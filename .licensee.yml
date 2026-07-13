@@ -1,0 +1,18 @@
+sources:
+  npm: true
+  bundler: false
+  cabal: false
+  cargo: false
+  composer: false
+  go: false
+  maven: false
+  nuget: false
+  pip: false
+
+allowed:
+  - apache-2.0
+  - bsd-2-clause
+  - bsd-3-clause
+  - isc
+  - mit
+

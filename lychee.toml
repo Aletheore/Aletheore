@@ -1,0 +1,5 @@
+exclude_path = [".git", "node_modules", "dist", "build", "coverage"]
+exclude = []
+max_retries = 2
+timeout = 20
+

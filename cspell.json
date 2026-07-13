@@ -1,0 +1,7 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "words": ["Veridion"],
+  "ignorePaths": [".git", "node_modules", "dist", "build", "coverage"],
+  "flagWords": []
+}

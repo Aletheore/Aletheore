@@ -1,0 +1,18 @@
+name: Spell Check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  spellcheck:
+    name: Spell check placeholder
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Spell check placeholder
+        run: 'echo "TODO: enable spelling checks once dictionary policy is finalized"'

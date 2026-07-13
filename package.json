@@ -1,0 +1,15 @@
+{
+  "name": "veridion",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Repository scaffold for the Veridion framework.",
+  "scripts": {
+    "format:check": "echo \"TODO: enable Prettier once dependencies are finalized\"",
+    "format": "echo \"TODO: enable Prettier once dependencies are finalized\"",
+    "lint:markdown": "echo \"TODO: enable markdownlint once dependencies are finalized\"",
+    "lint:links": "echo \"TODO: configure link checking\"",
+    "lint:spelling": "echo \"TODO: configure spell checking\"",
+    "lint:licenses": "echo \"TODO: configure license checking\""
+  },
+  "devDependencies": {}
+}

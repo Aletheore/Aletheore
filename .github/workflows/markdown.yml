@@ -1,0 +1,18 @@
+name: Markdown
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  markdown:
+    name: Markdown placeholder
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Markdown lint placeholder
+        run: 'echo "TODO: enable markdownlint once dependencies are finalized"'
