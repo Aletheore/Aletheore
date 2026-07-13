@@ -3,6 +3,7 @@ identifier: VDP-XXXX
 title: Replace with proposal title
 status: Draft
 version: 0.1.0
+format_version: "1.0"
 authors:
   - Replace with author name
 reviewers: []
@@ -21,7 +22,9 @@ tags:
 <!--
 Replace all YAML front matter placeholders before submitting a real proposal.
 The template itself is intentionally not schema-valid because VDP-XXXX and dates
-are replacement markers. Do not duplicate metadata as editable body content.
+are replacement markers. version is the proposal document version. format_version
+is the Veridion Proposal System format version. Both are required and independent.
+Do not duplicate metadata as editable body content.
 -->
 
 ## Abstract
@@ -79,10 +82,12 @@ TODO
 
 <!--
 State requirements using RFC 2119 and RFC 8174 language only when intended.
-Formatting example only:
-- The proposal MUST define replacement-specific requirements before acceptance.
+Use canonical requirement headings:
+### VDP-XXXX-REQ-001 — Replace with short requirement title
 Required.
 -->
+
+### VDP-XXXX-REQ-001 — Replace with short requirement title
 
 TODO
 

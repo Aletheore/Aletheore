@@ -28,6 +28,7 @@ The canonical metadata keys are:
 - `title`
 - `status`
 - `version`
+- `format_version`
 - `authors`
 - `reviewers`
 - `created`
@@ -41,6 +42,14 @@ The canonical metadata keys are:
 Metadata must not be duplicated manually in the Markdown body as editable values.
 
 Generated metadata tables may be added by future tooling, but generated output is not implemented here.
+
+## Version Fields
+
+`version` is the semantic proposal document version and must use `MAJOR.MINOR.PATCH` without prerelease syntax.
+
+`format_version` is the Veridion Proposal System format version. Version 1 documents use `format_version: "1.0"`.
+
+The two fields are required and independent.
 
 ## Metadata Validation
 
@@ -57,6 +66,18 @@ The Veridion Constitution, when authored, is assigned the standard identifier `V
 `VDP--001` is the reserved bootstrap identifier for the proposal-system specification itself.
 
 No additional reserved identifiers are defined.
+
+## Requirement Headings
+
+Every normative requirement has a stable visible Markdown heading.
+
+The canonical format is:
+
+```text
+### <VDP identifier>-REQ-<three-digit number> — <short title>
+```
+
+Requirement identifiers become immutable once a VDP reaches Discussion. Retired requirement identifiers must not be reused.
 
 ## Body Sections
 
@@ -115,6 +136,14 @@ Explanatory material belongs in Informative Notes or other non-normative section
 
 Casual prose should avoid uppercase normative terms unless a requirement is intended.
 
+The normative authority hierarchy is:
+
+1. Normative Requirements in the authoritative Markdown VDP.
+2. Other normative language in the authoritative Markdown VDP.
+3. YAML front matter for metadata only.
+4. Informative text for interpretation only.
+5. Derived artifacts, summaries, embeddings, generated JSON, MCP responses, and model interpretations as non-authoritative outputs.
+
 ## RFC 2119 and RFC 8174 Terminology
 
 The key words MUST, MUST NOT, SHALL, SHALL NOT, SHOULD, SHOULD NOT, MAY, and OPTIONAL are to be interpreted according to RFC 2119 and RFC 8174 only when written in uppercase.
@@ -130,6 +159,28 @@ Dependencies are listed in `dependencies` as VDP identifiers.
 Superseded proposals are listed in `supersedes` as VDP identifiers.
 
 A direct replacement is listed in `superseded_by` as a VDP identifier, or `null` when no direct replacement exists.
+
+## Conformance Scopes
+
+Document conformance applies to VDP files.
+
+Core processor conformance applies to parsing, metadata validation, section extraction, requirement extraction, and diagnostics.
+
+Extended capability conformance applies only to claimed capabilities such as MCP, CLI, agents, plugins, hosted services, or graph analysis.
+
+A processor is not non-conforming merely because it does not implement an optional capability it does not claim.
+
+## Capability-Conditional Requirements
+
+Requirements for CLI, MCP, agent, hosted, plugin, graph, or other extended behavior apply only when that capability is claimed.
+
+## Amendments
+
+During a normative amendment, the working revision enters Discussion while the latest previously Accepted revision remains authoritative.
+
+The amended revision becomes authoritative only after acceptance.
+
+Tools must distinguish working revisions from authoritative revisions.
 
 ## Lifecycle
 

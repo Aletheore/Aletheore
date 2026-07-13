@@ -3,6 +3,7 @@ identifier: VDP-9999
 title: Formatting Example
 status: Draft
 version: 0.1.0
+format_version: "1.0"
 authors:
   - Example Author
 reviewers: []
@@ -54,7 +55,9 @@ Placeholder prose for the proposed design.
 
 ## Normative Requirements
 
-- The proposal MUST replace placeholder requirements before acceptance.
+### VDP-9999-REQ-001 — Placeholder requirement
+
+The example proposal MUST replace placeholder requirements before it is used as a real proposal.
 
 ## Informative Notes
 

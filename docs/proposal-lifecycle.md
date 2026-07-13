@@ -137,6 +137,25 @@ Deprecated proposals remain part of the record.
 
 Deprecation does not imply deletion.
 
+## Normative Amendments
+
+When a normative amendment begins:
+
+- The working revision enters Discussion.
+- The latest previously Accepted revision remains authoritative.
+- The amended revision becomes authoritative only after acceptance.
+- Tools must distinguish working and authoritative revisions.
+
+## Withdrawal Convention
+
+Until a formal disposition field or Withdrawn status is defined, retained withdrawn proposals use:
+
+> **Disposition: Withdrawn**
+
+A withdrawn Draft must not be treated as active solely because metadata says Draft.
+
+This convention is transitional. Do not add Withdrawn to the status enum until a future specification defines it.
+
 ## Notes
 
 These gates are minimum artifact requirements only. They do not define approval authority.
