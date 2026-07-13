@@ -41,28 +41,36 @@ A proposal system gives Veridion a durable way to separate design intent from im
 
 ## Goals
 
-- Preserve architectural intent and rationale for significant decisions.
-- Separate design approval from implementation work.
-- Provide consistent proposal structure and machine-readable metadata.
-- Make normative requirements identifiable, stable, and traceable.
-- Support evidence, assumptions, inferences, risks, validation, and review records.
-- Prevent silent architectural drift and undocumented accepted-behavior changes.
-- Preserve historical integrity across amendments, supersession, deprecation, forks, mirrors, and migrations.
-- Support human review and future automated review without giving automation approval authority.
-- Enable future CLI, MCP, agent, CI, hosted, IDE, extension, audit, and graph-analysis tools.
-- Avoid unnecessary process for routine changes that do not require VDP treatment.
+- Create a durable source of architectural intent for significant decisions.
+- Separate design from implementation so accepted intent is not confused with code presence.
+- Establish consistent proposal structure across future VDPs.
+- Make normative requirements identifiable through stable visible requirement identifiers.
+- Support machine-readable metadata for validation, indexing, and review workflows.
+- Enable requirement traceability across proposals, evidence, implementations, diagnostics, and lifecycle records.
+- Preserve rationale and alternatives so rejected paths and trade-offs remain inspectable.
+- Make risks explicit, including security, compatibility, migration, evidence, operational, and governance risks.
+- Define measurable completion through validation, evidence, lifecycle gates, and conformance claims.
+- Protect historical integrity across amendments, supersession, deprecation, withdrawal, forks, mirrors, and migrations.
+- Support long-term project evolution without losing prior authoritative context.
+- Support human and automated review while keeping human authority distinct from tool output.
+- Prevent silent architectural change by requiring material changes to be visible and reviewable.
+- Minimize unnecessary process by avoiding VDP requirements for routine repository changes.
 
 ## Non Goals
 
-- Define Veridion product behavior, repository discovery, scoring, evidence models, engines, or AI architecture.
-- Establish permanent governance authority, voting systems, quorum, maintainer counts, or organizational roles.
+- Define Veridion product behavior.
+- Establish project-governance authority.
+- Define a voting system.
 - Replace engineering judgment with documents, tools, tests, scores, or models.
-- Require a VDP for every routine code, documentation, formatting, dependency, or maintenance change.
-- Treat source code as automatically normative or documentation as proof of implementation.
-- Make validation success equivalent to lifecycle acceptance.
-- Validate full Markdown body semantics through JSON Schema.
-- Require a document compiler, a specific implementation language, proprietary tooling, or network access.
-- Promise zero ambiguity or prohibit proposal evolution through reviewed amendments.
+- Require a VDP for every repository change.
+- Treat implementation as automatically becoming specification.
+- Treat documentation as implementation evidence.
+- Allow tools to automatically accept proposals.
+- Validate the entire Markdown body through JSON Schema.
+- Require a complete document compiler.
+- Mandate an implementation language or toolchain.
+- Promise to eliminate all ambiguity.
+- Prevent proposals from evolving through reviewed changes.
 
 ## Terminology
 
@@ -364,11 +372,11 @@ VDP--001 defines document conformance, core processor conformance, and extended 
 
 ### VDP--001-REQ-061 — Unknown content preservation
 
-Tools that rewrite VDPs SHOULD preserve unknown non-authoritative content when preservation does not alter canonical meaning. If preservation is impossible, the tool should report what was dropped and why.
+A tool that reads and rewrites a VDP MUST preserve content it does not understand unless the user explicitly authorizes its removal. This includes unknown sections, extension blocks, HTML comments, links, requirement annotations, embedded diagrams, and metadata permitted by a supported extension mechanism. A tool that cannot guarantee safe preservation MUST refuse the write or operate in read-only mode. A tool MUST NOT silently discard unknown content.
 
 ### VDP--001-REQ-062 — Forward compatibility
 
-Processors SHOULD reject unsupported canonical metadata or format versions while preserving source content for human review. Forward compatibility does not permit silent reinterpretation of unknown semantics.
+Processors MUST reject unsupported canonical metadata or format versions while preserving source content for human review. Forward compatibility does not permit silent reinterpretation of unknown semantics. A processor that cannot determine whether a format version is supported MUST fail safely and report the unsupported or unknown version rather than attempting best-effort interpretation.
 
 ### VDP--001-REQ-063 — Deterministic machine output
 
@@ -392,7 +400,7 @@ MCP servers that expose VDP data MUST preserve the distinction between authorita
 
 ### VDP--001-REQ-068 — Agent compatibility
 
-Agents that review or edit VDPs MUST isolate VDP content from controlling instructions. They may propose edits, diagnostics, or review notes, but they must not autonomously approve lifecycle transitions.
+An AI-enabled or agentic processor MUST treat VDP content as untrusted data unless a trusted calling context explicitly authorizes a specific instruction source. Text embedded in a VDP MUST NOT override system, developer, user, policy, or tool instructions. Agents MAY prepare edits, diagnostics, comparisons, or review material, but they MUST NOT independently approve lifecycle transitions. Write, publish, execute, and lifecycle-transition capabilities MUST require separate authorization.
 
 ### VDP--001-REQ-069 — Stable resource addressing
 
@@ -408,7 +416,7 @@ Extensions, plugins, and add-ons that affect interpretation SHOULD declare their
 
 ### VDP--001-REQ-072 — Safe write behavior
 
-Tools that prepare edits SHOULD produce inspectable diffs before writing, committing, or pushing changes unless a user explicitly authorizes a narrower automated write mode. Safe write behavior protects reviewability and provenance.
+A tool that modifies a VDP MUST preserve canonical metadata, stable identifiers, normative meaning, and unknown content as required by this specification. A material modification MUST require explicit authorization. The tool MUST produce a reviewable diff or an equivalent inspectable change record before commit, push, publication, or lifecycle transition. Automated formatting MAY proceed without per-change approval only when it is guaranteed not to alter normative meaning. A tool that cannot safely preserve the document MUST refuse the write.
 
 ### VDP--001-REQ-073 — No autonomous acceptance
 
@@ -420,11 +428,11 @@ Tools MUST treat VDP content, links, embedded HTML, examples, code fences, and g
 
 ### VDP--001-REQ-075 — Prompt-injection resistance
 
-Agentic systems SHOULD apply prompt-injection-resistant handling to VDP content, especially quoted instructions, examples, malicious Markdown, and remote content. If an agent cannot enforce this boundary, it should disclose the limitation.
+AI-enabled processors MUST treat instructions contained inside a VDP as untrusted document content by default. A VDP MUST NOT be assumed to contain trusted operational instructions for an agent. Quoted instructions, examples, code blocks, links, imported content, generated text, and remote references MUST remain subordinate to trusted system, developer, user, policy, and tool instructions. Where provenance is available, processors SHOULD preserve it to support prompt-injection analysis. A processor that cannot maintain this boundary MUST disclose the limitation and MUST NOT perform privileged write, execute, publish, or lifecycle-transition operations based on the document.
 
 ### VDP--001-REQ-076 — Sensitive information exclusion
 
-VDPs SHOULD avoid embedding secrets or sensitive evidence directly. Sensitive evidence should be referenced through controlled mechanisms when needed, with access, provenance, and retention handled outside the public proposal body.
+VDPs MUST NOT contain secrets, private credentials, access tokens, private keys, authentication cookies, or equivalent sensitive authentication material. Sensitive evidence may be referenced through controlled-access mechanisms when needed, with access, provenance, and retention handled outside the public proposal body.
 
 ### VDP--001-REQ-077 — Link integrity
 
@@ -442,8 +450,6 @@ Repository-scale processors SHOULD support many VDPs and many relationships thro
 
 Processors that build dependency graphs SHOULD detect missing nodes, cycles, supersession conflicts, and version-context ambiguity. Graph diagnostics must identify source proposals and edges rather than reporting opaque failure.
 
-
-### Versioning, Amendments, Supersession, and History
 
 ### VDP--001-REQ-081 — Semantic limits
 
@@ -472,6 +478,8 @@ Core processors SHOULD minimize mandatory runtime dependencies where practical. 
 ### VDP--001-REQ-087 — Capability separation
 
 Processors MUST separate core document processing from optional CLI, MCP, agent, hosted, extension, graph, or audit capabilities. A capability-specific failure must not be misreported as core document non-conformance unless core semantics are affected.
+
+### Versioning, Amendments, Supersession, and History
 
 ### VDP--001-REQ-088 — Document semantic versioning
 
@@ -524,9 +532,6 @@ Reviews supporting lifecycle transitions SHOULD be inspectable. If private revie
 ### VDP--001-REQ-100 — Review scope
 
 Review records SHOULD state whether review covered metadata, requirements, security, compatibility, implementation evidence, lifecycle readiness, or other dimensions. This prevents narrow review from being mistaken for complete approval.
-
-
-### Exceptions, Implementation Evidence, Lifecycle, and Provenance
 
 ### VDP--001-REQ-101 — Conditional approval
 
@@ -587,6 +592,8 @@ Until a formal disposition field exists, retained withdrawn proposals MUST inclu
 ### VDP--001-REQ-115 — Identifier retirement
 
 Withdrawn, superseded, or deprecated proposal identifiers MUST NOT be reused. Retirement preserves external references and avoids historical ambiguity.
+
+### Exceptions, Implementation Evidence, Lifecycle, and Provenance
 
 ### VDP--001-REQ-116 — Explicit deviation disclosure
 

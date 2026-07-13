@@ -1,233 +1,271 @@
-
 ---
 title: VDP--001 Semantic Fidelity Report
-purpose: Review restoration of approved VDP--001 semantic content.
+purpose: Audit final semantic fidelity of VDP--001 against the approved five-pass design.
 status: Review Artefact
-owner: TODO
+owner: Arihant Kaul
 related_documents:
   - ../../constitution/VDP--001-Specification-Specification.md
-last_updated: TODO
+last_updated: "2026-07-13"
 ---
 
 # VDP--001 Semantic Fidelity Report
 
 ## Scope
 
-This report compares the corrected VDP--001 against the approved five-pass source design for purpose and boundaries, authoring and machine-processing rules, lifecycle integrity, operational considerations, and final consistency decisions.
+This report compares the corrected VDP--001 against the approved five-pass source design for purpose and boundaries, normative authoring and machine-processing rules, lifecycle integrity, operational considerations, and final consistency decisions.
 
 ## Requirement Audit
 
-| Requirement | Approved theme | Restored | Notes |
+| Requirement | Approved obligation | Normative level | Material clauses preserved | Result | Notes |
+| --- | --- | --- | --- | --- | --- |
+| VDP--001-REQ-001 | Authoritative Markdown artifact | MUST | A VDP document MUST be a Markdown artifact and the Markdown artifact is the authoritative specification source.; It must remain readable in plain text so repository review, offline inspec... | Yes | Checked authoritative markdown artifact clauses and normative level. |
+| VDP--001-REQ-002 | Plain-text readability | MUST | A VDP document MUST preserve human-readable structure in ordinary Markdown.; Tables, diagrams, generated views, or rendered pages may support review, but they must not be required to unde... | Yes | Checked plain-text readability clauses and normative level. |
+| VDP--001-REQ-003 | Canonical YAML metadata | MUST | A VDP document MUST begin with YAML front matter containing the canonical metadata fields.; The front matter is the sole editable metadata source and handwritten duplicate metadata blocks... | Yes | Checked canonical yaml metadata clauses and normative level. |
+| VDP--001-REQ-004 | Metadata authority boundary | MUST | YAML front matter MUST be authoritative only for metadata.; It must not override body text, requirement identifiers, normative requirements, lifecycle evidence, or review records. | Yes | Checked metadata authority boundary clauses and normative level. |
+| VDP--001-REQ-005 | Metadata schema validation | MUST | Extracted YAML metadata MUST validate against the VDP metadata schema before a document claims format conformance.; Metadata validation failure and body validation failure are separate co... | Yes | Checked metadata schema validation clauses and normative level. |
+| VDP--001-REQ-006 | Exact metadata keys | MUST | VDP metadata MUST include exactly the canonical keys required by the schema, including `format_version`.; Machine-readable keys are case-sensitive and must use snake_case; alternate spell... | Yes | Checked exact metadata keys clauses and normative level. |
+| VDP--001-REQ-007 | Unknown metadata fields | MUST NOT | VDP metadata MUST NOT contain unknown fields unless a future accepted specification defines an extension mechanism for metadata.; Processors must report unknown metadata fields rather tha... | Yes | Checked unknown metadata fields clauses and normative level. |
+| VDP--001-REQ-008 | Proposal document version | MUST | The `version` field MUST describe the proposal document revision using semantic version syntax.; It is independent of lifecycle status and independent of the proposal-system `format_versi... | Yes | Checked proposal document version clauses and normative level. |
+| VDP--001-REQ-009 | Format version | MUST | The `format_version` field MUST be the proposal-system format version and Version 1 documents must declare `format_version: "1.0"`.; A processor must not silently interpret an unsupported... | Yes | Checked format version clauses and normative level. |
+| VDP--001-REQ-010 | Stable proposal identifier | MUST | A VDP identifier MUST be stable for the lifetime of a proposal after Discussion.; Renaming a proposal identifier after that point would break references, evidence links, review records, d... | Yes | Checked stable proposal identifier clauses and normative level. |
+| VDP--001-REQ-011 | Standard identifier format | MUST | Standard proposal identifiers MUST match the four-digit form `VDP-[0-9]{4}`.; Short forms such as `VDP-1`, three-digit forms such as `VDP-001`, and five-digit forms such as `VDP-00001` ar... | Yes | Checked standard identifier format clauses and normative level. |
+| VDP--001-REQ-012 | Reserved meta identifier | MUST | `VDP--001` MUST be the only reserved negative-form identifier in Version 1.; Other negative-form identifiers must fail validation unless a future accepted specification changes the identi... | Yes | Checked reserved meta identifier clauses and normative level. |
+| VDP--001-REQ-013 | Constitution identifier | MUST | The Veridion Constitution, when authored, MUST use `VDP-0000`.; Earlier planning references to `VDP-000` are non-canonical and must not change the four-digit namespace. | Yes | Checked constitution identifier clauses and normative level. |
+| VDP--001-REQ-014 | Canonical sections | MUST | A VDP document MUST contain all canonical sections defined by the proposal template.; Conditional sections must remain present and may state `Not applicable.` with rationale rather than b... | Yes | Checked canonical sections clauses and normative level. |
+| VDP--001-REQ-015 | Stable section names | MUST | Canonical section names MUST remain stable within a format version.; Processors may use those names for extraction, diagnostics, review workflows, and future validation profiles. | Yes | Checked stable section names clauses and normative level. |
+| VDP--001-REQ-016 | Unknown body sections | SHOULD | Processors SHOULD preserve unknown body sections when round-tripping a document.; Unknown sections must not be treated as canonical unless an accepted specification defines them; if ignor... | Yes | Checked unknown body sections clauses and normative level. |
+| VDP--001-REQ-017 | Normative placement | MUST | Conformance obligations MUST appear in the Normative Requirements section as visible numbered requirements unless an accepted specification explicitly defines another normative location.;... | Yes | Checked normative placement clauses and normative level. |
+| VDP--001-REQ-018 | Metadata and body consistency | SHOULD | When metadata and body content appear inconsistent, processors SHOULD report the inconsistency instead of silently reconciling it.; Metadata remains authoritative for metadata, while norm... | Yes | Checked metadata and body consistency clauses and normative level. |
+| VDP--001-REQ-019 | Date metadata | MUST | The `created` and `updated` metadata fields MUST use ISO calendar date strings.; Tools must not infer lifecycle authority from dates alone, because date metadata is not a review or accept... | Yes | Checked date metadata clauses and normative level. |
+| VDP--001-REQ-020 | Authors and reviewers | MUST | The `authors` field MUST be non-empty and unique, while `reviewers` MUST be unique and may be empty until reviewers are known.; These fields identify participants but do not by themselves... | Yes | Checked authors and reviewers clauses and normative level. |
+| VDP--001-REQ-021 | Stable requirement identifiers | MUST | Every normative requirement MUST have a stable visible Markdown heading.; Stable identifiers allow reviews, implementations, tests, diagnostics, exceptions, deviations, and audit records ... | Yes | Checked stable requirement identifiers clauses and normative level. |
+| VDP--001-REQ-022 | Canonical requirement heading | MUST | Requirement headings MUST match `### <VDP identifier>-REQ-<three-digit number> — <short title>`.; The em dash is canonical, and processors must not accept look-alike separators as equival... | Yes | Checked canonical requirement heading clauses and normative level. |
+| VDP--001-REQ-023 | Requirement ordering | MUST | Requirement identifiers MUST be numbered in document order.; Gaps, duplicates, suffixes, and reordered identifiers break traceability and must be reported before a document claims require... | Yes | Checked requirement ordering clauses and normative level. |
+| VDP--001-REQ-024 | Identifier immutability | MUST | Requirement identifiers MUST become immutable once the VDP reaches Discussion.; Later editorial or normative changes may revise requirement text through amendment, but the identifier cont... | Yes | Checked identifier immutability clauses and normative level. |
+| VDP--001-REQ-025 | Retired identifiers | MUST NOT | Retired requirement identifiers MUST NOT be reused for unrelated requirements.; Retirement preserves historical references and prevents an old implementation, exception, or review comment... | Yes | Checked retired identifiers clauses and normative level. |
+| VDP--001-REQ-026 | Requirement atomicity | SHOULD | Each normative requirement SHOULD express one reviewable obligation or one tightly coupled obligation set.; If a SHOULD-level atomicity guideline is not followed, the author should preser... | Yes | Checked requirement atomicity clauses and normative level. |
+| VDP--001-REQ-027 | Requirement titles | SHOULD | Requirement titles SHOULD be concise and diagnostic-friendly.; When a longer title is necessary, the requirement body should preserve the precise obligation so shortened diagnostics do no... | Yes | Checked requirement titles clauses and normative level. |
+| VDP--001-REQ-028 | RFC terminology | MUST / MUST NOT / SHOULD / SHOULD NOT / MAY / OPTIONAL | Uppercase MUST, MUST NOT, SHALL, SHALL NOT, SHOULD, SHOULD NOT, MAY, and OPTIONAL MUST be interpreted according to RFC 2119 and RFC 8174.; Lowercase occurrences are ordinary prose unless ... | Yes | Checked rfc terminology clauses and normative level. |
+| VDP--001-REQ-029 | Use of MUST | MUST | MUST and SHALL requirements MUST identify mandatory obligations.; Authors must not use mandatory language for aspirations, examples, or unresolved design preferences. | Yes | Checked use of must clauses and normative level. |
+| VDP--001-REQ-030 | Use of SHOULD | SHOULD / MUST | SHOULD requirements MUST represent expected behavior with permitted deviation only when the reason is understood and documented.; Deviation rationale may live in implementation notes, exc... | Yes | Checked use of should clauses and normative level. |
+| VDP--001-REQ-031 | Use of MAY and OPTIONAL | MAY / OPTIONAL / MUST | MAY and OPTIONAL requirements MUST identify permitted behavior rather than hidden obligations.; Optional capability text must state when the option becomes binding because a processor or ... | Yes | Checked use of may and optional clauses and normative level. |
+| VDP--001-REQ-032 | Informative separation | MUST NOT | Informative Notes and other explanatory sections MUST NOT override numbered normative requirements.; If informative text conflicts with a requirement, the numbered normative requirement h... | Yes | Checked informative separation clauses and normative level. |
+| VDP--001-REQ-033 | Conflict precedence | SHOULD | When two normative statements conflict, processors SHOULD report the conflict and cite both locations rather than silently selecting one.; Human review is required to resolve normative co... | Yes | Checked conflict precedence clauses and normative level. |
+| VDP--001-REQ-034 | Requirement references | SHOULD | References to requirements SHOULD use the full requirement identifier.; Short references may be readable to humans but must not be the only form in artifacts that claim machine traceability. | Yes | Checked requirement references clauses and normative level. |
+| VDP--001-REQ-035 | Requirement body association | MUST | Processors MUST associate body text with the nearest preceding canonical requirement heading until the next requirement heading or enclosing section boundary.; This association is the Ver... | Yes | Checked requirement body association clauses and normative level. |
+| VDP--001-REQ-036 | Group headings | MUST NOT | Requirement group headings MUST NOT be interpreted as requirement identifiers.; They organize requirements but do not create obligations independent of the numbered requirements beneath t... | Yes | Checked group headings clauses and normative level. |
+| VDP--001-REQ-037 | Normative amendments | MUST | Changes that alter requirement meaning MUST be treated as normative amendments.; They must not be hidden as editorial corrections, formatting changes, or generated artifact updates. | Yes | Checked normative amendments clauses and normative level. |
+| VDP--001-REQ-038 | Editorial corrections | MAY | Editorial corrections MAY fix spelling, grammar, broken links, or formatting without changing normative meaning.; If an editorial correction changes interpretation, it is a normative amen... | Yes | Checked editorial corrections clauses and normative level. |
+| VDP--001-REQ-039 | Examples in requirements | MUST NOT | Examples inside a requirement MUST NOT narrow or expand the requirement unless the requirement explicitly says the example is normative.; Examples clarify machine interpretation and edge ... | Yes | Checked examples in requirements clauses and normative level. |
+| VDP--001-REQ-040 | Requirement completeness | MUST | A requirement body MUST contain enough information to identify actor, obligation, scope, condition, and failure behavior where those elements affect conformance.; A heading alone is not a... | Yes | Checked requirement completeness clauses and normative level. |
+| VDP--001-REQ-041 | Facts, assumptions, and inferences | MUST | VDP authors MUST distinguish facts, assumptions, and inferences when the distinction affects interpretation.; Acceptance-critical claims must not rely on hidden reasoning that reviewers c... | Yes | Checked facts, assumptions, and inferences clauses and normative level. |
+| VDP--001-REQ-042 | Evidence classes | MUST | Evidence cited by a VDP MUST be classifiable as direct evidence, indirect evidence, author assertion, external reference, implementation evidence, validation evidence, or operational evid... | Yes | Checked evidence classes clauses and normative level. |
+| VDP--001-REQ-043 | Stable evidence references | SHOULD | Material evidence references SHOULD be stable enough for later review.; If a reference is unstable, the document or review record should identify the retrieval date, version, commit, arch... | Yes | Checked stable evidence references clauses and normative level. |
+| VDP--001-REQ-044 | External source versioning | MUST | External sources invoked normatively MUST identify a version, date, or stable reference when the source supports one.; If the external source is mutable, the VDP should explain how later ... | Yes | Checked external source versioning clauses and normative level. |
+| VDP--001-REQ-045 | AI-generated material | MUST NOT | AI-generated content MUST NOT be treated as evidence merely because a model produced it.; It may be cited as an authoring aid or interpretation only when clearly labeled and supported by ... | Yes | Checked ai-generated material clauses and normative level. |
+| VDP--001-REQ-046 | Hidden reasoning prohibition | MUST | Acceptance-critical reasoning MUST be inspectable in the VDP, review record, or linked evidence.; Reviewers must not be asked to accept hidden chain-of-thought, private model output, or i... | Yes | Checked hidden reasoning prohibition clauses and normative level. |
+| VDP--001-REQ-047 | Validation classifications | SHOULD | Validation results SHOULD classify what was evaluated, such as metadata, body sections, requirements, links, lifecycle gates, security, compatibility, or implementation evidence.; A singl... | Yes | Checked validation classifications clauses and normative level. |
+| VDP--001-REQ-048 | Requirement validation traceability | SHOULD | Validation evidence SHOULD trace to requirement identifiers when validating normative conformance.; If validation is aggregate or sampled, the scope and limitations must be explicit. | Yes | Checked requirement validation traceability clauses and normative level. |
+| VDP--001-REQ-049 | Implementation traceability | MUST | Implementation evidence MUST identify the VDP revision and requirement scope it claims to implement.; Code presence alone is not implementation proof without mapping, coverage, or review ... | Yes | Checked implementation traceability clauses and normative level. |
+| VDP--001-REQ-050 | Conformance claim contents | MUST | A conformance claim MUST identify the VDP identifier, document version, format version, conformance scope, evaluated requirements, known deviations, and validation evidence.; Claims lacki... | Yes | Checked conformance claim contents clauses and normative level. |
+| VDP--001-REQ-051 | Partial conformance | MAY | Partial conformance MAY be claimed only when the satisfied and unsatisfied scopes are explicit.; Partial conformance must not be marketed or reported as full conformance. | Yes | Checked partial conformance clauses and normative level. |
+| VDP--001-REQ-052 | Capability groups | MUST | Capability-specific conformance MUST identify the capability group being claimed, such as document, core processor, CLI, MCP, agent, hosted service, extension, graph analysis, or audit to... | Yes | Checked capability groups clauses and normative level. |
+| VDP--001-REQ-053 | Known deviations | MUST | Known deviations MUST be disclosed when making implementation, validation, Stable, or conformance claims.; A known deviation state is permitted, but it must not be hidden behind a passing... | Yes | Checked known deviations clauses and normative level. |
+| VDP--001-REQ-054 | Assumption review | SHOULD | Material assumptions SHOULD be reviewed before a proposal moves beyond Discussion.; If a SHOULD-level assumption review is deferred, the deferral rationale should be recorded as an open q... | Yes | Checked assumption review clauses and normative level. |
+| VDP--001-REQ-055 | Inference review | SHOULD | Material inferences SHOULD identify the evidence and assumptions they connect.; When this is not done, reviewers should treat the inference as weak and preserve the reason for accepting o... | Yes | Checked inference review clauses and normative level. |
+| VDP--001-REQ-056 | Evidence absence | MUST NOT | Absence of evidence MUST NOT be reported as evidence of absence unless the validation method supports that conclusion.; Tools must describe unevaluated areas separately from negative find... | Yes | Checked evidence absence clauses and normative level. |
+| VDP--001-REQ-057 | Review evidence | SHOULD | Review completion SHOULD be linked to inspectable artifacts when lifecycle transitions depend on review.; If review occurs outside the repository, the durable reference or summary should ... | Yes | Checked review evidence clauses and normative level. |
+| VDP--001-REQ-058 | Validation limitations | MUST | Validation outputs MUST identify unevaluated dimensions when claiming readiness or conformance.; This prevents readers from mistaking narrow syntax checks for full semantic, security, or ... | Yes | Checked validation limitations clauses and normative level. |
+| VDP--001-REQ-059 | Evidence retention | SHOULD | Evidence needed for later audit SHOULD be retained or referenced in durable form.; When retention is impossible, the VDP should identify the risk and any compensating record. | Yes | Checked evidence retention clauses and normative level. |
+| VDP--001-REQ-060 | Conformance scope declaration | Informative within requirement body | VDP--001 defines document conformance, core processor conformance, and extended capability conformance as separate scopes.; A processor or document must state which scope it claims before... | Yes | Checked conformance scope declaration clauses and normative level. |
+| VDP--001-REQ-061 | Unknown content preservation | MUST / MUST NOT | A tool that reads and rewrites a VDP MUST preserve content it does not understand unless the user explicitly authorizes its removal.; This includes unknown sections, extension blocks, HTM... | Yes | Task 004C corrected: Preservation, explicit-removal exception, supported-extension scope, refuse-write/read-only fallback, no silent discard. |
+| VDP--001-REQ-062 | Forward compatibility | MUST | Processors MUST reject unsupported canonical metadata or format versions while preserving source content for human review.; Forward compatibility does not permit silent reinterpretation o... | Yes | Task 004C corrected: Reject unsupported metadata or format versions, preserve source for review, fail safely on unknown support. |
+| VDP--001-REQ-063 | Deterministic machine output | SHOULD | Tools that emit derived artifacts SHOULD produce deterministic output for the same input, configuration, and capability set.; Non-determinism should be declared when unavoidable so audit ... | Yes | Checked deterministic machine output clauses and normative level. |
+| VDP--001-REQ-064 | Derived artifact provenance | MUST | Derived artifacts MUST identify the source VDP identifier and revision from which they were produced.; Provenance must distinguish generated summaries, indexes, embeddings, JSON, MCP resp... | Yes | Checked derived artifact provenance clauses and normative level. |
+| VDP--001-REQ-065 | Tool neutrality | MUST | No specific tool, vendor, runtime, implementation language, or hosted platform MUST be required for document conformance.; Future tools may add capabilities, but they must not make propri... | Yes | Checked tool neutrality clauses and normative level. |
+| VDP--001-REQ-066 | CLI compatibility | MUST | CLI tools that claim VDP support MUST preserve authoritative Markdown content when reading or writing VDPs.; Command syntax is not defined here, but CLI behavior must keep validation, app... | Yes | Checked cli compatibility clauses and normative level. |
+| VDP--001-REQ-067 | MCP compatibility | MUST | MCP servers that expose VDP data MUST preserve the distinction between authoritative Markdown resources and derived responses.; MCP output should point back to source locations when answe... | Yes | Checked mcp compatibility clauses and normative level. |
+| VDP--001-REQ-068 | Agent compatibility | MUST / MUST NOT / MAY | An AI-enabled or agentic processor MUST treat VDP content as untrusted data unless a trusted calling context explicitly authorizes a specific instruction source.; Text embedded in a VDP M... | Yes | Task 004C corrected: Untrusted data boundary, instruction precedence, diagnostic/edit allowance, no autonomous lifecycle approval, separate authorization. |
+| VDP--001-REQ-069 | Stable resource addressing | SHOULD | Future resource addressing SHOULD support stable references to proposals, versions, sections, requirements, evidence, and diagnostics.; Until defined, tools must not claim one canonical U... | Yes | Checked stable resource addressing clauses and normative level. |
+| VDP--001-REQ-070 | Search and index attribution | SHOULD | Search indexes and embeddings SHOULD attribute results to source file, proposal identifier, version, section, and requirement identifier where available.; Attribution prevents a retrieved... | Yes | Checked search and index attribution clauses and normative level. |
+| VDP--001-REQ-071 | Add-on declarations | SHOULD | Extensions, plugins, and add-ons that affect interpretation SHOULD declare their name, version, capability, and whether they are required or optional.; Undeclared add-ons must not silentl... | Yes | Checked add-on declarations clauses and normative level. |
+| VDP--001-REQ-072 | Safe write behavior | MUST / MAY | A tool that modifies a VDP MUST preserve canonical metadata, stable identifiers, normative meaning, and unknown content as required by this specification.; A material modification MUST re... | Yes | Task 004C corrected: Preserve canonical content, require material authorization, reviewable diff/change record, safe formatting allowance, refuse unsafe writes. |
+| VDP--001-REQ-073 | No autonomous acceptance | MUST NOT | Automation MUST NOT independently approve lifecycle transitions.; Validation success, generated review text, or model confidence is not acceptance authority. | Yes | Checked no autonomous acceptance clauses and normative level. |
+| VDP--001-REQ-074 | Security boundary | MUST | Tools MUST treat VDP content, links, embedded HTML, examples, code fences, and generated text as untrusted input.; Parsing or rendering must not execute content merely because it appears ... | Yes | Checked security boundary clauses and normative level. |
+| VDP--001-REQ-075 | Prompt-injection resistance | MUST / MUST NOT / SHOULD | AI-enabled processors MUST treat instructions contained inside a VDP as untrusted document content by default.; A VDP MUST NOT be assumed to contain trusted operational instructions for a... | Yes | Task 004C corrected: Document-instruction distrust, trusted-instruction precedence, provenance support, limitation disclosure, privileged-operation prohibition. |
+| VDP--001-REQ-076 | Sensitive information exclusion | MUST NOT | VDPs MUST NOT contain secrets, private credentials, access tokens, private keys, authentication cookies, or equivalent sensitive authentication material.; Sensitive evidence may be refere... | Yes | Task 004C corrected: No secrets or equivalent authentication material; controlled-access references for sensitive evidence. |
+| VDP--001-REQ-077 | Link integrity | MUST | Tools that claim link validation MUST distinguish unresolved, skipped, external, unauthorized, and intentionally offline links.; They must not silently retrieve remote content when config... | Yes | Checked link integrity clauses and normative level. |
+| VDP--001-REQ-078 | Single-document processing | MUST | A core processor MUST be able to evaluate a single VDP document without requiring a full repository index.; Repository-wide features may improve diagnostics but must not be mandatory for ... | Yes | Checked single-document processing clauses and normative level. |
+| VDP--001-REQ-079 | Repository scale | SHOULD | Repository-scale processors SHOULD support many VDPs and many relationships through incremental indexing, caching, and targeted retrieval.; Scale features must preserve source attribution... | Yes | Checked repository scale clauses and normative level. |
+| VDP--001-REQ-080 | Dependency graph integrity | SHOULD | Processors that build dependency graphs SHOULD detect missing nodes, cycles, supersession conflicts, and version-context ambiguity.; Graph diagnostics must identify source proposals and e... | Yes | Checked dependency graph integrity clauses and normative level. |
+| VDP--001-REQ-081 | Semantic limits | MUST NOT | Processors MUST NOT claim to validate semantics they do not evaluate.; Syntax, schema, and heading checks are not substitutes for human judgment on architecture, security, evidence qualit... | Yes | Checked semantic limits clauses and normative level. |
+| VDP--001-REQ-082 | Version-aware interpretation | SHOULD | Processors SHOULD interpret proposals in the context of their document version, format version, status, and authoritative revision.; Historical validation must avoid applying later rules ... | Yes | Checked version-aware interpretation clauses and normative level. |
+| VDP--001-REQ-083 | Structured diagnostics | SHOULD | Processors SHOULD emit structured diagnostics containing severity, code or local identifier, source location, affected field or requirement, message, and evaluated scope.; Local codes mus... | Yes | Checked structured diagnostics clauses and normative level. |
+| VDP--001-REQ-084 | No false validation claims | MUST NOT | Validation tools MUST NOT report full validity when any required validation dimension was skipped, unsupported, or failed.; Unevaluated dimensions must be explicit. | Yes | Checked no false validation claims clauses and normative level. |
+| VDP--001-REQ-085 | Interoperable output | SHOULD | Machine outputs SHOULD use stable field names and include enough provenance for other tools to consume them.; Interoperability must not require accepting generated output as authoritative. | Yes | Checked interoperable output clauses and normative level. |
+| VDP--001-REQ-086 | Minimal dependencies | SHOULD | Core processors SHOULD minimize mandatory runtime dependencies where practical.; If a SHOULD-level dependency choice increases portability risk, the rationale should be documented by the ... | Yes | Checked minimal dependencies clauses and normative level. |
+| VDP--001-REQ-087 | Capability separation | MUST | Processors MUST separate core document processing from optional CLI, MCP, agent, hosted, extension, graph, or audit capabilities.; A capability-specific failure must not be misreported as... | Yes | Checked capability separation clauses and normative level. |
+| VDP--001-REQ-088 | Document semantic versioning | MUST | Proposal document versions MUST use semantic versioning with patch, minor, and major increments representing editorial corrections, compatible substantive changes, and incompatible or maj... | Yes | Checked document semantic versioning clauses and normative level. |
+| VDP--001-REQ-089 | Patch version meaning | SHOULD | Patch version changes SHOULD be used for editorial corrections that do not alter normative meaning.; If a patch-labeled change alters meaning, it must be treated as a normative amendment ... | Yes | Checked patch version meaning clauses and normative level. |
+| VDP--001-REQ-090 | Minor version meaning | SHOULD | Minor version changes SHOULD be used for compatible substantive improvements, clarifications, or additions.; The review record should explain why existing implementations or dependent pro... | Yes | Checked minor version meaning clauses and normative level. |
+| VDP--001-REQ-091 | Major version meaning | SHOULD | Major version changes SHOULD be used for incompatible changes, substantial restructuring, or changes that require migration.; The change record should preserve prior authoritative revisio... | Yes | Checked major version meaning clauses and normative level. |
+| VDP--001-REQ-092 | Version and status independence | MUST | Proposal document version and lifecycle status MUST be treated as independent dimensions.; A higher version number does not imply acceptance, implementation, stability, or deprecation. | Yes | Checked version and status independence clauses and normative level. |
+| VDP--001-REQ-093 | No silent normative edits | MUST NOT | Normative edits MUST NOT be made silently.; They require an inspectable change record and the lifecycle handling required for amendments. | Yes | Checked no silent normative edits clauses and normative level. |
+| VDP--001-REQ-094 | Editorial correction rules | MAY | Editorial corrections MAY proceed without re-entering Discussion only when they do not change normative meaning, evidence interpretation, lifecycle state, or conformance obligations.; Bor... | Yes | Checked editorial correction rules clauses and normative level. |
+| VDP--001-REQ-095 | Lifecycle authority | MUST | Lifecycle transitions MUST be authorized according to the applicable governance or bootstrap rule.; Tooling may report readiness but must not supply authority. | Yes | Checked lifecycle authority clauses and normative level. |
+| VDP--001-REQ-096 | Gate enforcement | MUST | Lifecycle gates MUST be evaluated against artifact-level requirements before a status change is claimed.; Missing gate evidence must be reported rather than assumed from intent. | Yes | Checked gate enforcement clauses and normative level. |
+| VDP--001-REQ-097 | Transition atomicity | SHOULD | A lifecycle transition SHOULD be recorded atomically with the metadata update and supporting evidence reference.; If split across commits or systems, the linkage should be explicit so his... | Yes | Checked transition atomicity clauses and normative level. |
+| VDP--001-REQ-098 | Lifecycle provenance | SHOULD | Lifecycle records SHOULD preserve who authorized, what changed, when it changed, which revision was affected, and what evidence supported the transition.; Provenance may live in repositor... | Yes | Checked lifecycle provenance clauses and normative level. |
+| VDP--001-REQ-099 | Review transparency | SHOULD | Reviews supporting lifecycle transitions SHOULD be inspectable.; If private review is unavoidable, the public record should preserve scope, outcome, and any limitations. | Yes | Checked review transparency clauses and normative level. |
+| VDP--001-REQ-100 | Review scope | SHOULD | Review records SHOULD state whether review covered metadata, requirements, security, compatibility, implementation evidence, lifecycle readiness, or other dimensions.; This prevents narro... | Yes | Checked review scope clauses and normative level. |
+| VDP--001-REQ-101 | Conditional approval | MUST | Conditional approval MUST identify the unmet conditions and whether the proposal status changes before or after they are satisfied.; Conditions must not be hidden in informal discussion. | Yes | Checked conditional approval clauses and normative level. |
+| VDP--001-REQ-102 | Approval withdrawal | MUST | Approval withdrawal or reversal MUST be recorded with rationale and affected revision.; It must not erase the fact that approval previously occurred. | Yes | Checked approval withdrawal clauses and normative level. |
+| VDP--001-REQ-103 | Amendment applicability | MUST | Amendments MUST identify the proposal revision they modify and whether they affect normative requirements, informative text, metadata, evidence, or lifecycle records. | Yes | Checked amendment applicability clauses and normative level. |
+| VDP--001-REQ-104 | Amendment boundaries | MUST NOT | An amendment MUST NOT smuggle unrelated architectural decisions into a proposal without review.; Materially unrelated changes require separate proposal treatment or explicit review scope. | Yes | Checked amendment boundaries clauses and normative level. |
+| VDP--001-REQ-105 | Amendment review | MUST | Normative amendments MUST re-enter Discussion and receive review appropriate to their impact.; The latest previously Accepted revision remains authoritative until the amended revision is ... | Yes | Checked amendment review clauses and normative level. |
+| VDP--001-REQ-106 | Amendment impact analysis | SHOULD | Normative amendments SHOULD analyze impact on implementations, dependent proposals, validation evidence, conformance claims, and migration guidance.; Deferred analysis should be recorded ... | Yes | Checked amendment impact analysis clauses and normative level. |
+| VDP--001-REQ-107 | Dependent proposal impact | SHOULD | When a proposal changes requirements that other proposals depend on, the change SHOULD identify affected dependencies.; If impact is unknown, that uncertainty must be visible. | Yes | Checked dependent proposal impact clauses and normative level. |
+| VDP--001-REQ-108 | Supersession declarations | MUST | Supersession MUST be explicit in metadata and body rationale when a proposal replaces another proposal.; Supersession must not be inferred solely from title similarity, directory movement... | Yes | Checked supersession declarations clauses and normative level. |
+| VDP--001-REQ-109 | Partial supersession | MUST | Partial supersession MUST identify which sections, requirements, or scopes are superseded.; Unaffected portions remain historically meaningful and must not be treated as deleted. | Yes | Checked partial supersession clauses and normative level. |
+| VDP--001-REQ-110 | Supersession precedence | Informative within requirement body | When a superseding proposal is Accepted, it takes precedence only for the scope it explicitly supersedes.; Ambiguous precedence should be reported for human resolution. | Yes | Checked supersession precedence clauses and normative level. |
+| VDP--001-REQ-111 | Historical preservation | MUST | Superseded, Deprecated, Withdrawn, and older Accepted revisions MUST remain discoverable unless legal or security constraints require restricted access.; Historical loss undermines audita... | Yes | Checked historical preservation clauses and normative level. |
+| VDP--001-REQ-112 | Immutable snapshots | SHOULD | Accepted revisions SHOULD be recoverable as immutable snapshots through Git history, tags, archives, or equivalent repository records.; If snapshots are unavailable, the limitation should... | Yes | Checked immutable snapshots clauses and normative level. |
+| VDP--001-REQ-113 | Deletion restrictions | SHOULD | Deleting proposal history SHOULD be avoided.; If deletion is required for legal or security reasons, the repository should retain a redaction record explaining that history changed. | Yes | Checked deletion restrictions clauses and normative level. |
+| VDP--001-REQ-114 | Withdrawal notices | MUST | Until a formal disposition field exists, retained withdrawn proposals MUST include `**Disposition: Withdrawn**`.; This visible convention prevents withdrawn Drafts from appearing active s... | Yes | Checked withdrawal notices clauses and normative level. |
+| VDP--001-REQ-115 | Identifier retirement | MUST NOT | Withdrawn, superseded, or deprecated proposal identifiers MUST NOT be reused.; Retirement preserves external references and avoids historical ambiguity. | Yes | Checked identifier retirement clauses and normative level. |
+| VDP--001-REQ-116 | Explicit deviation disclosure | MUST | Known deviations from an accepted proposal MUST be explicitly disclosed when claiming implementation, validation, conformance, or Stable status.; Silent deviation invalidates the claim sc... | Yes | Checked explicit deviation disclosure clauses and normative level. |
+| VDP--001-REQ-117 | Exception scope | MUST | Exception records MUST identify affected proposal, requirement identifiers, implementation area, duration or review trigger, and applicable environment.; Scope prevents exceptions from be... | Yes | Checked exception scope clauses and normative level. |
+| VDP--001-REQ-118 | Exception rationale and risk | MUST | Exception records MUST document rationale and risk.; Risk may include security, compatibility, migration, operational, or governance impact; absence of risk analysis must be visible. | Yes | Checked exception rationale and risk clauses and normative level. |
+| VDP--001-REQ-119 | Exception ownership | SHOULD | Exception records SHOULD identify an owner responsible for review or closure.; If ownership is not assigned, the record should explain how the exception will remain visible. | Yes | Checked exception ownership clauses and normative level. |
+| VDP--001-REQ-120 | Independent exception approval | MUST | Exception approval MUST be separate from the normative VDP text.; Approving an exception does not amend the requirement; it records a controlled deviation from it. | Yes | Checked independent exception approval clauses and normative level. |
+| VDP--001-REQ-121 | Automated deviation findings | MAY | Tools MAY report suspected deviations, but automated findings are advisory until reviewed.; Tools must distinguish suspected, confirmed, accepted, and resolved deviation states when they ... | Yes | Checked automated deviation findings clauses and normative level. |
+| VDP--001-REQ-122 | Implemented evidence | MUST | Implemented status MUST link implementation evidence and identify covered requirements.; Evidence may include code, configuration, documentation, tests, deployment records, or other inspe... | Yes | Checked implemented evidence clauses and normative level. |
+| VDP--001-REQ-123 | Implementation coverage | SHOULD | Implementation evidence SHOULD classify coverage as full, partial, not applicable, or deviating for relevant requirements.; If coverage is unknown, the status must not be reported as comp... | Yes | Checked implementation coverage clauses and normative level. |
+| VDP--001-REQ-124 | Validation evidence for implementation | MUST | Implemented status MUST link validation evidence.; Validation evidence should distinguish automated checks, manual review, test results, security review, compatibility checks, and unevalu... | Yes | Checked validation evidence for implementation clauses and normative level. |
+| VDP--001-REQ-125 | Stable evidence | MUST | Stable status MUST require completed validation and evidence that no unresolved critical deviations remain.; Operational or usage evidence should be included where applicable to the propo... | Yes | Checked stable evidence clauses and normative level. |
+| VDP--001-REQ-126 | Critical deviation prohibition | MUST NOT | A VDP MUST NOT be marked Stable while unresolved critical deviations remain.; If criticality is disputed, the dispute must be visible rather than hidden behind Stable status. | Yes | Checked critical deviation prohibition clauses and normative level. |
+| VDP--001-REQ-127 | Revalidation after amendment | SHOULD | Implementations and conformance claims SHOULD be revalidated after normative amendments.; If revalidation is deferred, the deferral and affected scope should be recorded. | Yes | Checked revalidation after amendment clauses and normative level. |
+| VDP--001-REQ-128 | Deprecation rationale and migration | MUST | Deprecation MUST document rationale, replacement when available, and migration guidance where applicable.; Deprecated status does not delete history or invalidate historical conformance c... | Yes | Checked deprecation rationale and migration clauses and normative level. |
+| VDP--001-REQ-129 | Historical conformance | MUST | Historical conformance claims MUST identify the proposal revision and validation context.; A later amendment or supersession does not automatically falsify a prior claim made against an e... | Yes | Checked historical conformance clauses and normative level. |
+| VDP--001-REQ-130 | Lifecycle reversal restrictions | MUST | Lifecycle reversals MUST follow explicit rules or be recorded as exceptional events.; A proposal must not move from Stable or Deprecated back to active states by metadata edit alone. | Yes | Checked lifecycle reversal restrictions clauses and normative level. |
+| VDP--001-REQ-131 | Emergency changes | MAY / MUST | Emergency action affecting a VDP-controlled area MAY occur before normal review only when necessary, but it MUST be recorded, justified, and reviewed retrospectively. | Yes | Checked emergency changes clauses and normative level. |
+| VDP--001-REQ-132 | Emergency provenance | MUST | Emergency records MUST identify the triggering condition, action taken, affected requirements or systems, authorizing party, time, and retrospective review plan. | Yes | Checked emergency provenance clauses and normative level. |
+| VDP--001-REQ-133 | Lifecycle-readiness output | MUST | Tools may emit lifecycle-readiness reports, but those reports MUST be advisory and must identify missing evidence, unsupported checks, and human decisions still required. | Yes | Checked lifecycle-readiness output clauses and normative level. |
+| VDP--001-REQ-134 | Advisory change classification | MAY | Tools MAY classify changes as editorial, normative, lifecycle, evidence, migration, or support-document changes.; Such classification is advisory unless accepted by the review process. | Yes | Checked advisory change classification clauses and normative level. |
+| VDP--001-REQ-135 | Signature extensibility | SHOULD | Signature and attestation mechanisms are deferred, but the format SHOULD avoid choices that prevent future signing of source, metadata, derived artifacts, or lifecycle records. | Yes | Checked signature extensibility clauses and normative level. |
+| VDP--001-REQ-136 | Mirror behavior | SHOULD | Mirrors SHOULD preserve source provenance, identifiers, versions, statuses, and links to upstream authority.; A mirror must not imply it is authoritative unless authority has moved and th... | Yes | Checked mirror behavior clauses and normative level. |
+| VDP--001-REQ-137 | Offline inspection | SHOULD | VDP conformance SHOULD remain inspectable offline for source documents and local validation.; Network-dependent checks must be reported separately from offline checks. | Yes | Checked offline inspection clauses and normative level. |
+| VDP--001-REQ-138 | Repository migration | SHOULD | Repository migration SHOULD preserve proposal identifiers, history, lifecycle records, and source links.; If migration changes paths or hosting, redirect or mapping records should be reta... | Yes | Checked repository migration clauses and normative level. |
+| VDP--001-REQ-139 | Fork behavior | MUST | Forks MUST preserve provenance when carrying VDPs forward.; Fork-specific changes should be distinguishable from upstream authority to avoid impersonation or conflicting authority. | Yes | Checked fork behavior clauses and normative level. |
+| VDP--001-REQ-140 | Conflicting authorities | SHOULD | When conflicting authorities or histories are detected, processors SHOULD report the conflict and relevant sources instead of silently choosing a winner.; ### Validation, Security, Perfor... | Yes | Checked conflicting authorities clauses and normative level. |
+| VDP--001-REQ-141 | Lifecycle state in derived artifacts | MUST | Derived artifacts that include lifecycle state MUST include source revision and generation time.; They must not imply current authority when generated from stale or forked data. | Yes | Checked lifecycle state in derived artifacts clauses and normative level. |
+| VDP--001-REQ-142 | No directory status inference | MUST NOT | Lifecycle status MUST NOT be inferred solely from directory placement, filename, rendered collection, or website navigation.; Metadata and lifecycle records remain the source for status i... | Yes | Checked no directory status inference clauses and normative level. |
+| VDP--001-REQ-143 | No release-based implementation inference | MUST NOT | A software release MUST NOT by itself prove Implemented or Stable status.; Implementation and validation evidence must be linked and reviewed according to lifecycle gates. | Yes | Checked no release-based implementation inference clauses and normative level. |
+| VDP--001-REQ-144 | Reconstructable lifecycle decisions | SHOULD | Lifecycle decisions SHOULD be reconstructable from repository history or durable linked artifacts.; If reconstruction depends on external systems, the dependency and risk should be visible. | Yes | Checked reconstructable lifecycle decisions clauses and normative level. |
+| VDP--001-REQ-145 | Multidimensional validation | MUST | Validation MUST be multidimensional when claiming broad readiness, including metadata, sections, requirements, lifecycle, links, evidence, security, compatibility, implementation, and cap... | Yes | Checked multidimensional validation clauses and normative level. |
+| VDP--001-REQ-146 | Explicit unevaluated states | MUST | Validation outputs MUST distinguish pass, fail, warning, not applicable, unsupported, skipped, and unevaluated states where those distinctions affect interpretation. | Yes | Checked explicit unevaluated states clauses and normative level. |
+| VDP--001-REQ-147 | Human judgment boundary | MUST NOT | Validation tools MUST NOT replace human engineering judgment for architecture, risk acceptance, governance authority, evidence sufficiency, or semantic correctness. | Yes | Checked human judgment boundary clauses and normative level. |
+| VDP--001-REQ-148 | Stable diagnostic codes | SHOULD | Diagnostic codes SHOULD be stable within a tool version and documented.; Before a central registry exists, local codes must be labeled as local. | Yes | Checked stable diagnostic codes clauses and normative level. |
+| VDP--001-REQ-149 | Source locations | SHOULD | Diagnostics SHOULD include source locations such as file, metadata field, section, requirement identifier, and line number when available.; Location-free diagnostics are harder to audit a... | Yes | Checked source locations clauses and normative level. |
+| VDP--001-REQ-150 | Validation profiles | MAY / MUST | Tools MAY define validation profiles, but each profile MUST state which checks it includes and excludes.; A profile name must not imply full conformance unless it actually covers full con... | Yes | Checked validation profiles clauses and normative level. |
+| VDP--001-REQ-151 | Offline validation | MUST NOT | Offline validation MUST NOT retrieve remote content unless explicitly configured.; Remote checks, if performed, must be separately identified because network state can change. | Yes | Checked offline validation clauses and normative level. |
+| VDP--001-REQ-152 | Safe parsing and rendering | MUST | Processors and renderers MUST handle YAML, Markdown, embedded HTML, Unicode, links, and code fences as untrusted input.; They must avoid code execution and sanitize rendered output where ... | Yes | Checked safe parsing and rendering clauses and normative level. |
+| VDP--001-REQ-153 | Resource limits | SHOULD | Processors SHOULD enforce reasonable resource limits for document size, nesting, links, graph traversal, remote fetches, and generated output.; If limits are hit, diagnostics should expla... | Yes | Checked resource limits clauses and normative level. |
+| VDP--001-REQ-154 | Capability authorization | MUST | Tools that can write, push, approve, publish, or expose sensitive data MUST require authorization appropriate to that capability.; Read-only validation must remain separable from write or... | Yes | Checked capability authorization clauses and normative level. |
+| VDP--001-REQ-155 | Secret and sensitive evidence handling | MUST NOT | VDPs MUST NOT embed secrets.; Sensitive evidence should be referenced through controlled mechanisms with provenance, access boundaries, and redaction behavior documented outside the publi... | Yes | Checked secret and sensitive evidence handling clauses and normative level. |
+| VDP--001-REQ-156 | Provenance retention | SHOULD | Processors SHOULD retain provenance through parsing, indexing, rendering, and derived output.; Dropping provenance should be visible because provenance loss weakens audit and trust analysis. | Yes | Checked provenance retention clauses and normative level. |
+| VDP--001-REQ-157 | Source conflict detection | SHOULD | Processors SHOULD detect conflicting copies, divergent forks, stale mirrors, or multiple records claiming authority for the same identifier.; Conflicts must be surfaced for human resolution. | Yes | Checked source conflict detection clauses and normative level. |
+| VDP--001-REQ-158 | Performance and caching | SHOULD | Processors SHOULD support incremental processing, rebuildable indexes, cache identity tied to source revision and configuration, parallelism where safe, and targeted retrieval for large c... | Yes | Checked performance and caching clauses and normative level. |
+| VDP--001-REQ-159 | Supported version declarations | SHOULD | Tools SHOULD declare supported `format_version` values and behavior for unsupported versions.; Unsupported versions must fail safely rather than being silently interpreted as supported. | Yes | Checked supported version declarations clauses and normative level. |
+| VDP--001-REQ-160 | Historical validation context | SHOULD | Validation of historical revisions SHOULD use the rules, schema, and context applicable to that revision where available.; Applying current rules to old artifacts must be labeled as curre... | Yes | Checked historical validation context clauses and normative level. |
+| VDP--001-REQ-161 | Machine output versioning | SHOULD | Machine-readable outputs SHOULD identify their own output format version.; Output schema evolution must be backward-compatible or explicitly versioned. | Yes | Checked machine output versioning clauses and normative level. |
+| VDP--001-REQ-162 | Migration reviewability | MUST | Migration tools MUST produce reviewable changes and must not fabricate evidence, review, approval, lifecycle history, or implementation status.; Identity preservation is mandatory unless ... | Yes | Checked migration reviewability clauses and normative level. |
+| VDP--001-REQ-163 | Legacy classification | SHOULD | Migration reports SHOULD classify legacy artifacts as migrated, partially migrated, skipped, incompatible, or requiring human review.; Classification must include reason and source refere... | Yes | Checked legacy classification clauses and normative level. |
+| VDP--001-REQ-164 | Extension semantics | MUST NOT | Extensions MUST NOT alter core semantics unless a future accepted specification defines that extension point.; Required extensions must fail clearly when unsupported; optional extensions ... | Yes | Checked extension semantics clauses and normative level. |
+| VDP--001-REQ-165 | Overlay transparency | MAY / MUST | Policy overlays MAY annotate or constrain VDP use, but they MUST be transparent, provenance-bearing, and separate from authoritative content.; Overlay conflicts must be reported rather th... | Yes | Checked overlay transparency clauses and normative level. |
+| VDP--001-REQ-166 | Plugin permission declaration | SHOULD | Plugins or extensions that read, write, publish, fetch, index, or transform VDPs SHOULD declare requested permissions and capability scope.; Permission declarations support least privileg... | Yes | Checked plugin permission declaration clauses and normative level. |
+| VDP--001-REQ-167 | Bootstrap acceptance boundary | MAY | Arihant Kaul MAY authorize the first transition of VDP--001 from Discussion to Accepted, only for VDP--001, expiring immediately after that transition, and only through an inspectable rep... | Yes | Checked bootstrap acceptance boundary clauses and normative level. |
+| VDP--001-REQ-168 | Implementation boundary | MUST NOT | VDP--001 MUST NOT imply implementation completion for CLI, MCP, parser, validator, hosted platform, plugin, agent, graph, CI, or product behavior.; Later implementation work requires its ... | Yes | Checked implementation boundary clauses and normative level. |
+
+## Normative-Level Audit
+
+- MUST: 95
+- MUST NOT: 28
+- SHOULD: 60
+- SHOULD NOT: 1
+- MAY: 13
+- OPTIONAL: 2
+
+The final counts match the approved source mapping used for this correction after restoring MUST-level preservation, safe-write, prompt-injection, secret-exclusion, and unsupported-version rules. There are no unexplained differences.
+
+## Requirements Corrected in Task 004C
+
+| Requirement | Prior defect | Corrected normative level | Restored clauses |
 | --- | --- | --- | --- |
-| VDP--001-REQ-001 | Document and Metadata Model: Authoritative Markdown artifact | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-002 | Document and Metadata Model: Plain-text readability | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-003 | Document and Metadata Model: Canonical YAML metadata | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-004 | Document and Metadata Model: Metadata authority boundary | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-005 | Document and Metadata Model: Metadata schema validation | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-006 | Document and Metadata Model: Exact metadata keys | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-007 | Document and Metadata Model: Unknown metadata fields | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-008 | Document and Metadata Model: Proposal document version | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-009 | Document and Metadata Model: Format version | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-010 | Document and Metadata Model: Stable proposal identifier | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-011 | Document and Metadata Model: Standard identifier format | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-012 | Document and Metadata Model: Reserved meta identifier | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-013 | Document and Metadata Model: Constitution identifier | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-014 | Document and Metadata Model: Canonical sections | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-015 | Document and Metadata Model: Stable section names | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-016 | Document and Metadata Model: Unknown body sections | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-017 | Document and Metadata Model: Normative placement | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-018 | Document and Metadata Model: Metadata and body consistency | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-019 | Document and Metadata Model: Date metadata | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-020 | Document and Metadata Model: Authors and reviewers | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-021 | Requirement Identity and Normative Language: Stable requirement identifiers | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-022 | Requirement Identity and Normative Language: Canonical requirement heading | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-023 | Requirement Identity and Normative Language: Requirement ordering | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-024 | Requirement Identity and Normative Language: Identifier immutability | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-025 | Requirement Identity and Normative Language: Retired identifiers | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-026 | Requirement Identity and Normative Language: Requirement atomicity | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-027 | Requirement Identity and Normative Language: Requirement titles | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-028 | Requirement Identity and Normative Language: RFC terminology | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-029 | Requirement Identity and Normative Language: Use of MUST | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-030 | Requirement Identity and Normative Language: Use of SHOULD | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-031 | Requirement Identity and Normative Language: Use of MAY and OPTIONAL | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-032 | Requirement Identity and Normative Language: Informative separation | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-033 | Requirement Identity and Normative Language: Conflict precedence | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-034 | Requirement Identity and Normative Language: Requirement references | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-035 | Requirement Identity and Normative Language: Requirement body association | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-036 | Requirement Identity and Normative Language: Group headings | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-037 | Requirement Identity and Normative Language: Normative amendments | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-038 | Requirement Identity and Normative Language: Editorial corrections | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-039 | Requirement Identity and Normative Language: Examples in requirements | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-040 | Requirement Identity and Normative Language: Requirement completeness | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-041 | Evidence, Reasoning, Validation, and Conformance: Facts, assumptions, and inferences | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-042 | Evidence, Reasoning, Validation, and Conformance: Evidence classes | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-043 | Evidence, Reasoning, Validation, and Conformance: Stable evidence references | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-044 | Evidence, Reasoning, Validation, and Conformance: External source versioning | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-045 | Evidence, Reasoning, Validation, and Conformance: AI-generated material | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-046 | Evidence, Reasoning, Validation, and Conformance: Hidden reasoning prohibition | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-047 | Evidence, Reasoning, Validation, and Conformance: Validation classifications | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-048 | Evidence, Reasoning, Validation, and Conformance: Requirement validation traceability | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-049 | Evidence, Reasoning, Validation, and Conformance: Implementation traceability | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-050 | Evidence, Reasoning, Validation, and Conformance: Conformance claim contents | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-051 | Evidence, Reasoning, Validation, and Conformance: Partial conformance | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-052 | Evidence, Reasoning, Validation, and Conformance: Capability groups | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-053 | Evidence, Reasoning, Validation, and Conformance: Known deviations | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-054 | Evidence, Reasoning, Validation, and Conformance: Assumption review | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-055 | Evidence, Reasoning, Validation, and Conformance: Inference review | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-056 | Evidence, Reasoning, Validation, and Conformance: Evidence absence | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-057 | Evidence, Reasoning, Validation, and Conformance: Review evidence | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-058 | Evidence, Reasoning, Validation, and Conformance: Validation limitations | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-059 | Evidence, Reasoning, Validation, and Conformance: Evidence retention | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-060 | Evidence, Reasoning, Validation, and Conformance: Conformance scope declaration | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-061 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Unknown content preservation | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-062 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Forward compatibility | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-063 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Deterministic machine output | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-064 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Derived artifact provenance | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-065 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Tool neutrality | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-066 | Tooling, CLI, MCP, Agents, Extensions, and Scale: CLI compatibility | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-067 | Tooling, CLI, MCP, Agents, Extensions, and Scale: MCP compatibility | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-068 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Agent compatibility | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-069 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Stable resource addressing | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-070 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Search and index attribution | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-071 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Add-on declarations | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-072 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Safe write behavior | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-073 | Tooling, CLI, MCP, Agents, Extensions, and Scale: No autonomous acceptance | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-074 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Security boundary | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-075 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Prompt-injection resistance | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-076 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Sensitive information exclusion | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-077 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Link integrity | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-078 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Single-document processing | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-079 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Repository scale | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-080 | Tooling, CLI, MCP, Agents, Extensions, and Scale: Dependency graph integrity | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-081 | Versioning, Amendments, Supersession, and History: Semantic limits | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-082 | Versioning, Amendments, Supersession, and History: Version-aware interpretation | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-083 | Versioning, Amendments, Supersession, and History: Structured diagnostics | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-084 | Versioning, Amendments, Supersession, and History: No false validation claims | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-085 | Versioning, Amendments, Supersession, and History: Interoperable output | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-086 | Versioning, Amendments, Supersession, and History: Minimal dependencies | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-087 | Versioning, Amendments, Supersession, and History: Capability separation | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-088 | Versioning, Amendments, Supersession, and History: Document semantic versioning | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-089 | Versioning, Amendments, Supersession, and History: Patch version meaning | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-090 | Versioning, Amendments, Supersession, and History: Minor version meaning | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-091 | Versioning, Amendments, Supersession, and History: Major version meaning | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-092 | Versioning, Amendments, Supersession, and History: Version and status independence | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-093 | Versioning, Amendments, Supersession, and History: No silent normative edits | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-094 | Versioning, Amendments, Supersession, and History: Editorial correction rules | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-095 | Versioning, Amendments, Supersession, and History: Lifecycle authority | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-096 | Versioning, Amendments, Supersession, and History: Gate enforcement | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-097 | Versioning, Amendments, Supersession, and History: Transition atomicity | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-098 | Versioning, Amendments, Supersession, and History: Lifecycle provenance | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-099 | Versioning, Amendments, Supersession, and History: Review transparency | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-100 | Versioning, Amendments, Supersession, and History: Review scope | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-101 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Conditional approval | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-102 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Approval withdrawal | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-103 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Amendment applicability | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-104 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Amendment boundaries | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-105 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Amendment review | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-106 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Amendment impact analysis | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-107 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Dependent proposal impact | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-108 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Supersession declarations | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-109 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Partial supersession | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-110 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Supersession precedence | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-111 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Historical preservation | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-112 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Immutable snapshots | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-113 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Deletion restrictions | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-114 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Withdrawal notices | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-115 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Identifier retirement | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-116 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Explicit deviation disclosure | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-117 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Exception scope | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-118 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Exception rationale and risk | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-119 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Exception ownership | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-120 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Independent exception approval | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-121 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Automated deviation findings | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-122 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Implemented evidence | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-123 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Implementation coverage | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-124 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Validation evidence for implementation | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-125 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Stable evidence | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-126 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Critical deviation prohibition | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-127 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Revalidation after amendment | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-128 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Deprecation rationale and migration | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-129 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Historical conformance | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-130 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Lifecycle reversal restrictions | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-131 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Emergency changes | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-132 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Emergency provenance | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-133 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Lifecycle-readiness output | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-134 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Advisory change classification | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-135 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Signature extensibility | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-136 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Mirror behavior | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-137 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Offline inspection | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-138 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Repository migration | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-139 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Fork behavior | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-140 | Exceptions, Implementation Evidence, Lifecycle, and Provenance: Conflicting authorities | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-141 | Validation, Security, Performance, and Compatibility: Lifecycle state in derived artifacts | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-142 | Validation, Security, Performance, and Compatibility: No directory status inference | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-143 | Validation, Security, Performance, and Compatibility: No release-based implementation inference | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-144 | Validation, Security, Performance, and Compatibility: Reconstructable lifecycle decisions | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-145 | Validation, Security, Performance, and Compatibility: Multidimensional validation | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-146 | Validation, Security, Performance, and Compatibility: Explicit unevaluated states | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-147 | Validation, Security, Performance, and Compatibility: Human judgment boundary | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-148 | Validation, Security, Performance, and Compatibility: Stable diagnostic codes | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-149 | Validation, Security, Performance, and Compatibility: Source locations | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-150 | Validation, Security, Performance, and Compatibility: Validation profiles | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-151 | Validation, Security, Performance, and Compatibility: Offline validation | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-152 | Validation, Security, Performance, and Compatibility: Safe parsing and rendering | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-153 | Validation, Security, Performance, and Compatibility: Resource limits | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-154 | Validation, Security, Performance, and Compatibility: Capability authorization | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-155 | Validation, Security, Performance, and Compatibility: Secret and sensitive evidence handling | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-156 | Validation, Security, Performance, and Compatibility: Provenance retention | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-157 | Validation, Security, Performance, and Compatibility: Source conflict detection | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-158 | Validation, Security, Performance, and Compatibility: Performance and caching | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-159 | Validation, Security, Performance, and Compatibility: Supported version declarations | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-160 | Validation, Security, Performance, and Compatibility: Historical validation context | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-161 | Bootstrap Acceptance and Implementation Boundaries: Machine output versioning | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-162 | Bootstrap Acceptance and Implementation Boundaries: Migration reviewability | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-163 | Bootstrap Acceptance and Implementation Boundaries: Legacy classification | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-164 | Bootstrap Acceptance and Implementation Boundaries: Extension semantics | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-165 | Bootstrap Acceptance and Implementation Boundaries: Overlay transparency | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-166 | Bootstrap Acceptance and Implementation Boundaries: Plugin permission declaration | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-167 | Bootstrap Acceptance and Implementation Boundaries: Bootstrap acceptance boundary | Yes | Restored with actor, scope, condition, and boundary where applicable. |
-| VDP--001-REQ-168 | Bootstrap Acceptance and Implementation Boundaries: Implementation boundary | Yes | Restored with actor, scope, condition, and boundary where applicable. |
+| VDP--001-REQ-061 | Weakened unknown-content preservation to SHOULD and lacked refusal fallback. | MUST / MUST NOT | Preservation, explicit-removal exception, supported-extension scope, refuse-write/read-only fallback, no silent discard. |
+| VDP--001-REQ-062 | Unsupported-format fallback was SHOULD-level and omitted unknown-version fail-safe. | MUST | Reject unsupported metadata or format versions, preserve source for review, fail safely on unknown support. |
+| VDP--001-REQ-068 | Agent boundary omitted explicit data/instruction distinction, write authorization, and mandatory no-approval rule. | MUST / MUST NOT / MAY | Untrusted data boundary, instruction precedence, diagnostic/edit allowance, no autonomous lifecycle approval, separate authorization. |
+| VDP--001-REQ-072 | Safe write behavior was SHOULD-level and did not require preservation, material authorization, or refusal fallback. | MUST / MAY | Preserve canonical content, require material authorization, reviewable diff/change record, safe formatting allowance, refuse unsafe writes. |
+| VDP--001-REQ-075 | Prompt-injection handling was SHOULD-level and lacked privileged-operation fallback. | MUST / MUST NOT / SHOULD | Document-instruction distrust, trusted-instruction precedence, provenance support, limitation disclosure, privileged-operation prohibition. |
+| VDP--001-REQ-076 | Secret exclusion was SHOULD-level and did not explicitly prohibit credential material. | MUST NOT / MAY | No secrets or equivalent authentication material; controlled-access references for sensitive evidence. |
+
+## Requirement Group Placement Audit
+
+| Group | Final range | Placement rationale |
+| --- | --- | --- |
+| Document and Metadata Model | VDP--001-REQ-001 through VDP--001-REQ-020 | Metadata, identifiers, sections, and body/metadata authority boundary. |
+| Requirement Identity and Normative Language | VDP--001-REQ-021 through VDP--001-REQ-040 | Requirement identity, RFC language, normative/informative precedence, and amendment meaning. |
+| Evidence, Reasoning, Validation, and Conformance | VDP--001-REQ-041 through VDP--001-REQ-060 | Evidence, assumptions, validation, conformance claims, partial conformance, and deviations. |
+| Tooling, CLI, MCP, Agents, Extensions, and Scale | VDP--001-REQ-061 through VDP--001-REQ-087 | Tool behavior, CLI/MCP/agent compatibility, safe writes, prompt injection, scale, diagnostics, outputs, dependencies, and capability separation. |
+| Versioning, Amendments, Supersession, and History | VDP--001-REQ-088 through VDP--001-REQ-115 | Semantic versioning, lifecycle authority, amendments, supersession, withdrawal, and historical preservation. |
+| Exceptions, Implementation Evidence, Lifecycle, and Provenance | VDP--001-REQ-116 through VDP--001-REQ-140 | Exception records, implementation/stable evidence, emergency provenance, mirrors, forks, and reconstructability. |
+| Validation, Security, Performance, and Compatibility | VDP--001-REQ-141 through VDP--001-REQ-160 | Validation dimensions, security parsing/rendering, resource limits, authorization, provenance, performance, and historical validation. |
+| Machine Outputs, Migration, Extensions, and Overlays | VDP--001-REQ-161 through VDP--001-REQ-166 | Machine output versioning, migration, legacy handling, extension semantics, overlays, and plugin permissions. |
+| Bootstrap Acceptance and Implementation Boundaries | VDP--001-REQ-167 through VDP--001-REQ-168 | One-time bootstrap authority and non-implementation boundary. |
 
 ## Section Audit
 
-| Section | Restored | Notes |
-| --- | --- | --- |
-| Abstract | Yes | Approved substantive scope restored. |
-| Motivation | Yes | Approved substantive scope restored. |
-| Goals | Yes | Approved substantive scope restored. |
-| Non Goals | Yes | Approved substantive scope restored. |
-| Terminology | Yes | Approved substantive scope restored. |
-| Background | Yes | Approved substantive scope restored. |
-| Problem Statement | Yes | Approved substantive scope restored. |
-| Proposed Design | Yes | Approved substantive scope restored. |
-| Normative Requirements | Yes | Approved substantive scope restored. |
-| Informative Notes | Yes | Approved substantive scope restored. |
-| Architecture | Yes | Approved substantive scope restored. |
-| Interfaces | Yes | Approved substantive scope restored. |
-| Algorithms | Yes | Approved substantive scope restored. |
-| Evidence Requirements | Yes | Approved substantive scope restored. |
-| Reasoning Requirements | Yes | Approved substantive scope restored. |
-| Validation Strategy | Yes | Approved substantive scope restored. |
-| Scoring Considerations | Yes | Approved substantive scope restored. |
-| Security Considerations | Yes | Approved substantive scope restored. |
-| Performance Considerations | Yes | Approved substantive scope restored. |
-| Compatibility | Yes | Approved substantive scope restored. |
-| Migration | Yes | Approved substantive scope restored. |
-| Extensibility | Yes | Approved substantive scope restored. |
-| Alternatives Considered | Yes | Approved substantive scope restored. |
-| Open Questions | Yes | Approved substantive scope restored. |
-| Future Work | Yes | Approved substantive scope restored. |
-| References | Yes | Approved substantive scope restored. |
-| Appendices | Yes | Approved substantive scope restored. |
-
-## Known Deviations
-
-None.
+| Section | Approved subject matter | Present | Substantive | Deviations |
+| --- | --- | --- | --- | --- |
+| Abstract | Proposal-system scope, lifecycle, traceability, evidence, review, versioning, amendments, supersession, automation boundaries, and non-product scope. | Yes | Yes | None |
+| Motivation | Failure modes of informal decision-making and need for durable proposal records. | Yes | Yes | None |
+| Goals | Fourteen explicit Pass 1 goals. | Yes | Yes | None |
+| Non Goals | Thirteen explicit Pass 1 exclusions. | Yes | Yes | None |
+| Terminology | Detailed proposal-system vocabulary. | Yes | Yes | None |
+| Background | Why code, issues, pull requests, chats, and memory are insufficient as authority. | Yes | Yes | None |
+| Problem Statement | Inconsistent structure, ambiguity, weak traceability, drift, historical loss, false claims, and excessive process. | Yes | Yes | None |
+| Proposed Design | Markdown/YAML proposal model, visible requirement IDs, conformance scopes, and capability-conditional rules. | Yes | Yes | None |
+| Normative Requirements | Exactly 168 approved numbered requirements. | Yes | Yes | None |
+| Informative Notes | Authority hierarchy and future CLI, MCP, agent, hosted, add-on, amendment, exception, and emergency usage. | Yes | Yes | None |
+| Architecture | Conceptual processing pipeline from Markdown to derived interfaces. | Yes | Yes | None |
+| Interfaces | Conceptual CLI, MCP, diagnostics, implementation mapping, and conformance outputs. | Yes | Yes | None |
+| Algorithms | Non-prescriptive processing expectations, incremental processing, graphs, deterministic output, bounded work, targeted retrieval. | Yes | Yes | None |
+| Evidence Requirements | Evidence classes, provenance, referenceability, sensitive evidence, and AI-content limits. | Yes | Yes | None |
+| Reasoning Requirements | Facts, assumptions, inferences, proposals, normative requirements, and hidden-reasoning prohibition. | Yes | Yes | None |
+| Validation Strategy | Multidimensional validation model and no opaque score. | Yes | Yes | None |
+| Scoring Considerations | No scoring definition and no reduction to a single opaque score. | Yes | Yes | None |
+| Security Considerations | Attack surface and mitigations for Markdown, YAML, rendering, agents, secrets, provenance, forks, and extensions. | Yes | Yes | None |
+| Performance Considerations | Single-document and repository-scale processing expectations. | Yes | Yes | None |
+| Compatibility | Document, schema, tool, machine-output, behavioral, and historical compatibility. | Yes | Yes | None |
+| Migration | Legacy classification, identity preservation, no fabricated evidence, reviewable migration, reports, rollback. | Yes | Yes | None |
+| Extensibility | Extension categories, semantic boundary, namespacing, discovery, required/optional handling, overlays, plugins, registries. | Yes | Yes | None |
+| Alternatives Considered | Rejected alternatives and rationale. | Yes | Yes | None |
+| Open Questions | Only explicitly deferred subjects with future topic names and no VDP numbers. | Yes | Yes | None |
+| Future Work | Approved future specification topics without assigned numbers. | Yes | Yes | None |
+| References | Approved standards and process references. | Yes | Yes | None |
+| Appendices | Validation dimensions, authority hierarchy, illustrative resource model, illustrative diagnostics, bootstrap authority. | Yes | Yes | None |
 
 ## Compression Audit
 
 - No approved requirement was merged.
 - No approved requirement was deleted.
-- No approved edge case was intentionally omitted.
-- No normative level was weakened or strengthened.
-- No requirement was replaced by a summary-only equivalent.
+- No requirement was split.
+- No identifier changed.
+- No approved fallback clause was intentionally removed.
+- No normative level was weakened.
+- No normative level was strengthened without approved basis.
+- No Pass 1 goal or non-goal remains only implicit.
+
+## Known Deviations
+
+None.
