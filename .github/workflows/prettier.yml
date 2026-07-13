@@ -13,6 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Prettier placeholder
         run: 'echo "TODO: enable Prettier check once dependencies are finalized"'
