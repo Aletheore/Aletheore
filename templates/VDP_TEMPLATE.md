@@ -1,172 +1,196 @@
-# Veridion Design Proposal Template
+---
+identifier: VDP-XXXX
+title: Replace with proposal title
+status: Draft
+version: 0.1.0
+format_version: "1.0"
+authors:
+  - Replace with author name
+reviewers: []
+created: "YYYY-MM-DD"
+updated: "YYYY-MM-DD"
+dependencies: []
+supersedes: []
+superseded_by: null
+category: replace-with-category
+tags:
+  - replace-with-tag
+---
 
-**Purpose:** Provide the required structure for future Veridion Design Proposals.
-**Status:** Template
-**Owner:** TODO
-**Related Documents:** [../docs/specification-process.md](../docs/specification-process.md), [../docs/proposal-lifecycle.md](../docs/proposal-lifecycle.md), [../schemas/vdp.schema.json](../schemas/vdp.schema.json)
-**Last Updated:** TODO
+# Replace with proposal title
 
-## Metadata
+<!--
+Replace all YAML front matter placeholders before submitting a real proposal.
+The template itself is intentionally not schema-valid because VDP-XXXX and dates
+are replacement markers. version is the proposal document version. format_version
+is the Veridion Proposal System format version. Both are required and independent.
+Do not duplicate metadata as editable body content.
+-->
 
-### Identifier
+## Abstract
 
-TODO
+<!-- Summarize the proposal in a short, reader-oriented paragraph. Required. -->
 
-### Title
+Placeholder.
 
-TODO
+## Motivation
 
-### Status
+<!-- Explain why the proposal exists. Required. -->
 
-TODO
+Placeholder.
 
-### Version
+## Goals
 
-TODO
+<!-- List the intended outcomes. Required. -->
 
-### Authors
+Placeholder.
 
-TODO
+## Non Goals
 
-### Reviewers
+<!-- List intentionally excluded outcomes. Required. -->
 
-TODO
+Placeholder.
 
-### Created
+## Terminology
 
-TODO
+<!-- Define terms needed to read this proposal. Required. -->
 
-### Updated
+Placeholder.
 
-TODO
+## Background
 
-### Dependencies
+<!-- Conditional. Use "Not applicable." with a short rationale when this section does not apply. -->
 
-TODO
+Placeholder.
 
-### Supersedes
+## Problem Statement
 
-TODO
+<!-- Describe the problem without prescribing the solution. Required. -->
 
-### Superseded By
+Placeholder.
 
-TODO
+## Proposed Design
 
-### Category
+<!-- Describe the proposed design. Required. -->
 
-TODO
+Placeholder.
 
-### Tags
+## Normative Requirements
 
-TODO
+<!--
+State requirements using RFC 2119 and RFC 8174 language only when intended.
+Use canonical requirement headings:
+### VDP-XXXX-REQ-001 — Replace with short requirement title
+-->
 
-## Body
+### VDP-XXXX-REQ-001 — Replace with short requirement title
 
-### Abstract
+Placeholder requirement text.
 
-TODO
+## Informative Notes
 
-### Motivation
+<!-- Add explanatory non-normative material. Required. -->
 
-TODO
+Placeholder.
 
-### Goals
+## Architecture
 
-TODO
+<!-- Conditional. Use "Not applicable." with a short rationale when this section does not apply. -->
 
-### Non Goals
+Placeholder.
 
-TODO
+## Interfaces
 
-### Terminology
+<!-- Conditional. Use "Not applicable." with a short rationale when this section does not apply. -->
 
-TODO
+Placeholder.
 
-### Background
+## Algorithms
 
-TODO
+<!-- Conditional. Use "Not applicable." with a short rationale when this section does not apply. -->
 
-### Problem Statement
+Placeholder.
 
-TODO
+## Evidence Requirements
 
-### Proposed Design
+<!-- Conditional. Use "Not applicable." with a short rationale when this section does not apply. -->
 
-TODO
+Placeholder.
 
-### Normative Requirements
+## Reasoning Requirements
 
-TODO
+<!-- Conditional. Use "Not applicable." with a short rationale when this section does not apply. -->
 
-### Informative Notes
+Placeholder.
 
-TODO
+## Validation Strategy
 
-### Architecture
+<!-- Describe how the proposal can be validated. Required. -->
 
-TODO
+Placeholder.
 
-### Interfaces
+## Scoring Considerations
 
-TODO
+<!-- Conditional. Use "Not applicable." with a short rationale when this section does not apply. -->
 
-### Algorithms
+Placeholder.
 
-TODO
+## Security Considerations
 
-### Evidence Requirements
+<!-- Describe security considerations or state why none are known. Required. -->
 
-TODO
+Placeholder.
 
-### Reasoning Requirements
+## Performance Considerations
 
-TODO
+<!-- Describe performance considerations or state why none are known. Required. -->
 
-### Validation Strategy
+Placeholder.
 
-TODO
+## Compatibility
 
-### Scoring Considerations
+<!-- Describe compatibility impact. Required. -->
 
-TODO
+Placeholder.
 
-### Security Considerations
+## Migration
 
-TODO
+<!-- Describe migration impact or mark not applicable with rationale. Required. -->
 
-### Performance Considerations
+Placeholder.
 
-TODO
+## Extensibility
 
-### Compatibility
+<!-- Describe how future extension is affected. Required. -->
 
-TODO
+Placeholder.
 
-### Migration
+## Alternatives Considered
 
-TODO
+<!-- Describe alternatives and why they were not selected. Required. -->
 
-### Extensibility
+Placeholder.
 
-TODO
+## Open Questions
 
-### Alternatives Considered
+<!-- List unresolved questions or state that none are known. Required. -->
 
-TODO
+Placeholder.
 
-### Open Questions
+## Future Work
 
-TODO
+<!-- List future work outside the proposal scope. Required. -->
 
-### Future Work
+Placeholder.
 
-TODO
+## References
 
-### References
+<!-- List references used by the proposal. Required. -->
 
-TODO
+Placeholder.
 
-### Appendices
+## Appendices
 
-TODO
+<!-- Conditional. Use "Not applicable." with a short rationale when this section does not apply. -->
 
+Placeholder.

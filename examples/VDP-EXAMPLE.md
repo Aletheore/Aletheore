@@ -1,172 +1,132 @@
-# VDP Example
+---
+identifier: VDP-9999
+title: Formatting Example
+status: Draft
+version: 0.1.0
+format_version: "1.0"
+authors:
+  - Example Author
+reviewers: []
+created: "2026-07-13"
+updated: "2026-07-13"
+dependencies: []
+supersedes: []
+superseded_by: null
+category: example
+tags:
+  - formatting
+---
 
-**Purpose:** Show the minimal formatting shape of a Veridion Design Proposal.
-**Status:** Example
-**Owner:** TODO
-**Related Documents:** [../templates/VDP_TEMPLATE.md](../templates/VDP_TEMPLATE.md), [../docs/specification-process.md](../docs/specification-process.md), [../schemas/vdp.schema.json](../schemas/vdp.schema.json)
-**Last Updated:** TODO
+# Formatting Example
 
-## Metadata
+This document demonstrates proposal formatting only. It does not define Veridion behavior.
 
-### Identifier
+## Abstract
 
-VDP-EXAMPLE
+Placeholder prose for a short proposal summary.
 
-### Title
+## Motivation
 
-Placeholder
+Placeholder prose for why a proposal exists.
 
-### Status
+## Goals
 
-Draft
+- Placeholder goal.
 
-### Version
+## Non Goals
 
-TODO
+- Placeholder non-goal.
 
-### Authors
+## Terminology
 
-TODO
+- Placeholder term: placeholder definition.
 
-### Reviewers
+## Background
 
-TODO
+Not applicable. This formatting example does not require background context.
 
-### Created
+## Problem Statement
 
-TODO
+Placeholder prose for the problem statement.
 
-### Updated
+## Proposed Design
 
-TODO
+Placeholder prose for the proposed design.
 
-### Dependencies
+## Normative Requirements
 
-TODO
+### VDP-9999-REQ-001 — Placeholder requirement
 
-### Supersedes
+The example proposal MUST replace placeholder requirements before it is used as a real proposal.
 
-TODO
+## Informative Notes
 
-### Superseded By
+This paragraph is explanatory and non-normative.
 
-TODO
+## Architecture
 
-### Category
+Not applicable. This formatting example does not define architecture.
 
-TODO
+## Interfaces
 
-### Tags
+Not applicable. This formatting example does not define interfaces.
 
-TODO
+## Algorithms
 
-## Body
+Not applicable. This formatting example does not define algorithms.
 
-### Abstract
+## Evidence Requirements
 
-Placeholder.
+Not applicable. This formatting example does not define evidence requirements.
 
-### Motivation
+## Reasoning Requirements
 
-TODO.
+Not applicable. This formatting example does not define reasoning requirements.
 
-### Goals
+## Validation Strategy
 
-To be defined.
+Placeholder prose for validation strategy.
 
-### Non Goals
+## Scoring Considerations
 
-TODO.
+Not applicable. This formatting example does not define scoring.
 
-### Terminology
+## Security Considerations
 
-Placeholder.
+Placeholder prose for security considerations.
 
-### Background
+## Performance Considerations
 
-To be defined.
+Placeholder prose for performance considerations.
 
-### Problem Statement
+## Compatibility
 
-TODO.
+Placeholder prose for compatibility.
 
-### Proposed Design
+## Migration
 
-Placeholder.
+Not applicable. This formatting example does not require migration.
 
-### Normative Requirements
+## Extensibility
 
-To be defined.
+Placeholder prose for extensibility.
 
-### Informative Notes
+## Alternatives Considered
 
-TODO.
+Placeholder prose for alternatives considered.
 
-### Architecture
+## Open Questions
 
-Placeholder.
+- Placeholder open question.
 
-### Interfaces
+## Future Work
 
-To be defined.
+Placeholder prose for future work.
 
-### Algorithms
+## References
 
-TODO.
+- Placeholder reference.
 
-### Evidence Requirements
+## Appendices
 
-Placeholder.
-
-### Reasoning Requirements
-
-To be defined.
-
-### Validation Strategy
-
-TODO.
-
-### Scoring Considerations
-
-Placeholder.
-
-### Security Considerations
-
-To be defined.
-
-### Performance Considerations
-
-TODO.
-
-### Compatibility
-
-Placeholder.
-
-### Migration
-
-To be defined.
-
-### Extensibility
-
-TODO.
-
-### Alternatives Considered
-
-Placeholder.
-
-### Open Questions
-
-To be defined.
-
-### Future Work
-
-TODO.
-
-### References
-
-Placeholder.
-
-### Appendices
-
-To be defined.
-
+Not applicable. This formatting example does not require appendices.

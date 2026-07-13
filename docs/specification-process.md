@@ -1,67 +1,198 @@
-# Specification Process
+---
+title: Specification Process
+purpose: Describe the Veridion Design Proposal process without defining framework behavior.
+status: Placeholder
+owner: TODO
+related_documents:
+  - ../templates/VDP_TEMPLATE.md
+  - ../schemas/vdp.schema.json
+  - proposal-lifecycle.md
+last_updated: TODO
+---
 
-**Purpose:** Describe the Veridion Design Proposal process without defining framework behavior.
-**Status:** Placeholder
-**Owner:** TODO
-**Related Documents:** [../templates/VDP_TEMPLATE.md](../templates/VDP_TEMPLATE.md), [../schemas/vdp.schema.json](../schemas/vdp.schema.json), [proposal-lifecycle.md](proposal-lifecycle.md)
-**Last Updated:** TODO
+# Specification Process
 
 ## Purpose
 
 The Veridion Proposal System provides a reusable structure for future Veridion Design Proposals.
 
-## Scope
+This document describes proposal infrastructure only. Governance authority is out of scope except where VDP--001 defines its one-time bootstrap acceptance rule.
 
-This document describes proposal infrastructure only.
+## Canonical Metadata
 
-TODO: Define process details through future governance work.
+YAML front matter is the canonical metadata source for VDP Markdown files.
 
-## RFC 2119 Terminology
+The canonical metadata keys are:
 
-Veridion Design Proposals may use RFC 2119 terminology to distinguish normative language from informative language.
+- `identifier`
+- `title`
+- `status`
+- `version`
+- `format_version`
+- `authors`
+- `reviewers`
+- `created`
+- `updated`
+- `dependencies`
+- `supersedes`
+- `superseded_by`
+- `category`
+- `tags`
 
-The recognized terms are:
+Metadata is authoritative only for metadata. Normative Requirements govern conformance obligations.
 
-- MUST
-- MUST NOT
-- SHALL
-- SHALL NOT
-- SHOULD
-- SHOULD NOT
-- MAY
-- OPTIONAL
+Metadata must not be duplicated manually in the Markdown body as editable values.
 
-These terms should be used according to RFC 2119. This document does not define framework-specific meanings for them.
+Generated metadata tables may be added by future tooling, but generated output is not implemented here.
 
-## Proposal Metadata
+## Version Fields
 
-Proposal metadata is described by [VDP metadata schema](../schemas/vdp.schema.json).
+`version` is the semantic proposal document version and must use `MAJOR.MINOR.PATCH` without prerelease syntax.
 
-TODO: Define metadata extraction and validation tooling.
+`format_version` is the Veridion Proposal System format version. Version 1 documents use `format_version: "1.0"`.
 
-## Proposal Body
+The two fields are required and independent.
 
-Proposal bodies should use [VDP template](../templates/VDP_TEMPLATE.md).
+## Metadata Validation
 
-TODO: Define authoring and review expectations.
+Extracted YAML front matter must validate against [VDP metadata schema](../schemas/vdp.schema.json).
 
-## Responsibilities
+The schema validates metadata only. Markdown body validation and lifecycle gate validation are deferred to future tooling or specifications.
 
-### Authors
+## Identifier Rules
 
-TODO
+Standard VDP identifiers use `VDP-0000` format.
 
-### Reviewers
+The Veridion Constitution, when authored, is assigned the standard identifier `VDP-0000`; references to `VDP-000` in early planning material are non-canonical.
 
-TODO
+`VDP--001` is the reserved bootstrap identifier for the proposal-system specification itself.
 
-### Maintainers
+No additional reserved identifiers are defined.
 
-TODO
+## Requirement Headings
 
-## Relationship to Lifecycle
+Every normative requirement has a stable visible Markdown heading.
 
-Proposal stage responsibilities are described in [proposal lifecycle](proposal-lifecycle.md).
+The canonical format is:
 
-TODO: Define lifecycle transitions through governance.
+```text
+### <VDP identifier>-REQ-<three-digit number> — <short title>
+```
 
+Requirement identifiers become immutable once a VDP reaches Discussion. Retired requirement identifiers must not be reused.
+
+## Body Sections
+
+VDP bodies must use [VDP template](../templates/VDP_TEMPLATE.md).
+
+Sections must not be silently deleted from the template.
+
+## Required Sections
+
+- Abstract
+- Motivation
+- Goals
+- Non Goals
+- Terminology
+- Problem Statement
+- Proposed Design
+- Normative Requirements
+- Informative Notes
+- Validation Strategy
+- Security Considerations
+- Performance Considerations
+- Compatibility
+- Migration
+- Extensibility
+- Alternatives Considered
+- Open Questions
+- Future Work
+- References
+
+## Conditional Sections
+
+- Background
+- Architecture
+- Interfaces
+- Algorithms
+- Evidence Requirements
+- Reasoning Requirements
+- Scoring Considerations
+- Appendices
+
+Conditional sections must still appear in the document. A contributor may use `Not applicable.` with a short rationale.
+
+## TODO and Placeholder Rules
+
+Draft proposals may contain unresolved placeholders.
+
+Discussion proposals may retain placeholders only when they clearly identify unresolved content.
+
+Accepted proposals must not contain unresolved placeholders in normative sections.
+
+## Normative and Informative Content
+
+Normative requirements belong in the Normative Requirements section.
+
+Explanatory material belongs in Informative Notes or other non-normative sections.
+
+Casual prose should avoid uppercase normative terms unless a requirement is intended.
+
+The normative authority hierarchy is:
+
+1. Normative Requirements in the authoritative Markdown VDP.
+2. Other normative language in the authoritative Markdown VDP.
+3. YAML front matter for metadata only.
+4. Informative text for interpretation only.
+5. Derived artifacts, summaries, embeddings, generated JSON, MCP responses, and model interpretations as non-authoritative outputs.
+
+## RFC 2119 and RFC 8174 Terminology
+
+The key words MUST, MUST NOT, SHALL, SHALL NOT, SHOULD, SHOULD NOT, MAY, and OPTIONAL are to be interpreted according to RFC 2119 and RFC 8174 only when written in uppercase.
+
+SHOULD requires an understood and documented reason when not followed.
+
+This document does not define framework-specific meanings for RFC terminology.
+
+## Dependencies and Supersession
+
+Dependencies are listed in `dependencies` as VDP identifiers.
+
+Superseded proposals are listed in `supersedes` as VDP identifiers.
+
+A direct replacement is listed in `superseded_by` as a VDP identifier, or `null` when no direct replacement exists.
+
+## Conformance Scopes
+
+Document conformance applies to VDP files.
+
+Core processor conformance applies to parsing, metadata validation, section extraction, and diagnostics.
+
+Extended capability conformance applies only to claimed capabilities such as MCP, CLI, agents, plugins, hosted services, or graph analysis.
+
+A processor is not non-conforming merely because it does not implement an optional capability it does not claim.
+
+## Capability-Conditional Requirements
+
+Requirements for CLI, MCP, agent, hosted, plugin, graph, or other extended behavior apply only when that capability is claimed.
+
+## Amendments
+
+During a normative amendment, the working revision enters Discussion while the latest previously Accepted revision remains authoritative.
+
+The amended revision becomes authoritative only after acceptance.
+
+Tools must distinguish working revisions from authoritative revisions.
+
+## Lifecycle
+
+Proposal stage responsibilities and transition gates are described in [proposal lifecycle](proposal-lifecycle.md).
+
+Acceptance authority is intentionally deferred to a future governance specification except for the one-time bootstrap rule defined by VDP--001.
+
+## References
+
+- RFC 2119: Key words for use in RFCs to Indicate Requirement Levels
+- RFC 8174: Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words
+- Semantic Versioning 2.0.0
+- JSON Schema Draft 2020-12
