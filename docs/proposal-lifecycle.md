@@ -1,56 +1,142 @@
-# Proposal Lifecycle
+---
+title: Proposal Lifecycle
+purpose: Describe Veridion Design Proposal stages, transitions, and artifact-level gates.
+status: Placeholder
+owner: TODO
+related_documents:
+  - specification-process.md
+  - ../templates/VDP_TEMPLATE.md
+  - ../schemas/vdp.schema.json
+last_updated: TODO
+---
 
-**Purpose:** Describe Veridion Design Proposal stages and stage responsibilities.
-**Status:** Placeholder
-**Owner:** TODO
-**Related Documents:** [specification-process.md](specification-process.md), [../templates/VDP_TEMPLATE.md](../templates/VDP_TEMPLATE.md), [../schemas/vdp.schema.json](../schemas/vdp.schema.json)
-**Last Updated:** TODO
+# Proposal Lifecycle
 
 ## Purpose
 
-This document describes proposal lifecycle stages only.
+This document defines proposal lifecycle stages, legal transitions, prohibited transitions, and minimum artifact-level gates.
 
-It does not define governance authority, acceptance criteria, implementation behavior, or framework architecture.
+It does not define governance authority, approval bodies, voting rules, implementation behavior, or framework architecture.
 
-## Stages
+Acceptance authority is intentionally deferred to a future governance specification.
 
-### Draft
+## Statuses
 
-Responsible for capturing an initial proposal in the required VDP format.
+- Draft
+- Discussion
+- Accepted
+- Implemented
+- Stable
+- Deprecated
 
-TODO: Define draft entry requirements.
+## Legal Transitions
 
-### Discussion
+- Draft -> Discussion
+- Discussion -> Draft
+- Discussion -> Accepted
+- Accepted -> Implemented
+- Implemented -> Stable
+- Accepted -> Deprecated
+- Implemented -> Deprecated
+- Stable -> Deprecated
 
-Responsible for collecting review, questions, and refinement before acceptance.
+```mermaid
+stateDiagram-v2
+    Draft --> Discussion
+    Discussion --> Draft
+    Discussion --> Accepted
+    Accepted --> Implemented
+    Implemented --> Stable
+    Accepted --> Deprecated
+    Implemented --> Deprecated
+    Stable --> Deprecated
+```
 
-TODO: Define discussion responsibilities.
+## Prohibited Transitions
 
-### Accepted
+The following transitions are prohibited unless a future governance specification changes them:
 
-Responsible for marking a proposal as approved for future implementation work.
+- Draft -> Implemented
+- Draft -> Stable
+- Discussion -> Implemented
+- Accepted -> Draft
+- Stable -> Draft
+- Deprecated -> Stable
+- Deprecated -> Accepted
 
-TODO: Define acceptance responsibilities.
+## Draft Gates
 
-### Implemented
+A VDP may be marked Draft only if:
 
-Responsible for indicating that implementation work associated with an accepted proposal exists.
+- YAML front matter exists.
+- All required metadata fields exist.
+- The document validates against [VDP metadata schema](../schemas/vdp.schema.json).
+- Abstract, Motivation, Goals, and Non Goals exist.
+- Unresolved content may contain TODO markers.
+- Open questions may remain.
 
-TODO: Define implementation verification responsibilities.
+## Discussion Gates
 
-### Stable
+A VDP may enter Discussion only if:
 
-Responsible for indicating that an implemented proposal has reached a stable state.
+- Draft gates pass.
+- Problem Statement is present.
+- Proposed Design is present.
+- Alternatives Considered is present.
+- Security Considerations is present.
+- Performance Considerations is present.
+- Open Questions are explicitly listed.
+- Placeholders clearly indicate unresolved sections.
 
-TODO: Define stability responsibilities.
+## Accepted Gates
 
-### Deprecated
+A VDP may be marked Accepted only if:
 
-Responsible for indicating that a proposal is no longer the preferred reference.
+- Discussion gates pass.
+- No unresolved TODO markers remain in normative sections.
+- Normative Requirements exist.
+- Validation Strategy exists.
+- Compatibility is addressed.
+- Migration is addressed or explicitly marked not applicable with rationale.
+- References are supplied where external standards are invoked.
+- All known open questions are resolved or explicitly deferred.
+- Required reviews are complete, though reviewer authority is governed elsewhere.
 
-TODO: Define deprecation responsibilities.
+## Implemented Gates
 
-## Transitions
+A VDP may be marked Implemented only if:
 
-TODO: Define lifecycle transitions through future governance work.
+- It is already Accepted.
+- Implementation evidence is linked.
+- Validation evidence is linked.
+- Known deviations from the accepted design are documented.
+- Implementation status is not inferred merely from code presence.
 
+## Stable Gates
+
+A VDP may be marked Stable only if:
+
+- It is already Implemented.
+- Validation has been completed.
+- No unresolved critical deviations remain.
+- Compatibility and migration statements reflect actual implementation.
+- Operational or usage evidence exists where applicable.
+
+## Deprecated Gates
+
+A VDP may be marked Deprecated only if:
+
+- The rationale is documented.
+- Replacement or superseding proposals are identified when they exist.
+- Migration guidance is provided where applicable.
+- `superseded_by` is populated when a direct replacement exists.
+
+## Deprecation Behavior
+
+Deprecated proposals remain part of the record.
+
+Deprecation does not imply deletion.
+
+## Notes
+
+These gates are minimum artifact requirements only. They do not define approval authority.

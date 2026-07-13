@@ -1,172 +1,129 @@
-# VDP Example
+---
+identifier: VDP-9999
+title: Formatting Example
+status: Draft
+version: 0.1.0
+authors:
+  - Example Author
+reviewers: []
+created: "2026-07-13"
+updated: "2026-07-13"
+dependencies: []
+supersedes: []
+superseded_by: null
+category: example
+tags:
+  - formatting
+---
 
-**Purpose:** Show the minimal formatting shape of a Veridion Design Proposal.
-**Status:** Example
-**Owner:** TODO
-**Related Documents:** [../templates/VDP_TEMPLATE.md](../templates/VDP_TEMPLATE.md), [../docs/specification-process.md](../docs/specification-process.md), [../schemas/vdp.schema.json](../schemas/vdp.schema.json)
-**Last Updated:** TODO
+# Formatting Example
 
-## Metadata
+This document demonstrates proposal formatting only. It does not define Veridion behavior.
 
-### Identifier
+## Abstract
 
-VDP-EXAMPLE
+Placeholder prose for a short proposal summary.
 
-### Title
+## Motivation
 
-Placeholder
+Placeholder prose for why a proposal exists.
 
-### Status
+## Goals
 
-Draft
+- Placeholder goal.
 
-### Version
+## Non Goals
 
-TODO
+- Placeholder non-goal.
 
-### Authors
+## Terminology
 
-TODO
+- Placeholder term: placeholder definition.
 
-### Reviewers
+## Background
 
-TODO
+Not applicable. This formatting example does not require background context.
 
-### Created
+## Problem Statement
 
-TODO
+Placeholder prose for the problem statement.
 
-### Updated
+## Proposed Design
 
-TODO
+Placeholder prose for the proposed design.
 
-### Dependencies
+## Normative Requirements
 
-TODO
+- The proposal MUST replace placeholder requirements before acceptance.
 
-### Supersedes
+## Informative Notes
 
-TODO
+This paragraph is explanatory and non-normative.
 
-### Superseded By
+## Architecture
 
-TODO
+Not applicable. This formatting example does not define architecture.
 
-### Category
+## Interfaces
 
-TODO
+Not applicable. This formatting example does not define interfaces.
 
-### Tags
+## Algorithms
 
-TODO
+Not applicable. This formatting example does not define algorithms.
 
-## Body
+## Evidence Requirements
 
-### Abstract
+Not applicable. This formatting example does not define evidence requirements.
 
-Placeholder.
+## Reasoning Requirements
 
-### Motivation
+Not applicable. This formatting example does not define reasoning requirements.
 
-TODO.
+## Validation Strategy
 
-### Goals
+Placeholder prose for validation strategy.
 
-To be defined.
+## Scoring Considerations
 
-### Non Goals
+Not applicable. This formatting example does not define scoring.
 
-TODO.
+## Security Considerations
 
-### Terminology
+Placeholder prose for security considerations.
 
-Placeholder.
+## Performance Considerations
 
-### Background
+Placeholder prose for performance considerations.
 
-To be defined.
+## Compatibility
 
-### Problem Statement
+Placeholder prose for compatibility.
 
-TODO.
+## Migration
 
-### Proposed Design
+Not applicable. This formatting example does not require migration.
 
-Placeholder.
+## Extensibility
 
-### Normative Requirements
+Placeholder prose for extensibility.
 
-To be defined.
+## Alternatives Considered
 
-### Informative Notes
+Placeholder prose for alternatives considered.
 
-TODO.
+## Open Questions
 
-### Architecture
+- Placeholder open question.
 
-Placeholder.
+## Future Work
 
-### Interfaces
+Placeholder prose for future work.
 
-To be defined.
+## References
 
-### Algorithms
+- Placeholder reference.
 
-TODO.
+## Appendices
 
-### Evidence Requirements
-
-Placeholder.
-
-### Reasoning Requirements
-
-To be defined.
-
-### Validation Strategy
-
-TODO.
-
-### Scoring Considerations
-
-Placeholder.
-
-### Security Considerations
-
-To be defined.
-
-### Performance Considerations
-
-TODO.
-
-### Compatibility
-
-Placeholder.
-
-### Migration
-
-To be defined.
-
-### Extensibility
-
-TODO.
-
-### Alternatives Considered
-
-Placeholder.
-
-### Open Questions
-
-To be defined.
-
-### Future Work
-
-TODO.
-
-### References
-
-Placeholder.
-
-### Appendices
-
-To be defined.
-
+Not applicable. This formatting example does not require appendices.

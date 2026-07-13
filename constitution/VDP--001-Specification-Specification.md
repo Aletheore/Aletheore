@@ -1,172 +1,131 @@
-# VDP--001 Specification Specification
+---
+identifier: VDP--001
+title: Specification Specification
+status: Draft
+version: 0.1.0
+authors:
+  - Arihant Kaul
+reviewers: []
+created: "2026-07-13"
+updated: "2026-07-13"
+dependencies: []
+supersedes: []
+superseded_by: null
+category: constitution
+tags:
+  - proposal-system
+---
 
-**Purpose:** Establish the placeholder structure for the Veridion Proposal System specification.
-**Status:** Draft
-**Owner:** TODO
-**Related Documents:** [../templates/VDP_TEMPLATE.md](../templates/VDP_TEMPLATE.md), [../schemas/vdp.schema.json](../schemas/vdp.schema.json), [../docs/specification-process.md](../docs/specification-process.md), [../docs/proposal-lifecycle.md](../docs/proposal-lifecycle.md)
-**Last Updated:** TODO
+# Specification Specification
 
-## Metadata
+VDP--001 is the reserved bootstrap identifier for the Veridion Proposal System specification itself. No other reserved negative-form identifiers are defined.
 
-### Identifier
+This scaffold does not define Veridion product behavior.
 
-VDP--001
-
-### Title
-
-Specification Specification
-
-### Status
-
-Draft
-
-### Version
-
-TODO
-
-### Authors
+## Abstract
 
 TODO
 
-### Reviewers
+## Motivation
 
 TODO
 
-### Created
+## Goals
 
 TODO
 
-### Updated
+## Non Goals
 
 TODO
 
-### Dependencies
+## Terminology
 
 TODO
 
-### Supersedes
+## Background
 
 TODO
 
-### Superseded By
+## Problem Statement
 
 TODO
 
-### Category
+## Proposed Design
 
 TODO
 
-### Tags
+## Normative Requirements
 
 TODO
 
-## Body
-
-### Abstract
+## Informative Notes
 
 TODO
 
-### Motivation
+## Architecture
 
 TODO
 
-### Goals
+## Interfaces
 
 TODO
 
-### Non Goals
+## Algorithms
 
 TODO
 
-### Terminology
+## Evidence Requirements
 
 TODO
 
-### Background
+## Reasoning Requirements
 
 TODO
 
-### Problem Statement
+## Validation Strategy
 
 TODO
 
-### Proposed Design
+## Scoring Considerations
 
 TODO
 
-### Normative Requirements
+## Security Considerations
 
 TODO
 
-### Informative Notes
+## Performance Considerations
 
 TODO
 
-### Architecture
+## Compatibility
 
 TODO
 
-### Interfaces
+## Migration
 
 TODO
 
-### Algorithms
+## Extensibility
 
 TODO
 
-### Evidence Requirements
+## Alternatives Considered
 
 TODO
 
-### Reasoning Requirements
+## Open Questions
 
 TODO
 
-### Validation Strategy
+## Future Work
 
 TODO
 
-### Scoring Considerations
+## References
 
 TODO
 
-### Security Considerations
+## Appendices
 
 TODO
-
-### Performance Considerations
-
-TODO
-
-### Compatibility
-
-TODO
-
-### Migration
-
-TODO
-
-### Extensibility
-
-TODO
-
-### Alternatives Considered
-
-TODO
-
-### Open Questions
-
-TODO
-
-### Future Work
-
-TODO
-
-### References
-
-TODO
-
-### Appendices
-
-TODO
-
