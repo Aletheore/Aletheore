@@ -86,7 +86,7 @@ A VDP may enter Discussion only if:
 - Security Considerations is present.
 - Performance Considerations is present.
 - Open Questions are explicitly listed.
-- Placeholders clearly indicate unresolved sections.
+- Any placeholders that remain clearly identify unresolved content.
 
 ## Accepted Gates
 

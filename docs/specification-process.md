@@ -52,6 +52,8 @@ The schema validates metadata only. Markdown body validation is outside the JSON
 
 Standard VDP identifiers use `VDP-0000` format.
 
+The Veridion Constitution, when authored, is assigned the standard identifier `VDP-0000`; references to `VDP-000` in early planning material are non-canonical.
+
 `VDP--001` is the reserved bootstrap identifier for the proposal-system specification itself.
 
 No additional reserved identifiers are defined.
@@ -101,7 +103,7 @@ Conditional sections must still appear in the document. A contributor may use `N
 
 Draft proposals may contain TODO markers.
 
-Discussion proposals may contain placeholders only when unresolved sections are clearly marked.
+Discussion proposals may retain placeholders only when they clearly identify unresolved content.
 
 Accepted proposals must not contain unresolved TODO markers in normative sections.
 
