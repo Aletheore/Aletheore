@@ -83,3 +83,17 @@ This authority applied only to the first acceptance of VDP--001 and expired imme
 **Consequences**
 
 VDP--001 version 1.0.0 is the first Accepted revision of the Veridion Proposal System specification. It is not yet Implemented or Stable. Future amendments must follow the accepted proposal-system rules.
+
+## 2026-07-14 — Draft constitutional governance model
+
+**Decision**
+
+VDP-0000 adopts a phased founder-to-institution governance design: Founder Stewardship, Maintainer Governance, and Constitutional Governance.
+
+**Rationale**
+
+Documents and accepted records are authoritative over implementation behavior and repository access. AI systems may participate as drafting, analysis, validation, and review aids, but they are not governance authorities.
+
+**Consequences**
+
+The initial Constitution will require a one-time Constituent Ratification Record before acceptance. This entry records the draft architecture only and does not ratify or accept VDP-0000.
