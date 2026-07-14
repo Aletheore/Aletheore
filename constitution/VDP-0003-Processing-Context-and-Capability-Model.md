@@ -327,7 +327,7 @@ Unsupported MUST mean the implementation does not claim the requested capability
 
 Partially supported MUST mean the implementation claims some but not all requested capability behavior and must disclose limitations.
 
-### VDP-0003-REQ-054 — Deprecated result
+### VDP-0003-REQ-054 — Availability status
 
 Availability status MUST explain whether supported or partially supported behavior is available, blocked by policy, unavailable in the environment, dependency-unsatisfied, version-incompatible, or deferred for the current request.
 
