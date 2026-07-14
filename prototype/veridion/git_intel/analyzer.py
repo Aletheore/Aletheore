@@ -39,6 +39,8 @@ def _parse_branches(repo_path: Path, now: datetime) -> list[dict]:
         if not line.strip():
             continue
         name, date_str = line.split("\t")
+        if name in remotes or name.endswith("/HEAD"):
+            continue
         branch_type = "remote" if name.startswith("origin/") or (
             "/" in name and name.split("/")[0] in remotes
         ) else "local"

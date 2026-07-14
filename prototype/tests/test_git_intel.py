@@ -93,3 +93,19 @@ def test_analyze_git_totals(tmp_path):
     result = analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
     assert result["total_commits"] == 3
     assert result["repo_age_days"] == 43
+
+
+def test_analyze_git_ignores_remote_head_symbolic_ref(tmp_path):
+    repo = make_git_repo(tmp_path)
+    remote = tmp_path / "remote.git"
+    run(remote.parent, "init", "--bare", remote.name)
+    run(repo, "remote", "add", "origin", str(remote))
+    run(repo, "push", "-u", "origin", "main")
+    run(repo, "remote", "set-head", "origin", "main")
+
+    result = analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+    branch_names = {branch["name"] for branch in result["branches"]}
+
+    assert "origin/main" in branch_names
+    assert "origin" not in branch_names
+    assert "origin/HEAD" not in branch_names
