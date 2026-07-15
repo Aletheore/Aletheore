@@ -10,11 +10,13 @@ from veridion.scanner.detect import (
     detect_monorepo,
 )
 from veridion.scanner.graph import build_module_graph
+from veridion.secrets import find_secrets
+from veridion.vulnerabilities import check_vulnerabilities as check_dependency_vulnerabilities
 
 EVIDENCE_VERSION = "0.1.0"
 
 
-def scan_repository(repo_path: Path) -> dict:
+def scan_repository(repo_path: Path, check_vulnerabilities: bool = True) -> dict:
     repo_path = repo_path.resolve()
 
     languages = detect_languages(repo_path)
@@ -23,6 +25,16 @@ def scan_repository(repo_path: Path) -> dict:
     monorepo = detect_monorepo(repo_path)
     modules, dependency_graph, unparseable_files = build_module_graph(repo_path)
     git_data = analyze_git(repo_path)
+    secrets_data = find_secrets(repo_path)
+
+    if check_vulnerabilities:
+        vulnerabilities_data = check_dependency_vulnerabilities(repo_path)
+    else:
+        vulnerabilities_data = {
+            "checked": False,
+            "reason": "skipped (--no-check-vulnerabilities)",
+            "findings": [],
+        }
 
     return {
         "veridion_version": EVIDENCE_VERSION,
@@ -38,6 +50,10 @@ def scan_repository(repo_path: Path) -> dict:
             "unparseable_files": unparseable_files,
         },
         "git": git_data,
+        "security": {
+            "secrets": secrets_data,
+            "dependency_vulnerabilities": vulnerabilities_data,
+        },
     }
 
 

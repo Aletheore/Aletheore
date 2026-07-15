@@ -16,11 +16,11 @@ KNOWN_ADAPTERS = [ClaudeCodeAdapter()]
 MANUAL_DIR = str(Path(__file__).resolve().parent.parent / "manual")
 
 
-def _audit(repo_path: str, forced_agent: str | None) -> int:
+def _audit(repo_path: str, forced_agent: str | None, check_vulnerabilities: bool) -> int:
     repo = Path(repo_path).resolve()
 
     print(f"Scanning {repo}...")
-    evidence = scan_repository(repo)
+    evidence = scan_repository(repo, check_vulnerabilities=check_vulnerabilities)
     evidence_path = write_evidence(evidence, repo)
     print(f"Evidence written to {evidence_path}")
 
@@ -52,11 +52,18 @@ def main() -> int:
     audit_parser = subparsers.add_parser("audit", help="audit a repository")
     audit_parser.add_argument("path", nargs="?", default=".")
     audit_parser.add_argument("--agent", default=None, help="force a specific agent adapter by name")
+    audit_parser.add_argument(
+        "--no-check-vulnerabilities",
+        dest="check_vulnerabilities",
+        action="store_false",
+        default=True,
+        help="skip the OSV.dev dependency-vulnerability check (on by default)",
+    )
 
     args = parser.parse_args()
 
     if args.command == "audit":
-        return _audit(args.path, args.agent)
+        return _audit(args.path, args.agent, args.check_vulnerabilities)
 
     parser.print_help()
     return 1

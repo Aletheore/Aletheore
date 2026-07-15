@@ -1,6 +1,7 @@
 import json
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 from veridion.evidence import scan_repository, write_evidence
 
@@ -24,7 +25,9 @@ def make_repo(tmp_path: Path) -> Path:
 
 def test_scan_repository_produces_full_schema(tmp_path):
     repo = make_repo(tmp_path)
-    evidence = scan_repository(repo)
+    with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo)
 
     assert evidence["veridion_version"] == "0.1.0"
     assert "scanned_at" in evidence
@@ -42,16 +45,48 @@ def test_scan_repository_handles_no_git_history(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "main.py").write_text("x = 1\n")
-    evidence = scan_repository(repo)
+    evidence = scan_repository(repo, check_vulnerabilities=False)
     assert evidence["git"] == {"available": False}
 
 
 def test_write_evidence_creates_veridion_dir(tmp_path):
     repo = make_repo(tmp_path)
-    evidence = scan_repository(repo)
+    evidence = scan_repository(repo, check_vulnerabilities=False)
     written_path = write_evidence(evidence, repo)
 
     assert written_path == repo / ".veridion" / "evidence.json"
     assert written_path.exists()
     loaded = json.loads(written_path.read_text())
     assert loaded["veridion_version"] == "0.1.0"
+
+
+def test_scan_repository_includes_security_block(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("x = 1\n")
+
+    with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo)
+
+    assert "security" in evidence
+    assert "secrets" in evidence["security"]
+    assert evidence["security"]["secrets"]["scanned_files"] >= 1
+    assert evidence["security"]["dependency_vulnerabilities"]["checked"] is True
+    mock_check.assert_called_once()
+
+
+def test_scan_repository_skips_vulnerability_check_when_disabled(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("x = 1\n")
+
+    with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
+        evidence = scan_repository(repo, check_vulnerabilities=False)
+
+    mock_check.assert_not_called()
+    assert evidence["security"]["dependency_vulnerabilities"] == {
+        "checked": False,
+        "reason": "skipped (--no-check-vulnerabilities)",
+        "findings": [],
+    }

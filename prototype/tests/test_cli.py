@@ -1,3 +1,5 @@
+import json
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -103,4 +105,23 @@ def test_main_audit_invokes_audit_flow(tmp_path):
         with patch("veridion.cli._audit", return_value=0) as mock_audit:
             exit_code = main()
     assert exit_code == 0
-    mock_audit.assert_called_once_with(str(tmp_path), "claude")
+    mock_audit.assert_called_once_with(str(tmp_path), "claude", True)
+
+
+def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path, monkeypatch):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["veridion", "audit", str(repo), "--no-check-vulnerabilities", "--agent", "nonexistent"],
+    )
+
+    main()
+
+    evidence = json.loads((repo / ".veridion" / "evidence.json").read_text())
+    assert evidence["security"]["dependency_vulnerabilities"]["checked"] is False
+    assert (
+        evidence["security"]["dependency_vulnerabilities"]["reason"]
+        == "skipped (--no-check-vulnerabilities)"
+    )
