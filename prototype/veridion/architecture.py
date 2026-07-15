@@ -44,12 +44,12 @@ LAYER_FOLDER_MARKERS = {
 }
 
 
-def build_clusters(dependency_graph: dict) -> tuple[list[dict], list[dict]]:
+def build_clusters(dependency_graph: dict, resolution: float = 1.0) -> tuple[list[dict], list[dict]]:
     graph = nx.Graph()
     graph.add_nodes_from(dependency_graph["nodes"])
     graph.add_edges_from(dependency_graph["edges"])
 
-    communities = list(greedy_modularity_communities(graph))
+    communities = list(greedy_modularity_communities(graph, resolution=resolution))
 
     cluster_of: dict[str, int] = {}
     clusters = []
@@ -78,24 +78,26 @@ def build_clusters(dependency_graph: dict) -> tuple[list[dict], list[dict]]:
     return clusters, cross_cluster_edges
 
 
-def _classify_module_rank(rel_path: str) -> tuple[str, int] | None:
+def _classify_module_rank(rel_path: str, markers: dict[str, int]) -> tuple[str, int] | None:
     parts = Path(rel_path).parts
     for part in parts[:-1]:
-        if part in LAYER_FOLDER_MARKERS:
-            return part, LAYER_FOLDER_MARKERS[part]
+        if part in markers:
+            return part, markers[part]
     return None
 
 
-def detect_layer_violations(dependency_graph: dict) -> dict:
+def detect_layer_violations(
+    dependency_graph: dict, custom_markers: dict[str, int] | None = None
+) -> dict:
+    effective_markers = {**LAYER_FOLDER_MARKERS, **(custom_markers or {})}
+
     classifications: dict[str, tuple[str, int]] = {}
     for node in dependency_graph["nodes"]:
-        result = _classify_module_rank(node)
+        result = _classify_module_rank(node, effective_markers)
         if result is not None:
             classifications[node] = result
 
     distinct_ranks = {rank for _, rank in classifications.values()}
-    if len(distinct_ranks) < 2:
-        return {"convention_detected": False, "layers": [], "violations": []}
 
     layer_folders: dict[str, set[str]] = {}
     for node, (name, _rank) in classifications.items():
@@ -105,9 +107,12 @@ def detect_layer_violations(dependency_graph: dict) -> dict:
         layer_folders.setdefault(name, set()).add(folder)
 
     layers = [
-        {"name": name, "rank": LAYER_FOLDER_MARKERS[name], "folders": sorted(folders)}
+        {"name": name, "rank": effective_markers[name], "folders": sorted(folders)}
         for name, folders in sorted(layer_folders.items())
     ]
+
+    if len(distinct_ranks) < 2 and custom_markers is None:
+        return {"convention_detected": False, "layers": [], "violations": []}
 
     violations = []
     for from_node, to_node in dependency_graph["edges"]:

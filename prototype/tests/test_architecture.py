@@ -182,3 +182,50 @@ def test_load_architecture_config_fills_defaults_when_only_one_key_present(tmp_p
     result = load_architecture_config(repo)
 
     assert result == {"layer_markers": {"biz": 1}, "cluster_resolution": 1.0}
+
+
+def test_build_clusters_resolution_parameter_changes_cluster_count():
+    dependency_graph = {
+        "nodes": ["a", "b", "c", "d", "e", "f"],
+        "edges": [
+            ["a", "b"], ["a", "c"], ["b", "c"],
+            ["d", "e"], ["d", "f"], ["e", "f"],
+            ["c", "d"],
+        ],
+    }
+
+    clusters_default, _ = build_clusters(dependency_graph)
+    clusters_high_resolution, _ = build_clusters(dependency_graph, resolution=5.0)
+
+    assert len(clusters_default) == 2
+    assert len(clusters_high_resolution) == 6
+
+
+def test_detect_layer_violations_custom_marker_enables_detection():
+    dependency_graph = {
+        "nodes": ["app/biz/order.py", "app/routers/orders.py"],
+        "edges": [["app/routers/orders.py", "app/biz/order.py"]],
+    }
+
+    without_custom = detect_layer_violations(dependency_graph)
+    assert without_custom["convention_detected"] is False
+
+    with_custom = detect_layer_violations(dependency_graph, custom_markers={"biz": 1})
+    assert with_custom["convention_detected"] is True
+    layer_names = {layer["name"] for layer in with_custom["layers"]}
+    assert layer_names == {"biz", "routers"}
+
+
+def test_detect_layer_violations_custom_marker_overrides_built_in_rank():
+    dependency_graph = {
+        "nodes": ["app/domain/user.py", "app/services/auth.py"],
+        "edges": [["app/domain/user.py", "app/services/auth.py"]],
+    }
+
+    default_result = detect_layer_violations(dependency_graph)
+    assert len(default_result["violations"]) == 1
+
+    overridden_result = detect_layer_violations(dependency_graph, custom_markers={"services": 0})
+    assert overridden_result["violations"] == []
+    services_layer = next(l for l in overridden_result["layers"] if l["name"] == "services")
+    assert services_layer["rank"] == 0
