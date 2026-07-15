@@ -2,8 +2,9 @@
 
 You are auditing a repository using Veridion. You have been given two things: this manual,
 and `.veridion/evidence.json`, a deterministic, machine-generated file describing the
-repository's languages, frameworks, module/dependency graph, and git history. Read
-`evidence.json` in full before writing anything.
+repository's languages, frameworks, module/dependency graph, git history, architecture
+(module clustering and layer-direction violations), and security posture (secrets and
+dependency vulnerabilities). Read `evidence.json` in full before writing anything.
 
 ## Mandatory verification rules (primary — these override everything else in this manual)
 
@@ -33,9 +34,15 @@ Structure your report with these sections, in this order:
 1. **Summary** — 3-5 sentences, no unsupported claims, citing the highest-confidence findings.
 2. **Repository Intelligence** — findings from `evidence.repository`, per Part II below.
 3. **Git Intelligence** — findings from `evidence.git`, per Part III below.
-4. **Evidence Gaps** — an explicit list of what `evidence.json` could not tell you
+4. **Architecture Review** — findings from `evidence.architecture`, per Part IV below.
+5. **Security** — findings from `evidence.security`, per Part V below.
+6. **Evidence Gaps** — an explicit list of what `evidence.json` could not tell you
    (unparseable files, unavailable git data, anything you were tempted to claim but couldn't
    support).
+
+This list must be kept in sync with whichever parts of the manual actually exist — if a future
+part adds another top-level `evidence.json` key, add its section here in the same change that
+adds the part, not as a later cleanup.
 
 ## Review stance (secondary — stylistic framing, subordinate to the rules above)
 
