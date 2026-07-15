@@ -1,7 +1,11 @@
 import json
 from pathlib import Path
 
-IGNORED_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".veridion"}
+IGNORED_DIRS = {
+    ".git", "node_modules", "__pycache__", ".venv", "venv", ".veridion",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".cache",
+    "dist", "build", "out", "release", ".next", "coverage", "htmlcov",
+}
 
 EXTENSION_TO_LANGUAGE = {
     ".py": "python",

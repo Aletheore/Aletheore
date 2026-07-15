@@ -62,3 +62,45 @@ def test_build_module_graph_extracts_javascript_imports(tmp_path):
     assert "index.js" in by_path
     assert "utils.js" in by_path["index.js"]["imports"]
     assert unparseable == []
+
+
+def test_build_module_graph_skips_non_source_files_silently(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("x = 1\n")
+    (repo / "data.json").write_text("{}")
+    (repo / "logo.png").write_bytes(b"\x89PNG")
+    (repo / "notes.md").write_text("# hi")
+    modules, _, unparseable = build_module_graph(repo)
+    assert unparseable == []
+    assert {m["path"] for m in modules} == {"main.py"}
+
+
+def test_build_module_graph_ignores_cache_and_build_dirs(tmp_path):
+    repo = tmp_path / "repo"
+    cache = repo / ".mypy_cache" / "3.12"
+    cache.mkdir(parents=True)
+    (cache / "module.data.json").write_text("{}")
+    (repo / "dist").mkdir()
+    (repo / "dist" / "bundle.js").write_text("console.log(1)")
+    (repo / "main.py").write_text("x = 1\n")
+    modules, _, unparseable = build_module_graph(repo)
+    assert unparseable == []
+    assert {m["path"] for m in modules} == {"main.py"}
+
+
+def test_build_module_graph_extracts_typescript_imports(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "utils.ts").write_text(
+        "export function add(a: number, b: number): number { return a + b; }\n"
+    )
+    (repo / "index.ts").write_text(
+        "import { add } from './utils';\n\nfunction main(): number { return add(1, 2); }\n"
+    )
+    modules, dependency_graph, unparseable = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+    assert "index.ts" in by_path
+    assert "utils.ts" in by_path["index.ts"]["imports"]
+    assert "add" in by_path["utils.ts"]["symbols"]["functions"]
+    assert unparseable == []

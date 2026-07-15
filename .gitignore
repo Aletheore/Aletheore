@@ -27,3 +27,6 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# Veridion prototype scan output (generated locally by `veridion audit`)
+.veridion/

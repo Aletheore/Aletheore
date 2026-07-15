@@ -2,17 +2,34 @@ from pathlib import Path
 
 import tree_sitter_javascript as tsjavascript
 import tree_sitter_python as tspython
+import tree_sitter_typescript as tstypescript
 from tree_sitter import Language, Node, Parser
 
-IGNORED_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".veridion"}
+from veridion.scanner.detect import IGNORED_DIRS
 
 PY_LANGUAGE = Language(tspython.language())
 JS_LANGUAGE = Language(tsjavascript.language())
+TS_LANGUAGE = Language(tstypescript.language_typescript())
+TSX_LANGUAGE = Language(tstypescript.language_tsx())
 
 LANGUAGE_BY_EXTENSION = {
     ".py": ("python", PY_LANGUAGE),
     ".js": ("javascript", JS_LANGUAGE),
     ".jsx": ("javascript", JS_LANGUAGE),
+    ".ts": ("typescript", TS_LANGUAGE),
+    ".tsx": ("typescript", TSX_LANGUAGE),
+}
+
+# Extensions that are recognizable programming languages we don't yet have a grammar
+# for. Only these count as "unparseable" coverage gaps. Everything else (assets, docs,
+# configs, lock files, tool caches not already excluded by IGNORED_DIRS) was never
+# source code and is skipped silently rather than reported as a gap - otherwise
+# unparseable_files balloons with noise (a real repo scan turned up 19k+ .json files
+# from an untracked cache directory before IGNORED_DIRS was widened, none of which
+# were ever "unparseable source").
+KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR = {
+    ".swift", ".go", ".rs", ".java", ".rb", ".c", ".cpp", ".cc", ".h", ".hpp",
+    ".cs", ".kt", ".kts", ".m", ".mm", ".scala", ".php",
 }
 
 
@@ -129,11 +146,18 @@ def _resolve_python_from_import(repo_path: Path, module_name: str, imported_name
     return _resolve_python_module(repo_path, module_name)
 
 
+JS_FAMILY_EXTENSIONS = (".js", ".jsx", ".ts", ".tsx")
+
+
 def _resolve_js_import(repo_path: Path, from_file: Path, spec: str) -> str | None:
     if not spec.startswith("."):
         return None
     base = (from_file.parent / spec).resolve()
-    for candidate in (base, base.with_suffix(".js"), base / "index.js"):
+    candidates = [base]
+    for ext in JS_FAMILY_EXTENSIONS:
+        candidates.append(base.with_suffix(ext))
+        candidates.append(base / f"index{ext}")
+    for candidate in candidates:
         if candidate.exists() and candidate.is_file():
             try:
                 return _rel(repo_path, candidate)
@@ -154,9 +178,10 @@ def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
         rel_path = _rel(repo_path, path)
         language_info = LANGUAGE_BY_EXTENSION.get(path.suffix)
         if language_info is None:
-            unparseable.append(
-                {"path": rel_path, "reason": f"no grammar registered for {path.suffix}"}
-            )
+            if path.suffix in KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR:
+                unparseable.append(
+                    {"path": rel_path, "reason": f"no grammar registered for {path.suffix}"}
+                )
             continue
 
         language_name, ts_language = language_info

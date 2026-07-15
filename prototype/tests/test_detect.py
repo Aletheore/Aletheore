@@ -71,3 +71,15 @@ def test_detect_monorepo_false_when_absent(tmp_path):
     result = detect_monorepo(repo)
     assert result["detected"] is False
     assert result["workspaces"] == []
+
+
+def test_detect_languages_ignores_cache_dirs(tmp_path):
+    repo = tmp_path / "repo"
+    cache = repo / ".mypy_cache" / "3.12"
+    cache.mkdir(parents=True)
+    for i in range(50):
+        (cache / f"mod{i}.json").write_text("{}")
+    (repo / "main.py").write_text("x = 1\n")
+    languages = detect_languages(repo)
+    by_name = {entry["name"]: entry for entry in languages}
+    assert by_name["python"]["file_count"] == 1
