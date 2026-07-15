@@ -238,6 +238,143 @@ def test_main_query_unknown_module_errors_clearly(tmp_path, monkeypatch, capsys)
     assert "not present in evidence" in captured.out
 
 
+def make_evidence_file(path: Path, findings: list[dict] | None = None) -> Path:
+    evidence = {
+        "repository": {"modules": [], "dependency_graph": {"nodes": [], "edges": []}},
+        "git": {"total_commits": 0},
+        "security": {
+            "secrets": {
+                "findings": findings or [],
+                "history_scanned_commits": 0,
+                "history_findings": [],
+            },
+            "dependency_vulnerabilities": {"checked": True, "reason": None, "findings": []},
+        },
+        "architecture": {"layer_violations": {"violations": []}},
+    }
+    path.write_text(json.dumps(evidence))
+    return path
+
+
+def test_main_diff_shows_curated_diff_between_two_files(tmp_path, monkeypatch, capsys):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(
+        tmp_path / "new.json",
+        findings=[
+            {
+                "path": "a.py",
+                "pattern": "aws_access_key_id",
+                "match_preview": "AKIA...MNOP",
+                "likely_placeholder": False,
+            }
+        ],
+    )
+
+    monkeypatch.setattr(sys, "argv", ["veridion", "diff", str(old_path), str(new_path)])
+    exit_code = main()
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert len(result["secrets"]["new"]) == 1
+
+
+def test_main_diff_full_flag_returns_raw_diff(tmp_path, monkeypatch, capsys):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(tmp_path / "new.json")
+
+    monkeypatch.setattr(sys, "argv", ["veridion", "diff", str(old_path), str(new_path), "--full"])
+    exit_code = main()
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert set(result.keys()) == {"added", "removed", "changed"}
+
+
+def test_main_diff_fail_on_new_secrets_exits_1_for_a_real_secret(tmp_path, monkeypatch, capsys):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(
+        tmp_path / "new.json",
+        findings=[
+            {
+                "path": "a.py",
+                "pattern": "aws_access_key_id",
+                "match_preview": "AKIA...MNOP",
+                "likely_placeholder": False,
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        sys, "argv", ["veridion", "diff", str(old_path), str(new_path), "--fail-on-new-secrets"]
+    )
+    exit_code = main()
+
+    assert exit_code == 1
+
+
+def test_main_diff_fail_on_new_secrets_exits_0_for_a_placeholder_only(tmp_path, monkeypatch, capsys):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(
+        tmp_path / "new.json",
+        findings=[
+            {
+                "path": "tests/fixture.py",
+                "pattern": "generic_credential_assignment",
+                "match_preview": "test****...cret",
+                "likely_placeholder": True,
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        sys, "argv", ["veridion", "diff", str(old_path), str(new_path), "--fail-on-new-secrets"]
+    )
+    exit_code = main()
+
+    assert exit_code == 0
+
+
+def test_main_diff_fail_on_new_secrets_works_even_with_full_flag(tmp_path, monkeypatch, capsys):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(
+        tmp_path / "new.json",
+        findings=[
+            {
+                "path": "a.py",
+                "pattern": "aws_access_key_id",
+                "match_preview": "AKIA...MNOP",
+                "likely_placeholder": False,
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["veridion", "diff", str(old_path), str(new_path), "--full", "--fail-on-new-secrets"],
+    )
+    exit_code = main()
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert set(result.keys()) == {"added", "removed", "changed"}
+
+
+def test_main_diff_missing_file_errors_cleanly(tmp_path, monkeypatch, capsys):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    missing_path = tmp_path / "does_not_exist.json"
+
+    monkeypatch.setattr(sys, "argv", ["veridion", "diff", str(old_path), str(missing_path)])
+    exit_code = main()
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "not found" in captured.out
+
+
 def test_main_scan_saves_a_history_snapshot(tmp_path, monkeypatch):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")

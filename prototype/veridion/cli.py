@@ -121,6 +121,45 @@ def _query(kind: str, target: str | None, repo_path: str, full: bool = False) ->
     return 0
 
 
+def _diff(old_path: str, new_path: str, full: bool, fail_on_new_secrets: bool) -> int:
+    old_file = Path(old_path)
+    new_file = Path(new_path)
+
+    if not old_file.exists():
+        print(f"error: evidence file not found: {old_file}")
+        return 1
+    if not new_file.exists():
+        print(f"error: evidence file not found: {new_file}")
+        return 1
+
+    try:
+        old = json.loads(old_file.read_text())
+    except json.JSONDecodeError:
+        print(f"error: {old_file} is not valid JSON")
+        return 1
+    try:
+        new = json.loads(new_file.read_text())
+    except json.JSONDecodeError:
+        print(f"error: {new_file} is not valid JSON")
+        return 1
+
+    diff = compute_diff(old, new, full=full)
+    print(json.dumps(diff, indent=2))
+
+    if fail_on_new_secrets:
+        curated = diff if not full else compute_diff(old, new, full=False)
+        new_real_secrets = [
+            f for f in curated["secrets"]["new"] if not f.get("likely_placeholder", False)
+        ]
+        new_real_history_secrets = [
+            f for f in curated["history_secrets"]["new"] if not f.get("likely_placeholder", False)
+        ]
+        if new_real_secrets or new_real_history_secrets:
+            return 1
+
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="veridion")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -171,6 +210,23 @@ def main() -> int:
         help="show the full raw diff instead of the curated summary (only applies to 'changes')",
     )
 
+    diff_parser = subparsers.add_parser("diff", help="compare two evidence.json files")
+    diff_parser.add_argument("old", help="path to the baseline evidence.json")
+    diff_parser.add_argument("new", help="path to the comparison evidence.json")
+    diff_parser.add_argument(
+        "--full",
+        action="store_true",
+        default=False,
+        help="show the full raw diff instead of the curated summary",
+    )
+    diff_parser.add_argument(
+        "--fail-on-new-secrets",
+        dest="fail_on_new_secrets",
+        action="store_true",
+        default=False,
+        help="exit 1 if a new real (non-placeholder) secret finding appears",
+    )
+
     args = parser.parse_args()
 
     if args.command == "audit":
@@ -182,6 +238,8 @@ def main() -> int:
         return exit_code
     if args.command == "query":
         return _query(args.kind, args.target, args.repo_path, args.full)
+    if args.command == "diff":
+        return _diff(args.old, args.new, args.full, args.fail_on_new_secrets)
 
     parser.print_help()
     return 1
