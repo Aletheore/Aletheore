@@ -1,7 +1,31 @@
+import json
 from pathlib import Path
 
 import networkx as nx
 from networkx.algorithms.community import greedy_modularity_communities
+
+
+def load_architecture_config(repo_path: Path) -> dict | None:
+    config_file = repo_path / ".veridion.json"
+    if not config_file.exists():
+        return None
+    try:
+        data = json.loads(config_file.read_text(encoding="utf-8", errors="ignore"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    layer_markers = data.get("layer_markers", {})
+    if not isinstance(layer_markers, dict):
+        layer_markers = {}
+
+    cluster_resolution = data.get("cluster_resolution", 1.0)
+    if not isinstance(cluster_resolution, (int, float)) or isinstance(cluster_resolution, bool):
+        cluster_resolution = 1.0
+
+    return {"layer_markers": layer_markers, "cluster_resolution": float(cluster_resolution)}
+
 
 LAYER_FOLDER_MARKERS = {
     "domain": 0,

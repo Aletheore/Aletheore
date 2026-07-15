@@ -1,4 +1,6 @@
-from veridion.architecture import build_clusters, detect_layer_violations
+import json
+
+from veridion.architecture import build_clusters, detect_layer_violations, load_architecture_config
 
 
 def test_build_clusters_finds_two_clusters_with_a_thin_bridge():
@@ -143,3 +145,40 @@ def test_detect_layer_violations_recognizes_infra_abbreviation():
 
     assert result["convention_detected"] is True
     assert len(result["violations"]) == 1
+
+
+def test_load_architecture_config_reads_a_valid_file(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".veridion.json").write_text(
+        json.dumps({"layer_markers": {"biz": 1}, "cluster_resolution": 1.5})
+    )
+
+    result = load_architecture_config(repo)
+
+    assert result == {"layer_markers": {"biz": 1}, "cluster_resolution": 1.5}
+
+
+def test_load_architecture_config_returns_none_when_file_missing(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    assert load_architecture_config(repo) is None
+
+
+def test_load_architecture_config_returns_none_on_malformed_json(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".veridion.json").write_text("{not valid json")
+
+    assert load_architecture_config(repo) is None
+
+
+def test_load_architecture_config_fills_defaults_when_only_one_key_present(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".veridion.json").write_text(json.dumps({"layer_markers": {"biz": 1}}))
+
+    result = load_architecture_config(repo)
+
+    assert result == {"layer_markers": {"biz": 1}, "cluster_resolution": 1.0}
