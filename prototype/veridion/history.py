@@ -36,3 +36,127 @@ def list_snapshots(repo_path: Path) -> list[Path]:
     if not history_dir.exists():
         return []
     return sorted(history_dir.glob("*.json"))
+
+
+def _identity_key(finding: dict, fields: tuple[str, ...]) -> tuple:
+    return tuple(finding.get(field) for field in fields)
+
+
+def _new_and_resolved(
+    old_findings: list[dict], new_findings: list[dict], fields: tuple[str, ...]
+) -> tuple[list[dict], list[dict]]:
+    old_keys = {_identity_key(f, fields) for f in old_findings}
+    new_keys = {_identity_key(f, fields) for f in new_findings}
+    new_only = [f for f in new_findings if _identity_key(f, fields) not in old_keys]
+    resolved = [f for f in old_findings if _identity_key(f, fields) not in new_keys]
+    return new_only, resolved
+
+
+def _compute_curated_diff(old: dict, new: dict) -> dict:
+    result: dict = {}
+    caveats = []
+
+    old_vuln_checked = old["security"]["dependency_vulnerabilities"]["checked"]
+    new_vuln_checked = new["security"]["dependency_vulnerabilities"]["checked"]
+    if old_vuln_checked != new_vuln_checked:
+        caveats.append(
+            "dependency-vulnerability checking state changed between scans "
+            f"(was checked={old_vuln_checked}, now checked={new_vuln_checked}) - "
+            "new/resolved vulnerability findings below may reflect checking being "
+            "toggled on/off, not necessarily real changes"
+        )
+
+    old_history_scanned = old["security"]["secrets"]["history_scanned_commits"] > 0
+    new_history_scanned = new["security"]["secrets"]["history_scanned_commits"] > 0
+    if old_history_scanned != new_history_scanned:
+        caveats.append(
+            "git-history secret scanning state changed between scans "
+            f"(was scanned={old_history_scanned}, now scanned={new_history_scanned}) - "
+            "new/resolved history secret findings below may reflect scanning being "
+            "toggled on/off, not necessarily real changes"
+        )
+
+    if caveats:
+        result["caveats"] = caveats
+
+    new_secrets, resolved_secrets = _new_and_resolved(
+        old["security"]["secrets"]["findings"],
+        new["security"]["secrets"]["findings"],
+        ("path", "pattern", "match_preview"),
+    )
+    result["secrets"] = {"new": new_secrets, "resolved": resolved_secrets}
+
+    new_history_secrets, resolved_history_secrets = _new_and_resolved(
+        old["security"]["secrets"]["history_findings"],
+        new["security"]["secrets"]["history_findings"],
+        ("commit", "path", "pattern"),
+    )
+    result["history_secrets"] = {"new": new_history_secrets, "resolved": resolved_history_secrets}
+
+    new_vulns, resolved_vulns = _new_and_resolved(
+        old["security"]["dependency_vulnerabilities"]["findings"],
+        new["security"]["dependency_vulnerabilities"]["findings"],
+        ("ecosystem", "package", "advisory_id"),
+    )
+    result["vulnerabilities"] = {"new": new_vulns, "resolved": resolved_vulns}
+
+    new_violations, resolved_violations = _new_and_resolved(
+        old["architecture"]["layer_violations"]["violations"],
+        new["architecture"]["layer_violations"]["violations"],
+        ("from", "to"),
+    )
+    result["layer_violations"] = {"new": new_violations, "resolved": resolved_violations}
+
+    result["aggregate_deltas"] = {
+        "module_count": len(new["repository"]["modules"]) - len(old["repository"]["modules"]),
+        "dependency_graph_edge_count": (
+            len(new["repository"]["dependency_graph"]["edges"])
+            - len(old["repository"]["dependency_graph"]["edges"])
+        ),
+        "total_commits": new["git"]["total_commits"] - old["git"]["total_commits"],
+    }
+
+    return result
+
+
+def _flatten(obj, prefix: str = "") -> dict:
+    flat: dict = {}
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            new_prefix = f"{prefix}.{key}" if prefix else key
+            flat.update(_flatten(val, new_prefix))
+    elif isinstance(obj, list):
+        for idx, val in enumerate(obj):
+            flat.update(_flatten(val, f"{prefix}[{idx}]"))
+    else:
+        flat[prefix] = obj
+    return flat
+
+
+def _compute_full_diff(old: dict, new: dict) -> dict:
+    old_flat = _flatten(old)
+    new_flat = _flatten(new)
+
+    added = [
+        {"path": path, "value": value}
+        for path, value in sorted(new_flat.items())
+        if path not in old_flat
+    ]
+    removed = [
+        {"path": path, "value": value}
+        for path, value in sorted(old_flat.items())
+        if path not in new_flat
+    ]
+    changed = [
+        {"path": path, "old_value": old_flat[path], "new_value": new_flat[path]}
+        for path in sorted(old_flat.keys() & new_flat.keys())
+        if old_flat[path] != new_flat[path]
+    ]
+
+    return {"added": added, "removed": removed, "changed": changed}
+
+
+def compute_diff(old: dict, new: dict, full: bool = False) -> dict:
+    if full:
+        return _compute_full_diff(old, new)
+    return _compute_curated_diff(old, new)
