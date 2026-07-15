@@ -220,3 +220,14 @@ def test_api_mcp_tools_returns_13_tools(tmp_path):
     names = {t["name"] for t in tools}
     assert "veridion_scan" in names
     assert "veridion_search" in names
+
+
+def test_logo_route_serves_the_bundled_png(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    app = build_app(repo)
+    client = TestClient(app)
+
+    response = client.get("/logo.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"

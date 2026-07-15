@@ -4,7 +4,7 @@ from pathlib import Path
 
 from sse_starlette.sse import EventSourceResponse
 from starlette.applications import Starlette
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.routing import Route
 
 from veridion.history import list_snapshots
@@ -128,6 +128,10 @@ def build_app(repo_path: Path) -> Starlette:
     async def events(request):
         return EventSourceResponse(_watch_evidence_mtime(repo_path))
 
+    async def logo(request):
+        logo_path = Path(__file__).resolve().parent / "static" / "logo.png"
+        return FileResponse(logo_path)
+
     return Starlette(
         routes=[
             Route("/", index),
@@ -136,6 +140,7 @@ def build_app(repo_path: Path) -> Starlette:
             Route("/api/graph", api_graph),
             Route("/api/mcp-tools", api_mcp_tools),
             Route("/events", events),
+            Route("/logo.png", logo),
         ]
     )
 
@@ -146,43 +151,55 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <title>Veridion Dashboard</title>
 <meta charset="utf-8">
 <style>
-  body { font-family: -apple-system, sans-serif; margin: 0; padding: 24px; background: #0b0e14; color: #e6e6e6; }
-  h1 { font-size: 20px; margin-bottom: 4px; }
-  #scanned-at { color: #8a8f98; font-size: 13px; margin-bottom: 20px; }
+  body { font-family: -apple-system, sans-serif; margin: 0; padding: 24px; background: #000; color: #f2f2f2; }
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+  .logo { height: 28px; display: block; }
+  #scanned-at { display: flex; align-items: center; gap: 12px; color: #9a9a9a; font-size: 13px; }
+  #scanned-at-date { color: #f2f2f2; font-weight: 600; }
+  #scanned-at-time { color: #9a9a9a; }
+  #tz-toggle { background: #0d0d0d; color: #9a9a9a; border: 1px solid #2a2a2a; border-radius: 20px; padding: 4px 12px; font-size: 11px; cursor: pointer; transition: color 0.15s ease, border-color 0.15s ease; }
+  #tz-toggle:hover { color: #fff; border-color: #4a4a4a; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 24px; }
-  .card { background: #151a24; border: 1px solid #262b36; border-radius: 8px; padding: 16px; }
-  .card h2 { font-size: 13px; text-transform: uppercase; color: #8a8f98; margin: 0 0 12px 0; }
-  .stat { font-size: 24px; font-weight: 600; }
-  .stat-row { display: flex; justify-content: space-between; margin: 4px 0; font-size: 13px; }
-  svg { width: 100%; height: 320px; background: #0b0e14; border: 1px solid #262b36; border-radius: 8px; }
-  .sparkline { width: 100%; height: 40px; }
+  .card { background: #0a0a0a; border: 1px solid #222; border-radius: 10px; padding: 16px; box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 24px rgba(0,0,0,0.35); }
+  .card h2 { font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: #8a8a8a; margin: 0 0 12px 0; }
+  .stat { font-size: 24px; font-weight: 600; color: #fff; }
+  .stat-row { display: flex; justify-content: space-between; margin: 4px 0; font-size: 13px; color: #c8c8c8; }
+  svg { width: 100%; height: 320px; background: #000; border: 1px solid #222; border-radius: 8px; }
+  .barchart { width: 100%; height: 90px; }
   .tools-list { max-height: 240px; overflow-y: auto; }
-  .tool-row { padding: 6px 0; border-bottom: 1px solid #1c212b; font-size: 13px; }
-  .tool-name { color: #7fd3ff; font-family: monospace; }
-  .graph-hint { font-size: 11px; color: #565c68; margin-top: 6px; }
-  #graph-hover-info { min-height: 18px; margin-top: 4px; font-size: 13px; color: #8a8f98; }
-  #graph-hover-info .hover-path { color: #e6e6e6; font-family: monospace; }
+  .tool-row { padding: 6px 0; border-bottom: 1px solid #1a1a1a; font-size: 13px; color: #c8c8c8; }
+  .tool-name { color: #fff; font-family: monospace; }
+  .graph-hint { font-size: 11px; color: #5a5a5a; margin-top: 6px; }
+  #graph-hover-info { min-height: 18px; margin-top: 4px; font-size: 13px; color: #9a9a9a; }
+  #graph-hover-info .hover-path { color: #fff; font-family: monospace; }
   .graph-controls { margin-top: 8px; }
-  .graph-controls button { background: #1c212b; color: #8a8f98; border: 1px solid #262b36; border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
-  .graph-controls button:hover { color: #e6e6e6; }
+  .graph-controls button { background: #0d0d0d; color: #9a9a9a; border: 1px solid #2a2a2a; border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; transition: color 0.15s ease, border-color 0.15s ease; }
+  .graph-controls button:hover { color: #fff; border-color: #4a4a4a; }
   .cluster-list { max-height: 320px; overflow-y: auto; }
-  .cluster-row { border-bottom: 1px solid #1c212b; }
-  .cluster-header { padding: 8px 0; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; color: #e6e6e6; }
-  .cluster-header:hover { color: #7fd3ff; }
-  .cluster-row.active .cluster-header { color: #7fd3ff; }
-  .cluster-modules { display: none; padding: 0 0 10px 12px; font-size: 12px; color: #8a8f98; font-family: monospace; }
+  .cluster-row { border-bottom: 1px solid #1a1a1a; }
+  .cluster-header { padding: 8px 0; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; color: #c8c8c8; transition: color 0.15s ease; }
+  .cluster-header:hover { color: #fff; }
+  .cluster-row.active .cluster-header { color: #fff; font-weight: 600; }
+  .cluster-modules { display: none; padding: 0 0 10px 12px; font-size: 12px; color: #8a8a8a; font-family: monospace; }
   .cluster-row.expanded .cluster-modules { display: block; }
   .cluster-modules div { padding: 2px 0; }
-  .sparkline-value { font-size: 20px; font-weight: 600; margin-top: 6px; }
+  .sparkline-value { font-size: 20px; font-weight: 600; margin-top: 6px; color: #fff; }
   #cluster-graph { height: 620px; }
-  #cluster-graph-hover-info { min-height: 18px; margin-top: 8px; font-size: 13px; color: #8a8f98; }
-  #cluster-graph-hover-info .hover-path { color: #e6e6e6; font-family: monospace; }
+  #cluster-graph-hover-info { min-height: 18px; margin-top: 8px; font-size: 13px; color: #9a9a9a; }
+  #cluster-graph-hover-info .hover-path { color: #fff; font-family: monospace; }
 </style>
 </head>
 <body>
 <div id="app">
-  <h1>Veridion Dashboard</h1>
-  <div id="scanned-at">loading...</div>
+  <div class="header">
+    <img src="/logo.png" alt="Veridion" class="logo">
+    <div id="scanned-at">
+      <span>Last scanned:</span>
+      <span id="scanned-at-date">-</span>
+      <span id="scanned-at-time">-</span>
+      <button id="tz-toggle" onclick="toggleTimezone()">Show UTC</button>
+    </div>
+  </div>
   <div class="grid">
     <div class="card"><h2>Repo Overview</h2><div id="repo-overview"></div></div>
     <div class="card"><h2>Git Activity</h2><div id="git-activity"></div></div>
@@ -192,17 +209,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="grid">
     <div class="card">
       <h2>Module Count Trend</h2>
-      <svg id="sparkline-modules" class="sparkline"></svg>
+      <svg id="sparkline-modules" class="barchart"></svg>
       <div id="sparkline-modules-value" class="sparkline-value"></div>
     </div>
     <div class="card">
       <h2>Secrets Findings Trend</h2>
-      <svg id="sparkline-secrets" class="sparkline"></svg>
+      <svg id="sparkline-secrets" class="barchart"></svg>
       <div id="sparkline-secrets-value" class="sparkline-value"></div>
     </div>
     <div class="card">
       <h2>Vulnerability Findings Trend</h2>
-      <svg id="sparkline-vulns" class="sparkline"></svg>
+      <svg id="sparkline-vulns" class="barchart"></svg>
       <div id="sparkline-vulns-value" class="sparkline-value"></div>
     </div>
   </div>
@@ -273,25 +290,34 @@ function renderArchitecture(data) {
     '<div class="stat-row"><span>Layer violations</span><span>' + data.violation_count + '</span></div>';
 }
 
-function renderSparkline(svgId, values, valueLabelId) {
+function renderBarChart(svgId, values, valueLabelId) {
   const svg = document.getElementById(svgId);
   const label = valueLabelId ? document.getElementById(valueLabelId) : null;
   if (label) label.textContent = values.length > 0 ? String(values[values.length - 1]) : '-';
-  if (values.length < 2) { svg.innerHTML = ''; return; }
-  const max = Math.max(...values);
-  const min = Math.min(...values);
-  const width = 100, height = 100, padding = 10;
-  const step = width / (values.length - 1);
-  const points = values.map((v, i) => {
-    const x = i * step;
-    const y = max === min
-      ? height / 2
-      : (height - padding) - ((v - min) / (max - min)) * (height - 2 * padding);
-    return x + ',' + y;
-  }).join(' ');
+  if (values.length === 0) { svg.innerHTML = ''; return; }
+
+  const width = 300, height = 90, baseline = 78, topPad = 14, axisLabelY = 10;
+  const max = Math.max(...values, 1);
+  const barGap = 3;
+  const barWidth = Math.max(2, (width / values.length) - barGap);
+  const minBarHeight = 3;
+
+  let content = '<line x1="0" y1="' + baseline + '" x2="' + width + '" y2="' + baseline +
+    '" stroke="#2a2a2a" stroke-width="1" />';
+  content += '<text x="0" y="' + axisLabelY + '" fill="#5a5a5a" font-size="9" font-family="monospace">max ' + max + '</text>';
+
+  values.forEach((v, i) => {
+    const x = i * (barWidth + barGap);
+    const barHeight = Math.max(minBarHeight, (v / max) * (baseline - topPad));
+    const y = baseline - barHeight;
+    const isLast = i === values.length - 1;
+    content += '<rect x="' + x + '" y="' + y + '" width="' + barWidth + '" height="' + barHeight +
+      '" fill="' + (isLast ? '#fff' : '#4a4a4a') + '" rx="1"><title>' + v + '</title></rect>';
+  });
+
   svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
   svg.setAttribute('preserveAspectRatio', 'none');
-  svg.innerHTML = '<polyline points="' + points + '" fill="none" stroke="#7fd3ff" stroke-width="2" />';
+  svg.innerHTML = content;
 }
 
 let graphState = null;
@@ -580,7 +606,7 @@ function renderClusterGraph(data) {
         // under a stack of coincident circles). Same-cluster pairs get extra attraction on
         // top, which pulls them closer than different-cluster pairs without eliminating
         // the minimum spacing repulsion guarantees.
-        const repulsionForce = (sameCluster ? 90 : 400) / (dist * dist);
+        const repulsionForce = (sameCluster ? 280 : 400) / (dist * dist);
         const rfx = (dx / dist) * repulsionForce, rfy = (dy / dist) * repulsionForce;
         a.vx -= rfx; a.vy -= rfy;
         b.vx += rfx; b.vy += rfy;
@@ -671,18 +697,40 @@ function renderMcpTools(tools) {
   ).join('');
 }
 
+let lastScannedAtIso = null;
+let currentTz = 'Asia/Kolkata';
+
+function renderScannedAt() {
+  if (!lastScannedAtIso) return;
+  const date = new Date(lastScannedAtIso);
+  const tzLabel = currentTz === 'Asia/Kolkata' ? 'IST' : 'UTC';
+  const dateStr = date.toLocaleDateString('en-CA', { timeZone: currentTz });
+  const timeStr = date.toLocaleTimeString('en-US', {
+    timeZone: currentTz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+  });
+  document.getElementById('scanned-at-date').textContent = dateStr;
+  document.getElementById('scanned-at-time').textContent = timeStr + ' ' + tzLabel;
+  document.getElementById('tz-toggle').textContent = currentTz === 'Asia/Kolkata' ? 'Show UTC' : 'Show IST';
+}
+
+function toggleTimezone() {
+  currentTz = currentTz === 'Asia/Kolkata' ? 'UTC' : 'Asia/Kolkata';
+  renderScannedAt();
+}
+
 async function loadAll() {
   const evidence = await fetchJSON('/api/evidence');
-  document.getElementById('scanned-at').textContent = 'Last scanned: ' + evidence.scanned_at;
+  lastScannedAtIso = evidence.scanned_at;
+  renderScannedAt();
   renderRepoOverview(evidence.repo_overview);
   renderGitActivity(evidence.git_activity);
   renderSecurity(evidence.security);
   renderArchitecture(evidence.architecture);
 
   const history = await fetchJSON('/api/history');
-  renderSparkline('sparkline-modules', history.map(h => h.module_count), 'sparkline-modules-value');
-  renderSparkline('sparkline-secrets', history.map(h => h.secrets_findings), 'sparkline-secrets-value');
-  renderSparkline('sparkline-vulns', history.map(h => h.vulnerability_findings), 'sparkline-vulns-value');
+  renderBarChart('sparkline-modules', history.map(h => h.module_count), 'sparkline-modules-value');
+  renderBarChart('sparkline-secrets', history.map(h => h.secrets_findings), 'sparkline-secrets-value');
+  renderBarChart('sparkline-vulns', history.map(h => h.vulnerability_findings), 'sparkline-vulns-value');
 
   const graph = await fetchJSON('/api/graph');
   renderGraph(graph);

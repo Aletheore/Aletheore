@@ -26,5 +26,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["veridion*"]
 
+[tool.setuptools.package-data]
+veridion = ["static/*.png"]
+
 [tool.pytest.ini_options]
 addopts = ["-p", "no:randomly"]
