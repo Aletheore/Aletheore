@@ -62,3 +62,23 @@ def build_history_summary(repo_path: Path) -> list[dict]:
             }
         )
     return result
+
+
+def build_graph_summary(evidence: dict) -> dict:
+    dependency_graph = evidence["repository"]["dependency_graph"]
+    clusters = evidence["architecture"]["clusters"]
+
+    node_to_cluster: dict[str, int] = {}
+    for cluster in clusters:
+        for module in cluster["modules"]:
+            node_to_cluster[module] = cluster["id"]
+
+    nodes = [
+        {"id": node, "cluster": node_to_cluster.get(node)}
+        for node in dependency_graph["nodes"]
+    ]
+    edges = [
+        {"source": edge[0], "target": edge[1]} for edge in dependency_graph["edges"]
+    ]
+
+    return {"nodes": nodes, "edges": edges, "clusters": clusters}

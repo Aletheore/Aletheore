@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from veridion.dashboard import build_evidence_summary, build_history_summary
+from veridion.dashboard import build_evidence_summary, build_graph_summary, build_history_summary
 
 
 def make_evidence(scanned_at: str, module_count: int = 2, secrets_count: int = 0) -> dict:
@@ -101,3 +101,44 @@ def test_build_history_summary_empty_when_no_history(tmp_path):
     repo.mkdir()
 
     assert build_history_summary(repo) == []
+
+
+def test_build_graph_summary_annotates_nodes_with_cluster_id():
+    evidence = {
+        "repository": {
+            "dependency_graph": {
+                "nodes": ["a.py", "b.py", "c.py"],
+                "edges": [["a.py", "b.py"], ["b.py", "c.py"]],
+            }
+        },
+        "architecture": {
+            "clusters": [
+                {"id": 0, "modules": ["a.py", "b.py"], "internal_edges": 1},
+                {"id": 1, "modules": ["c.py"], "internal_edges": 0},
+            ]
+        },
+    }
+
+    result = build_graph_summary(evidence)
+
+    assert result["nodes"] == [
+        {"id": "a.py", "cluster": 0},
+        {"id": "b.py", "cluster": 0},
+        {"id": "c.py", "cluster": 1},
+    ]
+    assert result["edges"] == [
+        {"source": "a.py", "target": "b.py"},
+        {"source": "b.py", "target": "c.py"},
+    ]
+    assert result["clusters"] == evidence["architecture"]["clusters"]
+
+
+def test_build_graph_summary_handles_unclustered_node():
+    evidence = {
+        "repository": {"dependency_graph": {"nodes": ["orphan.py"], "edges": []}},
+        "architecture": {"clusters": []},
+    }
+
+    result = build_graph_summary(evidence)
+
+    assert result["nodes"] == [{"id": "orphan.py", "cluster": None}]
