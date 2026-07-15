@@ -1,5 +1,5 @@
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -25,6 +25,28 @@ def _remote_names(repo_path: Path) -> set[str]:
     return set(result.stdout.strip().splitlines())
 
 
+def _default_branch_ref(repo_path: Path) -> str | None:
+    result = _run_git(repo_path, "symbolic-ref", "refs/remotes/origin/HEAD")
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip().removeprefix("refs/remotes/")
+    result = _run_git(repo_path, "rev-parse", "--abbrev-ref", "HEAD")
+    branch = result.stdout.strip()
+    if result.returncode == 0 and branch and branch != "HEAD":
+        return branch
+    return None
+
+
+def _ahead_behind(repo_path: Path, ref: str, branch: str) -> tuple[int, int]:
+    result = _run_git(repo_path, "rev-list", "--left-right", "--count", f"{ref}...{branch}")
+    if result.returncode != 0:
+        return 0, 0
+    parts = result.stdout.strip().split()
+    if len(parts) != 2:
+        return 0, 0
+    behind, ahead = int(parts[0]), int(parts[1])
+    return ahead, behind
+
+
 def _parse_branches(repo_path: Path, now: datetime) -> list[dict]:
     result = _run_git(
         repo_path,
@@ -34,6 +56,7 @@ def _parse_branches(repo_path: Path, now: datetime) -> list[dict]:
         "refs/remotes",
     )
     remotes = _remote_names(repo_path)
+    default_ref = _default_branch_ref(repo_path)
     branches = []
     for line in result.stdout.strip().splitlines():
         if not line.strip():
@@ -46,24 +69,29 @@ def _parse_branches(repo_path: Path, now: datetime) -> list[dict]:
         ) else "local"
         last_commit_at = datetime.fromisoformat(date_str)
         stale_days = (now - last_commit_at).days
+
+        ahead, behind = 0, 0
+        if default_ref is not None and name != default_ref:
+            ahead, behind = _ahead_behind(repo_path, default_ref, name)
+
         branches.append(
             {
                 "name": name,
                 "type": branch_type,
                 "last_commit_at": last_commit_at.isoformat(),
                 "stale_days": stale_days,
-                "ahead_of_main": 0,
-                "behind_main": 0,
+                "ahead_of_main": ahead,
+                "behind_main": behind,
             }
         )
     return branches
 
 
-def _commit_cadence(repo_path: Path) -> dict:
+def _commit_cadence(repo_path: Path, now: datetime) -> dict:
     result = _run_git(repo_path, "log", "--format=%ad", "--date=iso-strict", "HEAD")
     dates = [datetime.fromisoformat(line) for line in result.stdout.strip().splitlines() if line]
     if not dates:
-        return {"weekly_counts": [], "trend": "flat"}
+        return {"weekly_counts": [], "trend": "flat", "most_recent_week_partial": False}
 
     dates.sort()
     buckets: dict[int, int] = {}
@@ -71,7 +99,8 @@ def _commit_cadence(repo_path: Path) -> dict:
     for date in dates:
         week_index = (date - start).days // 7
         buckets[week_index] = buckets.get(week_index, 0) + 1
-    weekly_counts = [buckets.get(i, 0) for i in range(max(buckets.keys()) + 1)]
+    last_bucket = max(buckets.keys())
+    weekly_counts = [buckets.get(i, 0) for i in range(last_bucket + 1)]
 
     if len(weekly_counts) < 2:
         trend = "flat"
@@ -86,19 +115,37 @@ def _commit_cadence(repo_path: Path) -> dict:
         else:
             trend = "flat"
 
-    return {"weekly_counts": weekly_counts, "trend": trend}
+    last_bucket_start = start + timedelta(days=last_bucket * 7)
+    days_into_last_bucket = (now - last_bucket_start).days
+    most_recent_week_partial = days_into_last_bucket < 7
+
+    return {
+        "weekly_counts": weekly_counts,
+        "trend": trend,
+        "most_recent_week_partial": most_recent_week_partial,
+    }
 
 
 def _ownership(repo_path: Path) -> list[dict]:
-    result = _run_git(repo_path, "log", "--format=%an", "HEAD")
-    authors = [line for line in result.stdout.strip().splitlines() if line]
-    total = len(authors)
+    result = _run_git(repo_path, "log", "--format=%an\x1f%ae", "HEAD")
+    entries = [
+        line.split("\x1f") for line in result.stdout.strip().splitlines() if line
+    ]
+    total = len(entries)
     counts: dict[str, int] = {}
-    for author in authors:
-        counts[author] = counts.get(author, 0) + 1
+    names_by_email: dict[str, set[str]] = {}
+    for name, email in entries:
+        key = email.lower()
+        counts[key] = counts.get(key, 0) + 1
+        names_by_email.setdefault(key, set()).add(name)
     return [
-        {"author": author, "commit_count": count, "percent": round(count / total, 4)}
-        for author, count in sorted(counts.items(), key=lambda kv: -kv[1])
+        {
+            "email": email,
+            "names": sorted(names_by_email[email]),
+            "commit_count": count,
+            "percent": round(count / total, 4),
+        }
+        for email, count in sorted(counts.items(), key=lambda kv: -kv[1])
     ]
 
 
@@ -122,7 +169,7 @@ def analyze_git(repo_path: Path, now: datetime | None = None) -> dict:
     return {
         "available": True,
         "branches": _parse_branches(repo_path, now),
-        "commit_cadence": _commit_cadence(repo_path),
+        "commit_cadence": _commit_cadence(repo_path, now),
         "ownership": _ownership(repo_path),
         "repo_age_days": repo_age_days,
         "total_commits": total_commits,

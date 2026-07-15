@@ -82,10 +82,73 @@ def test_analyze_git_branches_and_staleness(tmp_path):
 def test_analyze_git_ownership(tmp_path):
     repo = make_git_repo(tmp_path)
     result = analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
-    by_author = {o["author"]: o for o in result["ownership"]}
-    assert by_author["Alice"]["commit_count"] == 2
-    assert by_author["Bob"]["commit_count"] == 1
-    assert by_author["Alice"]["percent"] == 0.6667
+    by_email = {o["email"]: o for o in result["ownership"]}
+    assert by_email["a@example.com"]["commit_count"] == 2
+    assert by_email["a@example.com"]["names"] == ["Alice"]
+    assert by_email["b@example.com"]["commit_count"] == 1
+    assert by_email["a@example.com"]["percent"] == 0.6667
+
+
+def test_analyze_git_ownership_merges_same_email_different_names(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run(repo, "init", "-b", "main")
+    run(repo, "config", "user.email", "person@example.com")
+    run(repo, "config", "user.name", "Nick")
+    (repo / "a.txt").write_text("1")
+    run(repo, "add", "a.txt")
+    commit(repo, "first", "2026-06-01T00:00:00+00:00")
+
+    run(repo, "config", "user.name", "Nicholas Smith")
+    (repo / "a.txt").write_text("2")
+    run(repo, "add", "a.txt")
+    commit(repo, "second", "2026-06-02T00:00:00+00:00")
+
+    result = analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+    assert len(result["ownership"]) == 1
+    entry = result["ownership"][0]
+    assert entry["email"] == "person@example.com"
+    assert entry["names"] == ["Nicholas Smith", "Nick"]
+    assert entry["commit_count"] == 2
+
+
+def test_analyze_git_ownership_merges_same_email_different_case(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run(repo, "init", "-b", "main")
+    run(repo, "config", "user.email", "Person@Example.com")
+    run(repo, "config", "user.name", "Nick")
+    (repo / "a.txt").write_text("1")
+    run(repo, "add", "a.txt")
+    commit(repo, "first", "2026-06-01T00:00:00+00:00")
+
+    run(repo, "config", "user.email", "person@example.com")
+    (repo / "a.txt").write_text("2")
+    run(repo, "add", "a.txt")
+    commit(repo, "second", "2026-06-02T00:00:00+00:00")
+
+    result = analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+    assert len(result["ownership"]) == 1
+    assert result["ownership"][0]["commit_count"] == 2
+
+
+def test_analyze_git_ahead_behind_main(tmp_path):
+    repo = make_git_repo(tmp_path)
+    result = analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+    by_name = {b["name"]: b for b in result["branches"]}
+    assert by_name["main"]["ahead_of_main"] == 0
+    assert by_name["main"]["behind_main"] == 0
+    assert by_name["feature/old"]["ahead_of_main"] == 1
+    assert by_name["feature/old"]["behind_main"] == 1
+
+
+def test_analyze_git_commit_cadence_partial_week_flag(tmp_path):
+    repo = make_git_repo(tmp_path)
+    result_partial = analyze_git(repo, now=datetime(2026, 7, 4, tzinfo=timezone.utc))
+    assert result_partial["commit_cadence"]["most_recent_week_partial"] is True
+
+    result_complete = analyze_git(repo, now=datetime(2026, 7, 20, tzinfo=timezone.utc))
+    assert result_complete["commit_cadence"]["most_recent_week_partial"] is False
 
 
 def test_analyze_git_totals(tmp_path):
