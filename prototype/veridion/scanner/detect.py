@@ -89,6 +89,24 @@ BUILD_TOOL_MARKERS = {
     "vite.config.js": "vite",
 }
 
+POLICY_DOC_MARKERS = {
+    "LICENSE": "license",
+    "LICENSE.md": "license",
+    "README.md": "readme",
+    "SECURITY.md": "security_policy",
+    "PRIVACY.md": "privacy_policy",
+    "PRIVACY_POLICY.md": "privacy_policy",
+    "CODE_OF_CONDUCT.md": "code_of_conduct",
+    "CONTRIBUTING.md": "contributing_guide",
+    "TERMS.md": "terms_of_service",
+    "TERMS_OF_SERVICE.md": "terms_of_service",
+    "GOVERNANCE.md": "governance_policy",
+    "docs/security": "security_policy",
+    "docs/privacy": "privacy_policy",
+    "docs/compliance": "compliance_docs",
+    "docs/governance": "governance_policy",
+}
+
 
 def _iter_pip_package_lines(repo_path: Path) -> list[tuple[str, str]]:
     requirements = repo_path / "requirements.txt"
@@ -201,6 +219,15 @@ def detect_build_tools(repo_path: Path) -> list[dict]:
         if marker.exists():
             tools.append({"name": tool_name, "evidence": filename})
     return tools
+
+
+def detect_policy_docs(repo_path: Path) -> list[dict]:
+    docs = []
+    for marker, category in POLICY_DOC_MARKERS.items():
+        candidate = repo_path / marker
+        if candidate.exists():
+            docs.append({"name": category, "evidence": marker})
+    return docs
 
 
 def detect_monorepo(repo_path: Path) -> dict:

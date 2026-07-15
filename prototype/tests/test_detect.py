@@ -7,6 +7,7 @@ from veridion.scanner.detect import (
     detect_frameworks,
     detect_languages,
     detect_monorepo,
+    detect_policy_docs,
 )
 
 
@@ -155,3 +156,38 @@ def test_detect_ai_usage_empty_lists_when_nothing_matches(tmp_path):
         "local_inference": [],
         "mcp": [],
     }
+
+
+def test_detect_policy_docs_finds_multiple_file_markers(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "LICENSE").write_text("MIT")
+    (repo / "SECURITY.md").write_text("# Security Policy\n")
+    (repo / "README.md").write_text("# My Project\n")
+
+    result = detect_policy_docs(repo)
+
+    names = {d["name"] for d in result}
+    assert names == {"license", "security_policy", "readme"}
+    license_entry = next(d for d in result if d["name"] == "license")
+    assert license_entry["evidence"] == "LICENSE"
+
+
+def test_detect_policy_docs_detects_directory_markers(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "docs" / "security").mkdir(parents=True)
+
+    result = detect_policy_docs(repo)
+
+    assert any(
+        d["name"] == "security_policy" and d["evidence"] == "docs/security" for d in result
+    )
+
+
+def test_detect_policy_docs_empty_when_nothing_present(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    result = detect_policy_docs(repo)
+
+    assert result == []
