@@ -125,12 +125,29 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[str]
     return imports, functions, classes
 
 
-def _resolve_python_module(repo_path: Path, dotted: str) -> str | None:
+def _resolve_python_module(repo_path: Path, dotted: str, from_file: Path | None = None) -> str | None:
     if not dotted:
         return None
-    as_path = Path(*dotted.split("."))
-    candidate_module = repo_path / (as_path.as_posix() + ".py")
-    candidate_package = repo_path / as_path / "__init__.py"
+
+    if dotted.startswith("."):
+        # Relative import ("from ..services.sessions import x"). tree-sitter hands us
+        # the leading dots as literal text in the dotted string, so dot_count is how
+        # many levels up from from_file's own package to resolve from: one dot means
+        # "the package containing from_file" (from_file.parent itself), each
+        # additional dot goes up one more parent directory.
+        if from_file is None:
+            return None
+        dot_count = len(dotted) - len(dotted.lstrip("."))
+        remainder = dotted[dot_count:]
+        base_dir = from_file.parent
+        for _ in range(dot_count - 1):
+            base_dir = base_dir.parent
+        as_path = base_dir if not remainder else base_dir / Path(*remainder.split("."))
+    else:
+        as_path = repo_path / Path(*dotted.split("."))
+
+    candidate_module = Path(as_path.as_posix() + ".py")
+    candidate_package = as_path / "__init__.py"
     if candidate_module.exists():
         return _rel(repo_path, candidate_module)
     if candidate_package.exists():
@@ -138,12 +155,24 @@ def _resolve_python_module(repo_path: Path, dotted: str) -> str | None:
     return None
 
 
-def _resolve_python_from_import(repo_path: Path, module_name: str, imported_name: str) -> str | None:
-    submodule_dotted = f"{module_name}.{imported_name}" if module_name else imported_name
-    target = _resolve_python_module(repo_path, submodule_dotted)
+def _resolve_python_from_import(
+    repo_path: Path, module_name: str, imported_name: str, from_file: Path
+) -> str | None:
+    # A relative module_name already ends in the dots that separate it from what
+    # follows ("." or ".." or "..services.sessions"); appending imported_name with an
+    # extra "." separator only when module_name does NOT already end in a dot avoids
+    # turning "from . import helpers" (single dot: current package) into an
+    # accidental double dot (parent package) - which silently resolves to the wrong
+    # file rather than raising an error, so it's easy to miss without a real repo to
+    # test against.
+    if module_name and not module_name.endswith("."):
+        submodule_dotted = f"{module_name}.{imported_name}"
+    else:
+        submodule_dotted = f"{module_name}{imported_name}"
+    target = _resolve_python_module(repo_path, submodule_dotted, from_file)
     if target is not None:
         return target
-    return _resolve_python_module(repo_path, module_name)
+    return _resolve_python_module(repo_path, module_name, from_file)
 
 
 JS_FAMILY_EXTENSIONS = (".js", ".jsx", ".ts", ".tsx")
@@ -196,7 +225,7 @@ def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
             resolved_imports: list[str] = []
 
             for dotted in plain_imports:
-                target = _resolve_python_module(repo_path, dotted)
+                target = _resolve_python_module(repo_path, dotted, path)
                 if target is not None:
                     resolved_imports.append(target)
                     edges.append([rel_path, target])
@@ -206,11 +235,11 @@ def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
                 targets: set[str] = set()
                 if names:
                     for name in names:
-                        target = _resolve_python_from_import(repo_path, module_name, name)
+                        target = _resolve_python_from_import(repo_path, module_name, name, path)
                         if target is not None:
                             targets.add(target)
                 else:
-                    target = _resolve_python_module(repo_path, module_name)
+                    target = _resolve_python_module(repo_path, module_name, path)
                     if target is not None:
                         targets.add(target)
                 for target in sorted(targets):

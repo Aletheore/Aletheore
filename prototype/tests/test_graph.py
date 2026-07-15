@@ -104,3 +104,57 @@ def test_build_module_graph_extracts_typescript_imports(tmp_path):
     assert "utils.ts" in by_path["index.ts"]["imports"]
     assert "add" in by_path["utils.ts"]["symbols"]["functions"]
     assert unparseable == []
+
+
+def test_build_module_graph_resolves_relative_imports(tmp_path):
+    repo = tmp_path / "repo"
+    app = repo / "app"
+    routers = app / "routers"
+    services = app / "services"
+    routers.mkdir(parents=True)
+    services.mkdir(parents=True)
+    (app / "__init__.py").write_text("")
+    (routers / "__init__.py").write_text("")
+    (services / "__init__.py").write_text("")
+    (app / "shared.py").write_text("def toplevel():\n    pass\n")
+    (services / "sessions.py").write_text(
+        "def collect_session_screenshots():\n    pass\n"
+    )
+    (routers / "helpers.py").write_text("def helper():\n    pass\n")
+    (routers / "admin.py").write_text(
+        "from ..services.sessions import collect_session_screenshots\n"
+        "from . import helpers\n"
+        "from .. import shared\n"
+    )
+
+    modules, dependency_graph, unparseable = build_module_graph(repo)
+
+    by_path = {m["path"]: m for m in modules}
+    admin_imports = by_path["app/routers/admin.py"]["imports"]
+
+    assert "app/services/sessions.py" in admin_imports
+    assert "app/routers/helpers.py" in admin_imports
+    assert "app/shared.py" in admin_imports
+
+
+def test_build_module_graph_relative_sibling_import_does_not_become_parent_package(tmp_path):
+    repo = tmp_path / "repo"
+    app = repo / "app"
+    routers = app / "routers"
+    routers.mkdir(parents=True)
+    (app / "__init__.py").write_text("")
+    (routers / "__init__.py").write_text("")
+    (routers / "helpers.py").write_text("def helper():\n    pass\n")
+    (routers / "admin.py").write_text("from . import helpers\n")
+
+    modules, dependency_graph, unparseable = build_module_graph(repo)
+
+    by_path = {m["path"]: m for m in modules}
+    admin_imports = by_path["app/routers/admin.py"]["imports"]
+
+    # a naive fix could turn "from . import helpers" (current package) into an
+    # accidental "from .. import helpers" (parent package) if it inserts an extra
+    # separator dot on top of the dot already present in "." - this must resolve
+    # to the sibling module, not to app/__init__.py (the parent package)
+    assert "app/routers/helpers.py" in admin_imports
+    assert "app/__init__.py" not in admin_imports
