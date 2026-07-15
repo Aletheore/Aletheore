@@ -1,0 +1,88 @@
+name: "Veridion PR Diff"
+description: "Evidence-grounded diff of what changed between two refs - new secrets, layer violations, dependency vulnerabilities, and architecture deltas."
+author: "ArihantK15"
+
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  base-ref:
+    description: "Git ref/sha to treat as the base"
+    required: false
+    default: ${{ github.event.pull_request.base.sha }}
+  head-ref:
+    description: "Git ref/sha to treat as the head"
+    required: false
+    default: ${{ github.event.pull_request.head.sha }}
+  fail-on-new-secrets:
+    description: "Exit non-zero if a new real (non-placeholder) secret is found"
+    required: false
+    default: "false"
+  full:
+    description: "Show the full raw diff instead of the curated summary"
+    required: false
+    default: "false"
+
+outputs:
+  diff-json:
+    description: "The JSON diff output"
+    value: ${{ steps.diff.outputs.diff-json }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout base
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.base-ref }}
+        path: veridion-base
+
+    - name: Checkout head
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.head-ref }}
+        path: veridion-head
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install Veridion
+      shell: bash
+      run: pip install "git+https://github.com/ArihantK15/Veridion.git@${{ github.action_ref }}#subdirectory=prototype"
+
+    - name: Scan base
+      shell: bash
+      run: veridion scan veridion-base --no-check-vulnerabilities
+
+    - name: Scan head
+      shell: bash
+      run: veridion scan veridion-head --no-check-vulnerabilities
+
+    - name: Diff
+      id: diff
+      shell: bash
+      run: |
+        ARGS=""
+        if [ "${{ inputs.full }}" = "true" ]; then
+          ARGS="$ARGS --full"
+        fi
+        if [ "${{ inputs.fail-on-new-secrets }}" = "true" ]; then
+          ARGS="$ARGS --fail-on-new-secrets"
+        fi
+
+        set +e
+        veridion diff veridion-base/.veridion/evidence.json veridion-head/.veridion/evidence.json $ARGS > diff-output.json
+        DIFF_EXIT_CODE=$?
+        set -e
+
+        {
+          echo "diff-json<<VERIDION_EOF"
+          cat diff-output.json
+          echo "VERIDION_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        cat diff-output.json
+        exit $DIFF_EXIT_CODE
