@@ -8,6 +8,8 @@ rules in Part I for everything below.
 - `languages`: detected languages with file counts and rough line counts.
 - `frameworks`: detected frameworks, each with an `evidence` string naming the manifest line
   that proves it (e.g. `"requirements.txt:fastapi==0.110.0"`).
+- `ai_usage`: detected AI/LLM provider, orchestration, vector-store, local-inference, and MCP
+  package usage — see Part VI for how to interpret this sub-key specifically.
 - `build_tools`: detected build tooling, same evidence-string pattern.
 - `monorepo`: whether workspace/monorepo tooling was detected, and the workspace list if so.
 - `modules`: one entry per parsed source file, with `imports` (what it imports),
