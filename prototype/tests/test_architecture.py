@@ -1,4 +1,4 @@
-from veridion.architecture import build_clusters
+from veridion.architecture import build_clusters, detect_layer_violations
 
 
 def test_build_clusters_finds_two_clusters_with_a_thin_bridge():
@@ -74,3 +74,72 @@ def test_build_clusters_is_deterministic_across_runs():
     second = build_clusters(dependency_graph)
 
     assert first == second
+
+
+def test_detect_layer_violations_finds_a_real_violation():
+    dependency_graph = {
+        "nodes": ["app/domain/user.py", "app/infrastructure/db.py", "app/services/auth.py"],
+        "edges": [
+            ["app/domain/user.py", "app/infrastructure/db.py"],
+            ["app/services/auth.py", "app/domain/user.py"],
+        ],
+    }
+
+    result = detect_layer_violations(dependency_graph)
+
+    assert result["convention_detected"] is True
+    assert len(result["violations"]) == 1
+    violation = result["violations"][0]
+    assert violation["from"] == "app/domain/user.py"
+    assert violation["to"] == "app/infrastructure/db.py"
+    assert "domain" in violation["reason"]
+    assert "infrastructure" in violation["reason"]
+
+    layer_names = {layer["name"] for layer in result["layers"]}
+    assert layer_names == {"domain", "infrastructure", "services"}
+
+
+def test_detect_layer_violations_clean_case_no_violations():
+    dependency_graph = {
+        "nodes": ["app/domain/user.py", "app/infrastructure/db.py"],
+        "edges": [["app/infrastructure/db.py", "app/domain/user.py"]],
+    }
+
+    result = detect_layer_violations(dependency_graph)
+
+    assert result["convention_detected"] is True
+    assert result["violations"] == []
+
+
+def test_detect_layer_violations_no_convention_when_only_one_rank_present():
+    dependency_graph = {
+        "nodes": ["app/domain/a.py", "app/domain/b.py"],
+        "edges": [["app/domain/a.py", "app/domain/b.py"]],
+    }
+
+    result = detect_layer_violations(dependency_graph)
+
+    assert result == {"convention_detected": False, "layers": [], "violations": []}
+
+
+def test_detect_layer_violations_no_convention_when_no_layer_folders_at_all():
+    dependency_graph = {
+        "nodes": ["app/routes.py", "app/helpers.py"],
+        "edges": [["app/routes.py", "app/helpers.py"]],
+    }
+
+    result = detect_layer_violations(dependency_graph)
+
+    assert result == {"convention_detected": False, "layers": [], "violations": []}
+
+
+def test_detect_layer_violations_recognizes_infra_abbreviation():
+    dependency_graph = {
+        "nodes": ["app/domain/user.py", "app/infra/db.py"],
+        "edges": [["app/domain/user.py", "app/infra/db.py"]],
+    }
+
+    result = detect_layer_violations(dependency_graph)
+
+    assert result["convention_detected"] is True
+    assert len(result["violations"]) == 1
