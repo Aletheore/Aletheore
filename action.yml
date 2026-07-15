@@ -51,7 +51,7 @@ runs:
 
     - name: Install Veridion
       shell: bash
-      run: pip install "git+https://github.com/ArihantK15/Veridion.git@${{ github.action_ref }}#subdirectory=prototype"
+      run: pip install "${{ github.action_path }}/prototype"
 
     - name: Scan base
       shell: bash

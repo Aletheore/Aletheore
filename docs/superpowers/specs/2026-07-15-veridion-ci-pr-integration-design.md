@@ -86,12 +86,18 @@ inherits the main repo's visibility rather than starting from zero).
 1. `actions/checkout@v4` with `ref: ${{ inputs.base-ref }}`, `path: veridion-base`
 2. `actions/checkout@v4` with `ref: ${{ inputs.head-ref }}`, `path: veridion-head`
 3. `actions/setup-python@v5`, Python 3.12 (matching this project's own floor)
-4. Install: `pip install "git+https://github.com/ArihantK15/Veridion.git@${{ github.action_ref }}#subdirectory=prototype"`
-   — confirmed necessary (no PyPI package exists for Veridion; `pip index versions veridion`
-   returns no match). `github.action_ref` is GitHub Actions' own context variable for "the ref
-   of the action currently being executed" — using it means a consumer pinned to `@v1` installs
-   the matching tagged Veridion version, not whatever happens to be on the default branch at
-   that instant.
+4. Install: `pip install "${{ github.action_path }}/prototype"` — confirmed necessary (no PyPI
+   package exists for Veridion; `pip index versions veridion` returns no match).
+   **Correction found via live testing** (Task 3 Step 3 of the implementation plan): the
+   original design used `git+https://github.com/ArihantK15/Veridion.git@${{ github.action_ref
+   }}#subdirectory=prototype`, reasoning that `github.action_ref` would pin the install to the
+   consumer's referenced tag. This broke immediately in the first live end-to-end test — GitHub
+   only sets `action_ref` when the action is referenced by tag/branch/SHA, and is **empty**
+   when referenced via a local path (`uses: ./`, exactly how same-repo testing before the first
+   tag exists must work), producing an invalid pip URL with an empty revision after `@`.
+   `github.action_path` (the path where the action's own source is already checked out) is set
+   correctly regardless of reference style, requires no network git-fetch at all, and works
+   identically for same-repo (`uses: ./`) and cross-repo (`uses: owner/repo@v1`) consumption.
 5. `veridion scan veridion-base --no-check-vulnerabilities`
 6. `veridion scan veridion-head --no-check-vulnerabilities`
    (Vulnerability checking is off by default in the action, since it calls OSV.dev twice per

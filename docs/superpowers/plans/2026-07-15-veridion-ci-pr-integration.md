@@ -353,7 +353,7 @@ runs:
 
     - name: Install Veridion
       shell: bash
-      run: pip install "git+https://github.com/ArihantK15/Veridion.git@${{ github.action_ref }}#subdirectory=prototype"
+      run: pip install "${{ github.action_path }}/prototype"
 
     - name: Scan base
       shell: bash
@@ -407,8 +407,18 @@ dev shell for this one-off manual check — it is not added as a project depende
 Re-read `docs/superpowers/specs/2026-07-15-veridion-ci-pr-integration-design.md`'s "action.yml:
 Composite GitHub Action" section side-by-side with the file just written. Confirm: all 4 inputs
 present with correct defaults, the `diff-json` output wired to `steps.diff.outputs.diff-json`,
-all 7 steps present in the documented order, the `github.action_ref` pinning present in the
-install step exactly as specified.
+all 7 steps present in the documented order, the `github.action_path`-based install present in
+the install step exactly as specified.
+
+**Update after live testing (Task 3 Step 3):** the install step originally used
+`git+https://github.com/ArihantK15/Veridion.git@${{ github.action_ref }}#subdirectory=prototype`.
+The first live run via `uses: ./` failed — `github.action_ref` is only set when an action is
+referenced by tag/branch/SHA, and is empty for a local path reference, producing an invalid pip
+URL with no revision after `@`. Fixed to `pip install "${{ github.action_path }}/prototype"`,
+which works identically for `uses: ./` and `uses: owner/repo@v1` since it installs from wherever
+the action's own source is already checked out, with no network git-fetch involved. Both this
+plan and the design spec were updated to match; `action.yml` itself was fixed and re-verified
+live (see Task 3).
 
 - [ ] **Step 4: Commit**
 
