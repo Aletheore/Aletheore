@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 
 from veridion.scanner.detect import IGNORED_DIRS
@@ -99,3 +100,61 @@ def find_secrets(repo_path: Path) -> dict:
                     )
 
     return {"scanned_files": scanned_files, "findings": findings}
+
+
+def find_secrets_in_history(repo_path: Path) -> dict:
+    process = subprocess.Popen(
+        ["git", "log", "-p", "--format=COMMIT_START\x1f%H\x1f%ad", "--date=iso-strict"],
+        cwd=repo_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        errors="ignore",
+    )
+
+    findings: list[dict] = []
+    scanned_commits: set[str] = set()
+    current_commit: str | None = None
+    current_commit_date: str | None = None
+    current_file: str | None = None
+
+    assert process.stdout is not None
+    for raw_line in process.stdout:
+        line = raw_line.rstrip("\n")
+        if line.startswith("COMMIT_START\x1f"):
+            parts = line.split("\x1f")
+            current_commit = parts[1] if len(parts) > 1 else None
+            current_commit_date = parts[2] if len(parts) > 2 else None
+            if current_commit:
+                scanned_commits.add(current_commit)
+            continue
+        if line.startswith("+++ b/"):
+            current_file = line[len("+++ b/"):]
+            continue
+        if line.startswith("+++"):
+            continue
+        if not line.startswith("+"):
+            continue
+
+        content = line[1:]
+        for pattern_name, pattern, value_group in SECRET_PATTERNS:
+            match = pattern.search(content)
+            if match:
+                findings.append(
+                    {
+                        "commit": current_commit,
+                        "commit_date": current_commit_date,
+                        "path": current_file,
+                        "pattern": pattern_name,
+                        "match_preview": _redact(match.group(value_group)),
+                        "likely_placeholder": _is_likely_placeholder(current_file or ""),
+                    }
+                )
+
+    process.stdout.close()
+    process.wait()
+
+    if process.returncode != 0:
+        return {"history_scanned_commits": 0, "history_findings": []}
+
+    return {"history_scanned_commits": len(scanned_commits), "history_findings": findings}
