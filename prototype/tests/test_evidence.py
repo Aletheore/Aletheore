@@ -108,3 +108,18 @@ def test_scan_repository_includes_architecture_block(tmp_path):
     assert "cross_cluster_edges" in evidence["architecture"]
     assert "layer_violations" in evidence["architecture"]
     assert evidence["architecture"]["layer_violations"]["convention_detected"] is False
+
+
+def test_scan_repository_includes_ai_usage_in_repository_block(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("openai==1.30.0\n")
+    (repo / "main.py").write_text("x = 1\n")
+
+    with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo)
+
+    assert "ai_usage" in evidence["repository"]
+    names = {p["name"] for p in evidence["repository"]["ai_usage"]["providers"]}
+    assert "openai" in names
