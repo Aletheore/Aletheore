@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from veridion.architecture import build_clusters, detect_layer_violations
 from veridion.git_intel.analyzer import analyze_git
 from veridion.scanner.detect import (
     detect_build_tools,
@@ -26,6 +27,8 @@ def scan_repository(repo_path: Path, check_vulnerabilities: bool = True) -> dict
     modules, dependency_graph, unparseable_files = build_module_graph(repo_path)
     git_data = analyze_git(repo_path)
     secrets_data = find_secrets(repo_path)
+    clusters, cross_cluster_edges = build_clusters(dependency_graph)
+    layer_violations = detect_layer_violations(dependency_graph)
 
     if check_vulnerabilities:
         vulnerabilities_data = check_dependency_vulnerabilities(repo_path)
@@ -53,6 +56,11 @@ def scan_repository(repo_path: Path, check_vulnerabilities: bool = True) -> dict
         "security": {
             "secrets": secrets_data,
             "dependency_vulnerabilities": vulnerabilities_data,
+        },
+        "architecture": {
+            "clusters": clusters,
+            "cross_cluster_edges": cross_cluster_edges,
+            "layer_violations": layer_violations,
         },
     }
 

@@ -90,3 +90,21 @@ def test_scan_repository_skips_vulnerability_check_when_disabled(tmp_path):
         "reason": "skipped (--no-check-vulnerabilities)",
         "findings": [],
     }
+
+
+def test_scan_repository_includes_architecture_block(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "app").mkdir(parents=True)
+    (repo / "app" / "__init__.py").write_text("")
+    (repo / "app" / "a.py").write_text("from app import b\n")
+    (repo / "app" / "b.py").write_text("x = 1\n")
+
+    with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo)
+
+    assert "architecture" in evidence
+    assert "clusters" in evidence["architecture"]
+    assert "cross_cluster_edges" in evidence["architecture"]
+    assert "layer_violations" in evidence["architecture"]
+    assert evidence["architecture"]["layer_violations"]["convention_detected"] is False
