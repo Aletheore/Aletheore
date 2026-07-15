@@ -224,6 +224,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <svg id="cluster-graph" class="interactive-graph" viewBox="0 0 1400 900"></svg>
       <div class="graph-hint">Scroll or pinch to zoom, drag to pan.</div>
       <div id="cluster-graph-hover-info">Hover a node to see which cluster it belongs to.</div>
+      <div class="graph-controls"><button onclick="resetGraphView('cluster-graph')">Reset view</button></div>
     </div>
   </div>
   <div class="card">
@@ -310,8 +311,9 @@ function nodeRadius(degree) {
   return Math.max(3, Math.min(14, 3 + Math.sqrt(degree) * 2));
 }
 
-function attachZoomPan(svg, initialViewBox) {
+function attachZoomPan(svg, initialViewBox, maxZoomOutW) {
   const vb = Object.assign({}, initialViewBox);
+  const zoomOutLimit = maxZoomOutW || initialViewBox.w * 4;
   const apply = () => svg.setAttribute('viewBox', vb.x + ' ' + vb.y + ' ' + vb.w + ' ' + vb.h);
   apply();
 
@@ -321,7 +323,7 @@ function attachZoomPan(svg, initialViewBox) {
     const mx = vb.x + ((e.clientX - rect.left) / rect.width) * vb.w;
     const my = vb.y + ((e.clientY - rect.top) / rect.height) * vb.h;
     const zoomFactor = e.deltaY > 0 ? 1.1 : 0.9;
-    const newW = Math.max(initialViewBox.w * 0.15, Math.min(initialViewBox.w * 4, vb.w * zoomFactor));
+    const newW = Math.max(initialViewBox.w * 0.15, Math.min(zoomOutLimit, vb.w * zoomFactor));
     const newH = newW * (initialViewBox.h / initialViewBox.w);
     vb.x = mx - (mx - vb.x) * (newW / vb.w);
     vb.y = my - (my - vb.y) * (newH / vb.h);
@@ -347,6 +349,16 @@ function attachZoomPan(svg, initialViewBox) {
   });
   window.addEventListener('mouseup', () => { isPanning = false; svg.style.cursor = 'grab'; });
   svg.style.cursor = 'grab';
+
+  svg.__resetView = () => {
+    vb.x = initialViewBox.x; vb.y = initialViewBox.y; vb.w = initialViewBox.w; vb.h = initialViewBox.h;
+    apply();
+  };
+}
+
+function resetGraphView(svgId) {
+  const svg = document.getElementById(svgId);
+  if (svg && svg.__resetView) svg.__resetView();
 }
 
 function renderGraph(data) {
@@ -527,21 +539,22 @@ function renderClusters(data) {
 
 function renderClusterGraph(data) {
   const svg = document.getElementById('cluster-graph');
-  const width = 1400, height = 900;
+  // Starting spread only - the simulation is free to move nodes anywhere; the final
+  // viewBox is computed from where they actually end up, not clamped to this box.
+  const spread = 700;
 
   const nodeToClusterId = {};
   data.nodes.forEach(n => { nodeToClusterId[n.id] = n.cluster; });
 
   const nodes = data.nodes.map(n => ({
     id: n.id, cluster: n.cluster,
-    x: width / 2 + (Math.random() - 0.5) * width, y: height / 2 + (Math.random() - 0.5) * height, vx: 0, vy: 0
+    x: (Math.random() - 0.5) * spread, y: (Math.random() - 0.5) * spread, vx: 0, vy: 0
   }));
   const nodeById = {};
   nodes.forEach(n => { nodeById[n.id] = n; });
 
-  // Only same-cluster edges pull nodes together - cross-cluster edges are excluded from this
-  // view entirely (dependencies live in the Dependency Graph). Nodes with no cluster at all
-  // feel no attraction and drift to wherever pure repulsion puts them.
+  // Only same-cluster edges are drawn - cross-cluster edges are excluded from this view
+  // entirely (dependencies live in the Dependency Graph).
   const internalEdges = data.edges.filter(e => {
     const a = nodeById[e.source], b = nodeById[e.target];
     return a && b && a.cluster !== null && a.cluster !== undefined && a.cluster === b.cluster;
@@ -550,36 +563,36 @@ function renderClusterGraph(data) {
   const clusterModuleCount = {};
   data.clusters.forEach(c => { clusterModuleCount[c.id] = c.modules.length; });
 
-  const iterations = 160;
+  // Community-aware force model: same-cluster pairs attract (pulling every member of a
+  // cluster toward the others, not just directly-edge-connected ones - Veridion's clusters
+  // are modularity communities, not just direct-edge groups), different-cluster pairs repel.
+  // This is what makes clusters read as clean, separated blobs instead of an interleaved mess.
+  const iterations = 200;
   for (let iter = 0; iter < iterations; iter++) {
     for (let i = 0; i < nodes.length; i++) {
       for (let j = i + 1; j < nodes.length; j++) {
         const a = nodes[i], b = nodes[j];
-        let dx = a.x - b.x, dy = a.y - b.y;
-        let distSq = dx * dx + dy * dy || 0.01;
-        const force = 900 / distSq;
-        const dist = Math.sqrt(distSq);
-        dx /= dist; dy /= dist;
-        a.vx += dx * force; a.vy += dy * force;
-        b.vx -= dx * force; b.vy -= dy * force;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const sameCluster = a.cluster !== null && a.cluster !== undefined && a.cluster === b.cluster;
+        if (sameCluster) {
+          const force = (dist - 26) * 0.02;
+          const fx = (dx / dist) * force, fy = (dy / dist) * force;
+          a.vx += fx; a.vy += fy;
+          b.vx -= fx; b.vy -= fy;
+        } else {
+          const force = 400 / (dist * dist);
+          const fx = (dx / dist) * force, fy = (dy / dist) * force;
+          a.vx -= fx; a.vy -= fy;
+          b.vx += fx; b.vy += fy;
+        }
       }
     }
-    internalEdges.forEach(e => {
-      const a = nodeById[e.source], b = nodeById[e.target];
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-      const force = (dist - 20) * 0.06;
-      const fx = (dx / dist) * force, fy = (dy / dist) * force;
-      a.vx += fx; a.vy += fy;
-      b.vx -= fx; b.vy -= fy;
-    });
     nodes.forEach(n => {
-      n.vx += (width / 2 - n.x) * 0.0004;
-      n.vy += (height / 2 - n.y) * 0.0004;
+      n.vx += -n.x * 0.0025;
+      n.vy += -n.y * 0.0025;
       n.x += n.vx * 0.1; n.y += n.vy * 0.1;
       n.vx *= 0.85; n.vy *= 0.85;
-      n.x = Math.max(20, Math.min(width - 20, n.x));
-      n.y = Math.max(20, Math.min(height - 20, n.y));
     });
   }
 
@@ -603,7 +616,24 @@ function renderClusterGraph(data) {
   });
 
   svg.innerHTML = svgContent;
-  attachZoomPan(svg, { x: 0, y: 0, w: width, h: height });
+
+  // With many distinct clusters, a handful of small/loosely-connected ones can end up far
+  // from the main mass under pure repulsion - fitting the initial view to the absolute
+  // extent would shrink everything else to near-invisibility around a mostly-empty box.
+  // Frame the initial view around the 90th-percentile radius (the "main mass"), but still
+  // allow zooming out far enough to reach the true full extent, so nothing is ever
+  // unreachable - just not force-fit into the default view.
+  const dists = nodes.map(n => Math.sqrt(n.x * n.x + n.y * n.y)).sort((a, b) => a - b);
+  const mainRadius = Math.max(60, dists[Math.floor(dists.length * 0.9)] || 60);
+  const fullRadius = Math.max(mainRadius, dists[dists.length - 1] || mainRadius);
+  const padding = 40;
+  const mainSize = mainRadius * 2 + padding * 2;
+  const fullSize = fullRadius * 2 + padding * 2;
+  attachZoomPan(
+    svg,
+    { x: -mainSize / 2, y: -mainSize / 2, w: mainSize, h: mainSize },
+    fullSize
+  );
 
   const hoverInfo = document.getElementById('cluster-graph-hover-info');
   svg.querySelectorAll('circle[data-id]').forEach(circle => {
