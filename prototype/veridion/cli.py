@@ -6,6 +6,7 @@ from pathlib import Path
 from veridion.adapters.claude_code import AdapterInvocationError, ClaudeCodeAdapter
 from veridion.evidence import scan_repository, write_evidence
 from veridion.history import compute_diff, list_snapshots, save_snapshot
+from veridion.mcp_server import build_server
 from veridion.query import (
     BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
@@ -160,6 +161,13 @@ def _diff(old_path: str, new_path: str, full: bool, fail_on_new_secrets: bool) -
     return 0
 
 
+def _mcp(repo_path: str) -> int:
+    repo = Path(repo_path).resolve()
+    server = build_server(repo)
+    server.run(transport="stdio")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="veridion")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -227,6 +235,9 @@ def main() -> int:
         help="exit 1 if a new real (non-placeholder) secret finding appears",
     )
 
+    mcp_parser = subparsers.add_parser("mcp", help="run an MCP server scoped to a repository")
+    mcp_parser.add_argument("path", nargs="?", default=".")
+
     args = parser.parse_args()
 
     if args.command == "audit":
@@ -240,6 +251,8 @@ def main() -> int:
         return _query(args.kind, args.target, args.repo_path, args.full)
     if args.command == "diff":
         return _diff(args.old, args.new, args.full, args.fail_on_new_secrets)
+    if args.command == "mcp":
+        return _mcp(args.path)
 
     parser.print_help()
     return 1

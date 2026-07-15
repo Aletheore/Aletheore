@@ -165,6 +165,14 @@ def test_main_scan_writes_evidence_without_invoking_an_agent(tmp_path, monkeypat
     assert "Running audit with" not in captured.out
 
 
+def test_main_mcp_invokes_mcp_flow(tmp_path):
+    with patch("sys.argv", ["veridion", "mcp", str(tmp_path)]):
+        with patch("veridion.cli._mcp", return_value=0) as mock_mcp:
+            exit_code = main()
+    assert exit_code == 0
+    mock_mcp.assert_called_once_with(str(tmp_path))
+
+
 def test_main_query_imports_prints_result(tmp_path, monkeypatch, capsys):
     repo = tmp_path
     (repo / "app").mkdir()
