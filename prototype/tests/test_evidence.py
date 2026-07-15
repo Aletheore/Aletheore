@@ -123,3 +123,17 @@ def test_scan_repository_includes_ai_usage_in_repository_block(tmp_path):
     assert "ai_usage" in evidence["repository"]
     names = {p["name"] for p in evidence["repository"]["ai_usage"]["providers"]}
     assert "openai" in names
+
+
+def test_scan_repository_includes_policy_docs_in_repository_block(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "LICENSE").write_text("MIT")
+    (repo / "main.py").write_text("x = 1\n")
+
+    with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo)
+
+    names = {d["name"] for d in evidence["repository"]["policy_docs"]}
+    assert "license" in names

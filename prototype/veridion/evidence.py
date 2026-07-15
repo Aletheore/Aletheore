@@ -10,6 +10,7 @@ from veridion.scanner.detect import (
     detect_frameworks,
     detect_languages,
     detect_monorepo,
+    detect_policy_docs,
 )
 from veridion.scanner.graph import build_module_graph
 from veridion.secrets import find_secrets
@@ -24,6 +25,7 @@ def scan_repository(repo_path: Path, check_vulnerabilities: bool = True) -> dict
     languages = detect_languages(repo_path)
     frameworks = detect_frameworks(repo_path)
     ai_usage = detect_ai_usage(repo_path)
+    policy_docs = detect_policy_docs(repo_path)
     build_tools = detect_build_tools(repo_path)
     monorepo = detect_monorepo(repo_path)
     modules, dependency_graph, unparseable_files = build_module_graph(repo_path)
@@ -49,6 +51,7 @@ def scan_repository(repo_path: Path, check_vulnerabilities: bool = True) -> dict
             "languages": languages,
             "frameworks": frameworks,
             "ai_usage": ai_usage,
+            "policy_docs": policy_docs,
             "build_tools": build_tools,
             "monorepo": monorepo,
             "modules": modules,
