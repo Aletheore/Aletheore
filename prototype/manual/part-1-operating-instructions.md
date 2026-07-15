@@ -37,7 +37,9 @@ Structure your report with these sections, in this order:
 4. **Architecture Review** — findings from `evidence.architecture`, per Part IV below.
 5. **Security** — findings from `evidence.security`, per Part V below.
 6. **Roadmap** — prioritized findings from the sections above, per Part IX below.
-7. **Evidence Gaps** — an explicit list of what `evidence.json` could not tell you
+7. **Perspectives** — six audience-specific readings of the findings above, per Part VII
+   below.
+8. **Evidence Gaps** — an explicit list of what `evidence.json` could not tell you
    (unparseable files, unavailable git data, anything you were tempted to claim but couldn't
    support).
 
