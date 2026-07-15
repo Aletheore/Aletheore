@@ -229,3 +229,27 @@ def test_detect_layer_violations_custom_marker_overrides_built_in_rank():
     assert overridden_result["violations"] == []
     services_layer = next(l for l in overridden_result["layers"] if l["name"] == "services")
     assert services_layer["rank"] == 0
+
+
+def test_detect_layer_violations_custom_marker_matching_nothing_does_not_force_detection():
+    dependency_graph = {
+        "nodes": ["app/domain/user.py", "app/domain/order.py"],
+        "edges": [],
+    }
+
+    result = detect_layer_violations(dependency_graph, custom_markers={"nonexistent_folder": 5})
+
+    assert result["convention_detected"] is False
+    assert result["layers"] == []
+
+
+def test_detect_layer_violations_empty_custom_markers_does_not_force_detection():
+    dependency_graph = {
+        "nodes": ["app/domain/user.py", "app/domain/order.py"],
+        "edges": [],
+    }
+
+    result = detect_layer_violations(dependency_graph, custom_markers={})
+
+    assert result["convention_detected"] is False
+    assert result["layers"] == []

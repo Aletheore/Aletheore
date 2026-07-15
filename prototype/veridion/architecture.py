@@ -111,7 +111,10 @@ def detect_layer_violations(
         for name, folders in sorted(layer_folders.items())
     ]
 
-    if len(distinct_ranks) < 2 and custom_markers is None:
+    custom_markers_contributed = bool(custom_markers) and any(
+        name in custom_markers for name in layer_folders
+    )
+    if len(distinct_ranks) < 2 and not custom_markers_contributed:
         return {"convention_detected": False, "layers": [], "violations": []}
 
     violations = []
