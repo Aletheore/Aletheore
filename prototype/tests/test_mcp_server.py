@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -238,3 +239,70 @@ async def test_veridion_search_caps_at_200_and_flags_truncated(tmp_path):
     result_body = tool_result_body(result)["result"]
     assert len(result_body["matches"]) == 200
     assert result_body["truncated"] is True
+
+
+def make_git_repo_with_source(tmp_path: Path) -> Path:
+    repo = tmp_path / "git_repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("x = 1\n")
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "a@example.com"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Alice"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True)
+    return repo
+
+
+@pytest.mark.asyncio
+async def test_veridion_scan_returns_compact_summary(tmp_path):
+    repo = make_git_repo_with_source(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("veridion_scan", {})
+
+    summary = tool_result_body(result)["result"]
+    assert summary["module_count"] == 1
+    assert "scanned_at" in summary
+    assert summary["secrets"] == {
+        "total_findings": 0,
+        "real_findings": 0,
+        "history_findings": 0,
+    }
+    assert summary["vulnerabilities"]["checked"] is True
+    assert summary["layer_violations"]["convention_detected"] is False
+    assert "cluster_count" in summary
+
+
+@pytest.mark.asyncio
+async def test_veridion_scan_writes_a_history_snapshot(tmp_path):
+    repo = make_git_repo_with_source(tmp_path)
+    server = build_server(repo)
+
+    await server.call_tool("veridion_scan", {})
+
+    history_files = list((repo / ".veridion" / "history").glob("*.json"))
+    assert len(history_files) == 1
+
+
+@pytest.mark.asyncio
+async def test_veridion_scan_real_findings_excludes_placeholders(tmp_path):
+    repo = make_git_repo_with_source(tmp_path)
+    (repo / "tests").mkdir()
+    (repo / "tests" / "fixture.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+    server = build_server(repo)
+
+    result = await server.call_tool("veridion_scan", {})
+
+    summary = tool_result_body(result)["result"]
+    assert summary["secrets"]["total_findings"] == 1
+    assert summary["secrets"]["real_findings"] == 0

@@ -4,7 +4,8 @@ from pathlib import Path, PurePath
 
 from mcp.server.fastmcp import FastMCP
 
-from veridion.history import compute_diff, list_snapshots
+from veridion.evidence import scan_repository, write_evidence
+from veridion.history import compute_diff, list_snapshots, save_snapshot
 from veridion.query import (
     ModuleNotFoundInEvidenceError,
     QUERY_FUNCTIONS,
@@ -131,10 +132,54 @@ def _register_search_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
         return {"result": {"matches": matches, "truncated": truncated}}
 
 
+def _scan_summary(evidence: dict) -> dict:
+    secret_findings = evidence["security"]["secrets"]["findings"]
+    history_findings = evidence["security"]["secrets"]["history_findings"]
+    return {
+        "scanned_at": evidence["scanned_at"],
+        "module_count": len(evidence["repository"]["modules"]),
+        "cluster_count": len(evidence["architecture"]["clusters"]),
+        "secrets": {
+            "total_findings": len(secret_findings),
+            "real_findings": len(
+                [finding for finding in secret_findings if not finding.get("likely_placeholder")]
+            ),
+            "history_findings": len(history_findings),
+        },
+        "vulnerabilities": {
+            "checked": evidence["security"]["dependency_vulnerabilities"]["checked"],
+            "finding_count": len(evidence["security"]["dependency_vulnerabilities"]["findings"]),
+        },
+        "layer_violations": {
+            "convention_detected": evidence["architecture"]["layer_violations"][
+                "convention_detected"
+            ],
+            "violation_count": len(evidence["architecture"]["layer_violations"]["violations"]),
+        },
+    }
+
+
+def _register_scan_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+    @mcp_instance.tool(name="veridion_scan")
+    def veridion_scan(
+        check_vulnerabilities: bool = True, scan_git_history: bool = True
+    ) -> dict:
+        """Run the deterministic Veridion scanner and save evidence for this repository."""
+        evidence = scan_repository(
+            repo_path,
+            check_vulnerabilities=check_vulnerabilities,
+            scan_git_history=scan_git_history,
+        )
+        write_evidence(evidence, repo_path)
+        save_snapshot(evidence, repo_path)
+        return {"result": _scan_summary(evidence)}
+
+
 def build_server(repo_path: Path) -> FastMCP:
     mcp_instance = FastMCP("veridion")
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
+    _register_scan_tool(mcp_instance, repo_path)
     return mcp_instance
