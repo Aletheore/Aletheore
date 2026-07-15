@@ -1,11 +1,22 @@
 import json
+import ssl
 import urllib.error
 import urllib.request
 from pathlib import Path
 
+import certifi
+
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 OSV_VULN_URL_TEMPLATE = "https://api.osv.dev/v1/vulns/{vuln_id}"
 DEFAULT_TIMEOUT_SECONDS = 10
+
+# Use certifi's CA bundle explicitly rather than the system default SSL context.
+# On macOS, Python installed from python.org commonly has no default CA bundle
+# configured (the "Install Certificates.command" step is easy to skip), which
+# would otherwise make every OSV.dev call fail with CERTIFICATE_VERIFY_FAILED
+# even though certifi itself is installed and correct - discovered by actually
+# running this against a real repo, not by inspection.
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 
 def _parse_pip_pins(repo_path: Path) -> list[tuple[str, str, str]]:
@@ -51,13 +62,13 @@ def _query_batch(pins: list[tuple[str, str, str]], timeout: int) -> list[dict]:
     request = urllib.request.Request(
         OSV_BATCH_URL, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
         return json.loads(response.read())["results"]
 
 
 def _fetch_vuln_detail(vuln_id: str, timeout: int) -> dict:
     request = urllib.request.Request(OSV_VULN_URL_TEMPLATE.format(vuln_id=vuln_id))
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
         return json.loads(response.read())
 
 

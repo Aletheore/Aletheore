@@ -8,6 +8,7 @@ dependencies = [
     "tree-sitter-python>=0.25,<0.26",
     "tree-sitter-javascript>=0.25,<0.26",
     "tree-sitter-typescript>=0.23,<0.24",
+    "certifi>=2024.0.0",
 ]
 
 [project.optional-dependencies]
