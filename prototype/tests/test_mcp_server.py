@@ -120,3 +120,41 @@ async def test_veridion_changes_tool_reports_no_prior_snapshot(tmp_path):
     result = await server.call_tool("veridion_changes", {})
 
     assert tool_result_body(result)["result"]["message"].startswith("no prior snapshot")
+
+
+@pytest.mark.asyncio
+async def test_veridion_neighborhood_combines_imports_imported_by_and_cluster(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("veridion_neighborhood", {"target": "a.py"})
+
+    assert tool_result_body(result)["result"] == {
+        "target": "a.py",
+        "imports": ["b.py"],
+        "imported_by": [],
+        "cluster": {"id": 0, "modules": ["a.py", "b.py"]},
+    }
+
+
+@pytest.mark.asyncio
+async def test_veridion_neighborhood_cluster_is_null_when_unclustered(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".veridion" / "evidence.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["architecture"]["clusters"] = []
+    evidence_path.write_text(json.dumps(evidence))
+    server = build_server(repo)
+
+    result = await server.call_tool("veridion_neighborhood", {"target": "a.py"})
+
+    assert tool_result_body(result)["result"]["cluster"] is None
+
+
+@pytest.mark.asyncio
+async def test_veridion_neighborhood_raises_for_unknown_module(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    with pytest.raises(ToolError):
+        await server.call_tool("veridion_neighborhood", {"target": "does/not/exist.py"})

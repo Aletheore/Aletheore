@@ -4,7 +4,13 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from veridion.history import compute_diff, list_snapshots
-from veridion.query import QUERY_FUNCTIONS
+from veridion.query import (
+    ModuleNotFoundInEvidenceError,
+    QUERY_FUNCTIONS,
+    find_cluster,
+    find_imported_by,
+    find_imports,
+)
 
 
 def _read_evidence(repo_path: Path) -> dict:
@@ -70,8 +76,30 @@ def _register_changes_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
         return {"result": compute_diff(old, new, full=full)}
 
 
+def _register_neighborhood_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+    @mcp_instance.tool(name="veridion_neighborhood")
+    def veridion_neighborhood(target: str) -> dict:
+        """A module's imports, dependents, and cluster in one call."""
+        evidence = _read_evidence(repo_path)
+        imports = find_imports(evidence, target)
+        imported_by = find_imported_by(evidence, target)
+        try:
+            cluster = find_cluster(evidence, target)
+        except ModuleNotFoundInEvidenceError:
+            cluster = None
+        return {
+            "result": {
+                "target": target,
+                "imports": imports,
+                "imported_by": imported_by,
+                "cluster": cluster,
+            }
+        }
+
+
 def build_server(repo_path: Path) -> FastMCP:
     mcp_instance = FastMCP("veridion")
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
+    _register_neighborhood_tool(mcp_instance, repo_path)
     return mcp_instance
