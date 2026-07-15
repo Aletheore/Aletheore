@@ -113,7 +113,7 @@ def _compute_curated_diff(old: dict, new: dict) -> dict:
             len(new["repository"]["dependency_graph"]["edges"])
             - len(old["repository"]["dependency_graph"]["edges"])
         ),
-        "total_commits": new["git"]["total_commits"] - old["git"]["total_commits"],
+        "total_commits": new["git"].get("total_commits", 0) - old["git"].get("total_commits", 0),
     }
 
     return result

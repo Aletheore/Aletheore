@@ -5,6 +5,7 @@ from pathlib import Path
 
 from veridion.adapters.claude_code import AdapterInvocationError, ClaudeCodeAdapter
 from veridion.evidence import scan_repository, write_evidence
+from veridion.history import compute_diff, list_snapshots, save_snapshot
 from veridion.query import (
     BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
@@ -40,6 +41,8 @@ def _scan(repo_path: str, check_vulnerabilities: bool, scan_git_history: bool) -
     )
     evidence_path = write_evidence(evidence, repo)
     print(f"Evidence written to {evidence_path}")
+    snapshot_path = save_snapshot(evidence, repo)
+    print(f"Snapshot saved to {snapshot_path}")
     return 0, evidence, evidence_path
 
 
@@ -71,7 +74,30 @@ def _audit(
     return 0
 
 
-def _query(kind: str, target: str | None, repo_path: str) -> int:
+def _query_changes(repo_path: str, full: bool) -> int:
+    repo = Path(repo_path).resolve()
+    snapshots = list_snapshots(repo)
+
+    if len(snapshots) < 2:
+        print("no prior snapshot to compare against - run 'veridion scan' again later to compare")
+        return 0
+
+    try:
+        old = json.loads(snapshots[-2].read_text())
+    except json.JSONDecodeError:
+        print(f"error: most recent snapshot is unreadable ({snapshots[-2]})")
+        return 1
+
+    new = json.loads(snapshots[-1].read_text())
+    diff = compute_diff(old, new, full=full)
+    print(json.dumps(diff, indent=2))
+    return 0
+
+
+def _query(kind: str, target: str | None, repo_path: str, full: bool = False) -> int:
+    if kind == "changes":
+        return _query_changes(repo_path, full)
+
     repo = Path(repo_path).resolve()
     evidence_path = repo / ".veridion" / "evidence.json"
     if not evidence_path.exists():
@@ -135,9 +161,15 @@ def main() -> int:
     )
 
     query_parser = subparsers.add_parser("query", help="query an existing evidence.json")
-    query_parser.add_argument("kind", choices=list(QUERY_FUNCTIONS.keys()))
+    query_parser.add_argument("kind", choices=list(QUERY_FUNCTIONS.keys()) + ["changes"])
     query_parser.add_argument("target", nargs="?", default=None)
     query_parser.add_argument("--path", dest="repo_path", default=".")
+    query_parser.add_argument(
+        "--full",
+        action="store_true",
+        default=False,
+        help="show the full raw diff instead of the curated summary (only applies to 'changes')",
+    )
 
     args = parser.parse_args()
 
@@ -149,7 +181,7 @@ def main() -> int:
         )
         return exit_code
     if args.command == "query":
-        return _query(args.kind, args.target, args.repo_path)
+        return _query(args.kind, args.target, args.repo_path, args.full)
 
     parser.print_help()
     return 1

@@ -236,3 +236,95 @@ def test_main_query_unknown_module_errors_clearly(tmp_path, monkeypatch, capsys)
     assert exit_code == 1
     captured = capsys.readouterr()
     assert "not present in evidence" in captured.out
+
+
+def test_main_scan_saves_a_history_snapshot(tmp_path, monkeypatch):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    monkeypatch.setattr(
+        sys, "argv", ["veridion", "scan", str(repo), "--no-check-vulnerabilities"]
+    )
+
+    main()
+
+    history_files = list((repo / ".veridion" / "history").glob("*.json"))
+    assert len(history_files) == 1
+
+
+def test_main_query_changes_reports_no_prior_snapshot_on_first_scan(tmp_path, monkeypatch, capsys):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    monkeypatch.setattr(
+        sys, "argv", ["veridion", "scan", str(repo), "--no-check-vulnerabilities"]
+    )
+    main()
+
+    monkeypatch.setattr(sys, "argv", ["veridion", "query", "changes", "--path", str(repo)])
+    exit_code = main()
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "no prior snapshot" in captured.out
+
+
+def test_main_query_changes_reports_corrupt_snapshot(tmp_path, monkeypatch, capsys):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    monkeypatch.setattr(
+        sys, "argv", ["veridion", "scan", str(repo), "--no-check-vulnerabilities"]
+    )
+    main()
+    main()
+
+    history_dir = repo / ".veridion" / "history"
+    oldest = sorted(history_dir.glob("*.json"))[0]
+    oldest.write_text("{not valid json")
+
+    monkeypatch.setattr(sys, "argv", ["veridion", "query", "changes", "--path", str(repo)])
+    exit_code = main()
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "unreadable" in captured.out
+
+
+def test_main_query_changes_shows_a_real_diff_between_two_scans(tmp_path, monkeypatch, capsys):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    monkeypatch.setattr(
+        sys, "argv", ["veridion", "scan", str(repo), "--no-check-vulnerabilities"]
+    )
+    main()
+
+    (repo / "second.py").write_text("y = 2\n")
+    main()
+    capsys.readouterr()
+
+    monkeypatch.setattr(sys, "argv", ["veridion", "query", "changes", "--path", str(repo)])
+    exit_code = main()
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert result["aggregate_deltas"]["module_count"] == 1
+
+
+def test_main_query_changes_full_flag_returns_raw_diff(tmp_path, monkeypatch, capsys):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    monkeypatch.setattr(
+        sys, "argv", ["veridion", "scan", str(repo), "--no-check-vulnerabilities"]
+    )
+    main()
+    main()
+    capsys.readouterr()
+
+    monkeypatch.setattr(
+        sys, "argv", ["veridion", "query", "changes", "--path", str(repo), "--full"]
+    )
+    exit_code = main()
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert set(result.keys()) == {"added", "removed", "changed"}
