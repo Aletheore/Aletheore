@@ -41,7 +41,7 @@ def find_branch(evidence: dict, target: str | None) -> dict:
 
 
 def find_ownership(evidence: dict, target: str | None) -> list[dict]:
-    return evidence["git"]["ownership"]
+    return evidence["git"].get("ownership", [])
 
 
 def find_secrets_for_file(evidence: dict, target: str | None) -> list[dict]:

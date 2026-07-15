@@ -139,3 +139,76 @@ def test_main_scan_writes_evidence_without_invoking_an_agent(tmp_path, monkeypat
     captured = capsys.readouterr()
     assert "audit-report.md" not in captured.out
     assert "Running audit with" not in captured.out
+
+
+def test_main_query_imports_prints_result(tmp_path, monkeypatch, capsys):
+    repo = tmp_path
+    (repo / "app").mkdir()
+    (repo / "app" / "config.py").write_text("SETTING = 1\n")
+    (repo / "app" / "auth.py").write_text("from app import config\n")
+    monkeypatch.setattr(sys, "argv", ["veridion", "scan", str(repo)])
+    main()
+
+    monkeypatch.setattr(
+        sys, "argv", ["veridion", "query", "imports", "app/auth.py", "--path", str(repo)]
+    )
+    exit_code = main()
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "app/config.py" in captured.out
+
+
+def test_main_query_ownership_does_not_require_a_target(tmp_path, monkeypatch, capsys):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    monkeypatch.setattr(sys, "argv", ["veridion", "scan", str(repo)])
+    main()
+
+    monkeypatch.setattr(sys, "argv", ["veridion", "query", "ownership", "--path", str(repo)])
+    exit_code = main()
+
+    assert exit_code == 0
+
+
+def test_main_query_missing_target_errors_clearly(tmp_path, monkeypatch, capsys):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    monkeypatch.setattr(sys, "argv", ["veridion", "scan", str(repo)])
+    main()
+
+    monkeypatch.setattr(sys, "argv", ["veridion", "query", "imports", "--path", str(repo)])
+    exit_code = main()
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "requires a target" in captured.out
+
+
+def test_main_query_without_evidence_errors_clearly(tmp_path, monkeypatch, capsys):
+    repo = tmp_path
+    monkeypatch.setattr(
+        sys, "argv", ["veridion", "query", "imports", "app/auth.py", "--path", str(repo)]
+    )
+
+    exit_code = main()
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "veridion scan" in captured.out
+
+
+def test_main_query_unknown_module_errors_clearly(tmp_path, monkeypatch, capsys):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    monkeypatch.setattr(sys, "argv", ["veridion", "scan", str(repo)])
+    main()
+
+    monkeypatch.setattr(
+        sys, "argv", ["veridion", "query", "imports", "does/not/exist.py", "--path", str(repo)]
+    )
+    exit_code = main()
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "not present in evidence" in captured.out

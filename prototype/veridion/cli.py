@@ -1,9 +1,15 @@
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from veridion.adapters.claude_code import AdapterInvocationError, ClaudeCodeAdapter
 from veridion.evidence import scan_repository, write_evidence
+from veridion.query import (
+    BranchNotFoundInEvidenceError,
+    ModuleNotFoundInEvidenceError,
+    QUERY_FUNCTIONS,
+)
 from veridion.report import (
     AmbiguousAdapterError,
     NoAdapterAvailableError,
@@ -50,6 +56,30 @@ def _audit(repo_path: str, forced_agent: str | None, check_vulnerabilities: bool
     return 0
 
 
+def _query(kind: str, target: str | None, repo_path: str) -> int:
+    repo = Path(repo_path).resolve()
+    evidence_path = repo / ".veridion" / "evidence.json"
+    if not evidence_path.exists():
+        print(f"error: no evidence found at {evidence_path}")
+        print(f"Run 'veridion scan {repo}' first.")
+        return 1
+
+    func, requires_target = QUERY_FUNCTIONS[kind]
+    if requires_target and target is None:
+        print(f"error: query type '{kind}' requires a target argument")
+        return 1
+
+    evidence = json.loads(evidence_path.read_text())
+    try:
+        result = func(evidence, target)
+    except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
+        print(f"error: {exc}")
+        return 1
+
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="veridion")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -75,6 +105,11 @@ def main() -> int:
         help="skip the OSV.dev dependency-vulnerability check (on by default)",
     )
 
+    query_parser = subparsers.add_parser("query", help="query an existing evidence.json")
+    query_parser.add_argument("kind", choices=list(QUERY_FUNCTIONS.keys()))
+    query_parser.add_argument("target", nargs="?", default=None)
+    query_parser.add_argument("--path", dest="repo_path", default=".")
+
     args = parser.parse_args()
 
     if args.command == "audit":
@@ -82,6 +117,8 @@ def main() -> int:
     if args.command == "scan":
         exit_code, _evidence, _evidence_path = _scan(args.path, args.check_vulnerabilities)
         return exit_code
+    if args.command == "query":
+        return _query(args.kind, args.target, args.repo_path)
 
     parser.print_help()
     return 1
