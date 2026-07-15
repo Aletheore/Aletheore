@@ -21,6 +21,16 @@ KNOWN_ADAPTERS = [ClaudeCodeAdapter()]
 
 MANUAL_DIR = str(Path(__file__).resolve().parent.parent / "manual")
 
+SPONSOR_NOTE = """
+┌────────────────────────────────────────────────────────┐
+│  Veridion is 100% open-source, local, and free.         │
+│  No accounts, no tracking — nothing leaves this machine.│
+│                                                          │
+│  If it saved you time, consider supporting development: │
+│  https://github.com/sponsors/ArihantK15                 │
+└────────────────────────────────────────────────────────┘
+"""
+
 
 def _scan(repo_path: str, check_vulnerabilities: bool) -> tuple[int, dict, Path]:
     repo = Path(repo_path).resolve()
@@ -53,6 +63,7 @@ def _audit(repo_path: str, forced_agent: str | None, check_vulnerabilities: bool
         return 1
 
     print(f"Audit report written to {report_path}")
+    print(SPONSOR_NOTE)
     return 0
 
 
