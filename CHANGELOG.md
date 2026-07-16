@@ -5,9 +5,12 @@ Notable changes to Aletheore, by release. The working code lives in `prototype/`
 
 ## Unreleased
 
+## 0.2.0 — 2026-07-16
+
 - **Renamed the project from Veridion to Aletheore** (package, CLI command, MCP tool prefixes,
-  `.veridion/` → `.aletheore/` config convention, GitHub repo). Everything below this point in
-  `Unreleased` reflects the new name; the `0.1.1` and `0.1.0` entries are left as a historical
+  `.veridion/` → `.aletheore/` config convention, GitHub repo) and moved the repo from the
+  personal `ArihantK15` account into the new `Aletheore` GitHub organization. Everything below
+  this point reflects the new name; the `0.1.1` and `0.1.0` entries are left as a historical
   record under the name that was actually live at the time, not rewritten.
 - Added `.github/workflows/tests.yml` — the test suite now actually runs in CI on every
   push/PR, across Python 3.11 and 3.12. Previously nothing ran it automatically.
