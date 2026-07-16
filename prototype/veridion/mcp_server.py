@@ -34,6 +34,7 @@ _TOOL_NAME_TO_QUERY_KIND = {
     "veridion_ownership": "ownership",
     "veridion_secrets": "secrets",
     "veridion_vulnerabilities": "vulnerabilities",
+    "veridion_licenses": "licenses",
     "veridion_cluster": "cluster",
     "veridion_layer_violations": "layer-violations",
 }

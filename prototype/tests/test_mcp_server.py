@@ -62,7 +62,7 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
 
 
 @pytest.mark.asyncio
-async def test_build_server_registers_all_10_wrapper_tools(tmp_path):
+async def test_build_server_registers_all_11_wrapper_tools(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo)
 
@@ -77,6 +77,7 @@ async def test_build_server_registers_all_10_wrapper_tools(tmp_path):
         "veridion_ownership",
         "veridion_secrets",
         "veridion_vulnerabilities",
+        "veridion_licenses",
         "veridion_cluster",
         "veridion_layer_violations",
         "veridion_changes",

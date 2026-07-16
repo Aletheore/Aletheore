@@ -105,7 +105,7 @@ def test_main_audit_invokes_audit_flow(tmp_path):
         with patch("veridion.cli._audit", return_value=0) as mock_audit:
             exit_code = main()
     assert exit_code == 0
-    mock_audit.assert_called_once_with(str(tmp_path), "claude", True, True)
+    mock_audit.assert_called_once_with(str(tmp_path), "claude", True, True, True)
 
 
 def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path, monkeypatch):
@@ -125,6 +125,35 @@ def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path, monkeypatch)
         evidence["security"]["dependency_vulnerabilities"]["reason"]
         == "skipped (--no-check-vulnerabilities)"
     )
+
+
+def test_main_audit_threads_no_check_licenses_flag(tmp_path, monkeypatch):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["veridion", "audit", str(repo), "--no-check-licenses", "--agent", "nonexistent"],
+    )
+
+    main()
+
+    evidence = json.loads((repo / ".veridion" / "evidence.json").read_text())
+    assert evidence["security"]["dependency_licenses"]["checked"] is False
+    assert (
+        evidence["security"]["dependency_licenses"]["reason"] == "skipped (--no-check-licenses)"
+    )
+
+
+def test_main_scan_threads_no_check_licenses_flag(tmp_path, monkeypatch):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    monkeypatch.setattr(sys, "argv", ["veridion", "scan", str(repo), "--no-check-licenses"])
+
+    main()
+
+    evidence = json.loads((repo / ".veridion" / "evidence.json").read_text())
+    assert evidence["security"]["dependency_licenses"]["checked"] is False
 
 
 def test_main_audit_threads_no_scan_git_history_flag(tmp_path, monkeypatch):

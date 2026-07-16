@@ -38,11 +38,16 @@ SPONSOR_NOTE = """
 """
 
 
-def _scan(repo_path: str, check_vulnerabilities: bool, scan_git_history: bool) -> tuple[int, dict, Path]:
+def _scan(
+    repo_path: str, check_vulnerabilities: bool, scan_git_history: bool, check_licenses: bool = True
+) -> tuple[int, dict, Path]:
     repo = Path(repo_path).resolve()
     print(f"Scanning {repo}...")
     evidence = scan_repository(
-        repo, check_vulnerabilities=check_vulnerabilities, scan_git_history=scan_git_history
+        repo,
+        check_vulnerabilities=check_vulnerabilities,
+        scan_git_history=scan_git_history,
+        check_licenses=check_licenses,
     )
     evidence_path = write_evidence(evidence, repo)
     print(f"Evidence written to {evidence_path}")
@@ -52,9 +57,15 @@ def _scan(repo_path: str, check_vulnerabilities: bool, scan_git_history: bool) -
 
 
 def _audit(
-    repo_path: str, forced_agent: str | None, check_vulnerabilities: bool, scan_git_history: bool
+    repo_path: str,
+    forced_agent: str | None,
+    check_vulnerabilities: bool,
+    scan_git_history: bool,
+    check_licenses: bool = True,
 ) -> int:
-    _exit_code, _evidence, evidence_path = _scan(repo_path, check_vulnerabilities, scan_git_history)
+    _exit_code, _evidence, evidence_path = _scan(
+        repo_path, check_vulnerabilities, scan_git_history, check_licenses
+    )
     repo = Path(repo_path).resolve()
 
     try:
@@ -225,6 +236,13 @@ def main() -> int:
         default=True,
         help="skip walking git history for secrets (on by default)",
     )
+    audit_parser.add_argument(
+        "--no-check-licenses",
+        dest="check_licenses",
+        action="store_false",
+        default=True,
+        help="skip the dependency-license check (on by default)",
+    )
 
     scan_parser = subparsers.add_parser("scan", help="run only the deterministic scan phase")
     scan_parser.add_argument("path", nargs="?", default=".")
@@ -241,6 +259,13 @@ def main() -> int:
         action="store_false",
         default=True,
         help="skip walking git history for secrets (on by default)",
+    )
+    scan_parser.add_argument(
+        "--no-check-licenses",
+        dest="check_licenses",
+        action="store_false",
+        default=True,
+        help="skip the dependency-license check (on by default)",
     )
 
     query_parser = subparsers.add_parser("query", help="query an existing evidence.json")
@@ -297,10 +322,16 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "audit":
-        return _audit(args.path, args.agent, args.check_vulnerabilities, args.scan_git_history)
+        return _audit(
+            args.path,
+            args.agent,
+            args.check_vulnerabilities,
+            args.scan_git_history,
+            args.check_licenses,
+        )
     if args.command == "scan":
         exit_code, _evidence, _evidence_path = _scan(
-            args.path, args.check_vulnerabilities, args.scan_git_history
+            args.path, args.check_vulnerabilities, args.scan_git_history, args.check_licenses
         )
         return exit_code
     if args.command == "query":

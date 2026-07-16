@@ -146,7 +146,19 @@ script.
 veridion scan .
 veridion scan . --no-check-vulnerabilities   # skip the OSV.dev dependency check
 veridion scan . --no-scan-git-history        # skip walking git history for secrets
+veridion scan . --no-check-licenses          # skip the dependency-license check
 ```
+
+The license check reads each pinned PyPI/npm dependency's registry metadata (PyPI's `license`
+field falling back to its OSI classifiers; npm's `license` field) and categorizes it as
+`permissive`, `copyleft-weak` (LGPL, MPL, EPL), `copyleft-strong` (GPL, AGPL), or `unknown` —
+only non-permissive dependencies show up as findings, the same way OSV vulnerability checking
+only reports actual vulnerabilities, not every clean dependency. It also detects the repo's own
+declared license (`pyproject.toml`'s `license` field, `package.json`'s `license` field, or
+pattern-matching a `LICENSE` file's text) so a report can flag a copyleft dependency alongside
+what license the repo itself claims to be under - a factual categorization, not a legal
+compatibility verdict, which is genuinely subjective and outside what a deterministic scanner
+should claim.
 
 ### `veridion audit [path]`
 
@@ -181,6 +193,7 @@ veridion query branch main --path .
 veridion query ownership --path .
 veridion query secrets app/routes.py --path .        # findings within just that file
 veridion query vulnerabilities --path .
+veridion query licenses --path .
 veridion query cluster app/routes.py --path .
 veridion query layer-violations --path .
 veridion query changes --path .              # diff against the previous history snapshot
@@ -204,13 +217,13 @@ something new.
 ### `veridion mcp [path]`
 
 Starts a stdio MCP server scoped to one repository, so a coding agent can query its structure
-directly instead of shelling out via Bash or re-reading files on every lookup. Exposes 13
+directly instead of shelling out via Bash or re-reading files on every lookup. Exposes 14
 tools:
 
-- The 9 query kinds above as tools (`veridion_imports`, `veridion_imported_by`,
+- The 10 query kinds above as tools (`veridion_imports`, `veridion_imported_by`,
   `veridion_symbols`, `veridion_branch`, `veridion_ownership`, `veridion_secrets`,
-  `veridion_vulnerabilities`, `veridion_cluster`, `veridion_layer_violations`), plus
-  `veridion_changes`.
+  `veridion_vulnerabilities`, `veridion_licenses`, `veridion_cluster`,
+  `veridion_layer_violations`), plus `veridion_changes`.
 - `veridion_neighborhood(target)` — a module's imports, dependents, and cluster in one call,
   instead of three round-trips.
 - `veridion_search(pattern, regex=False, path_glob=None)` — literal or regex full-text search

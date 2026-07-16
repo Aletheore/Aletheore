@@ -9,6 +9,7 @@ from veridion.query import (
     find_imported_by,
     find_imports,
     find_layer_violations,
+    find_licenses,
     find_ownership,
     find_secrets_for_file,
     find_symbols,
@@ -62,6 +63,12 @@ def make_evidence():
                 ],
             },
             "dependency_vulnerabilities": {"checked": True, "reason": None, "findings": []},
+            "dependency_licenses": {
+                "checked": True,
+                "reason": None,
+                "repo_license": {"category": "permissive", "detected_from": "LICENSE text match"},
+                "findings": [],
+            },
         },
         "architecture": {
             "clusters": [
@@ -120,6 +127,11 @@ def test_find_vulnerabilities_returns_the_whole_block_ignoring_target():
     assert result == make_evidence()["security"]["dependency_vulnerabilities"]
 
 
+def test_find_licenses_returns_the_whole_block_ignoring_target():
+    result = find_licenses(make_evidence(), None)
+    assert result == make_evidence()["security"]["dependency_licenses"]
+
+
 def test_find_cluster_returns_the_cluster_containing_the_file():
     result = find_cluster(make_evidence(), "app/config.py")
     assert result["id"] == 0
@@ -136,7 +148,7 @@ def test_find_layer_violations_returns_the_whole_block_ignoring_target():
     assert result == make_evidence()["architecture"]["layer_violations"]
 
 
-def test_query_functions_registry_has_all_nine_kinds_with_correct_requires_target():
+def test_query_functions_registry_has_all_ten_kinds_with_correct_requires_target():
     expected = {
         "imports": True,
         "imported-by": True,
@@ -145,6 +157,7 @@ def test_query_functions_registry_has_all_nine_kinds_with_correct_requires_targe
         "ownership": False,
         "secrets": True,
         "vulnerabilities": False,
+        "licenses": False,
         "cluster": True,
         "layer-violations": False,
     }

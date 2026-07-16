@@ -27,7 +27,7 @@ def test_scan_repository_produces_full_schema(tmp_path):
     repo = make_repo(tmp_path)
     with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
         mock_check.return_value = {"checked": True, "reason": None, "findings": []}
-        evidence = scan_repository(repo)
+        evidence = scan_repository(repo, check_licenses=False)
 
     assert evidence["veridion_version"] == "0.1.0"
     assert "scanned_at" in evidence
@@ -45,13 +45,13 @@ def test_scan_repository_handles_no_git_history(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "main.py").write_text("x = 1\n")
-    evidence = scan_repository(repo, check_vulnerabilities=False)
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
     assert evidence["git"] == {"available": False}
 
 
 def test_write_evidence_creates_veridion_dir(tmp_path):
     repo = make_repo(tmp_path)
-    evidence = scan_repository(repo, check_vulnerabilities=False)
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
     written_path = write_evidence(evidence, repo)
 
     assert written_path == repo / ".veridion" / "evidence.json"
@@ -67,7 +67,7 @@ def test_scan_repository_includes_security_block(tmp_path):
 
     with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
         mock_check.return_value = {"checked": True, "reason": None, "findings": []}
-        evidence = scan_repository(repo)
+        evidence = scan_repository(repo, check_licenses=False)
 
     assert "security" in evidence
     assert "secrets" in evidence["security"]
@@ -82,7 +82,7 @@ def test_scan_repository_skips_vulnerability_check_when_disabled(tmp_path):
     (repo / "main.py").write_text("x = 1\n")
 
     with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
-        evidence = scan_repository(repo, check_vulnerabilities=False)
+        evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
 
     mock_check.assert_not_called()
     assert evidence["security"]["dependency_vulnerabilities"] == {
@@ -101,7 +101,7 @@ def test_scan_repository_includes_architecture_block(tmp_path):
 
     with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
         mock_check.return_value = {"checked": True, "reason": None, "findings": []}
-        evidence = scan_repository(repo)
+        evidence = scan_repository(repo, check_licenses=False)
 
     assert "architecture" in evidence
     assert "clusters" in evidence["architecture"]
@@ -118,7 +118,7 @@ def test_scan_repository_includes_ai_usage_in_repository_block(tmp_path):
 
     with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
         mock_check.return_value = {"checked": True, "reason": None, "findings": []}
-        evidence = scan_repository(repo)
+        evidence = scan_repository(repo, check_licenses=False)
 
     assert "ai_usage" in evidence["repository"]
     names = {p["name"] for p in evidence["repository"]["ai_usage"]["providers"]}
@@ -133,7 +133,7 @@ def test_scan_repository_includes_policy_docs_in_repository_block(tmp_path):
 
     with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
         mock_check.return_value = {"checked": True, "reason": None, "findings": []}
-        evidence = scan_repository(repo)
+        evidence = scan_repository(repo, check_licenses=False)
 
     names = {d["name"] for d in evidence["repository"]["policy_docs"]}
     assert "license" in names
@@ -147,7 +147,7 @@ def test_scan_repository_includes_history_findings_in_secrets_block(tmp_path):
 
     with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
         mock_check.return_value = {"checked": True, "reason": None, "findings": []}
-        evidence = scan_repository(repo)
+        evidence = scan_repository(repo, check_licenses=False)
 
     secrets = evidence["security"]["secrets"]
     assert "history_scanned_commits" in secrets
@@ -162,7 +162,7 @@ def test_scan_repository_skips_history_scan_when_disabled(tmp_path):
     with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
         mock_check.return_value = {"checked": True, "reason": None, "findings": []}
         with patch("veridion.evidence.find_secrets_in_history") as mock_history:
-            evidence = scan_repository(repo, scan_git_history=False)
+            evidence = scan_repository(repo, scan_git_history=False, check_licenses=False)
 
     mock_history.assert_not_called()
     secrets = evidence["security"]["secrets"]
@@ -180,7 +180,7 @@ def test_scan_repository_applies_veridion_json_config(tmp_path):
 
     with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
         mock_check.return_value = {"checked": True, "reason": None, "findings": []}
-        evidence = scan_repository(repo, scan_git_history=False)
+        evidence = scan_repository(repo, scan_git_history=False, check_licenses=False)
 
     assert evidence["architecture"]["config_applied"] == {
         "layer_markers": {"biz": 1},
@@ -196,7 +196,7 @@ def test_scan_repository_config_applied_is_none_without_veridion_json(tmp_path):
 
     with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
         mock_check.return_value = {"checked": True, "reason": None, "findings": []}
-        evidence = scan_repository(repo, scan_git_history=False)
+        evidence = scan_repository(repo, scan_git_history=False, check_licenses=False)
 
     assert evidence["architecture"]["config_applied"] is None
 
@@ -208,7 +208,7 @@ def test_scan_repository_applies_a_secrets_baseline_end_to_end(tmp_path):
 
     with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
         mock_check.return_value = {"checked": True, "reason": None, "findings": []}
-        first_scan = scan_repository(repo, scan_git_history=False)
+        first_scan = scan_repository(repo, scan_git_history=False, check_licenses=False)
 
     finding = first_scan["security"]["secrets"]["findings"][0]
     assert finding["accepted"] is False
@@ -229,6 +229,46 @@ def test_scan_repository_applies_a_secrets_baseline_end_to_end(tmp_path):
 
     with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_check:
         mock_check.return_value = {"checked": True, "reason": None, "findings": []}
-        second_scan = scan_repository(repo, scan_git_history=False)
+        second_scan = scan_repository(repo, scan_git_history=False, check_licenses=False)
 
     assert second_scan["security"]["secrets"]["findings"][0]["accepted"] is True
+
+
+def test_scan_repository_includes_dependency_licenses_block(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("x = 1\n")
+
+    with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_vuln:
+        mock_vuln.return_value = {"checked": True, "reason": None, "findings": []}
+        with patch("veridion.evidence.check_dependency_licenses") as mock_licenses:
+            mock_licenses.return_value = {
+                "checked": True,
+                "reason": None,
+                "repo_license": {"category": "permissive", "detected_from": "LICENSE text match"},
+                "findings": [],
+            }
+            evidence = scan_repository(repo)
+
+    mock_licenses.assert_called_once()
+    assert evidence["security"]["dependency_licenses"]["checked"] is True
+    assert evidence["security"]["dependency_licenses"]["repo_license"]["category"] == "permissive"
+
+
+def test_scan_repository_skips_license_check_when_disabled(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("x = 1\n")
+
+    with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_vuln:
+        mock_vuln.return_value = {"checked": True, "reason": None, "findings": []}
+        with patch("veridion.evidence.check_dependency_licenses") as mock_licenses:
+            evidence = scan_repository(repo, check_licenses=False)
+
+    mock_licenses.assert_not_called()
+    assert evidence["security"]["dependency_licenses"] == {
+        "checked": False,
+        "reason": "skipped (--no-check-licenses)",
+        "repo_license": {"category": "unknown", "detected_from": None},
+        "findings": [],
+    }

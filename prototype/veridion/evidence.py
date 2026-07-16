@@ -4,6 +4,7 @@ from pathlib import Path
 
 from veridion.architecture import build_clusters, detect_layer_violations, load_architecture_config
 from veridion.git_intel.analyzer import analyze_git
+from veridion.licenses import check_dependency_licenses
 from veridion.scanner.detect import (
     detect_ai_usage,
     detect_build_tools,
@@ -20,7 +21,10 @@ EVIDENCE_VERSION = "0.1.0"
 
 
 def scan_repository(
-    repo_path: Path, check_vulnerabilities: bool = True, scan_git_history: bool = True
+    repo_path: Path,
+    check_vulnerabilities: bool = True,
+    scan_git_history: bool = True,
+    check_licenses: bool = True,
 ) -> dict:
     repo_path = repo_path.resolve()
 
@@ -54,6 +58,16 @@ def scan_repository(
             "findings": [],
         }
 
+    if check_licenses:
+        licenses_data = check_dependency_licenses(repo_path)
+    else:
+        licenses_data = {
+            "checked": False,
+            "reason": "skipped (--no-check-licenses)",
+            "repo_license": {"category": "unknown", "detected_from": None},
+            "findings": [],
+        }
+
     return {
         "veridion_version": EVIDENCE_VERSION,
         "scanned_at": datetime.now(timezone.utc).isoformat(),
@@ -73,6 +87,7 @@ def scan_repository(
         "security": {
             "secrets": secrets_data,
             "dependency_vulnerabilities": vulnerabilities_data,
+            "dependency_licenses": licenses_data,
         },
         "architecture": {
             "clusters": clusters,

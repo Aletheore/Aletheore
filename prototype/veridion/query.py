@@ -56,6 +56,10 @@ def find_vulnerabilities(evidence: dict, target: str | None) -> dict:
     return evidence["security"]["dependency_vulnerabilities"]
 
 
+def find_licenses(evidence: dict, target: str | None) -> dict:
+    return evidence["security"]["dependency_licenses"]
+
+
 def find_cluster(evidence: dict, target: str | None) -> dict:
     for cluster in evidence["architecture"]["clusters"]:
         if target in cluster["modules"]:
@@ -75,6 +79,7 @@ QUERY_FUNCTIONS: dict[str, tuple[Callable[[dict, str | None], Any], bool]] = {
     "ownership": (find_ownership, False),
     "secrets": (find_secrets_for_file, True),
     "vulnerabilities": (find_vulnerabilities, False),
+    "licenses": (find_licenses, False),
     "cluster": (find_cluster, True),
     "layer-violations": (find_layer_violations, False),
 }
