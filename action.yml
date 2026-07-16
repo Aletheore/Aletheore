@@ -1,4 +1,4 @@
-name: "Veridion"
+name: "Veridion Diff"
 description: "Evidence-grounded diff of a PR - new secrets, layer violations, dependency vulnerabilities."
 author: "ArihantK15"
 
