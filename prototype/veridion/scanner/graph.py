@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import tree_sitter_go as tsgo
+import tree_sitter_java as tsjava
 import tree_sitter_javascript as tsjavascript
 import tree_sitter_python as tspython
 import tree_sitter_rust as tsrust
@@ -15,6 +16,7 @@ TS_LANGUAGE = Language(tstypescript.language_typescript())
 TSX_LANGUAGE = Language(tstypescript.language_tsx())
 GO_LANGUAGE = Language(tsgo.language())
 RUST_LANGUAGE = Language(tsrust.language())
+JAVA_LANGUAGE = Language(tsjava.language())
 
 LANGUAGE_BY_EXTENSION = {
     ".py": ("python", PY_LANGUAGE),
@@ -24,6 +26,7 @@ LANGUAGE_BY_EXTENSION = {
     ".tsx": ("typescript", TSX_LANGUAGE),
     ".go": ("go", GO_LANGUAGE),
     ".rs": ("rust", RUST_LANGUAGE),
+    ".java": ("java", JAVA_LANGUAGE),
 }
 
 # Extensions that are recognizable programming languages we don't yet have a grammar
@@ -34,7 +37,7 @@ LANGUAGE_BY_EXTENSION = {
 # from an untracked cache directory before IGNORED_DIRS was widened, none of which
 # were ever "unparseable source").
 KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR = {
-    ".swift", ".java", ".rb", ".c", ".cpp", ".cc", ".h", ".hpp",
+    ".swift", ".rb", ".c", ".cpp", ".cc", ".h", ".hpp",
     ".cs", ".kt", ".kts", ".m", ".mm", ".scala", ".php",
 }
 
@@ -367,6 +370,120 @@ def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | Non
     return _rel(repo_path, target) if target is not None else None
 
 
+def _extract_java_package(node: Node, source: bytes) -> str | None:
+    for child in node.children:
+        if child.type == "package_declaration":
+            for grandchild in child.children:
+                if grandchild.type in ("scoped_identifier", "identifier"):
+                    return source[grandchild.start_byte:grandchild.end_byte].decode()
+            return None
+    return None
+
+
+def _extract_java(
+    node: Node, source: bytes
+) -> tuple[list[tuple[str, bool, bool]], list[str], list[str]]:
+    """Return (import path, is_static, is_wildcard) tuples, method names, and type names."""
+    imports: list[tuple[str, bool, bool]] = []
+    functions: list[str] = []
+    types: list[str] = []
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode()
+
+    def walk(n: Node):
+        if n.type == "import_declaration":
+            is_static = any(c.type == "static" for c in n.children)
+            is_wildcard = any(c.type == "asterisk" for c in n.children)
+            for child in n.children:
+                if child.type in ("scoped_identifier", "identifier"):
+                    imports.append((text(child), is_static, is_wildcard))
+                    break
+        elif n.type == "method_declaration":
+            name_node = n.child_by_field_name("name")
+            if name_node is not None:
+                functions.append(text(name_node))
+        elif n.type in (
+            "class_declaration", "interface_declaration", "enum_declaration", "record_declaration",
+        ):
+            name_node = n.child_by_field_name("name")
+            if name_node is not None:
+                types.append(text(name_node))
+        for child in n.children:
+            walk(child)
+
+    walk(node)
+    return imports, functions, types
+
+
+def _java_source_root_for(file_path: Path, package: str | None) -> Path | None:
+    """Infer the source root from what this file itself declares: the directory such
+    that source_root / package-as-a-path is this file's own containing directory.
+    Convention-agnostic on purpose - works for Maven/Gradle's src/main/java, a bare
+    src/, or a flat repo root, since it's derived per-file rather than assumed
+    upfront, and different files (main vs test source sets) can imply different
+    roots that all get tried when resolving any given import.
+    """
+    if not package:
+        return file_path.parent
+    segments = package.split(".")
+    parts = file_path.parent.parts
+    if len(parts) < len(segments) or list(parts[-len(segments):]) != segments:
+        return None
+    root = file_path.parent
+    for _ in range(len(segments)):
+        root = root.parent
+    return root
+
+
+def _java_class_file(root: Path, segments: list[str]) -> Path | None:
+    if not segments:
+        return None
+    candidate = root.joinpath(*segments[:-1], f"{segments[-1]}.java")
+    return candidate if candidate.is_file() else None
+
+
+def _resolve_java_import(
+    source_roots: list[Path], dotted: str, is_static: bool, is_wildcard: bool
+) -> list[Path]:
+    segments = dotted.split(".")
+    if not segments:
+        return []
+
+    if is_wildcard:
+        # dotted is a package path with no class name - every .java file directly
+        # in that package's directory is what a wildcard import pulls in, the same
+        # "import the whole package" fan-out Go's package-level imports need.
+        for root in source_roots:
+            package_dir = root.joinpath(*segments)
+            if package_dir.is_dir():
+                return sorted(package_dir.glob("*.java"))
+        return []
+
+    if is_static:
+        # "import static a.b.C.MEMBER" - MEMBER is a field or method, not a class;
+        # the file that actually exists is a.b.C.java.
+        segments = segments[:-1]
+        if not segments:
+            return []
+
+    for root in source_roots:
+        target = _java_class_file(root, segments)
+        if target is not None:
+            return [target]
+
+    # One segment short: the same fallback Python/Rust already use - the last
+    # segment might be a nested class rather than its own top-level file, in
+    # which case the containing class's own file is the real target.
+    if len(segments) > 1:
+        for root in source_roots:
+            target = _java_class_file(root, segments[:-1])
+            if target is not None:
+                return [target]
+
+    return []
+
+
 def _resolve_python_module(repo_path: Path, dotted: str, from_file: Path | None = None) -> str | None:
     if not dotted:
         return None
@@ -445,6 +562,24 @@ def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
     go_module_prefix = _load_go_module_prefix(repo_path)
     has_rust_crate_root = _rust_crate_root(repo_path) is not None
 
+    # Java has no single repo-root config naming a module prefix (no go.mod, no
+    # Cargo.toml equivalent) - the source root (src/main/java, a bare src/, or the
+    # repo root itself) has to be inferred from what each file's own package
+    # declaration implies about its directory, so every .java file needs a quick
+    # pre-parse before any of them can have their imports resolved.
+    java_source_roots: list[Path] = []
+    pre_parser = Parser()
+    pre_parser.language = JAVA_LANGUAGE
+    for path in _iter_source_files(repo_path):
+        if path.suffix != ".java":
+            continue
+        pre_source = path.read_bytes()
+        tree = pre_parser.parse(pre_source)
+        package = _extract_java_package(tree.root_node, pre_source)
+        root = _java_source_root_for(path, package)
+        if root is not None and root not in java_source_roots:
+            java_source_roots.append(root)
+
     parser = Parser()
 
     for path in _iter_source_files(repo_path):
@@ -510,6 +645,19 @@ def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
                         resolved_imports.append(target)
                         edges.append([rel_path, target])
                         imported_by_map.setdefault(target, []).append(rel_path)
+        elif language_name == "java":
+            raw_imports, functions, classes = _extract_java(tree.root_node, source)
+            resolved_imports = []
+            for dotted, is_static, is_wildcard in raw_imports:
+                for target_path in _resolve_java_import(
+                    java_source_roots, dotted, is_static, is_wildcard
+                ):
+                    target = _rel(repo_path, target_path)
+                    if target == rel_path:
+                        continue
+                    resolved_imports.append(target)
+                    edges.append([rel_path, target])
+                    imported_by_map.setdefault(target, []).append(rel_path)
         else:
             raw_imports, functions, classes = _extract_javascript(tree.root_node, source)
             resolved_imports = []

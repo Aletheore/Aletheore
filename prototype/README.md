@@ -22,7 +22,7 @@ never states anything it can't cite back to a specific field in it.
 
 Secrets, git activity, and dependency-vulnerability checks are language-agnostic. The module
 dependency graph (imports, clusters, layer violations) currently understands **Python,
-JavaScript/JSX, TypeScript/TSX, Go, and Rust** — other languages are still scanned for
+JavaScript/JSX, TypeScript/TSX, Go, Rust, and Java** — other languages are still scanned for
 secrets/git/vulnerabilities, but get no dependency-graph or architecture analysis until a
 grammar is added for them.
 
@@ -37,6 +37,13 @@ structure mirrors the module tree (true for the vast majority of real code; `#[p
 escape hatches aren't supported), and handles `crate::`/`self::`/`super::` paths, the implicit
 crate-relative form (`use handlers::Handler;` from the crate root), grouped (`{Bar, Baz}`),
 wildcard (`::*`), and aliased (`as`) forms.
+
+Java resolution has no repo-root config to read at all (no go.mod/Cargo.toml equivalent) - the
+source root (Maven/Gradle's `src/main/java`, a bare `src/`, or the repo root itself) is
+inferred per-file from each file's own `package` declaration matching its actual directory,
+so it works across layouts without assuming one. Handles direct imports, wildcard imports
+(fanning out to every `.java` file in that package, same idea as Go's package-level imports),
+and `import static` (resolving to the class, not the imported member).
 
 ## Setup
 
