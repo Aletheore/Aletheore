@@ -1,7 +1,7 @@
 import urllib.error
 from unittest.mock import MagicMock, patch
 
-from veridion.healthcheck import run_healthcheck
+from veridion.healthcheck import run_healthcheck, save_healthcheck
 
 
 def _mock_response(status: int):
@@ -167,3 +167,22 @@ def test_run_healthcheck_reports_unreachable_on_connection_error():
 
     assert result["results"][0]["reachable"] is False
     assert result["results"][0]["status_code"] is None
+
+
+def test_save_healthcheck_rotates_at_21st_save_keeping_20_newest(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    for hour in range(21):
+        save_healthcheck(
+            {
+                "base_url": "x",
+                "checked_at": f"2026-07-16T{hour:02d}:00:00+00:00",
+                "results": [],
+            },
+            repo,
+        )
+
+    healthchecks_dir = repo / ".veridion" / "healthchecks"
+    files = sorted(healthchecks_dir.glob("*.json"))
+    assert len(files) == 20

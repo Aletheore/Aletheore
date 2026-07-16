@@ -1,4 +1,3 @@
-import json
 import re
 import ssl
 import time
@@ -8,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import certifi
+
+from veridion.history import _save_json_with_rotation
 
 _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
@@ -95,10 +96,7 @@ def _healthchecks_dir(repo_path: Path) -> Path:
     return repo_path / ".veridion" / "healthchecks"
 
 
-def save_healthcheck(result: dict, repo_path: Path) -> Path:
-    healthchecks_dir = _healthchecks_dir(repo_path)
-    healthchecks_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = result["checked_at"].replace(":", "-")
-    path = healthchecks_dir / f"{safe_name}.json"
-    path.write_text(json.dumps(result, indent=2))
-    return path
+def save_healthcheck(result: dict, repo_path: Path, keep: int = 20) -> Path:
+    return _save_json_with_rotation(
+        result, _healthchecks_dir(repo_path), result["checked_at"], keep
+    )

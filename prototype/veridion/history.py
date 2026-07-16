@@ -15,20 +15,23 @@ def _rotate(history_dir: Path, keep: int) -> None:
         path.unlink()
 
 
-def save_snapshot(evidence: dict, repo_path: Path, keep: int = 20) -> Path:
-    history_dir = _history_dir(repo_path)
-    history_dir.mkdir(parents=True, exist_ok=True)
+def _save_json_with_rotation(data: dict, directory: Path, timestamp: str, keep: int) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
 
-    safe_name = evidence["scanned_at"].replace(":", "-")
-    snapshot_path = history_dir / f"{safe_name}.json"
+    safe_name = timestamp.replace(":", "-")
+    snapshot_path = directory / f"{safe_name}.json"
     suffix = 1
     while snapshot_path.exists():
-        snapshot_path = history_dir / f"{safe_name}-{suffix}.json"
+        snapshot_path = directory / f"{safe_name}-{suffix}.json"
         suffix += 1
 
-    snapshot_path.write_text(json.dumps(evidence, indent=2))
-    _rotate(history_dir, keep)
+    snapshot_path.write_text(json.dumps(data, indent=2))
+    _rotate(directory, keep)
     return snapshot_path
+
+
+def save_snapshot(evidence: dict, repo_path: Path, keep: int = 20) -> Path:
+    return _save_json_with_rotation(evidence, _history_dir(repo_path), evidence["scanned_at"], keep)
 
 
 def list_snapshots(repo_path: Path) -> list[Path]:
