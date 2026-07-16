@@ -94,8 +94,18 @@ def test_run_reasoning_phase_does_not_clobber_report_the_agent_wrote_itself(tmp_
     assert written.read_text() == "# Real Audit Report\n\nreal findings here\n"
 
 
-def test_main_requires_a_command(capsys):
+def test_main_with_no_command_shows_banner_and_exits_cleanly(capsys):
     with patch("sys.argv", ["aletheore"]):
+        exit_code = main()
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "ALETHEORE" in captured.out
+    assert "scan" in captured.out and "audit" in captured.out
+
+
+def test_main_unknown_command_still_errors(capsys):
+    with patch("sys.argv", ["aletheore", "bogus-command"]):
         with pytest.raises(SystemExit):
             main()
 

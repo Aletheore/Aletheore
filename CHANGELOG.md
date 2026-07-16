@@ -5,6 +5,21 @@ Notable changes to Aletheore, by release. The working code lives in `prototype/`
 
 ## Unreleased
 
+## 0.2.1 — 2026-07-16
+
+- **Fixed `aletheore audit` being completely broken on every real `pip install`.** `manual/`
+  (the operating instructions the coding-agent adapter reads to write a grounded report) was
+  never included in the packaged wheel, and even if it had been, `MANUAL_DIR`'s path
+  computation (`parent.parent`) only resolved correctly in the dev repo's layout, not an
+  installed one. Fixed by moving `manual/` inside the `aletheore` package itself (next to
+  `static/`, which already worked correctly), fixing the path computation to match, and adding
+  it to `package-data`. Verified by downloading the actual broken `0.2.0` wheel and confirming
+  `manual/` was absent from it, then building and installing a real wheel with the fix and
+  running a full `aletheore audit` end-to-end against it.
+- Added a proper first-run CLI experience: running bare `aletheore` (or `aletheore --help`)
+  now shows a bordered banner explaining what the tool is and a one-line summary of every
+  command, instead of a bare `usage:` line with no context.
+
 ## 0.2.0 — 2026-07-16
 
 - **Renamed the project from Veridion to Aletheore** (package, CLI command, MCP tool prefixes,

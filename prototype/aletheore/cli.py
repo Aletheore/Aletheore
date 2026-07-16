@@ -26,17 +26,46 @@ from aletheore.report import (
 
 KNOWN_ADAPTERS = [ClaudeCodeAdapter()]
 
-MANUAL_DIR = str(Path(__file__).resolve().parent.parent / "manual")
+MANUAL_DIR = str(Path(__file__).resolve().parent / "manual")
 
-SPONSOR_NOTE = """
-┌───────────────────────────────────────────────────────────┐
-│  Aletheore is 100% open-source, local, and free.           │
-│  No accounts, no tracking — nothing leaves this machine.   │
-│                                                            │
-│  If it saved you time, consider supporting development:    │
-│  https://github.com/sponsors/ArihantK15                    │
-└───────────────────────────────────────────────────────────┘
-"""
+
+def _box(lines: list[str]) -> str:
+    width = max(len(line) for line in lines)
+    top = "┌" + "─" * (width + 2) + "┐"
+    bottom = "└" + "─" * (width + 2) + "┘"
+    body = "\n".join(f"│ {line.ljust(width)} │" for line in lines)
+    return f"{top}\n{body}\n{bottom}"
+
+
+SPONSOR_NOTE = "\n" + _box(
+    [
+        "Aletheore is 100% open-source, local, and free.",
+        "No accounts, no tracking — nothing leaves this machine.",
+        "",
+        "If it saved you time, consider supporting development:",
+        "https://github.com/sponsors/ArihantK15",
+    ]
+) + "\n"
+
+BANNER_LINES = [
+    "ALETHEORE",
+    "",
+    "Evidence-grounded repository audit — a deterministic scanner (tree-sitter",
+    "+ git log, no LLM) reads a repo and writes .aletheore/evidence.json. Every",
+    "other command below reads from that same evidence, never re-scans blind.",
+    "",
+    "  scan         run the scanner, write evidence, no LLM call",
+    "  audit        scan, then have a coding agent write a grounded report",
+    "  query        answer a targeted question from existing evidence",
+    "  diff         compare two evidence snapshots",
+    "  mcp          run an MCP server so an agent can query a repo directly",
+    "  dashboard    a live local web UI over the same evidence",
+    "  healthcheck  GET-only live check of mapped API endpoints",
+    "",
+    "Run 'aletheore <command> --help' for details on any command.",
+    "https://github.com/Aletheore/Aletheore",
+]
+BANNER = _box(BANNER_LINES)
 
 
 def _scan(
@@ -248,7 +277,15 @@ def _dashboard(repo_path: str, port: int) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="aletheore")
+    if len(sys.argv) == 1:
+        print(BANNER)
+        return 0
+
+    parser = argparse.ArgumentParser(
+        prog="aletheore",
+        description=BANNER,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     audit_parser = subparsers.add_parser("audit", help="audit a repository")

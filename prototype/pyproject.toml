@@ -1,6 +1,6 @@
 [project]
 name = "aletheore"
-version = "0.2.0"
+version = "0.2.1"
 description = "Evidence-grounded repository audit CLI: deterministic scanner, MCP server, live dashboard, and a GitHub Action that posts PR diffs."
 readme = "README.md"
 license = "Apache-2.0"
@@ -55,7 +55,7 @@ build-backend = "setuptools.build_meta"
 include = ["aletheore*"]
 
 [tool.setuptools.package-data]
-aletheore = ["static/*.png"]
+aletheore = ["static/*.png", "manual/*.md"]
 
 [tool.pytest.ini_options]
 addopts = ["-p", "no:randomly"]
