@@ -6,6 +6,14 @@ IGNORED_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".veridion",
     ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".cache",
     "dist", "build", "out", "release", ".next", "coverage", "htmlcov",
+    # .NET's intermediate build directory - confirmed by a real `dotnet build`:
+    # it fills this with auto-generated .cs files (assembly attributes, etc.)
+    # that would otherwise get scanned as real source. Not adding "bin" (.NET's
+    # other build-output dir) alongside it - unlike "obj", "bin" is also a
+    # legitimate source directory in other ecosystems (e.g. a Ruby gem's own
+    # executable scripts), so excluding it globally risks hiding real source
+    # more than the noise it would remove here.
+    "obj",
 }
 
 EXTENSION_TO_LANGUAGE = {

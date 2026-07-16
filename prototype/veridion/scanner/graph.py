@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import tree_sitter_c as tsc
+import tree_sitter_c_sharp as tscsharp
 import tree_sitter_cpp as tscpp
 import tree_sitter_go as tsgo
 import tree_sitter_java as tsjava
@@ -26,6 +27,7 @@ RUBY_LANGUAGE = Language(tsruby.language())
 PHP_LANGUAGE = Language(tsphp.language_php())
 C_LANGUAGE = Language(tsc.language())
 CPP_LANGUAGE = Language(tscpp.language())
+CSHARP_LANGUAGE = Language(tscsharp.language())
 
 LANGUAGE_BY_EXTENSION = {
     ".py": ("python", PY_LANGUAGE),
@@ -45,6 +47,7 @@ LANGUAGE_BY_EXTENSION = {
     ".hpp": ("cpp", CPP_LANGUAGE),
     ".cpp": ("cpp", CPP_LANGUAGE),
     ".cc": ("cpp", CPP_LANGUAGE),
+    ".cs": ("csharp", CSHARP_LANGUAGE),
 }
 
 # Extensions that are recognizable programming languages we don't yet have a grammar
@@ -56,7 +59,7 @@ LANGUAGE_BY_EXTENSION = {
 # were ever "unparseable source").
 KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR = {
     ".swift",
-    ".cs", ".kt", ".kts", ".m", ".mm", ".scala",
+    ".kt", ".kts", ".m", ".mm", ".scala",
 }
 
 
@@ -779,6 +782,121 @@ def _resolve_c_include(from_file: Path, spec: str) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+def _extract_csharp_namespace(node: Node, source: bytes) -> str | None:
+    for child in node.children:
+        if child.type in ("namespace_declaration", "file_scoped_namespace_declaration"):
+            for grandchild in child.children:
+                if grandchild.type in ("qualified_name", "identifier"):
+                    return source[grandchild.start_byte:grandchild.end_byte].decode()
+            return None
+    return None
+
+
+def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[str], list[str]]:
+    imports: list[str] = []
+    functions: list[str] = []
+    types: list[str] = []
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode()
+
+    def walk(n: Node):
+        if n.type == "using_directive":
+            # Plain ("using App.Store;"), aliased ("using Foo = App.Store.Store;"),
+            # and static ("using static System.Console;") forms all put the actual
+            # qualified path as the LAST qualified_name/identifier child - an alias
+            # name, when present, is a plain identifier that comes before it, so
+            # taking the last match is correct for all three forms without needing
+            # to special-case any of them (verified directly: child_by_field_name
+            # ("name") on this node type returns the ALIAS name, not the path, the
+            # opposite of what it looks like it should return).
+            path_node = None
+            for child in n.children:
+                if child.type in ("qualified_name", "identifier"):
+                    path_node = child
+            if path_node is not None:
+                imports.append(text(path_node))
+        elif n.type in (
+            "class_declaration", "interface_declaration", "struct_declaration",
+            "record_declaration", "enum_declaration",
+        ):
+            name_node = n.child_by_field_name("name")
+            if name_node is not None:
+                types.append(text(name_node))
+        elif n.type in ("method_declaration", "constructor_declaration"):
+            name_node = n.child_by_field_name("name")
+            if name_node is not None:
+                functions.append(text(name_node))
+        for child in n.children:
+            walk(child)
+
+    walk(node)
+    return imports, functions, types
+
+
+def _csharp_prefix_and_root_for(file_path: Path, namespace: str | None) -> tuple[str, Path] | None:
+    """Returns (implicit prefix ending in "." or "", the root that prefix resolves
+    against) for this one file - discovered per-file the same way Java's source
+    root is, but accounting for something Java has no equivalent of: a real .NET
+    project's csproj almost always sets a <RootNamespace> (every "dotnet new"
+    template does this by default) that prepends an implicit prefix to every
+    file's effective namespace with NO corresponding directory on disk at all.
+    Verified directly against a real dotnet-built project: RootNamespace="App"
+    with Handler.cs living at Handlers/Handler.cs (no "App" folder anywhere) and
+    declaring "namespace App.Handlers" - requiring the FULL namespace to mirror
+    the directory (which is exactly what Java's version of this does, correctly,
+    since Java has no such implicit-prefix feature) silently resolved nothing at
+    all here. Matching only the longest trailing suffix that DOES correspond to
+    real directories, and treating whatever's left over as the implicit prefix,
+    handles this the same way PHP's PSR-4 handles a namespace prefix that maps to
+    a directory other than where the prefix "logically" starts.
+    """
+    if not namespace:
+        return "", file_path.parent
+    segments = namespace.split(".")
+    parts = file_path.parent.parts
+    for take in range(len(segments), 0, -1):
+        if len(parts) >= take and list(parts[-take:]) == segments[-take:]:
+            root = file_path.parent
+            for _ in range(take):
+                root = root.parent
+            prefix_segments = segments[: len(segments) - take]
+            prefix = ".".join(prefix_segments) + "." if prefix_segments else ""
+            return prefix, root
+    return None
+
+
+def _resolve_csharp_using(prefix_map: dict[str, Path], dotted: str) -> list[Path]:
+    # "using Namespace;" imports the WHOLE namespace, not any specific type -
+    # unlike Java's import (which explicitly names one class to bring in), C#
+    # offers no way to tell which specific class is actually depended on from the
+    # using statement alone; the referenced type only appears later, in the code
+    # body. Verified this the hard way: an earlier version tried to resolve
+    # straight to a single ClassName.cs file the way Java's import does, and it
+    # returned nothing at all for every using statement in a real dotnet-built
+    # project, because the file (Store.cs) and the class inside it (UserStore)
+    # don't share a name - nothing Java-style could ever have matched. Resolved
+    # instead the same way Go's package-level import already is: fan out to
+    # every file in the corresponding directory, since a namespace is the actual
+    # granularity "using" operates at.
+    best_prefix: str | None = None
+    for prefix in prefix_map:
+        if dotted.startswith(prefix):
+            if best_prefix is None or len(prefix) > len(best_prefix):
+                best_prefix = prefix
+
+    if best_prefix is None:
+        return []
+
+    remainder = dotted[len(best_prefix):]
+    root = prefix_map[best_prefix]
+    namespace_dir = root if not remainder else root.joinpath(*remainder.split("."))
+    if not namespace_dir.is_dir():
+        return []
+
+    return sorted(namespace_dir.glob("*.cs"))
+
+
 def _resolve_python_module(repo_path: Path, dotted: str, from_file: Path | None = None) -> str | None:
     if not dotted:
         return None
@@ -876,6 +994,25 @@ def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
             java_source_roots.append(root)
 
     php_psr4_map = _load_php_psr4_map(repo_path)
+
+    # Same reasoning and mechanism as Java's pre-pass above - C# has no repo-root
+    # config either, and namespace-mirrors-directory is only a convention here, not
+    # compiler-enforced, so it's an even softer heuristic than Java's version. A
+    # (prefix -> root) map rather than a plain root list, PSR-4-style, to handle
+    # <RootNamespace>'s implicit prefix (see _csharp_prefix_and_root_for).
+    csharp_prefix_map: dict[str, Path] = {}
+    cs_pre_parser = Parser()
+    cs_pre_parser.language = CSHARP_LANGUAGE
+    for path in _iter_source_files(repo_path):
+        if path.suffix != ".cs":
+            continue
+        pre_source = path.read_bytes()
+        tree = cs_pre_parser.parse(pre_source)
+        namespace = _extract_csharp_namespace(tree.root_node, pre_source)
+        result = _csharp_prefix_and_root_for(path, namespace)
+        if result is not None:
+            prefix, root = result
+            csharp_prefix_map.setdefault(prefix, root)
 
     parser = Parser()
 
@@ -992,6 +1129,17 @@ def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
                         resolved_imports.append(target)
                         edges.append([rel_path, target])
                         imported_by_map.setdefault(target, []).append(rel_path)
+        elif language_name == "csharp":
+            raw_imports, functions, classes = _extract_csharp(tree.root_node, source)
+            resolved_imports = []
+            for dotted in raw_imports:
+                for target_path in _resolve_csharp_using(csharp_prefix_map, dotted):
+                    target = _rel(repo_path, target_path)
+                    if target == rel_path:
+                        continue
+                    resolved_imports.append(target)
+                    edges.append([rel_path, target])
+                    imported_by_map.setdefault(target, []).append(rel_path)
         else:
             raw_imports, functions, classes = _extract_javascript(tree.root_node, source)
             resolved_imports = []

@@ -22,8 +22,8 @@ never states anything it can't cite back to a specific field in it.
 
 Secrets, git activity, and dependency-vulnerability checks are language-agnostic. The module
 dependency graph (imports, clusters, layer violations) currently understands **Python,
-JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Ruby, PHP, C, and C++** — other languages are
-still scanned for secrets/git/vulnerabilities, but get no dependency-graph or architecture
+JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Ruby, PHP, C, C++, and C#** — other languages
+are still scanned for secrets/git/vulnerabilities, but get no dependency-graph or architecture
 analysis until a grammar is added for them.
 
 Go resolution needs a `go.mod` at the repo root to know the module's own import-path prefix;
@@ -63,6 +63,17 @@ flags) - angle-bracket `#include <foo.h>` is always treated as external/system, 
 since a project using `<>` for its own headers via `-I` isn't distinguishable from a real system
 header without that same build info. `.h` is parsed with the C++ grammar (a superset that
 parses valid C too) since header files are ambiguously C-or-C++.
+
+C# resolves `using Namespace;` at namespace granularity, not class granularity - unlike every
+other language here, a C# `using` doesn't name a specific type at all, only a namespace, so it's
+resolved the same way Go's package-level import already is: fan out to every `.cs` file in the
+directory that namespace corresponds to (namespace-mirrors-directory is only a convention here,
+not compiler-enforced, so real misses are expected for code that doesn't follow it). Also
+accounts for `<RootNamespace>` (set by every `dotnet new` template by default), which prepends
+an implicit prefix to every file's effective namespace with no corresponding directory on disk
+at all - verified directly against a real `dotnet build`/`dotnet run`, which is also what
+surfaced this: a naive "namespace must fully mirror the directory" version (correct for Java,
+which has no such feature) resolved nothing at all until this was accounted for.
 
 ## Setup
 

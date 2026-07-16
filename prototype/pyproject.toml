@@ -30,6 +30,7 @@ dependencies = [
     "tree-sitter-php>=0.24,<0.25",
     "tree-sitter-c>=0.24,<0.25",
     "tree-sitter-cpp>=0.23,<0.24",
+    "tree-sitter-c-sharp>=0.23,<0.24",
     "certifi>=2024.0.0",
     "networkx>=3.0,<4.0",
     "mcp>=1.23,<2.0",
