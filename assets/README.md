@@ -1,6 +1,6 @@
 # Assets
 
-**Purpose:** Reserve a future home for Veridion project assets.
+**Purpose:** Reserve a future home for Aletheore project assets.
 **Status:** Placeholder
 **Owner:** TODO
 **Related Documents:** [../README.md](../README.md), [../website/README.md](../website/README.md), [../docs/README.md](../docs/README.md)
@@ -18,7 +18,7 @@ This directory will contain brand, documentation, and website assets.
 
 ## Contents
 
-- `logo.png` - Veridion wordmark (white on black), referenced by `../README.md` and
+- `logo.png` - Aletheore wordmark (white on black), referenced by `../README.md` and
   `../prototype/README.md`. This is the project's official logo going forward, including for
   future GitHub Releases.
 
