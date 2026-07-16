@@ -22,6 +22,15 @@ never states anything it can't cite back to a specific field in it.
 
 ## Setup
 
+Not yet on PyPI (the packaging and a tag-triggered publish workflow exist, but nothing has
+been published - see `../.github/workflows/publish-pypi.yml`). Once it is:
+
+```bash
+pipx install veridion   # or: pip install veridion
+```
+
+Until then, install from source:
+
 ```bash
 cd prototype
 pip install -e ".[dev]"
