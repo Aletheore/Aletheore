@@ -3,6 +3,7 @@ from pathlib import Path
 import tree_sitter_go as tsgo
 import tree_sitter_javascript as tsjavascript
 import tree_sitter_python as tspython
+import tree_sitter_rust as tsrust
 import tree_sitter_typescript as tstypescript
 from tree_sitter import Language, Node, Parser
 
@@ -13,6 +14,7 @@ JS_LANGUAGE = Language(tsjavascript.language())
 TS_LANGUAGE = Language(tstypescript.language_typescript())
 TSX_LANGUAGE = Language(tstypescript.language_tsx())
 GO_LANGUAGE = Language(tsgo.language())
+RUST_LANGUAGE = Language(tsrust.language())
 
 LANGUAGE_BY_EXTENSION = {
     ".py": ("python", PY_LANGUAGE),
@@ -21,6 +23,7 @@ LANGUAGE_BY_EXTENSION = {
     ".ts": ("typescript", TS_LANGUAGE),
     ".tsx": ("typescript", TSX_LANGUAGE),
     ".go": ("go", GO_LANGUAGE),
+    ".rs": ("rust", RUST_LANGUAGE),
 }
 
 # Extensions that are recognizable programming languages we don't yet have a grammar
@@ -31,7 +34,7 @@ LANGUAGE_BY_EXTENSION = {
 # from an untracked cache directory before IGNORED_DIRS was widened, none of which
 # were ever "unparseable source").
 KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR = {
-    ".swift", ".rs", ".java", ".rb", ".c", ".cpp", ".cc", ".h", ".hpp",
+    ".swift", ".java", ".rb", ".c", ".cpp", ".cc", ".h", ".hpp",
     ".cs", ".kt", ".kts", ".m", ".mm", ".scala", ".php",
 }
 
@@ -206,6 +209,164 @@ def _resolve_go_import(repo_path: Path, module_prefix: str | None, import_path: 
     return targets
 
 
+def _rust_use_paths(node: Node, source: bytes) -> list[str]:
+    """A use_declaration's path child, flattened to one or more full path strings.
+
+    tree-sitter's scoped_identifier span already covers the whole "a::b::c" text
+    (the "::" tokens are literal source between the segments), so a plain slice of
+    the source bytes is the flattened path - no manual tree-walking-and-rejoining
+    needed for the common case. The four special forms (aliased, grouped, wildcard)
+    each need their own handling before falling back to that slice.
+    """
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode()
+
+    if node.type == "use_as_clause":
+        # "crate::foo::Bar as MyBar" - only the path before "as" matters for
+        # resolution; the alias is a local name, never a thing to resolve.
+        return _rust_use_paths(node.children[0], source)
+
+    if node.type == "use_wildcard":
+        # "std::io::*" - drop the "*", resolve the prefix module itself.
+        prefix_nodes = [c for c in node.children if c.type not in ("::", "*")]
+        return [text(prefix_nodes[0])] if prefix_nodes else []
+
+    if node.type == "scoped_use_list":
+        # "crate::foo::{Bar, Baz}" - both names share the same prefix module; each
+        # becomes prefix::name so the existing crate/self/super resolver can treat
+        # them exactly like any other full path.
+        prefix_node = node.children[0]
+        list_node = node.children[-1]
+        prefix = text(prefix_node)
+        names = [text(c) for c in list_node.children if c.type in ("identifier", "self")]
+        return [f"{prefix}::{name}" for name in names]
+
+    if node.type == "use_list":
+        # "use {a, b};" - rare, no prefix at all.
+        return [text(c) for c in node.children if c.type in ("identifier", "self")]
+
+    # scoped_identifier, identifier, crate, self, or super used directly.
+    return [text(node)]
+
+
+def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[str], list[str]]:
+    """Return flattened use-path strings, function/method names, and type names."""
+    imports: list[str] = []
+    functions: list[str] = []
+    types: list[str] = []
+
+    def walk(n: Node):
+        if n.type == "use_declaration":
+            # use_declaration's single meaningful child is whichever path-shaped
+            # node follows the "use" keyword and precedes the ";".
+            for child in n.children:
+                if child.type not in ("use", ";"):
+                    imports.extend(_rust_use_paths(child, source))
+                    break
+        elif n.type in ("function_item", "function_signature_item"):
+            name_node = n.child_by_field_name("name")
+            if name_node is not None:
+                functions.append(source[name_node.start_byte:name_node.end_byte].decode())
+        elif n.type in ("struct_item", "enum_item", "trait_item"):
+            name_node = n.child_by_field_name("name")
+            if name_node is not None:
+                types.append(source[name_node.start_byte:name_node.end_byte].decode())
+        for child in n.children:
+            walk(child)
+
+    walk(node)
+    return imports, functions, types
+
+
+def _rust_crate_root(repo_path: Path) -> Path | None:
+    # Workspace repos (multiple crates, each with its own Cargo.toml + src/) aren't
+    # supported in this first pass - same documented scope limit as Go only looking
+    # at a repo-root go.mod, rather than every nested module.
+    for candidate in (repo_path / "src" / "lib.rs", repo_path / "src" / "main.rs"):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _rust_module_search_dir(repo_path: Path, file_path: Path) -> Path:
+    """The directory this file's own OWN submodules would live in.
+
+    Directory structure is assumed to mirror the module tree (true for the vast
+    majority of real Rust code; #[path = "..."] escape hatches aren't supported).
+    The crate root's submodules live directly in src/; a foo/mod.rs's submodules
+    live in that same foo/ directory; a leaf foo.rs's submodules live in an
+    adjacent foo/ directory (the 2018-edition convention that doesn't require
+    foo/mod.rs to exist just to hold further submodules).
+    """
+    src_dir = repo_path / "src"
+    if file_path in (src_dir / "lib.rs", src_dir / "main.rs"):
+        return src_dir
+    if file_path.name == "mod.rs":
+        return file_path.parent
+    return file_path.parent / file_path.stem
+
+
+def _resolve_rust_module_dir(search_dir: Path, name: str) -> Path | None:
+    if (search_dir / f"{name}.rs").exists():
+        return search_dir / f"{name}.rs"
+    if (search_dir / name / "mod.rs").exists():
+        return search_dir / name / "mod.rs"
+    return None
+
+
+def _walk_rust_segments(search_dir: Path, segments: list[str]) -> Path | None:
+    # Walks as far as it can and returns whatever was last resolved - which
+    # naturally gives the right answer for both cases: every segment resolving
+    # as a further submodule (the walk completes), and the last segment being an
+    # item (a struct/fn/const/etc) rather than a submodule (the walk stops one
+    # short and returns the containing module's own file, matching how a Python
+    # from-import of a plain name falls back to the containing package).
+    resolved_file: Path | None = None
+    current_dir = search_dir
+    for segment in segments:
+        candidate = _resolve_rust_module_dir(current_dir, segment)
+        if candidate is None:
+            break
+        resolved_file = candidate
+        current_dir = candidate.parent if candidate.name == "mod.rs" else candidate.parent / candidate.stem
+    return resolved_file
+
+
+def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | None:
+    segments = path.split("::")
+    if not segments:
+        return None
+
+    head = segments[0]
+    rest = segments[1:]
+
+    if head == "crate":
+        target = _walk_rust_segments(repo_path / "src", rest)
+    elif head == "self":
+        target = _walk_rust_segments(_rust_module_search_dir(repo_path, from_file), rest)
+    elif head == "super":
+        # "super" always climbs at least one level; each further leading "super"
+        # segment climbs one more - directory mirrors the module tree, so that's
+        # one more parent directory each time.
+        search_dir = _rust_module_search_dir(repo_path, from_file).parent
+        while rest and rest[0] == "super":
+            search_dir = search_dir.parent
+            rest = rest[1:]
+        target = _walk_rust_segments(search_dir, rest)
+    else:
+        # No crate/self/super prefix: could be an implicit crate-relative path
+        # ("use handlers::Handler;" from the crate root, valid since the 2018
+        # edition) or an external crate name (std, or a real third-party
+        # dependency) - both look identical syntactically. Walking the whole
+        # path from src/ disambiguates them the only way possible without a
+        # full Cargo.toml dependency parse: if the first segment doesn't exist
+        # on disk, nothing resolves, exactly as an external import should.
+        target = _walk_rust_segments(repo_path / "src", segments)
+
+    return _rel(repo_path, target) if target is not None else None
+
+
 def _resolve_python_module(repo_path: Path, dotted: str, from_file: Path | None = None) -> str | None:
     if not dotted:
         return None
@@ -282,6 +443,7 @@ def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
     imported_by_map: dict[str, list[str]] = {}
     edges: list[list[str]] = []
     go_module_prefix = _load_go_module_prefix(repo_path)
+    has_rust_crate_root = _rust_crate_root(repo_path) is not None
 
     parser = Parser()
 
@@ -338,6 +500,16 @@ def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
                     resolved_imports.append(target)
                     edges.append([rel_path, target])
                     imported_by_map.setdefault(target, []).append(rel_path)
+        elif language_name == "rust":
+            raw_imports, functions, classes = _extract_rust(tree.root_node, source)
+            resolved_imports = []
+            if has_rust_crate_root:
+                for use_path in raw_imports:
+                    target = _resolve_rust_path(repo_path, path, use_path)
+                    if target is not None and target != rel_path:
+                        resolved_imports.append(target)
+                        edges.append([rel_path, target])
+                        imported_by_map.setdefault(target, []).append(rel_path)
         else:
             raw_imports, functions, classes = _extract_javascript(tree.root_node, source)
             resolved_imports = []
