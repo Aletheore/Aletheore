@@ -17,7 +17,8 @@ one — it's just the actual, working tool.
 A deterministic scanner (tree-sitter + git log, no LLM, fully unit-tested) reads a repository
 and writes `.veridion/evidence.json`: languages, module dependency graph, modularity-based
 clusters, git ownership and commit cadence, secrets, dependency vulnerabilities, layer-
-convention violations. Every other feature below is built on top of that same evidence and
+convention violations, dependency licenses, and static API endpoint maps. Every other feature
+below is built on top of that same evidence and
 never states anything it can't cite back to a specific field in it.
 
 Secrets, git activity, and dependency-vulnerability checks are language-agnostic. The module
@@ -147,6 +148,7 @@ veridion scan .
 veridion scan . --no-check-vulnerabilities   # skip the OSV.dev dependency check
 veridion scan . --no-scan-git-history        # skip walking git history for secrets
 veridion scan . --no-check-licenses          # skip the dependency-license check
+veridion scan . --no-map-endpoints           # skip static API endpoint mapping
 ```
 
 The license check reads each pinned PyPI/npm dependency's registry metadata (PyPI's `license`
@@ -159,6 +161,11 @@ pattern-matching a `LICENSE` file's text) so a report can flag a copyleft depend
 what license the repo itself claims to be under - a factual categorization, not a legal
 compatibility verdict, which is genuinely subjective and outside what a deterministic scanner
 should claim.
+
+Static API endpoint mapping records `repository.api_endpoints` for Flask, FastAPI-style
+decorators, Django `urlpatterns`, and Express route calls. It is intentionally source-derived:
+literal route declarations are recorded with method, path, framework, file, line, handler, and
+whether the entry is an unresolved include/mount.
 
 ### `veridion audit [path]`
 
@@ -194,6 +201,7 @@ veridion query ownership --path .
 veridion query secrets app/routes.py --path .        # findings within just that file
 veridion query vulnerabilities --path .
 veridion query licenses --path .
+veridion query endpoints --path .
 veridion query cluster app/routes.py --path .
 veridion query layer-violations --path .
 veridion query changes --path .              # diff against the previous history snapshot
@@ -201,8 +209,8 @@ veridion query changes --path .              # diff against the previous history
 
 ### `veridion diff <old.json> <new.json>`
 
-Compares two `evidence.json` files directly — new/resolved secrets, layer violations,
-dependency vulnerabilities, architecture deltas. Powers the GitHub Action below.
+Compares two `evidence.json` files directly — new/resolved secrets, API endpoints, layer
+violations, dependency vulnerabilities, architecture deltas. Powers the GitHub Action below.
 
 ```bash
 veridion diff old/evidence.json new/evidence.json
@@ -214,15 +222,29 @@ veridion diff old/evidence.json new/evidence.json --fail-on-new-layer-violations
 All three `--fail-on-new-*` flags can be combined; the command exits 1 if any of them find
 something new.
 
+### `veridion healthcheck [path] --base-url <url>`
+
+Runs a GET-only live check of mapped API endpoints against a running app instance. This reads
+`repository.api_endpoints` from evidence, substitutes placeholder values for path parameters
+such as `<int:id>`, `{id}`, and `:id`, skips non-GET endpoints without calling them, and writes
+a rotated result file under `.veridion/healthchecks/`.
+
+This command depends on live runtime state, so it is deliberately **not** part of deterministic
+scan evidence or `veridion diff`.
+
+```bash
+veridion healthcheck . --base-url http://127.0.0.1:5000
+```
+
 ### `veridion mcp [path]`
 
 Starts a stdio MCP server scoped to one repository, so a coding agent can query its structure
-directly instead of shelling out via Bash or re-reading files on every lookup. Exposes 14
+directly instead of shelling out via Bash or re-reading files on every lookup. Exposes 16
 tools:
 
-- The 10 query kinds above as tools (`veridion_imports`, `veridion_imported_by`,
+- The 11 query kinds above as tools (`veridion_imports`, `veridion_imported_by`,
   `veridion_symbols`, `veridion_branch`, `veridion_ownership`, `veridion_secrets`,
-  `veridion_vulnerabilities`, `veridion_licenses`, `veridion_cluster`,
+  `veridion_vulnerabilities`, `veridion_licenses`, `veridion_endpoints`, `veridion_cluster`,
   `veridion_layer_violations`), plus `veridion_changes`.
 - `veridion_neighborhood(target)` — a module's imports, dependents, and cluster in one call,
   instead of three round-trips.
@@ -231,6 +253,8 @@ tools:
 - `veridion_scan()` — triggers a fresh deterministic scan and returns a compact summary (not
   the full evidence dump). Does **not** run the agent-driven `audit` report — see the note
   under `veridion audit` above for why that's a deliberate boundary, not a gap.
+- `veridion_healthcheck(base_url)` — runs the same GET-only live health check as the CLI and
+  persists the result under `.veridion/healthchecks/`.
 
 ```bash
 veridion mcp .

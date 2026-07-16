@@ -27,6 +27,14 @@ Notable changes to Veridion, by release. The working code lives in `prototype/` 
   copyleft-strong, with only non-permissive ones surfaced as findings. Also detects the repo's
   own declared license. New `veridion query licenses` / `veridion_licenses` MCP tool (14 tools,
   up from 13), `--no-check-licenses` flag on `scan`/`audit`.
+- Added static API endpoint mapping for Flask, FastAPI-style decorators, Django, and Express
+  as a new `repository.api_endpoints` evidence block, with a `veridion query endpoints` /
+  `veridion_endpoints` MCP tool (15 deterministic/query tools, up from 14), a
+  `--no-map-endpoints` flag, and tracking of added/removed endpoints in `veridion diff`.
+- Added `veridion healthcheck --base-url <url>` and a matching `veridion_healthcheck` MCP tool:
+  a GET-only live check of an app's mapped endpoints against a running instance. Deliberately
+  kept outside the deterministic evidence/diff model, since it depends on live runtime state,
+  not just repo content. The full MCP surface is now 16 tools including healthcheck.
 
 ## 0.1.1 — 2026-07-16
 
