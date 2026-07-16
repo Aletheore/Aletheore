@@ -1,12 +1,12 @@
 import json
-import sys
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from typer.testing import CliRunner
 
-from aletheore.cli import _ElapsedTicker, _make_progress_printer, main
+from aletheore.cli import _ElapsedTicker, _make_progress_printer, app
 from aletheore.report import (
     AmbiguousAdapterError,
     NoAdapterAvailableError,
@@ -14,6 +14,8 @@ from aletheore.report import (
     run_reasoning_phase,
     select_adapter,
 )
+
+runner = CliRunner()
 
 
 def make_adapter(name: str, available: bool):
@@ -95,20 +97,17 @@ def test_run_reasoning_phase_does_not_clobber_report_the_agent_wrote_itself(tmp_
     assert written.read_text() == "# Real Audit Report\n\nreal findings here\n"
 
 
-def test_main_with_no_command_shows_banner_and_exits_cleanly(capsys):
-    with patch("sys.argv", ["aletheore"]):
-        exit_code = main()
+def test_main_with_no_command_shows_banner_and_exits_cleanly():
+    result = runner.invoke(app, [])
 
-    assert exit_code == 0
-    captured = capsys.readouterr()
-    assert "ALETHEORE" in captured.out
-    assert "scan" in captured.out and "audit" in captured.out
+    assert result.exit_code == 0
+    assert "ALETHEORE" in result.output
+    assert "scan" in result.output and "audit" in result.output
 
 
-def test_main_unknown_command_still_errors(capsys):
-    with patch("sys.argv", ["aletheore", "bogus-command"]):
-        with pytest.raises(SystemExit):
-            main()
+def test_main_unknown_command_still_errors():
+    result = runner.invoke(app, ["bogus-command"])
+    assert result.exit_code != 0
 
 
 def test_progress_printer_prints_each_distinct_phase_on_its_own_line(capsys):
@@ -172,23 +171,21 @@ def test_elapsed_ticker_prints_start_and_done_once_when_not_a_tty(capsys):
 
 
 def test_main_audit_invokes_audit_flow(tmp_path):
-    with patch("sys.argv", ["aletheore", "audit", str(tmp_path), "--agent", "claude"]):
-        with patch("aletheore.cli._audit", return_value=0) as mock_audit:
-            exit_code = main()
-    assert exit_code == 0
+    with patch("aletheore.cli._audit", return_value=0) as mock_audit:
+        result = runner.invoke(app, ["audit", str(tmp_path), "--agent", "claude"])
+
+    assert result.exit_code == 0
     mock_audit.assert_called_once_with(str(tmp_path), "claude", True, True, True, True)
 
 
-def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path, monkeypatch):
+def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["aletheore", "audit", str(repo), "--no-check-vulnerabilities", "--agent", "nonexistent"],
-    )
 
-    main()
+    runner.invoke(
+        app,
+        ["audit", str(repo), "--no-check-vulnerabilities", "--agent", "nonexistent"],
+    )
 
     evidence = json.loads((repo / ".aletheore" / "evidence.json").read_text())
     assert evidence["security"]["dependency_vulnerabilities"]["checked"] is False
@@ -198,54 +195,66 @@ def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path, monkeypatch)
     )
 
 
-def test_main_audit_threads_no_check_licenses_flag(tmp_path, monkeypatch):
+def test_main_audit_threads_no_check_licenses_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["aletheore", "audit", str(repo), "--no-check-licenses", "--agent", "nonexistent"],
-    )
 
-    main()
+    runner.invoke(app, ["audit", str(repo), "--no-check-licenses", "--agent", "nonexistent"])
 
     evidence = json.loads((repo / ".aletheore" / "evidence.json").read_text())
     assert evidence["security"]["dependency_licenses"]["checked"] is False
-    assert (
-        evidence["security"]["dependency_licenses"]["reason"] == "skipped (--no-check-licenses)"
-    )
+    assert evidence["security"]["dependency_licenses"]["reason"] == "skipped (--no-check-licenses)"
 
 
-def test_main_scan_threads_no_check_licenses_flag(tmp_path, monkeypatch):
+def test_main_scan_threads_no_check_licenses_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
-    monkeypatch.setattr(sys, "argv", ["aletheore", "scan", str(repo), "--no-check-licenses"])
 
-    main()
+    runner.invoke(app, ["scan", str(repo), "--no-check-licenses"])
 
     evidence = json.loads((repo / ".aletheore" / "evidence.json").read_text())
     assert evidence["security"]["dependency_licenses"]["checked"] is False
 
 
-def test_main_scan_threads_no_map_endpoints_flag(tmp_path, monkeypatch):
+def test_main_scan_positive_check_licenses_flag_is_also_accepted(tmp_path):
+    # Typer's boolean-pair syntax additively exposes the positive counterpart
+    # of every existing --no-X flag (--check-licenses alongside
+    # --no-check-licenses) - purely additive, but worth confirming it actually
+    # does the right thing rather than silently being a no-op.
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    result = runner.invoke(app, ["scan", str(repo), "--check-licenses", "--no-check-vulnerabilities"])
+
+    assert result.exit_code == 0
+    evidence = json.loads((repo / ".aletheore" / "evidence.json").read_text())
+    assert evidence["security"]["dependency_licenses"]["checked"] is True
+
+
+def test_every_subcommand_help_runs_cleanly():
+    for command in ("audit", "scan", "query", "diff", "mcp", "dashboard", "healthcheck"):
+        result = runner.invoke(app, [command, "--help"])
+        assert result.exit_code == 0, f"{command} --help failed: {result.output}"
+        assert "Usage" in result.output
+
+
+def test_main_scan_threads_no_map_endpoints_flag(tmp_path):
     repo = tmp_path
     (repo / "app.py").write_text('@app.route("/users")\ndef list_users():\n    pass\n')
-    monkeypatch.setattr(sys, "argv", ["aletheore", "scan", str(repo), "--no-map-endpoints"])
 
-    main()
+    runner.invoke(app, ["scan", str(repo), "--no-map-endpoints"])
 
     evidence = json.loads((repo / ".aletheore" / "evidence.json").read_text())
     assert evidence["repository"]["api_endpoints"]["checked"] is False
 
 
-def test_main_audit_threads_no_scan_git_history_flag(tmp_path, monkeypatch):
+def test_main_audit_threads_no_scan_git_history_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
-    monkeypatch.setattr(
-        sys,
-        "argv",
+
+    runner.invoke(
+        app,
         [
-            "aletheore",
             "audit",
             str(repo),
             "--no-check-vulnerabilities",
@@ -255,48 +264,44 @@ def test_main_audit_threads_no_scan_git_history_flag(tmp_path, monkeypatch):
         ],
     )
 
-    main()
-
     evidence = json.loads((repo / ".aletheore" / "evidence.json").read_text())
     assert evidence["security"]["secrets"]["history_scanned_commits"] == 0
     assert evidence["security"]["secrets"]["history_findings"] == []
 
 
-def test_main_scan_writes_evidence_without_invoking_an_agent(tmp_path, monkeypatch, capsys):
+def test_main_scan_writes_evidence_without_invoking_an_agent(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
-    monkeypatch.setattr(sys, "argv", ["aletheore", "scan", str(repo)])
 
-    exit_code = main()
+    result = runner.invoke(app, ["scan", str(repo)])
 
-    assert exit_code == 0
+    assert result.exit_code == 0
     assert (repo / ".aletheore" / "evidence.json").exists()
-    captured = capsys.readouterr()
-    assert "audit-report.md" not in captured.out
-    assert "Running audit with" not in captured.out
+    assert "audit-report.md" not in result.output
+    assert "Running audit with" not in result.output
 
 
 def test_main_mcp_invokes_mcp_flow(tmp_path):
-    with patch("sys.argv", ["aletheore", "mcp", str(tmp_path)]):
-        with patch("aletheore.cli._mcp", return_value=0) as mock_mcp:
-            exit_code = main()
-    assert exit_code == 0
+    with patch("aletheore.cli._mcp", return_value=0) as mock_mcp:
+        result = runner.invoke(app, ["mcp", str(tmp_path)])
+
+    assert result.exit_code == 0
     mock_mcp.assert_called_once_with(str(tmp_path))
 
 
 def test_main_dashboard_invokes_dashboard_flow(tmp_path):
-    with patch("sys.argv", ["aletheore", "dashboard", str(tmp_path)]):
-        with patch("aletheore.cli._dashboard", return_value=0) as mock_dashboard:
-            exit_code = main()
-    assert exit_code == 0
+    with patch("aletheore.cli._dashboard", return_value=0) as mock_dashboard:
+        result = runner.invoke(app, ["dashboard", str(tmp_path)])
+
+    assert result.exit_code == 0
     mock_dashboard.assert_called_once_with(str(tmp_path), 8420)
 
 
 def test_main_dashboard_threads_custom_port(tmp_path):
-    with patch("sys.argv", ["aletheore", "dashboard", str(tmp_path), "--port", "9000"]):
-        with patch("aletheore.cli._dashboard", return_value=0) as mock_dashboard:
-            exit_code = main()
-    assert exit_code == 0
+    with patch("aletheore.cli._dashboard", return_value=0) as mock_dashboard:
+        result = runner.invoke(app, ["dashboard", str(tmp_path), "--port", "9000"])
+
+    assert result.exit_code == 0
     mock_dashboard.assert_called_once_with(str(tmp_path), 9000)
 
 
@@ -323,117 +328,96 @@ def test_dashboard_refuses_to_start_when_port_already_bound(tmp_path, capsys):
     assert "Dashboard running at" not in captured.out
 
 
-def test_main_healthcheck_reports_results(tmp_path, monkeypatch, capsys):
+def test_main_healthcheck_reports_results(tmp_path):
     repo = tmp_path
     (repo / "app.py").write_text('@app.route("/health")\ndef health():\n    pass\n')
-    monkeypatch.setattr(sys, "argv", ["aletheore", "scan", str(repo)])
-    main()
-    capsys.readouterr()
+    runner.invoke(app, ["scan", str(repo)])
 
     response = MagicMock()
     response.status = 200
     response.__enter__.return_value = response
     response.__exit__.return_value = False
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["aletheore", "healthcheck", str(repo), "--base-url", "http://localhost:5000"],
-    )
     with patch("aletheore.healthcheck.urllib.request.urlopen", return_value=response):
-        exit_code = main()
+        result = runner.invoke(
+            app, ["healthcheck", str(repo), "--base-url", "http://localhost:5000"]
+        )
 
-    assert exit_code == 0
-    captured = capsys.readouterr()
-    assert "/health" in captured.out
-    assert "200" in captured.out
+    assert result.exit_code == 0
+    assert "/health" in result.output
+    assert "200" in result.output
 
 
-def test_main_healthcheck_without_evidence_errors_clearly(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["aletheore", "healthcheck", str(tmp_path), "--base-url", "http://localhost:5000"],
+def test_main_healthcheck_without_evidence_errors_clearly(tmp_path):
+    result = runner.invoke(
+        app, ["healthcheck", str(tmp_path), "--base-url", "http://localhost:5000"]
     )
 
-    exit_code = main()
-
-    assert exit_code == 1
-    captured = capsys.readouterr()
-    assert "aletheore scan" in captured.out
+    assert result.exit_code == 1
+    assert "aletheore scan" in result.output
 
 
-def test_main_query_imports_prints_result(tmp_path, monkeypatch, capsys):
+def test_main_query_imports_prints_result(tmp_path):
     repo = tmp_path
     (repo / "app").mkdir()
     (repo / "app" / "config.py").write_text("SETTING = 1\n")
     (repo / "app" / "auth.py").write_text("from app import config\n")
-    monkeypatch.setattr(sys, "argv", ["aletheore", "scan", str(repo)])
-    main()
+    runner.invoke(app, ["scan", str(repo)])
 
-    monkeypatch.setattr(
-        sys, "argv", ["aletheore", "query", "imports", "app/auth.py", "--path", str(repo)]
-    )
-    exit_code = main()
+    result = runner.invoke(app, ["query", "imports", "app/auth.py", "--path", str(repo)])
 
-    assert exit_code == 0
-    captured = capsys.readouterr()
-    assert "app/config.py" in captured.out
+    assert result.exit_code == 0
+    assert "app/config.py" in result.output
 
 
-def test_main_query_ownership_does_not_require_a_target(tmp_path, monkeypatch, capsys):
+def test_main_query_ownership_does_not_require_a_target(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
-    monkeypatch.setattr(sys, "argv", ["aletheore", "scan", str(repo)])
-    main()
+    runner.invoke(app, ["scan", str(repo)])
 
-    monkeypatch.setattr(sys, "argv", ["aletheore", "query", "ownership", "--path", str(repo)])
-    exit_code = main()
+    result = runner.invoke(app, ["query", "ownership", "--path", str(repo)])
 
-    assert exit_code == 0
+    assert result.exit_code == 0
 
 
-def test_main_query_missing_target_errors_clearly(tmp_path, monkeypatch, capsys):
+def test_main_query_missing_target_errors_clearly(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
-    monkeypatch.setattr(sys, "argv", ["aletheore", "scan", str(repo)])
-    main()
+    runner.invoke(app, ["scan", str(repo)])
 
-    monkeypatch.setattr(sys, "argv", ["aletheore", "query", "imports", "--path", str(repo)])
-    exit_code = main()
+    result = runner.invoke(app, ["query", "imports", "--path", str(repo)])
 
-    assert exit_code == 1
-    captured = capsys.readouterr()
-    assert "requires a target" in captured.out
+    assert result.exit_code == 1
+    assert "requires a target" in result.output
 
 
-def test_main_query_without_evidence_errors_clearly(tmp_path, monkeypatch, capsys):
+def test_main_query_without_evidence_errors_clearly(tmp_path):
     repo = tmp_path
-    monkeypatch.setattr(
-        sys, "argv", ["aletheore", "query", "imports", "app/auth.py", "--path", str(repo)]
-    )
 
-    exit_code = main()
+    result = runner.invoke(app, ["query", "imports", "app/auth.py", "--path", str(repo)])
 
-    assert exit_code == 1
-    captured = capsys.readouterr()
-    assert "aletheore scan" in captured.out
+    assert result.exit_code == 1
+    assert "aletheore scan" in result.output
 
 
-def test_main_query_unknown_module_errors_clearly(tmp_path, monkeypatch, capsys):
+def test_main_query_unknown_module_errors_clearly(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
-    monkeypatch.setattr(sys, "argv", ["aletheore", "scan", str(repo)])
-    main()
+    runner.invoke(app, ["scan", str(repo)])
 
-    monkeypatch.setattr(
-        sys, "argv", ["aletheore", "query", "imports", "does/not/exist.py", "--path", str(repo)]
+    result = runner.invoke(
+        app, ["query", "imports", "does/not/exist.py", "--path", str(repo)]
     )
-    exit_code = main()
 
-    assert exit_code == 1
-    captured = capsys.readouterr()
-    assert "not present in evidence" in captured.out
+    assert result.exit_code == 1
+    assert "not present in evidence" in result.output
+
+
+def test_main_query_unknown_kind_errors_clearly(tmp_path):
+    result = runner.invoke(app, ["query", "bogus-kind", "--path", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "not a valid query kind" in result.output
 
 
 def make_evidence_file(
@@ -463,7 +447,7 @@ def make_evidence_file(
     return path
 
 
-def test_main_diff_shows_curated_diff_between_two_files(tmp_path, monkeypatch, capsys):
+def test_main_diff_shows_curated_diff_between_two_files(tmp_path):
     old_path = make_evidence_file(tmp_path / "old.json")
     new_path = make_evidence_file(
         tmp_path / "new.json",
@@ -477,29 +461,25 @@ def test_main_diff_shows_curated_diff_between_two_files(tmp_path, monkeypatch, c
         ],
     )
 
-    monkeypatch.setattr(sys, "argv", ["aletheore", "diff", str(old_path), str(new_path)])
-    exit_code = main()
+    result = runner.invoke(app, ["diff", str(old_path), str(new_path)])
 
-    assert exit_code == 0
-    captured = capsys.readouterr()
-    result = json.loads(captured.out)
-    assert len(result["secrets"]["new"]) == 1
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert len(parsed["secrets"]["new"]) == 1
 
 
-def test_main_diff_full_flag_returns_raw_diff(tmp_path, monkeypatch, capsys):
+def test_main_diff_full_flag_returns_raw_diff(tmp_path):
     old_path = make_evidence_file(tmp_path / "old.json")
     new_path = make_evidence_file(tmp_path / "new.json")
 
-    monkeypatch.setattr(sys, "argv", ["aletheore", "diff", str(old_path), str(new_path), "--full"])
-    exit_code = main()
+    result = runner.invoke(app, ["diff", str(old_path), str(new_path), "--full"])
 
-    assert exit_code == 0
-    captured = capsys.readouterr()
-    result = json.loads(captured.out)
-    assert set(result.keys()) == {"added", "removed", "changed"}
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert set(parsed.keys()) == {"added", "removed", "changed"}
 
 
-def test_main_diff_fail_on_new_secrets_exits_1_for_a_real_secret(tmp_path, monkeypatch, capsys):
+def test_main_diff_fail_on_new_secrets_exits_1_for_a_real_secret(tmp_path):
     old_path = make_evidence_file(tmp_path / "old.json")
     new_path = make_evidence_file(
         tmp_path / "new.json",
@@ -513,15 +493,14 @@ def test_main_diff_fail_on_new_secrets_exits_1_for_a_real_secret(tmp_path, monke
         ],
     )
 
-    monkeypatch.setattr(
-        sys, "argv", ["aletheore", "diff", str(old_path), str(new_path), "--fail-on-new-secrets"]
+    result = runner.invoke(
+        app, ["diff", str(old_path), str(new_path), "--fail-on-new-secrets"]
     )
-    exit_code = main()
 
-    assert exit_code == 1
+    assert result.exit_code == 1
 
 
-def test_main_diff_fail_on_new_secrets_exits_0_for_a_placeholder_only(tmp_path, monkeypatch, capsys):
+def test_main_diff_fail_on_new_secrets_exits_0_for_a_placeholder_only(tmp_path):
     old_path = make_evidence_file(tmp_path / "old.json")
     new_path = make_evidence_file(
         tmp_path / "new.json",
@@ -535,17 +514,14 @@ def test_main_diff_fail_on_new_secrets_exits_0_for_a_placeholder_only(tmp_path, 
         ],
     )
 
-    monkeypatch.setattr(
-        sys, "argv", ["aletheore", "diff", str(old_path), str(new_path), "--fail-on-new-secrets"]
+    result = runner.invoke(
+        app, ["diff", str(old_path), str(new_path), "--fail-on-new-secrets"]
     )
-    exit_code = main()
 
-    assert exit_code == 0
+    assert result.exit_code == 0
 
 
-def test_main_diff_fail_on_new_secrets_exits_0_for_an_accepted_baseline_secret(
-    tmp_path, monkeypatch, capsys
-):
+def test_main_diff_fail_on_new_secrets_exits_0_for_an_accepted_baseline_secret(tmp_path):
     old_path = make_evidence_file(tmp_path / "old.json")
     new_path = make_evidence_file(
         tmp_path / "new.json",
@@ -560,15 +536,14 @@ def test_main_diff_fail_on_new_secrets_exits_0_for_an_accepted_baseline_secret(
         ],
     )
 
-    monkeypatch.setattr(
-        sys, "argv", ["aletheore", "diff", str(old_path), str(new_path), "--fail-on-new-secrets"]
+    result = runner.invoke(
+        app, ["diff", str(old_path), str(new_path), "--fail-on-new-secrets"]
     )
-    exit_code = main()
 
-    assert exit_code == 0
+    assert result.exit_code == 0
 
 
-def test_main_diff_fail_on_new_secrets_works_even_with_full_flag(tmp_path, monkeypatch, capsys):
+def test_main_diff_fail_on_new_secrets_works_even_with_full_flag(tmp_path):
     old_path = make_evidence_file(tmp_path / "old.json")
     new_path = make_evidence_file(
         tmp_path / "new.json",
@@ -582,22 +557,16 @@ def test_main_diff_fail_on_new_secrets_works_even_with_full_flag(tmp_path, monke
         ],
     )
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["aletheore", "diff", str(old_path), str(new_path), "--full", "--fail-on-new-secrets"],
+    result = runner.invoke(
+        app, ["diff", str(old_path), str(new_path), "--full", "--fail-on-new-secrets"]
     )
-    exit_code = main()
 
-    assert exit_code == 1
-    captured = capsys.readouterr()
-    result = json.loads(captured.out)
-    assert set(result.keys()) == {"added", "removed", "changed"}
+    assert result.exit_code == 1
+    parsed = json.loads(result.output)
+    assert set(parsed.keys()) == {"added", "removed", "changed"}
 
 
-def test_main_diff_fail_on_new_vulnerabilities_exits_1_for_a_new_vulnerability(
-    tmp_path, monkeypatch, capsys
-):
+def test_main_diff_fail_on_new_vulnerabilities_exits_1_for_a_new_vulnerability(tmp_path):
     old_path = make_evidence_file(tmp_path / "old.json")
     new_path = make_evidence_file(
         tmp_path / "new.json",
@@ -613,35 +582,25 @@ def test_main_diff_fail_on_new_vulnerabilities_exits_1_for_a_new_vulnerability(
         ],
     )
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["aletheore", "diff", str(old_path), str(new_path), "--fail-on-new-vulnerabilities"],
+    result = runner.invoke(
+        app, ["diff", str(old_path), str(new_path), "--fail-on-new-vulnerabilities"]
     )
-    exit_code = main()
 
-    assert exit_code == 1
+    assert result.exit_code == 1
 
 
-def test_main_diff_fail_on_new_vulnerabilities_exits_0_with_no_new_vulnerabilities(
-    tmp_path, monkeypatch, capsys
-):
+def test_main_diff_fail_on_new_vulnerabilities_exits_0_with_no_new_vulnerabilities(tmp_path):
     old_path = make_evidence_file(tmp_path / "old.json")
     new_path = make_evidence_file(tmp_path / "new.json")
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["aletheore", "diff", str(old_path), str(new_path), "--fail-on-new-vulnerabilities"],
+    result = runner.invoke(
+        app, ["diff", str(old_path), str(new_path), "--fail-on-new-vulnerabilities"]
     )
-    exit_code = main()
 
-    assert exit_code == 0
+    assert result.exit_code == 0
 
 
-def test_main_diff_fail_on_new_layer_violations_exits_1_for_a_new_violation(
-    tmp_path, monkeypatch, capsys
-):
+def test_main_diff_fail_on_new_layer_violations_exits_1_for_a_new_violation(tmp_path):
     old_path = make_evidence_file(tmp_path / "old.json")
     new_path = make_evidence_file(
         tmp_path / "new.json",
@@ -654,35 +613,25 @@ def test_main_diff_fail_on_new_layer_violations_exits_1_for_a_new_violation(
         ],
     )
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["aletheore", "diff", str(old_path), str(new_path), "--fail-on-new-layer-violations"],
+    result = runner.invoke(
+        app, ["diff", str(old_path), str(new_path), "--fail-on-new-layer-violations"]
     )
-    exit_code = main()
 
-    assert exit_code == 1
+    assert result.exit_code == 1
 
 
-def test_main_diff_fail_on_new_layer_violations_exits_0_with_no_new_violations(
-    tmp_path, monkeypatch, capsys
-):
+def test_main_diff_fail_on_new_layer_violations_exits_0_with_no_new_violations(tmp_path):
     old_path = make_evidence_file(tmp_path / "old.json")
     new_path = make_evidence_file(tmp_path / "new.json")
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["aletheore", "diff", str(old_path), str(new_path), "--fail-on-new-layer-violations"],
+    result = runner.invoke(
+        app, ["diff", str(old_path), str(new_path), "--fail-on-new-layer-violations"]
     )
-    exit_code = main()
 
-    assert exit_code == 0
+    assert result.exit_code == 0
 
 
-def test_main_diff_fail_flags_combine_any_one_triggering_causes_exit_1(
-    tmp_path, monkeypatch, capsys
-):
+def test_main_diff_fail_flags_combine_any_one_triggering_causes_exit_1(tmp_path):
     old_path = make_evidence_file(tmp_path / "old.json")
     new_path = make_evidence_file(
         tmp_path / "new.json",
@@ -695,11 +644,9 @@ def test_main_diff_fail_flags_combine_any_one_triggering_causes_exit_1(
         ],
     )
 
-    monkeypatch.setattr(
-        sys,
-        "argv",
+    result = runner.invoke(
+        app,
         [
-            "aletheore",
             "diff",
             str(old_path),
             str(new_path),
@@ -708,110 +655,80 @@ def test_main_diff_fail_flags_combine_any_one_triggering_causes_exit_1(
             "--fail-on-new-layer-violations",
         ],
     )
-    exit_code = main()
 
-    assert exit_code == 1
+    assert result.exit_code == 1
 
 
-def test_main_diff_missing_file_errors_cleanly(tmp_path, monkeypatch, capsys):
+def test_main_diff_missing_file_errors_cleanly(tmp_path):
     old_path = make_evidence_file(tmp_path / "old.json")
     missing_path = tmp_path / "does_not_exist.json"
 
-    monkeypatch.setattr(sys, "argv", ["aletheore", "diff", str(old_path), str(missing_path)])
-    exit_code = main()
+    result = runner.invoke(app, ["diff", str(old_path), str(missing_path)])
 
-    assert exit_code == 1
-    captured = capsys.readouterr()
-    assert "not found" in captured.out
+    assert result.exit_code == 1
+    assert "not found" in result.output
 
 
-def test_main_scan_saves_a_history_snapshot(tmp_path, monkeypatch):
+def test_main_scan_saves_a_history_snapshot(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
-    monkeypatch.setattr(
-        sys, "argv", ["aletheore", "scan", str(repo), "--no-check-vulnerabilities"]
-    )
 
-    main()
+    runner.invoke(app, ["scan", str(repo), "--no-check-vulnerabilities"])
 
     history_files = list((repo / ".aletheore" / "history").glob("*.json"))
     assert len(history_files) == 1
 
 
-def test_main_query_changes_reports_no_prior_snapshot_on_first_scan(tmp_path, monkeypatch, capsys):
+def test_main_query_changes_reports_no_prior_snapshot_on_first_scan(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
-    monkeypatch.setattr(
-        sys, "argv", ["aletheore", "scan", str(repo), "--no-check-vulnerabilities"]
-    )
-    main()
+    runner.invoke(app, ["scan", str(repo), "--no-check-vulnerabilities"])
 
-    monkeypatch.setattr(sys, "argv", ["aletheore", "query", "changes", "--path", str(repo)])
-    exit_code = main()
+    result = runner.invoke(app, ["query", "changes", "--path", str(repo)])
 
-    assert exit_code == 0
-    captured = capsys.readouterr()
-    assert "no prior snapshot" in captured.out
+    assert result.exit_code == 0
+    assert "no prior snapshot" in result.output
 
 
-def test_main_query_changes_reports_corrupt_snapshot(tmp_path, monkeypatch, capsys):
+def test_main_query_changes_reports_corrupt_snapshot(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
-    monkeypatch.setattr(
-        sys, "argv", ["aletheore", "scan", str(repo), "--no-check-vulnerabilities"]
-    )
-    main()
-    main()
+    runner.invoke(app, ["scan", str(repo), "--no-check-vulnerabilities"])
+    runner.invoke(app, ["scan", str(repo), "--no-check-vulnerabilities"])
 
     history_dir = repo / ".aletheore" / "history"
     oldest = sorted(history_dir.glob("*.json"))[0]
     oldest.write_text("{not valid json")
 
-    monkeypatch.setattr(sys, "argv", ["aletheore", "query", "changes", "--path", str(repo)])
-    exit_code = main()
+    result = runner.invoke(app, ["query", "changes", "--path", str(repo)])
 
-    assert exit_code == 1
-    captured = capsys.readouterr()
-    assert "unreadable" in captured.out
+    assert result.exit_code == 1
+    assert "unreadable" in result.output
 
 
-def test_main_query_changes_shows_a_real_diff_between_two_scans(tmp_path, monkeypatch, capsys):
+def test_main_query_changes_shows_a_real_diff_between_two_scans(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
-    monkeypatch.setattr(
-        sys, "argv", ["aletheore", "scan", str(repo), "--no-check-vulnerabilities"]
-    )
-    main()
+    runner.invoke(app, ["scan", str(repo), "--no-check-vulnerabilities"])
 
     (repo / "second.py").write_text("y = 2\n")
-    main()
-    capsys.readouterr()
+    runner.invoke(app, ["scan", str(repo), "--no-check-vulnerabilities"])
 
-    monkeypatch.setattr(sys, "argv", ["aletheore", "query", "changes", "--path", str(repo)])
-    exit_code = main()
+    result = runner.invoke(app, ["query", "changes", "--path", str(repo)])
 
-    assert exit_code == 0
-    captured = capsys.readouterr()
-    result = json.loads(captured.out)
-    assert result["aggregate_deltas"]["module_count"] == 1
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["aggregate_deltas"]["module_count"] == 1
 
 
-def test_main_query_changes_full_flag_returns_raw_diff(tmp_path, monkeypatch, capsys):
+def test_main_query_changes_full_flag_returns_raw_diff(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
-    monkeypatch.setattr(
-        sys, "argv", ["aletheore", "scan", str(repo), "--no-check-vulnerabilities"]
-    )
-    main()
-    main()
-    capsys.readouterr()
+    runner.invoke(app, ["scan", str(repo), "--no-check-vulnerabilities"])
+    runner.invoke(app, ["scan", str(repo), "--no-check-vulnerabilities"])
 
-    monkeypatch.setattr(
-        sys, "argv", ["aletheore", "query", "changes", "--path", str(repo), "--full"]
-    )
-    exit_code = main()
+    result = runner.invoke(app, ["query", "changes", "--path", str(repo), "--full"])
 
-    assert exit_code == 0
-    captured = capsys.readouterr()
-    result = json.loads(captured.out)
-    assert set(result.keys()) == {"added", "removed", "changed"}
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert set(parsed.keys()) == {"added", "removed", "changed"}

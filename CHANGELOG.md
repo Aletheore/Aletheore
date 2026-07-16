@@ -29,6 +29,14 @@ Notable changes to Aletheore, by release. The working code lives in `prototype/`
   connected to that other, unrelated process instead — a reload looked like a working live
   dashboard while actually showing a completely different repo's data. Now checks the port
   first and fails with a clear message, without opening the browser, if it's already in use.
+- Migrated the CLI from `argparse` to [Typer](https://typer.tiangolo.com) + [Rich](https://rich.readthedocs.io):
+  every subcommand now gets a properly formatted, colored `--help` automatically (previously
+  only the top-level `--help` had any real formatting - every subcommand showed argparse's bare
+  default). The colorful `ALETHEORE` banner on a bare `aletheore` invocation is now a real Rich
+  panel. Every existing flag name and behavior is preserved exactly (`--no-check-vulnerabilities`,
+  `--base-url`, etc.); the only user-visible addition is that flags like `--no-check-licenses`
+  now also have an explicit positive counterpart (`--check-licenses`) for free, from Typer's
+  `--flag/--no-flag` pair syntax.
 
 ## 0.2.1 — 2026-07-16
 
