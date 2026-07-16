@@ -231,7 +231,7 @@ runs:
     - name: Post PR comment
       if: always() && inputs.post-pr-comment == 'true' && github.event_name == 'pull_request'
       continue-on-error: true
-      uses: actions/github-script@v7
+      uses: actions/github-script@v9
       with:
         script: |
           const fs = require('fs');
