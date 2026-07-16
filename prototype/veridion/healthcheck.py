@@ -1,9 +1,11 @@
+import json
 import re
 import ssl
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from pathlib import Path
 
 import certifi
 
@@ -87,3 +89,16 @@ def run_healthcheck(endpoints: list[dict], base_url: str, timeout: float = 5.0) 
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "results": results,
     }
+
+
+def _healthchecks_dir(repo_path: Path) -> Path:
+    return repo_path / ".veridion" / "healthchecks"
+
+
+def save_healthcheck(result: dict, repo_path: Path) -> Path:
+    healthchecks_dir = _healthchecks_dir(repo_path)
+    healthchecks_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = result["checked_at"].replace(":", "-")
+    path = healthchecks_dir / f"{safe_name}.json"
+    path.write_text(json.dumps(result, indent=2))
+    return path

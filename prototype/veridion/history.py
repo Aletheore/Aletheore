@@ -52,6 +52,12 @@ def _new_and_resolved(
     return new_only, resolved
 
 
+def _endpoint_block(evidence: dict) -> dict:
+    return evidence["repository"].get(
+        "api_endpoints", {"checked": False, "reason": "not present in older evidence", "endpoints": []}
+    )
+
+
 def _compute_curated_diff(old: dict, new: dict) -> dict:
     result: dict = {}
     caveats = []
@@ -76,8 +82,10 @@ def _compute_curated_diff(old: dict, new: dict) -> dict:
             "toggled on/off, not necessarily real changes"
         )
 
-    old_endpoints_checked = old["repository"]["api_endpoints"]["checked"]
-    new_endpoints_checked = new["repository"]["api_endpoints"]["checked"]
+    old_api_endpoints = _endpoint_block(old)
+    new_api_endpoints = _endpoint_block(new)
+    old_endpoints_checked = old_api_endpoints["checked"]
+    new_endpoints_checked = new_api_endpoints["checked"]
     if old_endpoints_checked != new_endpoints_checked:
         caveats.append(
             "API endpoint mapping state changed between scans "
@@ -118,8 +126,8 @@ def _compute_curated_diff(old: dict, new: dict) -> dict:
     result["layer_violations"] = {"new": new_violations, "resolved": resolved_violations}
 
     new_endpoints, resolved_endpoints = _new_and_resolved(
-        old["repository"]["api_endpoints"]["endpoints"],
-        new["repository"]["api_endpoints"]["endpoints"],
+        old_api_endpoints["endpoints"],
+        new_api_endpoints["endpoints"],
         ("method", "path"),
     )
     result["endpoints"] = {"new": new_endpoints, "resolved": resolved_endpoints}

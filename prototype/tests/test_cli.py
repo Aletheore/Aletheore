@@ -229,6 +229,46 @@ def test_main_dashboard_threads_custom_port(tmp_path):
     mock_dashboard.assert_called_once_with(str(tmp_path), 9000)
 
 
+def test_main_healthcheck_reports_results(tmp_path, monkeypatch, capsys):
+    repo = tmp_path
+    (repo / "app.py").write_text('@app.route("/health")\ndef health():\n    pass\n')
+    monkeypatch.setattr(sys, "argv", ["veridion", "scan", str(repo)])
+    main()
+    capsys.readouterr()
+
+    response = MagicMock()
+    response.status = 200
+    response.__enter__.return_value = response
+    response.__exit__.return_value = False
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["veridion", "healthcheck", str(repo), "--base-url", "http://localhost:5000"],
+    )
+    with patch("veridion.healthcheck.urllib.request.urlopen", return_value=response):
+        exit_code = main()
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "/health" in captured.out
+    assert "200" in captured.out
+
+
+def test_main_healthcheck_without_evidence_errors_clearly(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["veridion", "healthcheck", str(tmp_path), "--base-url", "http://localhost:5000"],
+    )
+
+    exit_code = main()
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "veridion scan" in captured.out
+
+
 def test_main_query_imports_prints_result(tmp_path, monkeypatch, capsys):
     repo = tmp_path
     (repo / "app").mkdir()

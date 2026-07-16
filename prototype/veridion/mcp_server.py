@@ -5,6 +5,7 @@ from pathlib import Path, PurePath
 from mcp.server.fastmcp import FastMCP
 
 from veridion.evidence import scan_repository, write_evidence
+from veridion.healthcheck import run_healthcheck, save_healthcheck
 from veridion.history import compute_diff, list_snapshots, save_snapshot
 from veridion.query import (
     ModuleNotFoundInEvidenceError,
@@ -186,6 +187,17 @@ def _register_scan_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
         return {"result": _scan_summary(evidence)}
 
 
+def _register_healthcheck_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+    @mcp_instance.tool(name="veridion_healthcheck")
+    def veridion_healthcheck(base_url: str) -> dict:
+        """GET-only live health check of mapped API endpoints against a running instance."""
+        evidence = read_evidence(repo_path)
+        endpoints = evidence["repository"].get("api_endpoints", {}).get("endpoints", [])
+        result = run_healthcheck(endpoints, base_url)
+        save_healthcheck(result, repo_path)
+        return {"result": result}
+
+
 def build_server(repo_path: Path) -> FastMCP:
     mcp_instance = FastMCP("veridion")
     _register_query_wrapper_tools(mcp_instance, repo_path)
@@ -193,4 +205,5 @@ def build_server(repo_path: Path) -> FastMCP:
     _register_neighborhood_tool(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
     _register_scan_tool(mcp_instance, repo_path)
+    _register_healthcheck_tool(mcp_instance, repo_path)
     return mcp_instance

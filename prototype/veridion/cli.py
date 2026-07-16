@@ -9,6 +9,7 @@ import uvicorn
 from veridion.adapters.claude_code import AdapterInvocationError, ClaudeCodeAdapter
 from veridion.dashboard import build_app
 from veridion.evidence import scan_repository, write_evidence
+from veridion.healthcheck import run_healthcheck, save_healthcheck
 from veridion.history import compute_diff, list_snapshots, save_snapshot
 from veridion.mcp_server import build_server
 from veridion.query import (
@@ -204,6 +205,31 @@ def _diff(
     return 0
 
 
+def _healthcheck(repo_path: str, base_url: str) -> int:
+    repo = Path(repo_path).resolve()
+    evidence_path = repo / ".veridion" / "evidence.json"
+    if not evidence_path.exists():
+        print(f"error: no evidence found at {evidence_path}")
+        print(f"Run 'veridion scan {repo}' first.")
+        return 1
+
+    evidence = json.loads(evidence_path.read_text())
+    endpoints = evidence["repository"].get("api_endpoints", {}).get("endpoints", [])
+    result = run_healthcheck(endpoints, base_url)
+    save_healthcheck(result, repo)
+
+    for entry in result["results"]:
+        method = entry.get("method") or "?"
+        if entry.get("skipped"):
+            print(f"{method:6} {entry['path']:40} SKIPPED ({entry['reason']})")
+        else:
+            status = entry["status_code"] if entry["reachable"] else "UNREACHABLE"
+            note = f" ({entry['note']})" if entry.get("note") else ""
+            print(f"{method:6} {entry['path']:40} {status} {entry['latency_ms']}ms{note}")
+
+    return 0
+
+
 def _mcp(repo_path: str) -> int:
     repo = Path(repo_path).resolve()
     server = build_server(repo)
@@ -339,6 +365,12 @@ def main() -> int:
     dashboard_parser.add_argument("path", nargs="?", default=".")
     dashboard_parser.add_argument("--port", type=int, default=8420)
 
+    healthcheck_parser = subparsers.add_parser(
+        "healthcheck", help="GET-only live health check of mapped API endpoints"
+    )
+    healthcheck_parser.add_argument("path", nargs="?", default=".")
+    healthcheck_parser.add_argument("--base-url", required=True, dest="base_url")
+
     args = parser.parse_args()
 
     if args.command == "audit":
@@ -374,6 +406,8 @@ def main() -> int:
         return _mcp(args.path)
     if args.command == "dashboard":
         return _dashboard(args.path, args.port)
+    if args.command == "healthcheck":
+        return _healthcheck(args.path, args.base_url)
 
     parser.print_help()
     return 1

@@ -1,6 +1,7 @@
 import json
 import subprocess
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
@@ -86,9 +87,10 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "veridion_neighborhood",
         "veridion_search",
         "veridion_scan",
+        "veridion_healthcheck",
     }
     assert expected.issubset(names)
-    assert len(names) == 15
+    assert len(names) == 16
 
 
 @pytest.mark.asyncio
@@ -313,3 +315,39 @@ async def test_veridion_scan_real_findings_excludes_placeholders(tmp_path):
     summary = tool_result_body(result)["result"]
     assert summary["secrets"]["total_findings"] == 1
     assert summary["secrets"]["real_findings"] == 0
+
+
+@pytest.mark.asyncio
+async def test_veridion_healthcheck_tool_returns_results(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".veridion" / "evidence.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["repository"]["api_endpoints"] = {
+        "checked": True,
+        "endpoints": [
+            {
+                "method": "GET",
+                "path": "/health",
+                "framework": "flask",
+                "file": "app.py",
+                "line": 1,
+                "handler": "health",
+                "unresolved": False,
+            }
+        ],
+    }
+    evidence_path.write_text(json.dumps(evidence))
+    server = build_server(repo)
+
+    response = MagicMock()
+    response.status = 200
+    response.__enter__.return_value = response
+    response.__exit__.return_value = False
+
+    with patch("veridion.healthcheck.urllib.request.urlopen", return_value=response):
+        result = await server.call_tool(
+            "veridion_healthcheck", {"base_url": "http://localhost:5000"}
+        )
+
+    body = tool_result_body(result)["result"]
+    assert body["results"][0]["status_code"] == 200
