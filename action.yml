@@ -1,4 +1,4 @@
-name: "Aletheore Diff"
+name: "Aletheore"
 description: "Posts an evidence-grounded PR diff: secrets, vulnerabilities, layer violations, architecture deltas."
 author: "ArihantK15"
 

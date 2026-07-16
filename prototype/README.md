@@ -273,7 +273,7 @@ aletheore dashboard . --port 8420
 
 ## GitHub Action
 
-`../action.yml` ("Aletheore Diff" on the Marketplace) is a composite Action that scans a PR's
+`../action.yml` ("Aletheore" on the Marketplace) is a composite Action that scans a PR's
 base and head refs and reports the diff three ways:
 
 - **A PR comment** — new/resolved secrets, new/resolved secrets found in git history,
