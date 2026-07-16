@@ -301,7 +301,7 @@ It only ever calls `aletheore scan` and `aletheore diff`, matching the reasoning
 something fast and deterministic, not a full agent-driven audit.
 
 ```yaml
-- uses: ArihantK15/Aletheore@master   # pin to a tagged release once one exists past 0.1.0
+- uses: Aletheore/Aletheore@master    # pin to a tagged release once one exists past 0.1.0
   with:
     fail-on-new-secrets: true              # exit 1 if a new real (non-placeholder) secret appears
     fail-on-new-vulnerabilities: true      # exit 1 if a new dependency vulnerability appears

@@ -40,9 +40,9 @@ dependencies = [
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 
 [project.urls]
-Homepage = "https://github.com/ArihantK15/Aletheore"
-Repository = "https://github.com/ArihantK15/Aletheore"
-Issues = "https://github.com/ArihantK15/Aletheore/issues"
+Homepage = "https://github.com/Aletheore/Aletheore"
+Repository = "https://github.com/Aletheore/Aletheore"
+Issues = "https://github.com/Aletheore/Aletheore/issues"
 
 [project.scripts]
 aletheore = "aletheore.cli:main"

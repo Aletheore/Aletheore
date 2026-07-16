@@ -1,6 +1,6 @@
 name: "Aletheore"
 description: "Posts an evidence-grounded PR diff: secrets, vulnerabilities, layer violations, architecture deltas."
-author: "ArihantK15"
+author: "Aletheore"
 
 branding:
   icon: "shield"
