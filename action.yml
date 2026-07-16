@@ -19,6 +19,14 @@ inputs:
     description: "Exit non-zero if a new real (non-placeholder) secret is found"
     required: false
     default: "false"
+  fail-on-new-vulnerabilities:
+    description: "Exit non-zero if a new dependency vulnerability is found"
+    required: false
+    default: "false"
+  fail-on-new-layer-violations:
+    description: "Exit non-zero if a new layer-convention violation is found"
+    required: false
+    default: "false"
   full:
     description: "Show the full raw diff instead of the curated summary"
     required: false
@@ -59,11 +67,11 @@ runs:
 
     - name: Scan base
       shell: bash
-      run: veridion scan veridion-base --no-check-vulnerabilities
+      run: veridion scan veridion-base
 
     - name: Scan head
       shell: bash
-      run: veridion scan veridion-head --no-check-vulnerabilities
+      run: veridion scan veridion-head
 
     - name: Diff
       id: diff
@@ -75,6 +83,12 @@ runs:
         fi
         if [ "${{ inputs.fail-on-new-secrets }}" = "true" ]; then
           ARGS="$ARGS --fail-on-new-secrets"
+        fi
+        if [ "${{ inputs.fail-on-new-vulnerabilities }}" = "true" ]; then
+          ARGS="$ARGS --fail-on-new-vulnerabilities"
+        fi
+        if [ "${{ inputs.fail-on-new-layer-violations }}" = "true" ]; then
+          ARGS="$ARGS --fail-on-new-layer-violations"
         fi
 
         set +e
@@ -91,12 +105,44 @@ runs:
         cat diff-output.json
         exit $DIFF_EXIT_CODE
 
-    - name: Format PR comment
-      if: always() && inputs.post-pr-comment == 'true' && github.event_name == 'pull_request'
+    - name: Annotate new secrets
+      if: always()
       shell: bash
       run: |
         if [ ! -f diff-output.json ]; then
-          echo "diff-output.json not found (an earlier step failed) - skipping comment"
+          echo "diff-output.json not found (an earlier step failed) - skipping annotations"
+          exit 0
+        fi
+
+        # Only current-tree secrets carry both a file path and a real line number - history
+        # secrets point at an old commit (no line in the current tree to point to), and
+        # vulnerabilities/layer violations are package- or file-level, not tied to any
+        # specific line at all. Faking a line number for those would misattribute the
+        # annotation, so only new secrets get inline annotations here; everything else stays
+        # in the PR comment above, where a file-level or package-level fact belongs.
+        python3 - <<'PYEOF'
+        import json
+
+        with open("diff-output.json") as f:
+            diff = json.load(f)
+
+        for finding in diff.get("secrets", {}).get("new", []):
+            if finding.get("likely_placeholder"):
+                continue
+            path = finding.get("path", "")
+            line = finding.get("line", 1)
+            pattern = finding.get("pattern", "secret")
+            message = f"New secret detected ({pattern}). Rotate it and remove it from source."
+            message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print(f"::error file={path},line={line}::{message}")
+        PYEOF
+
+    - name: Format diff summary
+      if: always()
+      shell: bash
+      run: |
+        if [ ! -f diff-output.json ]; then
+          echo "diff-output.json not found (an earlier step failed) - skipping summary"
           exit 0
         fi
 
@@ -161,8 +207,19 @@ runs:
         if len(body) <= 3:
             body.append("No new secrets, vulnerabilities, or layer violations. ✅")
 
+        text = "\n".join(body)
+
         with open("veridion-comment.md", "w") as f:
-            f.write("\n".join(body))
+            f.write(text)
+
+        # Visible for every run, not just pull_request events - a plain push has no PR to
+        # comment on, but the run's own Summary tab is always there.
+        import os
+
+        summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary_path:
+            with open(summary_path, "a") as f:
+                f.write(text + "\n")
         PYEOF
 
     - name: Post PR comment

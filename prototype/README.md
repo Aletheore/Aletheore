@@ -90,7 +90,12 @@ dependency vulnerabilities, architecture deltas. Powers the GitHub Action below.
 ```bash
 veridion diff old/evidence.json new/evidence.json
 veridion diff old/evidence.json new/evidence.json --fail-on-new-secrets
+veridion diff old/evidence.json new/evidence.json --fail-on-new-vulnerabilities
+veridion diff old/evidence.json new/evidence.json --fail-on-new-layer-violations
 ```
+
+All three `--fail-on-new-*` flags can be combined; the command exits 1 if any of them find
+something new.
 
 ### `veridion mcp [path]`
 
@@ -128,22 +133,37 @@ veridion dashboard . --port 8420
 ## GitHub Action
 
 `../action.yml` ("Veridion Diff" on the Marketplace) is a composite Action that scans a PR's
-base and head refs and posts the diff as a PR comment (updating the same comment on
-subsequent pushes rather than spamming new ones): new/resolved secrets, new/resolved secrets
-found in git history, new/resolved dependency vulnerabilities, new/resolved layer-convention
-violations, and aggregate deltas (module count, dependency-graph edge count, commit count). It
-only ever calls `veridion scan` and `veridion diff`, matching the reasoning above: CI needs
+base and head refs and reports the diff three ways:
+
+- **A PR comment** — new/resolved secrets, new/resolved secrets found in git history,
+  new/resolved dependency vulnerabilities, new/resolved layer-convention violations, and
+  aggregate deltas (module count, dependency-graph edge count, commit count). Updates the same
+  comment on subsequent pushes instead of spamming new ones.
+- **Inline annotations** on new secrets specifically — shown directly on the changed line in
+  the PR's "Files changed" tab. Scoped to current-tree secrets only, since that's the only
+  finding type with both a real file path and a real line number: history-secret findings
+  point at an old commit with no line in the current tree, vulnerabilities are package-level,
+  and layer violations are file-level (a "from" file imports a "to" file) — none of those have
+  a specific line to honestly point at, so they stay in the PR comment rather than getting a
+  fabricated line number.
+- **The run's Step Summary** — the same content as the PR comment, written on every run
+  regardless of event type, so a plain push (no PR to comment on) still shows something.
+
+It only ever calls `veridion scan` and `veridion diff`, matching the reasoning above: CI needs
 something fast and deterministic, not a full agent-driven audit.
 
 ```yaml
-- uses: ArihantK15/Veridion@0.1.0
+- uses: ArihantK15/Veridion@master   # pin to a tagged release once one exists past 0.1.0
   with:
-    fail-on-new-secrets: true   # exit 1 if a new real (non-placeholder) secret appears
+    fail-on-new-secrets: true              # exit 1 if a new real (non-placeholder) secret appears
+    fail-on-new-vulnerabilities: true      # exit 1 if a new dependency vulnerability appears
+    fail-on-new-layer-violations: true     # exit 1 if a new layer-convention violation appears
 ```
 
 Posting the PR comment needs `permissions: pull-requests: write` (and `issues: write`, since
 PR comments use the Issues API) on the calling workflow's job — set `post-pr-comment: false`
-to skip it and just use the `diff-json` output instead.
+to skip just that part and still get annotations, the step summary, and the `diff-json`
+output.
 
 ## Continuity
 

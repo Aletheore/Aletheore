@@ -262,7 +262,12 @@ def test_main_query_unknown_module_errors_clearly(tmp_path, monkeypatch, capsys)
     assert "not present in evidence" in captured.out
 
 
-def make_evidence_file(path: Path, findings: list[dict] | None = None) -> Path:
+def make_evidence_file(
+    path: Path,
+    findings: list[dict] | None = None,
+    vulnerabilities: list[dict] | None = None,
+    layer_violations: list[dict] | None = None,
+) -> Path:
     evidence = {
         "repository": {"modules": [], "dependency_graph": {"nodes": [], "edges": []}},
         "git": {"total_commits": 0},
@@ -272,9 +277,13 @@ def make_evidence_file(path: Path, findings: list[dict] | None = None) -> Path:
                 "history_scanned_commits": 0,
                 "history_findings": [],
             },
-            "dependency_vulnerabilities": {"checked": True, "reason": None, "findings": []},
+            "dependency_vulnerabilities": {
+                "checked": True,
+                "reason": None,
+                "findings": vulnerabilities or [],
+            },
         },
-        "architecture": {"layer_violations": {"violations": []}},
+        "architecture": {"layer_violations": {"violations": layer_violations or []}},
     }
     path.write_text(json.dumps(evidence))
     return path
@@ -385,6 +394,124 @@ def test_main_diff_fail_on_new_secrets_works_even_with_full_flag(tmp_path, monke
     captured = capsys.readouterr()
     result = json.loads(captured.out)
     assert set(result.keys()) == {"added", "removed", "changed"}
+
+
+def test_main_diff_fail_on_new_vulnerabilities_exits_1_for_a_new_vulnerability(
+    tmp_path, monkeypatch, capsys
+):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(
+        tmp_path / "new.json",
+        vulnerabilities=[
+            {
+                "ecosystem": "PyPI",
+                "package": "requests",
+                "installed_version": "2.25.0",
+                "advisory_id": "GHSA-xxxx",
+                "summary": "...",
+                "severity": [],
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["veridion", "diff", str(old_path), str(new_path), "--fail-on-new-vulnerabilities"],
+    )
+    exit_code = main()
+
+    assert exit_code == 1
+
+
+def test_main_diff_fail_on_new_vulnerabilities_exits_0_with_no_new_vulnerabilities(
+    tmp_path, monkeypatch, capsys
+):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(tmp_path / "new.json")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["veridion", "diff", str(old_path), str(new_path), "--fail-on-new-vulnerabilities"],
+    )
+    exit_code = main()
+
+    assert exit_code == 0
+
+
+def test_main_diff_fail_on_new_layer_violations_exits_1_for_a_new_violation(
+    tmp_path, monkeypatch, capsys
+):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(
+        tmp_path / "new.json",
+        layer_violations=[
+            {
+                "from": "app/routes.py",
+                "to": "app/db.py",
+                "reason": "inner layer 'routes' imports outer layer 'db'",
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["veridion", "diff", str(old_path), str(new_path), "--fail-on-new-layer-violations"],
+    )
+    exit_code = main()
+
+    assert exit_code == 1
+
+
+def test_main_diff_fail_on_new_layer_violations_exits_0_with_no_new_violations(
+    tmp_path, monkeypatch, capsys
+):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(tmp_path / "new.json")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["veridion", "diff", str(old_path), str(new_path), "--fail-on-new-layer-violations"],
+    )
+    exit_code = main()
+
+    assert exit_code == 0
+
+
+def test_main_diff_fail_flags_combine_any_one_triggering_causes_exit_1(
+    tmp_path, monkeypatch, capsys
+):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(
+        tmp_path / "new.json",
+        layer_violations=[
+            {
+                "from": "app/routes.py",
+                "to": "app/db.py",
+                "reason": "inner layer 'routes' imports outer layer 'db'",
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "veridion",
+            "diff",
+            str(old_path),
+            str(new_path),
+            "--fail-on-new-secrets",
+            "--fail-on-new-vulnerabilities",
+            "--fail-on-new-layer-violations",
+        ],
+    )
+    exit_code = main()
+
+    assert exit_code == 1
 
 
 def test_main_diff_missing_file_errors_cleanly(tmp_path, monkeypatch, capsys):

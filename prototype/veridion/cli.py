@@ -126,7 +126,14 @@ def _query(kind: str, target: str | None, repo_path: str, full: bool = False) ->
     return 0
 
 
-def _diff(old_path: str, new_path: str, full: bool, fail_on_new_secrets: bool) -> int:
+def _diff(
+    old_path: str,
+    new_path: str,
+    full: bool,
+    fail_on_new_secrets: bool,
+    fail_on_new_vulnerabilities: bool = False,
+    fail_on_new_layer_violations: bool = False,
+) -> int:
     old_file = Path(old_path)
     new_file = Path(new_path)
 
@@ -151,15 +158,28 @@ def _diff(old_path: str, new_path: str, full: bool, fail_on_new_secrets: bool) -
     diff = compute_diff(old, new, full=full)
     print(json.dumps(diff, indent=2))
 
-    if fail_on_new_secrets:
+    if fail_on_new_secrets or fail_on_new_vulnerabilities or fail_on_new_layer_violations:
         curated = diff if not full else compute_diff(old, new, full=False)
-        new_real_secrets = [
-            f for f in curated["secrets"]["new"] if not f.get("likely_placeholder", False)
-        ]
-        new_real_history_secrets = [
-            f for f in curated["history_secrets"]["new"] if not f.get("likely_placeholder", False)
-        ]
-        if new_real_secrets or new_real_history_secrets:
+        should_fail = False
+
+        if fail_on_new_secrets:
+            new_real_secrets = [
+                f for f in curated["secrets"]["new"] if not f.get("likely_placeholder", False)
+            ]
+            new_real_history_secrets = [
+                f
+                for f in curated["history_secrets"]["new"]
+                if not f.get("likely_placeholder", False)
+            ]
+            should_fail = should_fail or bool(new_real_secrets or new_real_history_secrets)
+
+        if fail_on_new_vulnerabilities:
+            should_fail = should_fail or bool(curated["vulnerabilities"]["new"])
+
+        if fail_on_new_layer_violations:
+            should_fail = should_fail or bool(curated["layer_violations"]["new"])
+
+        if should_fail:
             return 1
 
     return 0
@@ -248,6 +268,20 @@ def main() -> int:
         default=False,
         help="exit 1 if a new real (non-placeholder) secret finding appears",
     )
+    diff_parser.add_argument(
+        "--fail-on-new-vulnerabilities",
+        dest="fail_on_new_vulnerabilities",
+        action="store_true",
+        default=False,
+        help="exit 1 if a new dependency vulnerability finding appears",
+    )
+    diff_parser.add_argument(
+        "--fail-on-new-layer-violations",
+        dest="fail_on_new_layer_violations",
+        action="store_true",
+        default=False,
+        help="exit 1 if a new layer-convention violation appears",
+    )
 
     mcp_parser = subparsers.add_parser("mcp", help="run an MCP server scoped to a repository")
     mcp_parser.add_argument("path", nargs="?", default=".")
@@ -270,7 +304,14 @@ def main() -> int:
     if args.command == "query":
         return _query(args.kind, args.target, args.repo_path, args.full)
     if args.command == "diff":
-        return _diff(args.old, args.new, args.full, args.fail_on_new_secrets)
+        return _diff(
+            args.old,
+            args.new,
+            args.full,
+            args.fail_on_new_secrets,
+            args.fail_on_new_vulnerabilities,
+            args.fail_on_new_layer_violations,
+        )
     if args.command == "mcp":
         return _mcp(args.path)
     if args.command == "dashboard":
