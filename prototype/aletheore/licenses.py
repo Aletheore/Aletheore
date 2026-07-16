@@ -4,6 +4,7 @@ import ssl
 import tomllib
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 import certifi
@@ -141,14 +142,20 @@ def _fetch_npm_license(name: str, version: str, timeout: int) -> str | None:
     return None
 
 
-def check_dependency_licenses(repo_path: Path, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> dict:
+def check_dependency_licenses(
+    repo_path: Path,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> dict:
     repo_license = detect_repo_license(repo_path)
     pins = _parse_pip_pins(repo_path) + _parse_npm_pins(repo_path)
     if not pins:
         return {"checked": True, "reason": None, "repo_license": repo_license, "findings": []}
 
     findings = []
-    for name, version, ecosystem in pins:
+    for index, (name, version, ecosystem) in enumerate(pins, start=1):
+        if on_progress is not None:
+            on_progress(index, len(pins), name)
         try:
             if ecosystem == "PyPI":
                 license_text = _fetch_pypi_license(name, version, timeout)

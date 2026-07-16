@@ -52,9 +52,12 @@ def select_adapter(
 def build_instruction(manual_dir: str) -> str:
     return (
         f"Read every markdown file in the '{manual_dir}' directory and "
-        f"'.aletheore/evidence.json' in the current directory. Follow the manual's "
-        f"Part I operating instructions exactly, including its output contract, and "
-        f"write the resulting audit report to '.aletheore/audit-report.md'."
+        f"'.aletheore/evidence.toon' in the current directory (TOON-encoded - the same "
+        f"evidence as evidence.json, just more token-efficient to read; array headers "
+        f"declare field names once, each row below is comma-separated values in that "
+        f"order). Follow the manual's Part I operating instructions exactly, including "
+        f"its output contract, and write the resulting audit report to "
+        f"'.aletheore/audit-report.md'."
     )
 
 

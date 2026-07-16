@@ -1,7 +1,11 @@
 import argparse
 import json
+import socket
 import sys
+import threading
+import time
 import webbrowser
+from collections.abc import Callable
 from pathlib import Path
 
 import uvicorn
@@ -68,6 +72,69 @@ BANNER_LINES = [
 BANNER = _box(BANNER_LINES)
 
 
+def _make_progress_printer(is_tty: bool | None = None) -> Callable[[str], None]:
+    # License checks report one message per pinned dependency (can be dozens).
+    # In a real terminal those overwrite in place via \r instead of scrolling,
+    # since they're the same phase repeating, not a new step. \r only means
+    # "return to start of line" on an actual TTY though - piped to a CI log or
+    # a file, it prints as a literal character with no effect, so non-TTY
+    # output instead prints every message on its own line: more lines, but a
+    # real, readable history in a log rather than concatenated garbage.
+    is_tty = sys.stdout.isatty() if is_tty is None else is_tty
+    state = {"in_place": False}
+
+    def report(message: str) -> None:
+        overwritable = is_tty and message.startswith("Checking dependency licenses:")
+        if overwritable:
+            print(f"\r  → {message}" + " " * 15, end="", flush=True)
+            state["in_place"] = True
+        else:
+            if state["in_place"]:
+                print()
+                state["in_place"] = False
+            print(f"  → {message}")
+
+    return report
+
+
+class _ElapsedTicker:
+    """Prints an elapsed-time indicator while a blocking call (e.g. an external
+    coding-agent subprocess) runs, so a multi-minute wait doesn't look
+    identical to a hang. On a real terminal this updates in place every few
+    seconds; piped to a log/file (no TTY), it prints once at the start and
+    once at the end instead of spamming a new line every interval."""
+
+    def __init__(self, label: str, interval: float = 3.0, is_tty: bool | None = None) -> None:
+        self._label = label
+        self._interval = interval
+        self._is_tty = sys.stdout.isatty() if is_tty is None else is_tty
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        start = time.monotonic()
+        while not self._stop.wait(self._interval):
+            elapsed = int(time.monotonic() - start)
+            print(f"\r  → {self._label}... ({elapsed}s elapsed)" + " " * 10, end="", flush=True)
+
+    def __enter__(self) -> "_ElapsedTicker":
+        self._start = time.monotonic()
+        if self._is_tty:
+            self._thread.start()
+        else:
+            print(f"  → {self._label}...")
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        if self._is_tty:
+            self._stop.set()
+            self._thread.join()
+            print()
+        else:
+            elapsed = int(time.monotonic() - self._start)
+            print(f"  → {self._label}: done ({elapsed}s elapsed)")
+
+
 def _scan(
     repo_path: str,
     check_vulnerabilities: bool,
@@ -83,6 +150,7 @@ def _scan(
         scan_git_history=scan_git_history,
         check_licenses=check_licenses,
         map_endpoints=map_endpoints,
+        progress=_make_progress_printer(),
     )
     evidence_path = write_evidence(evidence, repo)
     print(f"Evidence written to {evidence_path}")
@@ -115,7 +183,8 @@ def _audit(
 
     print(f"Running audit with {adapter.name}...")
     try:
-        report_path = run_reasoning_phase(adapter, repo_path=str(repo), manual_dir=MANUAL_DIR)
+        with _ElapsedTicker(f"Waiting on {adapter.name}"):
+            report_path = run_reasoning_phase(adapter, repo_path=str(repo), manual_dir=MANUAL_DIR)
     except AdapterInvocationError as exc:
         print(f"error: {exc}")
         print(f"Evidence is still available at {evidence_path} for manual use.")
@@ -266,13 +335,40 @@ def _mcp(repo_path: str) -> int:
     return 0
 
 
+def _port_is_available(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+
 def _dashboard(repo_path: str, port: int) -> int:
     repo = Path(repo_path).resolve()
+    host = "127.0.0.1"
+
+    # Checked and reported *before* printing success or opening a browser tab -
+    # otherwise a stale process already bound to this port (e.g. a dashboard
+    # left running for a different repo) silently answers instead, and a
+    # browser reload looks like a normal working dashboard while actually
+    # showing a completely unrelated repo's data. Confirmed as a real bug,
+    # not hypothetical: this exact sequence was hit against a real stale
+    # process on the default port.
+    if not _port_is_available(host, port):
+        print(
+            f"error: port {port} is already in use - probably another aletheore "
+            f"dashboard (or something else) is already bound to it.\n"
+            f"Pass --port to use a different one, or stop whatever's using {port}."
+        )
+        return 1
+
     app = build_app(repo)
-    url = f"http://127.0.0.1:{port}"
+    url = f"http://{host}:{port}"
     print(f"Dashboard running at {url}")
     webbrowser.open(url)
-    uvicorn.run(app, host="127.0.0.1", port=port)
+    uvicorn.run(app, host=host, port=port)
     return 0
 
 

@@ -5,6 +5,31 @@ Notable changes to Aletheore, by release. The working code lives in `prototype/`
 
 ## Unreleased
 
+## 0.3.0 — 2026-07-16
+
+- Added live progress reporting to `scan`/`audit` — every major phase (module graph build,
+  git history, secrets, vulnerability/license checks, endpoint mapping) prints as it starts,
+  and dependency-license checking (a real, sequential, one-request-per-dependency network
+  call — the least visible part of a scan) reports per-dependency progress. On a real
+  terminal the per-dependency counter updates in place; piped to a log or CI, every message
+  prints on its own line instead, since `\r` only means "return to start of line" on an
+  actual TTY. `audit`'s wait on the coding-agent subprocess now shows an elapsed-time
+  indicator too, so a multi-minute run doesn't look identical to a hang.
+- Switched the MCP server's tool results and the file the `audit` command's coding-agent
+  adapter reads from JSON to [TOON](https://toonformat.dev) (Token-Oriented Object Notation)
+  - a lossless, more token-efficient re-encoding of the same data (~30-60% fewer tokens,
+    confirmed directly against Aletheore's own evidence shape). `.aletheore/evidence.json`
+    stays the canonical on-disk format (the dashboard and any external tooling still need
+    real JSON); a second `.aletheore/evidence.toon` file is written alongside it
+    specifically for the audit flow, and the manual's operating instructions now explain the
+    TOON syntax briefly for the agent reading it.
+- **Fixed a real, actively misleading bug in `aletheore dashboard`**: it printed "Dashboard
+  running" and opened a browser tab *before* actually trying to bind the port, so if the port
+  was already taken (e.g. a dashboard left running for a different repo), the browser silently
+  connected to that other, unrelated process instead — a reload looked like a working live
+  dashboard while actually showing a completely different repo's data. Now checks the port
+  first and fails with a clear message, without opening the browser, if it's already in use.
+
 ## 0.2.1 — 2026-07-16
 
 - **Fixed `aletheore audit` being completely broken on every real `pip install`.** `manual/`

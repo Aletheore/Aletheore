@@ -170,6 +170,18 @@ are recorded with method, path, framework, file, line, handler, whether the entr
 unresolved include/mount-style indirection, and an optional `note` for known same-file prefixes
 that are present but deliberately not composed into the recorded path.
 
+`scan` prints its progress through each major phase as it runs — module graph build, git
+history, secrets, vulnerability/license checks, endpoint mapping — since some of these (the
+license check especially, one real network request per pinned dependency, no batching) can
+take a while with no other feedback otherwise. On a real terminal the license-check counter
+updates in place; piped to a log or CI, every dependency prints on its own line instead.
+
+Alongside `evidence.json`, `scan` also writes `.aletheore/evidence.toon` — the same evidence,
+[TOON](https://toonformat.dev)-encoded (~30-60% fewer tokens for the same data, biggest win on
+the uniform arrays of same-shaped objects most of evidence.json actually is). `evidence.json`
+stays the canonical file for the dashboard and any external tooling; `evidence.toon` exists
+specifically for `audit`'s coding-agent adapter to read instead.
+
 ### `aletheore audit [path]`
 
 Runs a scan, then shells out to an installed coding-agent CLI (Claude Code today, via
@@ -184,6 +196,11 @@ answering a fast, deterministic query. It's meant to be run by hand, when you ac
 written document — it is not wired into CI or the MCP server, and shouldn't be: a CI gate
 needs to be fast and pass/fail on concrete facts, and an agent already driving an MCP session
 can reason over the evidence itself without spawning a nested agent process.
+
+While the agent subprocess runs, an elapsed-time indicator prints so a multi-minute wait
+doesn't look identical to a hang (updates in place on a real terminal; prints once at the
+start and once at the end when piped to a log). The agent is instructed to read
+`.aletheore/evidence.toon` (see `scan` above) rather than the JSON copy.
 
 ```bash
 aletheore audit .
@@ -242,8 +259,10 @@ aletheore healthcheck . --base-url http://127.0.0.1:5000
 ### `aletheore mcp [path]`
 
 Starts a stdio MCP server scoped to one repository, so a coding agent can query its structure
-directly instead of shelling out via Bash or re-reading files on every lookup. Exposes 16
-tools:
+directly instead of shelling out via Bash or re-reading files on every lookup. Every tool
+result is [TOON](https://toonformat.dev)-encoded rather than plain JSON — the calling agent's
+own token budget is what actually pays for reading these results, and evidence's shape (almost
+entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 16 tools:
 
 - The 11 query kinds above as tools (`aletheore_imports`, `aletheore_imported_by`,
   `aletheore_symbols`, `aletheore_branch`, `aletheore_ownership`, `aletheore_secrets`,

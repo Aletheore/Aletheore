@@ -240,3 +240,27 @@ def test_check_dependency_licenses_includes_repo_license(tmp_path):
     result = check_dependency_licenses(repo)
 
     assert result["repo_license"]["category"] == "permissive"
+
+
+def test_check_dependency_licenses_reports_progress_per_dependency(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("flask==3.0.0\nrequests==2.31.0\n")
+
+    response = _mock_response({"info": {"license": "MIT", "classifiers": []}})
+    calls = []
+
+    with patch("aletheore.licenses.urllib.request.urlopen", return_value=response):
+        check_dependency_licenses(repo, on_progress=lambda i, t, n: calls.append((i, t, n)))
+
+    assert calls == [(1, 2, "flask"), (2, 2, "requests")]
+
+
+def test_check_dependency_licenses_on_progress_not_called_with_no_pins(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    calls = []
+    check_dependency_licenses(repo, on_progress=lambda i, t, n: calls.append((i, t, n)))
+
+    assert calls == []

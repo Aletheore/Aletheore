@@ -15,6 +15,7 @@ from aletheore.query import (
     find_imports,
 )
 from aletheore.secrets import iter_all_files
+from aletheore.toon_encoding import to_toon
 
 
 def read_evidence(repo_path: Path) -> dict:
@@ -25,6 +26,15 @@ def read_evidence(repo_path: Path) -> dict:
             "or call the aletheore_scan tool"
         )
     return json.loads(evidence_path.read_text())
+
+
+def _toon_result(data: object) -> str:
+    # Every tool result is TOON-encoded rather than returned as a plain dict
+    # (which FastMCP would otherwise auto-serialize to JSON) - this is the
+    # actual token-cost surface for whatever agent is calling these tools,
+    # and evidence's own shape (uniform arrays of same-shaped objects almost
+    # everywhere) is exactly TOON's best case.
+    return to_toon({"result": data})
 
 
 _TOOL_NAME_TO_QUERY_KIND = {
@@ -51,15 +61,15 @@ def _register_query_wrapper_tools(mcp_instance: FastMCP, repo_path: Path) -> Non
         def make_tool(func=func, requires_target=requires_target, kind=kind):
             if requires_target:
 
-                def tool(target: str) -> dict:
+                def tool(target: str) -> str:
                     evidence = read_evidence(repo_path)
-                    return {"result": func(evidence, target)}
+                    return _toon_result(func(evidence, target))
 
             else:
 
-                def tool() -> dict:
+                def tool() -> str:
                     evidence = read_evidence(repo_path)
-                    return {"result": func(evidence, None)}
+                    return _toon_result(func(evidence, None))
 
             return tool
 
@@ -71,22 +81,22 @@ def _register_query_wrapper_tools(mcp_instance: FastMCP, repo_path: Path) -> Non
 
 def _register_changes_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_changes")
-    def aletheore_changes(full: bool = False) -> dict:
+    def aletheore_changes(full: bool = False) -> str:
         """What changed between the two most recent scans of this repo."""
         snapshots = list_snapshots(repo_path)
         if len(snapshots) < 2:
-            return {"result": {"message": "no prior snapshot to compare against"}}
+            return _toon_result({"message": "no prior snapshot to compare against"})
         try:
             old = json.loads(snapshots[-2].read_text())
         except json.JSONDecodeError:
-            return {"result": {"message": f"most recent snapshot is unreadable ({snapshots[-2]})"}}
+            return _toon_result({"message": f"most recent snapshot is unreadable ({snapshots[-2]})"})
         new = json.loads(snapshots[-1].read_text())
-        return {"result": compute_diff(old, new, full=full)}
+        return _toon_result(compute_diff(old, new, full=full))
 
 
 def _register_neighborhood_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_neighborhood")
-    def aletheore_neighborhood(target: str) -> dict:
+    def aletheore_neighborhood(target: str) -> str:
         """A module's imports, dependents, and cluster in one call."""
         evidence = read_evidence(repo_path)
         imports = find_imports(evidence, target)
@@ -95,19 +105,19 @@ def _register_neighborhood_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
             cluster = find_cluster(evidence, target)
         except ModuleNotFoundInEvidenceError:
             cluster = None
-        return {
-            "result": {
+        return _toon_result(
+            {
                 "target": target,
                 "imports": imports,
                 "imported_by": imported_by,
                 "cluster": cluster,
             }
-        }
+        )
 
 
 def _register_search_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search")
-    def aletheore_search(pattern: str, regex: bool = False, path_glob: str | None = None) -> dict:
+    def aletheore_search(pattern: str, regex: bool = False, path_glob: str | None = None) -> str:
         """Deterministic literal or regex search over the repository's source files."""
         compiled = re.compile(pattern) if regex else None
         matches: list[dict] = []
@@ -132,7 +142,7 @@ def _register_search_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
             if truncated:
                 break
 
-        return {"result": {"matches": matches, "truncated": truncated}}
+        return _toon_result({"matches": matches, "truncated": truncated})
 
 
 def _scan_summary(evidence: dict) -> dict:
@@ -173,7 +183,7 @@ def _register_scan_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
         scan_git_history: bool = True,
         check_licenses: bool = True,
         map_endpoints: bool = True,
-    ) -> dict:
+    ) -> str:
         """Run the deterministic Aletheore scanner and save evidence for this repository."""
         evidence = scan_repository(
             repo_path,
@@ -184,18 +194,18 @@ def _register_scan_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
         )
         write_evidence(evidence, repo_path)
         save_snapshot(evidence, repo_path)
-        return {"result": _scan_summary(evidence)}
+        return _toon_result(_scan_summary(evidence))
 
 
 def _register_healthcheck_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_healthcheck")
-    def aletheore_healthcheck(base_url: str) -> dict:
+    def aletheore_healthcheck(base_url: str) -> str:
         """GET-only live health check of mapped API endpoints against a running instance."""
         evidence = read_evidence(repo_path)
         endpoints = evidence["repository"].get("api_endpoints", {}).get("endpoints", [])
         result = run_healthcheck(endpoints, base_url)
         save_healthcheck(result, repo_path)
-        return {"result": result}
+        return _toon_result(result)
 
 
 def build_server(repo_path: Path) -> FastMCP:

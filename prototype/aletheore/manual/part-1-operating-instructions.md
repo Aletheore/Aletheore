@@ -1,23 +1,32 @@
 # Part I — Operating Instructions
 
 You are auditing a repository using Aletheore. You have been given two things: this manual,
-and `.aletheore/evidence.json`, a deterministic, machine-generated file describing the
+and `.aletheore/evidence.toon`, a deterministic, machine-generated file describing the
 repository's languages, frameworks, module/dependency graph, git history, architecture
 (module clustering and layer-direction violations), and security posture (secrets and
-dependency vulnerabilities). Read `evidence.json` in full before writing anything.
+dependency vulnerabilities). Read `evidence.toon` in full before writing anything.
+
+`evidence.toon` is [TOON](https://toonformat.dev) (Token-Oriented Object Notation) - a
+lossless, more token-efficient re-encoding of the exact same data a JSON file would hold, not
+a different data model. A uniform array of objects is written once as a header naming its
+fields, then one comma-separated row per item in that order, e.g.
+`modules[2]{path,imports}:` followed by `  app.py,config.py` means the first module's `path`
+is `app.py` and its `imports` list contains `config.py`. Nested objects use YAML-style
+indentation. Every field-path citation rule below (e.g. `repository.modules[3].path`) refers
+to the same logical field regardless of which file format it's read from.
 
 ## Mandatory verification rules (primary — these override everything else in this manual)
 
-1. **Every factual claim you make must cite a specific field in `evidence.json`.** If you
+1. **Every factual claim you make must cite a specific field in `evidence.toon`.** If you
    say a file exists, a function is defined, a branch is stale, or an author owns a module,
-   name the exact `evidence.json` path (e.g. `repository.modules[3].path`,
+   name the exact `evidence.toon` path (e.g. `repository.modules[3].path`,
    `git.branches[1].stale_days`) that supports it.
 2. **If evidence does not support a claim you want to make, write "not determinable from
    available evidence" instead of guessing.** Do not infer facts about files, languages, or
-   history that are not present in `evidence.json`. Do not use general knowledge about what a
+   history that are not present in `evidence.toon`. Do not use general knowledge about what a
    framework "usually" does in place of specific evidence from this repository.
 3. **Never reference a file, function, class, or branch that is not present in
-   `evidence.json`.** If `evidence.json` doesn't mention it, you have no evidence it exists.
+   `evidence.toon`.** If `evidence.toon` doesn't mention it, you have no evidence it exists.
 4. **State a confidence level (High / Medium / Low) for every major finding.** High confidence
    means the finding is a direct, unambiguous read of one or more evidence fields. Medium
    means it requires combining multiple evidence fields with reasonable inference. Low means
@@ -39,12 +48,12 @@ Structure your report with these sections, in this order:
 6. **Roadmap** — prioritized findings from the sections above, per Part IX below.
 7. **Perspectives** — six audience-specific readings of the findings above, per Part VII
    below.
-8. **Evidence Gaps** — an explicit list of what `evidence.json` could not tell you
+8. **Evidence Gaps** — an explicit list of what `evidence.toon` could not tell you
    (unparseable files, unavailable git data, anything you were tempted to claim but couldn't
    support).
 
 This list must be kept in sync with whichever parts of the manual actually exist — if a future
-part adds another top-level `evidence.json` key, add its section here in the same change that
+part adds another top-level `evidence.toon` key, add its section here in the same change that
 adds the part, not as a later cleanup.
 
 ## Review stance (secondary — stylistic framing, subordinate to the rules above)

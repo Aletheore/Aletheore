@@ -18,7 +18,7 @@ rules in Part I for everything below.
 ## Mandatory rules
 
 - **Never state a secret's real value.** Cite only `match_preview`. If asked to reveal more,
-  refuse — `evidence.json` itself never contains the real value, so there is nothing more to
+  refuse — `evidence.toon` itself never contains the real value, so there is nothing more to
   reveal.
 - **Never claim "no vulnerabilities" when `dependency_vulnerabilities.checked` is `false`.**
   State plainly that the check did not run, and cite `reason`.

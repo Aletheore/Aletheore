@@ -1,11 +1,12 @@
 import json
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from aletheore.cli import main
+from aletheore.cli import _ElapsedTicker, _make_progress_printer, main
 from aletheore.report import (
     AmbiguousAdapterError,
     NoAdapterAvailableError,
@@ -52,7 +53,7 @@ def test_select_adapter_honors_forced_name():
 def test_build_instruction_references_manual_and_evidence():
     instruction = build_instruction(manual_dir="manual")
     assert "manual" in instruction
-    assert ".aletheore/evidence.json" in instruction
+    assert ".aletheore/evidence.toon" in instruction
 
 
 def test_run_reasoning_phase_writes_report(tmp_path):
@@ -108,6 +109,66 @@ def test_main_unknown_command_still_errors(capsys):
     with patch("sys.argv", ["aletheore", "bogus-command"]):
         with pytest.raises(SystemExit):
             main()
+
+
+def test_progress_printer_prints_each_distinct_phase_on_its_own_line(capsys):
+    report = _make_progress_printer(is_tty=False)
+    report("Detecting languages, frameworks, and build tools")
+    report("Building module dependency graph (parsing source with tree-sitter)")
+
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.split("\n") if line]
+    assert len(lines) == 2
+    assert "Detecting languages" in lines[0]
+    assert "Building module dependency graph" in lines[1]
+
+
+def test_progress_printer_overwrites_repeated_license_progress_on_a_tty(capsys):
+    report = _make_progress_printer(is_tty=True)
+    report("Checking dependency licenses: 1/3 (flask)")
+    report("Checking dependency licenses: 2/3 (requests)")
+    report("Done")
+
+    captured = capsys.readouterr()
+    # both license lines share one terminal line via \r, so only two real
+    # newlines appear: one closing out the in-place license line, one from "Done"
+    assert captured.out.count("\n") == 2
+    assert "requests" in captured.out
+    assert "Done" in captured.out
+
+
+def test_progress_printer_prints_every_license_line_when_not_a_tty(capsys):
+    report = _make_progress_printer(is_tty=False)
+    report("Checking dependency licenses: 1/3 (flask)")
+    report("Checking dependency licenses: 2/3 (requests)")
+    report("Done")
+
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.split("\n") if line]
+    assert len(lines) == 3
+    assert "flask" in lines[0]
+    assert "requests" in lines[1]
+    assert "Done" in lines[2]
+
+
+def test_elapsed_ticker_updates_in_place_on_a_tty(capsys):
+    with _ElapsedTicker("Waiting", interval=0.05, is_tty=True):
+        time.sleep(0.12)
+
+    captured = capsys.readouterr()
+    assert "Waiting" in captured.out
+    assert "elapsed" in captured.out
+
+
+def test_elapsed_ticker_prints_start_and_done_once_when_not_a_tty(capsys):
+    with _ElapsedTicker("Waiting", is_tty=False):
+        pass
+
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.split("\n") if line]
+    assert len(lines) == 2
+    assert "Waiting..." in lines[0]
+    assert "done" in lines[1]
 
 
 def test_main_audit_invokes_audit_flow(tmp_path):
@@ -237,6 +298,29 @@ def test_main_dashboard_threads_custom_port(tmp_path):
             exit_code = main()
     assert exit_code == 0
     mock_dashboard.assert_called_once_with(str(tmp_path), 9000)
+
+
+def test_dashboard_refuses_to_start_when_port_already_bound(tmp_path, capsys):
+    import socket
+
+    from aletheore.cli import _dashboard
+
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    taken_port = blocker.getsockname()[1]
+
+    try:
+        with patch("aletheore.cli.webbrowser.open") as mock_open:
+            exit_code = _dashboard(str(tmp_path), taken_port)
+    finally:
+        blocker.close()
+
+    assert exit_code == 1
+    mock_open.assert_not_called()
+    captured = capsys.readouterr()
+    assert "already in use" in captured.out
+    assert "Dashboard running at" not in captured.out
 
 
 def test_main_healthcheck_reports_results(tmp_path, monkeypatch, capsys):

@@ -4,13 +4,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import toon
 from mcp.server.fastmcp.exceptions import ToolError
 
 from aletheore.mcp_server import build_server
 
 
 def tool_result_body(result):
-    return json.loads(result[0].text)
+    return toon.decode(result[0][0].text)
 
 
 def make_repo_with_evidence(tmp_path: Path) -> Path:

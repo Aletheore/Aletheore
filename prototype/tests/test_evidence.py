@@ -60,6 +60,18 @@ def test_write_evidence_creates_aletheore_dir(tmp_path):
     assert loaded["aletheore_version"] == "0.1.0"
 
 
+def test_write_evidence_also_writes_a_toon_copy(tmp_path):
+    import toon
+
+    repo = make_repo(tmp_path)
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+    write_evidence(evidence, repo)
+
+    toon_path = repo / ".aletheore" / "evidence.toon"
+    assert toon_path.exists()
+    assert toon.decode(toon_path.read_text()) == evidence
+
+
 def test_scan_repository_includes_security_block(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -302,3 +314,30 @@ def test_scan_repository_skips_endpoint_mapping_when_disabled(tmp_path):
         "reason": "skipped (--no-map-endpoints)",
         "endpoints": [],
     }
+
+
+def test_scan_repository_reports_progress_through_major_phases(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("x = 1\n")
+
+    messages = []
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_vuln:
+        mock_vuln.return_value = {"checked": True, "reason": None, "findings": []}
+        scan_repository(repo, check_licenses=False, progress=messages.append)
+
+    assert any("module dependency graph" in m for m in messages)
+    assert any("git history" in m for m in messages)
+    assert messages[-1] == "Done"
+
+
+def test_scan_repository_progress_is_optional(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("x = 1\n")
+
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_vuln:
+        mock_vuln.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo, check_licenses=False)
+
+    assert evidence["repository"]["languages"]
