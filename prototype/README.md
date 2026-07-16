@@ -20,6 +20,17 @@ clusters, git ownership and commit cadence, secrets, dependency vulnerabilities,
 convention violations. Every other feature below is built on top of that same evidence and
 never states anything it can't cite back to a specific field in it.
 
+Secrets, git activity, and dependency-vulnerability checks are language-agnostic. The module
+dependency graph (imports, clusters, layer violations) currently understands **Python,
+JavaScript/JSX, TypeScript/TSX, and Go** — other languages are still scanned for secrets/git/
+vulnerabilities, but get no dependency-graph or architecture analysis until a grammar is added
+for them.
+
+Go resolution needs a `go.mod` at the repo root to know the module's own import-path prefix;
+without one, Go imports are left unresolved (same as any import Veridion can't place) rather
+than guessed at. An import is resolved to every non-test `.go` file in its target directory,
+since Go imports whole packages, not individual files.
+
 ## Setup
 
 Not yet on PyPI (the packaging and a tag-triggered publish workflow exist, but nothing has

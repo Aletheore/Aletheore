@@ -14,6 +14,7 @@ EXTENSION_TO_LANGUAGE = {
     ".jsx": "javascript",
     ".ts": "typescript",
     ".tsx": "typescript",
+    ".go": "go",
 }
 
 FRAMEWORK_MARKERS_PY = {

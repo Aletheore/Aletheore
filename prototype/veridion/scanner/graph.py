@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import tree_sitter_go as tsgo
 import tree_sitter_javascript as tsjavascript
 import tree_sitter_python as tspython
 import tree_sitter_typescript as tstypescript
@@ -11,6 +12,7 @@ PY_LANGUAGE = Language(tspython.language())
 JS_LANGUAGE = Language(tsjavascript.language())
 TS_LANGUAGE = Language(tstypescript.language_typescript())
 TSX_LANGUAGE = Language(tstypescript.language_tsx())
+GO_LANGUAGE = Language(tsgo.language())
 
 LANGUAGE_BY_EXTENSION = {
     ".py": ("python", PY_LANGUAGE),
@@ -18,6 +20,7 @@ LANGUAGE_BY_EXTENSION = {
     ".jsx": ("javascript", JS_LANGUAGE),
     ".ts": ("typescript", TS_LANGUAGE),
     ".tsx": ("typescript", TSX_LANGUAGE),
+    ".go": ("go", GO_LANGUAGE),
 }
 
 # Extensions that are recognizable programming languages we don't yet have a grammar
@@ -28,7 +31,7 @@ LANGUAGE_BY_EXTENSION = {
 # from an untracked cache directory before IGNORED_DIRS was widened, none of which
 # were ever "unparseable source").
 KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR = {
-    ".swift", ".go", ".rs", ".java", ".rb", ".c", ".cpp", ".cc", ".h", ".hpp",
+    ".swift", ".rs", ".java", ".rb", ".c", ".cpp", ".cc", ".h", ".hpp",
     ".cs", ".kt", ".kts", ".m", ".mm", ".scala", ".php",
 }
 
@@ -125,6 +128,84 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[str]
     return imports, functions, classes
 
 
+def _extract_go(node: Node, source: bytes) -> tuple[list[str], list[str], list[str]]:
+    """Return raw import path strings, function/method names, and type names."""
+    imports: list[str] = []
+    functions: list[str] = []
+    types: list[str] = []
+
+    def string_content(n: Node) -> str | None:
+        for child in n.children:
+            if child.type == "interpreted_string_literal_content":
+                return source[child.start_byte:child.end_byte].decode()
+        return None
+
+    def walk(n: Node):
+        if n.type == "import_spec":
+            # import_spec is either just a string literal ("fmt") or an alias followed
+            # by one ("svc2 \"pkg/path\"") - the alias identifier itself is never the
+            # thing we resolve, only the string literal's content is a real import path.
+            for child in n.children:
+                if child.type == "interpreted_string_literal":
+                    content = string_content(child)
+                    if content is not None:
+                        imports.append(content)
+        elif n.type in ("function_declaration", "method_declaration"):
+            name_node = n.child_by_field_name("name")
+            if name_node is None:
+                # method_declaration names the method via a field_identifier child
+                # rather than a "name"-labeled field.
+                for child in n.children:
+                    if child.type == "field_identifier":
+                        name_node = child
+                        break
+            if name_node is not None:
+                functions.append(source[name_node.start_byte:name_node.end_byte].decode())
+        elif n.type == "type_spec":
+            name_node = n.child_by_field_name("name")
+            if name_node is not None:
+                types.append(source[name_node.start_byte:name_node.end_byte].decode())
+        for child in n.children:
+            walk(child)
+
+    walk(node)
+    return imports, functions, types
+
+
+def _load_go_module_prefix(repo_path: Path) -> str | None:
+    go_mod = repo_path / "go.mod"
+    if not go_mod.exists():
+        return None
+    for line in go_mod.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if line.startswith("module "):
+            return line[len("module "):].strip()
+    return None
+
+
+def _resolve_go_import(repo_path: Path, module_prefix: str | None, import_path: str) -> list[str]:
+    # Go doesn't import individual files, it imports whole packages (directories) - every
+    # non-test .go file in that directory is part of what gets pulled in, so one import
+    # statement can fan out to several edges. An import that doesn't start with the
+    # module's own declared prefix is external (stdlib or a third-party module) and never
+    # resolves to a local file, matching how an unresolved Python/JS import is silently
+    # dropped rather than treated as an error.
+    if not module_prefix or not import_path.startswith(module_prefix):
+        return []
+
+    remainder = import_path[len(module_prefix):].lstrip("/")
+    package_dir = repo_path if not remainder else repo_path / Path(*remainder.split("/"))
+    if not package_dir.is_dir():
+        return []
+
+    targets = []
+    for candidate in sorted(package_dir.glob("*.go")):
+        if candidate.name.endswith("_test.go"):
+            continue
+        targets.append(_rel(repo_path, candidate))
+    return targets
+
+
 def _resolve_python_module(repo_path: Path, dotted: str, from_file: Path | None = None) -> str | None:
     if not dotted:
         return None
@@ -200,6 +281,7 @@ def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
     unparseable: list[dict] = []
     imported_by_map: dict[str, list[str]] = {}
     edges: list[list[str]] = []
+    go_module_prefix = _load_go_module_prefix(repo_path)
 
     parser = Parser()
 
@@ -243,6 +325,16 @@ def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
                     if target is not None:
                         targets.add(target)
                 for target in sorted(targets):
+                    resolved_imports.append(target)
+                    edges.append([rel_path, target])
+                    imported_by_map.setdefault(target, []).append(rel_path)
+        elif language_name == "go":
+            raw_imports, functions, classes = _extract_go(tree.root_node, source)
+            resolved_imports = []
+            for spec in raw_imports:
+                for target in _resolve_go_import(repo_path, go_module_prefix, spec):
+                    if target == rel_path:
+                        continue
                     resolved_imports.append(target)
                     edges.append([rel_path, target])
                     imported_by_map.setdefault(target, []).append(rel_path)
