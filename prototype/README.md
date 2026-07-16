@@ -22,9 +22,9 @@ never states anything it can't cite back to a specific field in it.
 
 Secrets, git activity, and dependency-vulnerability checks are language-agnostic. The module
 dependency graph (imports, clusters, layer violations) currently understands **Python,
-JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Ruby, and PHP** — other languages are still
-scanned for secrets/git/vulnerabilities, but get no dependency-graph or architecture analysis
-until a grammar is added for them.
+JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Ruby, PHP, C, and C++** — other languages are
+still scanned for secrets/git/vulnerabilities, but get no dependency-graph or architecture
+analysis until a grammar is added for them.
 
 Go resolution needs a `go.mod` at the repo root to know the module's own import-path prefix;
 without one, Go imports are left unresolved (same as any import Veridion can't place) rather
@@ -56,6 +56,13 @@ prefix wins when more than one could match) to resolve `use` statements; with no
 `use` doesn't resolve at all. `require`/`require_once`/`include`/`include_once` (including the
 idiomatic `__DIR__ . '/../lib/util.php'` form) resolve relative to the current file, the same
 as Ruby's `require_relative`.
+
+C/C++ only resolves quoted `#include "foo.h"` (relative to the current file's own directory,
+the only part of the real preprocessor search order knowable without a build system's `-I`
+flags) - angle-bracket `#include <foo.h>` is always treated as external/system, never resolved,
+since a project using `<>` for its own headers via `-I` isn't distinguishable from a real system
+header without that same build info. `.h` is parsed with the C++ grammar (a superset that
+parses valid C too) since header files are ambiguously C-or-C++.
 
 ## Setup
 

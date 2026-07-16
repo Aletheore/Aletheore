@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import tree_sitter_c as tsc
+import tree_sitter_cpp as tscpp
 import tree_sitter_go as tsgo
 import tree_sitter_java as tsjava
 import tree_sitter_javascript as tsjavascript
@@ -22,6 +24,8 @@ RUST_LANGUAGE = Language(tsrust.language())
 JAVA_LANGUAGE = Language(tsjava.language())
 RUBY_LANGUAGE = Language(tsruby.language())
 PHP_LANGUAGE = Language(tsphp.language_php())
+C_LANGUAGE = Language(tsc.language())
+CPP_LANGUAGE = Language(tscpp.language())
 
 LANGUAGE_BY_EXTENSION = {
     ".py": ("python", PY_LANGUAGE),
@@ -34,6 +38,13 @@ LANGUAGE_BY_EXTENSION = {
     ".java": ("java", JAVA_LANGUAGE),
     ".rb": ("ruby", RUBY_LANGUAGE),
     ".php": ("php", PHP_LANGUAGE),
+    ".c": ("c", C_LANGUAGE),
+    # Headers are ambiguous C-or-C++; the C++ grammar (a superset) parses valid C
+    # too, so .h is treated as C++ rather than needing its own heuristic.
+    ".h": ("cpp", CPP_LANGUAGE),
+    ".hpp": ("cpp", CPP_LANGUAGE),
+    ".cpp": ("cpp", CPP_LANGUAGE),
+    ".cc": ("cpp", CPP_LANGUAGE),
 }
 
 # Extensions that are recognizable programming languages we don't yet have a grammar
@@ -44,7 +55,7 @@ LANGUAGE_BY_EXTENSION = {
 # from an untracked cache directory before IGNORED_DIRS was widened, none of which
 # were ever "unparseable source").
 KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR = {
-    ".swift", ".c", ".cpp", ".cc", ".h", ".hpp",
+    ".swift",
     ".cs", ".kt", ".kts", ".m", ".mm", ".scala",
 }
 
@@ -688,6 +699,86 @@ def _resolve_php_include(from_file: Path, spec: str) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[str], list[str]]:
+    """Return quoted #include paths (angle-bracket ones are never resolvable, so
+    they're dropped here rather than carried through and rejected later), function
+    names, and type names (struct/class/union/enum)."""
+    imports: list[str] = []
+    functions: list[str] = []
+    types: list[str] = []
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode()
+
+    def function_name(declarator: Node) -> str | None:
+        # The name-bearing function_declarator can be wrapped in pointer_declarator
+        # (a pointer return type), reference_declarator, etc. - search for it rather
+        # than assuming a fixed nesting depth.
+        if declarator.type == "function_declarator":
+            for child in declarator.children:
+                if child.type in ("identifier", "field_identifier"):
+                    return text(child)
+                if child.type == "qualified_identifier":
+                    # Out-of-class definition ("Logger::info(...)") - the class
+                    # qualifier is a namespace_identifier/type_identifier (already
+                    # captured separately as a type), only the final plain
+                    # "identifier" segment is the actual method name.
+                    for grandchild in child.children:
+                        if grandchild.type == "identifier":
+                            return text(grandchild)
+            return None
+        for child in declarator.children:
+            found = function_name(child)
+            if found is not None:
+                return found
+        return None
+
+    def walk(n: Node):
+        if n.type == "preproc_include":
+            for child in n.children:
+                if child.type == "string_literal":
+                    for grandchild in child.children:
+                        if grandchild.type == "string_content":
+                            imports.append(text(grandchild))
+                    break
+                # system_lib_string (<foo.h>) is deliberately not collected at all -
+                # always external by convention, never resolvable without knowing a
+                # build system's own -I search paths.
+        elif n.type == "function_definition":
+            declarator_node = n.child_by_field_name("declarator")
+            if declarator_node is not None:
+                name = function_name(declarator_node)
+                if name is not None:
+                    functions.append(name)
+        elif n.type in ("struct_specifier", "class_specifier", "union_specifier", "enum_specifier"):
+            # A forward declaration ("struct Foo;") or a plain type reference
+            # ("struct Foo* getFoo();") matches this node type too, with no body -
+            # only count it as a type genuinely defined in this file when it
+            # actually has one (verified this distinction is real: both of those
+            # produce the same struct_specifier node type with no
+            # field_declaration_list child, confirmed directly rather than assumed).
+            has_body = any(
+                c.type in ("field_declaration_list", "enumerator_list") for c in n.children
+            )
+            name_node = n.child_by_field_name("name")
+            if name_node is not None and has_body:
+                types.append(text(name_node))
+        for child in n.children:
+            walk(child)
+
+    walk(node)
+    return imports, functions, types
+
+
+def _resolve_c_include(from_file: Path, spec: str) -> Path | None:
+    # A quoted #include's default search order tries the current file's own
+    # directory first - the only part of that order knowable without a build
+    # system's -I flags, and the one that covers the overwhelming majority of real
+    # local includes.
+    candidate = (from_file.parent / spec).resolve()
+    return candidate if candidate.is_file() else None
+
+
 def _resolve_python_module(repo_path: Path, dotted: str, from_file: Path | None = None) -> str | None:
     if not dotted:
         return None
@@ -884,6 +975,17 @@ def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
                     if kind == "use"
                     else _resolve_php_include(path, spec)
                 )
+                if target_path is not None:
+                    target = _rel(repo_path, target_path)
+                    if target != rel_path:
+                        resolved_imports.append(target)
+                        edges.append([rel_path, target])
+                        imported_by_map.setdefault(target, []).append(rel_path)
+        elif language_name in ("c", "cpp"):
+            raw_imports, functions, classes = _extract_c_family(tree.root_node, source)
+            resolved_imports = []
+            for spec in raw_imports:
+                target_path = _resolve_c_include(path, spec)
                 if target_path is not None:
                     target = _rel(repo_path, target_path)
                     if target != rel_path:
