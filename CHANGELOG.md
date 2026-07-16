@@ -22,6 +22,11 @@ Notable changes to Veridion, by release. The working code lives in `prototype/` 
   handling, respectively), verified against real compiled/executed code in each language
   (`cargo build`, `javac`, `ruby`, `php`, `clang++`, `dotnet run`) rather than hand-written
   fixtures alone.
+- Added dependency license checking, alongside secrets/vulnerabilities: every pinned PyPI/npm
+  dependency's registry-declared license is categorized as permissive, copyleft-weak, or
+  copyleft-strong, with only non-permissive ones surfaced as findings. Also detects the repo's
+  own declared license. New `veridion query licenses` / `veridion_licenses` MCP tool (14 tools,
+  up from 13), `--no-check-licenses` flag on `scan`/`audit`.
 
 ## 0.1.1 — 2026-07-16
 
