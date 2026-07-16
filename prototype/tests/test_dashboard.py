@@ -207,7 +207,7 @@ def test_api_graph_returns_shape(tmp_path):
     assert set(body.keys()) == {"nodes", "edges", "clusters"}
 
 
-def test_api_mcp_tools_returns_14_tools(tmp_path):
+def test_api_mcp_tools_returns_16_tools(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     app = build_app(repo)
     client = TestClient(app)
@@ -216,10 +216,12 @@ def test_api_mcp_tools_returns_14_tools(tmp_path):
 
     assert response.status_code == 200
     tools = response.json()
-    assert len(tools) == 14
+    assert len(tools) == 16
     names = {t["name"] for t in tools}
     assert "veridion_scan" in names
     assert "veridion_search" in names
+    assert "veridion_endpoints" in names
+    assert "veridion_healthcheck" in names
 
 
 def test_logo_route_serves_the_bundled_png(tmp_path):
