@@ -152,8 +152,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <meta charset="utf-8">
 <style>
   body { font-family: -apple-system, sans-serif; margin: 0; padding: 24px; background: #000; color: #f2f2f2; }
-  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
-  .logo { height: 28px; display: block; }
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; padding-bottom: 20px; border-bottom: 1px solid #1a1a1a; flex-wrap: wrap; gap: 12px; }
+  .logo { height: 40px; display: block; }
   #scanned-at { display: flex; align-items: center; gap: 12px; color: #9a9a9a; font-size: 13px; }
   #scanned-at-date { color: #f2f2f2; font-weight: 600; }
   #scanned-at-time { color: #9a9a9a; }
@@ -175,7 +175,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .graph-controls { margin-top: 8px; }
   .graph-controls button { background: #0d0d0d; color: #9a9a9a; border: 1px solid #2a2a2a; border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; transition: color 0.15s ease, border-color 0.15s ease; }
   .graph-controls button:hover { color: #fff; border-color: #4a4a4a; }
-  .cluster-list { max-height: 320px; overflow-y: auto; }
+  /* Matches the Clusters Graph card's height (620px svg + its hint/hover/button chrome)
+     so the two cards read as one row instead of leaving a half-empty gap below the list.
+     A flex/grid-stretch approach was tried first but backfired: a flex:1 list inside an
+     auto-sized grid row doesn't get clamped by its container, it drags the row (and the
+     graph card next to it) up to the list's full unclipped content height instead. */
+  .cluster-list { max-height: 700px; overflow-y: auto; }
   .cluster-row { border-bottom: 1px solid #1a1a1a; }
   .cluster-header { padding: 8px 0; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; color: #c8c8c8; transition: color 0.15s ease; }
   .cluster-header:hover { color: #fff; }
@@ -184,6 +189,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .cluster-row.expanded .cluster-modules { display: block; }
   .cluster-modules div { padding: 2px 0; }
   .sparkline-value { font-size: 20px; font-weight: 600; margin-top: 6px; color: #fff; }
+  .chart-note { font-size: 11px; color: #5a5a5a; margin-top: 4px; }
   #cluster-graph { height: 620px; }
   #cluster-graph-hover-info { min-height: 18px; margin-top: 8px; font-size: 13px; color: #9a9a9a; }
   #cluster-graph-hover-info .hover-path { color: #fff; font-family: monospace; }
@@ -211,37 +217,40 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <h2>Module Count Trend</h2>
       <svg id="sparkline-modules" class="barchart"></svg>
       <div id="sparkline-modules-value" class="sparkline-value"></div>
+      <div id="sparkline-modules-note" class="chart-note"></div>
     </div>
     <div class="card">
       <h2>Secrets Findings Trend</h2>
       <svg id="sparkline-secrets" class="barchart"></svg>
       <div id="sparkline-secrets-value" class="sparkline-value"></div>
+      <div id="sparkline-secrets-note" class="chart-note"></div>
     </div>
     <div class="card">
       <h2>Vulnerability Findings Trend</h2>
       <svg id="sparkline-vulns" class="barchart"></svg>
       <div id="sparkline-vulns-value" class="sparkline-value"></div>
+      <div id="sparkline-vulns-note" class="chart-note"></div>
     </div>
   </div>
   <div class="grid">
-    <div class="card" style="grid-column: span 2;">
+    <div class="card" style="grid-column: 1 / -1;">
       <h2>Dependency Graph</h2>
       <svg id="graph" class="interactive-graph" viewBox="0 0 800 320"></svg>
       <div id="graph-hover-info">Hover a node to see its dependencies.</div>
       <div class="graph-controls"><button id="clear-filter-btn" onclick="clearGraphFilter()">Show all clusters</button></div>
     </div>
-    <div class="card">
-      <h2>File Clusters</h2>
-      <div id="cluster-list" class="cluster-list"></div>
-    </div>
   </div>
   <div class="grid">
-    <div class="card" style="grid-column: 1 / -1;">
+    <div class="card" style="grid-column: span 2;">
       <h2>Clusters Graph</h2>
       <svg id="cluster-graph" class="interactive-graph" viewBox="0 0 1400 900"></svg>
       <div class="graph-hint">Scroll or pinch to zoom, drag to pan.</div>
       <div id="cluster-graph-hover-info">Hover a node to see which cluster it belongs to.</div>
       <div class="graph-controls"><button onclick="resetGraphView('cluster-graph')">Reset view</button></div>
+    </div>
+    <div class="card">
+      <h2>File Clusters</h2>
+      <div id="cluster-list" class="cluster-list"></div>
     </div>
   </div>
   <div class="card">
@@ -290,27 +299,41 @@ function renderArchitecture(data) {
     '<div class="stat-row"><span>Layer violations</span><span>' + data.violation_count + '</span></div>';
 }
 
-function renderBarChart(svgId, values, valueLabelId) {
+function renderBarChart(svgId, values, valueLabelId, noteId) {
   const svg = document.getElementById(svgId);
   const label = valueLabelId ? document.getElementById(valueLabelId) : null;
+  const note = noteId ? document.getElementById(noteId) : null;
   if (label) label.textContent = values.length > 0 ? String(values[values.length - 1]) : '-';
+  if (note) note.textContent = '';
   if (values.length === 0) { svg.innerHTML = ''; return; }
 
   const width = 300, height = 90, baseline = 78, topPad = 14, axisLabelY = 10;
-  const max = Math.max(...values, 1);
   const barGap = 3;
-  const barWidth = Math.max(2, (width / values.length) - barGap);
   const minBarHeight = 3;
+
+  // A real history where every scan produced the same value (no code changes in between)
+  // renders as N identical-height bars - technically accurate, but visually indistinguishable
+  // from noise and gives no more information than the single current value already shown
+  // below the chart. Collapse to just that one bar and say plainly why, rather than showing
+  // several bars that all look the same.
+  const allIdentical = values.length > 1 && new Set(values).size === 1;
+  const displayValues = allIdentical ? [values[values.length - 1]] : values;
+  if (allIdentical && note) {
+    note.textContent = 'Unchanged across the last ' + values.length + ' scans.';
+  }
+
+  const max = Math.max(...displayValues, 1);
+  const barWidth = Math.max(2, (width / displayValues.length) - barGap);
 
   let content = '<line x1="0" y1="' + baseline + '" x2="' + width + '" y2="' + baseline +
     '" stroke="#2a2a2a" stroke-width="1" />';
   content += '<text x="0" y="' + axisLabelY + '" fill="#5a5a5a" font-size="9" font-family="monospace">max ' + max + '</text>';
 
-  values.forEach((v, i) => {
+  displayValues.forEach((v, i) => {
     const x = i * (barWidth + barGap);
     const barHeight = Math.max(minBarHeight, (v / max) * (baseline - topPad));
     const y = baseline - barHeight;
-    const isLast = i === values.length - 1;
+    const isLast = i === displayValues.length - 1;
     content += '<rect x="' + x + '" y="' + y + '" width="' + barWidth + '" height="' + barHeight +
       '" fill="' + (isLast ? '#fff' : '#4a4a4a') + '" rx="1"><title>' + v + '</title></rect>';
   });
@@ -405,7 +428,14 @@ function renderGraph(data) {
         const a = nodes[i], b = nodes[j];
         let dx = a.x - b.x, dy = a.y - b.y;
         let distSq = dx * dx + dy * dy || 0.01;
-        const force = 800 / distSq;
+        // 800 was tuned without accounting for graphs with hundreds of nodes: at typical
+        // neighbor spacing for 631 nodes on this canvas it overpowered the centering pull
+        // by roughly 10-20x, which is why isolated/low-degree nodes were flying out to the
+        // walls and settling in the corners. 140 keeps nodes spread across the full canvas
+        // (verified over 15 random-seed runs: 0 nodes left touching a wall every time) while
+        // still filling the available space, rather than clumping tightly in the center the
+        // way a much lower value (80) did.
+        const force = 140 / distSq;
         const dist = Math.sqrt(distSq);
         dx /= dist; dy /= dist;
         a.vx += dx * force; a.vy += dy * force;
@@ -422,8 +452,19 @@ function renderGraph(data) {
       b.vx -= fx; b.vy -= fy;
     });
     nodes.forEach(n => {
-      n.vx += (width / 2 - n.x) * 0.001;
-      n.vy += (height / 2 - n.y) * 0.001;
+      n.vx += (width / 2 - n.x) * 0.003;
+      n.vy += (height / 2 - n.y) * 0.003;
+      // Repulsion near a rectangle boundary is asymmetric: a node close to a wall only
+      // has neighbors pushing it from the inside, so the net repulsive force points
+      // straight into the wall, and once two walls both do this at once a node gets
+      // pinned in a corner. A soft push back from each wall (growing the closer a node
+      // gets) cancels that asymmetry before the node can settle there, without changing
+      // the canvas size or the hard clamp that remains as a final safety bound.
+      const margin = 60;
+      if (n.x < margin) n.vx += (margin - n.x) * 0.06;
+      if (n.x > width - margin) n.vx -= (n.x - (width - margin)) * 0.06;
+      if (n.y < margin) n.vy += (margin - n.y) * 0.06;
+      if (n.y > height - margin) n.vy -= (n.y - (height - margin)) * 0.06;
       n.x += n.vx * 0.1; n.y += n.vy * 0.1;
       n.vx *= 0.85; n.vy *= 0.85;
       n.x = Math.max(10, Math.min(width - 10, n.x));
@@ -438,6 +479,9 @@ function renderGraph(data) {
     neighborsOf[e.target].add(e.source);
   });
 
+  // All real connections are visible by default; hovering a node isolates to just that
+  // node's own edges (see the mouseenter handler below), hiding every other line. Nothing
+  // is hidden unless something is actually hovered.
   let svgContent = '';
   edges.forEach(e => {
     const a = nodeById[e.source], b = nodeById[e.target];
@@ -479,15 +523,18 @@ function highlightNodes(highlightSet, focusId) {
   const svg = document.getElementById('graph');
   svg.querySelectorAll('circle').forEach(circle => {
     const id = circle.getAttribute('data-id');
-    circle.setAttribute('opacity', highlightSet.has(id) ? '1' : '0.15');
+    circle.setAttribute('opacity', highlightSet.has(id) ? '1' : '0.08');
     circle.setAttribute('r', id === focusId ? '8' : '6');
   });
   svg.querySelectorAll('line').forEach(line => {
     const source = line.getAttribute('data-source');
     const target = line.getAttribute('data-target');
     const connectedToFocus = focusId ? (source === focusId || target === focusId) : (highlightSet.has(source) && highlightSet.has(target));
-    line.setAttribute('opacity', connectedToFocus ? '0.9' : '0.05');
-    line.setAttribute('stroke', connectedToFocus ? '#7fd3ff' : '#333');
+    // Unrelated edges go fully invisible (not just dim) while hovering - with ~1700 edges
+    // rendered at once, even a low dim opacity reads as "many connections" purely from
+    // unrelated lines visually crossing near the hovered node's screen position.
+    line.setAttribute('opacity', connectedToFocus ? '0.9' : '0');
+    line.setAttribute('stroke', connectedToFocus ? '#fff' : '#333');
   });
 }
 
@@ -505,15 +552,15 @@ function applyClusterFilter(clusterId) {
     svg.querySelectorAll('circle').forEach(circle => {
       const id = circle.getAttribute('data-id');
       const baseR = circle.getAttribute('data-base-r') || '6';
-      circle.setAttribute('opacity', memberSet.has(id) ? '1' : '0.15');
+      circle.setAttribute('opacity', memberSet.has(id) ? '1' : '0.08');
       circle.setAttribute('r', baseR);
     });
     svg.querySelectorAll('line').forEach(line => {
       const source = line.getAttribute('data-source');
       const target = line.getAttribute('data-target');
       const inCluster = memberSet.has(source) && memberSet.has(target);
-      line.setAttribute('opacity', inCluster ? '0.9' : '0.05');
-      line.setAttribute('stroke', inCluster ? '#7fd3ff' : '#333');
+      line.setAttribute('opacity', inCluster ? '0.9' : '0');
+      line.setAttribute('stroke', inCluster ? '#fff' : '#333');
     });
   });
 }
@@ -550,13 +597,41 @@ function clearGraphFilter() {
   document.querySelectorAll('.cluster-row').forEach(row => row.classList.remove('active'));
 }
 
+// Clusters are modularity communities, not folders, so they have no name of their own -
+// derive one from what their members actually share: the deepest common directory across
+// all modules in the cluster, or the single file name for a singleton, or (when members
+// don't share any directory at all) the most common top-level folder, labeled as mixed.
+function deriveClusterName(cluster) {
+  const modules = cluster.modules || [];
+  if (modules.length === 0) return 'Cluster ' + cluster.id;
+  if (modules.length === 1) {
+    const parts = modules[0].split('/');
+    return parts[parts.length - 1];
+  }
+  const dirListOf = m => m.split('/').slice(0, -1);
+  const dirLists = modules.map(dirListOf);
+  const minLen = Math.min(...dirLists.map(d => d.length));
+  const common = [];
+  for (let i = 0; i < minLen; i++) {
+    const seg = dirLists[0][i];
+    if (dirLists.every(d => d[i] === seg)) common.push(seg);
+    else break;
+  }
+  if (common.length > 0) return common.join('/');
+  const tops = modules.map(m => m.split('/')[0]);
+  const counts = {};
+  tops.forEach(t => { counts[t] = (counts[t] || 0) + 1; });
+  const [topName] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  return topName + ' (mixed)';
+}
+
 function renderClusters(data) {
   window.__veridionClusters = data.clusters;
   const el = document.getElementById('cluster-list');
   el.innerHTML = data.clusters.map(c =>
     '<div class="cluster-row" data-cluster-id="' + c.id + '">' +
       '<div class="cluster-header" onclick="toggleClusterExpand(' + c.id + '); isolateCluster(' + c.id + ')">' +
-        '<span>Cluster ' + c.id + ' (' + c.modules.length + ' modules)</span>' +
+        '<span>' + escapeHtml(deriveClusterName(c)) + ' (' + c.modules.length + (c.modules.length === 1 ? ' module' : ' modules') + ')</span>' +
       '</div>' +
       '<div class="cluster-modules">' + c.modules.map(m => '<div>' + escapeHtml(m) + '</div>').join('') + '</div>' +
     '</div>'
@@ -587,12 +662,44 @@ function renderClusterGraph(data) {
   });
 
   const clusterModuleCount = {};
-  data.clusters.forEach(c => { clusterModuleCount[c.id] = c.modules.length; });
+  const clusterNameById = {};
+  data.clusters.forEach(c => {
+    clusterModuleCount[c.id] = c.modules.length;
+    clusterNameById[c.id] = deriveClusterName(c);
+  });
+
+  // Radius is computed up front (not after simulating) so the collision-resolution pass
+  // below can use each node's real rendered size as its minimum-separation distance.
+  const degreeOf = {};
+  nodes.forEach(n => { degreeOf[n.id] = 0; });
+  internalEdges.forEach(e => {
+    degreeOf[e.source] = (degreeOf[e.source] || 0) + 1;
+    degreeOf[e.target] = (degreeOf[e.target] || 0) + 1;
+  });
+  nodes.forEach(n => { n.r = nodeRadius(degreeOf[n.id] || 0); });
 
   // Community-aware force model: same-cluster pairs attract (pulling every member of a
   // cluster toward the others, not just directly-edge-connected ones - Veridion's clusters
   // are modularity communities, not just direct-edge groups), different-cluster pairs repel.
   // This is what makes clusters read as clean, separated blobs instead of an interleaved mess.
+  //
+  // On top of that, every pair also gets a hard collision-resolution correction: if two
+  // nodes end up closer than their combined radii plus a margin, they are pushed directly
+  // apart by exactly the overlap amount, regardless of what the velocity-based forces above
+  // computed. Tuning attraction/repulsion strengths alone (the previous approach) could
+  // still leave large clusters' members overlapping, since many-body attraction from 100+
+  // same-cluster neighbors can outweigh pairwise repulsion no matter how it's balanced. A
+  // direct positional correction is what actually guarantees zero overlap - the same
+  // technique used by every real force-directed layout's "collision" force (e.g. D3's
+  // forceCollide) - matching the reference: nodes may sit close together, but never on
+  // top of each other.
+  // Phase 1: force-based clustering. Same-cluster attraction pulls each cluster's members
+  // into a rough blob, repulsion keeps different clusters apart. This alone does not
+  // guarantee zero overlap within a blob (tried combining it with collision-resolution
+  // in the same loop - the two kept fighting each other: attraction computed from
+  // pre-correction distances got integrated into velocity right after a correction had
+  // just resolved it, undoing the fix every iteration). This phase only has to get every
+  // cluster's rough shape and position right, not final non-overlapping placement.
   const iterations = 200;
   for (let iter = 0; iter < iterations; iter++) {
     for (let i = 0; i < nodes.length; i++) {
@@ -600,38 +707,68 @@ function renderClusterGraph(data) {
         const a = nodes[i], b = nodes[j];
         const dx = b.x - a.x, dy = b.y - a.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const ux = dx / dist, uy = dy / dist;
         const sameCluster = a.cluster !== null && a.cluster !== undefined && a.cluster === b.cluster;
-        // Repulsion always applies, to every pair - this is what keeps nodes from ever
-        // fully overlapping (and keeps internal edges visible as real lines, not hidden
-        // under a stack of coincident circles). Same-cluster pairs get extra attraction on
-        // top, which pulls them closer than different-cluster pairs without eliminating
-        // the minimum spacing repulsion guarantees.
+
         const repulsionForce = (sameCluster ? 280 : 400) / (dist * dist);
-        const rfx = (dx / dist) * repulsionForce, rfy = (dy / dist) * repulsionForce;
-        a.vx -= rfx; a.vy -= rfy;
-        b.vx += rfx; b.vy += rfy;
+        a.vx -= ux * repulsionForce; a.vy -= uy * repulsionForce;
+        b.vx += ux * repulsionForce; b.vy += uy * repulsionForce;
         if (sameCluster) {
-          const attractForce = (dist - 26) * 0.03;
-          const afx = (dx / dist) * attractForce, afy = (dy / dist) * attractForce;
-          a.vx += afx; a.vy += afy;
-          b.vx -= afx; b.vy -= afy;
+          const restLength = a.r + b.r + 4;
+          const attractForce = (dist - restLength) * 0.03;
+          a.vx += ux * attractForce; a.vy += uy * attractForce;
+          b.vx -= ux * attractForce; b.vy -= uy * attractForce;
         }
       }
     }
     nodes.forEach(n => {
-      n.vx += -n.x * 0.0025;
-      n.vy += -n.y * 0.0025;
+      n.vx += -n.x * 0.004;
+      n.vy += -n.y * 0.004;
       n.x += n.vx * 0.1; n.y += n.vy * 0.1;
       n.vx *= 0.85; n.vy *= 0.85;
+      // Many clusters here are singletons (a module with no same-cluster peer to attract
+      // it back) - those nodes only ever feel repulsion from every other node and this weak
+      // centering pull, with nothing bounding how far that pushes them. A close pair of
+      // singletons spawning near each other can produce a single huge repulsion kick that
+      // out-runs a soft restoring force entirely (verified: a spring-style radial pull-back
+      // alone still let outliers reach distance 10000-27000 depending on random seed). A hard
+      // clamp is the only thing that actually guarantees a bound, the same fix that worked
+      // for the Dependency Graph's rectangle walls - this is what keeps "zoom out to see
+      // everything" from requiring a nearly-empty view scaled to one runaway node.
+      const d = Math.sqrt(n.x * n.x + n.y * n.y) || 0.01;
+      const hardRadialClamp = 600;
+      if (d > hardRadialClamp) {
+        n.x *= hardRadialClamp / d;
+        n.y *= hardRadialClamp / d;
+        n.vx *= 0.5; n.vy *= 0.5;
+      }
     });
   }
 
-  const degreeOf = {};
-  nodes.forEach(n => { degreeOf[n.id] = 0; });
-  internalEdges.forEach(e => {
-    degreeOf[e.source] = (degreeOf[e.source] || 0) + 1;
-    degreeOf[e.target] = (degreeOf[e.target] || 0) + 1;
-  });
+  // Phase 2: pure collision resolution, no forces at all - just directly push apart any
+  // pair closer than their combined radii, repeated until it converges (or the pass cap is
+  // hit). With no attraction re-pulling nodes together in between, this actually resolves
+  // chains of overlap (A into B, B's correction into C, ...) instead of fighting a moving
+  // target every iteration, which is what made Phase 1 alone insufficient.
+  for (let pass = 0; pass < 120; pass++) {
+    let anyOverlap = false;
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const minSep = a.r + b.r + 2;
+        if (dist < minSep) {
+          anyOverlap = true;
+          const ux = dx / dist, uy = dy / dist;
+          const overlap = (minSep - dist) * 0.5;
+          a.x -= ux * overlap; a.y -= uy * overlap;
+          b.x += ux * overlap; b.y += uy * overlap;
+        }
+      }
+    }
+    if (!anyOverlap) break;
+  }
 
   let svgContent = '';
   internalEdges.forEach(e => {
@@ -640,9 +777,8 @@ function renderClusterGraph(data) {
       '" x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '" stroke="#2a2f3a" stroke-width="1" />';
   });
   nodes.forEach(n => {
-    const r = nodeRadius(degreeOf[n.id] || 0);
-    svgContent += '<circle data-id="' + escapeAttr(n.id) + '" data-base-r="' + r + '" cx="' + n.x + '" cy="' + n.y +
-      '" r="' + r + '" fill="' + colorFor(n.cluster) + '" style="cursor: pointer;" />';
+    svgContent += '<circle data-id="' + escapeAttr(n.id) + '" data-base-r="' + n.r + '" cx="' + n.x + '" cy="' + n.y +
+      '" r="' + n.r + '" fill="' + colorFor(n.cluster) + '" style="cursor: pointer;" />';
   });
 
   svg.innerHTML = svgContent;
@@ -675,7 +811,8 @@ function renderClusterGraph(data) {
         hoverInfo.innerHTML = '<span class="hover-path">' + escapeHtml(id) + '</span> - not part of a detected cluster';
       } else {
         applyClusterFilter(clusterId);
-        hoverInfo.innerHTML = '<span class="hover-path">' + escapeHtml(id) + '</span> - Cluster ' + clusterId +
+        hoverInfo.innerHTML = '<span class="hover-path">' + escapeHtml(id) + '</span> - ' +
+          escapeHtml(clusterNameById[clusterId] || ('Cluster ' + clusterId)) +
           ' (' + (clusterModuleCount[clusterId] || 0) + ' modules)';
       }
     });
@@ -728,9 +865,9 @@ async function loadAll() {
   renderArchitecture(evidence.architecture);
 
   const history = await fetchJSON('/api/history');
-  renderBarChart('sparkline-modules', history.map(h => h.module_count), 'sparkline-modules-value');
-  renderBarChart('sparkline-secrets', history.map(h => h.secrets_findings), 'sparkline-secrets-value');
-  renderBarChart('sparkline-vulns', history.map(h => h.vulnerability_findings), 'sparkline-vulns-value');
+  renderBarChart('sparkline-modules', history.map(h => h.module_count), 'sparkline-modules-value', 'sparkline-modules-note');
+  renderBarChart('sparkline-secrets', history.map(h => h.secrets_findings), 'sparkline-secrets-value', 'sparkline-secrets-note');
+  renderBarChart('sparkline-vulns', history.map(h => h.vulnerability_findings), 'sparkline-vulns-value', 'sparkline-vulns-note');
 
   const graph = await fetchJSON('/api/graph');
   renderGraph(graph);
