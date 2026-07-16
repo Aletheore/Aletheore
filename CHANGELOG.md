@@ -5,12 +5,23 @@ Notable changes to Veridion, by release. The working code lives in `prototype/` 
 
 ## Unreleased
 
-- Added `.github/workflows/tests.yml` — the test suite (182 tests) now actually runs in CI on
-  every push/PR, across Python 3.11 and 3.12. Previously nothing ran it automatically.
+- Added `.github/workflows/tests.yml` — the test suite now actually runs in CI on every
+  push/PR, across Python 3.11 and 3.12. Previously nothing ran it automatically.
 - Added real PyPI packaging (full metadata in `prototype/pyproject.toml`) and
   `.github/workflows/publish-pypi.yml`, which publishes via trusted publishing whenever a
   GitHub Release is published. Not live yet — needs the PyPI-side trusted-publisher
   registration first.
+- Added a secrets baseline: `.veridion.json`'s new `accepted_secrets` key lets a known,
+  reviewed finding (e.g. a fake key in a test fixture) stop blocking `--fail-on-new-secrets`
+  permanently, without hiding it from evidence, queries, the dashboard, or the PR comment.
+- The module dependency graph now understands seven new languages beyond the original
+  Python/JavaScript/TypeScript: **Go**, **Rust**, **Java**, **Ruby**, **PHP**, **C/C++**, and
+  **C#** — each with its own import-resolution model (package-directory fan-out, `crate`/
+  `self`/`super` path walking, per-file source-root inference, `require`/`require_relative`,
+  PSR-4 autoloading, quoted `#include`, and namespace-directory fan-out with `RootNamespace`
+  handling, respectively), verified against real compiled/executed code in each language
+  (`cargo build`, `javac`, `ruby`, `php`, `clang++`, `dotnet run`) rather than hand-written
+  fixtures alone.
 
 ## 0.1.1 — 2026-07-16
 
