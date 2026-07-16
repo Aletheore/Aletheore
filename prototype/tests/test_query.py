@@ -6,6 +6,7 @@ from veridion.query import (
     ModuleNotFoundInEvidenceError,
     find_branch,
     find_cluster,
+    find_endpoints,
     find_imported_by,
     find_imports,
     find_layer_violations,
@@ -33,7 +34,21 @@ def make_evidence():
                     "imported_by": ["app/auth.py"],
                     "symbols": {"functions": ["load"], "classes": []},
                 },
-            ]
+            ],
+            "api_endpoints": {
+                "checked": True,
+                "endpoints": [
+                    {
+                        "method": "GET",
+                        "path": "/users",
+                        "framework": "flask",
+                        "file": "app.py",
+                        "line": 1,
+                        "handler": "list_users",
+                        "unresolved": False,
+                    }
+                ],
+            },
         },
         "git": {
             "branches": [
@@ -132,6 +147,11 @@ def test_find_licenses_returns_the_whole_block_ignoring_target():
     assert result == make_evidence()["security"]["dependency_licenses"]
 
 
+def test_find_endpoints_returns_the_whole_block_ignoring_target():
+    result = find_endpoints(make_evidence(), None)
+    assert result == make_evidence()["repository"]["api_endpoints"]
+
+
 def test_find_cluster_returns_the_cluster_containing_the_file():
     result = find_cluster(make_evidence(), "app/config.py")
     assert result["id"] == 0
@@ -148,7 +168,7 @@ def test_find_layer_violations_returns_the_whole_block_ignoring_target():
     assert result == make_evidence()["architecture"]["layer_violations"]
 
 
-def test_query_functions_registry_has_all_ten_kinds_with_correct_requires_target():
+def test_query_functions_registry_has_all_eleven_kinds_with_correct_requires_target():
     expected = {
         "imports": True,
         "imported-by": True,
@@ -158,6 +178,7 @@ def test_query_functions_registry_has_all_ten_kinds_with_correct_requires_target
         "secrets": True,
         "vulnerabilities": False,
         "licenses": False,
+        "endpoints": False,
         "cluster": True,
         "layer-violations": False,
     }

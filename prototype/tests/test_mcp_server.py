@@ -37,6 +37,7 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
                 },
             ],
             "dependency_graph": {"nodes": ["a.py", "b.py"], "edges": [["a.py", "b.py"]]},
+            "api_endpoints": {"checked": True, "endpoints": []},
         },
         "git": {
             "branches": [{"name": "main", "ahead_of_main": 0}],
@@ -62,7 +63,7 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
 
 
 @pytest.mark.asyncio
-async def test_build_server_registers_all_11_wrapper_tools(tmp_path):
+async def test_build_server_registers_expected_tools(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo)
 
@@ -78,11 +79,16 @@ async def test_build_server_registers_all_11_wrapper_tools(tmp_path):
         "veridion_secrets",
         "veridion_vulnerabilities",
         "veridion_licenses",
+        "veridion_endpoints",
         "veridion_cluster",
         "veridion_layer_violations",
         "veridion_changes",
+        "veridion_neighborhood",
+        "veridion_search",
+        "veridion_scan",
     }
     assert expected.issubset(names)
+    assert len(names) == 15
 
 
 @pytest.mark.asyncio
