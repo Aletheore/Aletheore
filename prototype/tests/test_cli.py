@@ -105,7 +105,7 @@ def test_main_audit_invokes_audit_flow(tmp_path):
         with patch("veridion.cli._audit", return_value=0) as mock_audit:
             exit_code = main()
     assert exit_code == 0
-    mock_audit.assert_called_once_with(str(tmp_path), "claude", True, True, True)
+    mock_audit.assert_called_once_with(str(tmp_path), "claude", True, True, True, True)
 
 
 def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path, monkeypatch):
@@ -154,6 +154,17 @@ def test_main_scan_threads_no_check_licenses_flag(tmp_path, monkeypatch):
 
     evidence = json.loads((repo / ".veridion" / "evidence.json").read_text())
     assert evidence["security"]["dependency_licenses"]["checked"] is False
+
+
+def test_main_scan_threads_no_map_endpoints_flag(tmp_path, monkeypatch):
+    repo = tmp_path
+    (repo / "app.py").write_text('@app.route("/users")\ndef list_users():\n    pass\n')
+    monkeypatch.setattr(sys, "argv", ["veridion", "scan", str(repo), "--no-map-endpoints"])
+
+    main()
+
+    evidence = json.loads((repo / ".veridion" / "evidence.json").read_text())
+    assert evidence["repository"]["api_endpoints"]["checked"] is False
 
 
 def test_main_audit_threads_no_scan_git_history_flag(tmp_path, monkeypatch):

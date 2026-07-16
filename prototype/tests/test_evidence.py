@@ -272,3 +272,33 @@ def test_scan_repository_skips_license_check_when_disabled(tmp_path):
         "repo_license": {"category": "unknown", "detected_from": None},
         "findings": [],
     }
+
+
+def test_scan_repository_includes_api_endpoints_block(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text('@app.route("/users")\ndef list_users():\n    pass\n')
+
+    with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_vuln:
+        mock_vuln.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo, check_licenses=False)
+
+    assert evidence["repository"]["api_endpoints"]["checked"] is True
+    paths = {e["path"] for e in evidence["repository"]["api_endpoints"]["endpoints"]}
+    assert "/users" in paths
+
+
+def test_scan_repository_skips_endpoint_mapping_when_disabled(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text('@app.route("/users")\ndef list_users():\n    pass\n')
+
+    with patch("veridion.evidence.check_dependency_vulnerabilities") as mock_vuln:
+        mock_vuln.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo, check_licenses=False, map_endpoints=False)
+
+    assert evidence["repository"]["api_endpoints"] == {
+        "checked": False,
+        "reason": "skipped (--no-map-endpoints)",
+        "endpoints": [],
+    }

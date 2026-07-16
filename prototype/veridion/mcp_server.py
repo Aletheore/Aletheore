@@ -167,13 +167,18 @@ def _scan_summary(evidence: dict) -> dict:
 def _register_scan_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
     @mcp_instance.tool(name="veridion_scan")
     def veridion_scan(
-        check_vulnerabilities: bool = True, scan_git_history: bool = True
+        check_vulnerabilities: bool = True,
+        scan_git_history: bool = True,
+        check_licenses: bool = True,
+        map_endpoints: bool = True,
     ) -> dict:
         """Run the deterministic Veridion scanner and save evidence for this repository."""
         evidence = scan_repository(
             repo_path,
             check_vulnerabilities=check_vulnerabilities,
             scan_git_history=scan_git_history,
+            check_licenses=check_licenses,
+            map_endpoints=map_endpoints,
         )
         write_evidence(evidence, repo_path)
         save_snapshot(evidence, repo_path)

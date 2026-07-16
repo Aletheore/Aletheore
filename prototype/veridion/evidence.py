@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from veridion.architecture import build_clusters, detect_layer_violations, load_architecture_config
+from veridion.endpoints import map_api_endpoints
 from veridion.git_intel.analyzer import analyze_git
 from veridion.licenses import check_dependency_licenses
 from veridion.scanner.detect import (
@@ -25,6 +26,7 @@ def scan_repository(
     check_vulnerabilities: bool = True,
     scan_git_history: bool = True,
     check_licenses: bool = True,
+    map_endpoints: bool = True,
 ) -> dict:
     repo_path = repo_path.resolve()
 
@@ -68,6 +70,15 @@ def scan_repository(
             "findings": [],
         }
 
+    if map_endpoints:
+        api_endpoints_data = map_api_endpoints(repo_path)
+    else:
+        api_endpoints_data = {
+            "checked": False,
+            "reason": "skipped (--no-map-endpoints)",
+            "endpoints": [],
+        }
+
     return {
         "veridion_version": EVIDENCE_VERSION,
         "scanned_at": datetime.now(timezone.utc).isoformat(),
@@ -82,6 +93,7 @@ def scan_repository(
             "modules": modules,
             "dependency_graph": dependency_graph,
             "unparseable_files": unparseable_files,
+            "api_endpoints": api_endpoints_data,
         },
         "git": git_data,
         "security": {

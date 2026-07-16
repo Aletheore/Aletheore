@@ -39,7 +39,11 @@ SPONSOR_NOTE = """
 
 
 def _scan(
-    repo_path: str, check_vulnerabilities: bool, scan_git_history: bool, check_licenses: bool = True
+    repo_path: str,
+    check_vulnerabilities: bool,
+    scan_git_history: bool,
+    check_licenses: bool = True,
+    map_endpoints: bool = True,
 ) -> tuple[int, dict, Path]:
     repo = Path(repo_path).resolve()
     print(f"Scanning {repo}...")
@@ -48,6 +52,7 @@ def _scan(
         check_vulnerabilities=check_vulnerabilities,
         scan_git_history=scan_git_history,
         check_licenses=check_licenses,
+        map_endpoints=map_endpoints,
     )
     evidence_path = write_evidence(evidence, repo)
     print(f"Evidence written to {evidence_path}")
@@ -62,9 +67,10 @@ def _audit(
     check_vulnerabilities: bool,
     scan_git_history: bool,
     check_licenses: bool = True,
+    map_endpoints: bool = True,
 ) -> int:
     _exit_code, _evidence, evidence_path = _scan(
-        repo_path, check_vulnerabilities, scan_git_history, check_licenses
+        repo_path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints
     )
     repo = Path(repo_path).resolve()
 
@@ -243,6 +249,13 @@ def main() -> int:
         default=True,
         help="skip the dependency-license check (on by default)",
     )
+    audit_parser.add_argument(
+        "--no-map-endpoints",
+        dest="map_endpoints",
+        action="store_false",
+        default=True,
+        help="skip static API endpoint mapping (on by default)",
+    )
 
     scan_parser = subparsers.add_parser("scan", help="run only the deterministic scan phase")
     scan_parser.add_argument("path", nargs="?", default=".")
@@ -266,6 +279,13 @@ def main() -> int:
         action="store_false",
         default=True,
         help="skip the dependency-license check (on by default)",
+    )
+    scan_parser.add_argument(
+        "--no-map-endpoints",
+        dest="map_endpoints",
+        action="store_false",
+        default=True,
+        help="skip static API endpoint mapping (on by default)",
     )
 
     query_parser = subparsers.add_parser("query", help="query an existing evidence.json")
@@ -328,10 +348,15 @@ def main() -> int:
             args.check_vulnerabilities,
             args.scan_git_history,
             args.check_licenses,
+            args.map_endpoints,
         )
     if args.command == "scan":
         exit_code, _evidence, _evidence_path = _scan(
-            args.path, args.check_vulnerabilities, args.scan_git_history, args.check_licenses
+            args.path,
+            args.check_vulnerabilities,
+            args.scan_git_history,
+            args.check_licenses,
+            args.map_endpoints,
         )
         return exit_code
     if args.command == "query":
