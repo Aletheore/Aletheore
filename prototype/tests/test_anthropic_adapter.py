@@ -64,6 +64,9 @@ def test_invoke_assembles_all_required_sections_in_order(mock_anthropic_class, t
         assert f"content for {section}" in result
     assert result.index("## Summary") < result.index("## Roadmap")
 
+    first_call = mock_client.messages.create.call_args_list[0]
+    assert first_call.kwargs["tool_choice"] == {"type": "any"}
+
 
 @patch("aletheore.adapters.anthropic_native.Anthropic")
 def test_invoke_raises_if_finish_called_before_all_sections_written(

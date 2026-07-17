@@ -96,6 +96,7 @@ class AnthropicAdapter(AgentAdapter):
                     system=system_prompt,
                     messages=messages,
                     tools=ANTHROPIC_TOOLS,
+                    tool_choice={"type": "any"},
                 )
             except Exception as exc:
                 raise AdapterInvocationError(

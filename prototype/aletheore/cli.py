@@ -71,6 +71,7 @@ KNOWN_ADAPTERS = [
         model="llama3.1:8b",
         needs_key=False,
         requires_consent=False,
+        supports_tool_choice=False,
     ),
     GeminiCliAdapter(),
     OpenAICompatibleAdapter(

@@ -214,6 +214,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         model: str,
         needs_key: bool = True,
         requires_consent: bool = True,
+        supports_tool_choice: bool = True,
         credentials_path: Path | None = None,
     ) -> None:
         self.name = name
@@ -222,6 +223,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         self._api_key_env_var = api_key_env_var
         self._model = model
         self._needs_key = needs_key
+        self._supports_tool_choice = supports_tool_choice
         self._credentials_path = credentials_path or DEFAULT_CREDENTIALS_PATH
 
     def is_available(self) -> bool:
@@ -264,14 +266,17 @@ class OpenAICompatibleAdapter(AgentAdapter):
         finished = False
         consecutive_no_tool_calls = 0
 
+        create_kwargs = {
+            "model": self._model,
+            "tools": TOOLS,
+            "timeout": REQUEST_TIMEOUT_SECONDS,
+        }
+        if self._supports_tool_choice:
+            create_kwargs["tool_choice"] = "required"
+
         for _round in range(MAX_TOOL_ROUNDS):
             try:
-                response = client.chat.completions.create(
-                    model=self._model,
-                    messages=messages,
-                    tools=TOOLS,
-                    timeout=REQUEST_TIMEOUT_SECONDS,
-                )
+                response = client.chat.completions.create(messages=messages, **create_kwargs)
             except Exception as exc:
                 raise AdapterInvocationError(
                     f"{self.name} invocation failed: {type(exc).__name__}"

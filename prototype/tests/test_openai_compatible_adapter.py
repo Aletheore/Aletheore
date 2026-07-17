@@ -112,6 +112,9 @@ def test_invoke_assembles_all_required_sections_in_order(mock_openai_class, tmp_
     assert result.index("## Summary") < result.index("## Repository Intelligence")
     assert result.index("## Evidence Gaps") < result.index("## Roadmap")
 
+    first_call = mock_client.chat.completions.create.call_args_list[0]
+    assert first_call.kwargs["tool_choice"] == "required"
+
 
 @patch("aletheore.adapters.openai_compatible.OpenAI")
 def test_invoke_raises_if_finish_called_before_all_sections_written(mock_openai_class, tmp_path):
@@ -276,3 +279,32 @@ def test_ollama_style_adapter_does_not_need_key(tmp_path):
         assert adapter.is_available() is True
     with patch.object(adapter, "_local_server_reachable", return_value=False):
         assert adapter.is_available() is False
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_supports_tool_choice_false_omits_tool_choice_from_request(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _write_all_sections_then_finish_responses()
+
+    adapter = _adapter(tmp_path, needs_key=False, supports_tool_choice=False)
+    adapter.invoke("audit this repo", cwd=str(repo))
+
+    first_call = mock_client.chat.completions.create.call_args_list[0]
+    assert "tool_choice" not in first_call.kwargs
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_supports_tool_choice_true_by_default(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _write_all_sections_then_finish_responses()
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        adapter.invoke("audit this repo", cwd=str(repo))
+
+    first_call = mock_client.chat.completions.create.call_args_list[0]
+    assert first_call.kwargs["tool_choice"] == "required"
