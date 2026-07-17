@@ -11,6 +11,7 @@ from aletheore.adapters.openai_compatible import (
     NO_TOOL_CALL_NUDGE,
     REQUIRED_SECTIONS,
     SYSTEM_PROMPT_TEMPLATE,
+    WEAK_MODEL_HINT,
     _get_by_dot_path,
     _read_manual_text,
 )
@@ -135,7 +136,7 @@ class AnthropicAdapter(AgentAdapter):
                     if missing:
                         raise AdapterInvocationError(
                             "anthropic finished without writing required section(s): "
-                            f"{', '.join(missing)}"
+                            f"{', '.join(missing)}{WEAK_MODEL_HINT}"
                         )
                     result = "ok"
                     finished = True
@@ -151,13 +152,15 @@ class AnthropicAdapter(AgentAdapter):
                 break
         else:
             raise AdapterInvocationError(
-                f"anthropic did not finish the report within {MAX_TOOL_ROUNDS} tool-call rounds"
+                f"anthropic did not finish the report within {MAX_TOOL_ROUNDS} "
+                f"tool-call rounds{WEAK_MODEL_HINT}"
             )
 
         missing = [s for s in REQUIRED_SECTIONS if s not in sections]
         if missing:
             raise AdapterInvocationError(
-                f"anthropic finished without writing required section(s): {', '.join(missing)}"
+                "anthropic finished without writing required section(s): "
+                f"{', '.join(missing)}{WEAK_MODEL_HINT}"
             )
 
         return "\n\n".join(f"## {name}\n\n{sections[name]}" for name in REQUIRED_SECTIONS)

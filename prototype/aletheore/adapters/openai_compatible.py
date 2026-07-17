@@ -18,6 +18,12 @@ NO_TOOL_CALL_NUDGE = (
     "write_report_section, or finish_report. Do not respond with plain text."
 )
 
+WEAK_MODEL_HINT = (
+    " - if this keeps happening with this model, it likely cannot reliably follow this "
+    "audit's structured tool-calling contract; try a more capable model (see the README's "
+    "local model guidance if running locally)"
+)
+
 REQUIRED_SECTIONS = [
     "Summary",
     "Repository Intelligence",
@@ -319,7 +325,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
                     if missing:
                         raise AdapterInvocationError(
                             f"{self.name} finished without writing required section(s): "
-                            f"{', '.join(missing)}"
+                            f"{', '.join(missing)}{WEAK_MODEL_HINT}"
                         )
                     result = "ok"
                     finished = True
@@ -334,13 +340,15 @@ class OpenAICompatibleAdapter(AgentAdapter):
                 break
         else:
             raise AdapterInvocationError(
-                f"{self.name} did not finish the report within {MAX_TOOL_ROUNDS} tool-call rounds"
+                f"{self.name} did not finish the report within {MAX_TOOL_ROUNDS} "
+                f"tool-call rounds{WEAK_MODEL_HINT}"
             )
 
         missing = [s for s in REQUIRED_SECTIONS if s not in sections]
         if missing:
             raise AdapterInvocationError(
-                f"{self.name} finished without writing required section(s): {', '.join(missing)}"
+                f"{self.name} finished without writing required section(s): "
+                f"{', '.join(missing)}{WEAK_MODEL_HINT}"
             )
 
         return "\n\n".join(f"## {name}\n\n{sections[name]}" for name in REQUIRED_SECTIONS)
