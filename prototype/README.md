@@ -224,17 +224,25 @@ variable or saved key exists, Aletheore prompts for a key and asks whether to us
 save it to `~/.config/aletheore/credentials.json` with `0600` permissions. Keys are never
 printed or included in adapter error messages.
 
-**A note on local model choice for `ollama`**: the default `ollama` model tag
-(`llama3.1:8b`) is too small to reliably follow this audit's structured, multi-round
-tool-calling contract — it will typically fail with a clear "finished without writing
-required section(s)" error rather than a hang (Aletheore fails fast on this, it doesn't
-retry forever), but it will fail. Models that hold up noticeably better on structured
-tool-calling and coding tasks at comparable or better memory footprints: `qwen2.5-coder:14b`
-or `qwen2.5-coder:32b` (dedicated coding models, strong tool-calling adherence),
-`deepseek-coder-v2` (strong on code-specific structured tasks). Pull one with
-`ollama pull qwen2.5-coder:14b`. There is currently no `--model` override flag — using a
-different local model than the built-in `llama3.1:8b` tag requires editing `KNOWN_ADAPTERS`
-in `aletheore/cli.py` if you're running from source.
+**A note on local model reliability for `ollama`**: treat local-model support as
+experimental. The default tag (`llama3.1:8b`) reliably fails this audit's structured,
+multi-round tool-calling contract — it will typically fail fast with a clear
+"finished without writing required section(s)" error rather than hang (Aletheore fails fast
+on this, it doesn't retry forever), but it will fail. This is not specific to that one model:
+live-tested against four local models on ordinary consumer hardware (`llama3.1:8b`,
+`qwen2.5-coder:14b`, `deepseek-coder-v2:latest`, `gpt-oss:20b`), all four failed this specific
+task — one lacked Ollama tool-calling support entirely (`deepseek-coder-v2` returns
+`does not support tools`), one exceeded the per-request timeout outright (`gpt-oss:20b`,
+likely a hardware-speed problem rather than a capability one), and two produced tool calls but
+never reliably completed all nine sections. No local model has been confirmed to complete this
+audit successfully yet. If you get one working, especially something in the 30B+ range on
+capable hardware, that's genuinely useful data — there is currently no `--model` override
+flag, so trying a different tag than the built-in `llama3.1:8b` requires editing
+`KNOWN_ADAPTERS` in `aletheore/cli.py` if you're running from source. For local-model use
+today, the practical recommendation is: use `ollama` for quick/free experimentation with the
+understanding that it may fail, and rely on an API-key provider or a CLI-based agent (`claude`,
+`codex`, `gemini-cli`, `mistral-vibe`, `grok-build`, `opencode`) for a run you actually need to
+complete.
 
 API/local adapters are deliberately bounded: they receive no raw repository files and no
 filesystem tools. They can only call `read_evidence_section` against
