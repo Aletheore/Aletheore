@@ -153,6 +153,49 @@ def test_invoke_normalizes_provider_errors_without_leaking_details(
     assert "secret detail" not in message
 
 
+@patch("aletheore.adapters.anthropic_native.Anthropic")
+def test_invoke_fails_fast_after_consecutive_no_tool_call_rounds(mock_anthropic_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    no_tool_response = MagicMock()
+    no_tool_response.content = []
+    mock_client.messages.create.return_value = no_tool_response
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value="sk-ant-test"):
+        with pytest.raises(AdapterInvocationError, match="stopped calling tools"):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert mock_client.messages.create.call_count == 2
+
+
+@patch("aletheore.adapters.anthropic_native.Anthropic")
+def test_invoke_recovers_after_single_no_tool_call_round(mock_anthropic_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    no_tool_response = MagicMock()
+    no_tool_response.content = []
+    responses = [no_tool_response] + _write_all_sections_then_finish_responses()
+    mock_client.messages.create.side_effect = responses
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value="sk-ant-test"):
+        result = adapter.invoke("audit this repo", cwd=str(repo))
+
+    for section in REQUIRED_SECTIONS:
+        assert f"## {section}" in result
+
+    second_call = mock_client.messages.create.call_args_list[1]
+    nudge_messages = [
+        m for m in second_call.kwargs["messages"]
+        if m.get("role") == "user" and isinstance(m.get("content"), str)
+        and "must call exactly one of the provided tools" in m["content"]
+    ]
+    assert len(nudge_messages) == 1
+
+
 def test_is_available_true_with_api_key(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-abc")
     assert _adapter(tmp_path).is_available() is True

@@ -11,6 +11,12 @@ from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api
 
 MAX_TOOL_ROUNDS = 20
 REQUEST_TIMEOUT_SECONDS = 120
+MAX_CONSECUTIVE_NO_TOOL_CALLS = 2
+
+NO_TOOL_CALL_NUDGE = (
+    "You must call exactly one of the provided tools now: read_evidence_section, "
+    "write_report_section, or finish_report. Do not respond with plain text."
+)
 
 REQUIRED_SECTIONS = [
     "Summary",
@@ -256,6 +262,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         ]
         sections: dict[str, str] = {}
         finished = False
+        consecutive_no_tool_calls = 0
 
         for _round in range(MAX_TOOL_ROUNDS):
             try:
@@ -273,7 +280,17 @@ class OpenAICompatibleAdapter(AgentAdapter):
             messages.append(message.model_dump(exclude_none=True))
 
             if not message.tool_calls:
+                consecutive_no_tool_calls += 1
+                if consecutive_no_tool_calls >= MAX_CONSECUTIVE_NO_TOOL_CALLS:
+                    raise AdapterInvocationError(
+                        f"{self.name} stopped calling tools after "
+                        f"{consecutive_no_tool_calls} consecutive rounds without a tool "
+                        "call - the model likely cannot reliably follow this tool-calling "
+                        "format"
+                    )
+                messages.append({"role": "user", "content": NO_TOOL_CALL_NUDGE})
                 continue
+            consecutive_no_tool_calls = 0
 
             for tool_call in message.tool_calls:
                 tool_name = tool_call.function.name

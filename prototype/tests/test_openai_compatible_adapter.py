@@ -222,6 +222,46 @@ def test_is_available_false_when_key_missing(monkeypatch, tmp_path):
     assert adapter.is_available() is False
 
 
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_fails_fast_after_consecutive_no_tool_call_rounds(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.return_value = _mock_response(tool_calls=None)
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError, match="stopped calling tools"):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    # must fail fast (after 2 rounds), not burn through all 20 MAX_TOOL_ROUNDS
+    assert mock_client.chat.completions.create.call_count == 2
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_recovers_after_single_no_tool_call_round(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    responses = [_mock_response(tool_calls=None)] + _write_all_sections_then_finish_responses()
+    mock_client.chat.completions.create.side_effect = responses
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        result = adapter.invoke("audit this repo", cwd=str(repo))
+
+    for section in REQUIRED_SECTIONS:
+        assert f"## {section}" in result
+
+    # the round after the no-tool-call response must include a corrective nudge
+    second_call = mock_client.chat.completions.create.call_args_list[1]
+    nudge_messages = [
+        m for m in second_call.kwargs["messages"]
+        if m.get("role") == "user" and "must call exactly one of the provided tools" in m.get("content", "")
+    ]
+    assert len(nudge_messages) == 1
+
+
 def test_ollama_style_adapter_does_not_need_key(tmp_path):
     adapter = _adapter(
         tmp_path,

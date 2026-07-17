@@ -6,7 +6,9 @@ from anthropic import Anthropic
 from aletheore.adapters.base import AdapterInvocationError, AgentAdapter
 from aletheore.adapters.openai_compatible import (
     EVIDENCE_SCHEMA_MAP,
+    MAX_CONSECUTIVE_NO_TOOL_CALLS,
     MAX_TOOL_ROUNDS,
+    NO_TOOL_CALL_NUDGE,
     REQUIRED_SECTIONS,
     SYSTEM_PROMPT_TEMPLATE,
     _get_by_dot_path,
@@ -84,6 +86,7 @@ class AnthropicAdapter(AgentAdapter):
         messages = [{"role": "user", "content": instruction}]
         sections: dict[str, str] = {}
         finished = False
+        consecutive_no_tool_calls = 0
 
         for _round in range(MAX_TOOL_ROUNDS):
             try:
@@ -102,7 +105,17 @@ class AnthropicAdapter(AgentAdapter):
             messages.append({"role": "assistant", "content": response.content})
             tool_use_blocks = [block for block in response.content if block.type == "tool_use"]
             if not tool_use_blocks:
+                consecutive_no_tool_calls += 1
+                if consecutive_no_tool_calls >= MAX_CONSECUTIVE_NO_TOOL_CALLS:
+                    raise AdapterInvocationError(
+                        f"anthropic stopped calling tools after "
+                        f"{consecutive_no_tool_calls} consecutive rounds without a tool "
+                        "call - the model likely cannot reliably follow this tool-calling "
+                        "format"
+                    )
+                messages.append({"role": "user", "content": NO_TOOL_CALL_NUDGE})
                 continue
+            consecutive_no_tool_calls = 0
 
             tool_results = []
             for block in tool_use_blocks:
