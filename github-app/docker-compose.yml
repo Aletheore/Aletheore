@@ -1,0 +1,59 @@
+services:
+  app-server:
+    build:
+      context: ..
+      dockerfile: github-app/Dockerfile.app-server
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  scan-worker:
+    build:
+      context: ..
+      dockerfile: github-app/Dockerfile.scan-worker
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=aletheore_app
+      - POSTGRES_USER=aletheore
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - aletheore_postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - aletheore_caddy_data:/data
+      - aletheore_caddy_config:/config
+    depends_on:
+      - app-server
+
+volumes:
+  aletheore_postgres_data:
+  aletheore_caddy_data:
+  aletheore_caddy_config:

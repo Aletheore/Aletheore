@@ -1,0 +1,40 @@
+# Aletheore GitHub App
+
+The hosted service backing the Aletheore GitHub App receives webhooks, runs
+`aletheore scan` plus `aletheore diff` for pull requests, posts the result as a
+comment, and exposes a JSON dashboard endpoint.
+
+## Local development
+
+```bash
+cd prototype
+pip install -e .
+
+cd ../github-app
+pip install -r requirements.txt
+
+docker run -d --name aletheore-test-pg -e POSTGRES_PASSWORD=test \
+  -e POSTGRES_DB=aletheore_test -p 55433:5432 postgres:16
+
+PGPASSWORD=test psql -h localhost -p 55433 -U postgres -d aletheore_test \
+  -f migrations/001_initial_schema.sql
+
+export TEST_DATABASE_URL=postgresql://postgres:test@localhost:55433/aletheore_test
+export DATABASE_URL=$TEST_DATABASE_URL
+python -m pytest tests/ -v
+```
+
+## Deploying on KVM4
+
+1. Register the GitHub App with webhook URL `https://aletheore.com/webhook`.
+2. Grant `contents: read` and `pull_requests: write`.
+3. Subscribe to `pull_request`, `installation`, `installation_repositories`, and
+   `marketplace_purchase`.
+4. Copy `.env.example` to `.env` on the server and fill the GitHub App, webhook,
+   and Postgres values.
+5. Point `aletheore.com` at the KVM4 server.
+6. Run `docker compose up -d --build`.
+
+The dashboard route is a JSON foundation endpoint at `/app/{org}/{repo}`. A
+private-repository OAuth gate and rendered UI are deferred fast-follows; do not
+install this hosted endpoint for private repositories until that gate exists.

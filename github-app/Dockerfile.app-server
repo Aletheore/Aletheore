@@ -1,0 +1,18 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY prototype/pyproject.toml prototype/pyproject.toml
+COPY prototype/aletheore prototype/aletheore
+RUN pip install --no-cache-dir ./prototype
+
+COPY github-app/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY github-app/app_server ./app_server
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+CMD ["uvicorn", "app_server.main:app", "--host", "0.0.0.0", "--port", "8000"]
