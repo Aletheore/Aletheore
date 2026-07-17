@@ -5,6 +5,16 @@ Notable changes to Aletheore, by release. The working code lives in `prototype/`
 
 ## Unreleased
 
+- Added multi-provider support to `aletheore audit`: OpenCode, OpenAI, Mistral, xAI Grok,
+  Ollama (local), and Gemini alongside the existing Claude Code adapter. Interactive runs
+  always show a provider-selection menu, even with only one available; non-interactive runs
+  require `--agent` explicitly. Every run using an API-based provider shows a fresh consent
+  prompt naming the exact provider before any data leaves the machine - never remembered,
+  every single time. API keys are checked from each provider's standard environment variable
+  first, with an explicit prompt-and-choose-to-save-or-discard flow if missing. The API-based
+  providers can only ever read this repository's already-computed evidence, never raw source
+  files - a hard architectural boundary, not a setting.
+
 ## 0.3.0 — 2026-07-16
 
 - Added live progress reporting to `scan`/`audit` — every major phase (module graph build,

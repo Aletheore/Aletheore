@@ -28,7 +28,8 @@ def make_adapter(name: str, available: bool):
 def test_select_adapter_returns_only_available_one():
     a = make_adapter("claude", True)
     b = make_adapter("cursor", False)
-    result = select_adapter([a, b], forced_name=None, interactive=False)
+    with patch("builtins.input", return_value="1"):
+        result = select_adapter([a, b], forced_name=None, interactive=True)
     assert result is a
 
 
@@ -43,6 +44,20 @@ def test_select_adapter_raises_when_multiple_and_not_interactive_and_no_flag():
     b = make_adapter("cursor", True)
     with pytest.raises(AmbiguousAdapterError):
         select_adapter([a, b], forced_name=None, interactive=False)
+
+
+def test_select_adapter_always_prompts_interactively_even_with_one_available():
+    a = make_adapter("claude", True)
+    with patch("builtins.input", return_value="1") as mock_input:
+        result = select_adapter([a], forced_name=None, interactive=True)
+    assert result is a
+    mock_input.assert_called_once()
+
+
+def test_select_adapter_raises_when_not_interactive_even_with_one_available():
+    a = make_adapter("claude", True)
+    with pytest.raises(AmbiguousAdapterError):
+        select_adapter([a], forced_name=None, interactive=False)
 
 
 def test_select_adapter_honors_forced_name():
@@ -176,6 +191,66 @@ def test_main_audit_invokes_audit_flow(tmp_path):
 
     assert result.exit_code == 0
     mock_audit.assert_called_once_with(str(tmp_path), "claude", True, True, True, True)
+
+
+def test_known_adapters_includes_every_provider():
+    from aletheore.cli import KNOWN_ADAPTERS
+
+    names = {a.name for a in KNOWN_ADAPTERS}
+    assert names == {"claude", "opencode", "openai", "mistral", "grok", "ollama", "gemini"}
+
+
+def test_audit_shows_consent_prompt_for_api_based_adapter_and_proceeds_on_yes(tmp_path):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    fake_adapter = MagicMock()
+    fake_adapter.name = "openai"
+    fake_adapter.requires_consent = True
+    fake_adapter.invoke.return_value = "## Summary\n\nreport text"
+
+    with patch("aletheore.cli.select_adapter", return_value=fake_adapter):
+        with patch("builtins.input", return_value="y") as mock_input:
+            result = runner.invoke(app, ["audit", str(repo)])
+
+    assert result.exit_code == 0
+    assert any("Continue" in call.args[0] for call in mock_input.call_args_list)
+    fake_adapter.invoke.assert_called_once()
+
+
+def test_audit_cancels_cleanly_when_consent_is_declined(tmp_path):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    fake_adapter = MagicMock()
+    fake_adapter.name = "openai"
+    fake_adapter.requires_consent = True
+
+    with patch("aletheore.cli.select_adapter", return_value=fake_adapter):
+        with patch("builtins.input", return_value="n"):
+            result = runner.invoke(app, ["audit", str(repo)])
+
+    assert result.exit_code == 0
+    fake_adapter.invoke.assert_not_called()
+    assert "Cancelled" in result.output
+
+
+def test_audit_skips_consent_prompt_for_cli_based_adapter(tmp_path):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    fake_adapter = MagicMock()
+    fake_adapter.name = "claude"
+    fake_adapter.requires_consent = False
+    fake_adapter.invoke.return_value = "## Summary\n\nreport text"
+
+    with patch("aletheore.cli.select_adapter", return_value=fake_adapter):
+        with patch("builtins.input") as mock_input:
+            result = runner.invoke(app, ["audit", str(repo)])
+
+    assert result.exit_code == 0
+    mock_input.assert_not_called()
+    fake_adapter.invoke.assert_called_once()
 
 
 def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path):

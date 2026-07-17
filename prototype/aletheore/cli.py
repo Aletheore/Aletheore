@@ -15,6 +15,8 @@ from rich.panel import Panel
 from rich.text import Text
 
 from aletheore.adapters.claude_code import AdapterInvocationError, ClaudeCodeAdapter
+from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
+from aletheore.adapters.opencode import OpenCodeAdapter
 from aletheore.dashboard import build_app
 from aletheore.evidence import scan_repository, write_evidence
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
@@ -32,7 +34,41 @@ from aletheore.report import (
     select_adapter,
 )
 
-KNOWN_ADAPTERS = [ClaudeCodeAdapter()]
+KNOWN_ADAPTERS = [
+    ClaudeCodeAdapter(),
+    OpenCodeAdapter(),
+    OpenAICompatibleAdapter(
+        name="openai",
+        base_url="https://api.openai.com/v1",
+        api_key_env_var="OPENAI_API_KEY",
+        model="gpt-5.2",
+    ),
+    OpenAICompatibleAdapter(
+        name="mistral",
+        base_url="https://api.mistral.ai/v1",
+        api_key_env_var="MISTRAL_API_KEY",
+        model="mistral-large-latest",
+    ),
+    OpenAICompatibleAdapter(
+        name="grok",
+        base_url="https://api.x.ai/v1",
+        api_key_env_var="XAI_API_KEY",
+        model="grok-4-latest",
+    ),
+    OpenAICompatibleAdapter(
+        name="ollama",
+        base_url="http://localhost:11434/v1",
+        api_key_env_var="",
+        model="llama3.1:8b",
+        needs_key=False,
+    ),
+    OpenAICompatibleAdapter(
+        name="gemini",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        api_key_env_var="GEMINI_API_KEY",
+        model="gemini-3.5-flash",
+    ),
+]
 
 MANUAL_DIR = str(Path(__file__).resolve().parent / "manual")
 
@@ -192,6 +228,16 @@ def _audit(
         console.print(f"[bold red]error:[/bold red] {exc}")
         console.print(f"Evidence is still available at {evidence_path} for manual use.")
         return 1
+
+    if adapter.requires_consent:
+        console.print(
+            f"[bold yellow]This will send this repository's evidence "
+            f"(not source code) to {adapter.name}'s API.[/bold yellow]"
+        )
+        confirmed = input("Continue? [y/N]: ").strip().lower() == "y"
+        if not confirmed:
+            console.print("Cancelled - no data was sent.")
+            return 0
 
     console.print(f"Running audit with [bold]{adapter.name}[/bold]...")
     try:

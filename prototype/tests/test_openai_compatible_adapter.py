@@ -1,0 +1,236 @@
+import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+import toon
+
+from aletheore.adapters.openai_compatible import (
+    AdapterInvocationError,
+    OpenAICompatibleAdapter,
+    REQUIRED_SECTIONS,
+    _get_by_dot_path,
+)
+
+
+def test_get_by_dot_path_simple_key():
+    assert _get_by_dot_path({"a": {"b": 1}}, "a.b") == 1
+
+
+def test_get_by_dot_path_array_index():
+    data = {"modules": [{"path": "a.py"}, {"path": "b.py"}]}
+    assert _get_by_dot_path(data, "modules[1].path") == "b.py"
+
+
+def test_get_by_dot_path_missing_returns_none():
+    assert _get_by_dot_path({"a": 1}, "b.c") is None
+
+
+def _mock_tool_call(name, arguments, call_id="call_1"):
+    tool_call = MagicMock()
+    tool_call.id = call_id
+    tool_call.function.name = name
+    tool_call.function.arguments = json.dumps(arguments)
+    return tool_call
+
+
+def _mock_response(tool_calls=None):
+    message = MagicMock()
+    message.tool_calls = tool_calls
+    message.model_dump.return_value = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": (
+            [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in tool_calls
+            ]
+            if tool_calls
+            else None
+        ),
+    }
+    response = MagicMock()
+    response.choices = [MagicMock(message=message)]
+    return response
+
+
+def _make_repo_with_evidence(tmp_path, evidence: dict):
+    repo = tmp_path / "repo"
+    (repo / ".aletheore").mkdir(parents=True)
+    (repo / ".aletheore" / "evidence.toon").write_text(toon.encode(evidence))
+    return repo
+
+
+def _write_all_sections_then_finish_responses():
+    responses = [
+        _mock_response(
+            tool_calls=[
+                _mock_tool_call(
+                    "write_report_section",
+                    {"name": section, "content": f"content for {section}"},
+                    call_id=f"call_{i}",
+                )
+            ]
+        )
+        for i, section in enumerate(REQUIRED_SECTIONS)
+    ]
+    responses.append(
+        _mock_response(tool_calls=[_mock_tool_call("finish_report", {}, call_id="call_finish")])
+    )
+    return responses
+
+
+def _adapter(tmp_path, **overrides):
+    kwargs = dict(
+        name="testprovider",
+        base_url="https://example.test/v1",
+        api_key_env_var="TESTPROVIDER_API_KEY",
+        model="test-model",
+        credentials_path=tmp_path / "creds.json",
+    )
+    kwargs.update(overrides)
+    return OpenAICompatibleAdapter(**kwargs)
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_assembles_all_required_sections_in_order(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _write_all_sections_then_finish_responses()
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        result = adapter.invoke("audit this repo", cwd=str(repo))
+
+    for section in REQUIRED_SECTIONS:
+        assert f"## {section}" in result
+        assert f"content for {section}" in result
+    assert result.index("## Summary") < result.index("## Repository Intelligence")
+    assert result.index("## Evidence Gaps") < result.index("## Roadmap")
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_raises_if_finish_called_before_all_sections_written(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = [
+        _mock_response(
+            tool_calls=[_mock_tool_call("write_report_section", {"name": "Summary", "content": "x"})]
+        ),
+        _mock_response(tool_calls=[_mock_tool_call("finish_report", {})]),
+    ]
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError, match="without writing required section"):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_raises_if_never_finishes_within_max_rounds(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.return_value = _mock_response(
+        tool_calls=[_mock_tool_call("read_evidence_section", {"path": "repository.modules"})]
+    )
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError, match="did not finish"):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_normalizes_provider_errors_without_leaking_details(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = RuntimeError("secret detail")
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError) as exc_info:
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    message = str(exc_info.value)
+    assert "testprovider invocation failed: RuntimeError" in message
+    assert "secret detail" not in message
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_read_evidence_section_tool_returns_wrapped_data(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": [{"path": "app.py"}]}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    responses = [
+        _mock_response(
+            tool_calls=[_mock_tool_call("read_evidence_section", {"path": "repository.modules"})]
+        )
+    ]
+    responses += _write_all_sections_then_finish_responses()
+    mock_client.chat.completions.create.side_effect = responses
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        adapter.invoke("audit this repo", cwd=str(repo))
+
+    second_call = mock_client.chat.completions.create.call_args_list[1]
+    messages = second_call.kwargs["messages"]
+    tool_message = next(m for m in messages if m.get("role") == "tool")
+    assert '<evidence path="repository.modules">' in tool_message["content"]
+    assert "app.py" in tool_message["content"]
+    assert "</evidence>" in tool_message["content"]
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_read_evidence_section_missing_path_reports_clearly(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    responses = [
+        _mock_response(
+            tool_calls=[_mock_tool_call("read_evidence_section", {"path": "does.not.exist"})]
+        )
+    ]
+    responses += _write_all_sections_then_finish_responses()
+    mock_client.chat.completions.create.side_effect = responses
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        adapter.invoke("audit this repo", cwd=str(repo))
+
+    second_call = mock_client.chat.completions.create.call_args_list[1]
+    tool_message = next(m for m in second_call.kwargs["messages"] if m.get("role") == "tool")
+    assert "no such path: does.not.exist" in tool_message["content"]
+
+
+def test_is_available_checks_api_key_for_key_based_provider(monkeypatch, tmp_path):
+    monkeypatch.setenv("TESTPROVIDER_API_KEY", "sk-abc")
+    adapter = _adapter(tmp_path)
+    assert adapter.is_available() is True
+
+
+def test_is_available_false_when_key_missing(monkeypatch, tmp_path):
+    monkeypatch.delenv("TESTPROVIDER_API_KEY", raising=False)
+    adapter = _adapter(tmp_path)
+    assert adapter.is_available() is False
+
+
+def test_ollama_style_adapter_does_not_need_key(tmp_path):
+    adapter = _adapter(
+        tmp_path,
+        name="ollama",
+        base_url="http://localhost:11434/v1",
+        api_key_env_var="",
+        needs_key=False,
+    )
+    with patch.object(adapter, "_local_server_reachable", return_value=True):
+        assert adapter.is_available() is True
+    with patch.object(adapter, "_local_server_reachable", return_value=False):
+        assert adapter.is_available() is False

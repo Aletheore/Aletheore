@@ -184,27 +184,51 @@ specifically for `audit`'s coding-agent adapter to read instead.
 
 ### `aletheore audit [path]`
 
-Runs a scan, then shells out to an installed coding-agent CLI (Claude Code today, via
-`--agent` to force a specific one) to write a full grounded report to
+Runs a scan, then uses a selected reasoning provider to write a full grounded report to
 `.aletheore/audit-report.md`, following the per-section instructions in `manual/` (repository
 intelligence, git intelligence, architecture, security, AI-usage detection, audience
 perspectives, roadmap synthesis) and citing exact evidence fields throughout.
 
 This is a genuinely different kind of operation from everything else in this list: it spawns
-a full second agent CLI process (up to a 10-minute timeout) to produce prose, rather than
-answering a fast, deterministic query. It's meant to be run by hand, when you actually want a
-written document — it is not wired into CI or the MCP server, and shouldn't be: a CI gate
-needs to be fast and pass/fail on concrete facts, and an agent already driving an MCP session
-can reason over the evidence itself without spawning a nested agent process.
+a full second reasoning process (up to a 10-minute timeout for CLI-backed providers) to
+produce prose, rather than answering a fast, deterministic query. It's meant to be run by
+hand, when you actually want a written document — it is not wired into CI or the MCP server,
+and shouldn't be: a CI gate needs to be fast and pass/fail on concrete facts, and an agent
+already driving an MCP session can reason over the evidence itself without spawning a nested
+agent process.
 
-While the agent subprocess runs, an elapsed-time indicator prints so a multi-minute wait
+Supported providers are Claude Code, OpenCode, OpenAI, Mistral, xAI Grok, Ollama, and Gemini.
+Interactive runs always show a provider-selection menu, even if exactly one provider is
+available. Non-interactive runs must pass `--agent NAME` explicitly so automation never
+silently chooses a provider.
+
+OpenAI-compatible providers (OpenAI, Mistral, Grok, Gemini, Ollama, and any future compatible
+provider) show a fresh per-run consent prompt before the provider call. That prompt names the
+provider and explains that only already-computed repository evidence is sent, not raw source
+code. Declining exits cleanly after writing evidence.
+
+API keys are read from the provider's environment variable first (`OPENAI_API_KEY`,
+`MISTRAL_API_KEY`, `XAI_API_KEY`, `GEMINI_API_KEY`). If no environment variable or saved key
+exists, Aletheore prompts for a key and asks whether to use it once or save it to
+`~/.config/aletheore/credentials.json` with `0600` permissions. Keys are never printed or
+included in adapter error messages.
+
+The OpenAI-compatible API providers are deliberately bounded: they receive no raw repository
+files and no filesystem tools. They can only call `read_evidence_section` against
+`.aletheore/evidence.toon`, write named report sections, and finish the report. CLI-backed
+providers such as Claude Code and OpenCode still run as local subprocesses in the repository
+working directory.
+
+While the reasoning provider runs, an elapsed-time indicator prints so a multi-minute wait
 doesn't look identical to a hang (updates in place on a real terminal; prints once at the
-start and once at the end when piped to a log). The agent is instructed to read
+start and once at the end when piped to a log). Providers are instructed to use
 `.aletheore/evidence.toon` (see `scan` above) rather than the JSON copy.
 
 ```bash
 aletheore audit .
 aletheore audit . --agent claude
+aletheore audit . --agent openai
+aletheore audit . --agent ollama
 ```
 
 ### `aletheore query <kind> [target]`

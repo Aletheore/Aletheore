@@ -30,12 +30,9 @@ def select_adapter(
             f"no supported agent CLI found on PATH (checked: {names})"
         )
 
-    if len(available) == 1:
-        return available[0]
-
     if interactive:
         names = [a.name for a in available]
-        print("Multiple agent CLIs found:")
+        print("Available agent providers:")
         for i, name in enumerate(names, start=1):
             print(f"  {i}. {name}")
         choice = input(f"Which one? [1-{len(names)}]: ").strip()
@@ -44,7 +41,7 @@ def select_adapter(
 
     names = ", ".join(a.name for a in available)
     raise AmbiguousAdapterError(
-        f"multiple agent CLIs available ({names}) and not running interactively; "
+        f"{len(available)} agent provider(s) available ({names}) and not running interactively; "
         "pass --agent NAME to choose one"
     )
 
