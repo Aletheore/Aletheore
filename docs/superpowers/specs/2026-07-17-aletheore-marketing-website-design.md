@@ -20,10 +20,11 @@ terms, privacy, refund policy). Polish and expansion (docs, blog, more sections)
 
 - Five static pages: **Home, Pricing, Terms of Service, Privacy Policy, Refund Policy**.
 - Visual direction locked from an approved Stitch mockup: warm cream/beige background, black
-  text, a single warm amber/terracotta accent, a geometric owl mark, humanist sans-serif
-  typography, a conversational hero line ("I got tired of code-review tools that just guess. So
-  I built one that has to show its work."), card-based feature sections, one dark-background
-  contrast section (terminal screenshot).
+  text, a single warm amber/terracotta accent, the real "A" monogram mark (a black-background
+  geometric logo asset, not a generated illustration), humanist sans-serif typography, a
+  conversational hero line ("I got tired of code-review tools that just guess. So I built one
+  that has to show its work."), card-based feature sections, one dark-background contrast
+  section (terminal screenshot).
 - **Every claim on the site must be real**, matching this project's own evidence-grounded ethos.
   The mockup's "12.4k stars / 450+ [something]" stats card used placeholder numbers — checked
   live against the real repo (`gh repo view`): **0 stars, 0 forks**, a genuinely new project.
@@ -65,7 +66,7 @@ website/
   refund.html
   styles.css           # shared, one stylesheet, no per-page CSS files
   assets/
-    owl-mark.svg        # or .png if a suitable geometric owl asset needs sourcing/generating
+    logo-mark.png        # real "A" monogram asset, copied in as-is
   vercel.json           # static deploy config
 ```
 
@@ -88,13 +89,13 @@ website/
 
 ### Home page sections (top to bottom)
 
-1. **Nav**: "Aletheore" wordmark + owl mark, links to Pricing/Terms (minimal nav for this
+1. **Nav**: "Aletheore" wordmark + the "A" monogram mark, links to Pricing/Terms (minimal nav for this
    version — no Docs/Changelog/Security links since those pages don't exist yet), a "Sign In"
    or "GitHub" CTA button top-right.
 2. **Hero**: headline "I got tired of code-review tools that just guess. So I built one that
    has to show its work." (the italicized/accent-colored clause on "has to show its work"),
    subtext describing Aletheore in one sentence (deterministic evidence-grounded scanner, no
-   LLM guessing, every claim traced to a fact), owl mark illustration right-aligned, two CTAs:
+   LLM guessing, every claim traced to a fact), the "A" monogram mark right-aligned, two CTAs:
    "Start Your First Audit" (primary, links to the GitHub repo's README/quickstart) and "Read
    the Protocol" (secondary, links to the repo).
 3. **"Evidence-first architecture"** section, card grid: Traceability Matrix, Zero-Config CLI,

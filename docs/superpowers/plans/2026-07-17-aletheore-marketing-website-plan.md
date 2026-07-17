@@ -18,11 +18,11 @@
 
 ---
 
-## Task 1: Shared stylesheet, owl mark, Home page
+## Task 1: Shared stylesheet, logo mark, Home page
 
 **Files:**
 - Create: `website/styles.css`
-- Create: `website/assets/owl-mark.svg`
+- Create: `website/assets/logo-mark.png` (copy of the real "A" monogram asset, not generated)
 - Create: `website/index.html`
 
 - [ ] **Step 1: Write the shared stylesheet**
@@ -67,7 +67,7 @@ nav {
 .nav-links a:hover { color: var(--text-primary); }
 
 .wordmark { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 20px; }
-.wordmark svg { width: 28px; height: 28px; }
+.wordmark img { width: 28px; height: 28px; border-radius: 7px; display: block; }
 
 .btn {
   display: inline-block;
@@ -93,15 +93,11 @@ nav {
 .hero h1 .accent { color: var(--accent); font-style: italic; }
 .hero p { margin: 20px 0 28px; color: var(--text-muted); font-size: 17px; max-width: 520px; }
 .hero-actions { display: flex; gap: 14px; }
-.hero-owl {
-  background: var(--bg-dark);
-  border-radius: 16px;
+.hero-mark {
   aspect-ratio: 1;
   display: flex;
-  align-items: center;
-  justify-content: center;
 }
-.hero-owl svg { width: 55%; height: 55%; }
+.hero-mark img { width: 100%; height: 100%; object-fit: cover; border-radius: 16px; }
 
 section { padding: 56px 0; }
 section h2 { font-size: 28px; margin-bottom: 32px; }
@@ -159,21 +155,24 @@ footer a:hover { color: #fff; }
 .price-card li { margin-bottom: 8px; }
 ```
 
-- [ ] **Step 2: Create the owl mark SVG**
+- [ ] **Step 2: Copy the real logo mark asset**
 
-Create `website/assets/owl-mark.svg` (a simple geometric owl silhouette — deliberately not a pixel-perfect reproduction of the mockup's owl, per the spec's own non-goal on exact matching):
+The mark is a real, already-designed asset (a geometric "A" monogram, white on black, 1024x1024
+PNG) — not generated. Copy it into place:
 
-```svg
-<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-  <polygon points="50,8 82,30 88,68 68,92 32,92 12,68 18,30" fill="#e8e4da"/>
-  <polygon points="50,8 82,30 50,50 18,30" fill="#d8d2c2"/>
-  <circle cx="36" cy="42" r="11" fill="#17140f"/>
-  <circle cx="64" cy="42" r="11" fill="#17140f"/>
-  <circle cx="36" cy="42" r="4" fill="#fff"/>
-  <circle cx="64" cy="42" r="4" fill="#fff"/>
-  <polygon points="50,50 44,60 56,60" fill="#e0863a"/>
-</svg>
+```bash
+cp ~/Desktop/screen.png website/assets/logo-mark.png
 ```
+
+Confirm it landed correctly:
+
+Run: `file website/assets/logo-mark.png`
+Expected: `website/assets/logo-mark.png: PNG image data, 1024 x 1024, 8-bit/color RGB, non-interlaced`
+
+Note: this is a solid black square (no transparency, confirmed via the `file` output above showing
+RGB, not RGBA) — it's styled as a self-contained rounded-square badge everywhere it's used
+(`border-radius` applied via CSS in Step 1), not treated as a transparent icon that needs a
+background color of its own.
 
 - [ ] **Step 3: Write the Home page**
 
@@ -193,7 +192,7 @@ Create `website/index.html`:
   <div class="container">
     <nav>
       <div class="wordmark">
-        <img src="assets/owl-mark.svg" alt="" width="28" height="28">
+        <img src="assets/logo-mark.png" alt="" width="28" height="28">
         Aletheore
       </div>
       <div class="nav-links">
@@ -212,8 +211,8 @@ Create `website/index.html`:
           <a class="btn btn-secondary" href="https://github.com/Aletheore/Aletheore">Read the Protocol</a>
         </div>
       </div>
-      <div class="hero-owl">
-        <img src="assets/owl-mark.svg" alt="Aletheore owl mark">
+      <div class="hero-mark">
+        <img src="assets/logo-mark.png" alt="Aletheore A monogram">
       </div>
     </section>
 
@@ -261,7 +260,7 @@ Create `website/index.html`:
     <div class="container footer-grid">
       <div>
         <div class="wordmark" style="color: #fff;">
-          <img src="assets/owl-mark.svg" alt="" width="24" height="24">
+          <img src="assets/logo-mark.png" alt="" width="24" height="24">
           Aletheore
         </div>
         <p style="color: #8a8377; font-size: 14px; margin-top: 12px; max-width: 280px;">Evidence-grounded repository audits. Open source, local-first.</p>
@@ -300,8 +299,8 @@ Expected: a number greater than 0 (confirms links exist); manually confirm each 
 
 ```bash
 cd /Users/arihantkaul/Documents/GitHub/Veridion
-git add website/styles.css website/assets/owl-mark.svg website/index.html
-git commit -m "feat(website): shared styles, owl mark, Home page"
+git add website/styles.css website/assets/logo-mark.png website/index.html
+git commit -m "feat(website): shared styles, logo mark, Home page"
 ```
 
 ---
@@ -328,7 +327,7 @@ Create `website/pricing.html`:
   <div class="container">
     <nav>
       <a class="wordmark" href="index.html">
-        <img src="assets/owl-mark.svg" alt="" width="28" height="28">
+        <img src="assets/logo-mark.png" alt="" width="28" height="28">
         Aletheore
       </a>
       <div class="nav-links">
@@ -375,7 +374,7 @@ Create `website/pricing.html`:
     <div class="container footer-grid">
       <div>
         <div class="wordmark" style="color: #fff;">
-          <img src="assets/owl-mark.svg" alt="" width="24" height="24">
+          <img src="assets/logo-mark.png" alt="" width="24" height="24">
           Aletheore
         </div>
       </div>
@@ -446,7 +445,7 @@ Create `website/terms.html`:
   <div class="container">
     <nav>
       <a class="wordmark" href="index.html">
-        <img src="assets/owl-mark.svg" alt="" width="28" height="28">
+        <img src="assets/logo-mark.png" alt="" width="28" height="28">
         Aletheore
       </a>
       <div class="nav-links">
@@ -495,7 +494,7 @@ Create `website/privacy.html`:
   <div class="container">
     <nav>
       <a class="wordmark" href="index.html">
-        <img src="assets/owl-mark.svg" alt="" width="28" height="28">
+        <img src="assets/logo-mark.png" alt="" width="28" height="28">
         Aletheore
       </a>
       <div class="nav-links">
@@ -541,7 +540,7 @@ Create `website/refund.html`:
   <div class="container">
     <nav>
       <a class="wordmark" href="index.html">
-        <img src="assets/owl-mark.svg" alt="" width="28" height="28">
+        <img src="assets/logo-mark.png" alt="" width="28" height="28">
         Aletheore
       </a>
       <div class="nav-links">
