@@ -23,18 +23,26 @@ capability — nothing today runs on a schedule, everything runs in response to 
   base_url)`, already shipped, already tested) as the actual ping — no new HTTP-probing code.
 - A new `installations.health_check_base_url` column (nullable, same pattern as `webhook_url` —
   unset means monitoring is off), settable from the existing admin page via a new route.
-- Alerts fire only on a **reachability flip** — an endpoint that was reachable on the last check
-  becomes unreachable, or vice versa (confirming recovery). Fully deterministic: no latency
-  threshold, no arbitrary number invented without evidence behind it — the exact discipline this
-  project has applied everywhere else (no risk scores, no fuzzy heuristics dressed as facts).
+- Alerts fire on a **reachability flip** — an endpoint that was reachable on the last check
+  becomes unreachable, or vice versa (confirming recovery).
+- Alerts also fire on a **latency-threshold flip**, using a threshold the *customer* sets for
+  their own installation (`installations.health_check_latency_threshold_ms`, nullable — unset
+  means no latency alerting, same optional-feature pattern as everything else here). This is
+  different from a threshold Aletheore itself would invent: the customer knows what "slow" means
+  for their own app, so this is a precise, deterministic comparison against a number they
+  supplied, not a fuzzy guess dressed up as a fact. Same flip-only design as reachability - fires
+  once on crossing the threshold in either direction, not on every check while still over it.
 
 ## Non-Goals
 
-- **No latency-threshold alerting.** Explicitly considered and rejected: picking a "too slow"
-  number (3000ms? 5000ms?) would be an arbitrary judgment call with no real data behind it,
-  inconsistent with this project's standing refusal to invent unfounded thresholds elsewhere.
-  Reachability is binary and unambiguous; latency degradation is not, and isn't worth a fuzzy
-  heuristic just to seem more thorough.
+- **No Aletheore-invented latency threshold.** A fixed number Aletheore itself picked (3000ms?
+  5000ms?) would be exactly the kind of unfounded judgment call this project has refused to make
+  elsewhere. The threshold instead comes from the customer (see Goals) - the distinction that
+  makes this feature consistent with the project's evidence-grounded discipline rather than an
+  exception to it.
+- **No automatic threshold suggestion** (e.g. "based on your last 100 checks, we suggest
+  800ms"). Also a fuzzy heuristic dressed as a fact, and unnecessary - the customer setting their
+  own number is already the honest version of this feature.
 - **No per-repo base URL for multi-repo installations.** `health_check_base_url` is scoped per
   *installation* (matching `webhook_url`'s existing scope, set from the same admin page), not
   per repo. A single installation's sweep checks every repo it covers against that one shared
@@ -94,8 +102,18 @@ observed exactly like every other job already running through this queue.
 5. For each result, look up the most recent prior `endpoint_health` row for that exact
    `(installation_id, repo_full_name, path, method)`. If `reachable` differs from the prior
    value (or there is no prior value and the new result is `reachable: false` — a first-ever
-   check finding something down is still worth surfacing), send a Slack alert.
-6. Insert a new `endpoint_health` row for every checked endpoint, then prune to the most recent
+   check finding something down is still worth surfacing), send a reachability Slack alert.
+6. If the installation has `health_check_latency_threshold_ms` set **and this check's
+   `reachable` is `true`** (an unreachable endpoint's `latency_ms` reflects how long the failed
+   attempt took to time out or error, per `run_healthcheck`'s own implementation - not a
+   meaningful response time, so latency comparison is skipped entirely while unreachable and
+   resumes on the check after it recovers), compare this check's `latency_ms` against the
+   threshold and the prior *reachable* row's `latency_ms` against the same threshold. If "over
+   threshold" differs between the two (or there is no prior reachable row and this check is
+   already over threshold), send a latency Slack alert - a distinct flip from the reachability
+   one, so an endpoint can be both reachable and alerting on latency at once, with two separate,
+   individually-clear messages rather than one conflated one.
+7. Insert a new `endpoint_health` row for every checked endpoint, then prune to the most recent
    20 per `(installation_id, repo_full_name, path, method)` — same rotation shape
    `repo_history` already uses.
 
@@ -103,6 +121,7 @@ observed exactly like every other job already running through this queue.
 
 ```sql
 ALTER TABLE installations ADD COLUMN health_check_base_url TEXT;
+ALTER TABLE installations ADD COLUMN health_check_latency_threshold_ms INT;
 
 CREATE TABLE endpoint_health (
     id               BIGSERIAL PRIMARY KEY,
@@ -121,28 +140,41 @@ CREATE INDEX endpoint_health_lookup
 
 ### 4. Admin route
 
-`PUT /admin/{org}/{repo}/health-check-url` (body `{"health_check_base_url": str | None}`),
-identical shape to the existing `PUT /admin/{org}/{repo}/webhook-url` route — same
-`_require_admin_installation` gate (login + administers this installation + paid plan).
+`PUT /admin/{org}/{repo}/health-check-url` (body
+`{"health_check_base_url": str | None, "health_check_latency_threshold_ms": int | None}`),
+same shape and gate as the existing `PUT /admin/{org}/{repo}/webhook-url` route
+(`_require_admin_installation`: login + administers this installation + paid plan). Both fields
+are set together in one action since they're configured from the same form on the same page -
+a customer turning monitoring on naturally decides "where" (base URL) and, optionally, "how
+slow is too slow" (threshold) at the same time.
 
 ### 5. Slack alert format
 
-A new formatter, distinct from the existing new-findings message:
+Two new formatters, distinct from the existing new-findings message and from each other (so a
+reader immediately knows which kind of event this is without reading the body):
 
 ```
 *Aletheore*: endpoint down on `octocat/hello-world`
 `GET /api/users` is unreachable (was reachable as of the last check)
 ```
 
-or, on recovery:
-
 ```
 *Aletheore*: endpoint recovered on `octocat/hello-world`
 `GET /api/users` is reachable again
 ```
 
+```
+*Aletheore*: endpoint slow on `octocat/hello-world`
+`GET /api/users` took 4120ms (threshold: 3000ms)
+```
+
+```
+*Aletheore*: endpoint back under threshold on `octocat/hello-world`
+`GET /api/users` took 850ms (threshold: 3000ms)
+```
+
 Sent via the same `webhook_url`/HTTP-POST mechanism `scan_worker/slack.py` already uses — no new
-delivery channel, just a new message body for a different trigger.
+delivery channel, just new message bodies for two new triggers.
 
 ## Testing
 
@@ -151,6 +183,18 @@ delivery channel, just a new message body for a different trigger.
   explicit cases, not one assumed symmetric behavior).
 - **First-ever check**: no prior row and the endpoint is unreachable fires an alert; no prior row
   and the endpoint is reachable does not (starting state matters, not just deltas).
+- **Latency-flip detection**: under→over threshold fires the "slow" alert; over→under fires the
+  "back under threshold" alert; staying on either side of the threshold fires nothing (mirrors
+  the four-case reachability test, same discipline applied to the second trigger).
+- **Latency alerting requires an explicit threshold**: an installation with
+  `health_check_latency_threshold_ms` unset never fires a latency alert, no matter how slow a
+  response is — proves "unset means off" actually holds for this field, not just documented
+  intent.
+- **Reachability and latency alerts are independent**: an endpoint that goes from
+  reachable-and-fast to reachable-but-slow fires only the latency alert, not a spurious
+  reachability one; an endpoint that goes fully unreachable fires only the reachability alert
+  (an unreachable endpoint has no meaningful latency to compare) - proves the two checks don't
+  cross-contaminate each other's triggers.
 - **Multi-repo installation**: a sweep for an installation covering two repos checks both against
   the same shared `health_check_base_url` and stores rows scoped correctly per repo (proving the
   installation-level scoping decision is actually implemented as designed, not accidentally
@@ -171,6 +215,9 @@ delivery channel, just a new message body for a different trigger.
 2. Bringing that same endpoint back up triggers a real recovery message on the next sweep.
 3. An installation with no `health_check_base_url` set is never pinged - confirmed by checking
    `docker compose logs scan-worker` shows no outbound requests for it during a live sweep.
-4. `docker compose ps` shows the new `ofelia` service running with `RestartCount: 0` after a
+4. A real endpoint set to respond slower than a real, customer-configured
+   `health_check_latency_threshold_ms` triggers a real "slow" Slack message, and speeding it
+   back up triggers a real "back under threshold" message - observed live, same as criteria 1-2.
+5. `docker compose ps` shows the new `ofelia` service running with `RestartCount: 0` after a
    real deploy, matching the same zero-restart bar every other service in this stack has been
    held to all session.
