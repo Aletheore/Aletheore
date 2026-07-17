@@ -118,6 +118,7 @@ _COMMAND_SUMMARIES = [
     ("mcp", "run an MCP server so an agent can query a repo directly"),
     ("dashboard", "a live local web UI over the same evidence"),
     ("healthcheck", "GET-only live check of mapped API endpoints"),
+    ("login", "authenticate and save a managed-audit API token"),
 ]
 
 
@@ -753,6 +754,48 @@ def healthcheck(
     base_url: str = typer.Option(..., "--base-url", help="base URL of the running instance to check"),
 ) -> None:
     raise typer.Exit(code=_healthcheck(path, base_url))
+
+
+@app.command(help="authenticate with GitHub via device flow and save a personal API token")
+def login() -> None:
+    from aletheore.credentials import save_api_token
+    from aletheore.device_auth import (
+        DeviceFlowError,
+        mint_cli_token,
+        poll_for_access_token,
+        request_device_code,
+        resolve_installation,
+    )
+
+    try:
+        code = request_device_code()
+        console.print("First, authenticate with GitHub:")
+        console.print(f"  1. Go to: [bold]{code.verification_uri}[/bold]")
+        console.print(f"  2. Enter code: [bold cyan]{code.user_code}[/bold cyan]")
+        console.print("Waiting for authorization...")
+        github_token = poll_for_access_token(code)
+
+        resolved = resolve_installation(github_token)
+        if isinstance(resolved, dict):
+            installation = resolved
+        else:
+            console.print("Multiple paid installations found - pick one:")
+            for index, candidate in enumerate(resolved, start=1):
+                console.print(f"  {index}. {candidate['account_login']}")
+            choice = int(input("Enter a number: "))
+            installation = resolved[choice - 1]
+
+        label = f"{socket.gethostname()} (device flow)"
+        token = mint_cli_token(github_token, installation["installation_id"], label)
+        save_api_token("aletheore-managed-audit", token)
+        console.print(
+            f"[bold green]Logged in.[/bold green] Token saved for "
+            f"[bold]{installation['account_login']}[/bold]. "
+            "This replaces any previously saved token."
+        )
+    except DeviceFlowError as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
 
 
 def main() -> None:

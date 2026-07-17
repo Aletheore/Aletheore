@@ -76,3 +76,11 @@ def _save_key(provider_name: str, key: str, credentials_path: Path) -> None:
     data[provider_name] = key
     credentials_path.write_text(json.dumps(data, indent=2))
     credentials_path.chmod(0o600)
+
+
+def save_api_token(
+    provider_name: str,
+    token: str,
+    credentials_path: Path | None = None,
+) -> None:
+    _save_key(provider_name, token, credentials_path or DEFAULT_CREDENTIALS_PATH)

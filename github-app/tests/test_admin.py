@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from app_server.auth import encrypt_access_token, sign_session_id
 from app_server.db import (
     create_session,
+    get_max_tokens,
     insert_repo_history,
     set_installation_plan,
     upsert_installation,
@@ -49,6 +50,22 @@ async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="pro"):
     signed = sign_session_id("sess-1", "test-session-secret")
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed})
+
+
+async def _mock_github_installations(monkeypatch, installation_ids: list[int]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "total_count": len(installation_ids),
+                "installations": [{"id": installation_id} for installation_id in installation_ids],
+            },
+        )
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
 
 
 @pytest.mark.asyncio
@@ -114,4 +131,127 @@ async def test_set_health_check_config_requires_login(pool):
                 "health_check_latency_threshold_ms": None,
             },
         )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_my_installations_returns_only_paid_and_administered(pool, monkeypatch):
+    await upsert_installation(pool, 100, "acme")
+    await set_installation_plan(pool, 100, "pro")
+    await upsert_installation(pool, 200, "free-org")
+    await set_installation_plan(pool, 200, "free")
+    await upsert_installation(pool, 300, "not-mine")
+    await set_installation_plan(pool, 300, "pro")
+    await _mock_github_installations(monkeypatch, [100, 200])
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/my-installations",
+            headers={"Authorization": "Bearer gho_faketoken"},
+        )
+
+    assert response.status_code == 200
+    installations = response.json()["installations"]
+    assert [installation["installation_id"] for installation in installations] == [100]
+    assert installations[0]["account_login"] == "acme"
+
+
+@pytest.mark.asyncio
+async def test_my_installations_requires_bearer_token(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/my-installations")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_mints_token_for_administered_paid_installation(pool, monkeypatch):
+    await upsert_installation(pool, 100, "acme")
+    await set_installation_plan(pool, 100, "pro")
+    await _mock_github_installations(monkeypatch, [100])
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/cli-tokens",
+            json={"installation_id": 100, "label": "laptop (device flow)"},
+            headers={"Authorization": "Bearer gho_faketoken"},
+        )
+
+    assert response.status_code == 200
+    assert len(response.json()["token"]) > 20
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_rejects_unadministered_installation(pool, monkeypatch):
+    await upsert_installation(pool, 100, "acme")
+    await set_installation_plan(pool, 100, "pro")
+    await _mock_github_installations(monkeypatch, [999])
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/cli-tokens",
+            json={"installation_id": 100, "label": "x"},
+            headers={"Authorization": "Bearer gho_faketoken"},
+        )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_rejects_free_plan(pool, monkeypatch):
+    await upsert_installation(pool, 100, "acme")
+    await set_installation_plan(pool, 100, "free")
+    await _mock_github_installations(monkeypatch, [100])
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/cli-tokens",
+            json={"installation_id": 100, "label": "x"},
+            headers={"Authorization": "Bearer gho_faketoken"},
+        )
+
+    assert response.status_code == 402
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_enforces_seat_cap(pool, monkeypatch):
+    await upsert_installation(pool, 100, "acme")
+    await set_installation_plan(pool, 100, "pro")
+    await _mock_github_installations(monkeypatch, [100])
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    max_tokens = await get_max_tokens(pool, 100)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        for i in range(max_tokens):
+            response = await client.post(
+                "/v1/cli-tokens",
+                json={"installation_id": 100, "label": f"token-{i}"},
+                headers={"Authorization": "Bearer gho_faketoken"},
+            )
+            assert response.status_code == 200
+        over_limit = await client.post(
+            "/v1/cli-tokens",
+            json={"installation_id": 100, "label": "one-too-many"},
+            headers={"Authorization": "Bearer gho_faketoken"},
+        )
+
+    assert over_limit.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_requires_bearer_token(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/v1/cli-tokens", json={"installation_id": 100, "label": "x"})
     assert response.status_code == 401

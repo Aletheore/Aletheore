@@ -7,6 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from aletheore.cli import _ElapsedTicker, _make_progress_printer, app
+from aletheore.device_auth import DeviceFlowError
 from aletheore.report import (
     AmbiguousAdapterError,
     NoAdapterAvailableError,
@@ -320,7 +321,7 @@ def test_main_scan_positive_check_licenses_flag_is_also_accepted(tmp_path):
 
 
 def test_every_subcommand_help_runs_cleanly():
-    for command in ("audit", "scan", "query", "diff", "mcp", "dashboard", "healthcheck"):
+    for command in ("audit", "scan", "query", "diff", "mcp", "dashboard", "healthcheck", "login"):
         result = runner.invoke(app, [command, "--help"])
         assert result.exit_code == 0, f"{command} --help failed: {result.output}"
         assert "Usage" in result.output
@@ -522,6 +523,75 @@ def test_main_healthcheck_without_evidence_errors_clearly(tmp_path):
 
     assert result.exit_code == 1
     assert "aletheore scan" in result.output
+
+
+def test_login_saves_token_when_installation_auto_resolved(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
+         patch("aletheore.device_auth.mint_cli_token") as mock_mint:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_resolve.return_value = {"installation_id": 100, "account_login": "acme"}
+        mock_mint.return_value = "aletheore-tok-xyz"
+
+        result = runner.invoke(app, ["login"])
+
+    assert result.exit_code == 0
+    assert "acme" in result.output
+    saved = json.loads(creds_path.read_text())
+    assert saved["aletheore-managed-audit"] == "aletheore-tok-xyz"
+
+
+def test_login_prompts_when_installation_ambiguous(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
+         patch("aletheore.device_auth.mint_cli_token") as mock_mint:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_resolve.return_value = [
+            {"installation_id": 100, "account_login": "acme"},
+            {"installation_id": 200, "account_login": "other"},
+        ]
+        mock_mint.return_value = "aletheore-tok-xyz"
+
+        result = runner.invoke(app, ["login"], input="2\n")
+
+    assert result.exit_code == 0
+    called_installation_id = mock_mint.call_args[0][1]
+    assert called_installation_id == 200
+
+
+def test_login_prints_error_and_exits_nonzero_on_device_flow_error():
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.side_effect = DeviceFlowError("authorization was denied")
+
+        result = runner.invoke(app, ["login"])
+
+    assert result.exit_code == 1
+    assert "denied" in result.output
 
 
 def test_main_query_imports_prints_result(tmp_path):

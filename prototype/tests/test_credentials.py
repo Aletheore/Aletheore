@@ -1,6 +1,6 @@
 import json
 
-from aletheore.credentials import get_api_key, has_api_key
+from aletheore.credentials import get_api_key, has_api_key, save_api_token
 
 
 def test_has_api_key_true_from_env_var(monkeypatch, tmp_path):
@@ -101,3 +101,16 @@ def test_save_key_preserves_other_providers_existing_keys(monkeypatch, tmp_path)
 
     saved = json.loads(creds_path.read_text())
     assert saved == {"provider_a": "sk-a", "provider_b": "sk-b"}
+
+
+def test_save_api_token_is_readable_via_get_api_key(monkeypatch, tmp_path):
+    monkeypatch.delenv("TESTPROVIDER_API_KEY", raising=False)
+    creds_path = tmp_path / "creds.json"
+
+    save_api_token("testprovider", "sk-from-device-flow", creds_path)
+
+    def fail_if_called(_msg):
+        raise AssertionError("should not prompt when a saved key exists")
+
+    result = get_api_key("TESTPROVIDER_API_KEY", "testprovider", creds_path, fail_if_called)
+    assert result == "sk-from-device-flow"
