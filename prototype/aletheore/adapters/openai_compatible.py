@@ -221,6 +221,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         needs_key: bool = True,
         requires_consent: bool = True,
         supports_tool_choice: bool = True,
+        request_timeout_seconds: int = REQUEST_TIMEOUT_SECONDS,
         credentials_path: Path | None = None,
     ) -> None:
         self.name = name
@@ -228,6 +229,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         self._base_url = base_url
         self._api_key_env_var = api_key_env_var
         self._model = model
+        self._request_timeout_seconds = request_timeout_seconds
         self._needs_key = needs_key
         self._supports_tool_choice = supports_tool_choice
         self._credentials_path = credentials_path or DEFAULT_CREDENTIALS_PATH
@@ -275,7 +277,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         create_kwargs = {
             "model": self._model,
             "tools": TOOLS,
-            "timeout": REQUEST_TIMEOUT_SECONDS,
+            "timeout": self._request_timeout_seconds,
         }
         if self._supports_tool_choice:
             create_kwargs["tool_choice"] = "required"

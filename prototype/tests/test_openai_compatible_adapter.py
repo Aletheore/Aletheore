@@ -282,6 +282,38 @@ def test_ollama_style_adapter_does_not_need_key(tmp_path):
 
 
 @patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_default_request_timeout_matches_module_constant(mock_openai_class, tmp_path):
+    from aletheore.adapters.openai_compatible import REQUEST_TIMEOUT_SECONDS
+
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _write_all_sections_then_finish_responses()
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        adapter.invoke("audit this repo", cwd=str(repo))
+
+    first_call = mock_client.chat.completions.create.call_args_list[0]
+    assert first_call.kwargs["timeout"] == REQUEST_TIMEOUT_SECONDS
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_custom_request_timeout_is_threaded_through(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _write_all_sections_then_finish_responses()
+
+    adapter = _adapter(tmp_path, request_timeout_seconds=400)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        adapter.invoke("audit this repo", cwd=str(repo))
+
+    first_call = mock_client.chat.completions.create.call_args_list[0]
+    assert first_call.kwargs["timeout"] == 400
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
 def test_supports_tool_choice_false_omits_tool_choice_from_request(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()

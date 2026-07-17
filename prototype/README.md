@@ -232,9 +232,12 @@ on this, it doesn't retry forever), but it will fail. This is not specific to th
 live-tested against four local models on ordinary consumer hardware (`llama3.1:8b`,
 `qwen2.5-coder:14b`, `deepseek-coder-v2:latest`, `gpt-oss:20b`), all four failed this specific
 task — one lacked Ollama tool-calling support entirely (`deepseek-coder-v2` returns
-`does not support tools`), one exceeded the per-request timeout outright (`gpt-oss:20b`,
-likely a hardware-speed problem rather than a capability one), and two produced tool calls but
-never reliably completed all nine sections. No local model has been confirmed to complete this
+`does not support tools`), and three produced tool calls but never reliably completed all nine
+sections. `gpt-oss:20b` initially hit the per-request timeout at the default 120s; re-tested
+with a 600s timeout it did **not** time out, but took ~10 minutes to arrive at the identical
+tool-calling failure the other models hit in under 3 - confirming this is a model-capability
+limit, not a timeout tuning problem. Raising the timeout only makes a guaranteed failure
+slower, so the default stays conservative. No local model has been confirmed to complete this
 audit successfully yet. If you get one working, especially something in the 30B+ range on
 capable hardware, that's genuinely useful data — there is currently no `--model` override
 flag, so trying a different tag than the built-in `llama3.1:8b` requires editing
