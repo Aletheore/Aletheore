@@ -59,6 +59,8 @@ def test_happy_path_posts_comment_and_writes_history(bare_repo_with_two_commits,
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
 
     run_pr_scan_job(
         installation_id=1,
@@ -83,6 +85,8 @@ def test_temp_dir_cleaned_up_on_success(bare_repo_with_two_commits, monkeypatch)
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
 
     seen_job_dirs = []
     original_mkdtemp = jobs_module._job_temp_dir
@@ -140,3 +144,112 @@ def test_clone_failure_posts_failure_comment_and_cleans_up(monkeypatch):
 
     assert "couldn't complete this scan" in posted["body"]
     assert not seen_job_dirs[0].exists()
+
+
+def test_slack_alert_fires_on_paid_install_with_webhook_url_and_new_secret(
+    bare_repo_with_two_commits, monkeypatch
+):
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "pro", "webhook_url": "https://hooks.slack.com/x"},
+    )
+    sent = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_slack_alert",
+        lambda webhook_url, diff, repo_full_name, pr_number: sent.update(
+            webhook_url=webhook_url, repo_full_name=repo_full_name
+        ),
+    )
+
+    run_pr_scan_job(1, "octocat/hello-world", 7, base_sha, head_sha)
+
+    assert sent["webhook_url"] == "https://hooks.slack.com/x"
+    assert sent["repo_full_name"] == "octocat/hello-world"
+
+
+def test_check_run_failure_on_new_secret(bare_repo_with_two_commits, monkeypatch):
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "pro"})
+    created = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo_full_name, head_sha, conclusion, summary: created.update(
+            conclusion=conclusion, head_sha=head_sha
+        ),
+    )
+
+    run_pr_scan_job(1, "octocat/hello-world", 7, base_sha, head_sha)
+
+    assert created["conclusion"] == "failure"
+    assert created["head_sha"] == head_sha
+
+
+def test_managed_audit_api_job_returns_report_text(monkeypatch):
+    monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda repo_path: "# API Report")
+    from scan_worker.jobs import run_managed_audit_api_job
+
+    result = run_managed_audit_api_job(evidence={"scanned_at": "2026-01-01"})
+
+    assert "API Report" in result
+
+
+def test_managed_audit_pr_job_clones_pr_head_runs_audit_and_replies(monkeypatch, tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True)
+    (work / "app.py").write_text("print('hello')\n")
+    subprocess.run(["git", "add", "."], cwd=work, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "commit"], cwd=work, check=True)
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=work,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(work), str(bare)], check=True)
+    subprocess.run(
+        ["git", "--git-dir", str(bare), "update-ref", "refs/pull/42/head", head_sha],
+        check=True,
+    )
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: str(bare))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda repo_path: "# Managed Audit")
+    posted = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo_full_name, pr_number, body, **kwargs: posted.update(
+            body=body,
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+            marker=kwargs.get("marker"),
+        ),
+    )
+    from scan_worker.jobs import AUDIT_COMMENT_MARKER, run_managed_audit_pr_job
+
+    run_managed_audit_pr_job(1, "octocat/hello-world", 42)
+
+    assert "Managed Audit" in posted["body"]
+    assert posted["repo_full_name"] == "octocat/hello-world"
+    assert posted["marker"] == AUDIT_COMMENT_MARKER

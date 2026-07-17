@@ -35,3 +35,23 @@ def insert_repo_history(
                 (installation_id, repo_full_name, keep),
             )
         conn.commit()
+
+
+def get_installation(dsn: str, installation_id: int) -> dict | None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT installation_id, account_login, plan, webhook_url
+                FROM installations
+                WHERE installation_id = %s
+                """,
+                (installation_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            columns = [description[0] for description in cur.description]
+            return dict(zip(columns, row))

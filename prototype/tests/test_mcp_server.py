@@ -110,9 +110,10 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_scan",
         "aletheore_healthcheck",
         "aletheore_search_codebase",
+        "aletheore_managed_audit",
     }
     assert expected.issubset(names)
-    assert len(names) == 20
+    assert len(names) == 21
     assert "aletheore_answer" not in names
 
 
@@ -181,6 +182,20 @@ async def test_aletheore_hotspots_tool_returns_toon_results(tmp_path):
     result = await server.call_tool("aletheore_hotspots", {})
 
     assert tool_result_body(result)["result"][0]["path"] == "a.py"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_managed_audit_tool_calls_client(tmp_path, monkeypatch):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+    monkeypatch.setattr(
+        "aletheore.mcp_server.run_managed_audit_request",
+        lambda evidence, token: "# Report\n\nmanaged audit text",
+    )
+
+    result = await server.call_tool("aletheore_managed_audit", {"token": "real-token"})
+
+    assert tool_result_body(result)["result"]["report"].startswith("# Report")
 
 
 @pytest.mark.asyncio

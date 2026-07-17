@@ -9,6 +9,7 @@ from aletheore.answer import answer_question
 from aletheore.evidence import scan_repository, write_evidence
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
+from aletheore.managed_audit_client import run_managed_audit_request
 from aletheore.query import (
     ModuleNotFoundInEvidenceError,
     QUERY_FUNCTIONS,
@@ -238,6 +239,21 @@ def _register_answer_tool(
         return _toon_result(answer_question(repo_path, question, answer_adapter, k=k))
 
 
+def _register_managed_audit_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_managed_audit")
+    def aletheore_managed_audit(token: str | None = None) -> str:
+        """Run a full audit report using Aletheore's managed audit service."""
+        import os
+
+        resolved_token = token or os.environ.get("ALETHEORE_API_TOKEN")
+        if not resolved_token:
+            return _toon_result(
+                {"error": "no managed-audit token available (set ALETHEORE_API_TOKEN or pass token)"}
+            )
+        evidence = read_evidence(repo_path)
+        return _toon_result({"report": run_managed_audit_request(evidence, resolved_token)})
+
+
 def build_server(repo_path: Path, answer_adapter: AgentAdapter | None = None) -> FastMCP:
     mcp_instance = FastMCP("aletheore")
     _register_query_wrapper_tools(mcp_instance, repo_path)
@@ -248,6 +264,7 @@ def build_server(repo_path: Path, answer_adapter: AgentAdapter | None = None) ->
     _register_scan_tool(mcp_instance, repo_path)
     _register_healthcheck_tool(mcp_instance, repo_path)
     _register_search_codebase_tool(mcp_instance, repo_path)
+    _register_managed_audit_tool(mcp_instance, repo_path)
     if answer_adapter is not None:
         _register_answer_tool(mcp_instance, repo_path, answer_adapter)
     return mcp_instance

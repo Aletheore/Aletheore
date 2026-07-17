@@ -9,6 +9,10 @@ class Settings:
     github_app_id: str
     github_app_private_key: str
     github_webhook_secret: str
+    github_client_id: str
+    github_client_secret: str
+    session_secret: str
+    public_base_url: str
 
 
 def _load_private_key() -> str:
@@ -32,4 +36,8 @@ def get_settings() -> Settings:
         github_app_id=os.environ.get("GITHUB_APP_ID", ""),
         github_app_private_key=_load_private_key(),
         github_webhook_secret=os.environ.get("GITHUB_WEBHOOK_SECRET", ""),
+        github_client_id=os.environ.get("GITHUB_CLIENT_ID", ""),
+        github_client_secret=os.environ.get("GITHUB_CLIENT_SECRET", ""),
+        session_secret=os.environ.get("SESSION_SECRET", ""),
+        public_base_url=os.environ.get("PUBLIC_BASE_URL", "https://aletheore.com"),
     )

@@ -3,9 +3,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 
+from app_server.admin import admin_router
+from app_server.auth import auth_router
 from app_server.config import get_settings
 from app_server.dashboard import dashboard_router
 from app_server.db import create_pool
+from app_server.managed_audit_api import managed_audit_router
 from app_server.signature import verify_signature
 from app_server.webhooks.installation import handle_installation_event
 
@@ -21,6 +24,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(dashboard_router)
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(managed_audit_router)
 
 
 @app.post("/webhook")
@@ -44,5 +50,9 @@ async def webhook(request: Request):
         from app_server.webhooks.pull_request import handle_pull_request_event
 
         await handle_pull_request_event(payload, settings.redis_url)
+    elif event == "issue_comment":
+        from app_server.webhooks.issue_comment import handle_issue_comment_event
+
+        await handle_issue_comment_event(payload, settings.redis_url)
 
     return {"ok": True}

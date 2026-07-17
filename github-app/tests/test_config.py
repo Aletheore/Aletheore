@@ -7,7 +7,15 @@ from app_server.config import get_settings
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for key in ("DATABASE_URL", "GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_PRIVATE_KEY_PATH"):
+    for key in (
+        "DATABASE_URL",
+        "GITHUB_APP_PRIVATE_KEY",
+        "GITHUB_APP_PRIVATE_KEY_PATH",
+        "GITHUB_CLIENT_ID",
+        "GITHUB_CLIENT_SECRET",
+        "SESSION_SECRET",
+        "PUBLIC_BASE_URL",
+    ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost/db")
 
@@ -33,3 +41,17 @@ def test_path_takes_precedence_over_raw_env_var(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "from-env-var")
     settings = get_settings()
     assert settings.github_app_private_key == "from-file"
+
+
+def test_reads_paid_tier_settings(monkeypatch):
+    monkeypatch.setenv("GITHUB_CLIENT_ID", "client-id")
+    monkeypatch.setenv("GITHUB_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("SESSION_SECRET", "session-secret")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://example.com")
+
+    settings = get_settings()
+
+    assert settings.github_client_id == "client-id"
+    assert settings.github_client_secret == "client-secret"
+    assert settings.session_secret == "session-secret"
+    assert settings.public_base_url == "https://example.com"

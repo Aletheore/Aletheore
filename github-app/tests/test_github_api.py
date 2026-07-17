@@ -30,3 +30,49 @@ def test_updates_existing_comment():
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
     upsert_pr_comment(client, "token", "octocat/hello-world", 42, f"{COMMENT_MARKER}\nnew body")
     assert [method for method, _ in calls] == ["GET", "PATCH"]
+
+
+def test_upsert_pr_comment_uses_custom_marker_when_given():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.content))
+        if request.method == "GET":
+            return httpx.Response(200, json=[{"id": 1, "body": f"{COMMENT_MARKER}\nold diff"}])
+        return httpx.Response(201, json={"id": 2})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    upsert_pr_comment(
+        client,
+        "token",
+        "octocat/hello-world",
+        42,
+        "<!-- aletheore-audit -->\nnew audit",
+        marker="<!-- aletheore-audit -->",
+    )
+    assert [method for method, _ in calls] == ["GET", "POST"]
+
+
+def test_create_check_run_posts_expected_payload():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(201, json={"id": 1})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    from scan_worker.github_api import create_check_run
+
+    create_check_run(client, "token", "octocat/hello-world", "abc123", "failure", "New secret found")
+
+    assert len(calls) == 1
+    request = calls[0]
+    assert request.method == "POST"
+    assert request.url.path == "/repos/octocat/hello-world/check-runs"
+    import json as _json
+
+    body = _json.loads(request.content)
+    assert body["head_sha"] == "abc123"
+    assert body["status"] == "completed"
+    assert body["conclusion"] == "failure"
+    assert body["name"] == "Aletheore secrets check"

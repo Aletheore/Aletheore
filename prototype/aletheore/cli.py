@@ -23,10 +23,12 @@ from aletheore.adapters.grok_build import GrokBuildAdapter
 from aletheore.adapters.mistral_vibe import MistralVibeAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.adapters.opencode import OpenCodeAdapter
+from aletheore.credentials import get_api_key
 from aletheore.dashboard import build_app
 from aletheore.evidence import scan_repository, write_evidence
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
+from aletheore.managed_audit_client import ManagedAuditError, run_managed_audit_request
 from aletheore.mcp_server import build_server
 from aletheore.query import (
     BranchNotFoundInEvidenceError,
@@ -273,6 +275,43 @@ def _audit(
     console.print(f"[green]Audit report written to[/green] {report_path}")
     console.print()
     console.print(_sponsor_panel())
+    return 0
+
+
+def _managed_audit(
+    repo_path: str,
+    token: str | None,
+    check_vulnerabilities: bool,
+    scan_git_history: bool,
+    check_licenses: bool = True,
+    map_endpoints: bool = True,
+) -> int:
+    resolved_token = token or get_api_key("ALETHEORE_API_TOKEN", "aletheore-managed-audit")
+    if not resolved_token:
+        console.print("[bold red]error:[/bold red] no managed-audit token available")
+        return 1
+
+    _exit_code, evidence, evidence_path = _scan(
+        repo_path,
+        check_vulnerabilities,
+        scan_git_history,
+        check_licenses,
+        map_endpoints,
+    )
+    repo = Path(repo_path).resolve()
+
+    console.print("Running managed audit (using Aletheore's shared key)...")
+    try:
+        with _ElapsedTicker("Waiting on the managed audit service"):
+            report_text = run_managed_audit_request(evidence, resolved_token)
+    except ManagedAuditError as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
+        console.print(f"Evidence is still available at {evidence_path} for manual use.")
+        return 1
+
+    report_path = repo / ".aletheore" / "audit-report.md"
+    report_path.write_text(report_text)
+    console.print(f"[green]Managed audit report written to[/green] {report_path}")
     return 0
 
 
@@ -567,6 +606,16 @@ def _main_callback(ctx: typer.Context) -> None:
 def audit(
     path: str = typer.Argument(".", help="repository path"),
     agent: Optional[str] = typer.Option(None, "--agent", help="force a specific agent adapter by name"),
+    managed: bool = typer.Option(
+        False,
+        "--managed",
+        help="run the audit using Aletheore's shared managed key instead of BYOK",
+    ),
+    token: Optional[str] = typer.Option(
+        None,
+        "--token",
+        help="managed-audit API token (or set ALETHEORE_API_TOKEN)",
+    ),
     check_vulnerabilities: bool = typer.Option(
         True,
         "--check-vulnerabilities/--no-check-vulnerabilities",
@@ -588,6 +637,17 @@ def audit(
         help="static API endpoint mapping (on by default)",
     ),
 ) -> None:
+    if managed:
+        raise typer.Exit(
+            code=_managed_audit(
+                path,
+                token,
+                check_vulnerabilities,
+                scan_git_history,
+                check_licenses,
+                map_endpoints,
+            )
+        )
     raise typer.Exit(
         code=_audit(path, agent, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints)
     )
