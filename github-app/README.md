@@ -28,12 +28,19 @@ python -m pytest tests/ -v
 
 1. Register the GitHub App with webhook URL `https://aletheore.com/webhook`.
 2. Grant `contents: read` and `pull_requests: write`.
-3. Subscribe to `pull_request`, `installation`, `installation_repositories`, and
-   `marketplace_purchase`.
-4. Copy `.env.example` to `.env` on the server and fill the GitHub App, webhook,
-   and Postgres values.
-5. Point `aletheore.com` at the KVM4 server.
-6. Run `docker compose up -d --build`.
+3. Subscribe to `pull_request` only - `installation`/`installation_repositories`
+   are delivered automatically for any App with repository permissions and
+   `marketplace_purchase` is tied to the separate Marketplace listing, neither
+   is a checkbox on the event-subscription page.
+4. Copy `.env.example` to `.env` on the server and fill the GitHub App ID,
+   webhook secret, and Postgres values.
+5. Place the downloaded private key at `github-app/app-private-key.pem` -
+   `docker-compose.yml` mounts it read-only and points
+   `GITHUB_APP_PRIVATE_KEY_PATH` at it. Do not paste the key into `.env`
+   directly: plain env-file values reject the real newlines in a PEM
+   (confirmed empirically against docker run/compose --env-file).
+6. Point `aletheore.com` at the KVM4 server.
+7. Run `docker compose up -d --build`.
 
 The dashboard route is a JSON foundation endpoint at `/app/{org}/{repo}`. A
 private-repository OAuth gate and rendered UI are deferred fast-follows; do not
