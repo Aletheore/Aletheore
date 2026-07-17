@@ -5,6 +5,17 @@ Notable changes to Aletheore, by release. The working code lives in `prototype/`
 
 ## Unreleased
 
+- **Fixed `aletheore audit` hanging or running away when an API-based provider's model stopped
+  calling tools mid-report.** The tool-calling loop used to silently retry (up to all 20
+  rounds) whenever a model responded with plain text instead of a tool call - live-verified
+  against a real local Ollama run that burned 250s+ across 4 rounds without writing a single
+  section. Now caps consecutive no-tool-call rounds at 2, with a corrective nudge on the first
+  miss and a fast, clear failure on the second. Also forces `tool_choice` (`"required"` for
+  OpenAI-compatible providers, `{"type": "any"}` for the native Anthropic adapter) on providers
+  that support it, preventing the no-tool-call response from happening at all rather than just
+  reacting to it - made opt-in per-adapter after live-verifying that Ollama's own `/v1`
+  OpenAI-compat endpoint does not support this parameter (a direct request with it never
+  returned at all; the identical request without it returned normally in ~5s).
 - Expanded `aletheore audit` to full CLI + API coverage across every major provider: Claude
   (`claude` CLI / `anthropic` API), OpenAI (`codex` CLI / `openai` API), Google (`gemini-cli`
   CLI / `gemini` API), Mistral (`mistral-vibe` CLI / `mistral` API), and xAI (`grok-build` CLI

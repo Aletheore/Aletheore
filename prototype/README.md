@@ -224,6 +224,18 @@ variable or saved key exists, Aletheore prompts for a key and asks whether to us
 save it to `~/.config/aletheore/credentials.json` with `0600` permissions. Keys are never
 printed or included in adapter error messages.
 
+**A note on local model choice for `ollama`**: the default `ollama` model tag
+(`llama3.1:8b`) is too small to reliably follow this audit's structured, multi-round
+tool-calling contract — it will typically fail with a clear "finished without writing
+required section(s)" error rather than a hang (Aletheore fails fast on this, it doesn't
+retry forever), but it will fail. Models that hold up noticeably better on structured
+tool-calling and coding tasks at comparable or better memory footprints: `qwen2.5-coder:14b`
+or `qwen2.5-coder:32b` (dedicated coding models, strong tool-calling adherence),
+`deepseek-coder-v2` (strong on code-specific structured tasks). Pull one with
+`ollama pull qwen2.5-coder:14b`. There is currently no `--model` override flag — using a
+different local model than the built-in `llama3.1:8b` tag requires editing `KNOWN_ADAPTERS`
+in `aletheore/cli.py` if you're running from source.
+
 API/local adapters are deliberately bounded: they receive no raw repository files and no
 filesystem tools. They can only call `read_evidence_section` against
 `.aletheore/evidence.toon`, write named report sections, and finish the report.
