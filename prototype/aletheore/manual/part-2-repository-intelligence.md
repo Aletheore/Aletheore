@@ -17,6 +17,8 @@ rules in Part I for everything below.
   `name`, `start_line`, and `end_line` for each extracted function/class).
 - `dependency_graph`: `nodes` and `edges` derived from `modules`.
 - `unparseable_files`: files that could not be parsed, with a `reason` per file.
+- `dead_code`: deterministic dead-code indicators: `unreachable_modules`,
+  `unused_dependencies`, and `entry_points_detected`.
 
 ## Do not speculate rule
 
@@ -38,3 +40,6 @@ its presence — say so rather than guessing from file names or conventions.
   compared.
 - **Evidence coverage gaps**: always report `unparseable_files` count and list, even if empty
   (say "none" explicitly rather than omitting the section).
+- **Dead-code candidates**: use `dead_code.unreachable_modules` and
+  `dead_code.unused_dependencies` as candidates, not proof of deletion safety. Cite the exact
+  path or package and the recorded reason.

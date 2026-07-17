@@ -24,7 +24,15 @@ def load_architecture_config(repo_path: Path) -> dict | None:
     if not isinstance(cluster_resolution, (int, float)) or isinstance(cluster_resolution, bool):
         cluster_resolution = 1.0
 
-    return {"layer_markers": layer_markers, "cluster_resolution": float(cluster_resolution)}
+    result = {"layer_markers": layer_markers, "cluster_resolution": float(cluster_resolution)}
+
+    dead_code_entry_points = data.get("dead_code_entry_points", [])
+    if isinstance(dead_code_entry_points, list):
+        valid_entry_points = [path for path in dead_code_entry_points if isinstance(path, str)]
+        if valid_entry_points:
+            result["dead_code_entry_points"] = valid_entry_points
+
+    return result
 
 
 LAYER_FOLDER_MARKERS = {

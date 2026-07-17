@@ -47,6 +47,32 @@ def test_scan_repository_handles_no_git_history(tmp_path):
     (repo / "main.py").write_text("x = 1\n")
     evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
     assert evidence["git"] == {"available": False}
+    assert "dead_code" in evidence["repository"]
+    assert "hotspots" not in evidence["git"]
+
+
+def test_scan_repository_includes_dead_code_and_hotspots(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "a@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "A"], cwd=repo, check=True)
+    (repo / "main.py").write_text("def run():\n    pass\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=repo, check=True)
+
+    evidence = scan_repository(
+        repo,
+        check_vulnerabilities=False,
+        scan_git_history=False,
+        check_licenses=False,
+        map_endpoints=False,
+    )
+
+    assert "dead_code" in evidence["repository"]
+    assert "unreachable_modules" in evidence["repository"]["dead_code"]
+    assert "hotspots" in evidence["git"]
+    assert evidence["git"]["hotspots"][0]["path"] == "main.py"
 
 
 def test_write_evidence_creates_aletheore_dir(tmp_path):
@@ -211,6 +237,18 @@ def test_scan_repository_config_applied_is_none_without_aletheore_json(tmp_path)
         evidence = scan_repository(repo, scan_git_history=False, check_licenses=False)
 
     assert evidence["architecture"]["config_applied"] is None
+
+
+def test_scan_repository_applies_dead_code_entry_points_config(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "worker.py").write_text("def run():\n    pass\n")
+    (repo / ".aletheore.json").write_text('{"dead_code_entry_points": ["worker.py"]}')
+
+    evidence = scan_repository(repo, scan_git_history=False, check_licenses=False)
+
+    assert "worker.py" in evidence["repository"]["dead_code"]["entry_points_detected"]
+    assert evidence["repository"]["dead_code"]["unreachable_modules"] == []
 
 
 def test_scan_repository_applies_a_secrets_baseline_end_to_end(tmp_path):

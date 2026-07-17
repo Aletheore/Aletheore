@@ -21,6 +21,8 @@ to describe branches, cadence, or ownership. Do not fabricate any git history.
   `names` git recorded for that email, `commit_count`, and `percent`. Two different display
   names under the same email are already the same person by construction — do not re-flag
   that as an identity ambiguity.
+- `hotspots`: raw churn and co-change facts per file: `churn_count`,
+  `co_change_partners`, and `dependents_count`. These are counts, not a composite risk score.
 - `repo_age_days` and `total_commits`.
 
 ## What counts as noteworthy
@@ -40,6 +42,9 @@ to describe branches, cadence, or ownership. Do not fabricate any git history.
   `most_recent_week_partial` before calling the final week a slowdown — if it's `true`, say
   the drop is not yet confirmed because the week is still in progress, not that it's a
   decline.
+- **Hotspots**: files with high `hotspots[].churn_count`, especially when they also have
+  nonempty `co_change_partners` or a high `dependents_count`. Report the raw counts and partner
+  paths; do not collapse them into a risk score.
 
 ## What this section does not produce
 

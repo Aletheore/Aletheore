@@ -15,6 +15,7 @@ from aletheore.query import (
     find_cluster,
     find_imported_by,
     find_imports,
+    find_symbol_source,
 )
 from aletheore.secrets import iter_all_files
 from aletheore.search_index import search_index
@@ -52,6 +53,8 @@ _TOOL_NAME_TO_QUERY_KIND = {
     "aletheore_endpoints": "endpoints",
     "aletheore_cluster": "cluster",
     "aletheore_layer_violations": "layer-violations",
+    "aletheore_dead_code": "dead-code",
+    "aletheore_hotspots": "hotspots",
 }
 
 _SEARCH_MATCH_CAP = 200
@@ -148,6 +151,14 @@ def _register_search_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
         return _toon_result({"matches": matches, "truncated": truncated})
 
 
+def _register_symbol_source_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_symbol_source")
+    def aletheore_symbol_source(module: str, symbol: str) -> str:
+        """Exact source text for one named function/class, with resolved line bounds."""
+        evidence = read_evidence(repo_path)
+        return _toon_result(find_symbol_source(evidence, repo_path, module, symbol))
+
+
 def _scan_summary(evidence: dict) -> dict:
     secret_findings = evidence["security"]["secrets"]["findings"]
     history_findings = evidence["security"]["secrets"]["history_findings"]
@@ -233,6 +244,7 @@ def build_server(repo_path: Path, answer_adapter: AgentAdapter | None = None) ->
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
+    _register_symbol_source_tool(mcp_instance, repo_path)
     _register_scan_tool(mcp_instance, repo_path)
     _register_healthcheck_tool(mcp_instance, repo_path)
     _register_search_codebase_tool(mcp_instance, repo_path)

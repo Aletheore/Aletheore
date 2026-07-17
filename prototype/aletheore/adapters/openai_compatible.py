@@ -91,12 +91,14 @@ repository.modules[]                - {path, imports[], imported_by[], symbols: 
 repository.dependency_graph         - {nodes[], edges[]}
 repository.unparseable_files[]      - {path, reason}
 repository.api_endpoints            - {checked, endpoints[]: {method, path, framework, file, line, handler, unresolved, note}}
+repository.dead_code                - {unreachable_modules[]: {path, reason}, unused_dependencies[]: {ecosystem, package}, entry_points_detected[]}
 git.available                       - false if not a git repo
 git.branches[]                      - {name, type, stale_days, ahead_of_main, behind_main}
 git.ownership[]                     - {email, names[], commit_count, percent}
 git.total_commits
 git.commit_cadence                  - {weekly_counts[], trend}
 git.repo_age_days
+git.hotspots[]                      - {path, churn_count, co_change_partners[]: {path, co_occurrences}, dependents_count}
 security.secrets                    - {scanned_files, findings[], history_scanned_commits, history_findings[]}
 security.dependency_vulnerabilities - {checked, reason, findings[]: {ecosystem, package, installed_version, advisory_id, summary, severity}}
 security.dependency_licenses        - {checked, reason, repo_license: {category, detected_from}, findings[]: {ecosystem, package, installed_version, license, category}}

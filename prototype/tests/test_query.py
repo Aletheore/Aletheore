@@ -4,15 +4,19 @@ from aletheore.query import (
     QUERY_FUNCTIONS,
     BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
+    SymbolNotFoundInEvidenceError,
     find_branch,
     find_cluster,
+    find_dead_code_evidence,
     find_endpoints,
+    find_hotspots,
     find_imported_by,
     find_imports,
     find_layer_violations,
     find_licenses,
     find_ownership,
     find_secrets_for_file,
+    find_symbol_source,
     find_symbols,
     find_vulnerabilities,
 )
@@ -55,6 +59,11 @@ def make_evidence():
                     }
                 ],
             },
+            "dead_code": {
+                "unreachable_modules": [{"path": "app/unused.py", "reason": "no imports"}],
+                "unused_dependencies": [],
+                "entry_points_detected": ["app/main.py"],
+            },
         },
         "git": {
             "branches": [
@@ -68,6 +77,14 @@ def make_evidence():
             ],
             "ownership": [
                 {"email": "a@example.com", "names": ["Alice"], "commit_count": 5, "percent": 1.0}
+            ],
+            "hotspots": [
+                {
+                    "path": "app/auth.py",
+                    "churn_count": 3,
+                    "co_change_partners": [{"path": "app/config.py", "co_occurrences": 2}],
+                    "dependents_count": 1,
+                }
             ],
         },
         "security": {
@@ -113,6 +130,32 @@ def test_find_symbols_returns_the_module_symbols_dict():
         "functions": [{"name": "login", "start_line": 4, "end_line": 5}],
         "classes": [{"name": "AuthError", "start_line": 8, "end_line": 9}],
     }
+
+
+def test_find_symbol_source_returns_exact_lines(tmp_path):
+    repo = tmp_path
+    (repo / "app").mkdir()
+    (repo / "app" / "auth.py").write_text(
+        "from app import config\n\n\ndef login():\n    return config.load()\n\n"
+    )
+
+    result = find_symbol_source(make_evidence(), repo, "app/auth.py", "login")
+
+    assert result["module"] == "app/auth.py"
+    assert result["symbol"] == "login"
+    assert result["start_line"] == 4
+    assert result["end_line"] == 5
+    assert result["source"] == "def login():\n    return config.load()"
+
+
+def test_find_symbol_source_raises_when_symbol_missing(tmp_path):
+    with pytest.raises(SymbolNotFoundInEvidenceError, match="nonexistent"):
+        find_symbol_source(make_evidence(), tmp_path, "app/auth.py", "nonexistent")
+
+
+def test_find_symbol_source_raises_when_module_missing(tmp_path):
+    with pytest.raises(ModuleNotFoundInEvidenceError):
+        find_symbol_source(make_evidence(), tmp_path, "app/missing.py", "login")
 
 
 def test_find_imports_raises_for_unknown_path():
@@ -174,7 +217,15 @@ def test_find_layer_violations_returns_the_whole_block_ignoring_target():
     assert result == make_evidence()["architecture"]["layer_violations"]
 
 
-def test_query_functions_registry_has_all_eleven_kinds_with_correct_requires_target():
+def test_find_dead_code_evidence_returns_the_whole_block_ignoring_target():
+    assert find_dead_code_evidence(make_evidence(), None) == make_evidence()["repository"]["dead_code"]
+
+
+def test_find_hotspots_returns_git_hotspots_ignoring_target():
+    assert find_hotspots(make_evidence(), None) == make_evidence()["git"]["hotspots"]
+
+
+def test_query_functions_registry_has_all_kinds_with_correct_requires_target():
     expected = {
         "imports": True,
         "imported-by": True,
@@ -187,6 +238,8 @@ def test_query_functions_registry_has_all_eleven_kinds_with_correct_requires_tar
         "endpoints": False,
         "cluster": True,
         "layer-violations": False,
+        "dead-code": False,
+        "hotspots": False,
     }
     assert set(QUERY_FUNCTIONS.keys()) == set(expected.keys())
     for kind, requires_target in expected.items():

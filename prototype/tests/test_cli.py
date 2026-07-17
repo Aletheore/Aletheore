@@ -537,6 +537,18 @@ def test_main_query_imports_prints_result(tmp_path):
     assert "app/config.py" in result.output
 
 
+def test_main_query_symbol_source_prints_toon_result(tmp_path):
+    repo = tmp_path
+    (repo / "app.py").write_text("x = 1\n\ndef greet():\n    return 'hi'\n")
+    runner.invoke(app, ["scan", str(repo)])
+
+    result = runner.invoke(app, ["query", "symbol-source", "app.py", "greet", "--path", str(repo)])
+
+    assert result.exit_code == 0
+    assert "def greet" in result.output
+    assert "return 'hi'" in result.output
+
+
 def test_main_query_ownership_does_not_require_a_target(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")

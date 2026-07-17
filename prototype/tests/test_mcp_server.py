@@ -43,11 +43,24 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
             ],
             "dependency_graph": {"nodes": ["a.py", "b.py"], "edges": [["a.py", "b.py"]]},
             "api_endpoints": {"checked": True, "endpoints": []},
+            "dead_code": {
+                "unreachable_modules": [{"path": "unused.py", "reason": "no imports"}],
+                "unused_dependencies": [],
+                "entry_points_detected": ["a.py"],
+            },
         },
         "git": {
             "branches": [{"name": "main", "ahead_of_main": 0}],
             "ownership": [{"path": "a.py", "top_author": "alice"}],
             "total_commits": 5,
+            "hotspots": [
+                {
+                    "path": "a.py",
+                    "churn_count": 3,
+                    "co_change_partners": [{"path": "b.py", "co_occurrences": 2}],
+                    "dependents_count": 0,
+                }
+            ],
         },
         "security": {
             "secrets": {
@@ -64,6 +77,7 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
         },
     }
     (aletheore_dir / "evidence.json").write_text(json.dumps(evidence))
+    (repo / "a.py").write_text("def foo():\n    return 1\n")
     return repo
 
 
@@ -87,15 +101,18 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_endpoints",
         "aletheore_cluster",
         "aletheore_layer_violations",
+        "aletheore_dead_code",
+        "aletheore_hotspots",
         "aletheore_changes",
         "aletheore_neighborhood",
         "aletheore_search",
+        "aletheore_symbol_source",
         "aletheore_scan",
         "aletheore_healthcheck",
         "aletheore_search_codebase",
     }
     assert expected.issubset(names)
-    assert len(names) == 17
+    assert len(names) == 20
     assert "aletheore_answer" not in names
 
 
@@ -134,6 +151,36 @@ async def test_aletheore_imports_tool_returns_correct_result(tmp_path):
     result = await server.call_tool("aletheore_imports", {"target": "a.py"})
 
     assert tool_result_body(result) == {"result": ["b.py"]}
+
+
+@pytest.mark.asyncio
+async def test_aletheore_symbol_source_returns_exact_source(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo"})
+
+    assert tool_result_body(result)["result"]["source"] == "def foo():"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_dead_code_tool_returns_toon_results(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_dead_code", {})
+
+    assert tool_result_body(result)["result"]["unreachable_modules"][0]["path"] == "unused.py"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_hotspots_tool_returns_toon_results(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_hotspots", {})
+
+    assert tool_result_body(result)["result"][0]["path"] == "a.py"
 
 
 @pytest.mark.asyncio

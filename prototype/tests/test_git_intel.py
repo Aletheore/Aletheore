@@ -3,7 +3,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from aletheore.git_intel.analyzer import analyze_git
+from aletheore.git_intel.analyzer import analyze_git, compute_hotspots
 
 
 def run(repo: Path, *args: str):
@@ -172,3 +172,105 @@ def test_analyze_git_ignores_remote_head_symbolic_ref(tmp_path):
     assert "origin/main" in branch_names
     assert "origin" not in branch_names
     assert "origin/HEAD" not in branch_names
+
+
+def _init_repo_with_hotspot_commits(tmp_path):
+    repo = tmp_path / "hotspot_repo"
+    repo.mkdir()
+    run(repo, "init", "-q")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "A")
+
+    (repo / "a.py").write_text("1")
+    (repo / "b.py").write_text("1")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "initial")
+
+    (repo / "a.py").write_text("2")
+    (repo / "b.py").write_text("2")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "touch both")
+
+    (repo / "a.py").write_text("3")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "touch a only")
+    return repo
+
+
+def test_compute_hotspots_ranks_by_churn(tmp_path):
+    repo = _init_repo_with_hotspot_commits(tmp_path)
+    modules = [
+        {"path": "a.py", "imported_by": []},
+        {"path": "b.py", "imported_by": ["a.py"]},
+    ]
+    hotspots = compute_hotspots(repo, modules)
+    by_path = {hotspot["path"]: hotspot for hotspot in hotspots}
+    assert by_path["a.py"]["churn_count"] == 3
+    assert by_path["b.py"]["churn_count"] == 2
+    assert hotspots[0]["path"] == "a.py"
+
+
+def test_compute_hotspots_finds_co_change_partner(tmp_path):
+    repo = _init_repo_with_hotspot_commits(tmp_path)
+    modules = [
+        {"path": "a.py", "imported_by": []},
+        {"path": "b.py", "imported_by": []},
+    ]
+    hotspots = compute_hotspots(repo, modules)
+    a = next(hotspot for hotspot in hotspots if hotspot["path"] == "a.py")
+    partners = {partner["path"]: partner["co_occurrences"] for partner in a["co_change_partners"]}
+    assert partners["b.py"] == 2
+
+
+def test_compute_hotspots_uses_dependents_count_from_imported_by(tmp_path):
+    repo = _init_repo_with_hotspot_commits(tmp_path)
+    modules = [
+        {"path": "a.py", "imported_by": ["b.py", "c.py"]},
+        {"path": "b.py", "imported_by": []},
+    ]
+    hotspots = compute_hotspots(repo, modules)
+    a = next(hotspot for hotspot in hotspots if hotspot["path"] == "a.py")
+    assert a["dependents_count"] == 2
+
+
+def test_compute_hotspots_excludes_mass_commits_from_co_change(tmp_path):
+    repo = tmp_path / "mass_repo"
+    repo.mkdir()
+    run(repo, "init", "-q")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "A")
+
+    many_files = [f"f{i}.py" for i in range(60)]
+    for name in many_files:
+        (repo / name).write_text("1")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "mass commit touching 60 files")
+
+    hotspots = compute_hotspots(repo, [{"path": name, "imported_by": []} for name in many_files])
+    f0 = next(hotspot for hotspot in hotspots if hotspot["path"] == "f0.py")
+    assert f0["co_change_partners"] == []
+    assert f0["churn_count"] == 1
+
+
+def test_compute_hotspots_normalizes_paths_when_scan_root_is_subdirectory(tmp_path):
+    repo = tmp_path / "repo"
+    subdir = repo / "prototype"
+    subdir.mkdir(parents=True)
+    run(repo, "init", "-q")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "A")
+    (subdir / "a.py").write_text("1")
+    (repo / "README.md").write_text("outside")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "initial")
+
+    hotspots = compute_hotspots(subdir, [{"path": "a.py", "imported_by": []}])
+
+    assert hotspots == [
+        {
+            "path": "a.py",
+            "churn_count": 1,
+            "co_change_partners": [],
+            "dependents_count": 0,
+        }
+    ]

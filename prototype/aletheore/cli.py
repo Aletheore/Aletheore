@@ -32,6 +32,8 @@ from aletheore.query import (
     BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
     QUERY_FUNCTIONS,
+    SymbolNotFoundInEvidenceError,
+    find_symbol_source,
 )
 from aletheore.report import (
     AmbiguousAdapterError,
@@ -89,7 +91,12 @@ MANUAL_DIR = str(Path(__file__).resolve().parent / "manual")
 
 console = Console()
 
-QUERY_KIND_CHOICES = list(QUERY_FUNCTIONS.keys()) + ["changes", "search-codebase", "answer"]
+QUERY_KIND_CHOICES = list(QUERY_FUNCTIONS.keys()) + [
+    "changes",
+    "search-codebase",
+    "answer",
+    "symbol-source",
+]
 
 
 def _sponsor_panel() -> Panel:
@@ -314,6 +321,7 @@ def _query(
     full: bool = False,
     forced_agent: str | None = None,
     k: int = 10,
+    symbol: str | None = None,
 ) -> int:
     if kind not in QUERY_KIND_CHOICES:
         console.print(
@@ -370,6 +378,19 @@ def _query(
         print(f"error: no evidence found at {evidence_path}")
         print(f"Run 'aletheore scan {repo}' first.")
         return 1
+
+    if kind == "symbol-source":
+        if target is None or symbol is None:
+            print("error: query type 'symbol-source' requires module and symbol arguments")
+            return 1
+        evidence = json.loads(evidence_path.read_text())
+        try:
+            result = find_symbol_source(evidence, repo, target, symbol)
+        except (ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError) as exc:
+            print(f"error: {exc}")
+            return 1
+        print(to_toon({"result": result}))
+        return 0
 
     func, requires_target = QUERY_FUNCTIONS[kind]
     if requires_target and target is None:
@@ -611,6 +632,7 @@ def index(path: str = typer.Argument(".", help="repository path")) -> None:
 def query(
     kind: str = typer.Argument(..., help=f"one of: {', '.join(QUERY_KIND_CHOICES)}"),
     target: Optional[str] = typer.Argument(None, help="target for kinds that need one (a file path, branch name, ...)"),
+    symbol: Optional[str] = typer.Argument(None, help="symbol name for 'symbol-source'"),
     repo_path: str = typer.Option(".", "--path", help="repository path"),
     full: bool = typer.Option(
         False, "--full", help="show the full raw diff instead of the curated summary (only 'changes')"
@@ -618,7 +640,7 @@ def query(
     agent: Optional[str] = typer.Option(None, "--agent", help="provider for 'answer'"),
     k: int = typer.Option(10, "--k", help="number of semantic search results"),
 ) -> None:
-    raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k))
+    raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k, symbol))
 
 
 @app.command(help="compare two evidence.json files")

@@ -2,6 +2,9 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+MASS_COMMIT_FILE_THRESHOLD = 50
+HOTSPOT_LIMIT = 30
+
 
 def _run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -147,6 +150,65 @@ def _ownership(repo_path: Path) -> list[dict]:
         }
         for email, count in sorted(counts.items(), key=lambda kv: -kv[1])
     ]
+
+
+def _commit_file_lists(repo_path: Path) -> list[list[str]]:
+    result = _run_git(repo_path, "log", "--format=%x00", "--name-only", "HEAD")
+    prefix_result = _run_git(repo_path, "rev-parse", "--show-prefix")
+    prefix = prefix_result.stdout.strip()
+    commits: list[list[str]] = []
+    current: list[str] = []
+    for line in result.stdout.splitlines():
+        if line == "\x00":
+            if current:
+                commits.append(current)
+            current = []
+        elif line.strip():
+            path = line.strip()
+            if prefix:
+                if not path.startswith(prefix):
+                    continue
+                path = path[len(prefix) :]
+            if path:
+                current.append(path)
+    if current:
+        commits.append(current)
+    return commits
+
+
+def compute_hotspots(repo_path: Path, modules: list[dict]) -> list[dict]:
+    dependents_by_path = {module["path"]: len(module.get("imported_by", [])) for module in modules}
+    churn: dict[str, int] = {}
+    co_change: dict[str, dict[str, int]] = {}
+
+    for files in _commit_file_lists(repo_path):
+        unique_files = sorted(set(files))
+        for path in unique_files:
+            churn[path] = churn.get(path, 0) + 1
+        if len(unique_files) > MASS_COMMIT_FILE_THRESHOLD:
+            continue
+        for index, first in enumerate(unique_files):
+            for second in unique_files[index + 1 :]:
+                first_partners = co_change.setdefault(first, {})
+                second_partners = co_change.setdefault(second, {})
+                first_partners[second] = first_partners.get(second, 0) + 1
+                second_partners[first] = second_partners.get(first, 0) + 1
+
+    hotspots = []
+    for path, churn_count in churn.items():
+        partners = sorted(co_change.get(path, {}).items(), key=lambda item: (-item[1], item[0]))[:5]
+        hotspots.append(
+            {
+                "path": path,
+                "churn_count": churn_count,
+                "co_change_partners": [
+                    {"path": partner, "co_occurrences": count} for partner, count in partners
+                ],
+                "dependents_count": dependents_by_path.get(path, 0),
+            }
+        )
+
+    return sorted(hotspots, key=lambda item: (-item["churn_count"], item["path"]))[:HOTSPOT_LIMIT]
 
 
 def analyze_git(repo_path: Path, now: datetime | None = None) -> dict:

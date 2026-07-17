@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 
@@ -12,6 +13,13 @@ class BranchNotFoundInEvidenceError(Exception):
     def __init__(self, branch_name: str):
         super().__init__(f"'{branch_name}' is not present in evidence.git.branches")
         self.branch_name = branch_name
+
+
+class SymbolNotFoundInEvidenceError(Exception):
+    def __init__(self, module_path: str, symbol_name: str):
+        super().__init__(f"'{symbol_name}' is not present in {module_path}'s symbols")
+        self.module_path = module_path
+        self.symbol_name = symbol_name
 
 
 def _find_module(evidence: dict, file_path: str) -> dict:
@@ -31,6 +39,28 @@ def find_imported_by(evidence: dict, target: str | None) -> list[str]:
 
 def find_symbols(evidence: dict, target: str | None) -> dict:
     return _find_module(evidence, target)["symbols"]
+
+
+def find_symbol_source(
+    evidence: dict, repo_path: Path, module_path: str, symbol_name: str
+) -> dict:
+    module = _find_module(evidence, module_path)
+    symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
+    entry = next((symbol for symbol in symbols if symbol["name"] == symbol_name), None)
+    if entry is None:
+        raise SymbolNotFoundInEvidenceError(module_path, symbol_name)
+
+    file_path = repo_path / module_path
+    lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    source = "\n".join(lines[entry["start_line"] - 1 : entry["end_line"]])
+
+    return {
+        "module": module_path,
+        "symbol": symbol_name,
+        "start_line": entry["start_line"],
+        "end_line": entry["end_line"],
+        "source": source,
+    }
 
 
 def find_branch(evidence: dict, target: str | None) -> dict:
@@ -75,6 +105,14 @@ def find_layer_violations(evidence: dict, target: str | None) -> dict:
     return evidence["architecture"]["layer_violations"]
 
 
+def find_dead_code_evidence(evidence: dict, target: str | None) -> dict:
+    return evidence["repository"]["dead_code"]
+
+
+def find_hotspots(evidence: dict, target: str | None) -> list[dict]:
+    return evidence["git"].get("hotspots", [])
+
+
 QUERY_FUNCTIONS: dict[str, tuple[Callable[[dict, str | None], Any], bool]] = {
     "imports": (find_imports, True),
     "imported-by": (find_imported_by, True),
@@ -87,4 +125,6 @@ QUERY_FUNCTIONS: dict[str, tuple[Callable[[dict, str | None], Any], bool]] = {
     "endpoints": (find_endpoints, False),
     "cluster": (find_cluster, True),
     "layer-violations": (find_layer_violations, False),
+    "dead-code": (find_dead_code_evidence, False),
+    "hotspots": (find_hotspots, False),
 }

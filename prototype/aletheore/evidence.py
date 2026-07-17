@@ -4,8 +4,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from aletheore.architecture import build_clusters, detect_layer_violations, load_architecture_config
+from aletheore.dead_code import find_dead_code
 from aletheore.endpoints import map_api_endpoints
-from aletheore.git_intel.analyzer import analyze_git
+from aletheore.git_intel.analyzer import analyze_git, compute_hotspots
 from aletheore.licenses import check_dependency_licenses
 from aletheore.scanner.detect import (
     detect_ai_usage,
@@ -78,6 +79,13 @@ def scan_repository(
     clusters, cross_cluster_edges = build_clusters(dependency_graph, resolution=resolution)
     layer_violations = detect_layer_violations(dependency_graph, custom_markers=custom_markers)
 
+    report("Detecting dead code")
+    dead_code_data = find_dead_code(repo_path, modules, architecture_config)
+
+    if git_data.get("available"):
+        report("Computing git hotspots")
+        git_data["hotspots"] = compute_hotspots(repo_path, modules)
+
     if check_vulnerabilities:
         report("Checking dependencies for known vulnerabilities (OSV.dev)")
         vulnerabilities_data = check_dependency_vulnerabilities(repo_path)
@@ -128,6 +136,7 @@ def scan_repository(
             "dependency_graph": dependency_graph,
             "unparseable_files": unparseable_files,
             "api_endpoints": api_endpoints_data,
+            "dead_code": dead_code_data,
         },
         "git": git_data,
         "security": {
