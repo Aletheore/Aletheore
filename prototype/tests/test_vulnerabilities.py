@@ -334,3 +334,265 @@ def test_parse_nuget_pins_empty_when_no_lock_file(tmp_path):
     repo.mkdir()
 
     assert _parse_nuget_pins(repo) == []
+
+
+def test_parse_pip_pins_reads_pep621_pyproject_dependencies(tmp_path):
+    from aletheore.vulnerabilities import _parse_pip_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text(
+        "[project]\n"
+        "dependencies = [\n"
+        '  "asgiref>=3.12.1",\n'
+        '  "sqlparse==0.5.0",\n'
+        "  \"tzdata; sys_platform == 'win32'\",\n"
+        "]\n"
+    )
+
+    pins = _parse_pip_pins(repo)
+
+    assert ("asgiref", "3.12.1", "PyPI") in pins
+    assert ("sqlparse", "0.5.0", "PyPI") in pins
+    assert not any(pin[0] == "tzdata" for pin in pins)
+
+
+def test_parse_pip_pins_reads_poetry_dependencies(tmp_path):
+    from aletheore.vulnerabilities import _parse_pip_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text(
+        "[tool.poetry.dependencies]\n"
+        'python = "^3.12"\n'
+        'django = "^5.1.0"\n'
+        'requests = { version = ">=2.32.0", optional = true }\n'
+    )
+
+    pins = _parse_pip_pins(repo)
+
+    assert ("django", "5.1.0", "PyPI") in pins
+    assert ("requests", "2.32.0", "PyPI") in pins
+    assert not any(pin[0] == "python" for pin in pins)
+
+
+def test_parse_pip_pins_is_additive_for_requirements_and_pyproject(tmp_path):
+    from aletheore.vulnerabilities import _parse_pip_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("fastapi==0.100.0\n")
+    (repo / "pyproject.toml").write_text('[project]\ndependencies = ["asgiref>=3.12.1"]\n')
+
+    pins = _parse_pip_pins(repo)
+
+    assert ("fastapi", "0.100.0", "PyPI") in pins
+    assert ("asgiref", "3.12.1", "PyPI") in pins
+
+
+def test_parse_npm_pins_prefers_package_lock_resolved_versions(tmp_path):
+    from aletheore.vulnerabilities import _parse_npm_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").write_text(json.dumps({"dependencies": {"left-pad": "^1.0.0"}}))
+    (repo / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "packages": {
+                    "": {"dependencies": {"left-pad": "^1.0.0"}},
+                    "node_modules/left-pad": {"version": "1.3.0"},
+                }
+            }
+        )
+    )
+
+    assert _parse_npm_pins(repo) == [("left-pad", "1.3.0", "npm")]
+
+
+def test_parse_cargo_pins_falls_back_to_cargo_toml_when_no_lockfile(tmp_path):
+    from aletheore.vulnerabilities import _parse_cargo_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Cargo.toml").write_text(
+        "[dependencies]\n"
+        'serde = "1.0.219"\n'
+        'local-crate = { path = "../local" }\n'
+        "[dev-dependencies]\n"
+        'tokio = { version = "^1.43.0", features = ["rt"] }\n'
+    )
+
+    pins = _parse_cargo_pins(repo)
+
+    assert ("serde", "1.0.219", "crates.io") in pins
+    assert ("tokio", "1.43.0", "crates.io") in pins
+    assert not any(pin[0] == "local-crate" for pin in pins)
+
+
+def test_parse_cargo_pins_prefers_lockfile_over_cargo_toml(tmp_path):
+    from aletheore.vulnerabilities import _parse_cargo_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Cargo.toml").write_text('[dependencies]\nserde = "1.0.0"\n')
+    (repo / "Cargo.lock").write_text('[[package]]\nname = "serde"\nversion = "1.0.219"\n')
+
+    assert _parse_cargo_pins(repo) == [("serde", "1.0.219", "crates.io")]
+
+
+def test_parse_maven_pins_resolves_properties_and_dependency_management(tmp_path):
+    from aletheore.vulnerabilities import _parse_maven_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pom.xml").write_text(
+        '<project xmlns="http://maven.apache.org/POM/4.0.0">'
+        "<properties><junit.version>5.10.2</junit.version></properties>"
+        "<dependencyManagement><dependencies><dependency>"
+        "<groupId>com.example</groupId><artifactId>managed</artifactId><version>1.2.3</version>"
+        "</dependency></dependencies></dependencyManagement>"
+        "<dependencies>"
+        "<dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId>"
+        "<version>${junit.version}</version></dependency>"
+        "<dependency><groupId>com.example</groupId><artifactId>managed</artifactId></dependency>"
+        "</dependencies>"
+        "</project>"
+    )
+
+    pins = _parse_maven_pins(repo)
+
+    assert ("org.junit.jupiter:junit-jupiter", "5.10.2", "Maven") in pins
+    assert ("com.example:managed", "1.2.3", "Maven") in pins
+
+
+def test_parse_maven_pins_reads_child_modules_and_skips_profile_dependencies(tmp_path):
+    from aletheore.vulnerabilities import _parse_maven_pins
+
+    repo = tmp_path / "repo"
+    child = repo / "child"
+    child.mkdir(parents=True)
+    (repo / "pom.xml").write_text(
+        '<project xmlns="http://maven.apache.org/POM/4.0.0">'
+        "<modules><module>child</module></modules>"
+        "<profiles><profile><dependencies><dependency>"
+        "<groupId>com.example</groupId><artifactId>profile-only</artifactId><version>9.9.9</version>"
+        "</dependency></dependencies></profile></profiles>"
+        "</project>"
+    )
+    (child / "pom.xml").write_text(
+        '<project xmlns="http://maven.apache.org/POM/4.0.0">'
+        "<dependencies><dependency>"
+        "<groupId>com.example</groupId><artifactId>child-lib</artifactId><version>1.0.0</version>"
+        "</dependency></dependencies>"
+        "</project>"
+    )
+
+    pins = _parse_maven_pins(repo)
+
+    assert ("com.example:child-lib", "1.0.0", "Maven") in pins
+    assert not any(pin[0] == "com.example:profile-only" for pin in pins)
+
+
+def test_parse_gemfile_lock_pins_falls_back_to_gemspec_when_no_lockfile(tmp_path):
+    from aletheore.vulnerabilities import _parse_gemfile_lock_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "demo.gemspec").write_text(
+        'spec.add_dependency "rack", ">= 3.0.0"\n'
+        'spec.add_runtime_dependency "thor", "~> 1.3.0"\n'
+        'spec.add_dependency "activesupport", version\n'
+    )
+
+    pins = _parse_gemfile_lock_pins(repo)
+
+    assert ("rack", "3.0.0", "RubyGems") in pins
+    assert ("thor", "1.3.0", "RubyGems") in pins
+    assert not any(pin[0] == "activesupport" for pin in pins)
+
+
+def test_parse_gemfile_lock_pins_prefers_lockfile_over_gemspec(tmp_path):
+    from aletheore.vulnerabilities import _parse_gemfile_lock_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "demo.gemspec").write_text('spec.add_dependency "rack", "1.0.0"\n')
+    (repo / "Gemfile.lock").write_text("GEM\n  remote: https://rubygems.org/\n  specs:\n    rack (3.0.0)\n")
+
+    assert _parse_gemfile_lock_pins(repo) == [("rack", "3.0.0", "RubyGems")]
+
+
+def test_parse_composer_pins_falls_back_to_composer_json_when_no_lockfile(tmp_path):
+    from aletheore.vulnerabilities import _parse_composer_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "composer.json").write_text(
+        json.dumps({"require": {"php": "^8.3", "guzzlehttp/psr7": "^2.7.0"}})
+    )
+
+    assert _parse_composer_pins(repo) == [("guzzlehttp/psr7", "2.7.0", "Packagist")]
+
+
+def test_parse_composer_pins_prefers_lockfile_over_composer_json(tmp_path):
+    from aletheore.vulnerabilities import _parse_composer_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "composer.json").write_text(json.dumps({"require": {"guzzlehttp/psr7": "^2.0.0"}}))
+    (repo / "composer.lock").write_text(
+        json.dumps({"packages": [{"name": "guzzlehttp/psr7", "version": "2.7.1"}]})
+    )
+
+    assert _parse_composer_pins(repo) == [("guzzlehttp/psr7", "2.7.1", "Packagist")]
+
+
+def test_parse_nuget_pins_falls_back_to_csproj_package_references(tmp_path):
+    from aletheore.vulnerabilities import _parse_nuget_pins
+
+    repo = tmp_path / "repo"
+    app = repo / "src" / "App"
+    app.mkdir(parents=True)
+    (app / "App.csproj").write_text(
+        "<Project><ItemGroup>"
+        '<PackageReference Include="Serilog" Version="4.0.1" />'
+        "</ItemGroup></Project>"
+    )
+
+    assert _parse_nuget_pins(repo) == [("Serilog", "4.0.1", "NuGet")]
+
+
+def test_parse_nuget_pins_reads_central_package_management_versions(tmp_path):
+    from aletheore.vulnerabilities import _parse_nuget_pins
+
+    repo = tmp_path / "repo"
+    app = repo / "src" / "App"
+    app.mkdir(parents=True)
+    (repo / "Directory.Packages.props").write_text(
+        "<Project><ItemGroup>"
+        '<PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />'
+        "</ItemGroup></Project>"
+    )
+    (app / "App.csproj").write_text(
+        "<Project><ItemGroup>"
+        '<PackageReference Include="Newtonsoft.Json" />'
+        "</ItemGroup></Project>"
+    )
+
+    assert _parse_nuget_pins(repo) == [("Newtonsoft.Json", "13.0.3", "NuGet")]
+
+
+def test_parse_nuget_pins_prefers_lockfile_over_project_files(tmp_path):
+    from aletheore.vulnerabilities import _parse_nuget_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "App.csproj").write_text(
+        '<Project><ItemGroup><PackageReference Include="Serilog" Version="4.0.0" /></ItemGroup></Project>'
+    )
+    (repo / "packages.lock.json").write_text(
+        json.dumps({"dependencies": {"net8.0": {"Serilog": {"resolved": "4.0.1"}}}})
+    )
+
+    assert _parse_nuget_pins(repo) == [("Serilog", "4.0.1", "NuGet")]

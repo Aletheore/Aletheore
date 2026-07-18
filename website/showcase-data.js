@@ -8,7 +8,7 @@ const SHOWCASE = {
     "licenseFindingsCount": 0,
     "licenseChecked": true,
     "licenseReason": null,
-    "vulnerabilityFindingsCount": 0,
+    "vulnerabilityFindingsCount": 1,
     "vulnerabilityChecked": true,
     "vulnerabilityReason": null,
     "totalCommits": 34793,
@@ -42,7 +42,7 @@ const SHOWCASE = {
     "totalCommits": 1,
     "clusterCount": 12641,
     "commitSha": "bd1a1b897340ef91595c36439fed49b9072f8b1d",
-    "scanSeconds": 355,
+    "scanSeconds": 368,
     "clonedShallow": true
   },
   "toonDemo": {
