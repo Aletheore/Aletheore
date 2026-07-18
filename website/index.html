@@ -36,21 +36,52 @@
       </div>
     </section>
 
-    <section>
-      <h2>Evidence-first architecture.</h2>
-      <div class="card-grid">
-        <article class="card">
-          <h3>Traceable evidence</h3>
-          <p>The scanner writes <code>evidence.json</code>: languages, dependency graph, module clusters, git activity, ownership, secrets, vulnerabilities, and layer violations.</p>
+    <section id="why">
+      <h2>Why deterministic-first.</h2>
+      <p class="section-intro">No LLM ever runs in the scan path. Aletheore reads your repository with tree-sitter and git log, writes what it found to <code>evidence.json</code>, and every other command - <code>query</code>, <code>diff</code>, the dashboard, the MCP server, even <code>audit</code>'s written report - reads from that same file. Nothing downstream states a claim it can't point back to a specific field in it.</p>
+    </section>
+
+    <section id="how">
+      <h2>How it actually works.</h2>
+      <p class="section-intro"><code>aletheore scan</code> runs once and writes two files: <code>evidence.json</code> (the canonical record - languages, dependency graph, clusters, git activity, secrets, licenses, vulnerabilities, API endpoints) and <code>evidence.toon</code>, a <a href="https://toonformat.dev">TOON</a>-encoded copy of the same data specifically for the MCP server's tool results and the coding-agent adapter <code>audit</code> uses - because that's where token cost is actually paid, not in the file Aletheore itself keeps on disk.</p>
+    </section>
+
+    <section id="proof-zone" class="proof-zone">
+      <div class="proof-label">PROOF</div>
+      <h2>Scanned for real. Not a mockup.</h2>
+      <p class="section-intro">Three real public repositories, actually scanned by <code>aletheore scan</code> at pinned commits. The numbers below are read directly from that output.</p>
+
+      <div class="showcase-grid">
+        <article class="showcase-card" data-repo="django">
+          <h3>Django</h3>
+          <p class="showcase-sub">Python · full git history</p>
+          <ul class="showcase-stats" data-fields="moduleCount,dependencyEdgeCount,clusterCount,totalCommits,licenseFindingsCount,vulnerabilityFindingsCount"></ul>
         </article>
-        <article class="card">
-          <h3>Zero-config CLI</h3>
-          <p><code>aletheore scan</code> runs the deterministic scanner, writes local evidence, and saves rolling history. No LLM call, safe to run in CI.</p>
+        <article class="showcase-card" data-repo="express">
+          <h3>Express</h3>
+          <p class="showcase-sub">JavaScript · real npm dependencies</p>
+          <ul class="showcase-stats" data-fields="moduleCount,totalCommits,evidenceJsonBytes,evidenceToonBytes,licenseFindingsCount,vulnerabilityFindingsCount"></ul>
         </article>
-        <article class="card dark">
-          <h3>Visual evidence trails</h3>
-          <p>The local dashboard shows a dependency graph, Obsidian-style cluster graph, trend charts, and the MCP tool list from the same evidence file.</p>
+        <article class="showcase-card" data-repo="kubernetes">
+          <h3>Kubernetes</h3>
+          <p class="showcase-sub">Go · the stress test</p>
+          <ul class="showcase-stats" data-fields="moduleCount,dependencyEdgeCount,scanSeconds,licenseFindingsCount,vulnerabilityFindingsCount"></ul>
         </article>
+      </div>
+
+      <div class="toon-demo">
+        <h3>The same data, TOON-encoded.</h3>
+        <p class="section-intro">Measured against Aletheore's own <code>evidence.json</code>/<code>evidence.toon</code> pair from a real self-scan - the exact data the MCP server and <code>audit</code>'s coding-agent adapter read.</p>
+        <div class="toon-counters">
+          <div class="toon-counter">
+            <div class="toon-counter-value" id="toon-token-count" data-target="45.5">45.5%</div>
+            <div class="toon-counter-label">fewer tokens</div>
+          </div>
+          <div class="toon-counter">
+            <div class="toon-counter-value" id="toon-byte-count" data-target="55.5">55.5%</div>
+            <div class="toon-counter-label">smaller on disk</div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -103,5 +134,8 @@
       </div>
     </div>
   </footer>
+  <script src="vendor/motion.js"></script>
+  <script src="showcase-data.js"></script>
+  <script src="script.js"></script>
 </body>
 </html>
