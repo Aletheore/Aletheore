@@ -38,3 +38,6 @@ coverage/
 # Machine-local dev-server launch config (points at whatever repo you're using to test
 # the dashboard against - not something to share)
 .claude/
+
+# Brainstorming visual-companion mockups (local scratch, not part of the shipped site)
+.superpowers/
