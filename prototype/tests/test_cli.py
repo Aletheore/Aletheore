@@ -72,13 +72,13 @@ def test_select_adapter_honors_forced_name():
 def test_build_instruction_references_manual_and_evidence():
     instruction = build_instruction(manual_dir="manual")
     assert "manual" in instruction
-    assert ".aletheore/evidence.toon" in instruction
+    assert ".aletheore/air.toon" in instruction
 
 
 def test_run_reasoning_phase_writes_report(tmp_path):
     repo = tmp_path
     (repo / ".aletheore").mkdir()
-    (repo / ".aletheore" / "evidence.json").write_text("{}")
+    (repo / ".aletheore" / "air.json").write_text("{}")
 
     adapter = MagicMock()
     adapter.invoke.return_value = "# Audit Report\n\nfindings here\n"
@@ -94,7 +94,7 @@ def test_run_reasoning_phase_writes_report(tmp_path):
 def test_run_reasoning_phase_does_not_clobber_report_the_agent_wrote_itself(tmp_path):
     repo = tmp_path
     (repo / ".aletheore").mkdir()
-    (repo / ".aletheore" / "evidence.json").write_text("{}")
+    (repo / ".aletheore" / "air.json").write_text("{}")
     report_file = repo / ".aletheore" / "audit-report.md"
 
     def fake_invoke(instruction, cwd):
@@ -277,7 +277,7 @@ def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path):
         ["audit", str(repo), "--no-check-vulnerabilities", "--agent", "nonexistent"],
     )
 
-    evidence = json.loads((repo / ".aletheore" / "evidence.json").read_text())
+    evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
     assert evidence["security"]["dependency_vulnerabilities"]["checked"] is False
     assert (
         evidence["security"]["dependency_vulnerabilities"]["reason"]
@@ -291,7 +291,7 @@ def test_main_audit_threads_no_check_licenses_flag(tmp_path):
 
     runner.invoke(app, ["audit", str(repo), "--no-check-licenses", "--agent", "nonexistent"])
 
-    evidence = json.loads((repo / ".aletheore" / "evidence.json").read_text())
+    evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
     assert evidence["security"]["dependency_licenses"]["checked"] is False
     assert evidence["security"]["dependency_licenses"]["reason"] == "skipped (--no-check-licenses)"
 
@@ -302,7 +302,7 @@ def test_main_scan_threads_no_check_licenses_flag(tmp_path):
 
     runner.invoke(app, ["scan", str(repo), "--no-check-licenses"])
 
-    evidence = json.loads((repo / ".aletheore" / "evidence.json").read_text())
+    evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
     assert evidence["security"]["dependency_licenses"]["checked"] is False
 
 
@@ -317,7 +317,7 @@ def test_main_scan_positive_check_licenses_flag_is_also_accepted(tmp_path):
     result = runner.invoke(app, ["scan", str(repo), "--check-licenses", "--no-check-vulnerabilities"])
 
     assert result.exit_code == 0
-    evidence = json.loads((repo / ".aletheore" / "evidence.json").read_text())
+    evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
     assert evidence["security"]["dependency_licenses"]["checked"] is True
 
 
@@ -344,7 +344,7 @@ def test_main_scan_threads_no_map_endpoints_flag(tmp_path):
 
     runner.invoke(app, ["scan", str(repo), "--no-map-endpoints"])
 
-    evidence = json.loads((repo / ".aletheore" / "evidence.json").read_text())
+    evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
     assert evidence["repository"]["api_endpoints"]["checked"] is False
 
 
@@ -364,7 +364,7 @@ def test_main_audit_threads_no_scan_git_history_flag(tmp_path):
         ],
     )
 
-    evidence = json.loads((repo / ".aletheore" / "evidence.json").read_text())
+    evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
     assert evidence["security"]["secrets"]["history_scanned_commits"] == 0
     assert evidence["security"]["secrets"]["history_findings"] == []
 
@@ -376,7 +376,7 @@ def test_main_scan_writes_evidence_without_invoking_an_agent(tmp_path):
     result = runner.invoke(app, ["scan", str(repo)])
 
     assert result.exit_code == 0
-    assert (repo / ".aletheore" / "evidence.json").exists()
+    assert (repo / ".aletheore" / "air.json").exists()
     assert "audit-report.md" not in result.output
     assert "Running audit with" not in result.output
 

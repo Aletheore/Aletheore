@@ -80,7 +80,7 @@ def test_write_evidence_creates_aletheore_dir(tmp_path):
     evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
     written_path = write_evidence(evidence, repo)
 
-    assert written_path == repo / ".aletheore" / "evidence.json"
+    assert written_path == repo / ".aletheore" / "air.json"
     assert written_path.exists()
     loaded = json.loads(written_path.read_text())
     assert loaded["aletheore_version"] == "0.1.0"
@@ -93,7 +93,7 @@ def test_write_evidence_also_writes_a_toon_copy(tmp_path):
     evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
     write_evidence(evidence, repo)
 
-    toon_path = repo / ".aletheore" / "evidence.toon"
+    toon_path = repo / ".aletheore" / "air.toon"
     assert toon_path.exists()
     assert toon.decode(toon_path.read_text()) == evidence
 

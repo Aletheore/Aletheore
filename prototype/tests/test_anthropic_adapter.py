@@ -20,7 +20,7 @@ def _tool_use_block(name, input_dict, block_id="toolu_1"):
 def _make_repo_with_evidence(tmp_path, evidence: dict):
     repo = tmp_path / "repo"
     (repo / ".aletheore").mkdir(parents=True)
-    (repo / ".aletheore" / "evidence.toon").write_text(toon.encode(evidence))
+    (repo / ".aletheore" / "air.toon").write_text(toon.encode(evidence))
     return repo
 
 

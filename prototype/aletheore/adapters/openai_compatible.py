@@ -280,7 +280,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
 
         client = OpenAI(base_url=self._base_url, api_key=api_key or "not-needed")
         manual_dir = Path(__file__).resolve().parent.parent / "manual"
-        evidence_path = Path(cwd) / ".aletheore" / "evidence.toon"
+        evidence_path = Path(cwd) / ".aletheore" / "air.toon"
 
         try:
             evidence = toon.decode(evidence_path.read_text())

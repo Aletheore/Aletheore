@@ -15,7 +15,7 @@ one — it's just the actual, working tool.
 ## What this is
 
 A deterministic scanner (tree-sitter + git log, no LLM, fully unit-tested) reads a repository
-and writes `.aletheore/evidence.json`: languages, module dependency graph, modularity-based
+and writes `.aletheore/air.json`: languages, module dependency graph, modularity-based
 clusters, git ownership and commit cadence, secrets, dependency vulnerabilities, layer-
 convention violations, dependency licenses, and static API endpoint maps. Every other feature
 below is built on top of that same evidence and
@@ -124,14 +124,14 @@ doesn't break reproducibility: same repo content in, same evidence out).
   one review-and-accept, and it stops blocking CI, permanently, for that exact finding. Match
   on the finding's exact `path`, `pattern`, and `match_preview` (copy these from a scan's
   output or `aletheore query secrets <path>` - `match_preview` is already redacted, safe to
-  commit). Accepted findings are **not hidden** - they still appear in `evidence.json`,
+  commit). Accepted findings are **not hidden** - they still appear in `air.json`,
   `aletheore query secrets`, the dashboard, and the PR comment, each flagged
   `"accepted": true`/labeled "accepted (in .aletheore.json baseline)" - only the fail-gates and
   inline PR annotations skip them.
 
 All three keys are optional and independently defaulted/empty if the file is missing,
 malformed, or only sets some of them. `layer_markers`/`cluster_resolution` (or `null` if
-there's no config file at all) are recorded verbatim in `evidence.json` at
+there's no config file at all) are recorded verbatim in `air.json` at
 `architecture.config_applied`, so a report can cite exactly what convention was in effect for
 that scan.
 
@@ -139,7 +139,7 @@ that scan.
 
 ### `aletheore scan [path]`
 
-Runs only the deterministic scan phase. Writes `.aletheore/evidence.json` and a rolling history
+Runs only the deterministic scan phase. Writes `.aletheore/air.json` and a rolling history
 snapshot under `.aletheore/history/`. No LLM call — safe to run repeatedly, in CI, or from a
 script.
 
@@ -176,10 +176,10 @@ license check especially, one real network request per pinned dependency, no bat
 take a while with no other feedback otherwise. On a real terminal the license-check counter
 updates in place; piped to a log or CI, every dependency prints on its own line instead.
 
-Alongside `evidence.json`, `scan` also writes `.aletheore/evidence.toon` — the same evidence,
+Alongside `air.json`, `scan` also writes `.aletheore/air.toon` — the same evidence,
 [TOON](https://toonformat.dev)-encoded (~30-60% fewer tokens for the same data, biggest win on
-the uniform arrays of same-shaped objects most of evidence.json actually is). `evidence.json`
-stays the canonical file for the dashboard and any external tooling; `evidence.toon` exists
+the uniform arrays of same-shaped objects most of air.json actually is). `air.json`
+stays the canonical file for the dashboard and any external tooling; `air.toon` exists
 specifically for `audit`'s coding-agent adapter to read instead.
 
 Extracted module symbols include exact 1-indexed line bounds (`name`, `start_line`, `end_line`)
@@ -271,7 +271,7 @@ complete.
 
 API/local adapters are deliberately bounded: they receive no raw repository files and no
 filesystem tools. They can only call `read_evidence_section` against
-`.aletheore/evidence.toon`, write named report sections, and finish the report.
+`.aletheore/air.toon`, write named report sections, and finish the report.
 
 Interactive runs always show a provider-selection menu, even if exactly one provider is
 available. Non-interactive runs must pass `--agent NAME` explicitly so automation never
@@ -280,7 +280,7 @@ silently chooses a provider.
 While the reasoning provider runs, an elapsed-time indicator prints so a multi-minute wait
 doesn't look identical to a hang (updates in place on a real terminal; prints once at the
 start and once at the end when piped to a log). Providers are instructed to use
-`.aletheore/evidence.toon` (see `scan` above) rather than the JSON copy.
+`.aletheore/air.toon` (see `scan` above) rather than the JSON copy.
 
 ```bash
 aletheore audit .
@@ -292,7 +292,7 @@ aletheore audit . --agent ollama
 
 ### `aletheore query <kind> [target]`
 
-Answers one targeted question from an existing `evidence.json`, without re-scanning or an LLM
+Answers one targeted question from an existing `air.json`, without re-scanning or an LLM
 call.
 
 ```bash
@@ -318,14 +318,14 @@ uses the selected provider's simple completion path to answer with citations.
 
 ### `aletheore diff <old.json> <new.json>`
 
-Compares two `evidence.json` files directly — new/resolved secrets, API endpoints, layer
+Compares two `air.json` files directly — new/resolved secrets, API endpoints, layer
 violations, dependency vulnerabilities, architecture deltas. Powers the GitHub Action below.
 
 ```bash
-aletheore diff old/evidence.json new/evidence.json
-aletheore diff old/evidence.json new/evidence.json --fail-on-new-secrets
-aletheore diff old/evidence.json new/evidence.json --fail-on-new-vulnerabilities
-aletheore diff old/evidence.json new/evidence.json --fail-on-new-layer-violations
+aletheore diff old/air.json new/air.json
+aletheore diff old/air.json new/air.json --fail-on-new-secrets
+aletheore diff old/air.json new/air.json --fail-on-new-vulnerabilities
+aletheore diff old/air.json new/air.json --fail-on-new-layer-violations
 ```
 
 All three `--fail-on-new-*` flags can be combined; the command exits 1 if any of them find

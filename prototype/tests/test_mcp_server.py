@@ -76,7 +76,7 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
             "layer_violations": {"convention_detected": False, "layers": [], "violations": []},
         },
     }
-    (aletheore_dir / "evidence.json").write_text(json.dumps(evidence))
+    (aletheore_dir / "air.json").write_text(json.dumps(evidence))
     (repo / "a.py").write_text("def foo():\n    return 1\n")
     return repo
 
@@ -245,7 +245,7 @@ async def test_aletheore_neighborhood_combines_imports_imported_by_and_cluster(t
 @pytest.mark.asyncio
 async def test_aletheore_neighborhood_cluster_is_null_when_unclustered(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
-    evidence_path = repo / ".aletheore" / "evidence.json"
+    evidence_path = repo / ".aletheore" / "air.json"
     evidence = json.loads(evidence_path.read_text())
     evidence["architecture"]["clusters"] = []
     evidence_path.write_text(json.dumps(evidence))
@@ -269,7 +269,7 @@ def make_repo_with_files(tmp_path: Path, files: dict[str, str]) -> Path:
     repo = tmp_path / "search_repo"
     repo.mkdir()
     (repo / ".aletheore").mkdir()
-    (repo / ".aletheore" / "evidence.json").write_text(json.dumps({"repository": {"modules": []}}))
+    (repo / ".aletheore" / "air.json").write_text(json.dumps({"repository": {"modules": []}}))
     for rel_path, content in files.items():
         full_path = repo / rel_path
         full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -415,7 +415,7 @@ async def test_aletheore_scan_real_findings_excludes_placeholders(tmp_path):
 @pytest.mark.asyncio
 async def test_aletheore_healthcheck_tool_returns_results(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
-    evidence_path = repo / ".aletheore" / "evidence.json"
+    evidence_path = repo / ".aletheore" / "air.json"
     evidence = json.loads(evidence_path.read_text())
     evidence["repository"]["api_endpoints"] = {
         "checked": True,

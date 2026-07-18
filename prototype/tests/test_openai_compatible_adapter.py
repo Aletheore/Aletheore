@@ -60,7 +60,7 @@ def _mock_response(tool_calls=None):
 def _make_repo_with_evidence(tmp_path, evidence: dict):
     repo = tmp_path / "repo"
     (repo / ".aletheore").mkdir(parents=True)
-    (repo / ".aletheore" / "evidence.toon").write_text(toon.encode(evidence))
+    (repo / ".aletheore" / "air.toon").write_text(toon.encode(evidence))
     return repo
 
 

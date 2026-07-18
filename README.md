@@ -5,7 +5,7 @@
 # Aletheore
 
 Aletheore is an evidence-grounded repository audit tool. A deterministic scanner (no LLM,
-fully unit-tested) reads a repo and writes `evidence.json` — languages, dependency graph,
+fully unit-tested) reads a repo and writes `air.json` — languages, dependency graph,
 module clusters, git activity and ownership, secrets, dependency vulnerabilities, layer
 violations. Everything downstream — the written report, the query tools, the MCP server, the
 local dashboard — reads from that same evidence and never states a claim it can't point back
@@ -16,7 +16,7 @@ has full setup, every CLI command, the MCP tool list, and the dashboard.
 
 ## What's actually shipped
 
-- **`aletheore scan`** — run the deterministic scanner, write `.aletheore/evidence.json`, save a
+- **`aletheore scan`** — run the deterministic scanner, write `.aletheore/air.json`, save a
   history snapshot. No LLM call, safe to run in CI.
 - **`aletheore audit`** — scan, then shell out to an installed coding-agent CLI (Claude Code
   today) to write a full grounded markdown report, citing exact evidence fields. Meant to be

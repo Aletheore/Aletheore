@@ -94,7 +94,7 @@ def build_graph_summary(evidence: dict) -> dict:
 
 
 async def _watch_evidence_mtime(repo_path: Path):
-    evidence_path = repo_path / ".aletheore" / "evidence.json"
+    evidence_path = repo_path / ".aletheore" / "air.json"
     last_mtime = evidence_path.stat().st_mtime if evidence_path.exists() else None
     while True:
         await asyncio.sleep(1.5)

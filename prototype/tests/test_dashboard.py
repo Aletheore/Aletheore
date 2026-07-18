@@ -155,7 +155,7 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     aletheore_dir = repo / ".aletheore"
     aletheore_dir.mkdir(parents=True)
-    (aletheore_dir / "evidence.json").write_text(json.dumps(make_evidence("2026-07-15T12:00:00+00:00")))
+    (aletheore_dir / "air.json").write_text(json.dumps(make_evidence("2026-07-15T12:00:00+00:00")))
     return repo
 
 

@@ -156,16 +156,16 @@ def scan_repository(
 def write_evidence(evidence: dict, repo_path: Path) -> Path:
     aletheore_dir = repo_path / ".aletheore"
     aletheore_dir.mkdir(parents=True, exist_ok=True)
-    output_path = aletheore_dir / "evidence.json"
+    output_path = aletheore_dir / "air.json"
     output_path.write_text(json.dumps(evidence, indent=2))
 
     # A second, TOON-encoded copy exists specifically for the audit command's
     # coding-agent adapter to read instead of the JSON one - the agent's own
-    # token budget is what actually pays for reading this file, and evidence's
+    # token budget is what actually pays for reading this file, and AIR's
     # shape (uniform arrays of same-shaped objects almost everywhere) is
-    # exactly TOON's best case. evidence.json stays the canonical machine-
+    # exactly TOON's best case. air.json stays the canonical machine-
     # readable copy (the dashboard's JS and any external tooling need real
     # JSON), so this is additive, not a replacement.
-    (aletheore_dir / "evidence.toon").write_text(to_toon(evidence))
+    (aletheore_dir / "air.toon").write_text(to_toon(evidence))
 
     return output_path

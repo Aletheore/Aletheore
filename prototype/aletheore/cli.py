@@ -26,6 +26,7 @@ from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.adapters.opencode import OpenCodeAdapter
 from aletheore.credentials import get_api_key
 from aletheore.dashboard import build_app
+from aletheore.device_auth import infer_repo_full_name_from_cwd_git_remote
 from aletheore.evidence import scan_repository, write_evidence
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
@@ -128,7 +129,7 @@ def _banner_panel() -> Panel:
     body = Text()
     body.append(
         "Evidence-grounded repository audit — a deterministic scanner (tree-sitter + "
-        "git log, no LLM) reads a repo and writes .aletheore/evidence.json. Every "
+        "git log, no LLM) reads a repo and writes .aletheore/air.json. Every "
         "other command below reads from that same evidence, never re-scans blind.\n\n"
     )
     for name, desc in _COMMAND_SUMMARIES:
@@ -302,11 +303,12 @@ def _managed_audit(
         map_endpoints,
     )
     repo = Path(repo_path).resolve()
+    repo_full_name = infer_repo_full_name_from_cwd_git_remote(cwd=str(repo))
 
     console.print("Running managed audit (using Aletheore's shared key)...")
     try:
         with _ElapsedTicker("Waiting on the managed audit service"):
-            report_text = run_managed_audit_request(evidence, resolved_token)
+            report_text = run_managed_audit_request(evidence, resolved_token, repo_full_name=repo_full_name)
     except ManagedAuditError as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         console.print(f"Evidence is still available at {evidence_path} for manual use.")
@@ -369,7 +371,7 @@ def _query_changes(repo_path: str, full: bool) -> int:
 
 def _index(repo_path: str) -> int:
     repo = Path(repo_path).resolve()
-    evidence_path = repo / ".aletheore" / "evidence.json"
+    evidence_path = repo / ".aletheore" / "air.json"
     if not evidence_path.exists():
         console.print(f"[bold red]error:[/bold red] no evidence found at {evidence_path}")
         console.print(f"Run 'aletheore scan {repo}' first.")
@@ -447,7 +449,7 @@ def _query(
         return 0
 
     repo = Path(repo_path).resolve()
-    evidence_path = repo / ".aletheore" / "evidence.json"
+    evidence_path = repo / ".aletheore" / "air.json"
     if not evidence_path.exists():
         print(f"error: no evidence found at {evidence_path}")
         print(f"Run 'aletheore scan {repo}' first.")
@@ -545,7 +547,7 @@ def _diff(
 
 def _healthcheck(repo_path: str, base_url: str) -> int:
     repo = Path(repo_path).resolve()
-    evidence_path = repo / ".aletheore" / "evidence.json"
+    evidence_path = repo / ".aletheore" / "air.json"
     if not evidence_path.exists():
         print(f"error: no evidence found at {evidence_path}")
         print(f"Run 'aletheore scan {repo}' first.")
@@ -723,7 +725,7 @@ def index(path: str = typer.Argument(".", help="repository path")) -> None:
     raise typer.Exit(code=_index(path))
 
 
-@app.command(help="query an existing evidence.json")
+@app.command(help="query an existing air.json")
 def query(
     kind: str = typer.Argument(..., help=f"one of: {', '.join(QUERY_KIND_CHOICES)}"),
     target: Optional[str] = typer.Argument(None, help="target for kinds that need one (a file path, branch name, ...)"),
@@ -738,10 +740,10 @@ def query(
     raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k, symbol))
 
 
-@app.command(help="compare two evidence.json files")
+@app.command(help="compare two air.json files")
 def diff(
-    old: str = typer.Argument(..., help="path to the baseline evidence.json"),
-    new: str = typer.Argument(..., help="path to the comparison evidence.json"),
+    old: str = typer.Argument(..., help="path to the baseline air.json"),
+    new: str = typer.Argument(..., help="path to the comparison air.json"),
     full: bool = typer.Option(False, "--full", help="show the full raw diff instead of the curated summary"),
     fail_on_new_secrets: bool = typer.Option(
         False,

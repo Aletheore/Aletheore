@@ -24,7 +24,7 @@ from aletheore.toon_encoding import to_toon
 
 
 def read_evidence(repo_path: Path) -> dict:
-    evidence_path = repo_path / ".aletheore" / "evidence.json"
+    evidence_path = repo_path / ".aletheore" / "air.json"
     if not evidence_path.exists():
         raise FileNotFoundError(
             f"no evidence found at {evidence_path} - run 'aletheore scan {repo_path}' first "
