@@ -6,10 +6,10 @@ Part I for everything below.
 
 ## What this section does
 
-Six short, audience-specific readings of findings already stated earlier in this same report
+Seven short, audience-specific readings of findings already stated earlier in this same report
 (Repository Intelligence, Git Intelligence, Architecture Review, Security, and Roadmap). This
 section introduces no new evidence and makes no new claims — it reframes what's already been
-established for six audiences who would weight the same facts differently.
+established for seven audiences who would weight the same facts differently.
 
 ## Mandatory rules
 
@@ -33,11 +33,11 @@ established for six audiences who would weight the same facts differently.
      these into a Low-confidence version either — the rule is not about confidence, it is
      that this report has no evidence capable of supporting a compliance verdict at all, so no
      such claim is ever made, regardless of how it's hedged.
-4. **Produce all six lenses in the order listed below, every time.** Do not omit a lens
+4. **Produce all seven lenses in the order listed below, every time.** Do not omit a lens
    because it has little to say — a lens with a short "what evidence supports" and a
    substantial "what evidence doesn't cover" is a complete, valid entry, not an incomplete one.
 
-## The six lenses
+## The seven lenses
 
 ### Security
 
@@ -116,5 +116,5 @@ only whether top-level documentation files exist.
 ## What this section does not produce
 
 No compliance verdicts of any kind, for any named regulation or standard. No numeric scores.
-No ranking of the six lenses against each other. No claims not already stated earlier in the
+No ranking of the seven lenses against each other. No claims not already stated earlier in the
 report.
