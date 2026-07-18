@@ -1,9 +1,15 @@
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 from scan_worker.jobs import run_pr_scan_job
+
+
+@contextmanager
+def _noop_spend_lock(*args, **kwargs):
+    yield
 
 
 def _make_git_repo(path: Path, files: dict[str, str]) -> str:
@@ -200,6 +206,7 @@ def test_check_run_failure_on_new_secret(bare_repo_with_two_commits, monkeypatch
 
 
 def test_managed_audit_api_job_returns_report_text(monkeypatch):
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
@@ -213,6 +220,7 @@ def test_managed_audit_api_job_returns_report_text(monkeypatch):
 
 
 def test_managed_audit_api_job_raises_when_spend_cap_reached(monkeypatch):
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -256,6 +264,7 @@ def test_managed_audit_pr_job_clones_pr_head_runs_audit_and_replies(monkeypatch,
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda *a, **k: "# Managed Audit")
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_managed_audit", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
@@ -306,6 +315,7 @@ def test_managed_audit_pr_job_skips_llm_call_when_spend_cap_reached(monkeypatch,
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_managed_audit", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
 
@@ -419,6 +429,7 @@ def test_flash_review_job_skips_when_spend_cap_reached(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
     )
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     llm_called = []
@@ -442,6 +453,7 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr(
@@ -487,6 +499,7 @@ def test_flash_review_job_posts_no_issues_found_when_findings_empty(monkeypatch)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+fine")
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda diff_text, on_usage=None: [])

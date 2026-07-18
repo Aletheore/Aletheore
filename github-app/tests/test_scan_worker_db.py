@@ -13,6 +13,7 @@ from scan_worker.db import (
     get_llm_spend_this_month,
     insert_endpoint_health,
     insert_repo_history,
+    installation_spend_lock,
     list_monitored_installations,
     list_repos_for_installation,
     record_llm_spend,
@@ -188,3 +189,30 @@ async def test_set_and_get_last_reviewed_sha_round_trips(pool):
     check_and_reserve_flash_review_attempt(TEST_DATABASE_URL, 301, "a/repo1", 42)
     set_last_reviewed_sha(TEST_DATABASE_URL, 301, "a/repo1", 42, "deadbeef")
     assert get_last_reviewed_sha(TEST_DATABASE_URL, 301, "a/repo1", 42) == "deadbeef"
+
+
+@pytest.mark.asyncio
+async def test_installation_spend_lock_blocks_concurrent_acquisition(pool):
+    import psycopg
+
+    with installation_spend_lock(TEST_DATABASE_URL, 301):
+        with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(301)")
+                acquired = cur.fetchone()[0]
+        assert acquired is False
+
+
+@pytest.mark.asyncio
+async def test_installation_spend_lock_releases_after_context_exits(pool):
+    import psycopg
+
+    with installation_spend_lock(TEST_DATABASE_URL, 301):
+        pass
+
+    with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(301)")
+            acquired = cur.fetchone()[0]
+            cur.execute("SELECT pg_advisory_unlock(301)")
+    assert acquired is True

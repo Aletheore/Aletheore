@@ -1,4 +1,5 @@
 import json
+from contextlib import contextmanager
 from datetime import datetime
 
 
@@ -111,6 +112,27 @@ def get_extra_seats(dsn: str, installation_id: int) -> int:
             )
             row = cur.fetchone()
             return row[0] if row else 0
+
+
+@contextmanager
+def installation_spend_lock(dsn: str, installation_id: int):
+    # A single scan-worker process handles jobs sequentially today, so the
+    # check-then-record spend cap is accidentally safe. This advisory lock
+    # makes that safety explicit: it serializes the check/run/record cycle
+    # per installation so scaling scan-worker to multiple replicas later
+    # can't let concurrent jobs for the same installation both pass the
+    # cap check before either has recorded its cost.
+    import psycopg
+
+    conn = psycopg.connect(dsn, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(%s)", (installation_id,))
+        yield
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock(%s)", (installation_id,))
+        conn.close()
 
 
 def check_and_reserve_flash_review_attempt(
