@@ -113,6 +113,69 @@ def get_extra_seats(dsn: str, installation_id: int) -> int:
             return row[0] if row else 0
 
 
+def check_and_reserve_flash_review_attempt(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    debounce_seconds: int = 120,
+) -> bool:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO flash_review_state
+                    (installation_id, repo_full_name, pr_number, last_attempted_at)
+                VALUES (%s, %s, %s, now())
+                ON CONFLICT (installation_id, repo_full_name, pr_number) DO UPDATE
+                SET last_attempted_at = EXCLUDED.last_attempted_at
+                WHERE flash_review_state.last_attempted_at <= now() - %s * interval '1 second'
+                RETURNING last_attempted_at
+                """,
+                (installation_id, repo_full_name, pr_number, debounce_seconds),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return row is not None
+
+
+def get_last_reviewed_sha(
+    dsn: str, installation_id: int, repo_full_name: str, pr_number: int
+) -> str | None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT last_reviewed_sha FROM flash_review_state
+                WHERE installation_id = %s AND repo_full_name = %s AND pr_number = %s
+                """,
+                (installation_id, repo_full_name, pr_number),
+            )
+            row = cur.fetchone()
+            return row[0] if row and row[0] else None
+
+
+def set_last_reviewed_sha(
+    dsn: str, installation_id: int, repo_full_name: str, pr_number: int, sha: str
+) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE flash_review_state SET last_reviewed_sha = %s
+                WHERE installation_id = %s AND repo_full_name = %s AND pr_number = %s
+                """,
+                (sha, installation_id, repo_full_name, pr_number),
+            )
+        conn.commit()
+
+
 def get_installation(dsn: str, installation_id: int) -> dict | None:
     import psycopg
 

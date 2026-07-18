@@ -1,7 +1,7 @@
 import httpx
 
 from aletheore.pr_comment import COMMENT_MARKER
-from scan_worker.github_api import upsert_pr_comment
+from scan_worker.github_api import fetch_pr_diff, upsert_pr_comment
 
 
 def test_creates_comment_when_none_exists():
@@ -76,3 +76,37 @@ def test_create_check_run_posts_expected_payload():
     assert body["status"] == "completed"
     assert body["conclusion"] == "failure"
     assert body["name"] == "Aletheore secrets check"
+
+
+def test_fetch_pr_diff_concatenates_real_patches():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/octocat/hello-world/compare/aaa...bbb"
+        return httpx.Response(
+            200,
+            json={
+                "files": [
+                    {
+                        "filename": "app.py",
+                        "patch": "@@ -1,2 +1,3 @@\n def hello():\n+    print('hi')\n     pass",
+                    },
+                    {"filename": "image.png", "patch": None},
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
+
+    assert "app.py" in diff_text
+    assert "print('hi')" in diff_text
+    assert "image.png" not in diff_text
+
+
+def test_fetch_pr_diff_returns_empty_string_when_no_files_changed():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"files": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
+
+    assert diff_text == ""

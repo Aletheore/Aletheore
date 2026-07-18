@@ -28,7 +28,7 @@ async def pool():
         pytest.skip(f"test Postgres unavailable: {exc}")
     async with p.acquire() as conn:
         migrations_dir = Path(__file__).resolve().parents[1] / "migrations"
-        for migration in sorted(migrations_dir.glob("00[2345]_*.sql")):
+        for migration in sorted(migrations_dir.glob("00[23456]_*.sql")):
             await conn.execute(migration.read_text())
         await conn.execute("TRUNCATE installations, sessions CASCADE")
     yield p

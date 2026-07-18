@@ -4,9 +4,11 @@ import os
 import pytest
 
 from scan_worker.db import (
+    check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     get_extra_seats,
     get_last_endpoint_health,
+    get_last_reviewed_sha,
     get_latest_evidence,
     get_llm_spend_this_month,
     insert_endpoint_health,
@@ -14,6 +16,7 @@ from scan_worker.db import (
     list_monitored_installations,
     list_repos_for_installation,
     record_llm_spend,
+    set_last_reviewed_sha,
 )
 
 TEST_DATABASE_URL = os.environ.get(
@@ -151,3 +154,37 @@ async def test_record_llm_spend_accumulates_sync(pool):
 async def test_get_extra_seats_sync_defaults_to_zero(pool):
     await _insert_installation(pool, 301, "a")
     assert get_extra_seats(TEST_DATABASE_URL, 301) == 0
+
+
+@pytest.mark.asyncio
+async def test_check_and_reserve_flash_review_attempt_allows_first_and_blocks_second(pool):
+    await _insert_installation(pool, 301, "a")
+    first = check_and_reserve_flash_review_attempt(TEST_DATABASE_URL, 301, "a/repo1", 42)
+    second = check_and_reserve_flash_review_attempt(TEST_DATABASE_URL, 301, "a/repo1", 42)
+    assert first is True
+    assert second is False
+
+
+@pytest.mark.asyncio
+async def test_check_and_reserve_flash_review_attempt_allows_after_debounce_elapses(pool):
+    await _insert_installation(pool, 301, "a")
+    check_and_reserve_flash_review_attempt(TEST_DATABASE_URL, 301, "a/repo1", 42, debounce_seconds=0)
+    allowed = check_and_reserve_flash_review_attempt(
+        TEST_DATABASE_URL, 301, "a/repo1", 42, debounce_seconds=0
+    )
+    assert allowed is True
+
+
+@pytest.mark.asyncio
+async def test_get_last_reviewed_sha_returns_none_before_any_review(pool):
+    await _insert_installation(pool, 301, "a")
+    check_and_reserve_flash_review_attempt(TEST_DATABASE_URL, 301, "a/repo1", 42)
+    assert get_last_reviewed_sha(TEST_DATABASE_URL, 301, "a/repo1", 42) is None
+
+
+@pytest.mark.asyncio
+async def test_set_and_get_last_reviewed_sha_round_trips(pool):
+    await _insert_installation(pool, 301, "a")
+    check_and_reserve_flash_review_attempt(TEST_DATABASE_URL, 301, "a/repo1", 42)
+    set_last_reviewed_sha(TEST_DATABASE_URL, 301, "a/repo1", 42, "deadbeef")
+    assert get_last_reviewed_sha(TEST_DATABASE_URL, 301, "a/repo1", 42) == "deadbeef"

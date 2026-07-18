@@ -18,10 +18,12 @@ from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.llm_cost import cost_for_usage, monthly_cap_for_installation
 from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
 from scan_worker.db import (
+    check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     get_extra_seats,
     get_installation as get_installation_row,
     get_last_endpoint_health,
+    get_last_reviewed_sha,
     get_latest_evidence,
     get_llm_spend_this_month,
     insert_endpoint_health,
@@ -29,8 +31,10 @@ from scan_worker.db import (
     list_monitored_installations,
     list_repos_for_installation,
     record_llm_spend,
+    set_last_reviewed_sha,
 )
-from scan_worker.github_api import create_check_run, upsert_pr_comment
+from scan_worker.flash_review import review_diff
+from scan_worker.github_api import create_check_run, fetch_pr_diff, upsert_pr_comment
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.slack import (
     format_latency_alert,
@@ -41,6 +45,7 @@ from scan_worker.slack import (
 
 JOBS_ROOT = Path("/tmp/aletheore-jobs")
 AUDIT_COMMENT_MARKER = "<!-- aletheore-audit -->"
+FLASH_REVIEW_MARKER = "<!-- aletheore-flash-review -->"
 
 
 def _job_temp_dir() -> Path:
@@ -283,6 +288,61 @@ def run_managed_audit_api_job(installation_id: int, evidence: dict | str) -> str
         return result
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def run_flash_review_job(
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    base_sha: str,
+    head_sha: str,
+) -> None:
+    settings = get_settings()
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is None or installation["plan"] == "free":
+        return
+
+    if not check_and_reserve_flash_review_attempt(
+        settings.database_url, installation_id, repo_full_name, pr_number
+    ):
+        return
+
+    extra_seats = get_extra_seats(settings.database_url, installation_id)
+    monthly_cap = monthly_cap_for_installation(7.00, extra_seats)
+    current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
+    if current_spend >= monthly_cap:
+        return
+
+    app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+    token = _token_sync(installation_id, app_jwt)
+    client = httpx.Client(base_url="https://api.github.com")
+
+    last_reviewed_sha = get_last_reviewed_sha(
+        settings.database_url, installation_id, repo_full_name, pr_number
+    )
+    diff_base = last_reviewed_sha or base_sha
+    diff_text = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha)
+
+    spend_accumulator = {"total": 0.0}
+
+    def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+        spend_accumulator["total"] += cost_for_usage(
+            "deepseek-v4-flash", prompt_tokens, completion_tokens
+        )
+
+    findings = review_diff(diff_text, on_usage=_on_usage)
+    record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
+
+    if findings:
+        lines = [f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n"]
+        for finding in findings:
+            lines.append(f"- `{finding['file']}:{finding['line']}` — {finding['issue']}")
+        body = "\n".join(lines)
+    else:
+        body = f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\nNo issues found in this diff."
+
+    upsert_pr_comment(client, token, repo_full_name, pr_number, body, marker=FLASH_REVIEW_MARKER)
+    set_last_reviewed_sha(settings.database_url, installation_id, repo_full_name, pr_number, head_sha)
 
 
 def _send_if_webhook_configured(installation: dict, message: dict) -> None:

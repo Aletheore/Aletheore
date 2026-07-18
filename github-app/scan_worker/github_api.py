@@ -58,3 +58,27 @@ def create_check_run(
         },
     )
     response.raise_for_status()
+
+
+def fetch_pr_diff(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    base_ref: str,
+    head_ref: str,
+) -> str:
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    response = client.get(
+        f"/repos/{repo_full_name}/compare/{base_ref}...{head_ref}",
+        headers=headers,
+    )
+    response.raise_for_status()
+    parts = []
+    for file in response.json().get("files", []):
+        patch = file.get("patch")
+        if patch:
+            parts.append(f"--- {file['filename']} ---\n{patch}")
+    return "\n\n".join(parts)
