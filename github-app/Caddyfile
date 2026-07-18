@@ -1,4 +1,4 @@
-aletheore.com {
+aletheore.com, app.aletheore.com {
     encode gzip
 
     header {
