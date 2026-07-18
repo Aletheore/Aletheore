@@ -92,7 +92,7 @@ runs:
         fi
 
         set +e
-        aletheore diff aletheore-base/.aletheore/evidence.json aletheore-head/.aletheore/evidence.json $ARGS > diff-output.json
+        aletheore diff aletheore-base/.aletheore/air.json aletheore-head/.aletheore/air.json $ARGS > diff-output.json
         DIFF_EXIT_CODE=$?
         set -e
 
