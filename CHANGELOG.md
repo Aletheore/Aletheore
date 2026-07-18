@@ -3,8 +3,34 @@
 Notable changes to Aletheore, by release. The working code lives in `prototype/` — see
 [`prototype/README.md`](prototype/README.md) for the full command reference.
 
-## Unreleased
+## 0.4.0 — 2026-07-18
 
+- Extended dependency vulnerability/license checking to cover manifests as well as lockfiles,
+  so a project isn't silently reported as "0 findings" (indistinguishable from a clean scan)
+  when its dependencies are declared somewhere the lockfile-only parsers didn't read - verified
+  against real repos before and after: Django (no root `requirements.txt` - declares deps in
+  `pyproject.toml`), `spring-petclinic` (Spring Boot's BOM-inherited dependency versions),
+  `apache/dubbo` (57-module multi-module repo), `serde`/`guzzle` (popular libraries that ship no
+  lockfile at all), and Microsoft's `eShopOnWeb` (.NET Central Package Management). Python now
+  additionally parses `pyproject.toml` (PEP 621 and Poetry); npm prefers the resolved version
+  from `package-lock.json` over `package.json`'s declared range when a lockfile is present; Rust,
+  PHP, Ruby, and C# each fall back to their manifest (`Cargo.toml`, `composer.json`, `*.gemspec`,
+  `.csproj`/`Directory.Packages.props`) when no lockfile exists; Maven now resolves
+  `${property}`-style versions and same-file `dependencyManagement`-inherited versions, and
+  recurses into every module listed in a multi-module `pom.xml` - while also fixing a
+  over-counting bug where the old lookup incorrectly pulled in profile-only and
+  dependencyManagement-only entries as if they were the project's real active dependencies
+  (confirmed on `dubbo`: 6 real dependencies vs. 46 falsely matched).
+- Added vulnerability/license checking for six more ecosystems beyond Python and JavaScript: Go
+  (`go.mod`, via the official `pkg.go.dev` v1beta API), Rust (`Cargo.lock`, crates.io), Java
+  (`pom.xml`, Maven Central), Ruby (`Gemfile.lock`, RubyGems), PHP (`composer.lock`, Packagist),
+  and C# (`packages.lock.json`, NuGet) - live-verified against a real Kubernetes scan (206 Go
+  dependencies, 9 vulnerability findings, 40 license findings).
+- Added `aletheore status`: reports the installed version, whether a newer release is available
+  on PyPI, and current login state.
+- Added `aletheore login`: GitHub OAuth device-flow authentication (no client secret needed,
+  no browser redirect - a device code is shown, approved on github.com, and the CLI polls until
+  approved).
 - Added local semantic code search and retrieval-grounded Q&A: `aletheore index` builds a
   LanceDB index over symbol-bounded code chunks using local Ollama embeddings
   (`nomic-embed-text`), `aletheore query search-codebase` returns TOON-encoded semantic
