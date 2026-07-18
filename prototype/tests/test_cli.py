@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -18,6 +20,23 @@ from aletheore.report import (
 )
 
 runner = CliRunner()
+
+
+def test_importing_cli_does_not_eagerly_load_heavy_dependencies():
+    # dashboard/mcp_server/search_index pull in lancedb+pyarrow+pandas+mcp+jsonschema -
+    # importing aletheore.cli must not drag that stack in for every single command
+    # (scan, audit, query, --help, ...), only for the specific commands that need it
+    # (dashboard, mcp, query answer/search-codebase). Run in a fresh subprocess since
+    # other test modules in this same pytest session may have already imported these
+    # heavy modules, which would make an in-process check meaningless.
+    result = subprocess.run(
+        [sys.executable, "-c", "import aletheore.cli; import sys; print('lancedb' in sys.modules)"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
 
 
 def make_adapter(name: str, available: bool):
@@ -387,7 +406,7 @@ def test_index_command_builds_index_from_existing_evidence(tmp_path):
     result = runner.invoke(app, ["scan", str(repo)])
     assert result.exit_code == 0
 
-    with patch("aletheore.cli.build_index", return_value=3) as mock_build:
+    with patch("aletheore.search_index.build_index", return_value=3) as mock_build:
         result = runner.invoke(app, ["index", str(repo)])
 
     assert result.exit_code == 0
@@ -403,7 +422,7 @@ def test_index_command_fails_clearly_without_prior_scan(tmp_path):
 
 def test_query_search_codebase_prints_toon_results(tmp_path):
     with patch(
-        "aletheore.cli.search_index",
+        "aletheore.search_index.search_index",
         return_value=[
             {
                 "module_path": "auth.py",
@@ -427,7 +446,7 @@ def test_query_answer_reuses_selected_adapter(tmp_path):
     fake_adapter.requires_consent = False
     with patch("aletheore.cli.select_adapter", return_value=fake_adapter):
         with patch(
-            "aletheore.cli.answer_question",
+            "aletheore.answer.answer_question",
             return_value={
                 "answer": "Login uses auth.py::login.",
                 "cited_chunks": ["auth.py::login"],

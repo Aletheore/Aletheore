@@ -15,7 +15,6 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from aletheore.answer import answer_question
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.claude_code import AdapterInvocationError, ClaudeCodeAdapter
 from aletheore.adapters.codex_cli import CodexCliAdapter
@@ -25,13 +24,11 @@ from aletheore.adapters.mistral_vibe import MistralVibeAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.adapters.opencode import OpenCodeAdapter
 from aletheore.credentials import get_api_key
-from aletheore.dashboard import build_app
 from aletheore.device_auth import infer_repo_full_name_from_cwd_git_remote
 from aletheore.evidence import scan_repository, write_evidence
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
 from aletheore.managed_audit_client import ManagedAuditError, run_managed_audit_request
-from aletheore.mcp_server import build_server
 from aletheore.query import (
     BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
@@ -45,7 +42,6 @@ from aletheore.report import (
     run_reasoning_phase,
     select_adapter,
 )
-from aletheore.search_index import IndexNotFoundError, build_index, search_index
 from aletheore.toon_encoding import to_toon
 
 KNOWN_ADAPTERS = [
@@ -381,6 +377,8 @@ def _index(repo_path: str) -> int:
         "Building semantic search index (embedding via local Ollama, "
         "falling back to OpenAI if unavailable)..."
     )
+    from aletheore.search_index import build_index
+
     try:
         count = build_index(repo, evidence)
     except Exception as exc:
@@ -413,6 +411,8 @@ def _query(
         if target is None:
             print("error: query type 'search-codebase' requires a natural-language query")
             return 1
+        from aletheore.search_index import IndexNotFoundError, search_index
+
         try:
             result = search_index(Path(repo_path).resolve(), target, k=k)
         except IndexNotFoundError as exc:
@@ -440,6 +440,9 @@ def _query(
             if input("Continue? [y/N]: ").strip().lower() != "y":
                 console.print("Cancelled - no data was sent.")
                 return 0
+        from aletheore.answer import answer_question
+        from aletheore.search_index import IndexNotFoundError
+
         try:
             result = answer_question(Path(repo_path).resolve(), target, adapter, k=k)
         except IndexNotFoundError as exc:
@@ -571,6 +574,8 @@ def _healthcheck(repo_path: str, base_url: str) -> int:
 
 
 def _mcp(repo_path: str, forced_agent: str | None = None) -> int:
+    from aletheore.mcp_server import build_server
+
     repo = Path(repo_path).resolve()
     answer_adapter = None
     if forced_agent is not None:
@@ -582,6 +587,14 @@ def _mcp(repo_path: str, forced_agent: str | None = None) -> int:
             console.print(f"[bold red]error:[/bold red] {exc}")
             return 1
     server = build_server(repo, answer_adapter=answer_adapter)
+    # stderr, never stdout - an MCP client treats this process's stdout as the
+    # JSON-RPC channel from the moment it starts, so anything written there
+    # that isn't a protocol message would corrupt the stream.
+    print(
+        "MCP server ready, waiting for a client on stdio "
+        "(this process produces no further output until one connects)",
+        file=sys.stderr,
+    )
     server.run(transport="stdio")
     return 0
 
@@ -597,6 +610,8 @@ def _port_is_available(host: str, port: int) -> bool:
 
 
 def _dashboard(repo_path: str, port: int) -> int:
+    from aletheore.dashboard import build_app
+
     repo = Path(repo_path).resolve()
     host = "127.0.0.1"
 
