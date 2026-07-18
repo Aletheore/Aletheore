@@ -192,6 +192,12 @@ Builds a local LanceDB vector index over the repository's code chunks from an ex
 This is explicit and never runs as a side effect of `scan`. Embeddings use local Ollama's
 OpenAI-compatible endpoint and the `nomic-embed-text` model.
 
+If Ollama is unreachable and `OPENAI_API_KEY` is configured (same lookup `audit` already uses -
+environment variable first, then a saved credential), Aletheore asks for explicit confirmation
+before falling back to OpenAI's `text-embedding-3-small` embeddings instead - this sends real
+source code chunks to OpenAI's API, so it's never used silently and never used at all when running
+non-interactively (e.g. from the MCP server).
+
 ```bash
 aletheore scan .
 ollama pull nomic-embed-text

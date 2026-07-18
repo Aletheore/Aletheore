@@ -375,7 +375,10 @@ def _index(repo_path: str) -> int:
         console.print(f"Run 'aletheore scan {repo}' first.")
         return 1
     evidence = json.loads(evidence_path.read_text())
-    console.print("Building semantic search index (embedding via local Ollama)...")
+    console.print(
+        "Building semantic search index (embedding via local Ollama, "
+        "falling back to OpenAI if unavailable)..."
+    )
     try:
         count = build_index(repo, evidence)
     except Exception as exc:

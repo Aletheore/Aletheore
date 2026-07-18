@@ -90,6 +90,120 @@ def test_embed_texts_raises_actionable_error_when_model_unavailable(mock_openai_
         embed_texts(["chunk one"])
 
 
+@patch("aletheore.search_index.has_api_key", return_value=False)
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_raises_ollama_error_when_no_openai_key_configured(
+    mock_openai_class, mock_has_api_key, tmp_path
+):
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.embeddings.create.side_effect = RuntimeError("connection refused")
+
+    with pytest.raises(EmbeddingProviderUnavailableError, match="ollama pull nomic-embed-text"):
+        embed_texts(["chunk one"], credentials_path=tmp_path / "credentials.json")
+
+    mock_has_api_key.assert_called_once_with(
+        "OPENAI_API_KEY", "OpenAI", tmp_path / "credentials.json"
+    )
+
+
+@patch("aletheore.search_index.sys")
+@patch("aletheore.search_index.get_api_key", return_value="sk-test-key")
+@patch("aletheore.search_index.has_api_key", return_value=True)
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_falls_back_to_openai_when_ollama_unavailable(
+    mock_openai_class, mock_has_api_key, mock_get_api_key, mock_sys, tmp_path
+):
+    mock_sys.stdin.isatty.return_value = True
+
+    ollama_client = MagicMock()
+    ollama_client.embeddings.create.side_effect = RuntimeError("connection refused")
+    openai_client = MagicMock()
+    openai_client.embeddings.create.return_value = MagicMock(
+        data=[MagicMock(embedding=[0.5, 0.6])]
+    )
+    mock_openai_class.side_effect = [ollama_client, openai_client]
+
+    confirm_fn = MagicMock(return_value=True)
+
+    result = embed_texts(
+        ["chunk one"], credentials_path=tmp_path / "credentials.json", confirm_fn=confirm_fn
+    )
+
+    assert result == [[0.5, 0.6]]
+    confirm_fn.assert_called_once()
+    openai_call = openai_client.embeddings.create.call_args
+    assert openai_call.kwargs["model"] == "text-embedding-3-small"
+    assert openai_call.kwargs["input"] == ["chunk one"]
+    second_client_call = mock_openai_class.call_args_list[1]
+    assert second_client_call.kwargs["base_url"] == "https://api.openai.com/v1"
+    assert second_client_call.kwargs["api_key"] == "sk-test-key"
+
+
+@patch("aletheore.search_index.sys")
+@patch("aletheore.search_index.get_api_key", return_value="sk-test-key")
+@patch("aletheore.search_index.has_api_key", return_value=True)
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_raises_when_openai_fallback_declined(
+    mock_openai_class, mock_has_api_key, mock_get_api_key, mock_sys, tmp_path
+):
+    mock_sys.stdin.isatty.return_value = True
+    ollama_client = MagicMock()
+    ollama_client.embeddings.create.side_effect = RuntimeError("connection refused")
+    mock_openai_class.return_value = ollama_client
+
+    confirm_fn = MagicMock(return_value=False)
+
+    with pytest.raises(EmbeddingProviderUnavailableError, match="declined"):
+        embed_texts(
+            ["chunk one"], credentials_path=tmp_path / "credentials.json", confirm_fn=confirm_fn
+        )
+
+    confirm_fn.assert_called_once()
+    assert mock_openai_class.call_count == 1
+
+
+@patch("aletheore.search_index.sys")
+@patch("aletheore.search_index.get_api_key", return_value="sk-test-key")
+@patch("aletheore.search_index.has_api_key", return_value=True)
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_refuses_fallback_when_not_interactive(
+    mock_openai_class, mock_has_api_key, mock_get_api_key, mock_sys, tmp_path
+):
+    mock_sys.stdin.isatty.return_value = False
+    ollama_client = MagicMock()
+    ollama_client.embeddings.create.side_effect = RuntimeError("connection refused")
+    mock_openai_class.return_value = ollama_client
+
+    with pytest.raises(EmbeddingProviderUnavailableError, match="interactive"):
+        embed_texts(["chunk one"], credentials_path=tmp_path / "credentials.json")
+
+    assert mock_openai_class.call_count == 1
+    mock_get_api_key.assert_not_called()
+
+
+@patch("aletheore.search_index.sys")
+@patch("aletheore.search_index.get_api_key", return_value="sk-test-key")
+@patch("aletheore.search_index.has_api_key", return_value=True)
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_names_both_failures_when_openai_also_fails(
+    mock_openai_class, mock_has_api_key, mock_get_api_key, mock_sys, tmp_path
+):
+    mock_sys.stdin.isatty.return_value = True
+    ollama_client = MagicMock()
+    ollama_client.embeddings.create.side_effect = RuntimeError("connection refused")
+    openai_client = MagicMock()
+    openai_client.embeddings.create.side_effect = RuntimeError("invalid api key")
+    mock_openai_class.side_effect = [ollama_client, openai_client]
+
+    with pytest.raises(EmbeddingProviderUnavailableError, match="Ollama unavailable.*OpenAI"):
+        embed_texts(
+            ["chunk one"],
+            credentials_path=tmp_path / "credentials.json",
+            confirm_fn=lambda: True,
+        )
+
+
 @patch("aletheore.search_index.embed_texts")
 def test_build_index_creates_lancedb_table(mock_embed_texts, tmp_path):
     (tmp_path / "app.py").write_text("def greet():\n    return 'hi'\n")
