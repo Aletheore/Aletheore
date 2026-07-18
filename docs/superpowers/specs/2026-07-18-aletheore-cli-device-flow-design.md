@@ -172,7 +172,7 @@ from dataclasses import dataclass
 
 import httpx
 
-GITHUB_CLIENT_ID = "Iv23liGMhaWSkY927jgl"  # public, not a secret - same App as the web flow
+GITHUB_CLIENT_ID = "Iv23liGMhaWSkY927jgI"  # public, not a secret - same App as the web flow
 DEVICE_BASE_URL = "https://github.com"
 BACKEND_BASE_URL = "https://app.aletheore.com"
 

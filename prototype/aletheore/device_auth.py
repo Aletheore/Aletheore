@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import httpx
 
-GITHUB_CLIENT_ID = "Iv23liGMhaWSkY927jgl"
+GITHUB_CLIENT_ID = "Iv23liGMhaWSkY927jgI"
 
 
 class DeviceFlowError(Exception):
