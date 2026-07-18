@@ -1,11 +1,12 @@
 import base64
 import hashlib
+import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
 
 import httpx
 from cryptography.fernet import Fernet
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
@@ -14,6 +15,8 @@ from app_server.db import create_session, delete_session, get_session
 
 SESSION_COOKIE_NAME = "session"
 SESSION_TTL = timedelta(days=30)
+OAUTH_STATE_COOKIE_NAME = "oauth_state"
+OAUTH_STATE_TTL = timedelta(minutes=10)
 
 auth_router = APIRouter()
 
@@ -52,6 +55,20 @@ def unsign_session_id(signed: str, secret: str) -> str | None:
         return None
 
 
+def sign_oauth_state(state: str, secret: str) -> str:
+    return URLSafeTimedSerializer(secret, salt="oauth-state").dumps(state)
+
+
+def unsign_oauth_state(signed: str, secret: str) -> str | None:
+    try:
+        return URLSafeTimedSerializer(secret, salt="oauth-state").loads(
+            signed,
+            max_age=int(OAUTH_STATE_TTL.total_seconds()),
+        )
+    except BadSignature:
+        return None
+
+
 async def get_current_session(request: Request) -> dict | None:
     signed = request.cookies.get(SESSION_COOKIE_NAME)
     if not signed:
@@ -72,17 +89,33 @@ async def get_current_session(request: Request) -> dict | None:
 @auth_router.get("/auth/login")
 async def login():
     settings = get_settings()
+    state = secrets.token_urlsafe(32)
     url = (
         "https://github.com/login/oauth/authorize"
         f"?client_id={settings.github_client_id}"
         f"&redirect_uri={settings.public_base_url}/auth/callback"
+        f"&state={state}"
     )
-    return RedirectResponse(url=url, status_code=307)
+    response = RedirectResponse(url=url, status_code=307)
+    response.set_cookie(
+        OAUTH_STATE_COOKIE_NAME,
+        sign_oauth_state(state, settings.session_secret),
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=int(OAUTH_STATE_TTL.total_seconds()),
+    )
+    return response
 
 
 @auth_router.get("/auth/callback")
-async def callback(code: str, request: Request):
+async def callback(code: str, state: str, request: Request):
     settings = get_settings()
+
+    signed_state = request.cookies.get(OAUTH_STATE_COOKIE_NAME)
+    expected_state = signed_state and unsign_oauth_state(signed_state, settings.session_secret)
+    if not expected_state or not hmac.compare_digest(expected_state, state):
+        raise HTTPException(status_code=400, detail="invalid oauth state")
 
     token_response = _github_oauth_http_client().post(
         "/login/oauth/access_token",
@@ -125,6 +158,7 @@ async def callback(code: str, request: Request):
         samesite="lax",
         max_age=int(SESSION_TTL.total_seconds()),
     )
+    response.delete_cookie(OAUTH_STATE_COOKIE_NAME)
     return response
 
 

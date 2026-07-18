@@ -62,8 +62,12 @@ async def test_callback_creates_session_and_sets_cookie(pool, monkeypatch):
 
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/auth/callback?code=fake-code", follow_redirects=False)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        login_response = await client.get("/auth/login", follow_redirects=False)
+        state = login_response.headers["location"].split("state=")[1]
+        response = await client.get(
+            f"/auth/callback?code=fake-code&state={state}", follow_redirects=False
+        )
 
     assert response.status_code == 307
     assert "session" in response.cookies
@@ -71,6 +75,31 @@ async def test_callback_creates_session_and_sets_cookie(pool, monkeypatch):
     row = await get_session(pool, session_id)
     assert row["github_login"] == "octocat"
     assert row["github_access_token"] != "gho_faketoken"
+
+
+@pytest.mark.asyncio
+async def test_callback_rejects_mismatched_state(pool, monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        await client.get("/auth/login", follow_redirects=False)
+        response = await client.get(
+            "/auth/callback?code=fake-code&state=wrong-state", follow_redirects=False
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_callback_rejects_missing_state_cookie(pool, monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/auth/callback?code=fake-code&state=anything", follow_redirects=False
+        )
+    assert response.status_code == 400
 
 
 @pytest.mark.asyncio
