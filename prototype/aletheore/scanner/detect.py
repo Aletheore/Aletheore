@@ -107,6 +107,14 @@ DB_ORM_MARKERS_JS = {
     "knex": "knex",
 }
 
+MIGRATION_DIR_NAME_MARKERS = ("migrations",)
+
+SCHEMA_FILE_MARKERS = (
+    "prisma/schema.prisma",
+    "db/schema.rb",
+    "db/structure.sql",
+)
+
 BUILD_TOOL_MARKERS = {
     "Dockerfile": "docker",
     "docker-compose.yml": "docker-compose",
@@ -299,3 +307,50 @@ def detect_monorepo(repo_path: Path) -> dict:
             return {"detected": True, "workspaces": []}
 
     return {"detected": False, "workspaces": []}
+
+
+def _detect_migration_directories(repo_path: Path) -> list[dict]:
+    results: list[dict] = []
+    for name in MIGRATION_DIR_NAME_MARKERS:
+        for candidate in repo_path.rglob(name):
+            if not candidate.is_dir():
+                continue
+            rel_parts = candidate.relative_to(repo_path).parts
+            if any(part in IGNORED_DIRS for part in rel_parts):
+                continue
+            file_count = sum(
+                1
+                for f in candidate.iterdir()
+                if f.is_file() and f.suffix in (".py", ".sql", ".js", ".ts", ".rb")
+            )
+            results.append(
+                {"path": candidate.relative_to(repo_path).as_posix(), "file_count": file_count}
+            )
+
+    alembic_versions = repo_path / "alembic" / "versions"
+    if alembic_versions.is_dir():
+        file_count = sum(1 for f in alembic_versions.iterdir() if f.is_file() and f.suffix == ".py")
+        results.append({"path": "alembic/versions", "file_count": file_count})
+
+    rails_migrate = repo_path / "db" / "migrate"
+    if rails_migrate.is_dir():
+        file_count = sum(1 for f in rails_migrate.iterdir() if f.is_file() and f.suffix == ".rb")
+        results.append({"path": "db/migrate", "file_count": file_count})
+
+    return results
+
+
+def _detect_schema_files(repo_path: Path) -> list[str]:
+    return [marker for marker in SCHEMA_FILE_MARKERS if (repo_path / marker).exists()]
+
+
+def detect_database(repo_path: Path) -> dict:
+    pip_lines = _iter_pip_package_lines(repo_path)
+    npm_deps = _npm_dependencies(repo_path)
+    return {
+        "orm_frameworks": _match_dependency_markers(
+            DB_ORM_MARKERS_PY, DB_ORM_MARKERS_JS, pip_lines, npm_deps
+        ),
+        "migration_directories": _detect_migration_directories(repo_path),
+        "schema_files": _detect_schema_files(repo_path),
+    }

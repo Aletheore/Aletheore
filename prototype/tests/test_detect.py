@@ -4,6 +4,7 @@ from pathlib import Path
 from aletheore.scanner.detect import (
     detect_ai_usage,
     detect_build_tools,
+    detect_database,
     detect_frameworks,
     detect_languages,
     detect_monorepo,
@@ -239,3 +240,104 @@ def test_detect_frameworks_still_reads_requirements_txt_with_correct_source(tmp_
     frameworks = detect_frameworks(repo)
     entry = next(f for f in frameworks if f["name"] == "fastapi")
     assert entry["evidence"] == "requirements.txt:fastapi==0.110.0"
+
+
+def test_detect_database_finds_orm_in_requirements_txt(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("sqlalchemy==2.0.0\n")
+
+    result = detect_database(repo)
+
+    names = {p["name"] for p in result["orm_frameworks"]}
+    assert "sqlalchemy" in names
+
+
+def test_detect_database_finds_orm_in_package_json(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").write_text(json.dumps({"dependencies": {"prisma": "^5.0.0"}}))
+
+    result = detect_database(repo)
+
+    names = {p["name"] for p in result["orm_frameworks"]}
+    assert "prisma" in names
+
+
+def test_detect_database_finds_generic_migrations_directory(tmp_path):
+    repo = tmp_path / "repo"
+    migrations = repo / "migrations"
+    migrations.mkdir(parents=True)
+    (migrations / "001_initial.sql").write_text("CREATE TABLE x (id INT);\n")
+    (migrations / "002_add_column.sql").write_text("ALTER TABLE x ADD y INT;\n")
+    (migrations / "README.md").write_text("not a migration\n")
+
+    result = detect_database(repo)
+
+    assert result["migration_directories"] == [{"path": "migrations", "file_count": 2}]
+
+
+def test_detect_database_finds_nested_django_style_migrations(tmp_path):
+    repo = tmp_path / "repo"
+    migrations = repo / "app" / "migrations"
+    migrations.mkdir(parents=True)
+    (migrations / "0001_initial.py").write_text("class Migration:\n    pass\n")
+
+    result = detect_database(repo)
+
+    assert result["migration_directories"] == [{"path": "app/migrations", "file_count": 1}]
+
+
+def test_detect_database_finds_alembic_versions(tmp_path):
+    repo = tmp_path / "repo"
+    versions = repo / "alembic" / "versions"
+    versions.mkdir(parents=True)
+    (versions / "abc123_initial.py").write_text("def upgrade():\n    pass\n")
+    (versions / "def456_add_index.py").write_text("def upgrade():\n    pass\n")
+
+    result = detect_database(repo)
+
+    assert {"path": "alembic/versions", "file_count": 2} in result["migration_directories"]
+
+
+def test_detect_database_finds_rails_style_migrate_dir(tmp_path):
+    repo = tmp_path / "repo"
+    migrate = repo / "db" / "migrate"
+    migrate.mkdir(parents=True)
+    (migrate / "20260101000000_create_users.rb").write_text("class CreateUsers; end\n")
+
+    result = detect_database(repo)
+
+    assert {"path": "db/migrate", "file_count": 1} in result["migration_directories"]
+
+
+def test_detect_database_ignores_migrations_dir_inside_node_modules(tmp_path):
+    repo = tmp_path / "repo"
+    vendored = repo / "node_modules" / "some-orm" / "migrations"
+    vendored.mkdir(parents=True)
+    (vendored / "001.js").write_text("module.exports = {};\n")
+
+    result = detect_database(repo)
+
+    assert result["migration_directories"] == []
+
+
+def test_detect_database_finds_prisma_schema_file(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "prisma").mkdir()
+    (repo / "prisma" / "schema.prisma").write_text("datasource db {}\n")
+
+    result = detect_database(repo)
+
+    assert result["schema_files"] == ["prisma/schema.prisma"]
+
+
+def test_detect_database_returns_empty_when_nothing_present(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("x = 1\n")
+
+    result = detect_database(repo)
+
+    assert result == {"orm_frameworks": [], "migration_directories": [], "schema_files": []}
