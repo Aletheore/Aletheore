@@ -6,10 +6,20 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
+from xml.etree import ElementTree
 
 import certifi
 
-from aletheore.vulnerabilities import _parse_npm_pins, _parse_pip_pins
+from aletheore.vulnerabilities import (
+    _parse_cargo_pins,
+    _parse_composer_pins,
+    _parse_gemfile_lock_pins,
+    _parse_go_pins,
+    _parse_maven_pins,
+    _parse_npm_pins,
+    _parse_nuget_pins,
+    _parse_pip_pins,
+)
 
 PYPI_URL_TEMPLATE = "https://pypi.org/pypi/{name}/{version}/json"
 NPM_URL_TEMPLATE = "https://registry.npmjs.org/{name}/{version}"
@@ -142,13 +152,104 @@ def _fetch_npm_license(name: str, version: str, timeout: int) -> str | None:
     return None
 
 
+def _fetch_go_license(name: str, version: str, timeout: int) -> str | None:
+    url = f"https://pkg.go.dev/v1beta/package/{name}?version={version}&licenses=true"
+    request = urllib.request.Request(url)
+    with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
+        data = json.loads(response.read())
+    licenses = data.get("licenses", [])
+    if licenses and licenses[0].get("types"):
+        return licenses[0]["types"][0]
+    return None
+
+
+def _fetch_crates_license(name: str, version: str, timeout: int) -> str | None:
+    request = urllib.request.Request(
+        f"https://crates.io/api/v1/crates/{name}/{version}",
+        headers={"User-Agent": "aletheore (https://github.com/Aletheore/Aletheore)"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
+        data = json.loads(response.read())
+    return data.get("version", {}).get("license")
+
+
+def _fetch_maven_license(name: str, version: str, timeout: int) -> str | None:
+    group, _, artifact = name.partition(":")
+    group_path = group.replace(".", "/")
+    url = (
+        f"https://repo1.maven.org/maven2/{group_path}/{artifact}/{version}/"
+        f"{artifact}-{version}.pom"
+    )
+    request = urllib.request.Request(url)
+    with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
+        pom_text = response.read()
+    root = ElementTree.fromstring(pom_text)
+    ns = {"m": "http://maven.apache.org/POM/4.0.0"}
+    license_name = root.find(".//m:licenses/m:license/m:name", ns)
+    return license_name.text.strip() if license_name is not None and license_name.text else None
+
+
+def _fetch_rubygems_license(name: str, version: str, timeout: int) -> str | None:
+    request = urllib.request.Request(f"https://rubygems.org/api/v1/gems/{name}.json")
+    with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
+        data = json.loads(response.read())
+    licenses = data.get("licenses") or []
+    return licenses[0] if licenses else None
+
+
+def _fetch_packagist_license(name: str, version: str, timeout: int) -> str | None:
+    request = urllib.request.Request(f"https://repo.packagist.org/p2/{name}.json")
+    with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
+        data = json.loads(response.read())
+    for entry in data.get("packages", {}).get(name, []):
+        if entry.get("version") == version:
+            licenses = entry.get("license") or []
+            return licenses[0] if licenses else None
+    return None
+
+
+def _fetch_nuget_license(name: str, version: str, timeout: int) -> str | None:
+    request = urllib.request.Request(
+        f"https://api.nuget.org/v3/registration5-semver1/{name.lower()}/index.json"
+    )
+    with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
+        data = json.loads(response.read())
+    for page in data.get("items", []):
+        for item in page.get("items", []):
+            entry = item.get("catalogEntry", {})
+            if entry.get("version") == version:
+                return entry.get("licenseExpression") or None
+    return None
+
+
+_LICENSE_FETCHERS = {
+    "PyPI": _fetch_pypi_license,
+    "npm": _fetch_npm_license,
+    "Go": _fetch_go_license,
+    "crates.io": _fetch_crates_license,
+    "Maven": _fetch_maven_license,
+    "RubyGems": _fetch_rubygems_license,
+    "Packagist": _fetch_packagist_license,
+    "NuGet": _fetch_nuget_license,
+}
+
+
 def check_dependency_licenses(
     repo_path: Path,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     on_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict:
     repo_license = detect_repo_license(repo_path)
-    pins = _parse_pip_pins(repo_path) + _parse_npm_pins(repo_path)
+    pins = (
+        _parse_pip_pins(repo_path)
+        + _parse_npm_pins(repo_path)
+        + _parse_go_pins(repo_path)
+        + _parse_cargo_pins(repo_path)
+        + _parse_maven_pins(repo_path)
+        + _parse_gemfile_lock_pins(repo_path)
+        + _parse_composer_pins(repo_path)
+        + _parse_nuget_pins(repo_path)
+    )
     if not pins:
         return {"checked": True, "reason": None, "repo_license": repo_license, "findings": []}
 
@@ -157,11 +258,14 @@ def check_dependency_licenses(
         if on_progress is not None:
             on_progress(index, len(pins), name)
         try:
-            if ecosystem == "PyPI":
-                license_text = _fetch_pypi_license(name, version, timeout)
-            else:
-                license_text = _fetch_npm_license(name, version, timeout)
-        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+            license_text = _LICENSE_FETCHERS[ecosystem](name, version, timeout)
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            json.JSONDecodeError,
+            ElementTree.ParseError,
+        ):
             # A single package's registry lookup failing (network hiccup, the
             # package removed, a malformed response) isn't the same as the whole
             # check being unreachable - it's reported as an "unknown" finding
