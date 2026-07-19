@@ -58,3 +58,52 @@ def test_review_diff_threads_on_usage_to_the_adapter(mock_adapter_class):
     _, kwargs = mock_adapter_class.call_args
     assert kwargs["on_usage"] is on_usage
     assert kwargs["model"] == "deepseek-v4-flash"
+
+
+def test_gather_file_context_stops_at_max_files(monkeypatch):
+    from scan_worker import flash_review
+
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILES", 2)
+    fetched = []
+
+    def fake_fetch(client, token, repo, path, ref):
+        fetched.append(path)
+        return "x" * 10
+
+    monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
+
+    flash_review.gather_file_context(None, "tok", "o/r", ["a.py", "b.py", "c.py", "d.py"], "sha")
+
+    assert fetched == ["a.py", "b.py"]
+
+
+def test_gather_file_context_skips_oversized_files(monkeypatch):
+    from scan_worker import flash_review
+
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILE_BYTES", 5)
+
+    def fake_fetch(client, token, repo, path, ref):
+        return "way too long for the cap"
+
+    monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
+
+    result = flash_review.gather_file_context(None, "tok", "o/r", ["a.py"], "sha")
+
+    assert "a.py" not in result
+
+
+def test_gather_file_context_stops_at_total_byte_budget(monkeypatch):
+    from scan_worker import flash_review
+
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILES", 10)
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILE_BYTES", 1000)
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_TOTAL_BYTES", 15)
+
+    def fake_fetch(client, token, repo, path, ref):
+        return "0123456789"
+
+    monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
+
+    result = flash_review.gather_file_context(None, "tok", "o/r", ["a.py", "b.py", "c.py"], "sha")
+
+    assert result.count("0123456789") == 1

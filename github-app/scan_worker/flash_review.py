@@ -2,6 +2,12 @@ import json
 from collections.abc import Callable
 
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
+from scan_worker.github_api import (
+    MAX_CONTEXT_FILE_BYTES,
+    MAX_CONTEXT_FILES,
+    MAX_CONTEXT_TOTAL_BYTES,
+    fetch_file_content,
+)
 
 FLASH_REVIEW_SYSTEM_PROMPT = """You are reviewing a code diff for potential issues. You must
 respond with ONLY a JSON array of findings, no other text, no markdown code fences, no
@@ -12,6 +18,29 @@ at that exact line - never a style opinion, never "consider refactoring", never 
 concern that isn't tied to something you can point at). Only report a finding if you can name
 a specific, real issue at a specific line. If you find nothing worth flagging, respond with
 exactly: []"""
+
+
+def gather_file_context(
+    client,
+    token: str,
+    repo_full_name: str,
+    changed_files: list[str],
+    head_ref: str,
+) -> str:
+    parts = []
+    total_bytes = 0
+    for path in changed_files[:MAX_CONTEXT_FILES]:
+        content = fetch_file_content(client, token, repo_full_name, path, head_ref)
+        if content is None:
+            continue
+        encoded_len = len(content.encode("utf-8"))
+        if encoded_len > MAX_CONTEXT_FILE_BYTES:
+            continue
+        if total_bytes + encoded_len > MAX_CONTEXT_TOTAL_BYTES:
+            break
+        parts.append(f"--- full content: {path} ---\n{content}")
+        total_bytes += encoded_len
+    return "\n\n".join(parts)
 
 
 def review_diff(diff_text: str, on_usage: Callable[[int, int], None] | None = None) -> list[dict]:
