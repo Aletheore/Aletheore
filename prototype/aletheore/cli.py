@@ -117,6 +117,7 @@ _COMMAND_SUMMARIES = [
     ("dashboard", "a live local web UI over the same evidence"),
     ("healthcheck", "GET-only live check of mapped API endpoints"),
     ("login", "authenticate and save a managed-audit API token"),
+    ("logout", "clear the locally saved managed-audit API token"),
     ("status", "installed version, update availability, and login state"),
 ]
 
@@ -847,6 +848,20 @@ def login() -> None:
     except DeviceFlowError as exc:
         console.print(f"[bold red]error:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
+
+
+@app.command(help="clear the locally saved managed-audit API token")
+def logout() -> None:
+    import aletheore.credentials as credentials
+
+    removed = credentials.clear_api_key(
+        "aletheore-managed-audit",
+        credentials_path=credentials.DEFAULT_CREDENTIALS_PATH,
+    )
+    if removed:
+        console.print("[bold green]Logged out.[/bold green] Saved token removed.")
+    else:
+        console.print("Not logged in - nothing to clear.")
 
 
 @app.command(help="show installed version, update availability, and login state")

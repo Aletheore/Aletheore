@@ -350,6 +350,7 @@ def test_every_subcommand_help_runs_cleanly():
         "dashboard",
         "healthcheck",
         "login",
+        "logout",
         "status",
     ):
         result = runner.invoke(app, [command, "--help"])
@@ -622,6 +623,33 @@ def test_login_prints_error_and_exits_nonzero_on_device_flow_error():
 
     assert result.exit_code == 1
     assert "denied" in result.output
+
+
+def test_logout_clears_saved_token(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    credentials.save_api_token("aletheore-managed-audit", "tok-123", creds_path)
+
+    result = runner.invoke(app, ["logout"])
+
+    assert result.exit_code == 0
+    assert not credentials.has_api_key(
+        "UNUSED_ENV", "aletheore-managed-audit", credentials_path=creds_path
+    )
+
+
+def test_logout_when_not_logged_in_says_so(tmp_path, monkeypatch):
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "credentials.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+
+    result = runner.invoke(app, ["logout"])
+
+    assert result.exit_code == 0
+    assert "not logged in" in result.stdout.lower()
 
 
 def test_check_for_update_reports_up_to_date():
