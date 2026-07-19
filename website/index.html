@@ -57,6 +57,21 @@
           <p>Secrets, dependency vulnerabilities and licenses across 11 languages (Python, JavaScript, TypeScript, Go, Rust, Java, Ruby, PHP, C, C++, C#), API endpoint mapping, architecture clustering, and full git history - all from tree-sitter and git log, no LLM involved.</p>
         </article>
         <article class="feature-card">
+          <p class="feature-cmd">$ aletheore query dead-code</p>
+          <h3>Dead code detection</h3>
+          <p>Flags unreachable modules and functions from real call-graph analysis - not a guess, a traced absence of any incoming edge from a known entry point.</p>
+        </article>
+        <article class="feature-card">
+          <p class="feature-cmd">$ aletheore query hotspots</p>
+          <h3>Git hotspot intelligence</h3>
+          <p>Surfaces the files that change most and who actually owns them, straight from git log - the parts of your codebase most likely to need a careful review.</p>
+        </article>
+        <article class="feature-card">
+          <p class="feature-cmd">$ aletheore query database</p>
+          <h3>Database &amp; infrastructure detection</h3>
+          <p>Finds ORM frameworks, migration directories, schema files, Docker Compose services, Kubernetes manifests, and declared environment variable names (never values) - all from static analysis, nothing executed.</p>
+        </article>
+        <article class="feature-card">
           <p class="feature-cmd">on: pull_request</p>
           <h3>GitHub Action</h3>
           <p>Posts a PR comment and inline annotations on new secrets, plus a step summary on every run - so review happens where the code already lives.</p>
