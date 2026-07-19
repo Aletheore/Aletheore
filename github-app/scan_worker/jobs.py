@@ -379,7 +379,13 @@ def _endpoint_results(evidence: dict, base_url: str) -> list[dict]:
     endpoints = evidence.get("repository", {}).get("api_endpoints", {}).get("endpoints", [])
     if not endpoints:
         return []
-    return run_healthcheck(endpoints, base_url).get("results", [])
+    results = run_healthcheck(endpoints, base_url).get("results", [])
+    for endpoint, result in zip(endpoints, results, strict=False):
+        if endpoint.get("file") is not None:
+            result["file"] = endpoint["file"]
+        if endpoint.get("line") is not None:
+            result["line"] = endpoint["line"]
+    return results
 
 
 def _latency_flipped(
@@ -420,6 +426,8 @@ def run_health_check_sweep_job() -> None:
                     continue
                 method = entry["method"]
                 path = entry["path"]
+                source_file = entry.get("file")
+                source_line = entry.get("line")
                 reachable = entry["reachable"]
                 status_code = entry.get("status_code")
                 latency_ms = entry.get("latency_ms")
@@ -437,7 +445,14 @@ def run_health_check_sweep_job() -> None:
                 if reachability_flipped:
                     _send_if_webhook_configured(
                         installation,
-                        format_reachability_alert(repo_full_name, method, path, reachable),
+                        format_reachability_alert(
+                            repo_full_name,
+                            method,
+                            path,
+                            source_file,
+                            source_line,
+                            reachable,
+                        ),
                     )
 
                 if _latency_flipped(prior, reachable, latency_ms, threshold_ms):
@@ -447,6 +462,8 @@ def run_health_check_sweep_job() -> None:
                             repo_full_name,
                             method,
                             path,
+                            source_file,
+                            source_line,
                             latency_ms,
                             threshold_ms,
                             latency_ms > threshold_ms,

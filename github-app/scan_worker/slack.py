@@ -48,17 +48,24 @@ def format_reachability_alert(
     repo_full_name: str,
     method: str,
     path: str,
+    source_file: str | None,
+    source_line: int | None,
     now_reachable: bool,
 ) -> dict:
+    location = (
+        f" - handled by {source_file}:{source_line}"
+        if source_file and source_line is not None
+        else ""
+    )
     if now_reachable:
         text = (
             f"*Aletheore*: endpoint recovered on `{repo_full_name}`\n"
-            f"`{method} {path}` is reachable again"
+            f"`{method} {path}` is reachable again{location}"
         )
     else:
         text = (
             f"*Aletheore*: endpoint down on `{repo_full_name}`\n"
-            f"`{method} {path}` is unreachable (was reachable as of the last check)"
+            f"`{method} {path}` is unreachable (was reachable as of the last check){location}"
         )
     return {"text": text}
 
@@ -67,19 +74,26 @@ def format_latency_alert(
     repo_full_name: str,
     method: str,
     path: str,
+    source_file: str | None,
+    source_line: int | None,
     latency_ms: float,
     threshold_ms: int,
     now_over: bool,
 ) -> dict:
+    location = (
+        f" - handled by {source_file}:{source_line}"
+        if source_file and source_line is not None
+        else ""
+    )
     if now_over:
         text = (
             f"*Aletheore*: endpoint slow on `{repo_full_name}`\n"
-            f"`{method} {path}` took {latency_ms:.0f}ms (threshold: {threshold_ms}ms)"
+            f"`{method} {path}` took {latency_ms:.0f}ms (threshold: {threshold_ms}ms){location}"
         )
     else:
         text = (
             f"*Aletheore*: endpoint back under threshold on `{repo_full_name}`\n"
-            f"`{method} {path}` took {latency_ms:.0f}ms (threshold: {threshold_ms}ms)"
+            f"`{method} {path}` took {latency_ms:.0f}ms (threshold: {threshold_ms}ms){location}"
         )
     return {"text": text}
 

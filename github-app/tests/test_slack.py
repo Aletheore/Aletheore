@@ -45,27 +45,63 @@ def test_send_slack_alert_posts_to_webhook_url():
 
 
 def test_format_reachability_alert_down():
-    body = format_reachability_alert("octocat/hello-world", "GET", "/api/users", now_reachable=False)
+    body = format_reachability_alert(
+        "octocat/hello-world",
+        "GET",
+        "/api/users",
+        "controllers/user.controller.ts",
+        42,
+        now_reachable=False,
+    )
     assert "down" in body["text"]
     assert "octocat/hello-world" in body["text"]
     assert "/api/users" in body["text"]
+    assert "controllers/user.controller.ts:42" in body["text"]
 
 
 def test_format_reachability_alert_recovered():
-    body = format_reachability_alert("octocat/hello-world", "GET", "/api/users", now_reachable=True)
+    body = format_reachability_alert(
+        "octocat/hello-world",
+        "GET",
+        "/api/users",
+        "controllers/user.controller.ts",
+        42,
+        now_reachable=True,
+    )
     assert "recovered" in body["text"]
+    assert "controllers/user.controller.ts:42" in body["text"]
 
 
 def test_format_latency_alert_over():
-    body = format_latency_alert("octocat/hello-world", "GET", "/api/users", 4120.0, 3000, now_over=True)
+    body = format_latency_alert(
+        "octocat/hello-world",
+        "GET",
+        "/api/users",
+        "controllers/user.controller.ts",
+        42,
+        4120.0,
+        3000,
+        now_over=True,
+    )
     assert "slow" in body["text"]
     assert "4120" in body["text"]
     assert "3000" in body["text"]
+    assert "controllers/user.controller.ts:42" in body["text"]
 
 
 def test_format_latency_alert_under():
-    body = format_latency_alert("octocat/hello-world", "GET", "/api/users", 850.0, 3000, now_over=False)
+    body = format_latency_alert(
+        "octocat/hello-world",
+        "GET",
+        "/api/users",
+        "controllers/user.controller.ts",
+        42,
+        850.0,
+        3000,
+        now_over=False,
+    )
     assert "under threshold" in body["text"]
+    assert "controllers/user.controller.ts:42" in body["text"]
 
 
 def test_send_health_alert_posts_message():

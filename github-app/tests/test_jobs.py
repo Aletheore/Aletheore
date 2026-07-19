@@ -640,6 +640,41 @@ def test_sweep_sends_down_alert_on_first_unreachable_check(monkeypatch):
     assert "down" in sent[0]["text"]
 
 
+def test_sweep_threads_endpoint_source_location_into_alert(monkeypatch):
+    sent = _patch_sweep(
+        monkeypatch,
+        prior={"reachable": True, "latency_ms": 100.0},
+        evidence={
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {
+                            "method": "GET",
+                            "path": "/x",
+                            "file": "controllers/user.controller.ts",
+                            "line": 42,
+                        }
+                    ]
+                }
+            }
+        },
+        result_entry={
+            "method": "GET",
+            "path": "/x",
+            "reachable": False,
+            "status_code": None,
+            "latency_ms": 10.0,
+        },
+    )
+
+    from scan_worker.jobs import run_health_check_sweep_job
+
+    run_health_check_sweep_job()
+
+    assert len(sent) == 1
+    assert "controllers/user.controller.ts:42" in sent[0]["text"]
+
+
 def test_sweep_sends_latency_over_alert(monkeypatch):
     sent = _patch_sweep(
         monkeypatch,
