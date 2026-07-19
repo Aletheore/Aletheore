@@ -116,6 +116,7 @@ _COMMAND_SUMMARIES = [
     ("mcp", "run an MCP server so an agent can query a repo directly"),
     ("dashboard", "a live local web UI over the same evidence"),
     ("healthcheck", "GET-only live check of mapped API endpoints"),
+    ("init", "scaffold a repository-local .aletheore.json config file"),
     ("login", "authenticate and save a managed-audit API token"),
     ("logout", "clear the locally saved managed-audit API token"),
     ("status", "installed version, update availability, and login state"),
@@ -751,6 +752,30 @@ def scan(
         path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints
     )
     raise typer.Exit(code=exit_code)
+
+
+@app.command(help="scaffold a .aletheore.json config file in a repository")
+def init(path: str = typer.Argument(".", help="repository path")) -> None:
+    config_path = Path(path) / ".aletheore.json"
+    if config_path.exists():
+        console.print(f"[bold red]error:[/bold red] {config_path} already exists - not overwriting it.")
+        raise typer.Exit(code=1)
+
+    default_config = {
+        "layer_markers": {},
+        "cluster_resolution": 1.0,
+        "dead_code_entry_points": [],
+        "accepted_secrets": [],
+    }
+    config_path.write_text(json.dumps(default_config, indent=2) + "\n")
+    console.print(f"[bold green]Wrote {config_path}[/bold green]")
+    console.print(
+        "  layer_markers: folder-name -> layer-order int, for custom layer-violation "
+        "conventions (e.g. {\"domain\": 0, \"infrastructure\": 2})"
+    )
+    console.print("  cluster_resolution: tunes architecture cluster detection (default 1.0)")
+    console.print("  dead_code_entry_points: extra file paths to treat as entry points")
+    console.print("  accepted_secrets: baseline of reviewed secret findings to suppress (leave empty for now)")
 
 
 @app.command(help="build a local semantic search index over the repository's code")

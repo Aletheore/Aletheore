@@ -358,6 +358,7 @@ def test_every_subcommand_help_runs_cleanly():
         "mcp",
         "dashboard",
         "healthcheck",
+        "init",
         "login",
         "logout",
         "status",
@@ -659,6 +660,31 @@ def test_logout_when_not_logged_in_says_so(tmp_path, monkeypatch):
 
     assert result.exit_code == 0
     assert "not logged in" in result.stdout.lower()
+
+
+def test_init_writes_aletheore_json_with_defaults(tmp_path):
+    result = runner.invoke(app, ["init", str(tmp_path)])
+
+    assert result.exit_code == 0
+    config_path = tmp_path / ".aletheore.json"
+    assert config_path.exists()
+    data = json.loads(config_path.read_text())
+    assert data == {
+        "layer_markers": {},
+        "cluster_resolution": 1.0,
+        "dead_code_entry_points": [],
+        "accepted_secrets": [],
+    }
+
+
+def test_init_refuses_to_overwrite_existing_config(tmp_path):
+    config_path = tmp_path / ".aletheore.json"
+    config_path.write_text('{"cluster_resolution": 2.0}')
+
+    result = runner.invoke(app, ["init", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert json.loads(config_path.read_text()) == {"cluster_resolution": 2.0}
 
 
 def test_check_for_update_reports_up_to_date():
