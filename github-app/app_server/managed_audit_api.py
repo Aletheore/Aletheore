@@ -67,6 +67,7 @@ async def start_managed_audit(request: Request):
     await touch_api_token(pool, token_hash)
     job = _get_queue(get_settings().redis_url).enqueue(
         "scan_worker.jobs.run_managed_audit_api_job",
+        job_timeout=900,
         installation_id=installation["installation_id"],
         evidence=evidence,
     )

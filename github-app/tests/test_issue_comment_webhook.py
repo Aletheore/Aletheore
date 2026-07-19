@@ -28,6 +28,9 @@ async def test_audit_command_enqueues_managed_audit_job():
     assert kwargs["installation_id"] == 111
     assert kwargs["repo_full_name"] == "octocat/hello-world"
     assert kwargs["pr_number"] == 42
+    # RQ's default job timeout (~180s) is too short for a real LLM-backed audit
+    # call - a real run was killed mid-flight by this before job_timeout was set.
+    assert kwargs["job_timeout"] >= 600
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ async def handle_issue_comment_event(payload: dict, redis_url: str, queue=None) 
 
     queue.enqueue(
         "scan_worker.jobs.run_managed_audit_pr_job",
+        job_timeout=900,
         installation_id=payload["installation"]["id"],
         repo_full_name=payload["repository"]["full_name"],
         pr_number=payload["issue"]["number"],

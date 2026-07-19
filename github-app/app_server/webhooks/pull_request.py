@@ -13,6 +13,7 @@ async def handle_pull_request_event(payload: dict, redis_url: str, queue=None) -
 
     queue.enqueue(
         "scan_worker.jobs.run_pr_scan_job",
+        job_timeout=300,
         installation_id=payload["installation"]["id"],
         repo_full_name=payload["repository"]["full_name"],
         pr_number=payload["number"],
@@ -21,6 +22,7 @@ async def handle_pull_request_event(payload: dict, redis_url: str, queue=None) -
     )
     queue.enqueue(
         "scan_worker.jobs.run_flash_review_job",
+        job_timeout=180,
         installation_id=payload["installation"]["id"],
         repo_full_name=payload["repository"]["full_name"],
         pr_number=payload["number"],

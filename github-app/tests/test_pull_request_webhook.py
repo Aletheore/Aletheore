@@ -32,6 +32,7 @@ async def test_opened_enqueues_both_jobs():
         assert kwargs["pr_number"] == 42
         assert kwargs["base_sha"] == "aaa111"
         assert kwargs["head_sha"] == "bbb222"
+        assert kwargs["job_timeout"] > 0
 
 
 @pytest.mark.asyncio
