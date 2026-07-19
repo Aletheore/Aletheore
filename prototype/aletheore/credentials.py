@@ -78,6 +78,20 @@ def _save_key(provider_name: str, key: str, credentials_path: Path) -> None:
     credentials_path.chmod(0o600)
 
 
+def clear_api_key(provider_name: str, credentials_path: Path = DEFAULT_CREDENTIALS_PATH) -> bool:
+    if not credentials_path.exists():
+        return False
+    try:
+        data = json.loads(credentials_path.read_text())
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(data, dict) or provider_name not in data:
+        return False
+    del data[provider_name]
+    credentials_path.write_text(json.dumps(data, indent=2))
+    return True
+
+
 def save_api_token(
     provider_name: str,
     token: str,

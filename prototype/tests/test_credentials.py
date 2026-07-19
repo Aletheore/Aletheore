@@ -1,6 +1,6 @@
 import json
 
-from aletheore.credentials import get_api_key, has_api_key, save_api_token
+from aletheore.credentials import clear_api_key, get_api_key, has_api_key, save_api_token
 
 
 def test_has_api_key_true_from_env_var(monkeypatch, tmp_path):
@@ -114,3 +114,19 @@ def test_save_api_token_is_readable_via_get_api_key(monkeypatch, tmp_path):
 
     result = get_api_key("TESTPROVIDER_API_KEY", "testprovider", creds_path, fail_if_called)
     assert result == "sk-from-device-flow"
+
+
+def test_clear_api_key_removes_saved_key(tmp_path):
+    path = tmp_path / "credentials.json"
+    save_api_token("aletheore-managed-audit", "tok-123", path)
+    assert has_api_key("UNUSED_ENV", "aletheore-managed-audit", credentials_path=path)
+
+    removed = clear_api_key("aletheore-managed-audit", path)
+
+    assert removed is True
+    assert not has_api_key("UNUSED_ENV", "aletheore-managed-audit", credentials_path=path)
+
+
+def test_clear_api_key_returns_false_when_nothing_to_clear(tmp_path):
+    path = tmp_path / "credentials.json"
+    assert clear_api_key("aletheore-managed-audit", path) is False
