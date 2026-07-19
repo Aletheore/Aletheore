@@ -34,8 +34,8 @@ from scan_worker.db import (
     record_llm_spend,
     set_last_reviewed_sha,
 )
-from scan_worker.flash_review import review_diff
-from scan_worker.github_api import create_check_run, fetch_pr_diff, upsert_pr_comment
+from scan_worker.flash_review import gather_file_context, review_diff
+from scan_worker.github_api import create_check_run, fetch_pr_changed_files, fetch_pr_diff, upsert_pr_comment
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.slack import (
     format_latency_alert,
@@ -342,6 +342,8 @@ def run_flash_review_job(
         )
         diff_base = last_reviewed_sha or base_sha
         diff_text = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha)
+        changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
+        file_context = gather_file_context(client, token, repo_full_name, changed_files, head_sha)
 
         spend_accumulator = {"total": 0.0}
 
@@ -350,13 +352,16 @@ def run_flash_review_job(
                 "deepseek-v4-flash", prompt_tokens, completion_tokens
             )
 
-        findings = review_diff(diff_text, on_usage=_on_usage)
+        findings = review_diff(diff_text, file_context=file_context, on_usage=_on_usage)
         record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
 
         if findings:
             lines = [f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n"]
             for finding in findings:
                 lines.append(f"- `{finding['file']}:{finding['line']}` — {finding['issue']}")
+                suggestion = finding.get("suggestion")
+                if suggestion:
+                    lines.append(f"  ```\n  {suggestion}\n  ```")
             body = "\n".join(lines)
         else:
             body = (

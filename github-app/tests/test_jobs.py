@@ -487,9 +487,13 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.gather_file_context", lambda *a, **k: "")
     monkeypatch.setattr(
         "scan_worker.jobs.review_diff",
-        lambda diff_text, on_usage=None: [{"file": "app.py", "line": 1, "issue": "real problem"}],
+        lambda diff_text, file_context="", on_usage=None: [
+            {"file": "app.py", "line": 1, "issue": "real problem"}
+        ],
     )
     recorded_spend = []
     monkeypatch.setattr(
@@ -518,6 +522,44 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     assert recorded_spend == [0.0]
 
 
+def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestion_syntax(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "pro"}
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.gather_file_context", lambda *a, **k: "")
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", on_usage=None: [
+            {"file": "app.py", "line": 1, "issue": "unclosed handle", "suggestion": "f.close()"}
+        ],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    posted = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo_full_name, pr_number, body, **kwargs: posted.update(body=body),
+    )
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert "f.close()" in posted["body"]
+    assert "```suggestion" not in posted["body"]
+
+
 def test_flash_review_job_posts_no_issues_found_when_findings_empty(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(
@@ -533,7 +575,9 @@ def test_flash_review_job_posts_no_issues_found_when_findings_empty(monkeypatch)
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+fine")
-    monkeypatch.setattr("scan_worker.jobs.review_diff", lambda diff_text, on_usage=None: [])
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.gather_file_context", lambda *a, **k: "")
+    monkeypatch.setattr("scan_worker.jobs.review_diff", lambda diff_text, file_context="", on_usage=None: [])
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     posted = {}
