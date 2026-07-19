@@ -1,7 +1,9 @@
+import base64
+
 import httpx
 
 from aletheore.pr_comment import COMMENT_MARKER
-from scan_worker.github_api import fetch_pr_diff, upsert_pr_comment
+from scan_worker.github_api import fetch_file_content, fetch_pr_changed_files, fetch_pr_diff, upsert_pr_comment
 
 
 def test_creates_comment_when_none_exists():
@@ -110,3 +112,50 @@ def test_fetch_pr_diff_returns_empty_string_when_no_files_changed():
     diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
 
     assert diff_text == ""
+
+
+def test_fetch_pr_changed_files_returns_filenames():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/octocat/hello-world/compare/aaa...bbb"
+        return httpx.Response(
+            200,
+            json={"files": [{"filename": "app.py", "patch": "..."}, {"filename": "lib.py", "patch": "..."}]},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    result = fetch_pr_changed_files(client, "tok", "octocat/hello-world", "aaa", "bbb")
+
+    assert result == ["app.py", "lib.py"]
+
+
+def test_fetch_file_content_decodes_base64():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/octocat/hello-world/contents/app.py"
+        assert request.url.params["ref"] == "bbb"
+        content = base64.b64encode(b"print('hello')\n").decode()
+        return httpx.Response(200, json={"content": content, "encoding": "base64", "size": 16})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    result = fetch_file_content(client, "tok", "octocat/hello-world", "app.py", "bbb")
+
+    assert result == "print('hello')\n"
+
+
+def test_fetch_file_content_returns_none_for_404():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    result = fetch_file_content(client, "tok", "octocat/hello-world", "deleted.py", "bbb")
+
+    assert result is None
+
+
+def test_fetch_file_content_returns_none_for_binary():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"content": "", "encoding": "none", "size": 12345})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    result = fetch_file_content(client, "tok", "octocat/hello-world", "image.png", "bbb")
+
+    assert result is None
