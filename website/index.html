@@ -39,17 +39,17 @@
 
     <section id="why">
       <h2>Why deterministic-first.</h2>
-      <p class="section-intro">No LLM ever runs in the scan path. Aletheore reads your repository with tree-sitter and git log, writes what it found to <code>evidence.json</code>, and every other command - <code>query</code>, <code>diff</code>, the dashboard, the MCP server, even <code>audit</code>'s written report - reads from that same file. Nothing downstream states a claim it can't point back to a specific field in it.</p>
+      <p class="section-intro">No LLM ever runs in the scan path. Aletheore reads your repository with tree-sitter and git log, writes what it found to <code>air.json</code>, and every other command - <code>query</code>, <code>diff</code>, the dashboard, the MCP server, even <code>audit</code>'s written report - reads from that same file. Nothing downstream states a claim it can't point back to a specific field in it.</p>
     </section>
 
     <section id="how">
       <h2>How it actually works.</h2>
-      <p class="section-intro"><code>aletheore scan</code> runs once and writes two files: <code>evidence.json</code> (the canonical record - languages, dependency graph, clusters, git activity, secrets, licenses, vulnerabilities, API endpoints) and <code>evidence.toon</code>, a <a href="https://toonformat.dev">TOON</a>-encoded copy of the same data specifically for the MCP server's tool results and the coding-agent adapter <code>audit</code> uses - because that's where token cost is actually paid, not in the file Aletheore itself keeps on disk.</p>
+      <p class="section-intro"><code>aletheore scan</code> runs once and writes two files: <code>air.json</code> (the canonical record - languages, dependency graph, clusters, git activity, secrets, licenses, vulnerabilities, API endpoints) and <code>air.toon</code>, a <a href="https://toonformat.dev">TOON</a>-encoded copy of the same data specifically for the MCP server's tool results and the coding-agent adapter <code>audit</code> uses - because that's where token cost is actually paid, not in the file Aletheore itself keeps on disk.</p>
     </section>
 
     <section id="features">
       <h2>What it actually checks.</h2>
-      <p class="section-intro">Every capability below runs from the same <code>evidence.json</code> - nothing here is aspirational copy.</p>
+      <p class="section-intro">Every capability below runs from the same <code>air.json</code> - nothing here is aspirational copy.</p>
       <div class="feature-grid">
         <article class="feature-card">
           <p class="feature-cmd">$ aletheore scan</p>
@@ -113,7 +113,7 @@
 
         <div class="toon-demo">
           <h3>The same data, TOON-encoded.</h3>
-          <p class="section-intro">Measured against Aletheore's own <code>evidence.json</code>/<code>evidence.toon</code> pair from a real self-scan - the exact data the MCP server and <code>audit</code>'s coding-agent adapter read.</p>
+          <p class="section-intro">Measured against Aletheore's own <code>air.json</code>/<code>air.toon</code> pair from a real self-scan - the exact data the MCP server and <code>audit</code>'s coding-agent adapter read.</p>
           <div class="toon-counters">
             <div class="toon-counter">
               <div class="toon-counter-value" id="toon-token-count" data-target="45.5">45.5%</div>
@@ -144,7 +144,7 @@
         Detecting languages, frameworks, and build tools<br>
         Building module dependency graph<br>
         Checking dependency vulnerabilities<br>
-        Evidence written to .aletheore/evidence.json<br>
+        Evidence written to .aletheore/air.json<br>
         Snapshot saved to .aletheore/history/
       </div>
     </section>

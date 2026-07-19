@@ -46,7 +46,7 @@ const SHOWCASE = {
     "clonedShallow": true
   },
   "toonDemo": {
-    "source": "Aletheore's own evidence.json/evidence.toon (self-scan, 2026-07-18)",
+    "source": "Aletheore's own air.json/air.toon (self-scan, 2026-07-18)",
     "jsonTokens": 51137,
     "toonTokens": 27892,
     "tokenReductionPercent": 45.5,
