@@ -643,7 +643,7 @@ app = typer.Typer(
     name="aletheore",
     help="Evidence-grounded repository audit — a deterministic scanner, MCP server, live "
     "dashboard, and a GitHub Action that posts PR diffs.",
-    add_completion=False,
+    add_completion=True,
     no_args_is_help=False,
 )
 
