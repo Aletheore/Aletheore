@@ -9,14 +9,17 @@ from scan_worker.github_api import (
     fetch_file_content,
 )
 
-FLASH_REVIEW_SYSTEM_PROMPT = """You are reviewing a code diff for potential issues. You must
-respond with ONLY a JSON array of findings, no other text, no markdown code fences, no
-explanation outside the array. Each finding must be an object with exactly these fields:
-"file" (the exact file path shown in the diff), "line" (the exact line number from the diff,
-as an integer), and "issue" (a concrete, specific, checkable description of an actual problem
-at that exact line - never a style opinion, never "consider refactoring", never a vague
-concern that isn't tied to something you can point at). Only report a finding if you can name
-a specific, real issue at a specific line. If you find nothing worth flagging, respond with
+FLASH_REVIEW_SYSTEM_PROMPT = """You are reviewing a code diff for potential issues. You may also be
+given the full current content of the changed files for context. You must respond with ONLY a
+JSON array of findings, no other text, no markdown code fences, no explanation outside the
+array. Each finding must be an object with these fields: "file" (the exact file path shown in
+the diff), "line" (the exact line number from the diff, as an integer), "issue" (a concrete,
+specific, checkable description of an actual problem at that exact line - never a style
+opinion, never "consider refactoring", never a vague concern that isn't tied to something you
+can point at), and optionally "suggestion" (a short plain-text code fix for that exact issue,
+with no markdown formatting or code fences of your own - if you have no concrete fix, omit this
+field entirely rather than restating the issue). Only report a finding if you can name a
+specific, real issue at a specific line. If you find nothing worth flagging, respond with
 exactly: []"""
 
 
@@ -43,7 +46,11 @@ def gather_file_context(
     return "\n\n".join(parts)
 
 
-def review_diff(diff_text: str, on_usage: Callable[[int, int], None] | None = None) -> list[dict]:
+def review_diff(
+    diff_text: str,
+    file_context: str = "",
+    on_usage: Callable[[int, int], None] | None = None,
+) -> list[dict]:
     if not diff_text.strip():
         return []
 
@@ -54,7 +61,8 @@ def review_diff(diff_text: str, on_usage: Callable[[int, int], None] | None = No
         model="deepseek-v4-flash",
         on_usage=on_usage,
     )
-    raw_output = adapter.simple_completion(FLASH_REVIEW_SYSTEM_PROMPT, diff_text, cwd=".")
+    user_prompt = diff_text if not file_context else f"{diff_text}\n\n{file_context}"
+    raw_output = adapter.simple_completion(FLASH_REVIEW_SYSTEM_PROMPT, user_prompt, cwd=".")
 
     try:
         findings = json.loads(raw_output)
@@ -66,7 +74,7 @@ def review_diff(diff_text: str, on_usage: Callable[[int, int], None] | None = No
 
     valid: list[dict] = []
     for finding in findings:
-        if (
+        if not (
             isinstance(finding, dict)
             and isinstance(finding.get("file"), str)
             and finding.get("file")
@@ -74,7 +82,10 @@ def review_diff(diff_text: str, on_usage: Callable[[int, int], None] | None = No
             and isinstance(finding.get("issue"), str)
             and finding.get("issue")
         ):
-            valid.append(
-                {"file": finding["file"], "line": finding["line"], "issue": finding["issue"]}
-            )
+            continue
+        result = {"file": finding["file"], "line": finding["line"], "issue": finding["issue"]}
+        suggestion = finding.get("suggestion")
+        if isinstance(suggestion, str) and suggestion.strip():
+            result["suggestion"] = suggestion.strip()
+        valid.append(result)
     return valid

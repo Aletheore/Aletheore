@@ -60,6 +60,47 @@ def test_review_diff_threads_on_usage_to_the_adapter(mock_adapter_class):
     assert kwargs["model"] == "deepseek-v4-flash"
 
 
+@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+def test_review_diff_includes_file_context_in_prompt(mock_adapter_class):
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = "[]"
+    mock_adapter_class.return_value = mock_adapter
+
+    review_diff("some diff", file_context="--- full content: a.py ---\nprint(1)")
+
+    call_args = mock_adapter.simple_completion.call_args
+    assert "print(1)" in call_args.args[1] or "print(1)" in call_args.kwargs.get("user_prompt", "")
+
+
+@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+def test_review_diff_parses_optional_suggestion_field(mock_adapter_class):
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = (
+        '[{"file": "a.py", "line": 3, "issue": "off-by-one", '
+        '"suggestion": "for i in range(n):"}]'
+    )
+    mock_adapter_class.return_value = mock_adapter
+
+    findings = review_diff("some diff")
+
+    assert findings == [
+        {"file": "a.py", "line": 3, "issue": "off-by-one", "suggestion": "for i in range(n):"}
+    ]
+
+
+@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+def test_review_diff_suggestion_field_is_optional(mock_adapter_class):
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = (
+        '[{"file": "a.py", "line": 3, "issue": "off-by-one"}]'
+    )
+    mock_adapter_class.return_value = mock_adapter
+
+    findings = review_diff("some diff")
+
+    assert findings == [{"file": "a.py", "line": 3, "issue": "off-by-one"}]
+
+
 def test_gather_file_context_stops_at_max_files(monkeypatch):
     from scan_worker import flash_review
 
