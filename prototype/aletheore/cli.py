@@ -648,8 +648,25 @@ app = typer.Typer(
 )
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        import importlib.metadata
+
+        console.print(f"aletheore {importlib.metadata.version('aletheore')}")
+        raise typer.Exit(code=0)
+
+
 @app.callback(invoke_without_command=True)
-def _main_callback(ctx: typer.Context) -> None:
+def _main_callback(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="show the installed version and exit",
+    ),
+) -> None:
     if ctx.invoked_subcommand is None:
         console.print(_banner_panel())
         raise typer.Exit(code=0)

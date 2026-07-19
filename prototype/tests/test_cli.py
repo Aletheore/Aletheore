@@ -141,6 +141,15 @@ def test_main_with_no_command_shows_banner_and_exits_cleanly():
     assert "scan" in result.output and "audit" in result.output
 
 
+def test_version_flag_prints_version_and_exits():
+    import importlib.metadata
+
+    result = runner.invoke(app, ["--version"])
+
+    assert result.exit_code == 0
+    assert importlib.metadata.version("aletheore") in result.stdout
+
+
 def test_main_unknown_command_still_errors():
     result = runner.invoke(app, ["bogus-command"])
     assert result.exit_code != 0
