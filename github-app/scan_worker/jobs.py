@@ -181,8 +181,19 @@ def run_pr_scan_job(
         client = httpx.Client(base_url="https://api.github.com")
         upsert_pr_comment(client, token, repo_full_name, pr_number, format_diff_comment(diff))
         _insert_history(installation_id, repo_full_name, new)
-        _maybe_send_slack_alert(installation_id, repo_full_name, pr_number, diff)
-        _maybe_create_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
+
+        # These are side effects, not the primary deliverable above - a failure in
+        # either (e.g. a missing Slack webhook or missing Checks permission) must
+        # not fall through to the outer except, which would overwrite the diff
+        # comment we already posted with a generic failure message.
+        try:
+            _maybe_send_slack_alert(installation_id, repo_full_name, pr_number, diff)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            _maybe_create_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as exc:  # noqa: BLE001
         try:
             _post_failure_comment(settings, installation_id, repo_full_name, pr_number, exc)

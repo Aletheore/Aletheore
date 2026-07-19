@@ -81,6 +81,37 @@ def test_happy_path_posts_comment_and_writes_history(bare_repo_with_two_commits,
     assert posted["pr_number"] == 7
 
 
+def test_check_run_failure_does_not_overwrite_diff_comment(bare_repo_with_two_commits, monkeypatch):
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    posted = {}
+
+    def fake_upsert(client, token, repo_full_name, pr_number, body):
+        posted["body"] = body
+
+    def raise_error(*a, **k):
+        raise RuntimeError("403 Forbidden")
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", raise_error)
+
+    run_pr_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        pr_number=7,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert "Secrets" in posted["body"]
+    assert "couldn't complete this scan" not in posted["body"]
+
+
 def test_temp_dir_cleaned_up_on_success(bare_repo_with_two_commits, monkeypatch):
     import scan_worker.jobs as jobs_module
 
