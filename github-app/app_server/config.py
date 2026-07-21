@@ -13,6 +13,7 @@ class Settings:
     github_client_secret: str
     session_secret: str
     public_base_url: str
+    internal_metrics_token: str | None
 
 
 def _required_env(name: str) -> str:
@@ -47,4 +48,5 @@ def get_settings() -> Settings:
         github_client_secret=_required_env("GITHUB_CLIENT_SECRET"),
         session_secret=_required_env("SESSION_SECRET"),
         public_base_url=os.environ.get("PUBLIC_BASE_URL", "https://aletheore.com"),
+        internal_metrics_token=os.environ.get("INTERNAL_METRICS_TOKEN", "").strip() or None,
     )

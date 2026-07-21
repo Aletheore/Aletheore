@@ -13,6 +13,7 @@ from app_server.dashboard import dashboard_router
 from app_server.db import create_pool
 from app_server.logging_config import configure_json_logging
 from app_server.managed_audit_api import managed_audit_router
+from app_server.metrics import metrics_router
 from app_server.signature import verify_signature
 from app_server.webhooks.installation import handle_installation_event
 
@@ -34,6 +35,7 @@ app.include_router(dashboard_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(managed_audit_router)
+app.include_router(metrics_router)
 
 
 @app.middleware("http")
