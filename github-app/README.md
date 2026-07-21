@@ -50,6 +50,34 @@ python -m pytest tests/ -v
     `docker compose exec -T postgres psql -U aletheore -d aletheore_app < migrations/003_health_monitoring.sql`.
 11. Run `docker compose up -d --build`.
 
+## Backups
+
+`scripts/backup-postgres.sh` runs `pg_dump` against the running `postgres`
+service and writes a timestamped, compressed custom-format dump to
+`./backups` (override with a first argument), pruning everything past the
+14 most recent backups (override with a second argument). Run it from
+`github-app/`, on the same host as `docker-compose.yml`.
+
+Schedule it with cron on the deployment host, for example daily at 03:00 UTC:
+
+```
+0 3 * * * cd /path/to/github-app && ./scripts/backup-postgres.sh >> /var/log/aletheore-backup.log 2>&1
+```
+
+To restore, use `scripts/restore-postgres.sh <backup-file> [target-db-name]`.
+It is destructive - it drops and recreates the target database - and asks
+for interactive confirmation of the database name before doing so. Always
+rehearse against a throwaway target first, never the live database:
+
+```
+./scripts/restore-postgres.sh ./backups/aletheore_app_2026-07-21T00-00-00Z.dump aletheore_app_restore_drill
+```
+
+Only once that succeeds and the data looks right would a real recovery use
+`aletheore_app` as the target - and only after confirming the app and
+worker are stopped or the restored data will immediately start changing
+again.
+
 Paid installations can configure endpoint health monitoring through
 `PUT /admin/{org}/{repo}/health-check-url`. The route stores the base URL and
 optional latency threshold per installation; the scheduled worker checks the
