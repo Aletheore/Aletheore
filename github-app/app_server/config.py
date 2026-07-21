@@ -15,6 +15,13 @@ class Settings:
     public_base_url: str
 
 
+def _required_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is required")
+    return value
+
+
 def _load_private_key() -> str:
     # A PEM private key contains real newlines, which plain env-file values
     # (docker run/compose --env-file) reject outright - confirmed empirically
@@ -35,9 +42,9 @@ def get_settings() -> Settings:
         redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
         github_app_id=os.environ.get("GITHUB_APP_ID", ""),
         github_app_private_key=_load_private_key(),
-        github_webhook_secret=os.environ.get("GITHUB_WEBHOOK_SECRET", ""),
+        github_webhook_secret=_required_env("GITHUB_WEBHOOK_SECRET"),
         github_client_id=os.environ.get("GITHUB_CLIENT_ID", ""),
-        github_client_secret=os.environ.get("GITHUB_CLIENT_SECRET", ""),
-        session_secret=os.environ.get("SESSION_SECRET", ""),
+        github_client_secret=_required_env("GITHUB_CLIENT_SECRET"),
+        session_secret=_required_env("SESSION_SECRET"),
         public_base_url=os.environ.get("PUBLIC_BASE_URL", "https://aletheore.com"),
     )

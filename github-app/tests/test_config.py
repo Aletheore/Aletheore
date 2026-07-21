@@ -13,11 +13,17 @@ def _clean_env(monkeypatch):
         "GITHUB_APP_PRIVATE_KEY_PATH",
         "GITHUB_CLIENT_ID",
         "GITHUB_CLIENT_SECRET",
+        "GITHUB_WEBHOOK_SECRET",
         "SESSION_SECRET",
         "PUBLIC_BASE_URL",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost/db")
+    # Required secrets get a baseline value so tests that aren't specifically
+    # exercising fail-closed behavior don't have to restate them.
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "webhook-secret")
+    monkeypatch.setenv("GITHUB_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("SESSION_SECRET", "session-secret")
 
 
 def test_reads_private_key_from_path_when_set(tmp_path, monkeypatch):
@@ -55,3 +61,23 @@ def test_reads_paid_tier_settings(monkeypatch):
     assert settings.github_client_secret == "client-secret"
     assert settings.session_secret == "session-secret"
     assert settings.public_base_url == "https://example.com"
+
+
+@pytest.mark.parametrize(
+    "missing_var",
+    ["GITHUB_WEBHOOK_SECRET", "GITHUB_CLIENT_SECRET", "SESSION_SECRET"],
+)
+def test_raises_when_required_secret_is_missing(missing_var, monkeypatch):
+    monkeypatch.delenv(missing_var, raising=False)
+    with pytest.raises(RuntimeError, match=missing_var):
+        get_settings()
+
+
+@pytest.mark.parametrize(
+    "missing_var",
+    ["GITHUB_WEBHOOK_SECRET", "GITHUB_CLIENT_SECRET", "SESSION_SECRET"],
+)
+def test_raises_when_required_secret_is_blank(missing_var, monkeypatch):
+    monkeypatch.setenv(missing_var, "   ")
+    with pytest.raises(RuntimeError, match=missing_var):
+        get_settings()
