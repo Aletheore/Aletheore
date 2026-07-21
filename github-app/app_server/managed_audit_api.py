@@ -25,18 +25,23 @@ def _fetch_job(job_id: str, redis_url: str):
     return Job.fetch(job_id, connection=Redis.from_url(redis_url))
 
 
-@managed_audit_router.post("/v1/managed-audit")
-async def start_managed_audit(request: Request):
+async def _authenticate_token(request: Request) -> tuple[dict, str]:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="missing bearer token")
 
     raw_token = auth_header.removeprefix("Bearer ")
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    pool = request.app.state.db_pool
-    installation = await get_installation_by_token_hash(pool, token_hash)
+    installation = await get_installation_by_token_hash(request.app.state.db_pool, token_hash)
     if installation is None:
         raise HTTPException(status_code=401, detail="invalid or revoked token")
+    return installation, token_hash
+
+
+@managed_audit_router.post("/v1/managed-audit")
+async def start_managed_audit(request: Request):
+    installation, token_hash = await _authenticate_token(request)
+    pool = request.app.state.db_pool
     if installation["plan"] == "free":
         raise HTTPException(status_code=402, detail="managed audits require a paid plan")
 
@@ -76,21 +81,24 @@ async def start_managed_audit(request: Request):
 
 @managed_audit_router.get("/v1/whoami")
 async def whoami(request: Request):
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="missing bearer token")
-
-    raw_token = auth_header.removeprefix("Bearer ")
-    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    installation = await get_installation_by_token_hash(request.app.state.db_pool, token_hash)
-    if installation is None:
-        raise HTTPException(status_code=401, detail="invalid or revoked token")
+    installation, _ = await _authenticate_token(request)
     return {"account_login": installation["account_login"], "plan": installation["plan"]}
 
 
 @managed_audit_router.get("/v1/managed-audit/{job_id}")
-async def get_managed_audit_status(job_id: str):
-    job = _fetch_job(job_id, get_settings().redis_url)
+async def get_managed_audit_status(job_id: str, request: Request):
+    installation, _ = await _authenticate_token(request)
+
+    from rq.exceptions import NoSuchJobError
+
+    try:
+        job = _fetch_job(job_id, get_settings().redis_url)
+    except NoSuchJobError as exc:
+        raise HTTPException(status_code=404, detail="job not found") from exc
+
+    if job.kwargs.get("installation_id") != installation["installation_id"]:
+        raise HTTPException(status_code=404, detail="job not found")
+
     if job.is_failed:
         return {"status": "failed"}
     if job.is_finished:

@@ -141,16 +141,79 @@ async def test_managed_audit_rate_limit_is_independent_per_repo(pool, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_get_job_status_returns_result_when_finished(monkeypatch):
-    fake_job = MagicMock(is_finished=True, is_failed=False, result="# Report")
-    monkeypatch.setattr("app_server.managed_audit_api._fetch_job", lambda job_id, redis_url: fake_job)
-
+async def test_get_job_status_requires_bearer_token(pool):
+    app.state.db_pool = pool
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/v1/managed-audit/job-123")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_job_status_returns_result_when_finished(pool, monkeypatch):
+    await upsert_installation(pool, 100, "octocat")
+    await set_installation_plan(pool, 100, "pro")
+    token_hash = hashlib.sha256(b"real-token").hexdigest()
+    await create_api_token(pool, 100, token_hash, "laptop", "octocat")
+
+    fake_job = MagicMock(is_finished=True, is_failed=False, result="# Report", kwargs={"installation_id": 100})
+    monkeypatch.setattr("app_server.managed_audit_api._fetch_job", lambda job_id, redis_url: fake_job)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/managed-audit/job-123", headers={"Authorization": "Bearer real-token"}
+        )
 
     assert response.status_code == 200
     assert response.json() == {"status": "finished", "result": "# Report"}
+
+
+@pytest.mark.asyncio
+async def test_get_job_status_rejects_job_belonging_to_another_installation(pool, monkeypatch):
+    await upsert_installation(pool, 100, "octocat")
+    await set_installation_plan(pool, 100, "pro")
+    token_hash = hashlib.sha256(b"real-token").hexdigest()
+    await create_api_token(pool, 100, token_hash, "laptop", "octocat")
+
+    # This job was enqueued for a different installation (999) - a valid
+    # token for installation 100 must not be able to read its result.
+    fake_job = MagicMock(is_finished=True, is_failed=False, result="# Report", kwargs={"installation_id": 999})
+    monkeypatch.setattr("app_server.managed_audit_api._fetch_job", lambda job_id, redis_url: fake_job)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/managed-audit/other-installations-job", headers={"Authorization": "Bearer real-token"}
+        )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_job_status_returns_404_for_unknown_job(pool, monkeypatch):
+    from rq.exceptions import NoSuchJobError
+
+    await upsert_installation(pool, 100, "octocat")
+    await set_installation_plan(pool, 100, "pro")
+    token_hash = hashlib.sha256(b"real-token").hexdigest()
+    await create_api_token(pool, 100, token_hash, "laptop", "octocat")
+
+    def _raise(job_id, redis_url):
+        raise NoSuchJobError(job_id)
+
+    monkeypatch.setattr("app_server.managed_audit_api._fetch_job", _raise)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/managed-audit/no-such-job", headers={"Authorization": "Bearer real-token"}
+        )
+
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
