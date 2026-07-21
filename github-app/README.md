@@ -53,6 +53,40 @@ python -m pytest tests/ -v
     `docker compose exec -T postgres psql -U aletheore -d aletheore_app < migrations/003_health_monitoring.sql`.
 11. Run `docker compose up -d --build`.
 
+Before every deploy, tag the commit you're deploying so a rollback target is
+always one command away: `git tag deploy-$(date -u +%Y%m%dT%H%M%SZ) && git push --tags`.
+
+## Rollback
+
+There is no image registry in this deployment - `docker compose up -d --build`
+builds from whatever is checked out on the server, so rolling back means
+checking out a previous commit and rebuilding from it.
+
+1. **Find the last-good commit or deploy tag**: `git log --oneline` or
+   `git tag -l 'deploy-*' | sort | tail -5`.
+2. **Decide if the bad deploy touched the database.** Migrations here are
+   forward-only SQL files with no down-migration - if the deploy that needs
+   rolling back applied a schema change you need to undo, the safe path is
+   restoring the pre-deploy backup (see Backups below), not hand-writing a
+   reverse migration. If it was app-code-only, skip to step 3.
+3. **Check out the last-good commit and rebuild**:
+   ```
+   git fetch --tags
+   git checkout <last-good-sha-or-deploy-tag>
+   docker compose up -d --build
+   ```
+4. **Verify the rollback actually took**:
+   - `docker compose ps` - all services `Up`, no restart loops.
+   - `docker compose logs --tail 50 app-server scan-worker scheduler` - clean
+     JSON startup lines, no tracebacks.
+   - `GET /v1/health/{org}/{repo}` for a known-good repo returns the expected
+     endpoint statuses.
+   - If `INTERNAL_METRICS_TOKEN` is set, `GET /v1/internal/queue-stats` shows
+     `worker_count >= 1` and a `failed_count` that isn't climbing.
+5. **Return to the tip of the branch** once the incident is resolved and a
+   fix is ready, rather than staying on the rolled-back commit indefinitely -
+   `git checkout master` (or the deploy branch) before the next real deploy.
+
 ## Backups
 
 `scripts/backup-postgres.sh` runs `pg_dump` against the running `postgres`
