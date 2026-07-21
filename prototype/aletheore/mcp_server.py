@@ -171,19 +171,19 @@ def _register_code_evidence_tools(mcp_instance: FastMCP, repo_path: Path) -> Non
     def aletheore_find_evidence_for_endpoint(method: str, path: str) -> str:
         """Resolve an API endpoint to source evidence: file, line, symbol, owner, commit, dependency, and risk."""
         evidence = read_evidence(repo_path)
-        return _toon_result(find_code_evidence_for_endpoint(evidence, f"{method} {path}"))
+        return _toon_result(find_code_evidence_for_endpoint(evidence, f"{method} {path}", repo_path))
 
     @mcp_instance.tool(name="aletheore_find_evidence_for_symbol")
     def aletheore_find_evidence_for_symbol(symbol: str) -> str:
         """Resolve a function or class symbol to source evidence."""
         evidence = read_evidence(repo_path)
-        return _toon_result(find_code_evidence_for_symbol(evidence, symbol))
+        return _toon_result(find_code_evidence_for_symbol(evidence, symbol, repo_path))
 
     @mcp_instance.tool(name="aletheore_find_evidence_for_dependency")
     def aletheore_find_evidence_for_dependency(dependency: str) -> str:
         """Resolve a dependency or import to source evidence."""
         evidence = read_evidence(repo_path)
-        return _toon_result(find_code_evidence_for_dependency(evidence, dependency))
+        return _toon_result(find_code_evidence_for_dependency(evidence, dependency, repo_path))
 
 
 def _scan_summary(evidence: dict) -> dict:

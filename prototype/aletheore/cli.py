@@ -480,7 +480,10 @@ def _query(
 
     evidence = json.loads(evidence_path.read_text())
     try:
-        result = func(evidence, target)
+        if kind in ("evidence-for-endpoint", "evidence-for-symbol", "evidence-for-dependency"):
+            result = func(evidence, target, repo)
+        else:
+            result = func(evidence, target)
     except (ModuleNotFoundInEvidenceError, BranchNotFoundInEvidenceError) as exc:
         print(f"error: {exc}")
         return 1

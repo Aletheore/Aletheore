@@ -96,19 +96,25 @@ def find_endpoints(evidence: dict, target: str | None) -> dict:
     return evidence["repository"]["api_endpoints"]
 
 
-def find_code_evidence_for_endpoint(evidence: dict, target: str | None) -> dict:
+def find_code_evidence_for_endpoint(
+    evidence: dict, target: str | None, repo_path: Path | None = None
+) -> dict:
     if not target or " " not in target.strip():
-        return resolve_code_evidence(evidence, kind="endpoint")
+        return resolve_code_evidence(evidence, repo_path, kind="endpoint")
     method, path = target.strip().split(maxsplit=1)
-    return resolve_code_evidence(evidence, kind="endpoint", method=method, path=path)
+    return resolve_code_evidence(evidence, repo_path, kind="endpoint", method=method, path=path)
 
 
-def find_code_evidence_for_symbol(evidence: dict, target: str | None) -> dict:
-    return resolve_code_evidence(evidence, kind="symbol", symbol=target)
+def find_code_evidence_for_symbol(
+    evidence: dict, target: str | None, repo_path: Path | None = None
+) -> dict:
+    return resolve_code_evidence(evidence, repo_path, kind="symbol", symbol=target)
 
 
-def find_code_evidence_for_dependency(evidence: dict, target: str | None) -> dict:
-    return resolve_code_evidence(evidence, kind="dependency", dependency=target)
+def find_code_evidence_for_dependency(
+    evidence: dict, target: str | None, repo_path: Path | None = None
+) -> dict:
+    return resolve_code_evidence(evidence, repo_path, kind="dependency", dependency=target)
 
 
 def find_cluster(evidence: dict, target: str | None) -> dict:

@@ -251,6 +251,35 @@ def test_find_code_evidence_for_dependency_returns_matching_module():
     assert result["dependency"] == "app/config.py"
 
 
+def test_find_code_evidence_for_symbol_resolves_owner_and_commit_when_repo_path_given(tmp_path):
+    import subprocess
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Alice"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "alice@example.com"], cwd=tmp_path, check=True)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "auth.py").write_text("def login():\n    pass\n")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "add login"], cwd=tmp_path, check=True, capture_output=True
+    )
+    codeowners = tmp_path / "CODEOWNERS"
+    codeowners.write_text("app/auth.py @api-team\n")
+
+    result = find_code_evidence_for_symbol(make_evidence(), "login", tmp_path)
+
+    assert result["file"] == "app/auth.py"
+    assert result["owner"] == ["@api-team"]
+    assert result["commit"]["subject"] == "add login"
+
+
+def test_find_code_evidence_for_symbol_without_repo_path_leaves_owner_and_commit_unavailable():
+    result = find_code_evidence_for_symbol(make_evidence(), "login")
+
+    assert result["owner_status"] == "unavailable"
+    assert result["commit_status"] == "unavailable"
+
+
 def test_find_cluster_returns_the_cluster_containing_the_file():
     result = find_cluster(make_evidence(), "app/config.py")
     assert result["id"] == 0
