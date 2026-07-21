@@ -1,3 +1,4 @@
+import socket
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -44,6 +45,12 @@ async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="pro"):
     monkeypatch.setattr(
         "app_server.admin._github_http_client",
         lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    # Deterministic, network-free DNS answer for URL-validation tests that
+    # don't care about SSRF behavior specifically - a real public address.
+    monkeypatch.setattr(
+        "app_server.url_validation.socket.getaddrinfo",
+        lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
     )
 
     app.state.db_pool = pool
@@ -117,6 +124,50 @@ async def test_set_health_check_config(pool, monkeypatch):
             },
         )
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_set_webhook_url_rejects_internal_address(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    monkeypatch.setattr(
+        "app_server.url_validation.socket.getaddrinfo",
+        lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 443))],
+    )
+    async with client:
+        response = await client.put(
+            "/admin/octocat/hello-world/webhook-url",
+            json={"webhook_url": "https://metadata.internal/latest/meta-data"},
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_set_webhook_url_rejects_non_https(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.put(
+            "/admin/octocat/hello-world/webhook-url",
+            json={"webhook_url": "http://hooks.slack.com/services/x"},
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_set_health_check_config_rejects_internal_address(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch, installation_id=100)
+    monkeypatch.setattr(
+        "app_server.url_validation.socket.getaddrinfo",
+        lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))],
+    )
+    async with client:
+        response = await client.put(
+            "/admin/octocat/hello-world/health-check-url",
+            json={
+                "health_check_base_url": "https://internal-service.local",
+                "health_check_latency_threshold_ms": 3000,
+            },
+        )
+    assert response.status_code == 400
 
 
 @pytest.mark.asyncio

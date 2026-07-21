@@ -15,6 +15,7 @@ from app_server.db import (
     set_health_check_config,
     set_webhook_url,
 )
+from app_server.url_validation import UnsafeURLError, validate_external_https_url
 
 admin_router = APIRouter()
 
@@ -124,10 +125,16 @@ async def revoke_token(org: str, repo: str, token_id: int, request: Request):
 async def set_webhook_url_route(org: str, repo: str, request: Request):
     installation = await _require_admin_installation(request, org, repo)
     body = await request.json()
+    webhook_url = body.get("webhook_url")
+    if webhook_url:
+        try:
+            validate_external_https_url(webhook_url)
+        except UnsafeURLError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     await set_webhook_url(
         request.app.state.db_pool,
         installation["installation_id"],
-        body.get("webhook_url"),
+        webhook_url,
     )
     return {"ok": True}
 
@@ -136,10 +143,16 @@ async def set_webhook_url_route(org: str, repo: str, request: Request):
 async def set_health_check_config_route(org: str, repo: str, request: Request):
     installation = await _require_admin_installation(request, org, repo)
     body = await request.json()
+    health_check_base_url = body.get("health_check_base_url")
+    if health_check_base_url:
+        try:
+            validate_external_https_url(health_check_base_url)
+        except UnsafeURLError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     await set_health_check_config(
         request.app.state.db_pool,
         installation["installation_id"],
-        body.get("health_check_base_url"),
+        health_check_base_url,
         body.get("health_check_latency_threshold_ms"),
     )
     return {"ok": True}
