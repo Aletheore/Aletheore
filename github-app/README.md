@@ -16,13 +16,14 @@ pip install -r requirements.txt
 docker run -d --name aletheore-test-pg -e POSTGRES_PASSWORD=test \
   -e POSTGRES_DB=aletheore_test -p 55433:5432 postgres:16
 
-PGPASSWORD=test psql -h localhost -p 55433 -U postgres -d aletheore_test \
-  -f migrations/001_initial_schema.sql
-
 export TEST_DATABASE_URL=postgresql://postgres:test@localhost:55433/aletheore_test
 export DATABASE_URL=$TEST_DATABASE_URL
 python -m pytest tests/ -v
 ```
+
+The test suite applies every file in `migrations/` itself (see the `pool`
+fixture in `tests/conftest.py`) - every migration is idempotent, so this
+works against a brand-new container with no manual migration step needed.
 
 ## Deploying on KVM4
 
@@ -47,14 +48,42 @@ python -m pytest tests/ -v
 7. Add `https://aletheore.com/auth/callback` as a Callback URL under GitHub App
    user authorization settings.
 8. Point `aletheore.com` at the KVM4 server.
-9. Apply paid-tier migration 002 to already-initialized databases:
-   `docker compose exec -T postgres psql -U aletheore -d aletheore_app < migrations/002_paid_tier.sql`.
-10. Apply health-monitoring migration 003 to already-initialized databases:
-    `docker compose exec -T postgres psql -U aletheore -d aletheore_app < migrations/003_health_monitoring.sql`.
-11. Run `docker compose up -d --build`.
+9. Run `docker compose up -d --build`.
+10. Apply any pending migrations: `DATABASE_URL=postgresql://aletheore:<password>@localhost:5432/aletheore_app python3 scripts/migrate.py`
+    (or run it from inside the `app-server` container against `postgres:5432`).
+    Safe to run on every deploy, including the very first one - see
+    Migrations below for why.
 
 Before every deploy, tag the commit you're deploying so a rollback target is
 always one command away: `git tag deploy-$(date -u +%Y%m%dT%H%M%SZ) && git push --tags`.
+
+## Migrations
+
+`docker-compose.yml` still mounts `./migrations` as
+`/docker-entrypoint-initdb.d`, so a brand-new Postgres volume gets every
+migration file applied automatically on first init - but Postgres does that
+exactly once, with no record of what it did. Any migration added after a
+database already exists needs a real apply step, which used to mean
+manually running the right numbered file by hand (easy to forget, easy to
+apply twice, easy to apply out of order).
+
+`scripts/migrate.py` replaces that: it tracks applied migrations in a
+`schema_migrations` table and only runs files not already recorded there.
+Every file in `migrations/` is written to be idempotent (`CREATE TABLE IF
+NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, ...), so it's always safe to run,
+regardless of whether the database is brand new, was bootstrapped by
+`docker-entrypoint-initdb.d`, or has had some migrations applied by hand in
+the past - the first run just backfills `schema_migrations` correctly, and
+every run after that is a no-op unless a new migration file was added.
+
+```bash
+DATABASE_URL=postgresql://aletheore:<password>@localhost:5432/aletheore_app \
+  python3 scripts/migrate.py
+```
+
+Add new schema changes as a new numbered file in `migrations/`, written
+idempotently, and run `scripts/migrate.py` after deploying the code that
+depends on it.
 
 ## Rollback
 

@@ -27,8 +27,12 @@ async def pool():
     except OSError as exc:
         pytest.skip(f"test Postgres unavailable: {exc}")
     async with p.acquire() as conn:
+        # Every migration file is idempotent (CREATE TABLE IF NOT EXISTS,
+        # etc. - see scripts/migrate.py), so it's safe to apply all of
+        # them here regardless of whether this database already has some
+        # or all of them applied.
         migrations_dir = Path(__file__).resolve().parents[1] / "migrations"
-        for migration in sorted(migrations_dir.glob("00[23456]_*.sql")):
+        for migration in sorted(migrations_dir.glob("*.sql")):
             await conn.execute(migration.read_text())
         await conn.execute("TRUNCATE installations, sessions CASCADE")
     yield p

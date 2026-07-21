@@ -56,12 +56,6 @@ jobs:
         working-directory: github-app
         run: pip install -r requirements.txt
 
-      - name: Apply base migration
-        working-directory: github-app
-        run: |
-          PGPASSWORD=test psql -h localhost -p 55433 -U postgres -d aletheore_test \
-            -f migrations/001_initial_schema.sql
-
       - name: Run tests
         working-directory: github-app
         run: pytest
