@@ -58,4 +58,4 @@ jobs:
 
       - name: Run tests
         working-directory: github-app
-        run: pytest
+        run: python -m pytest
