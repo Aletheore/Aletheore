@@ -2,6 +2,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from aletheore.evidence_resolution import resolve_code_evidence
+
 
 class ModuleNotFoundInEvidenceError(Exception):
     def __init__(self, file_path: str):
@@ -94,6 +96,21 @@ def find_endpoints(evidence: dict, target: str | None) -> dict:
     return evidence["repository"]["api_endpoints"]
 
 
+def find_code_evidence_for_endpoint(evidence: dict, target: str | None) -> dict:
+    if not target or " " not in target.strip():
+        return resolve_code_evidence(evidence, kind="endpoint")
+    method, path = target.strip().split(maxsplit=1)
+    return resolve_code_evidence(evidence, kind="endpoint", method=method, path=path)
+
+
+def find_code_evidence_for_symbol(evidence: dict, target: str | None) -> dict:
+    return resolve_code_evidence(evidence, kind="symbol", symbol=target)
+
+
+def find_code_evidence_for_dependency(evidence: dict, target: str | None) -> dict:
+    return resolve_code_evidence(evidence, kind="dependency", dependency=target)
+
+
 def find_cluster(evidence: dict, target: str | None) -> dict:
     for cluster in evidence["architecture"]["clusters"]:
         if target in cluster["modules"]:
@@ -142,4 +159,7 @@ QUERY_FUNCTIONS: dict[str, tuple[Callable[[dict, str | None], Any], bool]] = {
     "database": (find_database, False),
     "infrastructure": (find_infrastructure, False),
     "environment-variables": (find_environment_variables, False),
+    "evidence-for-endpoint": (find_code_evidence_for_endpoint, True),
+    "evidence-for-symbol": (find_code_evidence_for_symbol, True),
+    "evidence-for-dependency": (find_code_evidence_for_dependency, True),
 }

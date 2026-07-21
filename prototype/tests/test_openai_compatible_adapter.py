@@ -35,6 +35,11 @@ def test_evidence_schema_map_documents_infrastructure_and_environment_variables(
     assert "repository.environment_variables" in EVIDENCE_SCHEMA_MAP
 
 
+def test_evidence_schema_map_documents_code_evidence_resolution():
+    assert "code_evidence_resolutions" in EVIDENCE_SCHEMA_MAP
+    assert "file, line, symbol, owner, commit, dependency, risk" in EVIDENCE_SCHEMA_MAP
+
+
 def _mock_tool_call(name, arguments, call_id="call_1"):
     tool_call = MagicMock()
     tool_call.id = call_id

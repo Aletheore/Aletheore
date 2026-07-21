@@ -13,6 +13,9 @@ from aletheore.managed_audit_client import run_managed_audit_request
 from aletheore.query import (
     ModuleNotFoundInEvidenceError,
     QUERY_FUNCTIONS,
+    find_code_evidence_for_dependency,
+    find_code_evidence_for_endpoint,
+    find_code_evidence_for_symbol,
     find_cluster,
     find_imported_by,
     find_imports,
@@ -163,6 +166,26 @@ def _register_symbol_source_tool(mcp_instance: FastMCP, repo_path: Path) -> None
         return _toon_result(find_symbol_source(evidence, repo_path, module, symbol))
 
 
+def _register_code_evidence_tools(mcp_instance: FastMCP, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_find_evidence_for_endpoint")
+    def aletheore_find_evidence_for_endpoint(method: str, path: str) -> str:
+        """Resolve an API endpoint to source evidence: file, line, symbol, owner, commit, dependency, and risk."""
+        evidence = read_evidence(repo_path)
+        return _toon_result(find_code_evidence_for_endpoint(evidence, f"{method} {path}"))
+
+    @mcp_instance.tool(name="aletheore_find_evidence_for_symbol")
+    def aletheore_find_evidence_for_symbol(symbol: str) -> str:
+        """Resolve a function or class symbol to source evidence."""
+        evidence = read_evidence(repo_path)
+        return _toon_result(find_code_evidence_for_symbol(evidence, symbol))
+
+    @mcp_instance.tool(name="aletheore_find_evidence_for_dependency")
+    def aletheore_find_evidence_for_dependency(dependency: str) -> str:
+        """Resolve a dependency or import to source evidence."""
+        evidence = read_evidence(repo_path)
+        return _toon_result(find_code_evidence_for_dependency(evidence, dependency))
+
+
 def _scan_summary(evidence: dict) -> dict:
     secret_findings = evidence["security"]["secrets"]["findings"]
     history_findings = evidence["security"]["secrets"]["history_findings"]
@@ -264,6 +287,7 @@ def build_server(repo_path: Path, answer_adapter: AgentAdapter | None = None) ->
     _register_neighborhood_tool(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
     _register_symbol_source_tool(mcp_instance, repo_path)
+    _register_code_evidence_tools(mcp_instance, repo_path)
     _register_scan_tool(mcp_instance, repo_path)
     _register_healthcheck_tool(mcp_instance, repo_path)
     _register_search_codebase_tool(mcp_instance, repo_path)

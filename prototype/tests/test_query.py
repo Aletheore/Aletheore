@@ -7,6 +7,9 @@ from aletheore.query import (
     SymbolNotFoundInEvidenceError,
     find_branch,
     find_cluster,
+    find_code_evidence_for_dependency,
+    find_code_evidence_for_endpoint,
+    find_code_evidence_for_symbol,
     find_database,
     find_dead_code_evidence,
     find_endpoints,
@@ -222,6 +225,32 @@ def test_find_endpoints_returns_the_whole_block_ignoring_target():
     assert result == make_evidence()["repository"]["api_endpoints"]
 
 
+def test_find_code_evidence_for_endpoint_returns_handler_location():
+    result = find_code_evidence_for_endpoint(make_evidence(), "GET /users")
+
+    assert result["kind"] == "endpoint"
+    assert result["file"] == "app.py"
+    assert result["line"] == 1
+    assert result["symbol"] == "list_users"
+
+
+def test_find_code_evidence_for_symbol_returns_source_location():
+    result = find_code_evidence_for_symbol(make_evidence(), "login")
+
+    assert result["kind"] == "symbol"
+    assert result["file"] == "app/auth.py"
+    assert result["line"] == 4
+    assert result["end_line"] == 5
+
+
+def test_find_code_evidence_for_dependency_returns_matching_module():
+    result = find_code_evidence_for_dependency(make_evidence(), "app/config.py")
+
+    assert result["kind"] == "dependency"
+    assert result["file"] == "app/auth.py"
+    assert result["dependency"] == "app/config.py"
+
+
 def test_find_cluster_returns_the_cluster_containing_the_file():
     result = find_cluster(make_evidence(), "app/config.py")
     assert result["id"] == 0
@@ -279,6 +308,9 @@ def test_query_functions_registry_has_all_kinds_with_correct_requires_target():
         "database": False,
         "infrastructure": False,
         "environment-variables": False,
+        "evidence-for-endpoint": True,
+        "evidence-for-symbol": True,
+        "evidence-for-dependency": True,
     }
     assert set(QUERY_FUNCTIONS.keys()) == set(expected.keys())
     for kind, requires_target in expected.items():

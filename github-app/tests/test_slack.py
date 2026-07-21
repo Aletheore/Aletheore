@@ -45,6 +45,13 @@ def test_send_slack_alert_posts_to_webhook_url():
 
 
 def test_format_reachability_alert_down():
+    evidence_resolution = {
+        "symbol": "list_users",
+        "owner": ["@api-team"],
+        "commit": {"sha": "abcdef123456", "subject": "change user route"},
+        "dependency": ["UserService"],
+        "risk": [{"category": "availability", "severity": "high", "summary": "recently unreachable"}],
+    }
     body = format_reachability_alert(
         "octocat/hello-world",
         "GET",
@@ -52,11 +59,17 @@ def test_format_reachability_alert_down():
         "controllers/user.controller.ts",
         42,
         now_reachable=False,
+        evidence_resolution=evidence_resolution,
     )
     assert "down" in body["text"]
     assert "octocat/hello-world" in body["text"]
     assert "/api/users" in body["text"]
     assert "controllers/user.controller.ts:42" in body["text"]
+    assert "list_users" in body["text"]
+    assert "@api-team" in body["text"]
+    assert "abcdef12" in body["text"]
+    assert "UserService" in body["text"]
+    assert "recently unreachable" in body["text"]
 
 
 def test_format_reachability_alert_recovered():
@@ -73,6 +86,12 @@ def test_format_reachability_alert_recovered():
 
 
 def test_format_latency_alert_over():
+    evidence_resolution = {
+        "symbol": "list_users",
+        "owner": "@api-team",
+        "dependency": ["UserService"],
+        "risk": [{"category": "dependency", "severity": "medium", "summary": "slow dependency"}],
+    }
     body = format_latency_alert(
         "octocat/hello-world",
         "GET",
@@ -82,11 +101,16 @@ def test_format_latency_alert_over():
         4120.0,
         3000,
         now_over=True,
+        evidence_resolution=evidence_resolution,
     )
     assert "slow" in body["text"]
     assert "4120" in body["text"]
     assert "3000" in body["text"]
     assert "controllers/user.controller.ts:42" in body["text"]
+    assert "list_users" in body["text"]
+    assert "@api-team" in body["text"]
+    assert "UserService" in body["text"]
+    assert "slow dependency" in body["text"]
 
 
 def test_format_latency_alert_under():

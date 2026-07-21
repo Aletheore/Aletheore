@@ -1,6 +1,43 @@
 import httpx
 
 
+def _format_list(value) -> str | None:
+    if not value:
+        return None
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value[:5])
+    return str(value)
+
+
+def _format_evidence_context(evidence_resolution: dict | None) -> str:
+    if not evidence_resolution:
+        return ""
+    lines = []
+    symbol = evidence_resolution.get("symbol")
+    if symbol:
+        lines.append(f"Symbol: `{symbol}`")
+    owner = _format_list(evidence_resolution.get("owner"))
+    if owner:
+        lines.append(f"Owner: {owner}")
+    commit = evidence_resolution.get("commit")
+    if isinstance(commit, dict) and commit.get("sha"):
+        subject = f" - {commit['subject']}" if commit.get("subject") else ""
+        lines.append(f"Recent commit: `{commit['sha'][:8]}`{subject}")
+    dependency = _format_list(evidence_resolution.get("dependency"))
+    if dependency:
+        lines.append(f"Dependencies: {dependency}")
+    risks = evidence_resolution.get("risk") or []
+    if risks:
+        summaries = [
+            risk.get("summary")
+            for risk in risks[:3]
+            if isinstance(risk, dict) and risk.get("summary")
+        ]
+        if summaries:
+            lines.append(f"Risk: {'; '.join(summaries)}")
+    return "" if not lines else "\n" + "\n".join(lines)
+
+
 def _has_new_findings(diff: dict) -> bool:
     return bool(
         diff.get("secrets", {}).get("new")
@@ -51,6 +88,7 @@ def format_reachability_alert(
     source_file: str | None,
     source_line: int | None,
     now_reachable: bool,
+    evidence_resolution: dict | None = None,
 ) -> dict:
     location = (
         f" - handled by {source_file}:{source_line}"
@@ -61,11 +99,13 @@ def format_reachability_alert(
         text = (
             f"*Aletheore*: endpoint recovered on `{repo_full_name}`\n"
             f"`{method} {path}` is reachable again{location}"
+            f"{_format_evidence_context(evidence_resolution)}"
         )
     else:
         text = (
             f"*Aletheore*: endpoint down on `{repo_full_name}`\n"
             f"`{method} {path}` is unreachable (was reachable as of the last check){location}"
+            f"{_format_evidence_context(evidence_resolution)}"
         )
     return {"text": text}
 
@@ -79,6 +119,7 @@ def format_latency_alert(
     latency_ms: float,
     threshold_ms: int,
     now_over: bool,
+    evidence_resolution: dict | None = None,
 ) -> dict:
     location = (
         f" - handled by {source_file}:{source_line}"
@@ -89,11 +130,13 @@ def format_latency_alert(
         text = (
             f"*Aletheore*: endpoint slow on `{repo_full_name}`\n"
             f"`{method} {path}` took {latency_ms:.0f}ms (threshold: {threshold_ms}ms){location}"
+            f"{_format_evidence_context(evidence_resolution)}"
         )
     else:
         text = (
             f"*Aletheore*: endpoint back under threshold on `{repo_full_name}`\n"
             f"`{method} {path}` took {latency_ms:.0f}ms (threshold: {threshold_ms}ms){location}"
+            f"{_format_evidence_context(evidence_resolution)}"
         )
     return {"text": text}
 

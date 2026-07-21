@@ -42,7 +42,20 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
                 },
             ],
             "dependency_graph": {"nodes": ["a.py", "b.py"], "edges": [["a.py", "b.py"]]},
-            "api_endpoints": {"checked": True, "endpoints": []},
+            "api_endpoints": {
+                "checked": True,
+                "endpoints": [
+                    {
+                        "method": "GET",
+                        "path": "/health",
+                        "framework": "fastapi",
+                        "file": "a.py",
+                        "line": 1,
+                        "handler": "foo",
+                        "unresolved": False,
+                    }
+                ],
+            },
             "dead_code": {
                 "unreachable_modules": [{"path": "unused.py", "reason": "no imports"}],
                 "unused_dependencies": [],
@@ -128,9 +141,12 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_healthcheck",
         "aletheore_search_codebase",
         "aletheore_managed_audit",
+        "aletheore_find_evidence_for_endpoint",
+        "aletheore_find_evidence_for_symbol",
+        "aletheore_find_evidence_for_dependency",
     }
     assert expected.issubset(names)
-    assert len(names) == 24
+    assert len(names) == 27
     assert "aletheore_answer" not in names
 
 
@@ -179,6 +195,45 @@ async def test_aletheore_symbol_source_returns_exact_source(tmp_path):
     result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo"})
 
     assert tool_result_body(result)["result"]["source"] == "def foo():"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_find_evidence_for_endpoint_returns_location(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool(
+        "aletheore_find_evidence_for_endpoint", {"method": "GET", "path": "/health"}
+    )
+
+    body = tool_result_body(result)["result"]
+    assert body["file"] == "a.py"
+    assert body["line"] == 1
+    assert body["symbol"] == "foo"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_find_evidence_for_symbol_returns_location(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_find_evidence_for_symbol", {"symbol": "foo"})
+
+    body = tool_result_body(result)["result"]
+    assert body["file"] == "a.py"
+    assert body["line"] == 1
+
+
+@pytest.mark.asyncio
+async def test_aletheore_find_evidence_for_dependency_returns_location(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_find_evidence_for_dependency", {"dependency": "b.py"})
+
+    body = tool_result_body(result)["result"]
+    assert body["file"] == "a.py"
+    assert body["dependency"] == "b.py"
 
 
 @pytest.mark.asyncio

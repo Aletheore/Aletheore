@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-from scan_worker.flash_review import review_diff
+from scan_worker.flash_review import build_code_evidence_context, review_diff
 
 
 def test_review_diff_returns_empty_list_for_empty_diff():
@@ -70,6 +70,49 @@ def test_review_diff_includes_file_context_in_prompt(mock_adapter_class):
 
     call_args = mock_adapter.simple_completion.call_args
     assert "print(1)" in call_args.args[1] or "print(1)" in call_args.kwargs.get("user_prompt", "")
+
+
+@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+def test_review_diff_includes_code_evidence_context_in_prompt(mock_adapter_class):
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = "[]"
+    mock_adapter_class.return_value = mock_adapter
+
+    review_diff(
+        "some diff",
+        code_evidence_context="--- code evidence ---\na.py:1 symbol=foo owner=@api",
+    )
+
+    call_args = mock_adapter.simple_completion.call_args
+    assert "a.py:1 symbol=foo owner=@api" in call_args.args[1]
+
+
+def test_build_code_evidence_context_includes_file_symbol_dependency_and_risk():
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imports": ["b.py"],
+                    "symbols": {"functions": [{"name": "foo", "start_line": 1, "end_line": 2}], "classes": []},
+                }
+            ],
+            "api_endpoints": {"endpoints": []},
+        },
+        "security": {
+            "secrets": {"findings": [{"path": "a.py", "line": 2, "pattern": "generic_secret"}]},
+            "dependency_vulnerabilities": {"findings": []},
+            "dependency_licenses": {"findings": []},
+        },
+        "architecture": {"layer_violations": {"violations": []}},
+    }
+
+    context = build_code_evidence_context(evidence, ["a.py"])
+
+    assert "a.py:1" in context
+    assert "symbol=foo" in context
+    assert "dependency=b.py" in context
+    assert "risk=generic_secret at a.py:2" in context
 
 
 @patch("scan_worker.flash_review.OpenAICompatibleAdapter")

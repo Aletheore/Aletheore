@@ -1,6 +1,11 @@
 import json
 from collections.abc import Callable
 
+from aletheore.evidence_resolution import (
+    attach_dependency_evidence,
+    attach_risk_evidence,
+    normalize_resolution,
+)
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from scan_worker.github_api import (
     MAX_CONTEXT_FILE_BYTES,
@@ -46,9 +51,58 @@ def gather_file_context(
     return "\n\n".join(parts)
 
 
+def build_code_evidence_context(evidence: dict | None, changed_files: list[str]) -> str:
+    if not evidence:
+        return ""
+    modules = evidence.get("repository", {}).get("modules", [])
+    lines = []
+    for file_path in changed_files[:MAX_CONTEXT_FILES]:
+        module = next((entry for entry in modules if entry.get("path") == file_path), None)
+        if not module:
+            continue
+        symbols = module.get("symbols", {})
+        first_symbol = next(
+            iter(symbols.get("functions", []) + symbols.get("classes", [])),
+            {},
+        )
+        resolution = normalize_resolution(
+            kind="symbol",
+            file=file_path,
+            line=first_symbol.get("start_line"),
+            end_line=first_symbol.get("end_line"),
+            symbol=first_symbol.get("name"),
+            confidence="exact" if first_symbol else "unavailable",
+            evidence_path="repository.modules",
+        )
+        resolution = attach_dependency_evidence(evidence, resolution)
+        resolution = attach_risk_evidence(evidence, resolution, max_risks=3)
+        parts = [file_path]
+        if resolution.get("line") is not None:
+            parts[0] = f"{file_path}:{resolution['line']}"
+        if resolution.get("symbol"):
+            parts.append(f"symbol={resolution['symbol']}")
+        dependency = resolution.get("dependency")
+        if dependency:
+            if isinstance(dependency, list):
+                dependency = ", ".join(str(item) for item in dependency[:5])
+            parts.append(f"dependency={dependency}")
+        risk_summaries = [
+            risk.get("summary")
+            for risk in resolution.get("risk", [])
+            if isinstance(risk, dict) and risk.get("summary")
+        ]
+        if risk_summaries:
+            parts.append(f"risk={'; '.join(risk_summaries[:3])}")
+        lines.append(" ".join(parts))
+    if not lines:
+        return ""
+    return "--- deterministic code evidence for changed files ---\n" + "\n".join(lines)
+
+
 def review_diff(
     diff_text: str,
     file_context: str = "",
+    code_evidence_context: str = "",
     on_usage: Callable[[int, int], None] | None = None,
 ) -> list[dict]:
     if not diff_text.strip():
@@ -61,7 +115,12 @@ def review_diff(
         model="deepseek-v4-flash",
         on_usage=on_usage,
     )
-    user_prompt = diff_text if not file_context else f"{diff_text}\n\n{file_context}"
+    prompt_parts = [diff_text]
+    if file_context:
+        prompt_parts.append(file_context)
+    if code_evidence_context:
+        prompt_parts.append(code_evidence_context)
+    user_prompt = "\n\n".join(prompt_parts)
     raw_output = adapter.simple_completion(FLASH_REVIEW_SYSTEM_PROMPT, user_prompt, cwd=".")
 
     try:

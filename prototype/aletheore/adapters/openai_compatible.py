@@ -95,6 +95,7 @@ repository.modules[]                - {path, imports[], imported_by[], symbols: 
 repository.dependency_graph         - {nodes[], edges[]}
 repository.unparseable_files[]      - {path, reason}
 repository.api_endpoints            - {checked, endpoints[]: {method, path, framework, file, line, handler, unresolved, note}}
+repository.code_evidence_resolutions - derived resolver objects when present: {file, line, symbol, owner, commit, dependency, risk, confidence, evidence_path}; if absent, resolve claims from the concrete source fields above and say unavailable when unsupported
 repository.dead_code                - {unreachable_modules[]: {path, reason}, unused_dependencies[]: {ecosystem, package}, entry_points_detected[]}
 git.available                       - false if not a git repo
 git.branches[]                      - {name, type, stale_days, ahead_of_main, behind_main}

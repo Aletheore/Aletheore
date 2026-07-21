@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 
 from aletheore.evidence import write_evidence
+from aletheore.evidence_resolution import resolve_code_evidence
 from aletheore.history import compute_diff
 from aletheore.pr_comment import COMMENT_MARKER, format_diff_comment
 from aletheore.healthcheck import run_healthcheck
@@ -34,7 +35,7 @@ from scan_worker.db import (
     record_llm_spend,
     set_last_reviewed_sha,
 )
-from scan_worker.flash_review import gather_file_context, review_diff
+from scan_worker.flash_review import build_code_evidence_context, gather_file_context, review_diff
 from scan_worker.github_api import create_check_run, fetch_pr_changed_files, fetch_pr_diff, upsert_pr_comment
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.slack import (
@@ -344,6 +345,8 @@ def run_flash_review_job(
         diff_text = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha)
         changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
         file_context = gather_file_context(client, token, repo_full_name, changed_files, head_sha)
+        evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
+        code_evidence_context = build_code_evidence_context(evidence, changed_files)
 
         spend_accumulator = {"total": 0.0}
 
@@ -352,7 +355,15 @@ def run_flash_review_job(
                 "deepseek-v4-flash", prompt_tokens, completion_tokens
             )
 
-        findings = review_diff(diff_text, file_context=file_context, on_usage=_on_usage)
+        if code_evidence_context:
+            findings = review_diff(
+                diff_text,
+                file_context=file_context,
+                code_evidence_context=code_evidence_context,
+                on_usage=_on_usage,
+            )
+        else:
+            findings = review_diff(diff_text, file_context=file_context, on_usage=_on_usage)
         record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
 
         if findings:
@@ -390,7 +401,20 @@ def _endpoint_results(evidence: dict, base_url: str) -> list[dict]:
             result["file"] = endpoint["file"]
         if endpoint.get("line") is not None:
             result["line"] = endpoint["line"]
+        result["evidence_resolution"] = resolve_code_evidence(
+            evidence,
+            kind="endpoint",
+            method=str(endpoint.get("method") or result.get("method") or ""),
+            path=str(endpoint.get("path") or result.get("path") or ""),
+        )
     return results
+
+
+def _latest_evidence_or_none(dsn: str, installation_id: int, repo_full_name: str) -> dict | None:
+    try:
+        return get_latest_evidence(dsn, installation_id, repo_full_name)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _latency_flipped(
@@ -433,6 +457,7 @@ def run_health_check_sweep_job() -> None:
                 path = entry["path"]
                 source_file = entry.get("file")
                 source_line = entry.get("line")
+                evidence_resolution = entry.get("evidence_resolution")
                 reachable = entry["reachable"]
                 status_code = entry.get("status_code")
                 latency_ms = entry.get("latency_ms")
@@ -457,6 +482,7 @@ def run_health_check_sweep_job() -> None:
                             source_file,
                             source_line,
                             reachable,
+                            evidence_resolution=evidence_resolution,
                         ),
                     )
 
@@ -472,6 +498,7 @@ def run_health_check_sweep_job() -> None:
                             latency_ms,
                             threshold_ms,
                             latency_ms > threshold_ms,
+                            evidence_resolution=evidence_resolution,
                         ),
                     )
 

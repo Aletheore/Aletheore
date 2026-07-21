@@ -35,6 +35,10 @@ to the same logical field regardless of which file format it's read from.
    files were not analyzed and your findings do not cover them.**
 6. **If `evidence.git.available` is `false`, state that git intelligence is unavailable for
    this repository. Do not fabricate branch names, commit counts, or contributor history.**
+7. **For high-severity findings, resolve the claim back to code evidence whenever possible.**
+   Prefer explicit file, line, symbol, owner, commit, dependency, risk, confidence, and
+   evidence-path fields when they are present. If one of those fields is not available in
+   `air.toon`, say it is "not determinable from available evidence" rather than inventing it.
 
 ## Output contract
 
