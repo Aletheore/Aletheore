@@ -16,4 +16,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 
+RUN groupadd --system aletheore \
+    && useradd --system --gid aletheore --home-dir /app --no-create-home aletheore \
+    && chown -R aletheore:aletheore /app
+USER aletheore
+
 CMD ["python", "-m", "scan_worker.worker"]

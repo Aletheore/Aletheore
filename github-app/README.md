@@ -38,7 +38,10 @@ python -m pytest tests/ -v
    `docker-compose.yml` mounts it read-only and points
    `GITHUB_APP_PRIVATE_KEY_PATH` at it. Do not paste the key into `.env`
    directly: plain env-file values reject the real newlines in a PEM
-   (confirmed empirically against docker run/compose --env-file).
+   (confirmed empirically against docker run/compose --env-file). Run
+   `chmod 644 app-private-key.pem` after placing it - the app-server and
+   scan-worker containers run as a non-root user, and a bind-mounted file
+   keeps its host-side permissions inside the container.
 6. Add the App's Client ID/Client Secret, a random `SESSION_SECRET`, and a real
    `ANTHROPIC_API_KEY` to `.env`.
 7. Add `https://aletheore.com/auth/callback` as a Callback URL under GitHub App
