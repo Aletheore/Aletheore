@@ -111,9 +111,18 @@ a { color: var(--accent); }
 .field:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .empty-state { padding: 1.5rem; text-align: center; color: var(--slate-600); font-size: 13px; }
 .error-banner { background: var(--critical-soft); color: var(--critical); border-radius: 10px; padding: 12px 15px; font-size: 13px; margin: 1rem 0; }
-.upgrade-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; background: var(--accent-soft);
-  border-radius: 10px; padding: 12px 15px; margin: 10px 0 14px; flex-wrap: wrap; }
-.upgrade-banner-text { font-size: 12.5px; color: var(--accent-strong); line-height: 1.5; max-width: 46ch; }
+.locked-feature { position: relative; border-radius: 10px; overflow: hidden; min-height: 150px; }
+.locked-preview { filter: blur(5px); opacity: 0.65; pointer-events: none; user-select: none; padding: 2px; }
+.locked-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center; gap: 6px; padding: 1.5rem; background: rgba(0, 0, 0, 0.04); }
+@media (prefers-color-scheme: dark) { .locked-overlay { background: rgba(0, 0, 0, 0.35); } }
+:root[data-theme="dark"] .locked-overlay { background: rgba(0, 0, 0, 0.35); }
+:root[data-theme="light"] .locked-overlay { background: rgba(0, 0, 0, 0.04); }
+.locked-icon { width: 34px; height: 34px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-strong);
+  display: flex; align-items: center; justify-content: center; font-size: 17px; margin-bottom: 2px; }
+.locked-title { font-size: 13.5px; font-weight: 500; }
+.locked-desc { font-size: 12px; color: var(--slate-600); max-width: 38ch; line-height: 1.5; }
+.locked-feature .btn-accent { margin-top: 4px; }
 .form-row { display: flex; gap: 8px; margin-top: 8px; }
 .form-row .field { flex: 1; }
 .token-reveal { font-family: var(--font-mono); font-size: 12px; background: var(--warning-soft); color: var(--ink-900);
@@ -436,9 +445,22 @@ async function renderDiagram(container, text) {{
   }}
 }}
 
-function upgradeBanner(message) {{
-  return '<div class="upgrade-banner"><div class="upgrade-banner-text">' + message + '</div>' +
-    '<a class="btn btn-accent" href="{PRICING_URL}" target="_blank" rel="noopener">Upgrade plan<i class="ti ti-arrow-right" style="font-size:14px;" aria-hidden="true"></i></a></div>';
+function confirmUpgrade() {{
+  if (window.confirm('Upgrade to Pro to unlock this feature. Continue to the pricing page?')) {{
+    window.open('{PRICING_URL}', '_blank', 'noopener');
+  }}
+}}
+
+function lockedFeature(title, description, previewHtml) {{
+  return '<div class="locked-feature">' +
+    '<div class="locked-preview">' + previewHtml + '</div>' +
+    '<div class="locked-overlay">' +
+      '<div class="locked-icon"><i class="ti ti-lock" aria-hidden="true"></i></div>' +
+      '<div class="locked-title">' + escapeHtml(title) + '</div>' +
+      '<div class="locked-desc">' + escapeHtml(description) + '</div>' +
+      '<button class="btn btn-accent" onclick="confirmUpgrade()">Upgrade to Pro</button>' +
+    '</div>' +
+  '</div>';
 }}
 
 async function loadOverview() {{
@@ -583,16 +605,37 @@ async function showSubsystem(subsystemId) {{
   detail.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
 }}
 
+const WIKI_LOCKED_PREVIEW =
+  '<div class="diagram-wrap"><svg width="400" height="70" viewBox="0 0 400 70"><g font-size="12">' +
+  '<rect x="10" y="16" width="110" height="38" rx="7" fill="var(--accent-soft)" stroke="var(--accent)"></rect>' +
+  '<text x="65" y="39" text-anchor="middle" fill="var(--accent-strong)">Checkout API</text>' +
+  '<rect x="200" y="16" width="110" height="38" rx="7" fill="var(--accent-soft)" stroke="var(--accent)"></rect>' +
+  '<text x="255" y="39" text-anchor="middle" fill="var(--accent-strong)">Payments</text>' +
+  '<path d="M120,35 L200,35" stroke="var(--slate-400)" stroke-width="1.3"></path>' +
+  '</g></svg></div>' +
+  '<div class="subsystem-grid">' +
+  '<div class="subsystem-card"><div class="subsystem-name">Checkout API</div><div class="subsystem-desc">Validates carts and creates a payment session before handing off downstream.</div></div>' +
+  '<div class="subsystem-card"><div class="subsystem-name">Payments</div><div class="subsystem-desc">Wraps the payment SDK and reconciles session state with webhook ingest.</div></div>' +
+  '</div>';
+
 async function loadWiki(plan) {{
   const body = document.getElementById('wiki-body');
   if (plan === 'free') {{
-    body.innerHTML = upgradeBanner('<b>Live wiki is a paid feature.</b> An LLM-written wiki of this repo - what each subsystem does, with real dependency diagrams grounded in the scanner\\'s own evidence.');
+    body.innerHTML = lockedFeature(
+      'Live wiki is a paid feature',
+      'An LLM-written wiki of this repo, with real dependency diagrams grounded in the scanner\\'s own evidence.',
+      WIKI_LOCKED_PREVIEW
+    );
     return;
   }}
   const res = await apiGet(base + '/wiki');
   if (!res) return;
   if (res.status === 402) {{
-    body.innerHTML = upgradeBanner('<b>Live wiki is a paid feature.</b> Upgrade to generate one for this repository.');
+    body.innerHTML = lockedFeature(
+      'Live wiki is a paid feature',
+      'An LLM-written wiki of this repo, with real dependency diagrams grounded in the scanner\\'s own evidence.',
+      WIKI_LOCKED_PREVIEW
+    );
     return;
   }}
   if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Wiki unavailable.</div>'; return; }}
@@ -687,12 +730,25 @@ async function saveHealthCheck() {{
   status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
 }}
 
+const SETTINGS_LOCKED_PREVIEW =
+  '<div class="settings-grid">' +
+  '<div><div class="settings-block-label">API tokens</div>' +
+  '<div class="token-row"><div><div class="token-label">CI pipeline</div><div class="token-meta">created by you &middot; used 3 hours ago</div></div>' +
+  '<button class="btn">Revoke</button></div></div>' +
+  '<div><div class="settings-block-label">Alert webhook</div>' +
+  '<input class="field" value="https://hooks.slack.com/services/..." readonly></div>' +
+  '</div>';
+
 async function loadSettings() {{
   const body = document.getElementById('settings-body');
   const res = await apiGet(adminBase);
   if (!res) return;
   if (res.status === 402) {{
-    body.innerHTML = upgradeBanner('<b>API tokens, webhooks, and health checks are paid features.</b> Upgrade to configure them for this repository.');
+    body.innerHTML = lockedFeature(
+      'API tokens, webhooks, and health checks are paid features',
+      'Upgrade to configure them for this repository.',
+      SETTINGS_LOCKED_PREVIEW
+    );
     document.getElementById('plan-name').textContent = 'free';
     document.getElementById('plan-sub').textContent = 'Upgrade for live wiki and settings.';
     loadWiki('free');
