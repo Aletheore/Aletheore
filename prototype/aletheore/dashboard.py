@@ -50,6 +50,10 @@ def build_evidence_summary(evidence: dict) -> dict:
             ],
             "violation_count": len(evidence["architecture"]["layer_violations"]["violations"]),
         },
+        "dead_code": {
+            "unreachable_modules": evidence["repository"]["dead_code"]["unreachable_modules"],
+            "unused_dependencies": evidence["repository"]["dead_code"]["unused_dependencies"],
+        },
     }
 
 
@@ -254,6 +258,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <h2>File Clusters</h2>
       <div id="cluster-list" class="cluster-list"></div>
     </div>
+  </div>
+  <div class="card">
+    <h2>Dead Code</h2>
+    <div id="dead-code-summary" class="stat"></div>
+    <div id="dead-code" class="tools-list"></div>
   </div>
   <div class="card">
     <h2>MCP Tools Available for This Repo</h2>
@@ -829,6 +838,27 @@ function renderClusterGraph(data) {
   });
 }
 
+function renderDeadCode(data) {
+  const summary = document.getElementById('dead-code-summary');
+  const el = document.getElementById('dead-code');
+  const unreachable = data.unreachable_modules;
+  const unusedDeps = data.unused_dependencies;
+  summary.textContent = unreachable.length + ' unreachable module' + (unreachable.length === 1 ? '' : 's') +
+    ', ' + unusedDeps.length + ' unused dependenc' + (unusedDeps.length === 1 ? 'y' : 'ies');
+
+  if (unreachable.length === 0 && unusedDeps.length === 0) {
+    el.innerHTML = '<div class="tool-row">No dead code detected.</div>';
+    return;
+  }
+  const moduleRows = unreachable.map(m =>
+    '<div class="tool-row"><span class="tool-name">' + escapeHtml(m.path) + '</span> - ' + escapeHtml(m.reason) + '</div>'
+  );
+  const depRows = unusedDeps.map(d =>
+    '<div class="tool-row"><span class="tool-name">' + escapeHtml(d.package) + '</span> - unused ' + escapeHtml(d.ecosystem) + ' dependency</div>'
+  );
+  el.innerHTML = moduleRows.concat(depRows).join('');
+}
+
 function renderMcpTools(tools) {
   const el = document.getElementById('mcp-tools');
   el.innerHTML = tools.map(t =>
@@ -865,6 +895,7 @@ async function loadAll() {
   renderGitActivity(evidence.git_activity);
   renderSecurity(evidence.security);
   renderArchitecture(evidence.architecture);
+  renderDeadCode(evidence.dead_code);
 
   const history = await fetchJSON('/api/history');
   renderBarChart('sparkline-modules', history.map(h => h.module_count), 'sparkline-modules-value', 'sparkline-modules-note');

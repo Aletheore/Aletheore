@@ -19,6 +19,10 @@ def make_evidence(scanned_at: str, module_count: int = 2, secrets_count: int = 0
             "modules": [{"path": f"m{i}.py"} for i in range(module_count)],
             "monorepo": {"detected": False, "workspaces": []},
             "dependency_graph": {"nodes": [], "edges": []},
+            "dead_code": {
+                "unreachable_modules": [{"path": "old/unused.py", "reason": "no other module imports this file"}],
+                "unused_dependencies": [{"ecosystem": "pip", "package": "unused-pkg"}],
+            },
         },
         "git": {
             "total_commits": 10,
@@ -62,6 +66,10 @@ def test_build_evidence_summary_shape():
     assert summary["security"]["secrets"]["real_findings"] == 1
     assert summary["architecture"]["cluster_count"] == 1
     assert summary["architecture"]["convention_detected"] is True
+    assert summary["dead_code"]["unreachable_modules"] == [
+        {"path": "old/unused.py", "reason": "no other module imports this file"}
+    ]
+    assert summary["dead_code"]["unused_dependencies"] == [{"ecosystem": "pip", "package": "unused-pkg"}]
 
 
 def test_build_history_summary_reads_all_snapshots(tmp_path):
