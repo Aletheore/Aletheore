@@ -360,3 +360,130 @@ def delete_expired_sessions(dsn: str) -> int:
             deleted = cur.rowcount
         conn.commit()
     return deleted
+
+
+def upsert_wiki_overview(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    description: str,
+    diagram_mermaid: str,
+    source_commit: str | None = None,
+) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO wiki_overview
+                    (installation_id, repo_full_name, description, diagram_mermaid, source_commit, updated_at)
+                VALUES (%s, %s, %s, %s, %s, now())
+                ON CONFLICT (installation_id, repo_full_name) DO UPDATE
+                SET description = EXCLUDED.description,
+                    diagram_mermaid = EXCLUDED.diagram_mermaid,
+                    source_commit = EXCLUDED.source_commit,
+                    updated_at = now()
+                """,
+                (installation_id, repo_full_name, description, diagram_mermaid, source_commit),
+            )
+        conn.commit()
+
+
+def get_wiki_overview(dsn: str, installation_id: int, repo_full_name: str) -> dict | None:
+    import psycopg
+    import psycopg.rows
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                """
+                SELECT description, diagram_mermaid, source_commit, updated_at
+                FROM wiki_overview
+                WHERE installation_id = %s AND repo_full_name = %s
+                """,
+                (installation_id, repo_full_name),
+            )
+            return cur.fetchone()
+
+
+def upsert_wiki_subsystem(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    subsystem_id: str,
+    name: str,
+    description: str,
+    files: list,
+    diagram_mermaid: str,
+    source_commit: str | None = None,
+) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO wiki_subsystems
+                    (installation_id, repo_full_name, subsystem_id, name, description,
+                     files, diagram_mermaid, source_commit, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, now())
+                ON CONFLICT (installation_id, repo_full_name, subsystem_id) DO UPDATE
+                SET name = EXCLUDED.name,
+                    description = EXCLUDED.description,
+                    files = EXCLUDED.files,
+                    diagram_mermaid = EXCLUDED.diagram_mermaid,
+                    source_commit = EXCLUDED.source_commit,
+                    updated_at = now()
+                """,
+                (
+                    installation_id,
+                    repo_full_name,
+                    subsystem_id,
+                    name,
+                    description,
+                    json.dumps(files),
+                    diagram_mermaid,
+                    source_commit,
+                ),
+            )
+        conn.commit()
+
+
+def list_wiki_subsystems(dsn: str, installation_id: int, repo_full_name: str) -> list[dict]:
+    import psycopg.rows
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                """
+                SELECT subsystem_id, name, description, files, diagram_mermaid, source_commit, updated_at
+                FROM wiki_subsystems
+                WHERE installation_id = %s AND repo_full_name = %s
+                ORDER BY name ASC
+                """,
+                (installation_id, repo_full_name),
+            )
+            return cur.fetchall()
+
+
+def delete_wiki_subsystems_not_in(
+    dsn: str, installation_id: int, repo_full_name: str, keep_subsystem_ids: list[str]
+) -> None:
+    """Removes subsystem pages whose cluster no longer exists (e.g. it was
+    merged into another cluster, or its files were deleted). Passing an
+    empty keep list removes every subsystem page for the repo.
+    """
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM wiki_subsystems
+                WHERE installation_id = %s AND repo_full_name = %s
+                  AND NOT (subsystem_id = ANY(%s::text[]))
+                """,
+                (installation_id, repo_full_name, keep_subsystem_ids),
+            )
+        conn.commit()

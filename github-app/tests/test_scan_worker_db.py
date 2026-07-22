@@ -10,18 +10,23 @@ from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     delete_expired_sessions,
+    delete_wiki_subsystems_not_in,
     get_extra_seats,
     get_last_endpoint_health,
     get_last_reviewed_sha,
     get_latest_evidence,
     get_llm_spend_this_month,
+    get_wiki_overview,
     insert_endpoint_health,
     insert_repo_history,
     installation_spend_lock,
     list_monitored_installations,
     list_repos_for_installation,
+    list_wiki_subsystems,
     record_llm_spend,
     set_last_reviewed_sha,
+    upsert_wiki_overview,
+    upsert_wiki_subsystem,
 )
 
 TEST_DATABASE_URL = os.environ.get(
@@ -262,3 +267,95 @@ async def test_installation_spend_lock_releases_after_context_exits(pool):
             acquired = cur.fetchone()[0]
             cur.execute("SELECT pg_advisory_unlock(301)")
     assert acquired is True
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_get_wiki_overview(pool):
+    await _insert_installation(pool, 301, "a")
+
+    upsert_wiki_overview(TEST_DATABASE_URL, 301, "a/repo1", "First description.", "flowchart TD", "sha1")
+    row = get_wiki_overview(TEST_DATABASE_URL, 301, "a/repo1")
+
+    assert row["description"] == "First description."
+    assert row["diagram_mermaid"] == "flowchart TD"
+    assert row["source_commit"] == "sha1"
+
+
+@pytest.mark.asyncio
+async def test_upsert_wiki_overview_overwrites_on_conflict(pool):
+    await _insert_installation(pool, 301, "a")
+
+    upsert_wiki_overview(TEST_DATABASE_URL, 301, "a/repo1", "First.", "diagram1", "sha1")
+    upsert_wiki_overview(TEST_DATABASE_URL, 301, "a/repo1", "Second.", "diagram2", "sha2")
+
+    row = get_wiki_overview(TEST_DATABASE_URL, 301, "a/repo1")
+    assert row["description"] == "Second."
+    assert row["source_commit"] == "sha2"
+
+
+@pytest.mark.asyncio
+async def test_get_wiki_overview_returns_none_when_missing(pool):
+    await _insert_installation(pool, 301, "a")
+    assert get_wiki_overview(TEST_DATABASE_URL, 301, "a/repo1") is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_list_wiki_subsystems(pool):
+    await _insert_installation(pool, 301, "a")
+
+    upsert_wiki_subsystem(
+        TEST_DATABASE_URL, 301, "a/repo1", "0", "Authentication", "Handles login.",
+        [{"path": "auth/login.py", "role": "entry point", "key_symbols": []}], "flowchart TD", "sha1",
+    )
+    upsert_wiki_subsystem(
+        TEST_DATABASE_URL, 301, "a/repo1", "1", "Billing", "Handles payments.",
+        [], "flowchart TD", "sha1",
+    )
+
+    subsystems = list_wiki_subsystems(TEST_DATABASE_URL, 301, "a/repo1")
+
+    assert len(subsystems) == 2
+    names = {s["name"] for s in subsystems}
+    assert names == {"Authentication", "Billing"}
+    auth = next(s for s in subsystems if s["name"] == "Authentication")
+    assert auth["files"] == [{"path": "auth/login.py", "role": "entry point", "key_symbols": []}]
+
+
+@pytest.mark.asyncio
+async def test_upsert_wiki_subsystem_overwrites_on_conflict(pool):
+    await _insert_installation(pool, 301, "a")
+
+    upsert_wiki_subsystem(TEST_DATABASE_URL, 301, "a/repo1", "0", "Auth", "First.", [], "d1", "sha1")
+    upsert_wiki_subsystem(TEST_DATABASE_URL, 301, "a/repo1", "0", "Auth v2", "Second.", [], "d2", "sha2")
+
+    subsystems = list_wiki_subsystems(TEST_DATABASE_URL, 301, "a/repo1")
+    assert len(subsystems) == 1
+    assert subsystems[0]["name"] == "Auth v2"
+    assert subsystems[0]["description"] == "Second."
+
+
+@pytest.mark.asyncio
+async def test_delete_wiki_subsystems_not_in_removes_stale_clusters(pool):
+    await _insert_installation(pool, 301, "a")
+
+    upsert_wiki_subsystem(TEST_DATABASE_URL, 301, "a/repo1", "0", "Auth", "d", [], "diag", "sha1")
+    upsert_wiki_subsystem(TEST_DATABASE_URL, 301, "a/repo1", "1", "Billing", "d", [], "diag", "sha1")
+    upsert_wiki_subsystem(TEST_DATABASE_URL, 301, "a/repo1", "2", "Stale", "d", [], "diag", "sha1")
+
+    delete_wiki_subsystems_not_in(TEST_DATABASE_URL, 301, "a/repo1", ["0", "1"])
+
+    subsystems = list_wiki_subsystems(TEST_DATABASE_URL, 301, "a/repo1")
+    ids = {s["subsystem_id"] for s in subsystems}
+    assert ids == {"0", "1"}
+
+
+@pytest.mark.asyncio
+async def test_wiki_subsystems_are_scoped_per_repo(pool):
+    await _insert_installation(pool, 301, "a")
+
+    upsert_wiki_subsystem(TEST_DATABASE_URL, 301, "a/repo1", "0", "Auth", "d", [], "diag", "sha1")
+    upsert_wiki_subsystem(TEST_DATABASE_URL, 301, "a/repo2", "0", "Other", "d", [], "diag", "sha1")
+
+    repo1_subsystems = list_wiki_subsystems(TEST_DATABASE_URL, 301, "a/repo1")
+    assert len(repo1_subsystems) == 1
+    assert repo1_subsystems[0]["name"] == "Auth"
