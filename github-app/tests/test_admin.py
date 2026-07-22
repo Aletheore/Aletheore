@@ -110,6 +110,18 @@ async def test_generate_token_returns_422_for_missing_label(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_label",
+    ["", "x" * 101, "bad\nlabel", "bad\ttab", "bad\x00null"],
+)
+async def test_generate_token_rejects_invalid_labels(pool, monkeypatch, bad_label):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/tokens", json={"label": bad_label})
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_set_webhook_url(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch)
     async with client:
@@ -333,6 +345,24 @@ async def test_create_cli_token_returns_422_for_missing_fields(pool, monkeypatch
         response = await client.post(
             "/v1/cli-tokens",
             json={"installation_id": 100},
+            headers={"Authorization": "Bearer gho_faketoken"},
+        )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_cli_token_rejects_invalid_label(pool, monkeypatch):
+    await upsert_installation(pool, 100, "acme")
+    await set_installation_plan(pool, 100, "pro")
+    await _mock_github_installations(monkeypatch, [100])
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/cli-tokens",
+            json={"installation_id": 100, "label": "bad\nlabel"},
             headers={"Authorization": "Bearer gho_faketoken"},
         )
 

@@ -3,7 +3,7 @@ import secrets
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app_server.auth import get_current_session
 from app_server.db import (
@@ -20,9 +20,16 @@ from app_server.url_validation import UnsafeURLError, validate_external_https_ur
 
 admin_router = APIRouter()
 
+# No control characters (including newlines/tabs) or DEL - a label is a
+# single line of display text stored verbatim and shown back in the admin
+# dashboard and token list; letting one carry a newline or embedded escape
+# sequence risks log/UI injection for no legitimate benefit.
+_LABEL_PATTERN = r"^[^\x00-\x1f\x7f]+$"
+TokenLabel = Field(min_length=1, max_length=100, pattern=_LABEL_PATTERN)
+
 
 class GenerateTokenRequest(BaseModel):
-    label: str
+    label: str = TokenLabel
 
 
 class SetWebhookURLRequest(BaseModel):
@@ -36,7 +43,7 @@ class SetHealthCheckConfigRequest(BaseModel):
 
 class CreateCliTokenRequest(BaseModel):
     installation_id: int
-    label: str
+    label: str = TokenLabel
 
 
 BRANCH_PROTECTION_DISCLOSURE = (
