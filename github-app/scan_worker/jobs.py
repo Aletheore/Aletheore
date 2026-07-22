@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import json
+import logging
 import shutil
 import subprocess
 import uuid
@@ -22,6 +23,7 @@ from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evide
 from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
+    delete_expired_sessions,
     get_extra_seats,
     get_installation as get_installation_row,
     get_last_endpoint_health,
@@ -518,3 +520,12 @@ def run_health_check_sweep_job() -> None:
                     status_code,
                     latency_ms,
                 )
+
+
+@log_job
+def run_session_cleanup_job() -> None:
+    dsn = get_settings().database_url
+    deleted = delete_expired_sessions(dsn)
+    logging.getLogger("scan_worker.jobs").info(
+        "session cleanup completed", extra={"deleted_count": deleted}
+    )

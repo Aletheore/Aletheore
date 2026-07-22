@@ -3,10 +3,13 @@ import os
 
 import pytest
 
+from datetime import timedelta
+
 from app_server.evidence_limits import EvidenceTooLargeError, MAX_EVIDENCE_BYTES
 from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
+    delete_expired_sessions,
     get_extra_seats,
     get_last_endpoint_health,
     get_last_reviewed_sha,
@@ -92,6 +95,39 @@ async def test_insert_repo_history_rejects_oversized_evidence(pool):
     with pytest.raises(EvidenceTooLargeError):
         insert_repo_history(TEST_DATABASE_URL, 301, "a/repo1", datetime.now(timezone.utc), oversized)
     assert list_repos_for_installation(TEST_DATABASE_URL, 301) == []
+
+
+@pytest.mark.asyncio
+async def test_delete_expired_sessions_removes_only_expired_rows(pool):
+    now = datetime.now(timezone.utc)
+    await pool.execute(
+        """
+        INSERT INTO sessions (id, github_user_id, github_login, github_access_token, expires_at)
+        VALUES ($1, $2, $3, $4, $5)
+        """,
+        "expired-session",
+        1,
+        "octocat",
+        "token-a",
+        now - timedelta(hours=1),
+    )
+    await pool.execute(
+        """
+        INSERT INTO sessions (id, github_user_id, github_login, github_access_token, expires_at)
+        VALUES ($1, $2, $3, $4, $5)
+        """,
+        "active-session",
+        2,
+        "hubot",
+        "token-b",
+        now + timedelta(hours=1),
+    )
+
+    deleted = delete_expired_sessions(TEST_DATABASE_URL)
+
+    assert deleted == 1
+    remaining = await pool.fetch("SELECT id FROM sessions")
+    assert {row["id"] for row in remaining} == {"active-session"}
 
 
 @pytest.mark.asyncio

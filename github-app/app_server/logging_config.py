@@ -12,6 +12,7 @@ _STRUCTURED_FIELDS = (
     "path",
     "status_code",
     "duration_ms",
+    "deleted_count",
 )
 
 

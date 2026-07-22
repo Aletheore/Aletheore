@@ -349,3 +349,14 @@ def insert_endpoint_health(
                 (installation_id, repo_full_name, method, path, keep),
             )
         conn.commit()
+
+
+def delete_expired_sessions(dsn: str) -> int:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM sessions WHERE expires_at < now()")
+            deleted = cur.rowcount
+        conn.commit()
+    return deleted

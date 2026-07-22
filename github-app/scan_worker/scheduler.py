@@ -13,6 +13,8 @@ HEALTH_SWEEP_INTERVAL_SECONDS = 180
 # runtime that still guarantees the job can't run forever and pile up
 # against the next scheduler tick indefinitely.
 HEALTH_SWEEP_JOB_TIMEOUT_SECONDS = 600
+# A single indexed DELETE against a small table - generous but bounded.
+SESSION_CLEANUP_JOB_TIMEOUT_SECONDS = 60
 
 
 def run_forever(
@@ -26,6 +28,10 @@ def run_forever(
         queue.enqueue(
             "scan_worker.jobs.run_health_check_sweep_job",
             job_timeout=HEALTH_SWEEP_JOB_TIMEOUT_SECONDS,
+        )
+        queue.enqueue(
+            "scan_worker.jobs.run_session_cleanup_job",
+            job_timeout=SESSION_CLEANUP_JOB_TIMEOUT_SECONDS,
         )
         iterations += 1
         if max_iterations is not None and iterations >= max_iterations:
