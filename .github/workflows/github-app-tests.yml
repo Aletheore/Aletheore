@@ -58,4 +58,14 @@ jobs:
 
       - name: Run tests
         working-directory: github-app
-        run: python -m pytest
+        run: >
+          python -m pytest --cov=app_server --cov=scan_worker
+          --cov-report=term-missing --cov-report=xml --cov-fail-under=85
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-github-app
+          path: github-app/coverage.xml
+          retention-days: 14

@@ -21,6 +21,9 @@ dist/
 build/
 *.egg-info/
 coverage/
+coverage.xml
+.coverage
+.coverage.*
 .cache/
 .tmp/
 
