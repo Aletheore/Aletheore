@@ -133,6 +133,18 @@ def build_subsystem_record(evidence: dict, cluster: dict, brief: dict, name: str
     }
 
 
+def affected_cluster_ids(evidence: dict, changed_files: list[str]) -> set[int]:
+    """Maps a list of changed file paths to the clusters they belong to,
+    for incremental updates - only these clusters need regenerating.
+    """
+    changed = set(changed_files)
+    return {
+        cluster["id"]
+        for cluster in evidence.get("architecture", {}).get("clusters", [])
+        if changed & set(cluster.get("modules", []))
+    }
+
+
 def generate_subsystems(
     evidence: dict,
     naming_adapter,

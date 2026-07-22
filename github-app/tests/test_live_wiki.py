@@ -231,3 +231,22 @@ def test_generate_overview_falls_back_on_hallucinated_citation():
     overview = generate_overview(evidence, subsystem_records, adapter)
 
     assert overview["description"] == "Overview description unavailable."
+
+
+def test_affected_cluster_ids_maps_changed_files_to_clusters():
+    from scan_worker.live_wiki import affected_cluster_ids
+
+    evidence = {
+        "architecture": {
+            "clusters": [
+                {"id": 0, "modules": ["auth/login.py", "auth/tokens.py"]},
+                {"id": 1, "modules": ["billing/charge.py"]},
+            ]
+        }
+    }
+
+    assert affected_cluster_ids(evidence, ["auth/login.py"]) == {0}
+    assert affected_cluster_ids(evidence, ["billing/charge.py"]) == {1}
+    assert affected_cluster_ids(evidence, ["auth/login.py", "billing/charge.py"]) == {0, 1}
+    assert affected_cluster_ids(evidence, ["unrelated/file.py"]) == set()
+    assert affected_cluster_ids(evidence, []) == set()

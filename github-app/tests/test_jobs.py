@@ -28,6 +28,7 @@ def test_happy_path_posts_comment_and_writes_history(bare_repo_with_two_commits,
     monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
 
     run_pr_scan_job(
         installation_id=1,
@@ -60,6 +61,7 @@ def test_check_run_failure_does_not_overwrite_diff_comment(bare_repo_with_two_co
     monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", raise_error)
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
 
     run_pr_scan_job(
         installation_id=1,
@@ -85,6 +87,7 @@ def test_temp_dir_cleaned_up_on_success(bare_repo_with_two_commits, monkeypatch)
     monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
 
     seen_job_dirs = []
     original_mkdtemp = jobs_module._job_temp_dir
@@ -155,6 +158,7 @@ def test_slack_alert_fires_on_paid_install_with_webhook_url_and_new_secret(
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row",
         lambda *a, **k: {"plan": "pro", "webhook_url": "https://hooks.slack.com/x"},
@@ -182,6 +186,7 @@ def test_check_run_failure_on_new_secret(bare_repo_with_two_commits, monkeypatch
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "pro"})
     created = {}
     monkeypatch.setattr(
@@ -709,3 +714,185 @@ def test_sweep_skips_latency_when_unreachable(monkeypatch):
     run_health_check_sweep_job()
 
     assert sent == []
+
+
+def _wiki_evidence() -> dict:
+    return {
+        "repository": {
+            "modules": [
+                {
+                    "path": "auth/login.py",
+                    "language": "python",
+                    "imports": [],
+                    "symbols": {"functions": [], "classes": []},
+                }
+            ],
+            "dependency_graph": {"nodes": [], "edges": []},
+        },
+        "architecture": {"clusters": [{"id": 0, "modules": ["auth/login.py"], "internal_edges": 0}]},
+    }
+
+
+def test_maybe_update_live_wiki_skips_for_free_plan(monkeypatch):
+    from scan_worker.jobs import _maybe_update_live_wiki
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    called = []
+    monkeypatch.setattr(
+        "scan_worker.live_wiki.generate_subsystems", lambda *a, **k: called.append(1)
+    )
+
+    _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["auth/login.py"], "sha1")
+
+    assert called == []
+
+
+def test_maybe_update_live_wiki_skips_when_no_clusters_affected(monkeypatch):
+    from scan_worker.jobs import _maybe_update_live_wiki
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "pro"})
+    called = []
+    monkeypatch.setattr(
+        "scan_worker.live_wiki.generate_subsystems", lambda *a, **k: called.append(1)
+    )
+
+    _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["unrelated/file.py"], "sha1")
+
+    assert called == []
+
+
+def test_maybe_update_live_wiki_generates_and_stores_for_affected_clusters(monkeypatch):
+    from scan_worker.jobs import _maybe_update_live_wiki
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "pro"})
+
+    fake_record = {
+        "subsystem_id": "0",
+        "name": "Authentication",
+        "description": "Handles login.",
+        "files": [],
+        "diagram_mermaid": "flowchart TD",
+    }
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems", lambda *a, **k: [fake_record]
+    )
+
+    stored = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs._store_wiki_generation",
+        lambda dsn, iid, repo, evidence, records, adapter, commit: stored.update(
+            records=records, commit=commit
+        ),
+    )
+
+    _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["auth/login.py"], "sha1")
+
+    assert stored["records"] == [fake_record]
+    assert stored["commit"] == "sha1"
+
+
+def test_run_pr_scan_job_wires_changed_files_into_live_wiki_update(bare_repo_with_two_commits, monkeypatch):
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"]
+    )
+    called = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs._maybe_update_live_wiki",
+        lambda installation_id, repo_full_name, evidence, changed_files, head_sha: called.update(
+            installation_id=installation_id,
+            repo_full_name=repo_full_name,
+            changed_files=changed_files,
+            head_sha=head_sha,
+        ),
+    )
+
+    run_pr_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        pr_number=7,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert called["installation_id"] == 1
+    assert called["repo_full_name"] == "octocat/hello-world"
+    assert called["changed_files"] == ["app.py"]
+    assert called["head_sha"] == head_sha
+
+
+def test_run_live_wiki_full_build_job_skips_without_evidence(monkeypatch):
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: None)
+    called = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems", lambda *a, **k: called.append(1)
+    )
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert called == []
+
+
+def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
+
+    fake_record = {
+        "subsystem_id": "0",
+        "name": "Authentication",
+        "description": "Handles login.",
+        "files": [],
+        "diagram_mermaid": "flowchart TD",
+    }
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems", lambda *a, **k: [fake_record]
+    )
+
+    stored = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs._store_wiki_generation",
+        lambda dsn, iid, repo, evidence, records, adapter, commit: stored.update(
+            records=records, commit=commit
+        ),
+    )
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert stored["records"] == [fake_record]
+    assert stored["commit"] is None
+
+
+def test_run_live_wiki_full_build_for_installation_job_enqueues_per_repo(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from scan_worker.jobs import run_live_wiki_full_build_for_installation_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_repos_for_installation",
+        lambda *a, **k: ["octocat/repo1", "octocat/repo2"],
+    )
+    fake_queue = MagicMock()
+    monkeypatch.setattr("scan_worker.jobs._scans_queue", lambda redis_url: fake_queue)
+
+    run_live_wiki_full_build_for_installation_job(1)
+
+    assert fake_queue.enqueue.call_count == 2
+    repo_names = {call.kwargs["repo_full_name"] for call in fake_queue.enqueue.call_args_list}
+    assert repo_names == {"octocat/repo1", "octocat/repo2"}

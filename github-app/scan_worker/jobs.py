@@ -10,6 +10,7 @@ from pathlib import Path
 
 import httpx
 
+from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.evidence import write_evidence
 from aletheore.evidence_resolution import resolve_code_evidence
 from aletheore.history import compute_diff
@@ -20,10 +21,12 @@ from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.llm_cost import cost_for_usage, monthly_cap_for_installation
 from app_server.logging_config import log_job
 from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
+from scan_worker import live_wiki
 from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     delete_expired_sessions,
+    delete_wiki_subsystems_not_in,
     get_extra_seats,
     get_installation as get_installation_row,
     get_last_endpoint_health,
@@ -35,8 +38,11 @@ from scan_worker.db import (
     installation_spend_lock,
     list_monitored_installations,
     list_repos_for_installation,
+    list_wiki_subsystems,
     record_llm_spend,
     set_last_reviewed_sha,
+    upsert_wiki_overview,
+    upsert_wiki_subsystem,
 )
 from scan_worker.flash_review import build_code_evidence_context, gather_file_context, review_diff
 from scan_worker.github_api import create_check_run, fetch_pr_changed_files, fetch_pr_diff, upsert_pr_comment
@@ -51,6 +57,11 @@ from scan_worker.slack import (
 JOBS_ROOT = Path("/tmp/aletheore-jobs")
 AUDIT_COMMENT_MARKER = "<!-- aletheore-audit -->"
 FLASH_REVIEW_MARKER = "<!-- aletheore-flash-review -->"
+# Generous: the one-time full build calls a strong model once per
+# subsystem plus the overview, deliberately the most expensive step in
+# the whole Live Wiki pipeline - see scan_worker/live_wiki.py.
+LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS = 1800
+LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS = 300
 
 
 def _job_temp_dir() -> Path:
@@ -197,6 +208,11 @@ def run_pr_scan_job(
             pass
         try:
             _maybe_create_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            changed_files = fetch_pr_changed_files(client, token, repo_full_name, base_sha, head_sha)
+            _maybe_update_live_wiki(installation_id, repo_full_name, new, changed_files, head_sha)
         except Exception:  # noqa: BLE001
             pass
     except Exception as exc:  # noqa: BLE001
@@ -528,4 +544,131 @@ def run_session_cleanup_job() -> None:
     deleted = delete_expired_sessions(dsn)
     logging.getLogger("scan_worker.jobs").info(
         "session cleanup completed", extra={"deleted_count": deleted}
+    )
+
+
+def _live_wiki_naming_adapter() -> OpenAICompatibleAdapter:
+    return OpenAICompatibleAdapter(
+        name="DeepSeek",
+        base_url="https://api.deepseek.com",
+        api_key_env_var="DEEPSEEK_API_KEY",
+        model=live_wiki.FLASH_MODEL,
+    )
+
+
+def _live_wiki_full_build_writing_adapter() -> OpenAICompatibleAdapter:
+    return OpenAICompatibleAdapter(
+        name="OpenAI",
+        base_url="https://api.openai.com/v1",
+        api_key_env_var="OPENAI_API_KEY",
+        model=live_wiki.FULL_BUILD_MODEL,
+    )
+
+
+def _live_wiki_update_writing_adapter() -> OpenAICompatibleAdapter:
+    return OpenAICompatibleAdapter(
+        name="DeepSeek",
+        base_url="https://api.deepseek.com",
+        api_key_env_var="DEEPSEEK_API_KEY",
+        model=live_wiki.UPDATE_MODEL,
+    )
+
+
+def _store_wiki_generation(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    evidence: dict,
+    fresh_records: list[dict],
+    writing_adapter,
+    source_commit: str | None,
+) -> None:
+    """Upserts freshly-generated subsystem records, prunes any subsystem
+    whose cluster no longer exists in the current evidence at all, then
+    regenerates the overview from the full current set (fresh records
+    merged with whatever was already stored for subsystems untouched by
+    this run).
+    """
+    for record in fresh_records:
+        upsert_wiki_subsystem(
+            dsn,
+            installation_id,
+            repo_full_name,
+            record["subsystem_id"],
+            record["name"],
+            record["description"],
+            record["files"],
+            record["diagram_mermaid"],
+            source_commit,
+        )
+
+    current_cluster_ids = [str(c["id"]) for c in evidence.get("architecture", {}).get("clusters", [])]
+    delete_wiki_subsystems_not_in(dsn, installation_id, repo_full_name, current_cluster_ids)
+
+    all_records = {r["subsystem_id"]: r for r in list_wiki_subsystems(dsn, installation_id, repo_full_name)}
+    for record in fresh_records:
+        all_records[record["subsystem_id"]] = record
+    if not all_records:
+        return
+
+    overview = live_wiki.generate_overview(evidence, list(all_records.values()), writing_adapter)
+    upsert_wiki_overview(
+        dsn, installation_id, repo_full_name, overview["description"], overview["diagram_mermaid"], source_commit
+    )
+
+
+@log_job
+def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> None:
+    dsn = get_settings().database_url
+    evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
+    if evidence is None:
+        return  # nothing scanned for this repo yet - nothing to build from
+
+    naming_adapter = _live_wiki_naming_adapter()
+    writing_adapter = _live_wiki_full_build_writing_adapter()
+    records = live_wiki.generate_subsystems(evidence, naming_adapter, writing_adapter)
+    _store_wiki_generation(dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None)
+
+
+@log_job
+def _scans_queue(redis_url: str):
+    from redis import Redis
+    from rq import Queue
+
+    return Queue("scans", connection=Redis.from_url(redis_url))
+
+
+def run_live_wiki_full_build_for_installation_job(installation_id: int) -> None:
+    """Fans out one full-build job per repo, rather than looping in
+    process, so one slow or failing repo can't consume the whole
+    installation's build budget or block the others.
+    """
+    settings = get_settings()
+    queue = _scans_queue(settings.redis_url)
+    for repo_full_name in list_repos_for_installation(settings.database_url, installation_id):
+        queue.enqueue(
+            "scan_worker.jobs.run_live_wiki_full_build_job",
+            job_timeout=LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS,
+            installation_id=installation_id,
+            repo_full_name=repo_full_name,
+        )
+
+
+def _maybe_update_live_wiki(
+    installation_id: int, repo_full_name: str, evidence: dict, changed_files: list[str], head_sha: str
+) -> None:
+    settings = get_settings()
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is None or installation["plan"] == "free":
+        return
+
+    cluster_ids = live_wiki.affected_cluster_ids(evidence, changed_files)
+    if not cluster_ids:
+        return
+
+    naming_adapter = _live_wiki_naming_adapter()
+    writing_adapter = _live_wiki_update_writing_adapter()
+    records = live_wiki.generate_subsystems(evidence, naming_adapter, writing_adapter, cluster_ids=cluster_ids)
+    _store_wiki_generation(
+        settings.database_url, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha
     )
