@@ -896,3 +896,23 @@ def test_run_live_wiki_full_build_for_installation_job_enqueues_per_repo(monkeyp
     assert fake_queue.enqueue.call_count == 2
     repo_names = {call.kwargs["repo_full_name"] for call in fake_queue.enqueue.call_args_list}
     assert repo_names == {"octocat/repo1", "octocat/repo2"}
+
+
+def test_full_build_writing_adapter_uses_the_strong_model_when_key_present(monkeypatch):
+    from scan_worker.jobs import _live_wiki_full_build_writing_adapter
+    from scan_worker import live_wiki
+
+    monkeypatch.setattr("scan_worker.jobs.has_api_key", lambda *a, **k: True)
+    adapter = _live_wiki_full_build_writing_adapter()
+    assert adapter.name == "OpenAI"
+    assert adapter._model == live_wiki.FULL_BUILD_MODEL
+
+
+def test_full_build_writing_adapter_falls_back_when_key_missing(monkeypatch):
+    from scan_worker.jobs import _live_wiki_full_build_writing_adapter
+    from scan_worker import live_wiki
+
+    monkeypatch.setattr("scan_worker.jobs.has_api_key", lambda *a, **k: False)
+    adapter = _live_wiki_full_build_writing_adapter()
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == live_wiki.UPDATE_MODEL

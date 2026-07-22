@@ -11,6 +11,7 @@ from pathlib import Path
 import httpx
 
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
+from aletheore.credentials import has_api_key
 from aletheore.evidence import write_evidence
 from aletheore.evidence_resolution import resolve_code_evidence
 from aletheore.history import compute_diff
@@ -557,6 +558,19 @@ def _live_wiki_naming_adapter() -> OpenAICompatibleAdapter:
 
 
 def _live_wiki_full_build_writing_adapter() -> OpenAICompatibleAdapter:
+    # The strong model is the product decision for the one-time full build
+    # (see the Live Wiki design), but a customer's first build should not
+    # simply fail because that key isn't configured yet - fall back to the
+    # same cheap/fast model used for ongoing updates rather than blocking
+    # the wiki from existing at all. Logged, not silent, so this is never
+    # mistaken for the intended path.
+    if not has_api_key("OPENAI_API_KEY", "OpenAI"):
+        logging.getLogger(__name__).warning(
+            "OPENAI_API_KEY not configured - full Live Wiki build falling back to %s instead of %s",
+            live_wiki.UPDATE_MODEL,
+            live_wiki.FULL_BUILD_MODEL,
+        )
+        return _live_wiki_update_writing_adapter()
     return OpenAICompatibleAdapter(
         name="OpenAI",
         base_url="https://api.openai.com/v1",
