@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -30,6 +31,15 @@ def get_api_key(
     saved = _load_saved_key(provider_name, credentials_path)
     if saved:
         return saved
+
+    # A worker process, cron job, or any other non-interactive caller has no
+    # one to answer this prompt - input() would block forever (or raise
+    # EOFError once stdin closes) rather than fail cleanly. Only guards the
+    # real interactive prompt (prompt_fn left at its default); a caller that
+    # supplies its own prompt_fn (e.g. a test double) has already opted out
+    # of this check.
+    if prompt_fn is input and not sys.stdin.isatty():
+        return None
 
     entered = prompt_fn(
         f"No {env_var} found. Enter your {provider_name} API key "

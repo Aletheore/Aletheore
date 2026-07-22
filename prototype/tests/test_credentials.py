@@ -80,6 +80,34 @@ def test_get_api_key_returns_none_when_prompt_cancelled(monkeypatch, tmp_path):
     assert result is None
 
 
+def test_get_api_key_skips_prompt_when_not_a_tty_and_using_default_prompt_fn(monkeypatch, tmp_path):
+    # Regression test for a real production incident: a worker process (no
+    # stdin to answer a prompt) called get_api_key with the default
+    # prompt_fn=input, which blocked until EOFError killed the job instead
+    # of failing cleanly. Not passing prompt_fn here is the point - it
+    # exercises the real default, not a test double.
+    monkeypatch.delenv("TESTPROVIDER_API_KEY", raising=False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    creds_path = tmp_path / "creds.json"
+
+    result = get_api_key("TESTPROVIDER_API_KEY", "testprovider", creds_path)
+
+    assert result is None
+
+
+def test_get_api_key_still_prompts_when_a_custom_prompt_fn_is_supplied_even_off_tty(monkeypatch, tmp_path):
+    # A caller that explicitly hands in its own prompt_fn (tests, or any
+    # future caller with its own answer source) has opted out of the tty
+    # guard - only the default input() path should be skipped.
+    monkeypatch.delenv("TESTPROVIDER_API_KEY", raising=False)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    creds_path = tmp_path / "creds.json"
+
+    result = get_api_key("TESTPROVIDER_API_KEY", "testprovider", creds_path, lambda _msg: "sk-from-double")
+
+    assert result == "sk-from-double"
+
+
 def test_save_key_sets_restrictive_permissions(monkeypatch, tmp_path):
     monkeypatch.delenv("TESTPROVIDER_API_KEY", raising=False)
     creds_path = tmp_path / "creds.json"
