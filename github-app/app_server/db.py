@@ -360,3 +360,57 @@ async def touch_api_token(pool: asyncpg.Pool, token_hash: str) -> None:
         "UPDATE api_tokens SET last_used_at = now() WHERE token_hash = $1",
         token_hash,
     )
+
+
+async def get_wiki_overview(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT description, diagram_mermaid, source_commit, updated_at
+        FROM wiki_overview
+        WHERE installation_id = $1 AND repo_full_name = $2
+        """,
+        installation_id,
+        repo_full_name,
+    )
+    return dict(row) if row else None
+
+
+async def list_wiki_subsystems(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT subsystem_id, name, description, files, diagram_mermaid, source_commit, updated_at
+        FROM wiki_subsystems
+        WHERE installation_id = $1 AND repo_full_name = $2
+        ORDER BY name ASC
+        """,
+        installation_id,
+        repo_full_name,
+    )
+    result = []
+    for row in rows:
+        entry = dict(row)
+        if isinstance(entry["files"], str):
+            entry["files"] = json.loads(entry["files"])
+        result.append(entry)
+    return result
+
+
+async def get_wiki_subsystem(
+    pool: asyncpg.Pool, installation_id: int, repo_full_name: str, subsystem_id: str
+) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT subsystem_id, name, description, files, diagram_mermaid, source_commit, updated_at
+        FROM wiki_subsystems
+        WHERE installation_id = $1 AND repo_full_name = $2 AND subsystem_id = $3
+        """,
+        installation_id,
+        repo_full_name,
+        subsystem_id,
+    )
+    if row is None:
+        return None
+    entry = dict(row)
+    if isinstance(entry["files"], str):
+        entry["files"] = json.loads(entry["files"])
+    return entry

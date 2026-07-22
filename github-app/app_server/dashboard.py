@@ -1,9 +1,20 @@
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from aletheore.evidence_resolution import resolve_code_evidence
-from app_server.admin import _administered_installation_ids, _repo_installation_id
+from app_server.admin import (
+    _administered_installation_ids,
+    _repo_installation_id,
+    _require_admin_installation,
+)
 from app_server.auth import get_current_session
-from app_server.db import get_latest_evidence, get_recent_endpoint_health, get_recent_history
+from app_server.db import (
+    get_latest_evidence,
+    get_recent_endpoint_health,
+    get_recent_history,
+    get_wiki_overview,
+    get_wiki_subsystem,
+    list_wiki_subsystems,
+)
 
 dashboard_router = APIRouter()
 
@@ -63,6 +74,48 @@ async def get_dashboard_health(org: str, repo: str, request: Request):
         endpoints.append(entry)
 
     return {"repo_full_name": repo_full_name, "endpoints": endpoints}
+
+
+@dashboard_router.get("/app/{org}/{repo}/wiki")
+async def get_dashboard_wiki(org: str, repo: str, request: Request):
+    installation = await _require_admin_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    installation_id = installation["installation_id"]
+    repo_full_name = f"{org}/{repo}"
+
+    overview = await get_wiki_overview(pool, installation_id, repo_full_name)
+    if overview is not None:
+        overview["updated_at"] = overview["updated_at"].isoformat()
+
+    subsystems = await list_wiki_subsystems(pool, installation_id, repo_full_name)
+    return {
+        "repo_full_name": repo_full_name,
+        "overview": overview,
+        "subsystems": [
+            {
+                "subsystem_id": s["subsystem_id"],
+                "name": s["name"],
+                "description": s["description"],
+                "diagram_mermaid": s["diagram_mermaid"],
+                "updated_at": s["updated_at"].isoformat(),
+            }
+            for s in subsystems
+        ],
+    }
+
+
+@dashboard_router.get("/app/{org}/{repo}/wiki/{subsystem_id}")
+async def get_dashboard_wiki_subsystem(org: str, repo: str, subsystem_id: str, request: Request):
+    installation = await _require_admin_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    repo_full_name = f"{org}/{repo}"
+
+    subsystem = await get_wiki_subsystem(pool, installation["installation_id"], repo_full_name, subsystem_id)
+    if subsystem is None:
+        raise HTTPException(status_code=404, detail="subsystem not found")
+
+    subsystem["updated_at"] = subsystem["updated_at"].isoformat()
+    return {"repo_full_name": repo_full_name, "subsystem": subsystem}
 
 
 @dashboard_router.get("/v1/health/{org}/{repo}")

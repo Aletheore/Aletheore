@@ -5,8 +5,39 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app_server.auth import encrypt_access_token, sign_session_id
-from app_server.db import create_session, insert_repo_history, upsert_installation
+from app_server.db import create_session, insert_repo_history, set_installation_plan, upsert_installation
 from app_server.main import app
+
+
+async def _seed_wiki_overview(pool, installation_id, repo_full_name, description="System overview."):
+    await pool.execute(
+        """
+        INSERT INTO wiki_overview (installation_id, repo_full_name, description, diagram_mermaid, source_commit)
+        VALUES ($1, $2, $3, 'graph TD; A-->B;', 'abc123')
+        ON CONFLICT (installation_id, repo_full_name) DO UPDATE
+        SET description = EXCLUDED.description
+        """,
+        installation_id,
+        repo_full_name,
+        description,
+    )
+
+
+async def _seed_wiki_subsystem(pool, installation_id, repo_full_name, subsystem_id, name="Auth"):
+    await pool.execute(
+        """
+        INSERT INTO wiki_subsystems
+            (installation_id, repo_full_name, subsystem_id, name, description, files, diagram_mermaid, source_commit)
+        VALUES ($1, $2, $3, $4, 'Handles authentication.', $5::jsonb, 'graph TD; A-->B;', 'abc123')
+        ON CONFLICT (installation_id, repo_full_name, subsystem_id) DO UPDATE
+        SET name = EXCLUDED.name
+        """,
+        installation_id,
+        repo_full_name,
+        subsystem_id,
+        name,
+        '["server/auth.py"]',
+    )
 
 
 async def _logged_in_client(pool, monkeypatch, administered_ids):
@@ -223,3 +254,129 @@ async def test_dashboard_health_includes_evidence_resolution(pool, monkeypatch):
     assert resolution["line"] == 42
     assert resolution["symbol"] == "get_users"
     assert resolution["confidence"] == "exact"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_wiki_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/app/octocat/hello-world/wiki")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_dashboard_wiki_requires_paid_plan(pool, monkeypatch):
+    await upsert_installation(pool, 601, "octocat")  # defaults to plan='free'
+    await insert_repo_history(
+        pool,
+        601,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {"repository": {"modules": []}},
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[601])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/wiki")
+    assert response.status_code == 402
+
+
+@pytest.mark.asyncio
+async def test_dashboard_wiki_returns_overview_and_subsystems(pool, monkeypatch):
+    await upsert_installation(pool, 602, "octocat")
+    await set_installation_plan(pool, 602, "pro")
+    await insert_repo_history(
+        pool,
+        602,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {"repository": {"modules": []}},
+    )
+    await _seed_wiki_overview(pool, 602, "octocat/hello-world")
+    await _seed_wiki_subsystem(pool, 602, "octocat/hello-world", "auth")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[602])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/wiki")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["repo_full_name"] == "octocat/hello-world"
+    assert body["overview"]["description"] == "System overview."
+    assert body["overview"]["diagram_mermaid"] == "graph TD; A-->B;"
+    assert len(body["subsystems"]) == 1
+    assert body["subsystems"][0]["subsystem_id"] == "auth"
+    assert body["subsystems"][0]["name"] == "Auth"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_wiki_returns_null_overview_when_not_yet_generated(pool, monkeypatch):
+    await upsert_installation(pool, 603, "octocat")
+    await set_installation_plan(pool, 603, "pro")
+    await insert_repo_history(
+        pool,
+        603,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {"repository": {"modules": []}},
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[603])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/wiki")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overview"] is None
+    assert body["subsystems"] == []
+
+
+@pytest.mark.asyncio
+async def test_dashboard_wiki_subsystem_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/app/octocat/hello-world/wiki/auth")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_dashboard_wiki_subsystem_returns_detail(pool, monkeypatch):
+    await upsert_installation(pool, 604, "octocat")
+    await set_installation_plan(pool, 604, "pro")
+    await insert_repo_history(
+        pool,
+        604,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {"repository": {"modules": []}},
+    )
+    await _seed_wiki_subsystem(pool, 604, "octocat/hello-world", "auth")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[604])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/wiki/auth")
+
+    assert response.status_code == 200
+    body = response.json()
+    subsystem = body["subsystem"]
+    assert subsystem["subsystem_id"] == "auth"
+    assert subsystem["name"] == "Auth"
+    assert subsystem["files"] == ["server/auth.py"]
+    assert subsystem["description"] == "Handles authentication."
+
+
+@pytest.mark.asyncio
+async def test_dashboard_wiki_subsystem_404s_for_unknown_id(pool, monkeypatch):
+    await upsert_installation(pool, 605, "octocat")
+    await set_installation_plan(pool, 605, "pro")
+    await insert_repo_history(
+        pool,
+        605,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {"repository": {"modules": []}},
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[605])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/wiki/nonexistent")
+    assert response.status_code == 404
