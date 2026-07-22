@@ -362,6 +362,22 @@ async def touch_api_token(pool: asyncpg.Pool, token_hash: str) -> None:
     )
 
 
+async def list_repos_for_installations(pool: asyncpg.Pool, installation_ids: list[int]) -> list[dict]:
+    if not installation_ids:
+        return []
+    rows = await pool.fetch(
+        """
+        SELECT DISTINCT rh.installation_id, rh.repo_full_name, i.account_login, i.plan
+        FROM repo_history rh
+        JOIN installations i ON i.installation_id = rh.installation_id
+        WHERE rh.installation_id = ANY($1::bigint[])
+        ORDER BY i.account_login ASC, rh.repo_full_name ASC
+        """,
+        installation_ids,
+    )
+    return [dict(row) for row in rows]
+
+
 async def get_wiki_overview(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> dict | None:
     row = await pool.fetchrow(
         """

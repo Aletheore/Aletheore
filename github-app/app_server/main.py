@@ -12,6 +12,7 @@ from app_server.auth import auth_router
 from app_server.config import get_settings
 from app_server.dashboard import dashboard_router
 from app_server.db import create_pool
+from app_server.frontend import frontend_router
 from app_server.logging_config import configure_json_logging
 from app_server.managed_audit_api import managed_audit_router
 from app_server.metrics import metrics_router
@@ -37,6 +38,7 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(managed_audit_router)
 app.include_router(metrics_router)
+app.include_router(frontend_router)
 
 
 @app.middleware("http")

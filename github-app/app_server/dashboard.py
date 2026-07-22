@@ -13,10 +13,37 @@ from app_server.db import (
     get_recent_history,
     get_wiki_overview,
     get_wiki_subsystem,
+    list_repos_for_installations,
     list_wiki_subsystems,
 )
 
 dashboard_router = APIRouter()
+
+
+@dashboard_router.get("/app/repos")
+async def list_my_repos(request: Request):
+    session = await get_current_session(request)
+    if session is None:
+        raise HTTPException(status_code=401, detail="login required")
+
+    administered_ids = await _administered_installation_ids(session["github_access_token"])
+    pool = request.app.state.db_pool
+    repos = await list_repos_for_installations(pool, list(administered_ids))
+    result = []
+    for row in repos:
+        # repo_full_name is the source of truth for the org/repo split used
+        # in every /app/{org}/{repo} route - account_login is a display
+        # value only and isn't guaranteed to match the org segment exactly.
+        org, _, repo = row["repo_full_name"].partition("/")
+        result.append(
+            {
+                "org": org,
+                "repo": repo,
+                "repo_full_name": row["repo_full_name"],
+                "plan": row["plan"],
+            }
+        )
+    return {"repos": result}
 
 
 async def _require_dashboard_installation(request: Request, org: str, repo: str) -> int:

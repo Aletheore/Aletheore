@@ -72,6 +72,56 @@ async def _logged_in_client(pool, monkeypatch, administered_ids):
 
 
 @pytest.mark.asyncio
+async def test_list_my_repos_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/app/repos")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_list_my_repos_returns_repos_across_administered_installations(pool, monkeypatch):
+    await upsert_installation(pool, 701, "octocat")
+    await upsert_installation(pool, 702, "another-org")
+    await set_installation_plan(pool, 702, "pro")
+    await insert_repo_history(
+        pool, 701, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    await insert_repo_history(
+        pool, 702, "another-org/service-b", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    # A third installation the caller does NOT administer - must not leak in.
+    await upsert_installation(pool, 703, "someone-else")
+    await insert_repo_history(
+        pool, 703, "someone-else/private-repo", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[701, 702])
+    async with client:
+        response = await client.get("/app/repos")
+
+    assert response.status_code == 200
+    repos = response.json()["repos"]
+    full_names = {r["repo_full_name"] for r in repos}
+    assert full_names == {"octocat/hello-world", "another-org/service-b"}
+    by_name = {r["repo_full_name"]: r for r in repos}
+    assert by_name["octocat/hello-world"]["org"] == "octocat"
+    assert by_name["octocat/hello-world"]["repo"] == "hello-world"
+    assert by_name["octocat/hello-world"]["plan"] == "free"
+    assert by_name["another-org/service-b"]["plan"] == "pro"
+
+
+@pytest.mark.asyncio
+async def test_list_my_repos_empty_for_no_administered_installations(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[])
+    async with client:
+        response = await client.get("/app/repos")
+    assert response.status_code == 200
+    assert response.json()["repos"] == []
+
+
+@pytest.mark.asyncio
 async def test_dashboard_requires_login(pool):
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
