@@ -447,6 +447,8 @@ async function loadOverview() {{
   if (!res.ok) {{
     document.getElementById('top-error').innerHTML =
       '<div class="error-banner">' + (res.status === 403 ? "You don't administer this repository." : 'Repository not found.') + '</div>';
+    document.getElementById('security-body').innerHTML = '<div class="empty-state">Unavailable.</div>';
+    document.getElementById('deadcode-body').innerHTML = '<div class="empty-state">Unavailable.</div>';
     return;
   }}
   const data = await res.json();
@@ -693,9 +695,14 @@ async function loadSettings() {{
     body.innerHTML = upgradeBanner('<b>API tokens, webhooks, and health checks are paid features.</b> Upgrade to configure them for this repository.');
     document.getElementById('plan-name').textContent = 'free';
     document.getElementById('plan-sub').textContent = 'Upgrade for live wiki and settings.';
+    loadWiki('free');
     return;
   }}
-  if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Settings unavailable.</div>'; return; }}
+  if (!res.ok) {{
+    body.innerHTML = '<div class="empty-state">Settings unavailable.</div>';
+    document.getElementById('wiki-body').innerHTML = '<div class="empty-state">Unavailable.</div>';
+    return;
+  }}
   const data = await res.json();
   const installation = data.installation;
   document.getElementById('plan-name').textContent = installation.plan + ' plan';
