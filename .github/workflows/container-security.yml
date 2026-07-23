@@ -31,7 +31,16 @@ jobs:
       - name: Build image
         run: docker build -f "${{ matrix.dockerfile }}" -t "${{ matrix.tag }}" .
 
-      - name: Scan image
+      - name: Scan image report
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ matrix.tag }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Enforce image scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ matrix.tag }}
