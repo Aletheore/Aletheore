@@ -14,6 +14,54 @@ from app_server.db import create_session, get_session
 from app_server.main import app
 
 
+@pytest.mark.asyncio
+async def test_signin_page_is_not_cacheable(pool):
+    # A cached or bfcache-restored copy of an auth-flow page could let
+    # someone hit Back after Sign out and see stale page state without a
+    # real request ever reaching the server to re-check the session.
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/")
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_get_session_returns_none_for_expired_session(pool):
+    monkeypatch_secret = "test-session-secret"
+    encrypted = encrypt_access_token("gho_realtoken", monkeypatch_secret)
+    already_expired = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await create_session(pool, "sess-expired", 42, "octocat", encrypted, already_expired)
+
+    assert await get_session(pool, "sess-expired") is None
+
+
+@pytest.mark.asyncio
+async def test_logout_deletes_session_and_clears_cookie(pool, monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    encrypted = encrypt_access_token("gho_realtoken", "test-session-secret")
+    expires = datetime.now(timezone.utc) + timedelta(hours=1)
+    await create_session(pool, "sess-logout", 42, "octocat", encrypted, expires)
+    signed = sign_session_id("sess-logout", "test-session-secret")
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test", cookies={"session": signed}
+    ) as client:
+        logout_response = await client.get("/auth/logout", follow_redirects=False)
+
+        assert logout_response.status_code == 307
+        assert await get_session(pool, "sess-logout") is None
+
+        # Pressing Back with the old cookie (still held by the client - a
+        # real browser would send it too until the Set-Cookie expiry is
+        # processed) must not resurrect the session server-side.
+        picker_response = await client.get("/dashboard", follow_redirects=False)
+    assert picker_response.status_code == 307
+    assert picker_response.headers["location"] == "/"
+
+
 def test_sign_and_unsign_round_trip():
     signed = sign_session_id("sess-123", "test-secret")
     assert unsign_session_id(signed, "test-secret") == "sess-123"

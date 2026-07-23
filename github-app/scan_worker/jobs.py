@@ -241,7 +241,7 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
     settings = get_settings()
     job_dir = _job_temp_dir()
     installation = get_installation_row(settings.database_url, installation_id)
-    plan = installation["plan"] if installation is not None else "starter"
+    plan = installation["plan"] if installation is not None else "indie"
     try:
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
         token = _token_sync(installation_id, app_jwt)
@@ -305,7 +305,7 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
 def run_managed_audit_api_job(installation_id: int, evidence: dict | str) -> str:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    plan = installation["plan"] if installation is not None else "starter"
+    plan = installation["plan"] if installation is not None else "indie"
     with installation_spend_lock(settings.database_url, installation_id):
         extra_seats = get_extra_seats(settings.database_url, installation_id)
         monthly_cap = monthly_cap_for_installation(7.00, extra_seats)
@@ -567,7 +567,7 @@ def _live_wiki_naming_adapter() -> OpenAICompatibleAdapter:
 
 def _live_wiki_full_build_writing_adapter(plan: str) -> OpenAICompatibleAdapter | AnthropicAdapter:
     # The one-time full build uses the same tier model as managed audits
-    # (see model_tiers.py) rather than a fixed model - a Starter repo's
+    # (see model_tiers.py) rather than a fixed model - an Indie repo's
     # first AIRview build is written by the same DeepSeek model as its
     # ongoing updates, an Enterprise repo's by Claude Opus. Falls back
     # toward DeepSeek if a higher tier's provider key isn't configured
@@ -635,7 +635,7 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
         return  # nothing scanned for this repo yet - nothing to build from
 
     installation = get_installation_row(dsn, installation_id)
-    plan = installation["plan"] if installation is not None else "starter"
+    plan = installation["plan"] if installation is not None else "indie"
 
     naming_adapter = _live_wiki_naming_adapter()
     writing_adapter = _live_wiki_full_build_writing_adapter(plan)

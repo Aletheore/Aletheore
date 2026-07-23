@@ -16,7 +16,7 @@ from app_server.db import (
 from app_server.main import app
 
 
-async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="starter"):
+async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="indie"):
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     await upsert_installation(pool, installation_id, "octocat")
     await set_installation_plan(pool, installation_id, plan)
@@ -167,7 +167,7 @@ async def test_add_health_check_target_returns_422_for_non_integer_threshold(poo
 async def test_add_health_check_target_enforces_plan_limit(pool, monkeypatch):
     # Pro's included limit is 5 (INCLUDED_HEALTH_CHECK_TARGETS) - filling
     # it up, then the 6th add should be rejected.
-    client = await _logged_in_client(pool, monkeypatch, installation_id=100, plan="starter")
+    client = await _logged_in_client(pool, monkeypatch, installation_id=100, plan="indie")
     async with client:
         for i in range(5):
             response = await client.post(
@@ -256,11 +256,11 @@ async def test_set_webhook_url_rejects_non_https(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_my_installations_returns_only_paid_and_administered(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
-    await set_installation_plan(pool, 100, "starter")
+    await set_installation_plan(pool, 100, "indie")
     await upsert_installation(pool, 200, "free-org")
     await set_installation_plan(pool, 200, "free")
     await upsert_installation(pool, 300, "not-mine")
-    await set_installation_plan(pool, 300, "starter")
+    await set_installation_plan(pool, 300, "indie")
     await _mock_github_installations(monkeypatch, [100, 200])
 
     app.state.db_pool = pool
@@ -289,7 +289,7 @@ async def test_my_installations_requires_bearer_token(pool):
 @pytest.mark.asyncio
 async def test_create_cli_token_mints_token_for_administered_paid_installation(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
-    await set_installation_plan(pool, 100, "starter")
+    await set_installation_plan(pool, 100, "indie")
     await _mock_github_installations(monkeypatch, [100])
 
     app.state.db_pool = pool
@@ -308,7 +308,7 @@ async def test_create_cli_token_mints_token_for_administered_paid_installation(p
 @pytest.mark.asyncio
 async def test_create_cli_token_rejects_unadministered_installation(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
-    await set_installation_plan(pool, 100, "starter")
+    await set_installation_plan(pool, 100, "indie")
     await _mock_github_installations(monkeypatch, [999])
 
     app.state.db_pool = pool
@@ -344,7 +344,7 @@ async def test_create_cli_token_rejects_free_plan(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_create_cli_token_enforces_seat_cap(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
-    await set_installation_plan(pool, 100, "starter")
+    await set_installation_plan(pool, 100, "indie")
     await _mock_github_installations(monkeypatch, [100])
 
     app.state.db_pool = pool
@@ -370,7 +370,7 @@ async def test_create_cli_token_enforces_seat_cap(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_create_cli_token_returns_422_for_missing_fields(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
-    await set_installation_plan(pool, 100, "starter")
+    await set_installation_plan(pool, 100, "indie")
     await _mock_github_installations(monkeypatch, [100])
 
     app.state.db_pool = pool
@@ -388,7 +388,7 @@ async def test_create_cli_token_returns_422_for_missing_fields(pool, monkeypatch
 @pytest.mark.asyncio
 async def test_create_cli_token_rejects_invalid_label(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
-    await set_installation_plan(pool, 100, "starter")
+    await set_installation_plan(pool, 100, "indie")
     await _mock_github_installations(monkeypatch, [100])
 
     app.state.db_pool = pool

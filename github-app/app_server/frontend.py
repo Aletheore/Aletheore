@@ -398,6 +398,9 @@ def _sidebar(active: str) -> str:
 # loads the plan badge from the same admin endpoint every page needs
 # anyway for its own paid-gate check.
 PAGE_HEAD_JS = """
+window.addEventListener('pageshow', function (event) {
+  if (event.persisted) { window.location.reload(); }
+});
 const parts = window.location.pathname.split('/').filter(Boolean);
 const org = decodeURIComponent(parts[1]);
 const repo = decodeURIComponent(parts[2]);
@@ -1230,12 +1233,22 @@ loadPlanBadge();
 """
 
 
+def _no_store_html(content: str) -> HTMLResponse:
+    # Every page here either shows session-specific data or depends on
+    # auth state (the sign-in page itself redirects once logged in) - a
+    # browser-cached or bfcache-restored copy would let someone hit Back
+    # after Sign out and see the previous session's page without a fresh
+    # request ever reaching the server. no-store excludes the page from
+    # bfcache entirely, forcing a real reload that re-checks the session.
+    return HTMLResponse(content, headers={"Cache-Control": "no-store"})
+
+
 @frontend_router.get("/", response_class=HTMLResponse)
 async def signin_page(request: Request):
     session = await get_current_session(request)
     if session is not None:
         return RedirectResponse(url="/dashboard", status_code=307)
-    return HTMLResponse(SIGNIN_HTML)
+    return _no_store_html(SIGNIN_HTML)
 
 
 @frontend_router.get("/dashboard", response_class=HTMLResponse)
@@ -1243,7 +1256,7 @@ async def repo_picker_page(request: Request):
     session = await get_current_session(request)
     if session is None:
         return RedirectResponse(url="/", status_code=307)
-    return HTMLResponse(PICKER_HTML)
+    return _no_store_html(PICKER_HTML)
 
 
 async def _require_session_or_redirect(request: Request):
@@ -1258,7 +1271,7 @@ async def dashboard_overview_page(org: str, repo: str, request: Request):
     redirect = await _require_session_or_redirect(request)
     if redirect is not None:
         return redirect
-    return HTMLResponse(OVERVIEW_HTML)
+    return _no_store_html(OVERVIEW_HTML)
 
 
 @frontend_router.get("/dashboard/{org}/{repo}/security", response_class=HTMLResponse)
@@ -1266,7 +1279,7 @@ async def dashboard_security_page(org: str, repo: str, request: Request):
     redirect = await _require_session_or_redirect(request)
     if redirect is not None:
         return redirect
-    return HTMLResponse(SECURITY_HTML)
+    return _no_store_html(SECURITY_HTML)
 
 
 @frontend_router.get("/dashboard/{org}/{repo}/dead-code", response_class=HTMLResponse)
@@ -1274,7 +1287,7 @@ async def dashboard_deadcode_page(org: str, repo: str, request: Request):
     redirect = await _require_session_or_redirect(request)
     if redirect is not None:
         return redirect
-    return HTMLResponse(DEADCODE_HTML)
+    return _no_store_html(DEADCODE_HTML)
 
 
 @frontend_router.get("/dashboard/{org}/{repo}/health", response_class=HTMLResponse)
@@ -1282,7 +1295,7 @@ async def dashboard_health_page(org: str, repo: str, request: Request):
     redirect = await _require_session_or_redirect(request)
     if redirect is not None:
         return redirect
-    return HTMLResponse(HEALTH_HTML)
+    return _no_store_html(HEALTH_HTML)
 
 
 @frontend_router.get("/dashboard/{org}/{repo}/wiki", response_class=HTMLResponse)
@@ -1290,7 +1303,7 @@ async def dashboard_wiki_page(org: str, repo: str, request: Request):
     redirect = await _require_session_or_redirect(request)
     if redirect is not None:
         return redirect
-    return HTMLResponse(WIKI_HTML)
+    return _no_store_html(WIKI_HTML)
 
 
 @frontend_router.get("/dashboard/{org}/{repo}/settings", response_class=HTMLResponse)
@@ -1298,4 +1311,4 @@ async def dashboard_settings_page(org: str, repo: str, request: Request):
     redirect = await _require_session_or_redirect(request)
     if redirect is not None:
         return redirect
-    return HTMLResponse(SETTINGS_HTML)
+    return _no_store_html(SETTINGS_HTML)

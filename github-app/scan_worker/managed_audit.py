@@ -10,7 +10,7 @@ def run_managed_audit(
     repo_path: Path,
     manual_dir: str | None = None,
     on_usage: Callable[[int, int], None] | None = None,
-    plan: str = "starter",
+    plan: str = "indie",
 ) -> str:
     adapter = writing_adapter_for_plan(plan, on_usage=on_usage)
     report_path = run_reasoning_phase(

@@ -58,11 +58,11 @@ async def _insert_health_target(pool, installation_id: int, repo_full_name: str,
 
 @pytest.mark.asyncio
 async def test_list_health_check_targets_all_filters_by_plan(pool):
-    await _insert_installation(pool, 301, "a", plan="starter")
+    await _insert_installation(pool, 301, "a", plan="indie")
     await _insert_health_target(pool, 301, "a/repo1", "https://a.example.com")
     await _insert_installation(pool, 302, "b", plan="free")
     await _insert_health_target(pool, 302, "b/repo1", "https://b.example.com")
-    await _insert_installation(pool, 303, "c", plan="starter")
+    await _insert_installation(pool, 303, "c", plan="indie")
 
     targets = list_health_check_targets_all(TEST_DATABASE_URL)
     installation_ids = {t["installation_id"] for t in targets}
@@ -71,7 +71,7 @@ async def test_list_health_check_targets_all_filters_by_plan(pool):
 
 @pytest.mark.asyncio
 async def test_list_health_check_targets_all_includes_webhook_url_and_repo(pool):
-    await _insert_installation(pool, 304, "d", plan="starter", webhook_url="https://hooks.slack.com/d")
+    await _insert_installation(pool, 304, "d", plan="indie", webhook_url="https://hooks.slack.com/d")
     await _insert_health_target(pool, 304, "d/repo1", "https://d.example.com", latency_threshold_ms=2000)
 
     targets = list_health_check_targets_all(TEST_DATABASE_URL)
@@ -84,7 +84,7 @@ async def test_list_health_check_targets_all_includes_webhook_url_and_repo(pool)
 
 @pytest.mark.asyncio
 async def test_list_health_check_targets_all_returns_one_row_per_target(pool):
-    await _insert_installation(pool, 305, "e", plan="starter")
+    await _insert_installation(pool, 305, "e", plan="indie")
     await _insert_health_target(pool, 305, "e/repo1", "https://staging.example.com")
     await _insert_health_target(pool, 305, "e/repo1", "https://prod.example.com")
 
@@ -181,7 +181,7 @@ async def test_endpoint_health_rotation_keeps_20(pool):
 async def test_endpoint_health_is_scoped_per_target(pool):
     # Two targets checking the exact same method+path on the same repo (e.g.
     # staging and production) must not see or overwrite each other's history.
-    await _insert_installation(pool, 306, "f", plan="starter")
+    await _insert_installation(pool, 306, "f", plan="indie")
     staging_id = await _insert_health_target(pool, 306, "f/repo1", "https://staging.example.com")
     prod_id = await _insert_health_target(pool, 306, "f/repo1", "https://prod.example.com")
 
@@ -197,7 +197,7 @@ async def test_endpoint_health_is_scoped_per_target(pool):
 
 @pytest.mark.asyncio
 async def test_endpoint_health_rotation_is_scoped_per_target(pool):
-    await _insert_installation(pool, 307, "g", plan="starter")
+    await _insert_installation(pool, 307, "g", plan="indie")
     target_a = await _insert_health_target(pool, 307, "g/repo1", "https://a.example.com")
     target_b = await _insert_health_target(pool, 307, "g/repo1", "https://b.example.com")
 

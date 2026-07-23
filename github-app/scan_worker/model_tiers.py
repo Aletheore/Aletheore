@@ -16,7 +16,7 @@ from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.credentials import has_api_key
 
-STARTER_MODEL = "deepseek-v4-pro"
+INDIE_MODEL = "deepseek-v4-pro"
 TEAM_MODEL = "gpt-4o"
 ENTERPRISE_MODEL = "claude-opus-4-8"
 
@@ -35,7 +35,7 @@ def model_for_plan(plan: str) -> str:
         if has_api_key("OPENAI_API_KEY", "OpenAI"):
             return TEAM_MODEL
         logger.warning("OPENAI_API_KEY not configured - %s tier falling back to DeepSeek", plan)
-    return STARTER_MODEL
+    return INDIE_MODEL
 
 
 def writing_adapter_for_plan(

@@ -42,6 +42,20 @@ app.include_router(frontend_router)
 
 
 @app.middleware("http")
+async def no_store_for_session_data(request: Request, call_next):
+    # /admin and /app (but not the deliberately-public /v1/health/...)
+    # carry per-installation data - API tokens, team member logins, health
+    # check URLs, security findings. A browser or intermediate proxy
+    # caching a response here could replay someone else's data after they
+    # sign out, or on a shared machine. no-store forbids that outright.
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/admin") or path.startswith("/app/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.middleware("http")
 async def log_requests(request: Request, call_next):
     request_id = str(uuid.uuid4())
     start = time.monotonic()
