@@ -3,4 +3,3 @@ contact_links:
   - name: Security reports
     url: https://github.com/Aletheore/Aletheore/security
     about: Review SECURITY.md before reporting security-sensitive issues.
-

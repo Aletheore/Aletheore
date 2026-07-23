@@ -9,10 +9,11 @@ on:
 
 jobs:
   prettier:
-    name: Prettier placeholder
+    name: Prettier
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Prettier placeholder
-        run: 'echo "TODO: enable Prettier check once dependencies are finalized"'
+      - name: Check formatting
+        run: >
+          npx --yes prettier@3.3.3 --check ".github/**/*.{yml,yaml}" "package.json"

@@ -1,5 +1,9 @@
-exclude_path = [".git", "node_modules", "dist", "build", "coverage"]
-exclude = []
+exclude = [
+  "^mailto:",
+  "^https://github.com/marketplace$",
+  "^https://www.aletheore.com",
+  "^https://aletheore.com"
+]
+accept = [200, 204, 206, 301, 302, 307, 308, 429]
 max_retries = 2
 timeout = 20
-

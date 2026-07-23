@@ -23,19 +23,14 @@ jobs:
         ports:
           - 55433:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d aletheore_test"
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 15
+          --health-cmd "pg_isready -U postgres -d aletheore_test" --health-interval 2s
+          --health-timeout 5s --health-retries 15
       redis:
         image: redis:7-alpine
         ports:
           - 6379:6379
         options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 2s
-          --health-timeout 5s
-          --health-retries 15
+          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 5s --health-retries 15
 
     env:
       TEST_DATABASE_URL: postgresql://postgres:test@localhost:55433/aletheore_test
@@ -69,8 +64,8 @@ jobs:
       - name: Run tests
         working-directory: github-app
         run: >
-          python -m pytest --cov=app_server --cov=scan_worker
-          --cov-report=term-missing --cov-report=xml --cov-fail-under=85
+          python -m pytest --cov=app_server --cov=scan_worker --cov-report=term-missing
+          --cov-report=xml --cov-fail-under=85
 
       - name: Upload coverage report
         if: always()

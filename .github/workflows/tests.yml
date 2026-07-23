@@ -31,8 +31,7 @@ jobs:
       - name: Run tests
         working-directory: prototype
         run: >
-          pytest --cov=aletheore --cov-report=term-missing --cov-report=xml
-          --cov-fail-under=85
+          pytest --cov=aletheore --cov-report=term-missing --cov-report=xml --cov-fail-under=85
 
       - name: Upload coverage report
         if: always()

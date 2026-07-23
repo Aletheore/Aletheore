@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write  # trusted publishing (OIDC) - no PyPI token stored anywhere
+      id-token: write # trusted publishing (OIDC) - no PyPI token stored anywhere
     steps:
       - uses: actions/checkout@v4
 

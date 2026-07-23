@@ -9,10 +9,14 @@ on:
 
 jobs:
   linkcheck:
-    name: Link check placeholder
+    name: Link check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Link check placeholder
-        run: 'echo "TODO: enable link checking once documentation policy is finalized"'
+      - name: Link check
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --config lychee.toml "README.md" "website/**/*.html" "docs/**/*.md"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

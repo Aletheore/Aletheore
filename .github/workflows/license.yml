@@ -9,10 +9,25 @@ on:
 
 jobs:
   license:
-    name: License check placeholder
+    name: Python dependency licenses
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: License check placeholder
-        run: 'echo "TODO: enable license checks once dependency policy is finalized"'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check prototype dependency licenses
+        working-directory: prototype
+        run: |
+          pip install -e .
+          pip install pip-licenses
+          pip-licenses --fail-on "GPL;AGPL" --format=plain-vertical
+      - name: Check github-app dependency licenses
+        working-directory: github-app
+        run: |
+          pip install ../prototype
+          pip install -r requirements.txt
+          pip install pip-licenses
+          pip-licenses --fail-on "GPL;AGPL" --format=plain-vertical

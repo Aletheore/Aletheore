@@ -9,10 +9,12 @@ on:
 
 jobs:
   spellcheck:
-    name: Spell check placeholder
+    name: Spell check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Spell check placeholder
-        run: 'echo "TODO: enable spelling checks once dictionary policy is finalized"'
+      - name: Spell check
+        uses: streetsidesoftware/cspell-action@v6
+        with:
+          config: cspell.json

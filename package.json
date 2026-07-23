@@ -4,12 +4,16 @@
   "version": "0.0.0",
   "description": "Repository scaffold for the Veridion framework.",
   "scripts": {
-    "format:check": "echo \"TODO: enable Prettier once dependencies are finalized\"",
-    "format": "echo \"TODO: enable Prettier once dependencies are finalized\"",
-    "lint:markdown": "echo \"TODO: enable markdownlint once dependencies are finalized\"",
-    "lint:links": "echo \"TODO: configure link checking\"",
-    "lint:spelling": "echo \"TODO: configure spell checking\"",
-    "lint:licenses": "echo \"TODO: configure license checking\""
+    "format:check": "prettier --check \".github/**/*.{yml,yaml}\" \"package.json\"",
+    "format": "prettier --write \".github/**/*.{yml,yaml}\" \"package.json\"",
+    "lint:markdown": "markdownlint-cli2 \"*.md\" \"!STARTUP_AUDIT_REPORT.md\" \".github/**/*.md\" \"docs/**/*.md\" \"!docs/superpowers/**\"",
+    "lint:links": "lychee --config lychee.toml \"README.md\" \"website/**/*.html\" \"docs/**/*.md\"",
+    "lint:spelling": "cspell --config cspell.json",
+    "lint:licenses": "cd prototype && pip-licenses --fail-on \"GPL;AGPL\" --format=plain-vertical && cd ../github-app && pip-licenses --fail-on \"GPL;AGPL\" --format=plain-vertical"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "cspell": "8.17.5",
+    "markdownlint-cli2": "^0.23.1",
+    "prettier": "3.3.3"
+  }
 }
