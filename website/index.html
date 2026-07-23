@@ -3,10 +3,66 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Aletheore - Evidence-grounded code audits</title>
-  <meta name="description" content="A deterministic scanner that never states a claim it cannot point back to a specific fact in your repo.">
+  <title>Aletheore — Evidence-Grounded Code Audits &amp; GitHub Automation</title>
+  <meta name="description" content="Evidence-grounded GitHub audits: secrets, vulnerabilities, dead code, live endpoint monitoring, an AI-generated architecture wiki, and automated PR reviews.">
+  <link rel="canonical" href="https://www.aletheore.com/">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Aletheore">
+  <meta property="og:url" content="https://www.aletheore.com/">
+  <meta property="og:title" content="Aletheore — Evidence-Grounded Code Audits &amp; GitHub Automation">
+  <meta property="og:description" content="Aletheore is more than a scanner. Free deterministic CLI audits (secrets, vulnerabilities, licenses, dead code, git hotspots) plus a hosted GitHub App: automated PR reviews, live endpoint health monitoring, an AI-generated architecture wiki, Slack/Teams alerts, and team seat management.">
+  <meta property="og:image" content="https://www.aletheore.com/assets/logo-mark.png">
+
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Aletheore — Evidence-Grounded Code Audits &amp; GitHub Automation">
+  <meta name="twitter:description" content="Free deterministic CLI scanning plus a hosted GitHub App: dead code detection, live endpoint monitoring, an AI-generated architecture wiki, automated PR reviews, and Slack/Teams alerts.">
+  <meta name="twitter:image" content="https://www.aletheore.com/assets/logo-mark.png">
+
   <link rel="icon" type="image/png" href="assets/logo-mark.png">
   <link rel="stylesheet" href="styles.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Aletheore",
+    "url": "https://www.aletheore.com/",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "macOS, Linux, Windows",
+    "description": "Evidence-grounded repository audits: a free deterministic CLI scanner plus a hosted GitHub App with automated PR reviews, dead code detection, live endpoint health monitoring, an AI-generated architecture wiki, and Slack/Teams alerts.",
+    "offers": [
+      {
+        "@type": "Offer",
+        "name": "Free",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      {
+        "@type": "Offer",
+        "name": "Pro",
+        "price": "11.99",
+        "priceCurrency": "USD",
+        "description": "Up to 3 team members, then $3.99/mo per additional seat."
+      }
+    ],
+    "featureList": [
+      "Deterministic secret, vulnerability, and license scanning across 11 languages",
+      "Dead code detection from real call-graph analysis",
+      "Git hotspot intelligence",
+      "Database and infrastructure detection",
+      "Local semantic code search via vector index",
+      "MCP server for coding agents",
+      "Multi-provider AI audit reports (Claude, OpenAI, Gemini, Mistral, Grok, Ollama)",
+      "GitHub App: automatic PR comments and branch-protection check runs",
+      "AI-powered managed audit reports on pull requests (Pro)",
+      "Automatic Flash reviews on every pull request push (Pro)",
+      "Slack/Teams alerts on new findings (Pro)",
+      "Live API endpoint health monitoring across multiple targets, with a public status API (Pro)",
+      "AI-generated live architecture wiki with dependency diagrams, regenerated on every push (Pro)",
+      "Team seat management (Pro)"
+    ]
+  }
+  </script>
 </head>
 <body>
   <div class="container">
@@ -27,7 +83,7 @@
     <section class="hero">
       <div>
         <h1>I got tired of code-review tools that just guess. So I built one that <span class="accent">has to show its work.</span></h1>
-        <p>Aletheore is a deterministic repository scanner: no LLM in the scan path, fully unit-tested, and every downstream claim traces back to specific evidence in your repo.</p>
+        <p>Aletheore starts as a deterministic repository scanner - no LLM in the scan path, every claim traced to evidence in your repo - and grows into a hosted GitHub App that detects dead code, monitors your API endpoints live, keeps an AI-generated architecture wiki current on every push, and reviews every pull request automatically.</p>
         <div class="hero-actions">
           <a class="btn btn-primary" href="https://github.com/Aletheore/Aletheore">Start Your First Audit</a>
           <a class="btn btn-secondary" href="https://github.com/Aletheore/Aletheore">Read the Protocol</a>
