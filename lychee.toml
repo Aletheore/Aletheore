@@ -1,6 +1,7 @@
 exclude = [
   "^mailto:",
   "^https://github.com/marketplace$",
+  "^https://www.linkedin.com/company/aletheore$",
   "^https://www.aletheore.com",
   "^https://aletheore.com"
 ]
