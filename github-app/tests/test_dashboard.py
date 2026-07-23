@@ -365,6 +365,101 @@ async def test_dashboard_health_includes_evidence_resolution(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_health_includes_stale_endpoints(pool, monkeypatch):
+    await upsert_installation(pool, 504, "octocat")
+    await insert_repo_history(
+        pool,
+        504,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {
+                            "method": "GET",
+                            "path": "/api/legacy",
+                            "file": "routes.py",
+                            "line": 5,
+                            "handler": "legacy",
+                        }
+                    ]
+                }
+            }
+        },
+    )
+    async with pool.acquire() as conn:
+        for _ in range(5):
+            await conn.execute(
+                """
+                INSERT INTO endpoint_health
+                    (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+                VALUES (504, 'octocat/hello-world', 'GET', '/api/legacy', false)
+                """
+            )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[504])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/health")
+
+    assert response.status_code == 200
+    stale = response.json()["stale_endpoints"]
+    assert stale == [
+        {
+            "method": "GET",
+            "path": "/api/legacy",
+            "file": "routes.py",
+            "line": 5,
+            "check_count": 5,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_health_omits_stale_endpoints_with_recent_success(pool, monkeypatch):
+    await upsert_installation(pool, 505, "octocat")
+    await insert_repo_history(
+        pool,
+        505,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {
+                            "method": "GET",
+                            "path": "/api/active",
+                            "file": "routes.py",
+                            "line": 5,
+                            "handler": "active",
+                        }
+                    ]
+                }
+            }
+        },
+    )
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+            VALUES
+                (505, 'octocat/hello-world', 'GET', '/api/active', true),
+                (505, 'octocat/hello-world', 'GET', '/api/active', false),
+                (505, 'octocat/hello-world', 'GET', '/api/active', false),
+                (505, 'octocat/hello-world', 'GET', '/api/active', false),
+                (505, 'octocat/hello-world', 'GET', '/api/active', false)
+            """
+        )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[505])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/health")
+
+    assert response.status_code == 200
+    assert response.json()["stale_endpoints"] == []
+
+
+@pytest.mark.asyncio
 async def test_dashboard_wiki_requires_login(pool):
     app.state.db_pool = pool
     transport = ASGITransport(app=app)

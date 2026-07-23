@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from aletheore.evidence_resolution import resolve_code_evidence
@@ -10,6 +12,7 @@ from app_server.admin import (
 from app_server.auth import get_current_session
 from app_server.db import (
     get_installation,
+    get_endpoint_health_summary_since,
     get_latest_evidence,
     get_recent_endpoint_health,
     get_recent_history,
@@ -20,6 +23,31 @@ from app_server.db import (
 )
 
 dashboard_router = APIRouter()
+MIN_CHECKS_FOR_STALE_CONFIDENCE = 5
+STALE_ENDPOINT_WINDOW_DAYS = 30
+
+
+def find_stale_endpoints(
+    endpoints: list[dict], health_summary: dict[tuple[str, str], dict]
+) -> list[dict]:
+    stale = []
+    for endpoint in endpoints:
+        key = (endpoint.get("method"), endpoint.get("path"))
+        summary = health_summary.get(key)
+        if summary is None:
+            continue
+        if summary["ever_reachable"] or summary["check_count"] < MIN_CHECKS_FOR_STALE_CONFIDENCE:
+            continue
+        stale.append(
+            {
+                "method": endpoint.get("method"),
+                "path": endpoint.get("path"),
+                "file": endpoint.get("file"),
+                "line": endpoint.get("line"),
+                "check_count": summary["check_count"],
+            }
+        )
+    return stale
 
 
 @dashboard_router.get("/app/repos")
@@ -108,7 +136,26 @@ async def get_dashboard_health(org: str, repo: str, request: Request):
             )
         endpoints.append(entry)
 
-    return {"repo_full_name": repo_full_name, "endpoints": endpoints}
+    since = datetime.now(timezone.utc) - timedelta(days=STALE_ENDPOINT_WINDOW_DAYS)
+    health_summary = await get_endpoint_health_summary_since(
+        pool,
+        installation_id,
+        repo_full_name,
+        since,
+    )
+    api_endpoints = (
+        (evidence or {})
+        .get("repository", {})
+        .get("api_endpoints", {})
+        .get("endpoints", [])
+    )
+    stale_endpoints = find_stale_endpoints(api_endpoints, health_summary)
+
+    return {
+        "repo_full_name": repo_full_name,
+        "endpoints": endpoints,
+        "stale_endpoints": stale_endpoints,
+    }
 
 
 @dashboard_router.get("/app/{org}/{repo}/wiki")

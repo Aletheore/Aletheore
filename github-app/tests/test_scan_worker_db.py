@@ -214,6 +214,90 @@ async def test_insert_and_get_last_endpoint_health(pool):
 
 
 @pytest.mark.asyncio
+async def test_insert_audit_report(pool):
+    await _insert_installation(pool, 421, "audit-org")
+
+    from scan_worker.db import insert_audit_report
+
+    insert_audit_report(
+        TEST_DATABASE_URL,
+        421,
+        "audit-org/repo",
+        "tok-abc123",
+        "the report text",
+        "hash-1",
+        "sig-1",
+    )
+
+    row = await pool.fetchrow(
+        "SELECT * FROM audit_reports WHERE verification_token = 'tok-abc123'"
+    )
+    assert row["installation_id"] == 421
+    assert row["repo_full_name"] == "audit-org/repo"
+    assert row["report_text"] == "the report text"
+    assert row["content_hash"] == "hash-1"
+    assert row["signature"] == "sig-1"
+
+
+@pytest.mark.asyncio
+async def test_list_recent_endpoint_incidents_groups_by_endpoint(pool):
+    await _insert_installation(pool, 431, "incident-org")
+
+    from scan_worker.db import list_recent_endpoint_incidents
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+            VALUES
+                (431, 'incident-org/repo', 'GET', '/api/users', false),
+                (431, 'incident-org/repo', 'GET', '/api/users', false),
+                (431, 'incident-org/repo', 'GET', '/api/orders', true)
+            """
+        )
+
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    incidents = list_recent_endpoint_incidents(
+        TEST_DATABASE_URL,
+        431,
+        "incident-org/repo",
+        since,
+    )
+
+    assert len(incidents) == 1
+    assert incidents[0]["endpoint_method"] == "GET"
+    assert incidents[0]["endpoint_path"] == "/api/users"
+    assert incidents[0]["incident_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_list_recent_endpoint_incidents_excludes_old_incidents(pool):
+    await _insert_installation(pool, 432, "incident-org")
+
+    from scan_worker.db import list_recent_endpoint_incidents
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable, checked_at)
+            VALUES (432, 'incident-org/repo', 'GET', '/api/stale', false, now() - interval '30 days')
+            """
+        )
+
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    incidents = list_recent_endpoint_incidents(
+        TEST_DATABASE_URL,
+        432,
+        "incident-org/repo",
+        since,
+    )
+
+    assert incidents == []
+
+
+@pytest.mark.asyncio
 async def test_endpoint_health_rotation_keeps_20(pool):
     await _insert_installation(pool, 301, "a")
     for _ in range(21):

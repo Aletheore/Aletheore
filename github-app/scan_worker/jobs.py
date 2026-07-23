@@ -2,10 +2,11 @@ import asyncio
 import inspect
 import json
 import logging
+import secrets
 import shutil
 import subprocess
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -18,6 +19,7 @@ from aletheore.history import compute_diff
 from aletheore.pr_comment import COMMENT_MARKER, format_diff_comment
 from aletheore.healthcheck import run_healthcheck
 from app_server.config import get_settings
+from app_server.audit_signing import content_hash, sign_report
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.llm_cost import cost_for_usage, monthly_cap_for_installation
 from app_server.logging_config import log_job
@@ -34,10 +36,12 @@ from scan_worker.db import (
     get_last_reviewed_sha,
     get_latest_evidence,
     get_llm_spend_this_month,
+    insert_audit_report,
     insert_endpoint_health,
     insert_repo_history,
     installation_spend_lock,
     list_health_check_targets_all,
+    list_recent_endpoint_incidents,
     list_repos_for_installation,
     list_wiki_subsystems,
     record_llm_spend,
@@ -119,6 +123,38 @@ def _real_new_secrets(diff: dict) -> list[dict]:
     ]
 
 
+REGRESSION_FENCE_WINDOW_DAYS = 7
+
+
+def find_touched_incident_endpoints(
+    changed_files: list[str],
+    evidence: dict,
+    incidents: list[dict],
+) -> list[dict]:
+    incident_by_key = {(i["endpoint_method"], i["endpoint_path"]): i for i in incidents}
+    endpoints = evidence.get("repository", {}).get("api_endpoints", {}).get("endpoints", [])
+    changed = set(changed_files)
+    touched = []
+    for endpoint in endpoints:
+        if endpoint.get("file") not in changed:
+            continue
+        key = (endpoint.get("method"), endpoint.get("path"))
+        incident = incident_by_key.get(key)
+        if incident is None:
+            continue
+        touched.append(
+            {
+                "method": endpoint.get("method"),
+                "path": endpoint.get("path"),
+                "file": endpoint.get("file"),
+                "line": endpoint.get("line"),
+                "incident_count": incident["incident_count"],
+                "last_incident_at": incident["last_incident_at"],
+            }
+        )
+    return touched
+
+
 def _maybe_create_check_run(
     client: httpx.Client,
     token: str,
@@ -141,6 +177,61 @@ def _maybe_create_check_run(
         create_check_run(client, token, repo_full_name, head_sha, "failure", summary)
     else:
         create_check_run(client, token, repo_full_name, head_sha, "success", "No new secrets found.")
+
+
+def _maybe_create_regression_risk_check_run(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    head_sha: str,
+    installation_id: int,
+    evidence: dict,
+    changed_files: list[str],
+) -> None:
+    settings = get_settings()
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is None or installation["plan"] == "free":
+        return
+
+    since = datetime.now(timezone.utc) - timedelta(days=REGRESSION_FENCE_WINDOW_DAYS)
+    incidents = list_recent_endpoint_incidents(
+        settings.database_url,
+        installation_id,
+        repo_full_name,
+        since,
+    )
+    if not incidents:
+        return
+
+    touched = find_touched_incident_endpoints(changed_files, evidence, incidents)
+    if not touched:
+        return
+
+    lines = []
+    for item in touched:
+        location = (
+            f" - handled by {item['file']}:{item['line']}"
+            if item.get("file") and item.get("line") is not None
+            else ""
+        )
+        lines.append(
+            f"- `{item['method']} {item['path']}`{location}: "
+            f"{item['incident_count']} reachability incident(s) in the last "
+            f"{REGRESSION_FENCE_WINDOW_DAYS} days"
+        )
+    summary = (
+        "This PR touches a handler with recent production reachability incidents:\n"
+        + "\n".join(lines)
+    )
+    create_check_run(
+        client,
+        token,
+        repo_full_name,
+        head_sha,
+        "neutral",
+        summary,
+        name="Aletheore regression risk",
+    )
 
 
 async def _resolve_token(installation_id: int, app_jwt: str) -> str:
@@ -215,9 +306,25 @@ def run_pr_scan_job(
             pass
         try:
             changed_files = fetch_pr_changed_files(client, token, repo_full_name, base_sha, head_sha)
-            _maybe_update_live_wiki(installation_id, repo_full_name, new, changed_files, head_sha)
         except Exception:  # noqa: BLE001
-            pass
+            changed_files = None
+        if changed_files is not None:
+            try:
+                _maybe_update_live_wiki(installation_id, repo_full_name, new, changed_files, head_sha)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                _maybe_create_regression_risk_check_run(
+                    client,
+                    token,
+                    repo_full_name,
+                    head_sha,
+                    installation_id,
+                    new,
+                    changed_files,
+                )
+            except Exception:  # noqa: BLE001
+                pass
     except Exception as exc:  # noqa: BLE001
         try:
             _post_failure_comment(settings, installation_id, repo_full_name, pr_number, exc)
@@ -284,7 +391,23 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                     record_llm_spend(
                         settings.database_url, installation_id, spend_accumulator["total"]
                     )
-                    body = f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n{report_text}"
+                    verification_token = secrets.token_hex(32)
+                    report_hash = content_hash(report_text)
+                    signature = sign_report(report_text, settings.audit_signing_private_key)
+                    insert_audit_report(
+                        settings.database_url,
+                        installation_id,
+                        repo_full_name,
+                        verification_token,
+                        report_text,
+                        report_hash,
+                        signature,
+                    )
+                    verify_url = f"{settings.public_base_url}/v1/audit/{verification_token}/verify"
+                    body = (
+                        f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n"
+                        f"{report_text}\n\n[Verify this report]({verify_url})"
+                    )
         upsert_pr_comment(
             client,
             token,

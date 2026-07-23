@@ -5,8 +5,14 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app_server.audit_signing import public_key_hex_from_private, verify_report
 from app_server.config import get_settings
-from app_server.db import check_and_reserve_managed_audit, get_installation_by_token_hash, touch_api_token
+from app_server.db import (
+    check_and_reserve_managed_audit,
+    get_audit_report_by_token,
+    get_installation_by_token_hash,
+    touch_api_token,
+)
 from app_server.evidence_limits import MAX_EVIDENCE_BYTES
 from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
 
@@ -89,6 +95,24 @@ async def start_managed_audit(request: Request, body: StartManagedAuditRequest):
 async def whoami(request: Request):
     installation, _ = await _authenticate_token(request)
     return {"account_login": installation["account_login"], "plan": installation["plan"]}
+
+
+@managed_audit_router.get("/v1/audit/{verification_token}/verify")
+async def verify_audit_report(verification_token: str, request: Request):
+    report = await get_audit_report_by_token(request.app.state.db_pool, verification_token)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report not found")
+
+    settings = get_settings()
+    public_key_hex = public_key_hex_from_private(settings.audit_signing_private_key)
+    verified = verify_report(report["report_text"], report["signature"], public_key_hex)
+
+    return {
+        "repo_full_name": report["repo_full_name"],
+        "content_hash": report["content_hash"],
+        "signed_at": report["created_at"].isoformat(),
+        "verified": verified,
+    }
 
 
 @managed_audit_router.get("/v1/managed-audit/{job_id}")

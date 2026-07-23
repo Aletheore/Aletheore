@@ -47,6 +47,7 @@ def create_check_run(
     head_sha: str,
     conclusion: str,
     summary: str,
+    name: str = "Aletheore secrets check",
 ) -> None:
     headers = {
         "Authorization": f"token {token}",
@@ -56,11 +57,11 @@ def create_check_run(
         f"/repos/{repo_full_name}/check-runs",
         headers=headers,
         json={
-            "name": "Aletheore secrets check",
+            "name": name,
             "head_sha": head_sha,
             "status": "completed",
             "conclusion": conclusion,
-            "output": {"title": "Aletheore secrets check", "summary": summary},
+            "output": {"title": name, "summary": summary},
         },
     )
     response.raise_for_status()

@@ -16,6 +16,7 @@ def _clean_env(monkeypatch):
         "GITHUB_WEBHOOK_SECRET",
         "SESSION_SECRET",
         "PUBLIC_BASE_URL",
+        "AUDIT_SIGNING_PRIVATE_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost/db")
@@ -25,6 +26,7 @@ def _clean_env(monkeypatch):
     monkeypatch.setenv("GITHUB_CLIENT_SECRET", "client-secret")
     monkeypatch.setenv("SESSION_SECRET", "session-secret")
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "raw-key-value")
+    monkeypatch.setenv("AUDIT_SIGNING_PRIVATE_KEY", "11" * 32)
 
 
 def test_reads_private_key_from_path_when_set(tmp_path, monkeypatch):
@@ -66,7 +68,13 @@ def test_reads_paid_tier_settings(monkeypatch):
 
 @pytest.mark.parametrize(
     "missing_var",
-    ["GITHUB_WEBHOOK_SECRET", "GITHUB_CLIENT_SECRET", "SESSION_SECRET", "GITHUB_APP_PRIVATE_KEY"],
+    [
+        "GITHUB_WEBHOOK_SECRET",
+        "GITHUB_CLIENT_SECRET",
+        "SESSION_SECRET",
+        "GITHUB_APP_PRIVATE_KEY",
+        "AUDIT_SIGNING_PRIVATE_KEY",
+    ],
 )
 def test_raises_when_required_secret_is_missing(missing_var, monkeypatch):
     monkeypatch.delenv(missing_var, raising=False)
@@ -76,7 +84,13 @@ def test_raises_when_required_secret_is_missing(missing_var, monkeypatch):
 
 @pytest.mark.parametrize(
     "missing_var",
-    ["GITHUB_WEBHOOK_SECRET", "GITHUB_CLIENT_SECRET", "SESSION_SECRET", "GITHUB_APP_PRIVATE_KEY"],
+    [
+        "GITHUB_WEBHOOK_SECRET",
+        "GITHUB_CLIENT_SECRET",
+        "SESSION_SECRET",
+        "GITHUB_APP_PRIVATE_KEY",
+        "AUDIT_SIGNING_PRIVATE_KEY",
+    ],
 )
 def test_raises_when_required_secret_is_blank(missing_var, monkeypatch):
     monkeypatch.setenv(missing_var, "   ")

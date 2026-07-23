@@ -203,6 +203,99 @@ def test_check_run_failure_on_new_secret(bare_repo_with_two_commits, monkeypatch
     assert created["head_sha"] == head_sha
 
 
+def test_maybe_create_regression_risk_check_run_creates_neutral_check_run(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_recent_endpoint_incidents",
+        lambda *a, **k: [
+            {
+                "endpoint_method": "GET",
+                "endpoint_path": "/x",
+                "incident_count": 3,
+                "last_incident_at": "2026-07-20T00:00:00Z",
+            }
+        ],
+    )
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="Aletheore secrets check": created.append(
+            (conclusion, name, summary)
+        ),
+    )
+    evidence = {
+        "repository": {
+            "api_endpoints": {
+                "endpoints": [{"method": "GET", "path": "/x", "file": "app.py", "line": 10}]
+            }
+        }
+    }
+
+    from scan_worker.jobs import _maybe_create_regression_risk_check_run
+
+    _maybe_create_regression_risk_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        evidence=evidence,
+        changed_files=["app.py"],
+    )
+
+    assert len(created) == 1
+    assert created[0][0] == "neutral"
+    assert created[0][1] == "Aletheore regression risk"
+    assert "GET /x" in created[0][2]
+
+
+def test_maybe_create_regression_risk_check_run_skips_when_no_incidents(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"})
+    monkeypatch.setattr("scan_worker.jobs.list_recent_endpoint_incidents", lambda *a, **k: [])
+    created = []
+    monkeypatch.setattr("scan_worker.jobs.create_check_run", lambda *a, **k: created.append(True))
+
+    from scan_worker.jobs import _maybe_create_regression_risk_check_run
+
+    _maybe_create_regression_risk_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        evidence={"repository": {"api_endpoints": {"endpoints": []}}},
+        changed_files=["app.py"],
+    )
+
+    assert created == []
+
+
+def test_maybe_create_regression_risk_check_run_skips_free_plan(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    touched_incidents = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_recent_endpoint_incidents",
+        lambda *a, **k: touched_incidents.append(True),
+    )
+
+    from scan_worker.jobs import _maybe_create_regression_risk_check_run
+
+    _maybe_create_regression_risk_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        evidence={"repository": {}},
+        changed_files=[],
+    )
+
+    assert touched_incidents == []
+
+
 def test_managed_audit_api_job_returns_report_text(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"}
@@ -275,6 +368,7 @@ def test_managed_audit_pr_job_clones_pr_head_runs_audit_and_replies(monkeypatch,
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.insert_audit_report", lambda *a, **k: None)
     posted = {}
     monkeypatch.setattr(
         "scan_worker.jobs.upsert_pr_comment",
@@ -292,6 +386,71 @@ def test_managed_audit_pr_job_clones_pr_head_runs_audit_and_replies(monkeypatch,
     assert "Managed Audit" in posted["body"]
     assert posted["repo_full_name"] == "octocat/hello-world"
     assert posted["marker"] == AUDIT_COMMENT_MARKER
+
+
+def test_managed_audit_pr_job_persists_and_signs_the_report(monkeypatch, tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True)
+    (work / "app.py").write_text("print('hello')\n")
+    subprocess.run(["git", "add", "."], cwd=work, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "commit"], cwd=work, check=True)
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=work,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(work), str(bare)], check=True)
+    subprocess.run(
+        ["git", "--git-dir", str(bare), "update-ref", "refs/pull/42/head", head_sha],
+        check=True,
+    )
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"}
+    )
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: str(bare))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda *a, **k: "the audit findings")
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_managed_audit", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    posted = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo_full_name, pr_number, body, **kwargs: posted.update(body=body),
+    )
+    stored = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.insert_audit_report",
+        lambda dsn, iid, repo, token, text, chash, sig: stored.update(
+            installation_id=iid,
+            repo_full_name=repo,
+            token=token,
+            text=text,
+            hash=chash,
+            sig=sig,
+        ),
+    )
+
+    from scan_worker.jobs import run_managed_audit_pr_job
+
+    run_managed_audit_pr_job(1, "octocat/hello-world", 42)
+
+    assert stored["installation_id"] == 1
+    assert stored["repo_full_name"] == "octocat/hello-world"
+    assert stored["text"] == "the audit findings"
+    assert len(stored["token"]) == 64
+    assert stored["token"] in posted["body"]
 
 
 def test_managed_audit_pr_job_skips_llm_call_when_spend_cap_reached(monkeypatch, tmp_path):

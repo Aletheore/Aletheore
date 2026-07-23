@@ -106,6 +106,37 @@ def record_llm_spend(dsn: str, installation_id: int, cost_usd: float) -> None:
         conn.commit()
 
 
+def insert_audit_report(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    verification_token: str,
+    report_text: str,
+    content_hash: str,
+    signature: str,
+) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO audit_reports
+                    (installation_id, repo_full_name, verification_token, report_text, content_hash, signature)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    installation_id,
+                    repo_full_name,
+                    verification_token,
+                    report_text,
+                    content_hash,
+                    signature,
+                ),
+            )
+        conn.commit()
+
+
 def get_extra_seats(dsn: str, installation_id: int) -> int:
     import psycopg
 
@@ -314,6 +345,29 @@ def get_last_endpoint_health(
             if result["latency_ms"] is not None:
                 result["latency_ms"] = float(result["latency_ms"])
             return result
+
+
+def list_recent_endpoint_incidents(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    since: datetime,
+) -> list[dict]:
+    import psycopg
+    import psycopg.rows
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                """
+                SELECT endpoint_method, endpoint_path, count(*) AS incident_count, max(checked_at) AS last_incident_at
+                FROM endpoint_health
+                WHERE installation_id = %s AND repo_full_name = %s AND reachable = false AND checked_at >= %s
+                GROUP BY endpoint_method, endpoint_path
+                """,
+                (installation_id, repo_full_name, since),
+            )
+            return cur.fetchall()
 
 
 def insert_endpoint_health(

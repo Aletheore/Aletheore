@@ -19,6 +19,7 @@ os.environ.setdefault("GITHUB_WEBHOOK_SECRET", "test-webhook-secret")
 os.environ.setdefault("GITHUB_CLIENT_ID", "test-client-id")
 os.environ.setdefault("GITHUB_CLIENT_SECRET", "test-client-secret")
 os.environ.setdefault("SESSION_SECRET", "test-session-secret")
+os.environ.setdefault("AUDIT_SIGNING_PRIVATE_KEY", "11" * 32)
 os.environ.setdefault("PUBLIC_BASE_URL", "http://test")
 
 

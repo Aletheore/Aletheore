@@ -7,11 +7,75 @@ from httpx import ASGITransport, AsyncClient
 from app_server.db import create_api_token, set_installation_plan, upsert_installation
 from app_server.evidence_limits import MAX_EVIDENCE_BYTES
 from app_server.main import app
+from app_server.audit_signing import content_hash, sign_report
 from aletheore.toon_encoding import to_toon
 
 
 def _evidence_toon(total_loc: int = 100) -> str:
     return to_toon({"repository": {"languages": [{"name": "Python", "files": 1, "lines": total_loc}]}})
+
+
+@pytest.mark.asyncio
+async def test_verify_audit_report_returns_verified_true_for_untampered_report(pool, monkeypatch):
+    monkeypatch.setenv("AUDIT_SIGNING_PRIVATE_KEY", "11" * 32)
+    await upsert_installation(pool, 601, "octocat")
+    report_text = "the audit findings"
+    signature = sign_report(report_text, "11" * 32)
+    await pool.execute(
+        """
+        INSERT INTO audit_reports
+            (installation_id, repo_full_name, verification_token, report_text, content_hash, signature)
+        VALUES (601, 'octocat/hello-world', 'tok-real', $1, $2, $3)
+        """,
+        report_text,
+        content_hash(report_text),
+        signature,
+    )
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/audit/tok-real/verify")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verified"] is True
+    assert body["repo_full_name"] == "octocat/hello-world"
+    assert body["content_hash"] == content_hash(report_text)
+    assert "report_text" not in body
+
+
+@pytest.mark.asyncio
+async def test_verify_audit_report_returns_verified_false_for_tampered_report(pool, monkeypatch):
+    monkeypatch.setenv("AUDIT_SIGNING_PRIVATE_KEY", "11" * 32)
+    await upsert_installation(pool, 602, "octocat")
+    real_signature = sign_report("the original report", "11" * 32)
+    await pool.execute(
+        """
+        INSERT INTO audit_reports
+            (installation_id, repo_full_name, verification_token, report_text, content_hash, signature)
+        VALUES (602, 'octocat/hello-world', 'tok-tampered', 'a tampered report', $1, $2)
+        """,
+        content_hash("the original report"),
+        real_signature,
+    )
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/audit/tok-tampered/verify")
+
+    assert response.status_code == 200
+    assert response.json()["verified"] is False
+
+
+@pytest.mark.asyncio
+async def test_verify_audit_report_404s_for_unknown_token(pool, monkeypatch):
+    monkeypatch.setenv("AUDIT_SIGNING_PRIVATE_KEY", "11" * 32)
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/audit/does-not-exist/verify")
+
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio

@@ -342,6 +342,32 @@ async def get_recent_endpoint_health(
     return [dict(row) for row in rows]
 
 
+async def get_endpoint_health_summary_since(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    repo_full_name: str,
+    since: datetime,
+) -> dict[tuple[str, str], dict]:
+    rows = await pool.fetch(
+        """
+        SELECT endpoint_method, endpoint_path, bool_or(reachable) AS ever_reachable, count(*) AS check_count
+        FROM endpoint_health
+        WHERE installation_id = $1 AND repo_full_name = $2 AND checked_at >= $3
+        GROUP BY endpoint_method, endpoint_path
+        """,
+        installation_id,
+        repo_full_name,
+        since,
+    )
+    return {
+        (row["endpoint_method"], row["endpoint_path"]): {
+            "ever_reachable": row["ever_reachable"],
+            "check_count": row["check_count"],
+        }
+        for row in rows
+    }
+
+
 async def create_session(
     pool: asyncpg.Pool,
     session_id: str,
@@ -472,6 +498,21 @@ async def touch_api_token(pool: asyncpg.Pool, token_hash: str) -> None:
         "UPDATE api_tokens SET last_used_at = now() WHERE token_hash = $1",
         token_hash,
     )
+
+
+async def get_audit_report_by_token(
+    pool: asyncpg.Pool,
+    verification_token: str,
+) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT repo_full_name, report_text, content_hash, signature, created_at
+        FROM audit_reports
+        WHERE verification_token = $1
+        """,
+        verification_token,
+    )
+    return dict(row) if row else None
 
 
 async def list_repos_for_installations(pool: asyncpg.Pool, installation_ids: list[int]) -> list[dict]:
