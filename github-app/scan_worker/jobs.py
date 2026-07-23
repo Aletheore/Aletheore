@@ -49,6 +49,7 @@ from scan_worker.flash_review import build_code_evidence_context, gather_file_co
 from scan_worker.github_api import create_check_run, fetch_pr_changed_files, fetch_pr_diff, upsert_pr_comment
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.model_tiers import model_for_plan, writing_adapter_for_plan
+from scan_worker.packet_cache import lookup_cached_result, store_result
 from scan_worker.slack import (
     format_latency_alert,
     format_reachability_alert,
@@ -636,10 +637,20 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
 
     installation = get_installation_row(dsn, installation_id)
     plan = installation["plan"] if installation is not None else "indie"
+    model_used = model_for_plan(plan)
 
     naming_adapter = _live_wiki_naming_adapter()
     writing_adapter = _live_wiki_full_build_writing_adapter(plan)
-    records = live_wiki.generate_subsystems(evidence, naming_adapter, writing_adapter)
+    records = live_wiki.generate_subsystems(
+        evidence,
+        naming_adapter,
+        writing_adapter,
+        cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
+        cache_write=lambda packet, output, used: store_result(
+            dsn, installation_id, repo_full_name, packet, output, used
+        ),
+        model_used=model_used,
+    )
     _store_wiki_generation(dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None)
 
 
@@ -679,9 +690,20 @@ def _maybe_update_live_wiki(
     if not cluster_ids:
         return
 
+    dsn = settings.database_url
     naming_adapter = _live_wiki_naming_adapter()
     writing_adapter = _live_wiki_update_writing_adapter()
-    records = live_wiki.generate_subsystems(evidence, naming_adapter, writing_adapter, cluster_ids=cluster_ids)
+    records = live_wiki.generate_subsystems(
+        evidence,
+        naming_adapter,
+        writing_adapter,
+        cluster_ids=cluster_ids,
+        cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
+        cache_write=lambda packet, output, used: store_result(
+            dsn, installation_id, repo_full_name, packet, output, used
+        ),
+        model_used=live_wiki.UPDATE_MODEL,
+    )
     _store_wiki_generation(
         settings.database_url, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha
     )
