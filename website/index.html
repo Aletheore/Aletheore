@@ -87,8 +87,10 @@
       </a>
       <div class="nav-links">
         <a href="pricing.html">Pricing</a>
+        <a href="developers.html">Developers</a>
         <a href="terms.html">Terms</a>
         <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+        <a href="https://www.linkedin.com/company/aletheore">LinkedIn</a>
         <a href="https://app.aletheore.com/">Dashboard</a>
         <a class="btn btn-primary" href="https://app.aletheore.com/">Get Started</a>
       </div>
@@ -96,118 +98,157 @@
 
     <section class="hero">
       <div>
-        <h1>I got tired of code-review tools that just guess. So I built one that <span class="accent">has to show its work.</span></h1>
-        <p>Aletheore starts as a deterministic repository scanner - no LLM in the scan path, every claim traced to evidence in your repo - and grows into a hosted GitHub App that detects dead code, monitors your API endpoints live, keeps AIRview - an AI-generated map of your architecture - current on every push, and reviews every pull request automatically.</p>
+        <p class="eyebrow">Evidence-driven code intelligence</p>
+        <h1>AI code intelligence that <span class="accent">has to show its work.</span></h1>
+        <p>Aletheore reviews, audits, and monitors repositories with every finding traced back to source evidence: file, line, symbol, owner, commit, dependency, and risk.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="https://app.aletheore.com/">Start Your First Audit</a>
-          <a class="btn btn-secondary" href="https://github.com/Aletheore/Aletheore">Read the Protocol</a>
+          <a class="btn btn-primary" href="https://app.aletheore.com/">Start Free Audit</a>
+          <a class="btn btn-secondary" href="https://github.com/Aletheore/Aletheore">View GitHub</a>
+          <a class="btn btn-ghost" href="https://www.linkedin.com/company/aletheore">Follow Updates</a>
+        </div>
+        <div class="hero-trust">
+          <span>Open source</span>
+          <span>Local-first CLI</span>
+          <span>Hosted GitHub App</span>
         </div>
       </div>
-      <div class="hero-mark">
-        <img src="assets/logo-mark.png" alt="Aletheore A monogram">
+      <div class="evidence-preview" aria-label="Aletheore product evidence preview">
+        <div class="preview-header">
+          <div>
+            <span class="status-dot"></span>
+            Production alert
+          </div>
+          <span class="preview-badge">Resolved to code</span>
+        </div>
+        <div class="preview-title">
+          <span>GET</span>
+          <strong>/v1/users</strong>
+          <em>is down</em>
+        </div>
+        <div class="preview-code">
+          <span>handled by</span>
+          <strong>controllers/user.controller.ts:42</strong>
+        </div>
+        <dl class="evidence-grid">
+          <div>
+            <dt>Symbol</dt>
+            <dd>listUsers</dd>
+          </div>
+          <div>
+            <dt>Owner</dt>
+            <dd>@platform</dd>
+          </div>
+          <div>
+            <dt>Commit</dt>
+            <dd>8f42c91</dd>
+          </div>
+          <div>
+            <dt>Risk</dt>
+            <dd>High</dd>
+          </div>
+        </dl>
+        <div class="preview-note">
+          Most tools say it failed. Aletheore shows where it is handled, who owns it, and what changed.
+        </div>
       </div>
     </section>
 
-    <section id="why">
-      <h2>Why deterministic-first.</h2>
-      <p class="section-intro">No LLM ever runs in the scan path. Aletheore reads your repository with tree-sitter and git log, writes what it found to <code>air.json</code> - the AIR, Aletheore's Intermediate Representation - and every other command - <code>query</code>, <code>diff</code>, the dashboard, the MCP server, even <code>audit</code>'s written report - reads from that same file. Nothing downstream states a claim it can't point back to a specific field in it.</p>
+    <section class="evidence-strip" aria-label="Evidence fields">
+      <p>Every alert, review, audit, and query resolves back to:</p>
+      <div>
+        <span>file</span>
+        <span>line</span>
+        <span>symbol</span>
+        <span>owner</span>
+        <span>commit</span>
+        <span>dependency</span>
+        <span>risk</span>
+      </div>
     </section>
 
-    <section id="how">
-      <h2>How it actually works.</h2>
-      <p class="section-intro"><code>aletheore scan</code> runs once and writes two files: <code>air.json</code> (the canonical record - languages, dependency graph, clusters, git activity, secrets, licenses, vulnerabilities, API endpoints) and <code>air.toon</code>, a <a href="https://toonformat.dev">TOON</a>-encoded copy of the same data specifically for the MCP server's tool results and the coding-agent adapter <code>audit</code> uses - because that's where token cost is actually paid, not in the file Aletheore itself keeps on disk. Everything downstream - <code>query</code>, <code>diff</code>, the dashboard, the MCP server, the GitHub App - reads the same AIR. One evidence format, one source of truth, one name for it.</p>
+    <section class="proof-panel">
+      <div>
+        <p class="eyebrow">Why it is different</p>
+        <h2>Most AI tools summarize. Aletheore resolves.</h2>
+      </div>
+      <p>Aletheore starts with deterministic repository evidence, then lets AI reason only over what the scanner can prove. The result is friendlier than raw static analysis and more trustworthy than a generic AI summary.</p>
     </section>
 
     <section id="features">
-      <h2>What it actually checks.</h2>
-      <p class="section-intro">Every capability below runs from the same <code>air.json</code> - nothing here is aspirational copy.</p>
-      <div class="feature-grid">
-        <article class="feature-card">
-          <p class="feature-cmd">$ aletheore scan</p>
-          <h3>Deterministic scan</h3>
-          <p>Secrets, dependency vulnerabilities and licenses across 11 languages (Python, JavaScript, TypeScript, Go, Rust, Java, Ruby, PHP, C, C++, C#), API endpoint mapping, architecture clustering, and full git history - all from tree-sitter and git log, no LLM involved.</p>
+      <div class="section-heading">
+        <p class="eyebrow">What it covers</p>
+        <h2>One evidence layer. Four useful surfaces.</h2>
+        <p>Run locally with the CLI, install as a GitHub App, or give coding agents a smaller evidence context through MCP.</p>
+      </div>
+      <div class="pillar-grid">
+        <article class="pillar-card">
+          <span class="pillar-index">01</span>
+          <h3>Code Review</h3>
+          <p>Automatic PR comments, Flash reviews, managed audits, and branch-protection checks that cite the changed file and line.</p>
+          <ul>
+            <li>Review only what changed</li>
+            <li>Catch secrets before merge</li>
+            <li>Keep findings source-grounded</li>
+          </ul>
         </article>
-        <article class="feature-card">
-          <p class="feature-cmd">$ aletheore query dead-code</p>
-          <h3>Dead code detection</h3>
-          <p>Flags unreachable modules and functions from real call-graph analysis - not a guess, a traced absence of any incoming edge from a known entry point.</p>
+        <article class="pillar-card">
+          <span class="pillar-index">02</span>
+          <h3>Repository Intelligence</h3>
+          <p>Architecture clusters, dependency graphs, hotspots, owners, dead code, and AIRview maps from the same canonical evidence.</p>
+          <ul>
+            <li>Understand unfamiliar repos faster</li>
+            <li>Map systems without hand-written docs</li>
+            <li>Give agents precise context</li>
+          </ul>
         </article>
-        <article class="feature-card">
-          <p class="feature-cmd">$ aletheore query hotspots</p>
-          <h3>Git hotspot intelligence</h3>
-          <p>Surfaces the files that change most and who actually owns them, straight from git log - the parts of your codebase most likely to need a careful review.</p>
+        <article class="pillar-card">
+          <span class="pillar-index">03</span>
+          <h3>Security &amp; Dependencies</h3>
+          <p>Secrets, vulnerable packages, licenses, infrastructure, database usage, and AI usage are detected before an audit is written.</p>
+          <ul>
+            <li>11 language ecosystems</li>
+            <li>No fake coverage or invented signals</li>
+            <li>Risk tied to code evidence</li>
+          </ul>
         </article>
-        <article class="feature-card">
-          <p class="feature-cmd">$ aletheore query database</p>
-          <h3>Database &amp; infrastructure detection</h3>
-          <p>Finds ORM frameworks, migration directories, schema files, Docker Compose services, Kubernetes manifests, and declared environment variable names (never values) - all from static analysis, nothing executed.</p>
-        </article>
-        <article class="feature-card">
-          <p class="feature-cmd">on: pull_request</p>
-          <h3>GitHub Action</h3>
-          <p>Posts a PR comment and inline annotations on new secrets, plus a step summary on every run - so review happens where the code already lives.</p>
-        </article>
-        <article class="feature-card">
-          <p class="feature-cmd">$ aletheore mcp</p>
-          <h3>MCP server</h3>
-          <p>Gives any coding agent direct, tool-based access to your evidence: imports, dependents, full-text and semantic search, health checks.</p>
-        </article>
-        <article class="feature-card">
-          <p class="feature-cmd">$ aletheore index</p>
-          <h3>Semantic code search</h3>
-          <p>A local vector index over your code, embedded with Ollama and queried with cited answers - nothing leaves your machine.</p>
-        </article>
-        <article class="feature-card">
-          <p class="feature-cmd">$ aletheore audit</p>
-          <h3>Multi-provider reports</h3>
-          <p>Claude, OpenAI, Gemini, Mistral, Grok, or a fully local Ollama model - bring your own key, with consent shown every single time.</p>
-        </article>
-        <article class="feature-card">
-          <p class="feature-cmd">$ aletheore dashboard</p>
-          <h3>Local dashboard</h3>
-          <p>Visualize the dependency graph, clusters, and every finding in a browser tab - reads the same evidence file, nothing else to configure.</p>
+        <article class="pillar-card">
+          <span class="pillar-index">04</span>
+          <h3>Production Monitoring</h3>
+          <p>Source-mapped endpoint health checks alert when a route breaks and point back to the handler that owns it.</p>
+          <ul>
+            <li>Reachability and latency checks</li>
+            <li>Slack and Teams alerts</li>
+            <li>Status data grounded in source</li>
+          </ul>
         </article>
       </div>
     </section>
 
-    <section id="github-app">
-      <h2>Also available as a hosted GitHub App.</h2>
-      <p class="section-intro">Everything above runs locally with the CLI. If you'd rather it just run on every pull request without you doing anything, the Aletheore GitHub App posts the same evidence-grounded findings as PR comments and branch-protection check runs automatically - free on every plan.</p>
-      <div class="feature-grid">
-        <article class="feature-card">
-          <p class="feature-cmd">on: pull_request</p>
-          <h3>Automatic PR comments</h3>
-          <p>Every pull request gets a comment listing new secrets, vulnerabilities, and license issues - free, no setup beyond installing the App.</p>
+    <section id="github-app" class="workflow-section">
+      <div class="section-heading">
+        <p class="eyebrow">How teams use it</p>
+        <h2>Start local. Then let the GitHub App keep watch.</h2>
+      </div>
+      <div class="workflow-grid">
+        <article>
+          <span>$ aletheore scan</span>
+          <h3>Build the evidence</h3>
+          <p>Tree-sitter and git history produce <code>air.json</code> and <code>air.toon</code>. No LLM in the scan path.</p>
         </article>
-        <article class="feature-card">
-          <p class="feature-cmd">on: pull_request</p>
-          <h3>Branch-protection check runs</h3>
-          <p>A check run fails the pull request when a new secret is detected, so it can gate merges the same way any other required check does.</p>
+        <article>
+          <span>$ aletheore query</span>
+          <h3>Ask grounded questions</h3>
+          <p>Query architecture, owners, dependencies, endpoints, secrets, hotspots, and semantic search from one evidence file.</p>
         </article>
-        <article class="feature-card">
-          <p class="feature-cmd">/aletheore audit</p>
-          <h3>AI-powered managed audits (paid plans)</h3>
-          <p>Comment <code>/aletheore audit</code> on any pull request for a full narrative audit report - security, architecture, and investor-style perspectives, grounded in the same deterministic evidence, no API key required. Model quality scales with your plan tier - see <a href="pricing.html">Pricing</a>.</p>
+        <article>
+          <span>on: pull_request</span>
+          <h3>Review every change</h3>
+          <p>The GitHub App comments on PRs, gates new secrets, and can run managed audits or Flash reviews on paid plans.</p>
         </article>
-        <article class="feature-card">
-          <p class="feature-cmd">/dashboard/.../wiki</p>
-          <h3>AIRview (paid plans)</h3>
-          <p>An LLM-written, always-current map of your repo's architecture - real dependency diagrams grounded in the scanner's own evidence, regenerated automatically on every push.</p>
-        </article>
-        <article class="feature-card">
-          <p class="feature-cmd">on: pull_request</p>
-          <h3>Automatic Flash reviews (paid plans)</h3>
-          <p>Every push to an open pull request gets a fast, citation-constrained review of just the new diff - every finding names an exact file and line, or it isn't reported at all.</p>
-        </article>
-        <article class="feature-card">
-          <p class="feature-cmd">Slack / Teams</p>
-          <h3>Alerts on new findings (paid plans)</h3>
-          <p>Point Aletheore at a Slack or Microsoft Teams webhook and get notified the moment a new secret or vulnerability lands on a pull request.</p>
-        </article>
-        <article class="feature-card">
-          <p class="feature-cmd">GET /v1/health/...</p>
-          <h3>Endpoint health monitoring (paid plans)</h3>
-          <p>Aletheore maps your API endpoints from source, then checks them live on a schedule across multiple targets, and alerts on reachability or latency regressions.</p>
+        <article>
+          <span>GET /health</span>
+          <h3>Monitor what shipped</h3>
+          <p>Live endpoint checks alert on outages and latency regressions with source handler context.</p>
         </article>
       </div>
       <p class="section-intro">
@@ -262,7 +303,7 @@
     <section class="humanist">
       <div>
         <h2>Humanist tools for a technical world.</h2>
-        <p>Nothing leaves your machine when you run the deterministic local scan. Bring your own API key for agentic audit reports, or skip them entirely: the evidence pipeline stands on its own.</p>
+        <p>Nothing leaves your machine when you run the deterministic local scan. Bring your own API key for AI-assisted audit reports, or skip them entirely: the evidence pipeline stands on its own.</p>
         <ul>
           <li>Open source and local-first.</li>
           <li>Query, diff, dashboard, MCP, and reports all read the same evidence.</li>
@@ -293,10 +334,12 @@
       <div>
         <h4>Product</h4>
         <a href="pricing.html">Pricing</a>
+        <a href="developers.html">Developers</a>
         <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
       </div>
       <div>
         <h4>Community</h4>
+        <a href="https://www.linkedin.com/company/aletheore">LinkedIn</a>
         <a href="https://github.com/sponsors/ArihantK15">Sponsor</a>
         <a href="https://github.com/Aletheore/Aletheore/issues">Issues</a>
       </div>
