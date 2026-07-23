@@ -7,6 +7,11 @@ fetches JSON from the real app_server/admin.py APIs and renders it
 client-side. org/repo are read from the URL path in JS rather than
 interpolated server-side, so these strings never need to survive a
 str.format() pass against CSS full of literal braces.
+
+Each dashboard section (overview, security, dead code, health, wiki,
+settings) is its own real route rather than an anchor on one long page -
+each fetches only the data it needs and can show full detail without
+competing for space with five other sections.
 """
 
 from fastapi import APIRouter, Request
@@ -20,7 +25,7 @@ PRICING_URL = "https://www.aletheore.com/pricing"
 
 ICONS_LINK = (
     '<link rel="stylesheet" '
-    'href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.44.0/dist/tabler-icons.min.css">'
+    'href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.45.0/dist/tabler-icons.min.css">'
 )
 MERMAID_SCRIPT = '<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>'
 
@@ -48,6 +53,7 @@ STYLE = """
   --border: rgba(26, 26, 26, 0.1);
   --border-strong: rgba(26, 26, 26, 0.2);
   --shadow-card: 0 1px 2px rgba(26, 26, 26, 0.05);
+  --shadow-card-hover: 0 4px 14px rgba(26, 26, 26, 0.09);
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, monospace;
   --page-bg: var(--slate-50);
@@ -61,7 +67,7 @@ STYLE = """
     --success: #6FBE7E; --success-soft: #23331F; --warning: #D2A83C; --warning-soft: #3A301A;
     --critical: #E37972; --critical-soft: #3A211D;
     --border: rgba(243, 238, 227, 0.12); --border-strong: rgba(243, 238, 227, 0.22);
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35); --shadow-card-hover: 0 6px 18px rgba(0, 0, 0, 0.45);
   }
 }
 * { box-sizing: border-box; }
@@ -83,17 +89,22 @@ a { color: var(--accent); }
 .scope-note code { font-family: var(--font-mono); font-size: 11px; color: #A7B2AC; }
 
 /* ---- Repo picker ---- */
-.picker-wrap { max-width: 760px; margin: 0 auto; padding: 3rem 1.5rem; }
-.picker-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
-.picker-head h1 { font-size: 20px; font-weight: 500; margin: 0; }
-.picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-.picker-card { display: block; text-decoration: none; color: var(--ink-900); background: var(--paper); border: 1px solid var(--border);
-  border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow-card); }
-.picker-card:hover { border-color: var(--border-strong); }
-.picker-org { font-size: 12px; color: var(--slate-600); }
-.picker-repo { font-size: 14.5px; font-weight: 500; margin-top: 2px; }
-.picker-plan { display: inline-block; margin-top: 10px; font-size: 11px; font-weight: 500; padding: 2px 9px; border-radius: 99px; background: var(--slate-100); color: var(--slate-600); }
+.picker-wrap { max-width: 920px; margin: 0 auto; padding: 3rem 1.75rem; }
+.picker-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem; }
+.picker-head h1 { font-size: 22px; font-weight: 500; margin: 0; }
+.picker-org-group { margin-bottom: 2rem; }
+.picker-org-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--slate-400); font-weight: 500; margin-bottom: 10px; }
+.picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.picker-card { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--ink-900); background: var(--paper); border: 1px solid var(--border);
+  border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow-card); transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.15s ease; }
+.picker-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-card-hover); transform: translateY(-1px); }
+.picker-card-icon { width: 40px; height: 40px; border-radius: 9px; background: var(--accent-soft); color: var(--accent-strong);
+  display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+.picker-card-body { min-width: 0; flex: 1; }
+.picker-repo { font-size: 15px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-plan { display: inline-block; margin-top: 7px; font-size: 11px; font-weight: 500; padding: 2px 9px; border-radius: 99px; background: var(--slate-100); color: var(--slate-600); }
 .picker-plan.paid { background: var(--accent-soft); color: var(--accent-strong); }
+.picker-card-arrow { color: var(--slate-400); font-size: 16px; flex-shrink: 0; }
 
 /* ---- Shared UI atoms ---- */
 .btn { font-family: var(--font-sans); font-size: 12.5px; font-weight: 500; border-radius: 7px; padding: 7px 12px;
@@ -123,10 +134,12 @@ a { color: var(--accent); }
 .locked-title { font-size: 13.5px; font-weight: 500; }
 .locked-desc { font-size: 12px; color: var(--slate-600); max-width: 38ch; line-height: 1.5; }
 .locked-feature .btn-accent { margin-top: 4px; }
-.form-row { display: flex; gap: 8px; margin-top: 8px; }
-.form-row .field { flex: 1; }
+.form-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.form-row .field { flex: 1; min-width: 120px; }
 .token-reveal { font-family: var(--font-mono); font-size: 12px; background: var(--warning-soft); color: var(--ink-900);
   border-radius: 7px; padding: 10px 12px; margin: 8px 0; word-break: break-all; }
+.copy-box { display: flex; align-items: center; gap: 8px; }
+.copy-box .field { font-size: 11.5px; }
 
 /* ---- Dashboard shell ---- */
 .shell { display: grid; grid-template-columns: 216px minmax(0, 1fr); min-height: 100vh; }
@@ -140,6 +153,8 @@ a { color: var(--accent); }
 .nav-item { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 7px; font-size: 13.5px; color: var(--ink-700); text-decoration: none; }
 .nav-item i { font-size: 16px; color: var(--slate-400); }
 .nav-item:hover { background: var(--paper); }
+.nav-item.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 500; }
+.nav-item.active i { color: var(--accent-strong); }
 .plan-badge-wrap { margin-top: auto; }
 .plan-card { background: var(--paper); border: 1px solid var(--border); border-radius: 9px; padding: 10px 11px; }
 .plan-name { font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 6px; text-transform: capitalize; }
@@ -150,11 +165,14 @@ a { color: var(--accent); }
 .topbar { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 1.4rem; flex-wrap: wrap; }
 .breadcrumb { font-size: 12px; color: var(--slate-600); }
 .breadcrumb b { color: var(--ink-900); font-weight: 500; }
+.breadcrumb a { color: var(--slate-600); text-decoration: none; }
+.breadcrumb a:hover { color: var(--ink-900); }
 .h1 { font-size: 20px; font-weight: 500; margin: 2px 0 0; }
 .topbar-right { font-size: 12px; color: var(--slate-600); }
 
 .stat-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 1.6rem; }
-.stat-card { background: var(--slate-100); border-radius: 10px; padding: 12px 14px; }
+.stat-card { background: var(--slate-100); border-radius: 10px; padding: 12px 14px; text-decoration: none; color: inherit; display: block; transition: background 0.15s ease; }
+a.stat-card:hover { background: var(--slate-200); }
 .stat-label { font-size: 12px; color: var(--slate-600); }
 .stat-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 23px; font-weight: 500; margin-top: 4px; }
 .stat-value.critical { color: var(--critical); }
@@ -174,16 +192,16 @@ table.findings th { text-align: left; font-size: 11px; text-transform: uppercase
 table.findings td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 table.findings tr:last-child td { border-bottom: none; }
 .finding-title { font-weight: 500; }
-.finding-cite { font-family: var(--font-mono); font-size: 11.5px; color: var(--slate-600); }
+.finding-cite { font-family: var(--font-mono); font-size: 11.5px; color: var(--slate-600); overflow-wrap: anywhere; }
 .sev-stripe { display: inline-block; width: 3px; height: 13px; border-radius: 2px; margin-right: 8px; vertical-align: -2px; }
 .sev-stripe.critical { background: var(--critical); }
 .sev-stripe.warning { background: var(--warning); }
 
 .deadcode-list, .dep-list { display: flex; flex-direction: column; }
-.deadcode-row { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.deadcode-row { display: flex; align-items: baseline; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; flex-wrap: wrap; }
 .deadcode-row:last-child { border-bottom: none; }
-.deadcode-path { font-family: var(--font-mono); font-size: 12.5px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.deadcode-meta { font-size: 11.5px; color: var(--slate-600); white-space: nowrap; }
+.deadcode-path { font-family: var(--font-mono); font-size: 12.5px; flex: 1 1 320px; min-width: 0; overflow-wrap: anywhere; }
+.deadcode-meta { font-size: 11.5px; color: var(--slate-600); }
 
 .health-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .health-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; background: var(--slate-100); border-radius: 8px; }
@@ -193,6 +211,9 @@ table.findings tr:last-child td { border-bottom: none; }
 .health-endpoint { font-family: var(--font-mono); font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .health-latency { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 11.5px; color: var(--slate-600); }
 .health-checked { font-size: 10.5px; color: var(--slate-400); white-space: nowrap; }
+.health-target-group { margin-bottom: 1.2rem; }
+.health-target-group:last-child { margin-bottom: 0; }
+.health-target-group-label { font-size: 12px; font-weight: 500; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
 
 .wiki-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; background: var(--accent-soft); border-radius: 10px; padding: 12px 15px; margin: 10px 0 14px; flex-wrap: wrap; }
 .wiki-banner-text { font-size: 12.5px; color: var(--accent-strong); line-height: 1.5; max-width: 46ch; }
@@ -207,7 +228,7 @@ table.findings tr:last-child td { border-bottom: none; }
 .subsystem-files { font-family: var(--font-mono); font-size: 10.5px; color: var(--slate-400); margin-top: 8px; }
 .subsystem-detail { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }
 .subsystem-detail-file { margin-bottom: 12px; }
-.subsystem-detail-path { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; }
+.subsystem-detail-path { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; overflow-wrap: anywhere; }
 .subsystem-detail-role { font-size: 12.5px; color: var(--slate-600); margin: 3px 0 6px; }
 .subsystem-detail-symbol { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-700); padding: 2px 0 2px 14px; }
 .subsystem-detail-symbol .line { color: var(--slate-400); }
@@ -295,27 +316,45 @@ PICKER_HTML = f"""<!DOCTYPE html>
     body.innerHTML = '<div class="empty-state">No repositories yet. Install the Aletheore GitHub App on an organization to get started.</div>';
     return;
   }}
-  body.innerHTML = '<div class="picker-grid"></div>';
-  const grid = body.querySelector('.picker-grid');
+  const byOrg = {{}};
   data.repos.forEach(function (r) {{
-    const a = document.createElement('a');
-    a.className = 'picker-card';
-    a.href = '/dashboard/' + encodeURIComponent(r.org) + '/' + encodeURIComponent(r.repo);
-    a.innerHTML = '<div class="picker-org">' + escapeHtml(r.org) + '</div>' +
-      '<div class="picker-repo">' + escapeHtml(r.repo) + '</div>' +
-      '<span class="picker-plan' + (r.plan !== 'free' ? ' paid' : '') + '">' + escapeHtml(r.plan) + ' plan</span>';
-    grid.appendChild(a);
+    (byOrg[r.org] = byOrg[r.org] || []).push(r);
+  }});
+  body.innerHTML = '';
+  Object.keys(byOrg).sort().forEach(function (org) {{
+    const group = document.createElement('div');
+    group.className = 'picker-org-group';
+    const grid = byOrg[org].map(function (r) {{
+      return '<a class="picker-card" href="/dashboard/' + encodeURIComponent(r.org) + '/' + encodeURIComponent(r.repo) + '">' +
+        '<div class="picker-card-icon"><i class="ti ti-git-branch" aria-hidden="true"></i></div>' +
+        '<div class="picker-card-body"><div class="picker-repo">' + escapeHtml(r.repo) + '</div>' +
+        '<span class="picker-plan' + (r.plan !== 'free' ? ' paid' : '') + '">' + escapeHtml(r.plan) + ' plan</span></div>' +
+        '<i class="ti ti-chevron-right picker-card-arrow" aria-hidden="true"></i></a>';
+    }}).join('');
+    group.innerHTML = '<div class="picker-org-label">' + escapeHtml(org) + '</div><div class="picker-grid">' + grid + '</div>';
+    body.appendChild(group);
   }});
 }})();
 </script>
 """
 
-DASHBOARD_HTML = f"""<!DOCTYPE html>
-<title>Dashboard — Aletheore</title>
-{ICONS_LINK}
-{MERMAID_SCRIPT}
-{STYLE}
-<div class="shell">
+_NAV_ITEMS = [
+    ("overview", "", "ti-layout-dashboard", "Overview"),
+    ("security", "/security", "ti-shield-check", "Security findings"),
+    ("deadcode", "/dead-code", "ti-trash", "Dead code"),
+    ("health", "/health", "ti-activity", "Endpoint health"),
+    ("wiki", "/wiki", "ti-book-2", "Live wiki"),
+]
+
+
+def _sidebar(active: str) -> str:
+    repo_items = "".join(
+        f'<li><a class="nav-item{" active" if key == active else ""}" data-href="{suffix}">'
+        f'<i class="ti {icon}" aria-hidden="true"></i>{label}</a></li>'
+        for key, suffix, icon, label in _NAV_ITEMS
+    )
+    settings_active = " active" if active == "settings" else ""
+    return f"""
   <nav class="sidebar" aria-label="Dashboard navigation">
     <a class="org-switch" href="/dashboard">
       <span class="org-avatar" id="org-avatar"></span>
@@ -327,18 +366,12 @@ DASHBOARD_HTML = f"""<!DOCTYPE html>
     </a>
     <div>
       <div class="nav-group-label">Repository</div>
-      <ul class="nav-list">
-        <li><a class="nav-item" href="#overview"><i class="ti ti-layout-dashboard" aria-hidden="true"></i>Overview</a></li>
-        <li><a class="nav-item" href="#security"><i class="ti ti-shield-check" aria-hidden="true"></i>Security findings</a></li>
-        <li><a class="nav-item" href="#deadcode"><i class="ti ti-trash" aria-hidden="true"></i>Dead code</a></li>
-        <li><a class="nav-item" href="#health"><i class="ti ti-activity" aria-hidden="true"></i>Endpoint health</a></li>
-        <li><a class="nav-item" href="#wiki"><i class="ti ti-book-2" aria-hidden="true"></i>Live wiki</a></li>
-      </ul>
+      <ul class="nav-list">{repo_items}</ul>
     </div>
     <div>
       <div class="nav-group-label">Account</div>
       <ul class="nav-list">
-        <li><a class="nav-item" href="#settings"><i class="ti ti-settings" aria-hidden="true"></i>Settings</a></li>
+        <li><a class="nav-item{settings_active}" data-href="/settings"><i class="ti ti-settings" aria-hidden="true"></i>Settings</a></li>
         <li><a class="nav-item" href="/auth/logout"><i class="ti ti-logout" aria-hidden="true"></i>Sign out</a></li>
       </ul>
     </div>
@@ -349,102 +382,53 @@ DASHBOARD_HTML = f"""<!DOCTYPE html>
       </div>
     </div>
   </nav>
+"""
 
-  <main class="main">
-    <div class="topbar">
-      <div>
-        <div class="breadcrumb"><span id="crumb-org"></span> <span style="color:var(--slate-400);">/</span> <b id="crumb-repo"></b></div>
-        <h1 class="h1">Overview</h1>
-      </div>
-      <div class="topbar-right" id="last-scanned"></div>
-    </div>
 
-    <div id="top-error"></div>
-
-    <div class="stat-strip" id="stat-strip">
-      <div class="stat-card"><div class="stat-label">Open findings</div><div class="stat-value" id="stat-findings">&ndash;</div><div class="stat-delta" id="stat-findings-sub"></div></div>
-      <div class="stat-card"><div class="stat-label">Dead code</div><div class="stat-value" id="stat-deadcode">&ndash;</div><div class="stat-delta" id="stat-deadcode-sub"></div></div>
-      <div class="stat-card"><div class="stat-label">Endpoint uptime</div><div class="stat-value" id="stat-uptime">&ndash;</div><div class="stat-delta" id="stat-uptime-sub"></div></div>
-      <div class="stat-card"><div class="stat-label">Modules scanned</div><div class="stat-value" id="stat-modules">&ndash;</div><div class="stat-delta" id="stat-modules-sub"></div></div>
-    </div>
-
-    <section class="section" id="overview"></section>
-
-    <section class="section" id="security">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-shield-check" aria-hidden="true"></i>Security findings</div>
-        <span class="section-sub">Every claim below cites the exact file and line it was found at.</span>
-      </div>
-      <div class="section-body" id="security-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
-
-    <section class="section" id="deadcode">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-trash" aria-hidden="true"></i>Dead code</div>
-        <span class="section-sub">Modules nothing else in the repo imports</span>
-      </div>
-      <div class="section-body" id="deadcode-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
-
-    <section class="section" id="health">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-activity" aria-hidden="true"></i>Endpoint health</div>
-        <span class="section-sub">Most recent check per endpoint</span>
-      </div>
-      <div class="section-body" id="health-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
-
-    <section class="section" id="wiki">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-book-2" aria-hidden="true"></i>Live wiki</div>
-        <span class="section-sub">Regenerated automatically on every push</span>
-      </div>
-      <div class="section-body" id="wiki-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
-
-    <section class="section" id="settings">
-      <div class="section-head">
-        <div class="section-title"><i class="ti ti-key" aria-hidden="true"></i>Settings</div>
-      </div>
-      <div class="section-body" id="settings-body"><div class="empty-state">Loading&hellip;</div></div>
-    </section>
-  </main>
-</div>
-
-<script>
-{FETCH_HELPERS}
+# Included at the top of every dashboard page's <script>: parses org/repo
+# from the URL, wires the sidebar's nav hrefs (the sidebar HTML itself is
+# static per-page, only the org/repo prefix is computed client-side), and
+# loads the plan badge from the same admin endpoint every page needs
+# anyway for its own paid-gate check.
+PAGE_HEAD_JS = """
 const parts = window.location.pathname.split('/').filter(Boolean);
 const org = decodeURIComponent(parts[1]);
 const repo = decodeURIComponent(parts[2]);
 const base = '/app/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
 const adminBase = '/admin/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
+const pageBase = '/dashboard/' + encodeURIComponent(org) + '/' + encodeURIComponent(repo);
 
 document.getElementById('side-org').textContent = org;
 document.getElementById('side-repo').textContent = repo;
 document.getElementById('org-avatar').textContent = org.slice(0, 2).toLowerCase();
-document.getElementById('crumb-org').textContent = org;
-document.getElementById('crumb-repo').textContent = repo;
-document.title = org + '/' + repo + ' — Aletheore';
+document.querySelectorAll('.nav-item[data-href]').forEach(function (el) {
+  el.href = pageBase + el.dataset.href;
+});
+const cOrg = document.getElementById('crumb-org');
+const cRepo = document.getElementById('crumb-repo');
+if (cOrg) cOrg.textContent = org;
+if (cRepo) { cRepo.textContent = repo; cRepo.href = pageBase; }
+document.title = document.title.replace('{repo}', repo).replace('{org}', org);
 
-if (window.mermaid) {{
-  mermaid.initialize({{
-    startOnLoad: false,
-    theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'neutral',
-    securityLevel: 'strict',
-  }});
-}}
-let mermaidSeq = 0;
-async function renderDiagram(container, text) {{
-  if (!text || !window.mermaid) {{ container.remove(); return; }}
-  try {{
-    const id = 'mmd-' + (mermaidSeq++);
-    const {{ svg }} = await mermaid.render(id, text);
-    container.innerHTML = svg;
-  }} catch (e) {{
-    container.remove();
-  }}
-}}
+async function loadPlanBadge() {
+  const res = await apiGet(adminBase);
+  const nameEl = document.getElementById('plan-name');
+  const subEl = document.getElementById('plan-sub');
+  if (!res) return null;
+  if (res.status === 402) {
+    nameEl.textContent = 'free';
+    subEl.textContent = 'Upgrade for live wiki and settings.';
+    return 'free';
+  }
+  if (!res.ok) { nameEl.textContent = ''; subEl.textContent = ''; return null; }
+  const data = await res.json();
+  nameEl.textContent = data.installation.plan + ' plan';
+  subEl.textContent = data.installation.plan === 'free' ? 'Upgrade for live wiki and settings.' : 'Live wiki and priority scans included.';
+  return data;
+}
+"""
 
+CONFIRM_UPGRADE_JS = f"""
 function confirmUpgrade() {{
   if (window.confirm('This needs Pro. Go to pricing?')) {{
     window.open('{PRICING_URL}', '_blank', 'noopener');
@@ -462,6 +446,71 @@ function lockedFeature(title, description, previewHtml) {{
     '</div>' +
   '</div>';
 }}
+"""
+
+
+def _page_head(title: str) -> str:
+    return f"""<!DOCTYPE html>
+<title>{title}</title>
+{ICONS_LINK}
+{MERMAID_SCRIPT}
+{STYLE}"""
+
+
+def _topbar(h1: str, right_id: str = "") -> str:
+    right = f'<div class="topbar-right" id="{right_id}"></div>' if right_id else ""
+    return f"""
+    <div class="topbar">
+      <div>
+        <div class="breadcrumb"><a id="crumb-org" href="/dashboard"></a> <span style="color:var(--slate-400);">/</span> <b><a id="crumb-repo"></a></b></div>
+        <h1 class="h1">{h1}</h1>
+      </div>
+      {right}
+    </div>
+"""
+
+
+def _shell(active: str, body: str) -> str:
+    return f"""
+<div class="shell">
+  {_sidebar(active)}
+  <main class="main">
+    {body}
+  </main>
+</div>
+"""
+
+
+# ---------------------------------------------------------------------------
+# Overview page - stats only, each stat links into its own detail page.
+# ---------------------------------------------------------------------------
+OVERVIEW_HTML = _page_head("Overview — {repo} — Aletheore") + _shell(
+    "overview",
+    _topbar("Overview", "last-scanned")
+    + """
+    <div id="top-error"></div>
+    <div class="stat-strip" id="stat-strip">
+      <a class="stat-card" data-href="/security"><div class="stat-label">Open findings</div><div class="stat-value" id="stat-findings">&ndash;</div><div class="stat-delta" id="stat-findings-sub"></div></a>
+      <a class="stat-card" data-href="/dead-code"><div class="stat-label">Dead code</div><div class="stat-value" id="stat-deadcode">&ndash;</div><div class="stat-delta" id="stat-deadcode-sub"></div></a>
+      <a class="stat-card" data-href="/health"><div class="stat-label">Endpoint uptime</div><div class="stat-value" id="stat-uptime">&ndash;</div><div class="stat-delta" id="stat-uptime-sub"></div></a>
+      <div class="stat-card"><div class="stat-label">Modules scanned</div><div class="stat-value" id="stat-modules">&ndash;</div><div class="stat-delta" id="stat-modules-sub"></div></div>
+    </div>
+    <section class="section" id="recent-security">
+      <div class="section-head">
+        <div class="section-title"><i class="ti ti-shield-check" aria-hidden="true"></i>Recent security findings</div>
+        <a class="btn" data-href="/security">View all<i class="ti ti-arrow-right" style="font-size:13px;" aria-hidden="true"></i></a>
+      </div>
+      <div class="section-body" id="recent-security-body"><div class="empty-state">Loading&hellip;</div></div>
+    </section>
+"""
+) + f"""
+<script>
+{FETCH_HELPERS}
+{PAGE_HEAD_JS}
+{CONFIRM_UPGRADE_JS}
+document.querySelectorAll('[data-href]').forEach(function (el) {{
+  if (el.tagName === 'A' && el.dataset.href) el.href = pageBase + el.dataset.href;
+}});
 
 async function loadOverview() {{
   const res = await apiGet(base);
@@ -470,16 +519,14 @@ async function loadOverview() {{
     const data = await res.json().catch(function () {{ return {{}}; }});
     const fallback = res.status === 403 ? "You don't administer this repository." : 'Repository not found.';
     document.getElementById('top-error').innerHTML = '<div class="error-banner">' + escapeHtml(data.detail || fallback) + '</div>';
-    document.getElementById('security-body').innerHTML = '<div class="empty-state">Unavailable.</div>';
-    document.getElementById('deadcode-body').innerHTML = '<div class="empty-state">Unavailable.</div>';
+    document.getElementById('recent-security-body').innerHTML = '<div class="empty-state">Unavailable.</div>';
     return;
   }}
   const data = await res.json();
   const history = data.history || [];
   if (history.length === 0) {{
     document.getElementById('last-scanned').textContent = 'No scans yet';
-    document.getElementById('security-body').innerHTML = '<div class="empty-state">No scans yet - findings will appear after the first pull request is scanned.</div>';
-    document.getElementById('deadcode-body').innerHTML = '<div class="empty-state">No scans yet.</div>';
+    document.getElementById('recent-security-body').innerHTML = '<div class="empty-state">No scans yet - findings will appear after the first pull request is scanned.</div>';
     return;
   }}
   const latest = history[0];
@@ -506,12 +553,74 @@ async function loadOverview() {{
   document.getElementById('stat-modules').textContent = moduleCount;
   document.getElementById('stat-modules-sub').textContent = history.length + ' scan' + (history.length === 1 ? '' : 's') + ' recorded';
 
-  renderSecurity(secretFindings, vulnFindings);
-  renderDeadCode(unreachable, unusedDeps);
+  const recentBody = document.getElementById('recent-security-body');
+  const preview = secretFindings.slice(0, 5);
+  if (preview.length === 0 && vulnFindings.length === 0) {{
+    recentBody.innerHTML = '<div class="empty-state">No open findings.</div>';
+  }} else {{
+    let rows = '';
+    preview.forEach(function (f) {{
+      rows += '<tr><td><span class="sev-stripe critical"></span><span class="finding-title">Possible ' + escapeHtml(f.pattern) + ' secret</span></td>' +
+        '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
+        '<td><span class="chip critical">Critical</span></td></tr>';
+    }});
+    recentBody.innerHTML = '<table class="findings"><thead><tr><th>Finding</th><th>Evidence</th><th>Severity</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }}
 }}
 
-function renderSecurity(secretFindings, vulnFindings) {{
+async function loadUptimeStat() {{
+  const res = await apiGet(base + '/health');
+  if (!res || !res.ok) return;
+  const data = await res.json();
+  const endpoints = data.endpoints || [];
+  if (endpoints.length === 0) {{ document.getElementById('stat-uptime').textContent = 'n/a'; return; }}
+  const up = endpoints.filter(function (e) {{ return e.reachable; }}).length;
+  const pct = Math.round((up / endpoints.length) * 100);
+  document.getElementById('stat-uptime').textContent = pct + '%';
+  document.getElementById('stat-uptime').className = 'stat-value' + (pct === 100 ? ' success' : pct < 90 ? ' critical' : ' warning');
+  document.getElementById('stat-uptime-sub').textContent = up + ' of ' + endpoints.length + ' endpoints up';
+}}
+
+loadOverview();
+loadUptimeStat();
+loadPlanBadge();
+</script>
+"""
+
+
+# ---------------------------------------------------------------------------
+# Security findings page.
+# ---------------------------------------------------------------------------
+SECURITY_HTML = _page_head("Security findings — {repo} — Aletheore") + _shell(
+    "security",
+    _topbar("Security findings")
+    + """
+    <section class="section">
+      <div class="section-head">
+        <div class="section-title"><i class="ti ti-shield-check" aria-hidden="true"></i>Findings</div>
+        <span class="section-sub">Every claim below cites the exact file and line it was found at.</span>
+      </div>
+      <div class="section-body" id="security-body"><div class="empty-state">Loading&hellip;</div></div>
+    </section>
+"""
+) + f"""
+<script>
+{FETCH_HELPERS}
+{PAGE_HEAD_JS}
+
+async function loadSecurity() {{
+  const res = await apiGet(base);
   const body = document.getElementById('security-body');
+  if (!res) return;
+  if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Unavailable.</div>'; return; }}
+  const data = await res.json();
+  const history = data.history || [];
+  if (history.length === 0) {{ body.innerHTML = '<div class="empty-state">No scans yet.</div>'; return; }}
+  const evidence = history[0].evidence || {{}};
+  const security = evidence.security || {{}};
+  const secretFindings = ((security.secrets || {{}}).findings || []).filter(function (f) {{ return !f.likely_placeholder && !f.accepted; }});
+  const vulnFindings = (security.dependency_vulnerabilities || {{}}).findings || [];
+
   if (secretFindings.length === 0 && vulnFindings.length === 0) {{
     body.innerHTML = '<div class="empty-state">No open findings.</div>';
     return;
@@ -530,8 +639,45 @@ function renderSecurity(secretFindings, vulnFindings) {{
   body.innerHTML = '<table class="findings"><thead><tr><th>Finding</th><th>Evidence</th><th>Severity</th></tr></thead><tbody>' + rows + '</tbody></table>';
 }}
 
-function renderDeadCode(unreachable, unusedDeps) {{
+loadSecurity();
+loadPlanBadge();
+</script>
+"""
+
+
+# ---------------------------------------------------------------------------
+# Dead code page - full paths, never truncated.
+# ---------------------------------------------------------------------------
+DEADCODE_HTML = _page_head("Dead code — {repo} — Aletheore") + _shell(
+    "deadcode",
+    _topbar("Dead code")
+    + """
+    <section class="section">
+      <div class="section-head">
+        <div class="section-title"><i class="ti ti-trash" aria-hidden="true"></i>Unreferenced modules and dependencies</div>
+        <span class="section-sub">Modules nothing else in the repo imports</span>
+      </div>
+      <div class="section-body" id="deadcode-body"><div class="empty-state">Loading&hellip;</div></div>
+    </section>
+"""
+) + f"""
+<script>
+{FETCH_HELPERS}
+{PAGE_HEAD_JS}
+
+async function loadDeadCode() {{
+  const res = await apiGet(base);
   const body = document.getElementById('deadcode-body');
+  if (!res) return;
+  if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Unavailable.</div>'; return; }}
+  const data = await res.json();
+  const history = data.history || [];
+  if (history.length === 0) {{ body.innerHTML = '<div class="empty-state">No scans yet.</div>'; return; }}
+  const evidence = history[0].evidence || {{}};
+  const deadCode = (evidence.repository || {{}}).dead_code || {{}};
+  const unreachable = deadCode.unreachable_modules || [];
+  const unusedDeps = deadCode.unused_dependencies || [];
+
   if (unreachable.length === 0 && unusedDeps.length === 0) {{
     body.innerHTML = '<div class="empty-state">No dead code detected.</div>';
     return;
@@ -549,7 +695,127 @@ function renderDeadCode(unreachable, unusedDeps) {{
   body.innerHTML = html;
 }}
 
-async function loadHealth() {{
+loadDeadCode();
+loadPlanBadge();
+</script>
+"""
+
+
+# ---------------------------------------------------------------------------
+# Endpoint health page - multi-target configuration + live results + the
+# public status API URL.
+# ---------------------------------------------------------------------------
+HEALTH_HTML = _page_head("Endpoint health — {repo} — Aletheore") + _shell(
+    "health",
+    _topbar("Endpoint health")
+    + """
+    <section class="section">
+      <div class="section-head">
+        <div class="section-title"><i class="ti ti-target-arrow" aria-hidden="true"></i>Monitored targets</div>
+        <span class="section-sub" id="target-usage"></span>
+      </div>
+      <div class="section-body" id="targets-body"><div class="empty-state">Loading&hellip;</div></div>
+    </section>
+    <section class="section">
+      <div class="section-head">
+        <div class="section-title"><i class="ti ti-world" aria-hidden="true"></i>Public status API</div>
+        <span class="section-sub">For your own status page</span>
+      </div>
+      <div class="section-body" id="status-api-body"><div class="empty-state">Loading&hellip;</div></div>
+    </section>
+    <section class="section">
+      <div class="section-head">
+        <div class="section-title"><i class="ti ti-activity" aria-hidden="true"></i>Results</div>
+        <span class="section-sub">Most recent check per endpoint, per target</span>
+      </div>
+      <div class="section-body" id="health-body"><div class="empty-state">Loading&hellip;</div></div>
+    </section>
+"""
+) + f"""
+<script>
+{FETCH_HELPERS}
+{PAGE_HEAD_JS}
+{CONFIRM_UPGRADE_JS}
+
+const TARGETS_LOCKED_PREVIEW =
+  '<div class="token-row"><div><div class="token-label">Production</div><div class="token-meta">https://api.example.com &middot; threshold 3000ms</div></div>' +
+  '<button class="btn">Remove</button></div>';
+
+function renderTargetRows(targets) {{
+  let rows = '';
+  (targets || []).forEach(function (t) {{
+    rows += '<div class="token-row"><div><div class="token-label">' + escapeHtml(t.label) + '</div>' +
+      '<div class="token-meta">' + escapeHtml(t.base_url) + (t.latency_threshold_ms ? ' &middot; threshold ' + t.latency_threshold_ms + 'ms' : '') + '</div></div>' +
+      '<button class="btn" data-target-id="' + t.id + '" onclick="removeTarget(this)">Remove</button></div>';
+  }});
+  return rows || '<div class="token-meta" style="padding:7px 0;">No targets configured yet.</div>';
+}}
+
+async function removeTarget(btn) {{
+  btn.disabled = true;
+  const res = await fetch(adminBase + '/health-targets/' + btn.dataset.targetId, {{ method: 'DELETE' }});
+  if (res.ok) {{ loadTargets(); loadResults(); }} else {{ btn.disabled = false; }}
+}}
+
+async function addTarget() {{
+  const labelInput = document.getElementById('new-target-label');
+  const urlInput = document.getElementById('new-target-url');
+  const thresholdInput = document.getElementById('new-target-threshold');
+  const status = document.getElementById('target-status');
+  const label = labelInput.value.trim();
+  const baseUrl = urlInput.value.trim();
+  if (!label || !baseUrl) return;
+  const res = await fetch(adminBase + '/health-targets', {{
+    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{
+      label: label, base_url: baseUrl,
+      latency_threshold_ms: thresholdInput.value ? parseInt(thresholdInput.value, 10) : null,
+    }}),
+  }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  if (!res.ok) {{ status.textContent = data.detail || 'Could not add target.'; status.style.color = 'var(--critical)'; return; }}
+  labelInput.value = ''; urlInput.value = ''; thresholdInput.value = '';
+  status.textContent = '';
+  loadTargets();
+  loadResults();
+}}
+
+async function loadTargets() {{
+  const res = await apiGet(adminBase);
+  const body = document.getElementById('targets-body');
+  const statusApiBody = document.getElementById('status-api-body');
+  if (!res) return;
+  if (res.status === 402) {{
+    body.innerHTML = lockedFeature('Multiple health check targets are a paid feature', 'Monitor staging, production, or any URL per repository.', TARGETS_LOCKED_PREVIEW);
+    statusApiBody.innerHTML = '<div class="empty-state">Available on paid plans.</div>';
+    document.getElementById('target-usage').textContent = '';
+    return;
+  }}
+  if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Unavailable.</div>'; return; }}
+  const data = await res.json();
+  document.getElementById('target-usage').textContent = (data.health_targets || []).length + ' of ' + data.health_target_limit + ' used';
+  body.innerHTML = '<div id="target-list">' + renderTargetRows(data.health_targets) + '</div>' +
+    '<div class="form-row"><input class="field" id="new-target-label" placeholder="Label, e.g. Production" style="flex:1 1 140px;">' +
+    '<input class="field" id="new-target-url" placeholder="https://api.example.com" style="flex:2 1 220px;">' +
+    '<input class="field" id="new-target-threshold" type="number" placeholder="Threshold ms" style="flex:1 1 100px;">' +
+    '<button class="btn" onclick="addTarget()">Add</button></div>' +
+    '<div id="target-status" class="settings-block-hint"></div>';
+
+  const origin = window.location.origin;
+  const statusUrl = origin + data.public_status_url;
+  statusApiBody.innerHTML = '<div class="copy-box"><input class="field" id="status-url-field" value="' + escapeHtml(statusUrl) + '" readonly>' +
+    '<button class="btn" id="copy-status-url">Copy</button></div>' +
+    '<div class="settings-block-hint">Unauthenticated and CORS-enabled - safe to call from a public status page.</div>';
+  document.getElementById('copy-status-url').addEventListener('click', function () {{
+    navigator.clipboard.writeText(statusUrl).then(function () {{
+      const btn = document.getElementById('copy-status-url');
+      btn.textContent = 'Copied';
+      setTimeout(function () {{ btn.textContent = 'Copy'; }}, 1500);
+    }});
+  }});
+}}
+
+async function loadResults() {{
   const res = await apiGet(base + '/health');
   if (!res) return;
   const body = document.getElementById('health-body');
@@ -557,25 +823,91 @@ async function loadHealth() {{
   const data = await res.json();
   const endpoints = data.endpoints || [];
   if (endpoints.length === 0) {{
-    body.innerHTML = '<div class="empty-state">No endpoint health checks configured yet - set a health check base URL in Settings.</div>';
-    document.getElementById('stat-uptime').textContent = 'n/a';
+    body.innerHTML = '<div class="empty-state">No results yet - add a target above.</div>';
     return;
   }}
-  const up = endpoints.filter(function (e) {{ return e.reachable; }}).length;
-  const pct = Math.round((up / endpoints.length) * 100);
-  document.getElementById('stat-uptime').textContent = pct + '%';
-  document.getElementById('stat-uptime').className = 'stat-value' + (pct === 100 ? ' success' : pct < 90 ? ' critical' : ' warning');
-  document.getElementById('stat-uptime-sub').textContent = up + ' of ' + endpoints.length + ' endpoints up';
-
-  let html = '<div class="health-grid">';
+  const groups = {{}};
   endpoints.forEach(function (e) {{
-    html += '<div class="health-row"><span class="health-status ' + (e.reachable ? 'up' : 'down') + '"></span>' +
-      '<span class="health-endpoint">' + escapeHtml(e.method) + ' ' + escapeHtml(e.path) + '</span>' +
-      '<span class="health-latency"' + (e.reachable ? '' : ' style="color:var(--critical);"') + '>' + (e.reachable ? Math.round(e.latency_ms) + 'ms' : (e.status_code || 'unreachable')) + '</span>' +
-      '<span class="health-checked">' + relativeTime(e.checked_at) + '</span></div>';
+    const key = e.target_label || 'Unlabeled';
+    (groups[key] = groups[key] || []).push(e);
   }});
-  html += '</div>';
+  let html = '';
+  Object.keys(groups).sort().forEach(function (label) {{
+    const rows = groups[label];
+    const up = rows.filter(function (e) {{ return e.reachable; }}).length;
+    html += '<div class="health-target-group"><div class="health-target-group-label">' + escapeHtml(label) +
+      '<span class="chip ' + (up === rows.length ? 'success' : 'critical') + '">' + up + ' of ' + rows.length + ' up</span></div>' +
+      '<div class="health-grid">';
+    rows.forEach(function (e) {{
+      html += '<div class="health-row"><span class="health-status ' + (e.reachable ? 'up' : 'down') + '"></span>' +
+        '<span class="health-endpoint">' + escapeHtml(e.method) + ' ' + escapeHtml(e.path) + '</span>' +
+        '<span class="health-latency"' + (e.reachable ? '' : ' style="color:var(--critical);"') + '>' + (e.reachable ? Math.round(e.latency_ms) + 'ms' : (e.status_code || 'unreachable')) + '</span>' +
+        '<span class="health-checked">' + relativeTime(e.checked_at) + '</span></div>';
+    }});
+    html += '</div></div>';
+  }});
   body.innerHTML = html;
+}}
+
+loadTargets();
+loadResults();
+loadPlanBadge();
+</script>
+"""
+
+
+# ---------------------------------------------------------------------------
+# Live wiki page.
+# ---------------------------------------------------------------------------
+WIKI_LOCKED_PREVIEW = (
+    '<div class="diagram-wrap"><svg width="400" height="70" viewBox="0 0 400 70"><g font-size="12">'
+    '<rect x="10" y="16" width="110" height="38" rx="7" fill="var(--accent-soft)" stroke="var(--accent)"></rect>'
+    '<text x="65" y="39" text-anchor="middle" fill="var(--accent-strong)">Checkout API</text>'
+    '<rect x="200" y="16" width="110" height="38" rx="7" fill="var(--accent-soft)" stroke="var(--accent)"></rect>'
+    '<text x="255" y="39" text-anchor="middle" fill="var(--accent-strong)">Payments</text>'
+    '<path d="M120,35 L200,35" stroke="var(--slate-400)" stroke-width="1.3"></path>'
+    "</g></svg></div>"
+    '<div class="subsystem-grid">'
+    '<div class="subsystem-card"><div class="subsystem-name">Checkout API</div><div class="subsystem-desc">Validates carts and creates a payment session before handing off downstream.</div></div>'
+    '<div class="subsystem-card"><div class="subsystem-name">Payments</div><div class="subsystem-desc">Wraps the payment SDK and reconciles session state with webhook ingest.</div></div>'
+    "</div>"
+)
+
+WIKI_HTML = _page_head("Live wiki — {repo} — Aletheore") + _shell(
+    "wiki",
+    _topbar("Live wiki")
+    + """
+    <section class="section">
+      <div class="section-head">
+        <div class="section-title"><i class="ti ti-book-2" aria-hidden="true"></i>Live wiki</div>
+        <span class="section-sub">Regenerated automatically on every push</span>
+      </div>
+      <div class="section-body" id="wiki-body"><div class="empty-state">Loading&hellip;</div></div>
+    </section>
+"""
+) + f"""
+<script>
+{FETCH_HELPERS}
+{PAGE_HEAD_JS}
+{CONFIRM_UPGRADE_JS}
+
+if (window.mermaid) {{
+  mermaid.initialize({{
+    startOnLoad: false,
+    theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'neutral',
+    securityLevel: 'strict',
+  }});
+}}
+let mermaidSeq = 0;
+async function renderDiagram(container, text) {{
+  if (!text || !window.mermaid) {{ container.remove(); return; }}
+  try {{
+    const id = 'mmd-' + (mermaidSeq++);
+    const {{ svg }} = await mermaid.render(id, text);
+    container.innerHTML = svg;
+  }} catch (e) {{
+    container.remove();
+  }}
 }}
 
 async function showSubsystem(subsystemId) {{
@@ -606,26 +938,15 @@ async function showSubsystem(subsystemId) {{
   detail.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
 }}
 
-const WIKI_LOCKED_PREVIEW =
-  '<div class="diagram-wrap"><svg width="400" height="70" viewBox="0 0 400 70"><g font-size="12">' +
-  '<rect x="10" y="16" width="110" height="38" rx="7" fill="var(--accent-soft)" stroke="var(--accent)"></rect>' +
-  '<text x="65" y="39" text-anchor="middle" fill="var(--accent-strong)">Checkout API</text>' +
-  '<rect x="200" y="16" width="110" height="38" rx="7" fill="var(--accent-soft)" stroke="var(--accent)"></rect>' +
-  '<text x="255" y="39" text-anchor="middle" fill="var(--accent-strong)">Payments</text>' +
-  '<path d="M120,35 L200,35" stroke="var(--slate-400)" stroke-width="1.3"></path>' +
-  '</g></svg></div>' +
-  '<div class="subsystem-grid">' +
-  '<div class="subsystem-card"><div class="subsystem-name">Checkout API</div><div class="subsystem-desc">Validates carts and creates a payment session before handing off downstream.</div></div>' +
-  '<div class="subsystem-card"><div class="subsystem-name">Payments</div><div class="subsystem-desc">Wraps the payment SDK and reconciles session state with webhook ingest.</div></div>' +
-  '</div>';
-
-async function loadWiki(plan) {{
+async function loadWiki() {{
   const body = document.getElementById('wiki-body');
-  if (plan === 'free') {{
+  const planRes = await apiGet(adminBase);
+  if (!planRes) return;
+  if (planRes.status === 402) {{
     body.innerHTML = lockedFeature(
       'Live wiki is a paid feature',
       'An LLM-written wiki of this repo, with real dependency diagrams grounded in the scanner\\'s own evidence.',
-      WIKI_LOCKED_PREVIEW
+      {WIKI_LOCKED_PREVIEW!r}
     );
     return;
   }}
@@ -635,7 +956,7 @@ async function loadWiki(plan) {{
     body.innerHTML = lockedFeature(
       'Live wiki is a paid feature',
       'An LLM-written wiki of this repo, with real dependency diagrams grounded in the scanner\\'s own evidence.',
-      WIKI_LOCKED_PREVIEW
+      {WIKI_LOCKED_PREVIEW!r}
     );
     return;
   }}
@@ -663,6 +984,45 @@ async function loadWiki(plan) {{
     grid.outerHTML = '<div class="empty-state">No subsystems generated yet.</div>';
   }}
 }}
+
+loadWiki();
+loadPlanBadge();
+</script>
+"""
+
+
+# ---------------------------------------------------------------------------
+# Settings page - team/seats, API tokens, alert webhook.
+# ---------------------------------------------------------------------------
+SETTINGS_LOCKED_PREVIEW = (
+    '<div class="settings-grid">'
+    '<div><div class="settings-block-label">Team</div>'
+    '<div class="token-row"><div><div class="token-label">you</div><div class="token-meta">2 of 3 seats used</div></div>'
+    '<button class="btn">Remove</button></div>'
+    '<div class="settings-block-label" style="margin-top:14px;">API tokens</div>'
+    '<div class="token-row"><div><div class="token-label">CI pipeline</div><div class="token-meta">created by you &middot; used 3 hours ago</div></div>'
+    '<button class="btn">Revoke</button></div></div>'
+    '<div><div class="settings-block-label">Alert webhook</div>'
+    '<input class="field" value="https://hooks.slack.com/services/..." readonly></div>'
+    "</div>"
+)
+
+SETTINGS_HTML = _page_head("Settings — {repo} — Aletheore") + _shell(
+    "settings",
+    _topbar("Settings")
+    + """
+    <section class="section">
+      <div class="section-head">
+        <div class="section-title"><i class="ti ti-key" aria-hidden="true"></i>Settings</div>
+      </div>
+      <div class="section-body" id="settings-body"><div class="empty-state">Loading&hellip;</div></div>
+    </section>
+"""
+) + f"""
+<script>
+{FETCH_HELPERS}
+{PAGE_HEAD_JS}
+{CONFIRM_UPGRADE_JS}
 
 async function revokeToken(tokenId, btn) {{
   btn.disabled = true;
@@ -754,59 +1114,24 @@ async function saveWebhook() {{
   status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
 }}
 
-async function saveHealthCheck() {{
-  const urlInput = document.getElementById('health-url-input');
-  const thresholdInput = document.getElementById('health-threshold-input');
-  const status = document.getElementById('health-config-status');
-  const res = await fetch(adminBase + '/health-check-url', {{
-    method: 'PUT', headers: {{ 'Content-Type': 'application/json' }},
-    body: JSON.stringify({{
-      health_check_base_url: urlInput.value.trim() || null,
-      health_check_latency_threshold_ms: thresholdInput.value ? parseInt(thresholdInput.value, 10) : null,
-    }}),
-  }});
-  const data = await res.json().catch(function () {{ return {{}}; }});
-  status.textContent = res.ok ? 'Saved.' : (data.detail || 'Could not save.');
-  status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
-}}
-
-const SETTINGS_LOCKED_PREVIEW =
-  '<div class="settings-grid">' +
-  '<div><div class="settings-block-label">Team</div>' +
-  '<div class="token-row"><div><div class="token-label">you</div><div class="token-meta">2 of 3 seats used</div></div>' +
-  '<button class="btn">Remove</button></div>' +
-  '<div class="settings-block-label" style="margin-top:14px;">API tokens</div>' +
-  '<div class="token-row"><div><div class="token-label">CI pipeline</div><div class="token-meta">created by you &middot; used 3 hours ago</div></div>' +
-  '<button class="btn">Revoke</button></div></div>' +
-  '<div><div class="settings-block-label">Alert webhook</div>' +
-  '<input class="field" value="https://hooks.slack.com/services/..." readonly></div>' +
-  '</div>';
-
 async function loadSettings() {{
   const body = document.getElementById('settings-body');
   const res = await apiGet(adminBase);
   if (!res) return;
   if (res.status === 402) {{
     body.innerHTML = lockedFeature(
-      'API tokens, webhooks, and health checks are paid features',
+      'API tokens, webhooks, and team seats are paid features',
       'Upgrade to configure them for this repository.',
-      SETTINGS_LOCKED_PREVIEW
+      {SETTINGS_LOCKED_PREVIEW!r}
     );
-    document.getElementById('plan-name').textContent = 'free';
-    document.getElementById('plan-sub').textContent = 'Upgrade for live wiki and settings.';
-    loadWiki('free');
     return;
   }}
   if (!res.ok) {{
     body.innerHTML = '<div class="empty-state">Settings unavailable.</div>';
-    document.getElementById('wiki-body').innerHTML = '<div class="empty-state">Unavailable.</div>';
     return;
   }}
   const data = await res.json();
   const installation = data.installation;
-  document.getElementById('plan-name').textContent = installation.plan + ' plan';
-  document.getElementById('plan-sub').textContent = installation.plan === 'free' ? 'Upgrade for live wiki and settings.' : 'Live wiki and priority scans included.';
-  loadWiki(installation.plan);
 
   body.innerHTML =
     '<div class="settings-grid">' +
@@ -835,18 +1160,16 @@ async function loadSettings() {{
           '<div class="settings-block-hint">New critical findings are posted here shortly after a scan finishes.</div>' +
         '</div>' +
         '<div class="settings-block">' +
-          '<div class="settings-block-label">Health check</div>' +
-          '<input class="field" id="health-url-input" placeholder="https://api.example.com" value="' + escapeHtml(installation.health_check_base_url || '') + '" style="margin-bottom:6px;">' +
-          '<input class="field" id="health-threshold-input" type="number" placeholder="Latency threshold, ms" value="' + (installation.health_check_latency_threshold_ms || '') + '">' +
-          '<div class="form-row"><button class="btn" onclick="saveHealthCheck()">Save</button><span id="health-config-status" class="settings-block-hint"></span></div>' +
+          '<div class="settings-block-label">Endpoint health targets</div>' +
+          '<div class="settings-block-hint">Configure staging/production URLs and see live results on the <a data-href="/health">Endpoint health</a> page.</div>' +
         '</div>' +
       '</div>' +
     '</div>';
+  document.querySelectorAll('[data-href]').forEach(function (el) {{ el.href = pageBase + el.dataset.href; }});
 }}
 
-loadOverview();
-loadHealth();
 loadSettings();
+loadPlanBadge();
 </script>
 """
 
@@ -867,9 +1190,56 @@ async def repo_picker_page(request: Request):
     return HTMLResponse(PICKER_HTML)
 
 
-@frontend_router.get("/dashboard/{org}/{repo}", response_class=HTMLResponse)
-async def dashboard_page(org: str, repo: str, request: Request):
+async def _require_session_or_redirect(request: Request):
     session = await get_current_session(request)
     if session is None:
         return RedirectResponse(url="/", status_code=307)
-    return HTMLResponse(DASHBOARD_HTML)
+    return None
+
+
+@frontend_router.get("/dashboard/{org}/{repo}", response_class=HTMLResponse)
+async def dashboard_overview_page(org: str, repo: str, request: Request):
+    redirect = await _require_session_or_redirect(request)
+    if redirect is not None:
+        return redirect
+    return HTMLResponse(OVERVIEW_HTML)
+
+
+@frontend_router.get("/dashboard/{org}/{repo}/security", response_class=HTMLResponse)
+async def dashboard_security_page(org: str, repo: str, request: Request):
+    redirect = await _require_session_or_redirect(request)
+    if redirect is not None:
+        return redirect
+    return HTMLResponse(SECURITY_HTML)
+
+
+@frontend_router.get("/dashboard/{org}/{repo}/dead-code", response_class=HTMLResponse)
+async def dashboard_deadcode_page(org: str, repo: str, request: Request):
+    redirect = await _require_session_or_redirect(request)
+    if redirect is not None:
+        return redirect
+    return HTMLResponse(DEADCODE_HTML)
+
+
+@frontend_router.get("/dashboard/{org}/{repo}/health", response_class=HTMLResponse)
+async def dashboard_health_page(org: str, repo: str, request: Request):
+    redirect = await _require_session_or_redirect(request)
+    if redirect is not None:
+        return redirect
+    return HTMLResponse(HEALTH_HTML)
+
+
+@frontend_router.get("/dashboard/{org}/{repo}/wiki", response_class=HTMLResponse)
+async def dashboard_wiki_page(org: str, repo: str, request: Request):
+    redirect = await _require_session_or_redirect(request)
+    if redirect is not None:
+        return redirect
+    return HTMLResponse(WIKI_HTML)
+
+
+@frontend_router.get("/dashboard/{org}/{repo}/settings", response_class=HTMLResponse)
+async def dashboard_settings_page(org: str, repo: str, request: Request):
+    redirect = await _require_session_or_redirect(request)
+    if redirect is not None:
+        return redirect
+    return HTMLResponse(SETTINGS_HTML)
