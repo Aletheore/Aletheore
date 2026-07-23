@@ -51,7 +51,16 @@ from scan_worker.db import (
     upsert_wiki_overview,
     upsert_wiki_subsystem,
 )
-from scan_worker.flash_review import build_code_evidence_context, gather_file_context, review_diff
+from scan_worker.flash_review import (
+    build_code_evidence_context,
+    gather_file_context,
+    is_non_substantive_diff,
+    review_diff,
+)
+from scan_worker.flash_review_cache import (
+    lookup_cached_result as lookup_cached_flash_review_result,
+    store_result as store_flash_review_result,
+)
 from scan_worker.github_api import (
     create_check_run,
     fetch_pr_changed_files,
@@ -389,26 +398,47 @@ def run_flash_review_job(
         diff_base = last_reviewed_sha or base_sha
         diff_text = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha)
         changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
-        file_context = gather_file_context(client, token, repo_full_name, changed_files, head_sha)
-        evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
-        code_evidence_context = build_code_evidence_context(evidence, changed_files)
 
         spend_accumulator = {"total": 0.0}
 
-        def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-            spend_accumulator["total"] += cost_for_usage(
-                "deepseek-v4-flash", prompt_tokens, completion_tokens
-            )
-
-        if code_evidence_context:
-            findings = review_diff(
-                diff_text,
-                file_context=file_context,
-                code_evidence_context=code_evidence_context,
-                on_usage=_on_usage,
-            )
+        if is_non_substantive_diff(changed_files):
+            findings: list[dict] = []
         else:
-            findings = review_diff(diff_text, file_context=file_context, on_usage=_on_usage)
+            file_context = gather_file_context(client, token, repo_full_name, changed_files, head_sha)
+            evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
+            code_evidence_context = build_code_evidence_context(evidence, changed_files)
+            dsn = settings.database_url
+
+            def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+                spend_accumulator["total"] += cost_for_usage(
+                    "deepseek-v4-flash", prompt_tokens, completion_tokens
+                )
+
+            def _cache_lookup(diff: str) -> list[dict] | None:
+                return lookup_cached_flash_review_result(dsn, installation_id, repo_full_name, diff)
+
+            def _cache_write(diff: str, found: list[dict], used: str) -> None:
+                store_flash_review_result(dsn, installation_id, repo_full_name, diff, found, used)
+
+            if code_evidence_context:
+                findings = review_diff(
+                    diff_text,
+                    file_context=file_context,
+                    code_evidence_context=code_evidence_context,
+                    on_usage=_on_usage,
+                    cache_lookup=_cache_lookup,
+                    cache_write=_cache_write,
+                    model_used="deepseek-v4-flash",
+                )
+            else:
+                findings = review_diff(
+                    diff_text,
+                    file_context=file_context,
+                    on_usage=_on_usage,
+                    cache_lookup=_cache_lookup,
+                    cache_write=_cache_write,
+                    model_used="deepseek-v4-flash",
+                )
         record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
 
         if findings:
