@@ -179,6 +179,111 @@ def test_build_subsystem_record_rejects_description_with_hallucinated_citation()
     assert build_subsystem_record(evidence, cluster, brief, "Authentication", adapter) is None
 
 
+def test_build_subsystem_record_uses_cache_hit_and_skips_model_call():
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    cached_output = {
+        "description": "Handles authentication via do_login in auth/login.py.",
+        "files": [
+            {
+                "path": "auth/login.py",
+                "role": "Login entry point.",
+                "key_symbols": [{"name": "do_login", "line": 10, "explanation": "Logs a user in."}],
+            }
+        ],
+    }
+    cache_lookup = MagicMock(return_value=(cached_output, "deepseek-v4-pro"))
+    cache_write = MagicMock()
+    writing_adapter = _adapter("should never be called")
+
+    record = build_subsystem_record(
+        evidence,
+        cluster,
+        brief,
+        "Authentication",
+        writing_adapter,
+        cache_lookup=cache_lookup,
+        cache_write=cache_write,
+    )
+
+    assert record is not None
+    assert record["description"] == cached_output["description"]
+    writing_adapter.simple_completion.assert_not_called()
+    cache_write.assert_not_called()
+
+
+def test_build_subsystem_record_falls_through_to_model_when_cache_hit_fails_reverification():
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    cached_output = {"description": "See `gone_file.py:1` for details.", "files": []}
+    cache_lookup = MagicMock(return_value=(cached_output, "deepseek-v4-pro"))
+    cache_write = MagicMock()
+    fresh_output = {
+        "description": "Handles authentication.",
+        "files": [{"path": "auth/login.py", "role": "Login.", "key_symbols": []}],
+    }
+    writing_adapter = _adapter(json.dumps(fresh_output))
+
+    record = build_subsystem_record(
+        evidence,
+        cluster,
+        brief,
+        "Authentication",
+        writing_adapter,
+        cache_lookup=cache_lookup,
+        cache_write=cache_write,
+        model_used="deepseek-v4-pro",
+    )
+
+    assert record is not None
+    assert record["description"] == "Handles authentication."
+    writing_adapter.simple_completion.assert_called_once()
+    cache_write.assert_called_once()
+
+
+def test_build_subsystem_record_falls_through_to_model_when_cache_lookup_raises():
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    fresh_output = {
+        "description": "Handles authentication.",
+        "files": [{"path": "auth/login.py", "role": "Login.", "key_symbols": []}],
+    }
+    writing_adapter = _adapter(json.dumps(fresh_output))
+
+    def broken_lookup(packet):
+        raise RuntimeError("cache unavailable")
+
+    record = build_subsystem_record(
+        evidence,
+        cluster,
+        brief,
+        "Authentication",
+        writing_adapter,
+        cache_lookup=broken_lookup,
+        model_used="deepseek-v4-pro",
+    )
+
+    assert record is not None
+    assert record["description"] == "Handles authentication."
+    writing_adapter.simple_completion.assert_called_once()
+
+
+def test_build_subsystem_record_without_cache_callables_is_unchanged():
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    fresh_output = {"description": "Handles authentication.", "files": []}
+    writing_adapter = _adapter(json.dumps(fresh_output))
+
+    record = build_subsystem_record(evidence, cluster, brief, "Authentication", writing_adapter)
+
+    assert record["description"] == "Handles authentication."
+    writing_adapter.simple_completion.assert_called_once()
+
+
 def test_generate_subsystems_full_build_covers_every_cluster():
     evidence = make_evidence()
     naming_adapter = _adapter(json.dumps({"0": "Authentication"}))

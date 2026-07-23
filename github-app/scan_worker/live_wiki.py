@@ -13,17 +13,23 @@ Every model response is validated against the deterministic brief it was
 given before being trusted: a file, function, or line number the model
 returns that isn't actually in the brief is dropped, never stored. This
 module never touches the database - it takes evidence and adapters in,
-returns plain dict records out.
+returns plain dict records out. Optional cache callables can be injected
+by the caller, but this module never imports a cache or database client.
 """
 
 import json
+import logging
+from typing import Callable
 
 from aletheore.citation_verifier import verify_citations
+from aletheore.evidence_packet import build_evidence_packet
 from aletheore.wiki_diagrams import build_overview_diagram, build_subsystem_diagram
 from aletheore.wiki_mapping import build_cluster_briefs
 
 FLASH_MODEL = "deepseek-v4-flash"
 UPDATE_MODEL = "deepseek-v4-pro"
+
+logger = logging.getLogger(__name__)
 
 NAMING_SYSTEM_PROMPT = """You name subsystems of a codebase for a generated wiki. You are given a
 JSON array of clusters, each with a cluster_id and a list of file paths. Respond with ONLY a JSON
@@ -103,20 +109,58 @@ def _sanitize_written_files(written_files, brief_files: list[dict]) -> list[dict
     return sanitized
 
 
-def build_subsystem_record(evidence: dict, cluster: dict, brief: dict, name: str, writing_adapter) -> dict | None:
-    user_prompt = json.dumps({"name": name, "brief": brief})
-    raw = writing_adapter.simple_completion(SUBSYSTEM_WRITING_SYSTEM_PROMPT, user_prompt, cwd=".")
-    parsed = _parse_json_object(raw)
+def _validate_written_output(parsed: dict | None, evidence: dict) -> tuple[dict, str] | None:
     if parsed is None or not isinstance(parsed.get("description"), str) or not parsed["description"].strip():
         return None
 
     description = parsed["description"].strip()
-    # The description is free text and could still smuggle a fabricated
-    # file:line citation even though the structured fields below are
-    # validated directly - check it the same way audit report citations
-    # are checked.
     if not verify_citations(description, evidence)["all_verified"]:
         return None
+    return parsed, description
+
+
+def build_subsystem_record(
+    evidence: dict,
+    cluster: dict,
+    brief: dict,
+    name: str,
+    writing_adapter,
+    *,
+    cache_lookup: Callable[[dict], tuple[dict, str] | None] | None = None,
+    cache_write: Callable[[dict, dict, str], None] | None = None,
+    model_used: str = "",
+) -> dict | None:
+    packet = build_evidence_packet(
+        evidence, cluster, brief, model_used, cache_eligible=cache_lookup is not None
+    )
+    parsed = None
+    description = None
+
+    if cache_lookup is not None:
+        try:
+            cached = cache_lookup(packet)
+        except Exception as exc:
+            logger.warning("AIRview cache lookup failed (%s); treating as miss", type(exc).__name__)
+            cached = None
+        if cached is not None:
+            cached_output, _cached_model_used = cached
+            candidate = _validate_written_output(cached_output, evidence)
+            if candidate is not None:
+                parsed, description = candidate
+
+    if parsed is None:
+        user_prompt = json.dumps({"name": name, "brief": brief})
+        raw = writing_adapter.simple_completion(SUBSYSTEM_WRITING_SYSTEM_PROMPT, user_prompt, cwd=".")
+        raw_parsed = _parse_json_object(raw)
+        candidate = _validate_written_output(raw_parsed, evidence)
+        if candidate is None:
+            return None
+        parsed, description = candidate
+        if cache_write is not None:
+            try:
+                cache_write(packet, raw_parsed, model_used)
+            except Exception as exc:
+                logger.warning("AIRview cache write failed (%s); continuing without cache", type(exc).__name__)
 
     return {
         "subsystem_id": str(cluster["id"]),
@@ -144,6 +188,10 @@ def generate_subsystems(
     naming_adapter,
     writing_adapter,
     cluster_ids: set[int] | None = None,
+    *,
+    cache_lookup: Callable[[dict], tuple[dict, str] | None] | None = None,
+    cache_write: Callable[[dict, dict, str], None] | None = None,
+    model_used: str = "",
 ) -> list[dict]:
     """Generates subsystem records. If cluster_ids is given, only those
     clusters are processed (incremental update); otherwise every cluster
@@ -164,7 +212,16 @@ def generate_subsystems(
         cluster = clusters_by_id.get(cid)
         if cluster is None:
             continue
-        record = build_subsystem_record(evidence, cluster, brief, names[cid], writing_adapter)
+        record = build_subsystem_record(
+            evidence,
+            cluster,
+            brief,
+            names[cid],
+            writing_adapter,
+            cache_lookup=cache_lookup,
+            cache_write=cache_write,
+            model_used=model_used,
+        )
         if record is not None:
             records.append(record)
     return records

@@ -29,12 +29,15 @@ services:
         required: false
     environment:
       - GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem
+      - OLLAMA_BASE_URL=http://ollama:11434
     volumes:
       - ./app-private-key.pem:/run/secrets/github-app-key.pem:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_started
+      ollama:
         condition: service_started
 
   postgres:
@@ -70,6 +73,21 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
 
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - aletheore_ollama_data:/root/.ollama
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        sleep 3
+        ollama pull nomic-embed-text
+        wait
+    cpus: "1.0"
+    mem_limit: 1g
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -85,5 +103,6 @@ services:
 
 volumes:
   aletheore_postgres_data:
+  aletheore_ollama_data:
   aletheore_caddy_data:
   aletheore_caddy_config:

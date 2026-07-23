@@ -104,6 +104,53 @@ async def test_list_repos_for_installation(pool):
 
 
 @pytest.mark.asyncio
+async def test_insert_and_list_evidence_packet_cache_rows(pool):
+    await _insert_installation(pool, 401, "cache-org")
+
+    from scan_worker.db import insert_evidence_packet_cache_row, list_recent_evidence_packet_cache_rows
+
+    insert_evidence_packet_cache_row(
+        TEST_DATABASE_URL,
+        401,
+        "cache-org/repo",
+        "hash-1",
+        [0.1, 0.2, 0.3],
+        {"changed_files": ["a.py"]},
+        {"description": "does a thing"},
+        "deepseek-v4-pro",
+    )
+
+    rows = list_recent_evidence_packet_cache_rows(TEST_DATABASE_URL, 401, "cache-org/repo")
+
+    assert len(rows) == 1
+    assert rows[0]["content_hash"] == "hash-1"
+    assert rows[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert rows[0]["packet_json"]["changed_files"] == ["a.py"]
+    assert rows[0]["model_output"]["description"] == "does a thing"
+    assert rows[0]["model_used"] == "deepseek-v4-pro"
+
+
+@pytest.mark.asyncio
+async def test_list_evidence_packet_cache_rows_never_crosses_installations(pool):
+    await _insert_installation(pool, 402, "org-a")
+    await _insert_installation(pool, 403, "org-b")
+
+    from scan_worker.db import insert_evidence_packet_cache_row, list_recent_evidence_packet_cache_rows
+
+    insert_evidence_packet_cache_row(
+        TEST_DATABASE_URL, 402, "org-a/repo", "hash-a", [1.0], {}, {"description": "a"}, "deepseek-v4-pro"
+    )
+    insert_evidence_packet_cache_row(
+        TEST_DATABASE_URL, 403, "org-b/repo", "hash-b", [1.0], {}, {"description": "b"}, "deepseek-v4-pro"
+    )
+
+    rows = list_recent_evidence_packet_cache_rows(TEST_DATABASE_URL, 402, "org-a/repo")
+
+    assert len(rows) == 1
+    assert rows[0]["content_hash"] == "hash-a"
+
+
+@pytest.mark.asyncio
 async def test_insert_repo_history_rejects_oversized_evidence(pool):
     await _insert_installation(pool, 301, "a")
     oversized = {"padding": "x" * (MAX_EVIDENCE_BYTES + 1)}

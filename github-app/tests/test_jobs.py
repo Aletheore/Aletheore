@@ -1,3 +1,4 @@
+import json
 import subprocess
 from contextlib import contextmanager
 
@@ -571,6 +572,63 @@ def test_flash_review_job_posts_no_issues_found_when_findings_empty(monkeypatch)
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert "no issues found" in posted["body"].lower()
+
+
+def _wiki_evidence():
+    return {
+        "repository": {
+            "modules": [
+                {
+                    "path": "auth/login.py",
+                    "language": "python",
+                    "imports": [],
+                    "symbols": {
+                        "functions": [{"name": "do_login", "start_line": 10, "end_line": 20}],
+                        "classes": [],
+                    },
+                }
+            ],
+            "dependency_graph": {"nodes": [], "edges": []},
+        },
+        "architecture": {"clusters": [{"id": 0, "modules": ["auth/login.py"], "internal_edges": 0}]},
+    }
+
+
+def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch):
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.lookup_cached_result",
+        lambda *a, **k: ({"description": "Cached, verified description.", "files": []}, "deepseek-v4-pro"),
+    )
+    store_calls = []
+    monkeypatch.setattr("scan_worker.jobs.store_result", lambda *a, **k: store_calls.append(True))
+    monkeypatch.setattr("scan_worker.live_wiki.verify_citations", lambda *a, **k: {"all_verified": True})
+
+    adapter_calls = []
+
+    class _SpyAdapter:
+        name = "DeepSeek"
+
+        def simple_completion(self, *a, **k):
+            adapter_calls.append(True)
+            return json.dumps({"description": "should not be reached", "files": []})
+
+    class _NamingAdapter:
+        def simple_completion(self, *a, **k):
+            return json.dumps({"0": "Auth"})
+
+    monkeypatch.setattr("scan_worker.jobs._live_wiki_full_build_writing_adapter", lambda plan: _SpyAdapter())
+    monkeypatch.setattr("scan_worker.jobs._live_wiki_naming_adapter", lambda: _NamingAdapter())
+    monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert adapter_calls == []
+    assert store_calls == []
 
 
 def _patch_sweep(
