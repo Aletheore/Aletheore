@@ -1161,12 +1161,32 @@ footer a:hover {
   }
 
   .site-nav {
+    width: 100%;
     flex-direction: column;
+    gap: 18px;
   }
 
   .nav-links {
+    width: 100%;
     flex-wrap: wrap;
-    gap: 14px;
+    gap: 10px;
+  }
+
+  .nav-links a:not(.btn) {
+    min-height: 38px;
+    padding: 8px 11px;
+    border: 1px solid rgba(23, 20, 15, 0.08);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.34);
+    font-size: 14px;
+    line-height: 1.2;
+  }
+
+  .nav-links .btn {
+    flex: 1 1 150px;
+    min-height: 42px;
+    padding: 10px 14px;
+    font-size: 14px;
   }
 
   .hero,
