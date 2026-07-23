@@ -350,7 +350,7 @@ _NAV_ITEMS = [
     ("security", "/security", "ti-shield-check", "Security findings"),
     ("deadcode", "/dead-code", "ti-trash", "Dead code"),
     ("health", "/health", "ti-activity", "Endpoint health"),
-    ("wiki", "/wiki", "ti-book-2", "Live wiki"),
+    ("wiki", "/wiki", "ti-book-2", "AIRview"),
 ]
 
 
@@ -424,20 +424,20 @@ async function loadPlanBadge() {
   if (!res) return null;
   if (res.status === 402) {
     nameEl.textContent = 'free';
-    subEl.textContent = 'Upgrade for live wiki and settings.';
+    subEl.textContent = 'Upgrade for AIRview and settings.';
     return 'free';
   }
   if (!res.ok) { nameEl.textContent = ''; subEl.textContent = ''; return null; }
   const data = await res.json();
   nameEl.textContent = data.installation.plan + ' plan';
-  subEl.textContent = data.installation.plan === 'free' ? 'Upgrade for live wiki and settings.' : 'Live wiki and priority scans included.';
+  subEl.textContent = data.installation.plan === 'free' ? 'Upgrade for AIRview and settings.' : 'AIRview and priority scans included.';
   return data;
 }
 """
 
 CONFIRM_UPGRADE_JS = f"""
 function confirmUpgrade() {{
-  if (window.confirm('This needs Pro. Go to pricing?')) {{
+  if (window.confirm('This is a paid feature. Go to pricing?')) {{
     window.open('{PRICING_URL}', '_blank', 'noopener');
   }}
 }}
@@ -449,7 +449,7 @@ function lockedFeature(title, description, previewHtml) {{
       '<div class="locked-icon"><i class="ti ti-lock" aria-hidden="true"></i></div>' +
       '<div class="locked-title">' + escapeHtml(title) + '</div>' +
       '<div class="locked-desc">' + escapeHtml(description) + '</div>' +
-      '<button class="btn btn-accent" onclick="confirmUpgrade()">Upgrade to Pro</button>' +
+      '<button class="btn btn-accent" onclick="confirmUpgrade()">Upgrade</button>' +
     '</div>' +
   '</div>';
 }}
@@ -864,7 +864,7 @@ loadPlanBadge();
 
 
 # ---------------------------------------------------------------------------
-# Live wiki page.
+# AIRview page.
 # ---------------------------------------------------------------------------
 WIKI_LOCKED_PREVIEW = (
     '<div class="diagram-wrap"><svg width="400" height="70" viewBox="0 0 400 70"><g font-size="12">'
@@ -880,13 +880,13 @@ WIKI_LOCKED_PREVIEW = (
     "</div>"
 )
 
-WIKI_HTML = _page_head("Live wiki — {repo} — Aletheore") + _shell(
+WIKI_HTML = _page_head("AIRview — {repo} — Aletheore") + _shell(
     "wiki",
-    _topbar("Live wiki")
+    _topbar("AIRview")
     + """
     <section class="section">
       <div class="section-head">
-        <div class="section-title"><i class="ti ti-book-2" aria-hidden="true"></i>Live wiki</div>
+        <div class="section-title"><i class="ti ti-book-2" aria-hidden="true"></i>AIRview</div>
         <span class="section-sub">Regenerated automatically on every push</span>
       </div>
       <div class="section-body" id="wiki-body"><div class="empty-state">Loading&hellip;</div></div>
@@ -1000,8 +1000,8 @@ async function loadWiki() {{
   if (!planRes) return;
   if (planRes.status === 402) {{
     body.innerHTML = lockedFeature(
-      'Live wiki is a paid feature',
-      'An LLM-written wiki of this repo, with real dependency diagrams grounded in the scanner\\'s own evidence.',
+      'AIRview is a paid feature',
+      'An LLM-written map of this repo, with real dependency diagrams grounded in the scanner\\'s own evidence.',
       {WIKI_LOCKED_PREVIEW!r}
     );
     return;
@@ -1010,16 +1010,16 @@ async function loadWiki() {{
   if (!res) return;
   if (res.status === 402) {{
     body.innerHTML = lockedFeature(
-      'Live wiki is a paid feature',
-      'An LLM-written wiki of this repo, with real dependency diagrams grounded in the scanner\\'s own evidence.',
+      'AIRview is a paid feature',
+      'An LLM-written map of this repo, with real dependency diagrams grounded in the scanner\\'s own evidence.',
       {WIKI_LOCKED_PREVIEW!r}
     );
     return;
   }}
-  if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Wiki unavailable.</div>'; return; }}
+  if (!res.ok) {{ body.innerHTML = '<div class="empty-state">AIRview unavailable.</div>'; return; }}
   const data = await res.json();
   if (!data.overview) {{
-    body.innerHTML = '<div class="empty-state">The wiki hasn\\'t been built yet - it generates automatically shortly after upgrading.</div>';
+    body.innerHTML = '<div class="empty-state">AIRview hasn\\'t been built yet - it generates automatically shortly after upgrading.</div>';
     return;
   }}
   let html = '<div class="wiki-banner"><div class="wiki-banner-text"><b>Built once by a frontier model, kept current by a fast one.</b> Every diagram edge below is a real import in this repo, never inferred.</div></div>' +

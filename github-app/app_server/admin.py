@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from app_server.auth import get_current_session
 from app_server.db import (
     DEFAULT_HEALTH_CHECK_TARGET_LIMIT,
+    DEFAULT_SEAT_LIMIT,
     INCLUDED_HEALTH_CHECK_TARGETS,
     INCLUDED_SEATS,
     add_health_check_target,
@@ -169,7 +170,8 @@ async def admin_page(org: str, repo: str, request: Request):
     repo_full_name = f"{org}/{repo}"
     tokens = await list_api_tokens(pool, installation_id)
     members = await list_installation_members(pool, installation_id)
-    seat_limit = INCLUDED_SEATS + await get_extra_seats(pool, installation_id)
+    included_seats = INCLUDED_SEATS.get(installation["plan"], DEFAULT_SEAT_LIMIT)
+    seat_limit = included_seats + await get_extra_seats(pool, installation_id)
     health_targets = await list_health_check_targets(pool, installation_id, repo_full_name)
     health_target_limit = INCLUDED_HEALTH_CHECK_TARGETS.get(installation["plan"], DEFAULT_HEALTH_CHECK_TARGET_LIMIT)
     return {
@@ -191,7 +193,8 @@ async def add_member(org: str, repo: str, request: Request, body: AddMemberReque
     pool = request.app.state.db_pool
     installation_id = installation["installation_id"]
 
-    seat_limit = INCLUDED_SEATS + await get_extra_seats(pool, installation_id)
+    included_seats = INCLUDED_SEATS.get(installation["plan"], DEFAULT_SEAT_LIMIT)
+    seat_limit = included_seats + await get_extra_seats(pool, installation_id)
     if not await is_installation_member(pool, installation_id, body.github_login):
         if await count_installation_members(pool, installation_id) >= seat_limit:
             raise HTTPException(

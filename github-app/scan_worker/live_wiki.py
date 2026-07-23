@@ -1,13 +1,13 @@
-"""Live Wiki generation: naming, writing, and evidence-grounding on top of
+"""AIRview generation: naming, writing, and evidence-grounding on top of
 the deterministic briefs/diagrams in aletheore.wiki_mapping/wiki_diagrams.
 
-Two model tiers, per the product design:
-- Naming always uses Flash - cheap, fast, low-stakes (just picking a
-  readable label for a cluster the scanner already found).
-- Writing uses the strong model for the one-time initial build
-  (regardless of the customer's tier) and Flash/DeepSeek for every
-  incremental update after that. Both use this module's same functions -
-  which adapter to pass in is the caller's decision (see jobs.py).
+Naming always uses Flash - cheap, fast, low-stakes (just picking a
+readable label for a cluster the scanner already found). Writing uses
+the pricing tier's model (see scan_worker/model_tiers.py) for the
+one-time initial build, and Flash/DeepSeek for every incremental update
+after that regardless of tier - frequent, on every push, so it stays
+cheap even for higher tiers. Both use this module's same functions -
+which adapter to pass in is the caller's decision (see jobs.py).
 
 Every model response is validated against the deterministic brief it was
 given before being trusted: a file, function, or line number the model
@@ -24,12 +24,6 @@ from aletheore.wiki_mapping import build_cluster_briefs
 
 FLASH_MODEL = "deepseek-v4-flash"
 UPDATE_MODEL = "deepseek-v4-pro"
-# Used for the one-time initial build, regardless of tier - see the Live
-# Wiki design discussion. This exact model ID is a product decision, not
-# independently verified against OpenAI's current API; confirm it's still
-# current before relying on it in production (same caveat this codebase
-# applies to every model string - see the master brief's own note on this).
-FULL_BUILD_MODEL = "gpt-5.4"
 
 NAMING_SYSTEM_PROMPT = """You name subsystems of a codebase for a generated wiki. You are given a
 JSON array of clusters, each with a cluster_id and a list of file paths. Respond with ONLY a JSON

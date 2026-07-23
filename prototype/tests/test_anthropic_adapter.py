@@ -235,3 +235,24 @@ def test_simple_completion_makes_one_plain_completion_call(mock_anthropic_class,
     assert call.kwargs["system"] == "system text"
     assert call.kwargs["messages"] == [{"role": "user", "content": "user text"}]
     assert "tools" not in call.kwargs
+
+
+@patch("aletheore.adapters.anthropic_native.Anthropic")
+def test_simple_completion_reports_usage_to_callback(mock_anthropic_class, tmp_path):
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    text_block = MagicMock()
+    text_block.type = "text"
+    text_block.text = "a short cited answer"
+    mock_response = MagicMock()
+    mock_response.content = [text_block]
+    mock_response.usage.input_tokens = 123
+    mock_response.usage.output_tokens = 45
+    mock_client.messages.create.return_value = mock_response
+
+    usage_calls = []
+    adapter = _adapter(tmp_path, on_usage=lambda p, c: usage_calls.append((p, c)))
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value="sk-ant-test"):
+        adapter.simple_completion("system text", "user text", cwd="/repo")
+
+    assert usage_calls == [(123, 45)]

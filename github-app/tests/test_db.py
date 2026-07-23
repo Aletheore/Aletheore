@@ -56,9 +56,9 @@ async def test_upsert_installation_is_idempotent(pool):
 @pytest.mark.asyncio
 async def test_set_installation_plan_updates_plan(pool):
     await upsert_installation(pool, 123, "octocat")
-    await set_installation_plan(pool, 123, "pro")
+    await set_installation_plan(pool, 123, "starter")
     row = await get_installation(pool, 123)
-    assert row["plan"] == "pro"
+    assert row["plan"] == "starter"
 
 
 @pytest.mark.asyncio

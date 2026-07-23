@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Callable
 
 import toon
 from anthropic import Anthropic
@@ -58,10 +59,14 @@ class AnthropicAdapter(AgentAdapter):
     requires_consent = True
 
     def __init__(
-        self, model: str = "claude-sonnet-5", credentials_path: Path | None = None
+        self,
+        model: str = "claude-sonnet-5",
+        credentials_path: Path | None = None,
+        on_usage: Callable[[int, int], None] | None = None,
     ) -> None:
         self._model = model
         self._credentials_path = credentials_path or DEFAULT_CREDENTIALS_PATH
+        self._on_usage = on_usage
 
     def is_available(self) -> bool:
         return has_api_key("ANTHROPIC_API_KEY", self.name, self._credentials_path)
@@ -83,6 +88,8 @@ class AnthropicAdapter(AgentAdapter):
             raise AdapterInvocationError(
                 f"anthropic invocation failed: {type(exc).__name__}"
             ) from exc
+        if self._on_usage is not None and response.usage is not None:
+            self._on_usage(response.usage.input_tokens, response.usage.output_tokens)
         return "\n".join(block.text for block in response.content if block.type == "text")
 
     def invoke(self, instruction: str, cwd: str) -> str:

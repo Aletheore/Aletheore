@@ -84,7 +84,7 @@ async def test_list_my_repos_requires_login(pool):
 async def test_list_my_repos_returns_repos_across_administered_installations(pool, monkeypatch):
     await upsert_installation(pool, 701, "octocat")
     await upsert_installation(pool, 702, "another-org")
-    await set_installation_plan(pool, 702, "pro")
+    await set_installation_plan(pool, 702, "starter")
     await insert_repo_history(
         pool, 701, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -109,7 +109,7 @@ async def test_list_my_repos_returns_repos_across_administered_installations(poo
     assert by_name["octocat/hello-world"]["org"] == "octocat"
     assert by_name["octocat/hello-world"]["repo"] == "hello-world"
     assert by_name["octocat/hello-world"]["plan"] == "free"
-    assert by_name["another-org/service-b"]["plan"] == "pro"
+    assert by_name["another-org/service-b"]["plan"] == "starter"
 
 
 @pytest.mark.asyncio
@@ -380,7 +380,7 @@ async def test_dashboard_wiki_requires_paid_plan(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_wiki_returns_overview_and_subsystems(pool, monkeypatch):
     await upsert_installation(pool, 602, "octocat")
-    await set_installation_plan(pool, 602, "pro")
+    await set_installation_plan(pool, 602, "starter")
     await insert_repo_history(
         pool,
         602,
@@ -408,7 +408,7 @@ async def test_dashboard_wiki_returns_overview_and_subsystems(pool, monkeypatch)
 @pytest.mark.asyncio
 async def test_dashboard_wiki_returns_null_overview_when_not_yet_generated(pool, monkeypatch):
     await upsert_installation(pool, 603, "octocat")
-    await set_installation_plan(pool, 603, "pro")
+    await set_installation_plan(pool, 603, "starter")
     await insert_repo_history(
         pool,
         603,
@@ -438,7 +438,7 @@ async def test_dashboard_wiki_subsystem_requires_login(pool):
 @pytest.mark.asyncio
 async def test_dashboard_wiki_subsystem_returns_detail(pool, monkeypatch):
     await upsert_installation(pool, 604, "octocat")
-    await set_installation_plan(pool, 604, "pro")
+    await set_installation_plan(pool, 604, "starter")
     await insert_repo_history(
         pool,
         604,
@@ -464,7 +464,7 @@ async def test_dashboard_wiki_subsystem_returns_detail(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_wiki_subsystem_404s_for_unknown_id(pool, monkeypatch):
     await upsert_installation(pool, 605, "octocat")
-    await set_installation_plan(pool, 605, "pro")
+    await set_installation_plan(pool, 605, "starter")
     await insert_repo_history(
         pool,
         605,

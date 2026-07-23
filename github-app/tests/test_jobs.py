@@ -161,7 +161,7 @@ def test_slack_alert_fires_on_paid_install_with_webhook_url_and_new_secret(
     monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row",
-        lambda *a, **k: {"plan": "pro", "webhook_url": "https://hooks.slack.com/x"},
+        lambda *a, **k: {"plan": "starter", "webhook_url": "https://hooks.slack.com/x"},
     )
     sent = {}
     monkeypatch.setattr(
@@ -187,7 +187,7 @@ def test_check_run_failure_on_new_secret(bare_repo_with_two_commits, monkeypatch
     monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "pro"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"})
     created = {}
     monkeypatch.setattr(
         "scan_worker.jobs.create_check_run",
@@ -203,6 +203,9 @@ def test_check_run_failure_on_new_secret(bare_repo_with_two_commits, monkeypatch
 
 
 def test_managed_audit_api_job_returns_report_text(monkeypatch):
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"}
+    )
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
@@ -217,6 +220,9 @@ def test_managed_audit_api_job_returns_report_text(monkeypatch):
 
 
 def test_managed_audit_api_job_raises_when_spend_cap_reached(monkeypatch):
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"}
+    )
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
@@ -256,6 +262,9 @@ def test_managed_audit_pr_job_clones_pr_head_runs_audit_and_replies(monkeypatch,
     )
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"}
+    )
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: str(bare))
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
@@ -308,6 +317,9 @@ def test_managed_audit_pr_job_skips_llm_call_when_spend_cap_reached(monkeypatch,
     )
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"}
+    )
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: str(bare))
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
@@ -360,6 +372,9 @@ def test_managed_audit_pr_job_skips_llm_call_when_rate_limited(monkeypatch, tmp_
     )
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"}
+    )
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: str(bare))
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
@@ -404,7 +419,7 @@ def test_flash_review_job_skips_free_tier(monkeypatch):
 def test_flash_review_job_skips_when_debounced(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "pro"}
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"}
     )
     monkeypatch.setattr(
         "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: False
@@ -421,7 +436,7 @@ def test_flash_review_job_skips_when_debounced(monkeypatch):
 def test_flash_review_job_skips_when_spend_cap_reached(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "pro"}
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"}
     )
     monkeypatch.setattr(
         "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
@@ -441,7 +456,7 @@ def test_flash_review_job_skips_when_spend_cap_reached(monkeypatch):
 def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "pro"}
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"}
     )
     monkeypatch.setattr(
         "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
@@ -491,7 +506,7 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
 def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestion_syntax(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "pro"}
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"}
     )
     monkeypatch.setattr(
         "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
@@ -529,7 +544,7 @@ def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestio
 def test_flash_review_job_posts_no_issues_found_when_findings_empty(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "pro"}
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"}
     )
     monkeypatch.setattr(
         "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
@@ -817,7 +832,7 @@ def test_maybe_update_live_wiki_skips_when_no_clusters_affected(monkeypatch):
     from scan_worker.jobs import _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "pro"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"})
     called = []
     monkeypatch.setattr(
         "scan_worker.live_wiki.generate_subsystems", lambda *a, **k: called.append(1)
@@ -832,7 +847,7 @@ def test_maybe_update_live_wiki_generates_and_stores_for_affected_clusters(monke
     from scan_worker.jobs import _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "pro"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"})
 
     fake_record = {
         "subsystem_id": "0",
@@ -917,6 +932,9 @@ def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "starter"}
+    )
 
     fake_record = {
         "subsystem_id": "0",
@@ -963,21 +981,20 @@ def test_run_live_wiki_full_build_for_installation_job_enqueues_per_repo(monkeyp
     assert repo_names == {"octocat/repo1", "octocat/repo2"}
 
 
-def test_full_build_writing_adapter_uses_the_strong_model_when_key_present(monkeypatch):
+def test_full_build_writing_adapter_uses_the_tier_model_for_the_plan(monkeypatch):
+    # Fallback/tier-selection logic itself is covered by test_model_tiers.py -
+    # this just checks jobs.py's wrapper actually delegates plan through.
     from scan_worker.jobs import _live_wiki_full_build_writing_adapter
-    from scan_worker import live_wiki
 
-    monkeypatch.setattr("scan_worker.jobs.has_api_key", lambda *a, **k: True)
-    adapter = _live_wiki_full_build_writing_adapter()
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    adapter = _live_wiki_full_build_writing_adapter("team")
     assert adapter.name == "OpenAI"
-    assert adapter._model == live_wiki.FULL_BUILD_MODEL
+    assert adapter._model == "gpt-4o"
 
 
-def test_full_build_writing_adapter_falls_back_when_key_missing(monkeypatch):
+def test_full_build_writing_adapter_starter_stays_on_deepseek(monkeypatch):
     from scan_worker.jobs import _live_wiki_full_build_writing_adapter
-    from scan_worker import live_wiki
 
-    monkeypatch.setattr("scan_worker.jobs.has_api_key", lambda *a, **k: False)
-    adapter = _live_wiki_full_build_writing_adapter()
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    adapter = _live_wiki_full_build_writing_adapter("starter")
     assert adapter.name == "DeepSeek"
-    assert adapter._model == live_wiki.UPDATE_MODEL

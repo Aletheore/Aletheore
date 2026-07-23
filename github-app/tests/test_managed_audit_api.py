@@ -28,7 +28,7 @@ async def test_managed_audit_requires_bearer_token(pool):
 @pytest.mark.asyncio
 async def test_managed_audit_returns_422_for_oversized_evidence(pool):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "pro")
+    await set_installation_plan(pool, 100, "starter")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
     app.state.db_pool = pool
@@ -62,7 +62,7 @@ async def test_managed_audit_rejects_free_plan(pool):
 @pytest.mark.asyncio
 async def test_managed_audit_returns_422_for_missing_evidence(pool):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "pro")
+    await set_installation_plan(pool, 100, "starter")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
     app.state.db_pool = pool
@@ -79,7 +79,7 @@ async def test_managed_audit_returns_422_for_missing_evidence(pool):
 @pytest.mark.asyncio
 async def test_managed_audit_requires_repo_full_name(pool):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "pro")
+    await set_installation_plan(pool, 100, "starter")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
     app.state.db_pool = pool
@@ -96,7 +96,7 @@ async def test_managed_audit_requires_repo_full_name(pool):
 @pytest.mark.asyncio
 async def test_managed_audit_enqueues_job_for_paid_token(pool, monkeypatch):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "pro")
+    await set_installation_plan(pool, 100, "starter")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
     fake_job = MagicMock(id="job-123")
@@ -126,7 +126,7 @@ async def test_managed_audit_enqueues_job_for_paid_token(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_managed_audit_blocks_second_request_within_cooldown(pool, monkeypatch):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "pro")
+    await set_installation_plan(pool, 100, "starter")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
     fake_queue = MagicMock()
@@ -151,7 +151,7 @@ async def test_managed_audit_blocks_second_request_within_cooldown(pool, monkeyp
 @pytest.mark.asyncio
 async def test_managed_audit_rate_limit_is_independent_per_repo(pool, monkeypatch):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "pro")
+    await set_installation_plan(pool, 100, "starter")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
     fake_queue = MagicMock()
@@ -188,7 +188,7 @@ async def test_get_job_status_requires_bearer_token(pool):
 @pytest.mark.asyncio
 async def test_get_job_status_returns_result_when_finished(pool, monkeypatch):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "pro")
+    await set_installation_plan(pool, 100, "starter")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
 
@@ -209,7 +209,7 @@ async def test_get_job_status_returns_result_when_finished(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_get_job_status_rejects_job_belonging_to_another_installation(pool, monkeypatch):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "pro")
+    await set_installation_plan(pool, 100, "starter")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
 
@@ -233,7 +233,7 @@ async def test_get_job_status_returns_404_for_unknown_job(pool, monkeypatch):
     from rq.exceptions import NoSuchJobError
 
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "pro")
+    await set_installation_plan(pool, 100, "starter")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
 
@@ -275,7 +275,7 @@ async def test_whoami_rejects_unknown_token(pool):
 @pytest.mark.asyncio
 async def test_whoami_returns_account_login_and_plan_for_valid_token(pool):
     await upsert_installation(pool, 100, "acme")
-    await set_installation_plan(pool, 100, "pro")
+    await set_installation_plan(pool, 100, "starter")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "acme")
 
@@ -287,4 +287,4 @@ async def test_whoami_returns_account_login_and_plan_for_valid_token(pool):
         )
 
     assert response.status_code == 200
-    assert response.json() == {"account_login": "acme", "plan": "pro"}
+    assert response.json() == {"account_login": "acme", "plan": "starter"}

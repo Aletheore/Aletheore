@@ -10,8 +10,8 @@ from pathlib import Path
 
 import httpx
 
+from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
-from aletheore.credentials import has_api_key
 from aletheore.evidence import write_evidence
 from aletheore.evidence_resolution import resolve_code_evidence
 from aletheore.history import compute_diff
@@ -48,6 +48,7 @@ from scan_worker.db import (
 from scan_worker.flash_review import build_code_evidence_context, gather_file_context, review_diff
 from scan_worker.github_api import create_check_run, fetch_pr_changed_files, fetch_pr_diff, upsert_pr_comment
 from scan_worker.managed_audit import run_managed_audit
+from scan_worker.model_tiers import model_for_plan, writing_adapter_for_plan
 from scan_worker.slack import (
     format_latency_alert,
     format_reachability_alert,
@@ -239,6 +240,8 @@ def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
 def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_number: int) -> None:
     settings = get_settings()
     job_dir = _job_temp_dir()
+    installation = get_installation_row(settings.database_url, installation_id)
+    plan = installation["plan"] if installation is not None else "starter"
     try:
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
         token = _token_sync(installation_id, app_jwt)
@@ -269,14 +272,14 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                         "Try again next month, or contact support to increase your limit."
                     )
                 else:
-                    spend_accumulator = {"total": 0.0}
+                    spend_accumulator = {"total": 0.0, "model": model_for_plan(plan)}
 
                     def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
                         spend_accumulator["total"] += cost_for_usage(
-                            "deepseek-v4-pro", prompt_tokens, completion_tokens
+                            spend_accumulator["model"], prompt_tokens, completion_tokens
                         )
 
-                    report_text = run_managed_audit(repo_dir, on_usage=_on_usage)
+                    report_text = run_managed_audit(repo_dir, on_usage=_on_usage, plan=plan)
                     record_llm_spend(
                         settings.database_url, installation_id, spend_accumulator["total"]
                     )
@@ -301,6 +304,8 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
 @log_job
 def run_managed_audit_api_job(installation_id: int, evidence: dict | str) -> str:
     settings = get_settings()
+    installation = get_installation_row(settings.database_url, installation_id)
+    plan = installation["plan"] if installation is not None else "starter"
     with installation_spend_lock(settings.database_url, installation_id):
         extra_seats = get_extra_seats(settings.database_url, installation_id)
         monthly_cap = monthly_cap_for_installation(7.00, extra_seats)
@@ -319,14 +324,14 @@ def run_managed_audit_api_job(installation_id: int, evidence: dict | str) -> str
                 aletheore_dir.mkdir(parents=True, exist_ok=True)
                 (aletheore_dir / "air.toon").write_text(evidence)
                 (aletheore_dir / "air.json").write_text(json.dumps({"managed_evidence": True}))
-            spend_accumulator = {"total": 0.0}
+            spend_accumulator = {"total": 0.0, "model": model_for_plan(plan)}
 
             def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
                 spend_accumulator["total"] += cost_for_usage(
-                    "deepseek-v4-pro", prompt_tokens, completion_tokens
+                    spend_accumulator["model"], prompt_tokens, completion_tokens
                 )
 
-            result = run_managed_audit(job_dir, on_usage=_on_usage)
+            result = run_managed_audit(job_dir, on_usage=_on_usage, plan=plan)
             record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
             return result
         finally:
@@ -560,26 +565,14 @@ def _live_wiki_naming_adapter() -> OpenAICompatibleAdapter:
     )
 
 
-def _live_wiki_full_build_writing_adapter() -> OpenAICompatibleAdapter:
-    # The strong model is the product decision for the one-time full build
-    # (see the Live Wiki design), but a customer's first build should not
-    # simply fail because that key isn't configured yet - fall back to the
-    # same cheap/fast model used for ongoing updates rather than blocking
-    # the wiki from existing at all. Logged, not silent, so this is never
-    # mistaken for the intended path.
-    if not has_api_key("OPENAI_API_KEY", "OpenAI"):
-        logging.getLogger(__name__).warning(
-            "OPENAI_API_KEY not configured - full Live Wiki build falling back to %s instead of %s",
-            live_wiki.UPDATE_MODEL,
-            live_wiki.FULL_BUILD_MODEL,
-        )
-        return _live_wiki_update_writing_adapter()
-    return OpenAICompatibleAdapter(
-        name="OpenAI",
-        base_url="https://api.openai.com/v1",
-        api_key_env_var="OPENAI_API_KEY",
-        model=live_wiki.FULL_BUILD_MODEL,
-    )
+def _live_wiki_full_build_writing_adapter(plan: str) -> OpenAICompatibleAdapter | AnthropicAdapter:
+    # The one-time full build uses the same tier model as managed audits
+    # (see model_tiers.py) rather than a fixed model - a Starter repo's
+    # first AIRview build is written by the same DeepSeek model as its
+    # ongoing updates, an Enterprise repo's by Claude Opus. Falls back
+    # toward DeepSeek if a higher tier's provider key isn't configured
+    # yet, so a build never hard-fails on missing infra.
+    return writing_adapter_for_plan(plan)
 
 
 def _live_wiki_update_writing_adapter() -> OpenAICompatibleAdapter:
@@ -641,8 +634,11 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
     if evidence is None:
         return  # nothing scanned for this repo yet - nothing to build from
 
+    installation = get_installation_row(dsn, installation_id)
+    plan = installation["plan"] if installation is not None else "starter"
+
     naming_adapter = _live_wiki_naming_adapter()
-    writing_adapter = _live_wiki_full_build_writing_adapter()
+    writing_adapter = _live_wiki_full_build_writing_adapter(plan)
     records = live_wiki.generate_subsystems(evidence, naming_adapter, writing_adapter)
     _store_wiki_generation(dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None)
 
