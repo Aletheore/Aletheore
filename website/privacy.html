@@ -28,8 +28,8 @@
       <h2>The free CLI</h2>
       <p>Running <code>aletheore scan</code> locally sends nothing to Aletheore's servers. Evidence is written to your own machine. If you use an agentic audit command, evidence, not source code, is sent to whichever LLM provider you configure, using your own API key.</p>
 
-      <h2>The GitHub App Pro tier</h2>
-      <p>Installing the GitHub App is a different trust boundary. Source code is transiently cloned to run a scan, then immediately discarded. Only derived evidence, such as secrets findings, dependency graphs, and endpoint health rows, is stored. Managed audit runs send evidence, not source code, to our LLM provider using our shared key.</p>
+      <h2>The GitHub App paid tiers</h2>
+      <p>Installing the GitHub App is a different trust boundary. Source code is transiently cloned to run a scan, then immediately discarded. Only derived evidence, such as secrets findings, dependency graphs, and endpoint health rows, is stored. Managed audit and AIRview runs send evidence, not source code, to the LLM provider your plan uses (DeepSeek, OpenAI, or Anthropic, depending on tier - see <a href="pricing.html">Pricing</a>), using our shared key.</p>
 
       <h2>What we store</h2>
       <p>For paid installations: your GitHub account or organization identity, evidence snapshots from scans, and, if configured, a Slack/Teams webhook URL and health-check monitoring settings. We do not sell this data or share it beyond the service providers necessary to run Aletheore, including our LLM provider for managed audits and our payment provider for billing.</p>
