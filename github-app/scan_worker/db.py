@@ -567,3 +567,73 @@ def record_evidence_packet_cache_hit(dsn: str, row_id: int) -> None:
                 (row_id,),
             )
         conn.commit()
+
+
+def insert_flash_review_cache_row(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    content_hash: str,
+    embedding: list[float],
+    diff_text: str,
+    findings: list[dict],
+    model_used: str,
+) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO flash_review_cache
+                    (installation_id, repo_full_name, content_hash, embedding,
+                     diff_text, findings, model_used)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
+                """,
+                (
+                    installation_id,
+                    repo_full_name,
+                    content_hash,
+                    embedding,
+                    diff_text,
+                    json.dumps(findings),
+                    model_used,
+                ),
+            )
+        conn.commit()
+
+
+def list_recent_flash_review_cache_rows(
+    dsn: str, installation_id: int, repo_full_name: str, limit: int = 200
+) -> list[dict]:
+    import psycopg.rows
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                """
+                SELECT id, content_hash, embedding, diff_text, findings, model_used, hit_count
+                FROM flash_review_cache
+                WHERE installation_id = %s AND repo_full_name = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (installation_id, repo_full_name, limit),
+            )
+            return cur.fetchall()
+
+
+def record_flash_review_cache_hit(dsn: str, row_id: int) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE flash_review_cache
+                SET hit_count = hit_count + 1, last_hit_at = now()
+                WHERE id = %s
+                """,
+                (row_id,),
+            )
+        conn.commit()

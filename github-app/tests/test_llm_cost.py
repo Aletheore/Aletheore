@@ -1,6 +1,9 @@
+from datetime import date
+
 import pytest
 
-from app_server.llm_cost import cost_for_usage, monthly_cap_for_installation
+from app_server import llm_cost
+from app_server.llm_cost import cost_for_usage, monthly_cap_for_installation, stale_models
 
 
 def test_cost_for_usage_deepseek_v4_pro():
@@ -26,3 +29,53 @@ def test_monthly_cap_for_installation_base_only():
 
 def test_monthly_cap_for_installation_with_extra_seats():
     assert monthly_cap_for_installation(7.00, 3) == pytest.approx(13.00)
+
+
+def test_stale_models_returns_empty_when_all_recently_verified():
+    assert stale_models(as_of=date(2026, 7, 24)) == []
+
+
+def test_stale_models_flags_a_model_past_max_age(monkeypatch):
+    monkeypatch.setitem(
+        llm_cost.MODEL_RATES_PER_MILLION_USD,
+        "deepseek-v4-pro",
+        {"input": 0.435, "output": 0.87, "verified_at": "2026-01-01"},
+    )
+
+    assert stale_models(as_of=date(2026, 7, 23)) == ["deepseek-v4-pro"]
+
+
+def test_stale_models_respects_custom_max_age(monkeypatch):
+    monkeypatch.setitem(
+        llm_cost.MODEL_RATES_PER_MILLION_USD,
+        "deepseek-v4-pro",
+        {"input": 0.435, "output": 0.87, "verified_at": "2026-07-01"},
+    )
+
+    assert stale_models(as_of=date(2026, 7, 23), max_age_days=90) == []
+    assert stale_models(as_of=date(2026, 7, 23), max_age_days=10) == ["deepseek-v4-pro"]
+
+
+def test_cost_for_usage_warns_once_per_model_for_stale_pricing(monkeypatch, caplog):
+    monkeypatch.setitem(
+        llm_cost.MODEL_RATES_PER_MILLION_USD,
+        "deepseek-v4-pro",
+        {"input": 0.435, "output": 0.87, "verified_at": "2020-01-01"},
+    )
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+
+    with caplog.at_level("WARNING"):
+        cost_for_usage("deepseek-v4-pro", 1000, 1000)
+        cost_for_usage("deepseek-v4-pro", 1000, 1000)
+
+    stale_warnings = [r for r in caplog.records if "deepseek-v4-pro" in r.message]
+    assert len(stale_warnings) == 1
+
+
+def test_cost_for_usage_does_not_warn_for_freshly_verified_model(monkeypatch, caplog):
+    monkeypatch.setattr(llm_cost, "_warned_stale_models", set())
+
+    with caplog.at_level("WARNING"):
+        cost_for_usage("deepseek-v4-flash", 1000, 1000)
+
+    assert caplog.records == []

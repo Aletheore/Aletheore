@@ -151,6 +151,78 @@ async def test_list_evidence_packet_cache_rows_never_crosses_installations(pool)
 
 
 @pytest.mark.asyncio
+async def test_insert_and_list_flash_review_cache_rows(pool):
+    await _insert_installation(pool, 411, "flash-org")
+
+    from scan_worker.db import insert_flash_review_cache_row, list_recent_flash_review_cache_rows
+
+    insert_flash_review_cache_row(
+        TEST_DATABASE_URL,
+        411,
+        "flash-org/repo",
+        "hash-1",
+        [0.1, 0.2, 0.3],
+        "--- a.py ---\n@@ -1,1 +1,1 @@\n+x = 1",
+        [{"file": "a.py", "line": 1, "issue": "unused variable"}],
+        "deepseek-v4-flash",
+    )
+
+    rows = list_recent_flash_review_cache_rows(TEST_DATABASE_URL, 411, "flash-org/repo")
+
+    assert len(rows) == 1
+    assert rows[0]["content_hash"] == "hash-1"
+    assert rows[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert rows[0]["diff_text"] == "--- a.py ---\n@@ -1,1 +1,1 @@\n+x = 1"
+    assert rows[0]["findings"] == [{"file": "a.py", "line": 1, "issue": "unused variable"}]
+    assert rows[0]["model_used"] == "deepseek-v4-flash"
+
+
+@pytest.mark.asyncio
+async def test_list_flash_review_cache_rows_never_crosses_installations(pool):
+    await _insert_installation(pool, 412, "org-a")
+    await _insert_installation(pool, 413, "org-b")
+
+    from scan_worker.db import insert_flash_review_cache_row, list_recent_flash_review_cache_rows
+
+    insert_flash_review_cache_row(
+        TEST_DATABASE_URL, 412, "org-a/repo", "hash-a", [1.0], "diff a", [], "deepseek-v4-flash"
+    )
+    insert_flash_review_cache_row(
+        TEST_DATABASE_URL, 413, "org-b/repo", "hash-b", [1.0], "diff b", [], "deepseek-v4-flash"
+    )
+
+    rows = list_recent_flash_review_cache_rows(TEST_DATABASE_URL, 412, "org-a/repo")
+
+    assert len(rows) == 1
+    assert rows[0]["content_hash"] == "hash-a"
+
+
+@pytest.mark.asyncio
+async def test_record_flash_review_cache_hit_updates_hit_count_and_last_hit_at(pool):
+    await _insert_installation(pool, 414, "hit-org")
+
+    from scan_worker.db import (
+        insert_flash_review_cache_row,
+        list_recent_flash_review_cache_rows,
+        record_flash_review_cache_hit,
+    )
+
+    insert_flash_review_cache_row(
+        TEST_DATABASE_URL, 414, "hit-org/repo", "hash-1", [1.0], "diff", [], "deepseek-v4-flash"
+    )
+    row_id = list_recent_flash_review_cache_rows(TEST_DATABASE_URL, 414, "hit-org/repo")[0]["id"]
+
+    record_flash_review_cache_hit(TEST_DATABASE_URL, row_id)
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT hit_count, last_hit_at FROM flash_review_cache WHERE id = $1", row_id
+        )
+    assert row["hit_count"] == 1
+    assert row["last_hit_at"] is not None
+
+
+@pytest.mark.asyncio
 async def test_insert_repo_history_rejects_oversized_evidence(pool):
     await _insert_installation(pool, 301, "a")
     oversized = {"padding": "x" * (MAX_EVIDENCE_BYTES + 1)}
