@@ -3,6 +3,23 @@
 Notable changes to Aletheore, by release. The working code lives in `prototype/` — see
 [`prototype/README.md`](prototype/README.md) for the full command reference.
 
+## 0.5.0 — 2026-07-23
+
+- Launched the redesigned Aletheore marketing website with clearer positioning, pricing,
+  developer documentation, social links, sitemap coverage, and mobile navigation fixes.
+- Added the hosted GitHub App foundation and hardening: PR scan workers, managed audit
+  plumbing, health monitoring, public health APIs, deployment documentation, security
+  workflows, SBOM/image scanning, and operational runbooks.
+- Expanded evidence grounding across alerts, reviews, audits, and queries so product output
+  can resolve back toward concrete code evidence such as file, line, symbol, owner, commit,
+  dependency, and risk.
+- Added deeper repository intelligence, including API endpoint mapping, multi-language
+  endpoint support, database and infrastructure detection, threat-model perspective work,
+  dependency manifest fallbacks, embedding fallbacks, evidence packet caching, and
+  deterministic enrichment foundations.
+- Improved the developer experience around the CLI, MCP server, query commands, AIRview,
+  status/login flows, provider adapters, release checks, and prelaunch CI.
+
 ## 0.4.0 — 2026-07-18
 
 - Extended dependency vulnerability/license checking to cover manifests as well as lockfiles,
