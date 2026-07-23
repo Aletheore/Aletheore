@@ -52,11 +52,9 @@ works against a brand-new container with no manual migration step needed.
 7. Add `https://aletheore.com/auth/callback` as a Callback URL under GitHub App
    user authorization settings.
 8. Point `aletheore.com` at the KVM4 server.
-9. Run `docker compose up -d --build`.
-10. Apply any pending migrations: `DATABASE_URL=postgresql://aletheore:<password>@localhost:5432/aletheore_app python3 scripts/migrate.py`
-    (or run it from inside the `app-server` container against `postgres:5432`).
-    Safe to run on every deploy, including the very first one - see
-    Migrations below for why.
+9. Run `docker compose up -d --build`. The `app-server` container runs
+   `scripts/migrate.py` before starting Uvicorn, so pending migrations are
+   applied automatically on every deploy.
 
 Before every deploy, tag the commit you're deploying so a rollback target is
 always one command away: `git tag deploy-$(date -u +%Y%m%dT%H%M%SZ) && git push --tags`.
@@ -80,14 +78,15 @@ regardless of whether the database is brand new, was bootstrapped by
 the past - the first run just backfills `schema_migrations` correctly, and
 every run after that is a no-op unless a new migration file was added.
 
+Add new schema changes as a new numbered file in `migrations/`, written
+idempotently. The next `app-server` startup runs `scripts/migrate.py`
+automatically before serving traffic. You can still run it manually for a
+pre-deploy check:
+
 ```bash
 DATABASE_URL=postgresql://aletheore:<password>@localhost:5432/aletheore_app \
   python3 scripts/migrate.py
 ```
-
-Add new schema changes as a new numbered file in `migrations/`, written
-idempotently, and run `scripts/migrate.py` after deploying the code that
-depends on it.
 
 ## Rollback
 

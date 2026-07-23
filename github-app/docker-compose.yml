@@ -18,6 +18,8 @@ services:
         condition: service_started
     ports:
       - "127.0.0.1:8000:8000"
+    cpus: "1.0"
+    mem_limit: 768m
 
   scan-worker:
     build:
@@ -36,6 +38,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    cpus: "1.0"
+    mem_limit: 1g
 
   postgres:
     image: postgres:16
