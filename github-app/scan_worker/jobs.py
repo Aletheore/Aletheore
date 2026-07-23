@@ -37,7 +37,7 @@ from scan_worker.db import (
     insert_endpoint_health,
     insert_repo_history,
     installation_spend_lock,
-    list_monitored_installations,
+    list_health_check_targets_all,
     list_repos_for_installation,
     list_wiki_subsystems,
     record_llm_spend,
@@ -465,78 +465,81 @@ def run_health_check_sweep_job() -> None:
     settings = get_settings()
     dsn = settings.database_url
 
-    for installation in list_monitored_installations(dsn):
-        installation_id = installation["installation_id"]
-        base_url = installation["health_check_base_url"]
-        threshold_ms = installation["health_check_latency_threshold_ms"]
+    for target in list_health_check_targets_all(dsn):
+        installation_id = target["installation_id"]
+        repo_full_name = target["repo_full_name"]
+        target_id = target["target_id"]
+        base_url = target["base_url"]
+        threshold_ms = target["latency_threshold_ms"]
 
-        for repo_full_name in list_repos_for_installation(dsn, installation_id):
-            evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
-            if evidence is None:
+        evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
+        if evidence is None:
+            continue
+
+        for entry in _endpoint_results(evidence, base_url):
+            if entry.get("skipped"):
                 continue
+            method = entry["method"]
+            path = entry["path"]
+            source_file = entry.get("file")
+            source_line = entry.get("line")
+            evidence_resolution = entry.get("evidence_resolution")
+            reachable = entry["reachable"]
+            status_code = entry.get("status_code")
+            latency_ms = entry.get("latency_ms")
+            prior = get_last_endpoint_health(
+                dsn,
+                installation_id,
+                repo_full_name,
+                method,
+                path,
+                target_id=target_id,
+            )
 
-            for entry in _endpoint_results(evidence, base_url):
-                if entry.get("skipped"):
-                    continue
-                method = entry["method"]
-                path = entry["path"]
-                source_file = entry.get("file")
-                source_line = entry.get("line")
-                evidence_resolution = entry.get("evidence_resolution")
-                reachable = entry["reachable"]
-                status_code = entry.get("status_code")
-                latency_ms = entry.get("latency_ms")
-                prior = get_last_endpoint_health(
-                    dsn,
-                    installation_id,
-                    repo_full_name,
-                    method,
-                    path,
+            reachability_flipped = (prior is None and not reachable) or (
+                prior is not None and prior.get("reachable") != reachable
+            )
+            if reachability_flipped:
+                _send_if_webhook_configured(
+                    target,
+                    format_reachability_alert(
+                        repo_full_name,
+                        method,
+                        path,
+                        source_file,
+                        source_line,
+                        reachable,
+                        evidence_resolution=evidence_resolution,
+                    ),
                 )
 
-                reachability_flipped = (prior is None and not reachable) or (
-                    prior is not None and prior.get("reachable") != reachable
+            if _latency_flipped(prior, reachable, latency_ms, threshold_ms):
+                _send_if_webhook_configured(
+                    target,
+                    format_latency_alert(
+                        repo_full_name,
+                        method,
+                        path,
+                        source_file,
+                        source_line,
+                        latency_ms,
+                        threshold_ms,
+                        latency_ms > threshold_ms,
+                        evidence_resolution=evidence_resolution,
+                    ),
                 )
-                if reachability_flipped:
-                    _send_if_webhook_configured(
-                        installation,
-                        format_reachability_alert(
-                            repo_full_name,
-                            method,
-                            path,
-                            source_file,
-                            source_line,
-                            reachable,
-                            evidence_resolution=evidence_resolution,
-                        ),
-                    )
 
-                if _latency_flipped(prior, reachable, latency_ms, threshold_ms):
-                    _send_if_webhook_configured(
-                        installation,
-                        format_latency_alert(
-                            repo_full_name,
-                            method,
-                            path,
-                            source_file,
-                            source_line,
-                            latency_ms,
-                            threshold_ms,
-                            latency_ms > threshold_ms,
-                            evidence_resolution=evidence_resolution,
-                        ),
-                    )
-
-                insert_endpoint_health(
-                    dsn,
-                    installation_id,
-                    repo_full_name,
-                    method,
-                    path,
-                    reachable,
-                    status_code,
-                    latency_ms,
-                )
+            insert_endpoint_health(
+                dsn,
+                installation_id,
+                repo_full_name,
+                method,
+                path,
+                reachable,
+                status_code,
+                latency_ms,
+                target_id=target_id,
+            )
 
 
 @log_job

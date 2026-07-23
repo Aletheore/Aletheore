@@ -4,9 +4,11 @@ import pytest
 
 from app_server.evidence_limits import EvidenceTooLargeError, MAX_EVIDENCE_BYTES
 from app_server.db import (
+    add_health_check_target,
     add_installation_member,
     check_and_reserve_managed_audit,
     count_active_tokens,
+    count_health_check_targets,
     count_installation_members,
     create_api_token,
     create_session,
@@ -22,11 +24,12 @@ from app_server.db import (
     insert_repo_history,
     is_installation_member,
     list_api_tokens,
+    list_health_check_targets,
     list_installation_members,
+    remove_health_check_target,
     remove_installation_member,
     revoke_api_token,
     record_llm_spend,
-    set_health_check_config,
     set_installation_plan,
     set_webhook_url,
     touch_api_token,
@@ -125,23 +128,6 @@ async def test_webhook_url_and_token_lifecycle(pool):
     assert await get_installation_by_token_hash(pool, "hash1") is None
 
 
-@pytest.mark.asyncio
-async def test_set_health_check_config(pool):
-    await upsert_installation(pool, 300, "octocat")
-    await set_health_check_config(pool, 300, "https://api.example.com", 3000)
-    row = await get_installation(pool, 300)
-    assert row["health_check_base_url"] == "https://api.example.com"
-    assert row["health_check_latency_threshold_ms"] == 3000
-
-
-@pytest.mark.asyncio
-async def test_set_health_check_config_clears_with_none(pool):
-    await upsert_installation(pool, 300, "octocat")
-    await set_health_check_config(pool, 300, "https://api.example.com", 3000)
-    await set_health_check_config(pool, 300, None, None)
-    row = await get_installation(pool, 300)
-    assert row["health_check_base_url"] is None
-    assert row["health_check_latency_threshold_ms"] is None
 
 
 @pytest.mark.asyncio
@@ -264,3 +250,53 @@ async def test_removing_installation_cascades_to_members(pool):
     await delete_installation(pool, 600)
     await upsert_installation(pool, 600, "octocat")
     assert await count_installation_members(pool, 600) == 0
+
+
+@pytest.mark.asyncio
+async def test_health_check_target_lifecycle(pool):
+    await upsert_installation(pool, 700, "octocat")
+    assert await count_health_check_targets(pool, 700, "octocat/repo1") == 0
+
+    target_id = await add_health_check_target(pool, 700, "octocat/repo1", "Staging", "https://staging.example.com", 2000)
+    assert await count_health_check_targets(pool, 700, "octocat/repo1") == 1
+
+    targets = await list_health_check_targets(pool, 700, "octocat/repo1")
+    assert targets[0]["id"] == target_id
+    assert targets[0]["label"] == "Staging"
+    assert targets[0]["base_url"] == "https://staging.example.com"
+    assert targets[0]["latency_threshold_ms"] == 2000
+
+    await remove_health_check_target(pool, 700, "octocat/repo1", target_id)
+    assert await count_health_check_targets(pool, 700, "octocat/repo1") == 0
+
+
+@pytest.mark.asyncio
+async def test_health_check_targets_are_independent_per_repo(pool):
+    await upsert_installation(pool, 700, "octocat")
+    await add_health_check_target(pool, 700, "octocat/repo1", "Primary", "https://a.example.com", None)
+    await add_health_check_target(pool, 700, "octocat/repo2", "Primary", "https://b.example.com", None)
+    assert await count_health_check_targets(pool, 700, "octocat/repo1") == 1
+    assert await count_health_check_targets(pool, 700, "octocat/repo2") == 1
+
+
+@pytest.mark.asyncio
+async def test_add_health_check_target_upserts_on_duplicate_url(pool):
+    await upsert_installation(pool, 700, "octocat")
+    await add_health_check_target(pool, 700, "octocat/repo1", "First label", "https://a.example.com", None)
+    await add_health_check_target(pool, 700, "octocat/repo1", "Updated label", "https://a.example.com", 500)
+
+    targets = await list_health_check_targets(pool, 700, "octocat/repo1")
+    assert len(targets) == 1
+    assert targets[0]["label"] == "Updated label"
+    assert targets[0]["latency_threshold_ms"] == 500
+
+
+@pytest.mark.asyncio
+async def test_remove_health_check_target_is_scoped_to_installation_and_repo(pool):
+    await upsert_installation(pool, 700, "octocat")
+    await upsert_installation(pool, 701, "acme")
+    target_id = await add_health_check_target(pool, 700, "octocat/repo1", "Primary", "https://a.example.com", None)
+
+    # A different installation cannot delete someone else's target by id.
+    await remove_health_check_target(pool, 701, "octocat/repo1", target_id)
+    assert await count_health_check_targets(pool, 700, "octocat/repo1") == 1

@@ -224,17 +224,23 @@ def get_installation(dsn: str, installation_id: int) -> dict | None:
             return dict(zip(columns, row))
 
 
-def list_monitored_installations(dsn: str) -> list[dict]:
+def list_health_check_targets_all(dsn: str) -> list[dict]:
+    """Every configured health check target across every paid installation -
+    the health sweep job's worklist. One row per target, not per
+    installation, since an installation's repos can each have their own
+    monitored URL(s) now instead of a single shared one.
+    """
     import psycopg
 
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT installation_id, health_check_base_url,
-                       health_check_latency_threshold_ms, webhook_url
-                FROM installations
-                WHERE plan != 'free' AND health_check_base_url IS NOT NULL
+                SELECT t.id AS target_id, t.installation_id, t.repo_full_name, t.label,
+                       t.base_url, t.latency_threshold_ms, i.webhook_url
+                FROM health_check_targets t
+                JOIN installations i ON i.installation_id = t.installation_id
+                WHERE i.plan != 'free'
                 """
             )
             columns = [description[0] for description in cur.description]
@@ -280,6 +286,7 @@ def get_last_endpoint_health(
     repo_full_name: str,
     method: str,
     path: str,
+    target_id: int | None = None,
 ) -> dict | None:
     import psycopg
 
@@ -293,10 +300,11 @@ def get_last_endpoint_health(
                   AND repo_full_name = %s
                   AND endpoint_method = %s
                   AND endpoint_path = %s
+                  AND target_id IS NOT DISTINCT FROM %s
                 ORDER BY checked_at DESC, id DESC
                 LIMIT 1
                 """,
-                (installation_id, repo_full_name, method, path),
+                (installation_id, repo_full_name, method, path, target_id),
             )
             row = cur.fetchone()
             if row is None:
@@ -317,6 +325,7 @@ def insert_endpoint_health(
     reachable: bool,
     status_code: int | None,
     latency_ms: float | None,
+    target_id: int | None = None,
     keep: int = 20,
 ) -> None:
     import psycopg
@@ -327,10 +336,10 @@ def insert_endpoint_health(
                 """
                 INSERT INTO endpoint_health
                     (installation_id, repo_full_name, endpoint_method, endpoint_path,
-                     reachable, status_code, latency_ms)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                     reachable, status_code, latency_ms, target_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
-                (installation_id, repo_full_name, method, path, reachable, status_code, latency_ms),
+                (installation_id, repo_full_name, method, path, reachable, status_code, latency_ms, target_id),
             )
             cur.execute(
                 """
@@ -342,11 +351,12 @@ def insert_endpoint_health(
                       AND repo_full_name = %s
                       AND endpoint_method = %s
                       AND endpoint_path = %s
+                      AND target_id IS NOT DISTINCT FROM %s
                     ORDER BY checked_at DESC, id DESC
                     OFFSET %s
                 )
                 """,
-                (installation_id, repo_full_name, method, path, keep),
+                (installation_id, repo_full_name, method, path, target_id, keep),
             )
         conn.commit()
 

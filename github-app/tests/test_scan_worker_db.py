@@ -20,7 +20,7 @@ from scan_worker.db import (
     insert_endpoint_health,
     insert_repo_history,
     installation_spend_lock,
-    list_monitored_installations,
+    list_health_check_targets_all,
     list_repos_for_installation,
     list_wiki_subsystems,
     record_llm_spend,
@@ -45,42 +45,52 @@ async def _insert_installation(pool, installation_id: int, account_login: str, *
     )
 
 
+async def _insert_health_target(pool, installation_id: int, repo_full_name: str, base_url: str, **values) -> int:
+    values.setdefault("label", "Primary")
+    columns = ["installation_id", "repo_full_name", "base_url", *values.keys()]
+    params = [installation_id, repo_full_name, base_url, *values.values()]
+    placeholders = ", ".join(f"${i}" for i in range(1, len(params) + 1))
+    return await pool.fetchval(
+        f"INSERT INTO health_check_targets ({', '.join(columns)}) VALUES ({placeholders}) RETURNING id",
+        *params,
+    )
+
+
 @pytest.mark.asyncio
-async def test_list_monitored_installations_filters_plan_and_url(pool):
-    await _insert_installation(
-        pool,
-        301,
-        "a",
-        plan="pro",
-        health_check_base_url="https://a.example.com",
-    )
-    await _insert_installation(
-        pool,
-        302,
-        "b",
-        plan="free",
-        health_check_base_url="https://b.example.com",
-    )
+async def test_list_health_check_targets_all_filters_by_plan(pool):
+    await _insert_installation(pool, 301, "a", plan="pro")
+    await _insert_health_target(pool, 301, "a/repo1", "https://a.example.com")
+    await _insert_installation(pool, 302, "b", plan="free")
+    await _insert_health_target(pool, 302, "b/repo1", "https://b.example.com")
     await _insert_installation(pool, 303, "c", plan="pro")
 
-    ids = {row["installation_id"] for row in list_monitored_installations(TEST_DATABASE_URL)}
-    assert ids == {301}
+    targets = list_health_check_targets_all(TEST_DATABASE_URL)
+    installation_ids = {t["installation_id"] for t in targets}
+    assert installation_ids == {301}
 
 
 @pytest.mark.asyncio
-async def test_list_monitored_installations_includes_webhook_url(pool):
-    await _insert_installation(
-        pool,
-        304,
-        "d",
-        plan="pro",
-        health_check_base_url="https://d.example.com",
-        webhook_url="https://hooks.slack.com/d",
-    )
+async def test_list_health_check_targets_all_includes_webhook_url_and_repo(pool):
+    await _insert_installation(pool, 304, "d", plan="pro", webhook_url="https://hooks.slack.com/d")
+    await _insert_health_target(pool, 304, "d/repo1", "https://d.example.com", latency_threshold_ms=2000)
 
-    result = list_monitored_installations(TEST_DATABASE_URL)
-    row = next(r for r in result if r["installation_id"] == 304)
+    targets = list_health_check_targets_all(TEST_DATABASE_URL)
+    row = next(t for t in targets if t["installation_id"] == 304)
     assert row["webhook_url"] == "https://hooks.slack.com/d"
+    assert row["repo_full_name"] == "d/repo1"
+    assert row["base_url"] == "https://d.example.com"
+    assert row["latency_threshold_ms"] == 2000
+
+
+@pytest.mark.asyncio
+async def test_list_health_check_targets_all_returns_one_row_per_target(pool):
+    await _insert_installation(pool, 305, "e", plan="pro")
+    await _insert_health_target(pool, 305, "e/repo1", "https://staging.example.com")
+    await _insert_health_target(pool, 305, "e/repo1", "https://prod.example.com")
+
+    targets = [t for t in list_health_check_targets_all(TEST_DATABASE_URL) if t["installation_id"] == 305]
+    assert len(targets) == 2
+    assert {t["base_url"] for t in targets} == {"https://staging.example.com", "https://prod.example.com"}
 
 
 @pytest.mark.asyncio
@@ -165,6 +175,41 @@ async def test_endpoint_health_rotation_keeps_20(pool):
     async with pool.acquire() as conn:
         count = await conn.fetchval("SELECT count(*) FROM endpoint_health WHERE installation_id = 301")
     assert count == 20
+
+
+@pytest.mark.asyncio
+async def test_endpoint_health_is_scoped_per_target(pool):
+    # Two targets checking the exact same method+path on the same repo (e.g.
+    # staging and production) must not see or overwrite each other's history.
+    await _insert_installation(pool, 306, "f", plan="pro")
+    staging_id = await _insert_health_target(pool, 306, "f/repo1", "https://staging.example.com")
+    prod_id = await _insert_health_target(pool, 306, "f/repo1", "https://prod.example.com")
+
+    insert_endpoint_health(TEST_DATABASE_URL, 306, "f/repo1", "GET", "/x", True, 200, 50.0, target_id=staging_id)
+    insert_endpoint_health(TEST_DATABASE_URL, 306, "f/repo1", "GET", "/x", False, 503, None, target_id=prod_id)
+
+    staging_last = get_last_endpoint_health(TEST_DATABASE_URL, 306, "f/repo1", "GET", "/x", target_id=staging_id)
+    prod_last = get_last_endpoint_health(TEST_DATABASE_URL, 306, "f/repo1", "GET", "/x", target_id=prod_id)
+
+    assert staging_last["reachable"] is True
+    assert prod_last["reachable"] is False
+
+
+@pytest.mark.asyncio
+async def test_endpoint_health_rotation_is_scoped_per_target(pool):
+    await _insert_installation(pool, 307, "g", plan="pro")
+    target_a = await _insert_health_target(pool, 307, "g/repo1", "https://a.example.com")
+    target_b = await _insert_health_target(pool, 307, "g/repo1", "https://b.example.com")
+
+    for _ in range(21):
+        insert_endpoint_health(TEST_DATABASE_URL, 307, "g/repo1", "GET", "/x", True, 200, 100.0, target_id=target_a, keep=20)
+    insert_endpoint_health(TEST_DATABASE_URL, 307, "g/repo1", "GET", "/x", True, 200, 100.0, target_id=target_b, keep=20)
+
+    async with pool.acquire() as conn:
+        count_a = await conn.fetchval("SELECT count(*) FROM endpoint_health WHERE target_id = $1", target_a)
+        count_b = await conn.fetchval("SELECT count(*) FROM endpoint_health WHERE target_id = $1", target_b)
+    assert count_a == 20
+    assert count_b == 1
 
 
 @pytest.mark.asyncio

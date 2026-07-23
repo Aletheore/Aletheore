@@ -133,31 +133,96 @@ async def test_set_webhook_url(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_set_health_check_config(pool, monkeypatch):
+async def test_add_health_check_target(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch, installation_id=100)
     async with client:
-        response = await client.put(
-            "/admin/octocat/hello-world/health-check-url",
+        response = await client.post(
+            "/admin/octocat/hello-world/health-targets",
             json={
-                "health_check_base_url": "https://api.example.com",
-                "health_check_latency_threshold_ms": 3000,
+                "label": "Production",
+                "base_url": "https://api.example.com",
+                "latency_threshold_ms": 3000,
             },
         )
     assert response.status_code == 200
+    assert "id" in response.json()
 
 
 @pytest.mark.asyncio
-async def test_set_health_check_config_returns_422_for_non_integer_threshold(pool, monkeypatch):
+async def test_add_health_check_target_returns_422_for_non_integer_threshold(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch, installation_id=100)
     async with client:
-        response = await client.put(
-            "/admin/octocat/hello-world/health-check-url",
+        response = await client.post(
+            "/admin/octocat/hello-world/health-targets",
             json={
-                "health_check_base_url": "https://api.example.com",
-                "health_check_latency_threshold_ms": "not-a-number",
+                "label": "Production",
+                "base_url": "https://api.example.com",
+                "latency_threshold_ms": "not-a-number",
             },
         )
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_add_health_check_target_enforces_plan_limit(pool, monkeypatch):
+    # Pro's included limit is 5 (INCLUDED_HEALTH_CHECK_TARGETS) - filling
+    # it up, then the 6th add should be rejected.
+    client = await _logged_in_client(pool, monkeypatch, installation_id=100, plan="pro")
+    async with client:
+        for i in range(5):
+            response = await client.post(
+                "/admin/octocat/hello-world/health-targets",
+                json={"label": f"Target {i}", "base_url": f"https://api{i}.example.com", "latency_threshold_ms": None},
+            )
+            assert response.status_code == 200
+        sixth = await client.post(
+            "/admin/octocat/hello-world/health-targets",
+            json={"label": "One too many", "base_url": "https://api6.example.com", "latency_threshold_ms": None},
+        )
+    assert sixth.status_code == 409
+    assert "limit reached" in sixth.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_add_health_check_target_rejects_internal_address(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch, installation_id=100)
+    monkeypatch.setattr(
+        "app_server.url_validation.socket.getaddrinfo",
+        lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))],
+    )
+    async with client:
+        response = await client.post(
+            "/admin/octocat/hello-world/health-targets",
+            json={"label": "Internal", "base_url": "https://internal-service.local", "latency_threshold_ms": 3000},
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_add_health_check_target_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/admin/octocat/hello-world/health-targets",
+            json={"label": "Production", "base_url": "https://api.example.com", "latency_threshold_ms": None},
+        )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_remove_health_check_target(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch, installation_id=100)
+    async with client:
+        add_response = await client.post(
+            "/admin/octocat/hello-world/health-targets",
+            json={"label": "Production", "base_url": "https://api.example.com", "latency_threshold_ms": None},
+        )
+        target_id = add_response.json()["id"]
+        remove_response = await client.delete(f"/admin/octocat/hello-world/health-targets/{target_id}")
+        page = await client.get("/admin/octocat/hello-world")
+    assert remove_response.status_code == 200
+    assert page.json()["health_targets"] == []
 
 
 @pytest.mark.asyncio
@@ -186,37 +251,6 @@ async def test_set_webhook_url_rejects_non_https(pool, monkeypatch):
     assert response.status_code == 400
 
 
-@pytest.mark.asyncio
-async def test_set_health_check_config_rejects_internal_address(pool, monkeypatch):
-    client = await _logged_in_client(pool, monkeypatch, installation_id=100)
-    monkeypatch.setattr(
-        "app_server.url_validation.socket.getaddrinfo",
-        lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443))],
-    )
-    async with client:
-        response = await client.put(
-            "/admin/octocat/hello-world/health-check-url",
-            json={
-                "health_check_base_url": "https://internal-service.local",
-                "health_check_latency_threshold_ms": 3000,
-            },
-        )
-    assert response.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_set_health_check_config_requires_login(pool):
-    app.state.db_pool = pool
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.put(
-            "/admin/octocat/hello-world/health-check-url",
-            json={
-                "health_check_base_url": "https://api.example.com",
-                "health_check_latency_threshold_ms": None,
-            },
-        )
-    assert response.status_code == 401
 
 
 @pytest.mark.asyncio

@@ -568,17 +568,19 @@ def _patch_sweep(
 ):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(
-        "scan_worker.jobs.list_monitored_installations",
+        "scan_worker.jobs.list_health_check_targets_all",
         lambda dsn: [
             {
+                "target_id": 900,
                 "installation_id": 1,
-                "health_check_base_url": "https://api.example.com",
-                "health_check_latency_threshold_ms": threshold_ms,
+                "repo_full_name": "octocat/hello-world",
+                "label": "Primary",
+                "base_url": "https://api.example.com",
+                "latency_threshold_ms": threshold_ms,
                 "webhook_url": "https://hooks.slack.com/health",
             }
         ],
     )
-    monkeypatch.setattr("scan_worker.jobs.list_repos_for_installation", lambda dsn, iid: ["octocat/hello-world"])
     monkeypatch.setattr(
         "scan_worker.jobs.get_latest_evidence",
         lambda dsn, iid, repo: evidence
@@ -593,7 +595,9 @@ def _patch_sweep(
             ]
         },
     )
-    monkeypatch.setattr("scan_worker.jobs.get_last_endpoint_health", lambda dsn, iid, repo, method, path: prior)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_last_endpoint_health", lambda dsn, iid, repo, method, path, target_id=None: prior
+    )
     monkeypatch.setattr("scan_worker.jobs.insert_endpoint_health", lambda *a, **k: None)
     sent = []
     monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: sent.append(msg))
@@ -714,6 +718,67 @@ def test_sweep_skips_latency_when_unreachable(monkeypatch):
     run_health_check_sweep_job()
 
     assert sent == []
+
+
+def test_sweep_checks_every_target_independently(monkeypatch):
+    # Two targets on the same repo (e.g. staging and production) - one down,
+    # one up - must each be checked and alerted on their own, not merged or
+    # short-circuited after the first.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_health_check_targets_all",
+        lambda dsn: [
+            {
+                "target_id": 1,
+                "installation_id": 1,
+                "repo_full_name": "octocat/hello-world",
+                "label": "Staging",
+                "base_url": "https://staging.example.com",
+                "latency_threshold_ms": None,
+                "webhook_url": "https://hooks.slack.com/health",
+            },
+            {
+                "target_id": 2,
+                "installation_id": 1,
+                "repo_full_name": "octocat/hello-world",
+                "label": "Production",
+                "base_url": "https://prod.example.com",
+                "latency_threshold_ms": None,
+                "webhook_url": "https://hooks.slack.com/health",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_latest_evidence",
+        lambda dsn, iid, repo: {"repository": {"api_endpoints": {"endpoints": [{"method": "GET", "path": "/x"}]}}},
+    )
+
+    def fake_healthcheck(endpoints, base_url):
+        reachable = base_url == "https://staging.example.com"
+        return {"results": [{"method": "GET", "path": "/x", "reachable": reachable, "status_code": 200 if reachable else None, "latency_ms": 50.0}]}
+
+    monkeypatch.setattr("scan_worker.jobs.run_healthcheck", fake_healthcheck)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_last_endpoint_health",
+        lambda dsn, iid, repo, method, path, target_id=None: {"reachable": True, "latency_ms": 50.0},
+    )
+    recorded = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.insert_endpoint_health",
+        lambda dsn, iid, repo, method, path, reachable, status_code, latency_ms, target_id=None, keep=20: recorded.append(
+            (target_id, reachable)
+        ),
+    )
+    sent = []
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: sent.append(msg))
+
+    from scan_worker.jobs import run_health_check_sweep_job
+
+    run_health_check_sweep_job()
+
+    assert set(recorded) == {(1, True), (2, False)}
+    assert len(sent) == 1
+    assert "down" in sent[0]["text"]
 
 
 def _wiki_evidence() -> dict:

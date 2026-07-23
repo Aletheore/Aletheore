@@ -203,6 +203,71 @@ async def is_installation_member(pool: asyncpg.Pool, installation_id: int, githu
     return row is not None
 
 
+# Health check targets live behind the same paid-plan gate as the rest of
+# Settings (_require_admin_installation rejects free plans before any of
+# this is ever reached), so there is no meaningful "free" entry here - this
+# only needs to distinguish among the plans that actually get this far.
+INCLUDED_HEALTH_CHECK_TARGETS = {"pro": 5}
+DEFAULT_HEALTH_CHECK_TARGET_LIMIT = 5
+
+
+async def add_health_check_target(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    repo_full_name: str,
+    label: str,
+    base_url: str,
+    latency_threshold_ms: int | None,
+) -> int:
+    row = await pool.fetchrow(
+        """
+        INSERT INTO health_check_targets (installation_id, repo_full_name, label, base_url, latency_threshold_ms)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (installation_id, repo_full_name, base_url) DO UPDATE
+        SET label = EXCLUDED.label, latency_threshold_ms = EXCLUDED.latency_threshold_ms
+        RETURNING id
+        """,
+        installation_id,
+        repo_full_name,
+        label,
+        base_url,
+        latency_threshold_ms,
+    )
+    return row["id"]
+
+
+async def remove_health_check_target(pool: asyncpg.Pool, installation_id: int, repo_full_name: str, target_id: int) -> None:
+    await pool.execute(
+        "DELETE FROM health_check_targets WHERE id = $1 AND installation_id = $2 AND repo_full_name = $3",
+        target_id,
+        installation_id,
+        repo_full_name,
+    )
+
+
+async def list_health_check_targets(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT id, label, base_url, latency_threshold_ms, created_at
+        FROM health_check_targets
+        WHERE installation_id = $1 AND repo_full_name = $2
+        ORDER BY created_at ASC
+        """,
+        installation_id,
+        repo_full_name,
+    )
+    return [dict(row) for row in rows]
+
+
+async def count_health_check_targets(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> int:
+    row = await pool.fetchrow(
+        "SELECT count(*) AS n FROM health_check_targets WHERE installation_id = $1 AND repo_full_name = $2",
+        installation_id,
+        repo_full_name,
+    )
+    return row["n"]
+
+
 async def get_recent_history(
     pool: asyncpg.Pool,
     installation_id: int,
@@ -312,26 +377,6 @@ async def set_webhook_url(pool: asyncpg.Pool, installation_id: int, url: str | N
         "UPDATE installations SET webhook_url = $2, updated_at = now() WHERE installation_id = $1",
         installation_id,
         url,
-    )
-
-
-async def set_health_check_config(
-    pool: asyncpg.Pool,
-    installation_id: int,
-    base_url: str | None,
-    threshold_ms: int | None,
-) -> None:
-    await pool.execute(
-        """
-        UPDATE installations
-        SET health_check_base_url = $2,
-            health_check_latency_threshold_ms = $3,
-            updated_at = now()
-        WHERE installation_id = $1
-        """,
-        installation_id,
-        base_url,
-        threshold_ms,
     )
 
 

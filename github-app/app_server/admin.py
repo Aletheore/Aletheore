@@ -7,9 +7,13 @@ from pydantic import BaseModel, Field
 
 from app_server.auth import get_current_session
 from app_server.db import (
+    DEFAULT_HEALTH_CHECK_TARGET_LIMIT,
+    INCLUDED_HEALTH_CHECK_TARGETS,
     INCLUDED_SEATS,
+    add_health_check_target,
     add_installation_member,
     count_active_tokens,
+    count_health_check_targets,
     count_installation_members,
     create_api_token,
     get_extra_seats,
@@ -17,10 +21,11 @@ from app_server.db import (
     get_max_tokens,
     is_installation_member,
     list_api_tokens,
+    list_health_check_targets,
     list_installation_members,
+    remove_health_check_target,
     remove_installation_member,
     revoke_api_token,
-    set_health_check_config,
     set_webhook_url,
 )
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
@@ -43,9 +48,10 @@ class SetWebhookURLRequest(BaseModel):
     webhook_url: str | None = None
 
 
-class SetHealthCheckConfigRequest(BaseModel):
-    health_check_base_url: str | None = None
-    health_check_latency_threshold_ms: int | None = None
+class AddHealthCheckTargetRequest(BaseModel):
+    label: str = Field(min_length=1, max_length=100, pattern=_LABEL_PATTERN)
+    base_url: str
+    latency_threshold_ms: int | None = None
 
 
 class CreateCliTokenRequest(BaseModel):
@@ -160,14 +166,20 @@ async def admin_page(org: str, repo: str, request: Request):
     installation = await _require_admin_installation(request, org, repo)
     pool = request.app.state.db_pool
     installation_id = installation["installation_id"]
+    repo_full_name = f"{org}/{repo}"
     tokens = await list_api_tokens(pool, installation_id)
     members = await list_installation_members(pool, installation_id)
     seat_limit = INCLUDED_SEATS + await get_extra_seats(pool, installation_id)
+    health_targets = await list_health_check_targets(pool, installation_id, repo_full_name)
+    health_target_limit = INCLUDED_HEALTH_CHECK_TARGETS.get(installation["plan"], DEFAULT_HEALTH_CHECK_TARGET_LIMIT)
     return {
         "installation": installation,
         "tokens": tokens,
         "members": members,
         "seat_limit": seat_limit,
+        "health_targets": health_targets,
+        "health_target_limit": health_target_limit,
+        "public_status_url": f"/v1/health/{org}/{repo}",
         "branch_protection_disclosure": BRANCH_PROTECTION_DISCLOSURE,
     }
 
@@ -241,21 +253,35 @@ async def set_webhook_url_route(org: str, repo: str, request: Request, body: Set
     return {"ok": True}
 
 
-@admin_router.put("/admin/{org}/{repo}/health-check-url")
-async def set_health_check_config_route(
-    org: str, repo: str, request: Request, body: SetHealthCheckConfigRequest
-):
+@admin_router.post("/admin/{org}/{repo}/health-targets")
+async def add_health_check_target_route(org: str, repo: str, request: Request, body: AddHealthCheckTargetRequest):
     installation = await _require_admin_installation(request, org, repo)
-    if body.health_check_base_url:
-        try:
-            validate_external_https_url(body.health_check_base_url)
-        except UnsafeURLError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await set_health_check_config(
-        request.app.state.db_pool,
-        installation["installation_id"],
-        body.health_check_base_url,
-        body.health_check_latency_threshold_ms,
+    try:
+        validate_external_https_url(body.base_url)
+    except UnsafeURLError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    pool = request.app.state.db_pool
+    installation_id = installation["installation_id"]
+    repo_full_name = f"{org}/{repo}"
+    limit = INCLUDED_HEALTH_CHECK_TARGETS.get(installation["plan"], DEFAULT_HEALTH_CHECK_TARGET_LIMIT)
+    if await count_health_check_targets(pool, installation_id, repo_full_name) >= limit:
+        raise HTTPException(
+            status_code=409,
+            detail=f"health check target limit reached ({limit} for the {installation['plan']} plan)",
+        )
+
+    target_id = await add_health_check_target(
+        pool, installation_id, repo_full_name, body.label, body.base_url, body.latency_threshold_ms
+    )
+    return {"id": target_id}
+
+
+@admin_router.delete("/admin/{org}/{repo}/health-targets/{target_id}")
+async def remove_health_check_target_route(org: str, repo: str, target_id: int, request: Request):
+    installation = await _require_admin_installation(request, org, repo)
+    await remove_health_check_target(
+        request.app.state.db_pool, installation["installation_id"], f"{org}/{repo}", target_id
     )
     return {"ok": True}
 
