@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pricing — Aletheore</title>
-  <meta name="description" content="Free deterministic CLI scanning forever. Pro adds managed AI audits, live endpoint monitoring, an AI-generated architecture wiki, Slack/Teams alerts, and team seats.">
+  <meta name="description" content="Free deterministic CLI scanning forever. Starter, Team, and Enterprise add managed AI audits, AIRview, live endpoint monitoring, and team seats - model quality and seats scale with plan.">
   <link rel="canonical" href="https://www.aletheore.com/pricing">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Aletheore">
   <meta property="og:url" content="https://www.aletheore.com/pricing">
   <meta property="og:title" content="Pricing — Aletheore">
-  <meta property="og:description" content="Free deterministic CLI scanning forever. Pro adds managed AI audits, live endpoint monitoring, an AI-generated architecture wiki, Slack/Teams alerts, and team seats.">
+  <meta property="og:description" content="Free deterministic CLI scanning forever. Starter, Team, and Enterprise add managed AI audits, AIRview, live endpoint monitoring, and team seats - model quality and seats scale with plan.">
   <meta property="og:image" content="https://www.aletheore.com/assets/logo-mark.png">
   <link rel="icon" type="image/png" href="assets/logo-mark.png">
   <link rel="stylesheet" href="styles.css">
@@ -33,7 +33,7 @@
 
     <section class="pricing-hero">
       <h1>Simple, honest pricing.</h1>
-      <p class="section-intro">The deterministic scanner is free forever. Pro adds managed audits, alerts, and monitoring for small teams.</p>
+      <p class="section-intro">The deterministic scanner is free forever. Starter, Team, and Enterprise add managed AI audits and AIRview - the model writing them, and the seats included, scale with plan.</p>
 
       <div class="pricing-grid">
         <article class="price-card">
@@ -48,23 +48,46 @@
           </ul>
         </article>
 
-        <article class="price-card pro">
-          <h3>Pro</h3>
-          <div><span class="price-was">$15</span><span class="price-now">$11.99</span></div>
+        <article class="price-card">
+          <h3>Starter</h3>
+          <div class="price-now">$29</div>
           <div class="price-sub">/month, up to 3 team members</div>
           <ul>
             <li>Everything in Free.</li>
-            <li>Managed audit runs from PR comments, CLI, or MCP.</li>
+            <li>Managed audits and AIRview, written by DeepSeek.</li>
             <li>Automatic Flash reviews on every push to an open pull request.</li>
             <li>Slack / Teams alerts on new findings.</li>
             <li>Branch-protection Check Runs for new secrets.</li>
             <li>Endpoint health monitoring across multiple targets, with a public status API.</li>
-            <li>An AI-generated live architecture wiki, regenerated on every push.</li>
             <li>+$3.99/mo per additional team member.</li>
           </ul>
-          <p class="plan-note">Also available as a GitHub App - <a href="https://github.com/marketplace" rel="noopener">listing submitted, currently under GitHub's review</a>.</p>
+        </article>
+
+        <article class="price-card pro">
+          <h3>Team</h3>
+          <div class="price-now">$79</div>
+          <div class="price-sub">/month, up to 10 team members</div>
+          <ul>
+            <li>Everything in Starter.</li>
+            <li>Managed audits and AIRview, written by GPT-4o.</li>
+            <li>+$3.99/mo per additional team member.</li>
+          </ul>
+        </article>
+
+        <article class="price-card">
+          <h3>Enterprise</h3>
+          <div class="price-now">$199</div>
+          <div class="price-sub">/month, up to 25 team members</div>
+          <ul>
+            <li>Everything in Team.</li>
+            <li>Managed audits and AIRview, written by Claude Opus.</li>
+            <li>+$3.99/mo per additional team member.</li>
+          </ul>
         </article>
       </div>
+      <p class="section-intro" style="margin-top: 28px;">
+        Also available as a GitHub App - <a href="https://github.com/marketplace" rel="noopener">listing submitted, currently under GitHub's review</a>.
+      </p>
     </section>
   </div>
 

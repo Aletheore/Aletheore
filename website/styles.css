@@ -459,9 +459,9 @@ section h2 {
 
 .pricing-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 24px;
-  max-width: 780px;
+  max-width: 1180px;
   margin: 0 auto;
   text-align: left;
 }
