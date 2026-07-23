@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aletheore Developers — CLI, MCP, AIR, and Source-Grounded Tools</title>
+  <meta name="description" content="Developer guide for Aletheore: pip install, CLI commands, query subcommands, MCP tools, AIR evidence files, semantic search, AIRview, and managed audits.">
+  <link rel="canonical" href="https://www.aletheore.com/developers">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Aletheore">
+  <meta property="og:url" content="https://www.aletheore.com/developers">
+  <meta property="og:title" content="Aletheore Developers — CLI, MCP, AIR, and Source-Grounded Tools">
+  <meta property="og:description" content="Install Aletheore from PyPI, scan repositories locally, query AIR evidence, run MCP tools for coding agents, and use AIRview for architecture intelligence.">
+  <meta property="og:image" content="https://www.aletheore.com/assets/logo-mark.png">
+
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Aletheore Developers — CLI, MCP, AIR, and Source-Grounded Tools">
+  <meta name="twitter:description" content="CLI commands, query subcommands, MCP tools, and AIR evidence files for source-grounded code intelligence.">
+  <meta name="twitter:image" content="https://www.aletheore.com/assets/logo-mark.png">
+
+  <link rel="icon" type="image/png" href="assets/logo-mark.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <nav class="site-nav" aria-label="Main navigation">
+      <a class="wordmark" href="index.html">
+        <img src="assets/logo-mark.png" alt="" width="28" height="28">
+        Aletheore
+      </a>
+      <div class="nav-links">
+        <a href="pricing.html">Pricing</a>
+        <a href="developers.html">Developers</a>
+        <a href="terms.html">Terms</a>
+        <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+        <a href="https://www.linkedin.com/company/alethoeore">LinkedIn</a>
+        <a href="https://app.aletheore.com/">Dashboard</a>
+        <a class="btn btn-primary" href="https://app.aletheore.com/">Get Started</a>
+      </div>
+    </nav>
+
+    <main>
+      <section class="developer-hero">
+        <div>
+          <p class="eyebrow">For developers and coding agents</p>
+          <h1>Source-grounded repository intelligence from one command.</h1>
+          <p>Install Aletheore from PyPI, scan a repository locally, and expose the same evidence to CLI queries, MCP tools, AIRview, dashboard views, and managed audits.</p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#quickstart">Install from PyPI</a>
+            <a class="btn btn-secondary" href="#mcp">View MCP tools</a>
+          </div>
+        </div>
+        <div class="install-card" aria-label="Aletheore install and first scan commands">
+          <div class="terminal-title">
+            <span class="terminal-controls"></span>
+            <strong>Quickstart</strong>
+          </div>
+          <pre><code>pip install Aletheore
+
+aletheore scan .
+aletheore query endpoints
+aletheore dashboard</code></pre>
+        </div>
+      </section>
+
+      <section id="quickstart" class="developer-section">
+        <div class="section-heading">
+          <p class="eyebrow">CLI workflow</p>
+          <h2>Scan once. Query the evidence many ways.</h2>
+          <p>The deterministic scan writes AIR, Aletheore's Intermediate Representation. Downstream commands read AIR instead of scanning blindly again.</p>
+        </div>
+        <div class="command-grid">
+          <article>
+            <h3>Install and scan</h3>
+            <pre><code>pip install Aletheore
+aletheore scan .</code></pre>
+            <p>Builds <code>.aletheore/air.json</code>, <code>.aletheore/air.toon</code>, and history snapshots.</p>
+          </article>
+          <article>
+            <h3>Audit locally or managed</h3>
+            <pre><code>aletheore audit .
+aletheore audit . --managed</code></pre>
+            <p>Use your own provider locally, or run a managed audit with an Aletheore API token.</p>
+          </article>
+          <article>
+            <h3>Search and dashboard</h3>
+            <pre><code>aletheore index .
+aletheore query search-codebase "auth flow"
+aletheore dashboard .</code></pre>
+            <p>Build a local semantic index, ask targeted questions, and inspect evidence visually.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="developer-section">
+        <div class="section-heading">
+          <p class="eyebrow">Query subcommands</p>
+          <h2>Ask precise questions without sending the whole repo.</h2>
+        </div>
+        <div class="query-board">
+          <div>
+            <h3>Repository structure</h3>
+            <code>imports</code>
+            <code>imported-by</code>
+            <code>symbols</code>
+            <code>cluster</code>
+            <code>branch</code>
+            <code>changes</code>
+          </div>
+          <div>
+            <h3>Risk and operations</h3>
+            <code>secrets</code>
+            <code>vulnerabilities</code>
+            <code>licenses</code>
+            <code>endpoints</code>
+            <code>dead-code</code>
+            <code>hotspots</code>
+          </div>
+          <div>
+            <h3>Code intelligence</h3>
+            <code>database</code>
+            <code>infrastructure</code>
+            <code>environment-variables</code>
+            <code>symbol-source</code>
+            <code>search-codebase</code>
+            <code>answer</code>
+          </div>
+          <div>
+            <h3>Evidence resolution</h3>
+            <code>evidence-for-endpoint</code>
+            <code>evidence-for-symbol</code>
+            <code>evidence-for-dependency</code>
+            <code>ownership</code>
+          </div>
+        </div>
+      </section>
+
+      <section id="mcp" class="developer-section mcp-section">
+        <div>
+          <p class="eyebrow">MCP server</p>
+          <h2>Give coding agents tools, not a giant prompt.</h2>
+          <p>Aletheore's MCP server exposes repository evidence as structured, TOON-encoded tool results. Agents can ask for imports, owners, endpoints, symbols, semantic search, source evidence, and managed audits without pasting the whole repository into context.</p>
+          <pre><code>aletheore mcp .</code></pre>
+        </div>
+        <div class="mcp-tool-list">
+          <span>aletheore_scan</span>
+          <span>aletheore_imports</span>
+          <span>aletheore_imported_by</span>
+          <span>aletheore_symbols</span>
+          <span>aletheore_neighborhood</span>
+          <span>aletheore_search</span>
+          <span>aletheore_symbol_source</span>
+          <span>aletheore_find_evidence_for_endpoint</span>
+          <span>aletheore_find_evidence_for_symbol</span>
+          <span>aletheore_find_evidence_for_dependency</span>
+          <span>aletheore_healthcheck</span>
+          <span>aletheore_search_codebase</span>
+          <span>aletheore_answer</span>
+          <span>aletheore_managed_audit</span>
+        </div>
+      </section>
+
+      <section class="developer-section evidence-contract">
+        <div>
+          <p class="eyebrow">Evidence contract</p>
+          <h2>One source of truth.</h2>
+          <p>Everything downstream reads the same deterministic evidence. AIRview, dashboard, query, MCP, and audits do not invent files, routes, symbols, or owners that are not present in AIR.</p>
+        </div>
+        <div class="contract-list">
+          <article>
+            <h3>.aletheore/air.json</h3>
+            <p>Canonical repository evidence: modules, symbols, dependencies, endpoints, architecture, security, ownership, and history.</p>
+          </article>
+          <article>
+            <h3>.aletheore/air.toon</h3>
+            <p>TOON-encoded evidence for agent-facing and model-facing contexts where token cost matters.</p>
+          </article>
+          <article>
+            <h3>.aletheore/history/</h3>
+            <p>Snapshots used for changes, drift, and continuity between scans.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="developer-section deep-features">
+        <div class="section-heading">
+          <p class="eyebrow">Depth without mystery</p>
+          <h2>Technical surfaces that stay evidence-first.</h2>
+        </div>
+        <div class="pillar-grid">
+          <article class="pillar-card">
+            <span class="pillar-index">AIRview</span>
+            <h3>Architecture maps</h3>
+            <p>AI-written subsystem pages and dependency diagrams grounded in deterministic architecture clusters.</p>
+          </article>
+          <article class="pillar-card">
+            <span class="pillar-index">MCP</span>
+            <h3>Agent context savings</h3>
+            <p>Agents request focused evidence instead of dragging entire repositories into model context.</p>
+          </article>
+          <article class="pillar-card">
+            <span class="pillar-index">Security</span>
+            <h3>Risk resolution</h3>
+            <p>Secrets, vulnerabilities, dependencies, endpoints, and infrastructure findings trace back to source.</p>
+          </article>
+          <article class="pillar-card">
+            <span class="pillar-index">Health</span>
+            <h3>Endpoint checks</h3>
+            <p><code>aletheore healthcheck</code> runs GET-only checks against mapped API endpoints and saves the result locally.</p>
+          </article>
+          <article class="pillar-card">
+            <span class="pillar-index">Local</span>
+            <h3>Privacy by default</h3>
+            <p>The CLI scan runs locally. Managed and hosted flows use derived evidence according to the selected workflow.</p>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <div class="container footer-grid">
+      <div>
+        <a class="wordmark" href="index.html">
+          <img src="assets/logo-mark.png" alt="" width="24" height="24">
+          Aletheore
+        </a>
+        <p class="footer-note">Evidence-grounded repository audits. Open source, local-first.</p>
+      </div>
+      <div>
+        <h4>Product</h4>
+        <a href="pricing.html">Pricing</a>
+        <a href="developers.html">Developers</a>
+        <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+      </div>
+      <div>
+        <h4>Community</h4>
+        <a href="https://www.linkedin.com/company/alethoeore">LinkedIn</a>
+        <a href="https://github.com/sponsors/ArihantK15">Sponsor</a>
+        <a href="https://github.com/Aletheore/Aletheore/issues">Issues</a>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <a href="terms.html">Terms</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="refund.html">Refund Policy</a>
+      </div>
+    </div>
+  </footer>
+  <script src="vendor/motion.js"></script>
+</body>
+</html>
