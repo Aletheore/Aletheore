@@ -16,6 +16,15 @@ This directory contains concise runbooks and policies for operating the hosted A
 - Document incident response, reliability targets, and customer-impacting data handling.
 - Keep production claims tied to repository evidence and server verification.
 
+## Current Documents
+
+- [BRANCH-PROTECTION.md](BRANCH-PROTECTION.md)
+- [DATA-HANDLING.md](DATA-HANDLING.md)
+- [DEPLOYMENT-VERIFICATION.md](DEPLOYMENT-VERIFICATION.md)
+- [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md)
+- [SLOS.md](SLOS.md)
+- [SUPPORT-PROCESS.md](SUPPORT-PROCESS.md)
+
 ## Future Contents
 
 - Deployment drill records.
@@ -26,4 +35,3 @@ This directory contains concise runbooks and policies for operating the hosted A
 ## Relationship to Other Directories
 
 The hosted service implementation lives in [../../github-app](../../github-app). Security disclosure policy lives in [../../SECURITY.md](../../SECURITY.md). Startup-readiness tracking lives in [../../STARTUP_AUDIT_REPORT.md](../../STARTUP_AUDIT_REPORT.md).
-
