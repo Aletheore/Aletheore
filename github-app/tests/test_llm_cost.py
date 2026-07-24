@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 
 from app_server import llm_cost
-from app_server.llm_cost import cost_for_usage, monthly_cap_for_installation, stale_models
+from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation, stale_models
 
 
 def test_cost_for_usage_deepseek_v4_pro():
@@ -21,6 +21,17 @@ def test_cost_for_usage_deepseek_v4_flash():
 def test_cost_for_usage_small_real_call():
     expected = (2_000 * 0.14 + 300 * 0.28) / 1_000_000
     assert cost_for_usage("deepseek-v4-flash", 2_000, 300) == pytest.approx(expected)
+
+
+def test_base_cap_for_plan_is_half_of_tier_price():
+    assert base_cap_for_plan("indie") == pytest.approx(14.50)
+    assert base_cap_for_plan("team") == pytest.approx(39.50)
+    assert base_cap_for_plan("enterprise") == pytest.approx(99.50)
+
+
+def test_base_cap_for_plan_free_or_unknown_plan_has_no_budget():
+    assert base_cap_for_plan("free") == 0.0
+    assert base_cap_for_plan("not-a-real-plan") == 0.0
 
 
 def test_monthly_cap_for_installation_base_only():

@@ -28,7 +28,7 @@ from aletheore.pr_comment import COMMENT_MARKER, format_diff_comment
 from aletheore.healthcheck import run_healthcheck
 from app_server.config import get_settings
 from app_server.github_auth import generate_app_jwt, get_installation_token
-from app_server.llm_cost import cost_for_usage, monthly_cap_for_installation
+from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation
 from app_server.logging_config import log_job
 from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
 from scan_worker import live_wiki
@@ -424,7 +424,7 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
         else:
             with installation_spend_lock(settings.database_url, installation_id):
                 extra_seats = get_extra_seats(settings.database_url, installation_id)
-                monthly_cap = monthly_cap_for_installation(7.00, extra_seats)
+                monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
                 current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
                 if current_spend >= monthly_cap:
                     body = (
@@ -486,7 +486,7 @@ def run_managed_audit_api_job(
     plan = installation["plan"] if installation is not None else "indie"
     with installation_spend_lock(settings.database_url, installation_id):
         extra_seats = get_extra_seats(settings.database_url, installation_id)
-        monthly_cap = monthly_cap_for_installation(7.00, extra_seats)
+        monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
         current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
         if current_spend >= monthly_cap:
             raise RuntimeError(
@@ -546,7 +546,7 @@ def run_flash_review_job(
 
     with installation_spend_lock(settings.database_url, installation_id):
         extra_seats = get_extra_seats(settings.database_url, installation_id)
-        monthly_cap = monthly_cap_for_installation(7.00, extra_seats)
+        monthly_cap = monthly_cap_for_installation(base_cap_for_plan(installation["plan"]), extra_seats)
         current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
         if current_spend >= monthly_cap:
             return
