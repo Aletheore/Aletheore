@@ -93,45 +93,51 @@ def _extract_python(
     functions: list[dict] = []
     classes: list[dict] = []
 
-    def walk(n: Node):
-        if n.type == "import_from_statement":
-            module_node = n.child_by_field_name("module_name")
-            module_name = (
-                source[module_node.start_byte:module_node.end_byte].decode()
-                if module_node is not None
-                else ""
-            )
-            names: list[str] = []
-            for child in n.named_children:
-                if child == module_node:
-                    continue
-                if child.type in ("dotted_name", "identifier"):
-                    names.append(source[child.start_byte:child.end_byte].decode())
-                elif child.type == "aliased_import":
-                    name_node = child.child_by_field_name("name")
-                    if name_node is not None:
-                        names.append(source[name_node.start_byte:name_node.end_byte].decode())
-            from_imports.append((module_name, names))
-        elif n.type == "import_statement":
-            for child in n.named_children:
-                if child.type == "dotted_name":
-                    plain_imports.append(source[child.start_byte:child.end_byte].decode())
-                elif child.type == "aliased_import":
-                    name_node = child.child_by_field_name("name")
-                    if name_node is not None:
-                        plain_imports.append(
-                            source[name_node.start_byte:name_node.end_byte].decode()
-                        )
-        elif n.type == "function_definition":
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                functions.append(_symbol_entry(source, name_node, n))
-        elif n.type == "class_definition":
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                classes.append(_symbol_entry(source, name_node, n))
-        for child in n.children:
-            walk(child)
+    def walk(root: Node):
+        # Iterative, not recursive - a deeply-nested real-world AST (confirmed on
+        # Linux kernel C source) can exceed Python's recursion limit and crash the
+        # whole scan. reversed(children) before pushing preserves the same
+        # left-to-right visiting order a recursive walk would produce.
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n.type == "import_from_statement":
+                module_node = n.child_by_field_name("module_name")
+                module_name = (
+                    source[module_node.start_byte:module_node.end_byte].decode()
+                    if module_node is not None
+                    else ""
+                )
+                names: list[str] = []
+                for child in n.named_children:
+                    if child == module_node:
+                        continue
+                    if child.type in ("dotted_name", "identifier"):
+                        names.append(source[child.start_byte:child.end_byte].decode())
+                    elif child.type == "aliased_import":
+                        name_node = child.child_by_field_name("name")
+                        if name_node is not None:
+                            names.append(source[name_node.start_byte:name_node.end_byte].decode())
+                from_imports.append((module_name, names))
+            elif n.type == "import_statement":
+                for child in n.named_children:
+                    if child.type == "dotted_name":
+                        plain_imports.append(source[child.start_byte:child.end_byte].decode())
+                    elif child.type == "aliased_import":
+                        name_node = child.child_by_field_name("name")
+                        if name_node is not None:
+                            plain_imports.append(
+                                source[name_node.start_byte:name_node.end_byte].decode()
+                            )
+            elif n.type == "function_definition":
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    functions.append(_symbol_entry(source, name_node, n))
+            elif n.type == "class_definition":
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    classes.append(_symbol_entry(source, name_node, n))
+            stack.extend(reversed(n.children))
 
     walk(node)
     return plain_imports, from_imports, functions, classes
@@ -142,22 +148,25 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
     functions: list[dict] = []
     classes: list[dict] = []
 
-    def walk(n: Node):
-        if n.type == "import_statement":
-            source_node = n.child_by_field_name("source")
-            if source_node is not None:
-                raw = source[source_node.start_byte:source_node.end_byte].decode()
-                imports.append(raw.strip("'\""))
-        elif n.type == "function_declaration":
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                functions.append(_symbol_entry(source, name_node, n))
-        elif n.type == "class_declaration":
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                classes.append(_symbol_entry(source, name_node, n))
-        for child in n.children:
-            walk(child)
+    def walk(root: Node):
+        # Iterative, not recursive - see _extract_python's walk for why.
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n.type == "import_statement":
+                source_node = n.child_by_field_name("source")
+                if source_node is not None:
+                    raw = source[source_node.start_byte:source_node.end_byte].decode()
+                    imports.append(raw.strip("'\""))
+            elif n.type == "function_declaration":
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    functions.append(_symbol_entry(source, name_node, n))
+            elif n.type == "class_declaration":
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    classes.append(_symbol_entry(source, name_node, n))
+            stack.extend(reversed(n.children))
 
     walk(node)
     return imports, functions, classes
@@ -175,33 +184,36 @@ def _extract_go(node: Node, source: bytes) -> tuple[list[str], list[dict], list[
                 return source[child.start_byte:child.end_byte].decode()
         return None
 
-    def walk(n: Node):
-        if n.type == "import_spec":
-            # import_spec is either just a string literal ("fmt") or an alias followed
-            # by one ("svc2 \"pkg/path\"") - the alias identifier itself is never the
-            # thing we resolve, only the string literal's content is a real import path.
-            for child in n.children:
-                if child.type == "interpreted_string_literal":
-                    content = string_content(child)
-                    if content is not None:
-                        imports.append(content)
-        elif n.type in ("function_declaration", "method_declaration"):
-            name_node = n.child_by_field_name("name")
-            if name_node is None:
-                # method_declaration names the method via a field_identifier child
-                # rather than a "name"-labeled field.
+    def walk(root: Node):
+        # Iterative, not recursive - see _extract_python's walk for why.
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n.type == "import_spec":
+                # import_spec is either just a string literal ("fmt") or an alias followed
+                # by one ("svc2 \"pkg/path\"") - the alias identifier itself is never the
+                # thing we resolve, only the string literal's content is a real import path.
                 for child in n.children:
-                    if child.type == "field_identifier":
-                        name_node = child
-                        break
-            if name_node is not None:
-                functions.append(_symbol_entry(source, name_node, n))
-        elif n.type == "type_spec":
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                types.append(_symbol_entry(source, name_node, n))
-        for child in n.children:
-            walk(child)
+                    if child.type == "interpreted_string_literal":
+                        content = string_content(child)
+                        if content is not None:
+                            imports.append(content)
+            elif n.type in ("function_declaration", "method_declaration"):
+                name_node = n.child_by_field_name("name")
+                if name_node is None:
+                    # method_declaration names the method via a field_identifier child
+                    # rather than a "name"-labeled field.
+                    for child in n.children:
+                        if child.type == "field_identifier":
+                            name_node = child
+                            break
+                if name_node is not None:
+                    functions.append(_symbol_entry(source, name_node, n))
+            elif n.type == "type_spec":
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    types.append(_symbol_entry(source, name_node, n))
+            stack.extend(reversed(n.children))
 
     walk(node)
     return imports, functions, types
@@ -288,24 +300,27 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
     functions: list[dict] = []
     types: list[dict] = []
 
-    def walk(n: Node):
-        if n.type == "use_declaration":
-            # use_declaration's single meaningful child is whichever path-shaped
-            # node follows the "use" keyword and precedes the ";".
-            for child in n.children:
-                if child.type not in ("use", ";"):
-                    imports.extend(_rust_use_paths(child, source))
-                    break
-        elif n.type in ("function_item", "function_signature_item"):
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                functions.append(_symbol_entry(source, name_node, n))
-        elif n.type in ("struct_item", "enum_item", "trait_item"):
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                types.append(_symbol_entry(source, name_node, n))
-        for child in n.children:
-            walk(child)
+    def walk(root: Node):
+        # Iterative, not recursive - see _extract_python's walk for why.
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n.type == "use_declaration":
+                # use_declaration's single meaningful child is whichever path-shaped
+                # node follows the "use" keyword and precedes the ";".
+                for child in n.children:
+                    if child.type not in ("use", ";"):
+                        imports.extend(_rust_use_paths(child, source))
+                        break
+            elif n.type in ("function_item", "function_signature_item"):
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    functions.append(_symbol_entry(source, name_node, n))
+            elif n.type in ("struct_item", "enum_item", "trait_item"):
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    types.append(_symbol_entry(source, name_node, n))
+            stack.extend(reversed(n.children))
 
     walk(node)
     return imports, functions, types
@@ -420,26 +435,29 @@ def _extract_java(
     def text(n: Node) -> str:
         return source[n.start_byte:n.end_byte].decode()
 
-    def walk(n: Node):
-        if n.type == "import_declaration":
-            is_static = any(c.type == "static" for c in n.children)
-            is_wildcard = any(c.type == "asterisk" for c in n.children)
-            for child in n.children:
-                if child.type in ("scoped_identifier", "identifier"):
-                    imports.append((text(child), is_static, is_wildcard))
-                    break
-        elif n.type == "method_declaration":
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                functions.append(_symbol_entry(source, name_node, n))
-        elif n.type in (
-            "class_declaration", "interface_declaration", "enum_declaration", "record_declaration",
-        ):
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                types.append(_symbol_entry(source, name_node, n))
-        for child in n.children:
-            walk(child)
+    def walk(root: Node):
+        # Iterative, not recursive - see _extract_python's walk for why.
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n.type == "import_declaration":
+                is_static = any(c.type == "static" for c in n.children)
+                is_wildcard = any(c.type == "asterisk" for c in n.children)
+                for child in n.children:
+                    if child.type in ("scoped_identifier", "identifier"):
+                        imports.append((text(child), is_static, is_wildcard))
+                        break
+            elif n.type == "method_declaration":
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    functions.append(_symbol_entry(source, name_node, n))
+            elif n.type in (
+                "class_declaration", "interface_declaration", "enum_declaration", "record_declaration",
+            ):
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    types.append(_symbol_entry(source, name_node, n))
+            stack.extend(reversed(n.children))
 
     walk(node)
     return imports, functions, types
@@ -522,33 +540,36 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
     def text(n: Node) -> str:
         return source[n.start_byte:n.end_byte].decode()
 
-    def walk(n: Node):
-        if n.type == "call":
-            method_node = n.child_by_field_name("method")
-            receiver_node = n.child_by_field_name("receiver")
-            # require/require_relative are plain top-level function calls (no
-            # receiver) - "@store.require(...)" or "Foo.require(...)" wouldn't be
-            # the stdlib Kernel#require this resolver means to handle.
-            if receiver_node is None and method_node is not None and method_node.type == "identifier":
-                method_name = text(method_node)
-                if method_name in ("require", "require_relative"):
-                    args_node = n.child_by_field_name("arguments")
-                    if args_node is not None:
-                        for arg in args_node.children:
-                            if arg.type == "string":
-                                for part in arg.children:
-                                    if part.type == "string_content":
-                                        imports.append((method_name, text(part)))
-        elif n.type == "method":
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                functions.append(_symbol_entry(source, name_node, n))
-        elif n.type in ("class", "module"):
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                types.append(_symbol_entry(source, name_node, n))
-        for child in n.children:
-            walk(child)
+    def walk(root: Node):
+        # Iterative, not recursive - see _extract_python's walk for why.
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n.type == "call":
+                method_node = n.child_by_field_name("method")
+                receiver_node = n.child_by_field_name("receiver")
+                # require/require_relative are plain top-level function calls (no
+                # receiver) - "@store.require(...)" or "Foo.require(...)" wouldn't be
+                # the stdlib Kernel#require this resolver means to handle.
+                if receiver_node is None and method_node is not None and method_node.type == "identifier":
+                    method_name = text(method_node)
+                    if method_name in ("require", "require_relative"):
+                        args_node = n.child_by_field_name("arguments")
+                        if args_node is not None:
+                            for arg in args_node.children:
+                                if arg.type == "string":
+                                    for part in arg.children:
+                                        if part.type == "string_content":
+                                            imports.append((method_name, text(part)))
+            elif n.type == "method":
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    functions.append(_symbol_entry(source, name_node, n))
+            elif n.type in ("class", "module"):
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    types.append(_symbol_entry(source, name_node, n))
+            stack.extend(reversed(n.children))
 
     walk(node)
     return imports, functions, types
@@ -614,35 +635,38 @@ def _extract_php(node: Node, source: bytes) -> tuple[list[tuple[str, str]], list
 
     include_keywords = ("require", "require_once", "include", "include_once")
 
-    def walk(n: Node):
-        if n.type in (
-            "require_expression", "require_once_expression",
-            "include_expression", "include_once_expression",
-        ):
-            for child in n.children:
-                if child.type not in include_keywords:
-                    path = _php_require_path(child, source)
-                    if path:
-                        imports.append(("include", path))
-                    break
-        elif n.type == "namespace_use_declaration":
-            for clause in n.children:
-                if clause.type == "namespace_use_clause":
-                    for grandchild in clause.children:
-                        if grandchild.type in ("qualified_name", "name"):
-                            imports.append(("use", text(grandchild)))
-        elif n.type in ("function_definition", "method_declaration"):
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                functions.append(_symbol_entry(source, name_node, n))
-        elif n.type in (
-            "class_declaration", "interface_declaration", "trait_declaration", "enum_declaration",
-        ):
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                types.append(_symbol_entry(source, name_node, n))
-        for child in n.children:
-            walk(child)
+    def walk(root: Node):
+        # Iterative, not recursive - see _extract_python's walk for why.
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n.type in (
+                "require_expression", "require_once_expression",
+                "include_expression", "include_once_expression",
+            ):
+                for child in n.children:
+                    if child.type not in include_keywords:
+                        path = _php_require_path(child, source)
+                        if path:
+                            imports.append(("include", path))
+                        break
+            elif n.type == "namespace_use_declaration":
+                for clause in n.children:
+                    if clause.type == "namespace_use_clause":
+                        for grandchild in clause.children:
+                            if grandchild.type in ("qualified_name", "name"):
+                                imports.append(("use", text(grandchild)))
+            elif n.type in ("function_definition", "method_declaration"):
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    functions.append(_symbol_entry(source, name_node, n))
+            elif n.type in (
+                "class_declaration", "interface_declaration", "trait_declaration", "enum_declaration",
+            ):
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    types.append(_symbol_entry(source, name_node, n))
+            stack.extend(reversed(n.children))
 
     walk(node)
     return imports, functions, types
@@ -744,44 +768,51 @@ def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[dict],
                 return found
         return None
 
-    def walk(n: Node):
-        if n.type == "preproc_include":
-            for child in n.children:
-                if child.type == "string_literal":
-                    for grandchild in child.children:
-                        if grandchild.type == "string_content":
-                            imports.append(text(grandchild))
-                    break
-                # system_lib_string (<foo.h>) is deliberately not collected at all -
-                # always external by convention, never resolvable without knowing a
-                # build system's own -I search paths.
-        elif n.type == "function_definition":
-            declarator_node = n.child_by_field_name("declarator")
-            if declarator_node is not None:
-                name = function_name(declarator_node)
-                if name is not None:
-                    functions.append(
-                        {
-                            "name": name,
-                            "start_line": n.start_point[0] + 1,
-                            "end_line": n.end_point[0] + 1,
-                        }
-                    )
-        elif n.type in ("struct_specifier", "class_specifier", "union_specifier", "enum_specifier"):
-            # A forward declaration ("struct Foo;") or a plain type reference
-            # ("struct Foo* getFoo();") matches this node type too, with no body -
-            # only count it as a type genuinely defined in this file when it
-            # actually has one (verified this distinction is real: both of those
-            # produce the same struct_specifier node type with no
-            # field_declaration_list child, confirmed directly rather than assumed).
-            has_body = any(
-                c.type in ("field_declaration_list", "enumerator_list") for c in n.children
-            )
-            name_node = n.child_by_field_name("name")
-            if name_node is not None and has_body:
-                types.append(_symbol_entry(source, name_node, n))
-        for child in n.children:
-            walk(child)
+    def walk(root: Node):
+        # Iterative, not recursive - a deeply-nested real-world AST (confirmed on
+        # Linux kernel C source, which crashed the previous recursive version with
+        # "RecursionError: maximum recursion depth exceeded") can exceed Python's
+        # recursion limit. reversed(children) before pushing preserves the same
+        # left-to-right visiting order a recursive walk would produce.
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n.type == "preproc_include":
+                for child in n.children:
+                    if child.type == "string_literal":
+                        for grandchild in child.children:
+                            if grandchild.type == "string_content":
+                                imports.append(text(grandchild))
+                        break
+                    # system_lib_string (<foo.h>) is deliberately not collected at all -
+                    # always external by convention, never resolvable without knowing a
+                    # build system's own -I search paths.
+            elif n.type == "function_definition":
+                declarator_node = n.child_by_field_name("declarator")
+                if declarator_node is not None:
+                    name = function_name(declarator_node)
+                    if name is not None:
+                        functions.append(
+                            {
+                                "name": name,
+                                "start_line": n.start_point[0] + 1,
+                                "end_line": n.end_point[0] + 1,
+                            }
+                        )
+            elif n.type in ("struct_specifier", "class_specifier", "union_specifier", "enum_specifier"):
+                # A forward declaration ("struct Foo;") or a plain type reference
+                # ("struct Foo* getFoo();") matches this node type too, with no body -
+                # only count it as a type genuinely defined in this file when it
+                # actually has one (verified this distinction is real: both of those
+                # produce the same struct_specifier node type with no
+                # field_declaration_list child, confirmed directly rather than assumed).
+                has_body = any(
+                    c.type in ("field_declaration_list", "enumerator_list") for c in n.children
+                )
+                name_node = n.child_by_field_name("name")
+                if name_node is not None and has_body:
+                    types.append(_symbol_entry(source, name_node, n))
+            stack.extend(reversed(n.children))
 
     walk(node)
     return imports, functions, types
@@ -814,35 +845,38 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
     def text(n: Node) -> str:
         return source[n.start_byte:n.end_byte].decode()
 
-    def walk(n: Node):
-        if n.type == "using_directive":
-            # Plain ("using App.Store;"), aliased ("using Foo = App.Store.Store;"),
-            # and static ("using static System.Console;") forms all put the actual
-            # qualified path as the LAST qualified_name/identifier child - an alias
-            # name, when present, is a plain identifier that comes before it, so
-            # taking the last match is correct for all three forms without needing
-            # to special-case any of them (verified directly: child_by_field_name
-            # ("name") on this node type returns the ALIAS name, not the path, the
-            # opposite of what it looks like it should return).
-            path_node = None
-            for child in n.children:
-                if child.type in ("qualified_name", "identifier"):
-                    path_node = child
-            if path_node is not None:
-                imports.append(text(path_node))
-        elif n.type in (
-            "class_declaration", "interface_declaration", "struct_declaration",
-            "record_declaration", "enum_declaration",
-        ):
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                types.append(_symbol_entry(source, name_node, n))
-        elif n.type in ("method_declaration", "constructor_declaration"):
-            name_node = n.child_by_field_name("name")
-            if name_node is not None:
-                functions.append(_symbol_entry(source, name_node, n))
-        for child in n.children:
-            walk(child)
+    def walk(root: Node):
+        # Iterative, not recursive - see _extract_python's walk for why.
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n.type == "using_directive":
+                # Plain ("using App.Store;"), aliased ("using Foo = App.Store.Store;"),
+                # and static ("using static System.Console;") forms all put the actual
+                # qualified path as the LAST qualified_name/identifier child - an alias
+                # name, when present, is a plain identifier that comes before it, so
+                # taking the last match is correct for all three forms without needing
+                # to special-case any of them (verified directly: child_by_field_name
+                # ("name") on this node type returns the ALIAS name, not the path, the
+                # opposite of what it looks like it should return).
+                path_node = None
+                for child in n.children:
+                    if child.type in ("qualified_name", "identifier"):
+                        path_node = child
+                if path_node is not None:
+                    imports.append(text(path_node))
+            elif n.type in (
+                "class_declaration", "interface_declaration", "struct_declaration",
+                "record_declaration", "enum_declaration",
+            ):
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    types.append(_symbol_entry(source, name_node, n))
+            elif n.type in ("method_declaration", "constructor_declaration"):
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    functions.append(_symbol_entry(source, name_node, n))
+            stack.extend(reversed(n.children))
 
     walk(node)
     return imports, functions, types
