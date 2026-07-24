@@ -375,6 +375,34 @@ by default, plus one optional answer tool when started with `--agent`:
 aletheore mcp .
 ```
 
+### `aletheore mcp-install [path]`
+
+Writes the MCP server registration into your coding tool's own config, so it launches
+`aletheore mcp` for you automatically instead of you running it by hand. By default writes for
+every scriptable target: Claude Code (`.mcp.json`), Cursor (`.cursor/mcp.json`), VS Code
+(`.vscode/mcp.json`), Kiro (`.kiro/settings/mcp.json`), Opencode (`opencode.json`), and OpenAI
+Codex CLI (`.codex/config.toml`). Use `--target` to restrict to one or more
+(e.g. `--target cursor --target vscode`). Safe to re-run - it merges into any existing config
+file rather than overwriting it, so other MCP servers you've already configured are left alone.
+
+```bash
+aletheore mcp-install .
+```
+
+**PyCharm / other JetBrains IDEs:** not auto-configured. There's no single stable, publicly
+documented file format to safely script against - the supported path is Settings | Tools | AI
+Assistant | Model Context Protocol, using "Import a Claude MCP config" against the `.mcp.json`
+this command already wrote.
+
+**vim, Neovim, Emacs, and other terminal editors:** none of these have a native MCP client -
+support depends entirely on whichever AI plugin you've installed (e.g. `avante.nvim`,
+`codecompanion.nvim`), each with its own config. Point that plugin at `aletheore mcp <path>`.
+
+**OpenAI Codex CLI:** writes `.codex/config.toml`, but Codex only reads project-scoped MCP
+config for projects it already trusts - check Codex's own trust prompt if the tools don't
+appear. Writing this file reformats it; hand-written comments in an existing `config.toml` are
+not preserved.
+
 ### `aletheore dashboard [path]`
 
 A live local web UI (Starlette + SSE, opens in your browser): repo overview, git activity,

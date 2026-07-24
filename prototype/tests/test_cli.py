@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -9,7 +10,16 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from aletheore.cli import _ElapsedTicker, _make_progress_printer, app
+from aletheore.cli import (
+    _ElapsedTicker,
+    _MCP_CLIENT_CONFIGS,
+    _make_progress_printer,
+    _opencode_entry,
+    _stdio_entry,
+    _write_json_mcp_client_config,
+    _write_toml_mcp_client_config,
+    app,
+)
 from aletheore.device_auth import DeviceFlowError
 from aletheore.report import (
     AmbiguousAdapterError,
@@ -153,6 +163,247 @@ def test_version_flag_prints_version_and_exits():
 def test_main_unknown_command_still_errors():
     result = runner.invoke(app, ["bogus-command"])
     assert result.exit_code != 0
+
+
+def test_mcp_client_configs_cover_the_five_json_targets():
+    assert set(_MCP_CLIENT_CONFIGS.keys()) == {"claude-code", "cursor", "vscode", "kiro", "opencode"}
+
+
+def test_stdio_entry_includes_type_only_when_asked():
+    entry_with_type = _stdio_entry(Path("/repo"), include_type=True)
+    entry_without_type = _stdio_entry(Path("/repo"), include_type=False)
+
+    assert entry_with_type == {"type": "stdio", "command": "aletheore", "args": ["mcp", "/repo"]}
+    assert entry_without_type == {"command": "aletheore", "args": ["mcp", "/repo"]}
+
+
+def test_opencode_entry_uses_single_command_array_not_command_plus_args():
+    entry = _opencode_entry(Path("/repo"))
+
+    assert entry == {"type": "local", "command": ["aletheore", "mcp", "/repo"], "enabled": True}
+
+
+def test_write_json_mcp_client_config_creates_new_file(tmp_path):
+    config_path = tmp_path / ".mcp.json"
+    entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
+
+    message = _write_json_mcp_client_config(config_path, "mcpServers", entry)
+
+    assert "wrote" in message
+    assert json.loads(config_path.read_text()) == {"mcpServers": {"aletheore": entry}}
+
+
+def test_write_json_mcp_client_config_creates_parent_directories(tmp_path):
+    config_path = tmp_path / ".vscode" / "mcp.json"
+    entry = {"type": "stdio", "command": "aletheore", "args": ["mcp", str(tmp_path)]}
+
+    _write_json_mcp_client_config(config_path, "servers", entry)
+
+    assert json.loads(config_path.read_text()) == {"servers": {"aletheore": entry}}
+
+
+def test_write_json_mcp_client_config_preserves_other_servers(tmp_path):
+    config_path = tmp_path / ".mcp.json"
+    config_path.write_text(
+        json.dumps({"mcpServers": {"other-tool": {"command": "npx", "args": ["-y", "other"]}}})
+    )
+    entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
+
+    _write_json_mcp_client_config(config_path, "mcpServers", entry)
+
+    data = json.loads(config_path.read_text())
+    assert data["mcpServers"]["other-tool"] == {"command": "npx", "args": ["-y", "other"]}
+    assert data["mcpServers"]["aletheore"] == entry
+
+
+def test_write_json_mcp_client_config_updates_existing_aletheore_entry(tmp_path):
+    config_path = tmp_path / ".mcp.json"
+    config_path.write_text(
+        json.dumps({"mcpServers": {"aletheore": {"command": "aletheore", "args": ["mcp", "/old"]}}})
+    )
+    new_entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
+
+    message = _write_json_mcp_client_config(config_path, "mcpServers", new_entry)
+
+    assert "updated" in message
+    data = json.loads(config_path.read_text())
+    assert data["mcpServers"]["aletheore"] == new_entry
+    assert len(data["mcpServers"]) == 1
+
+
+def test_write_json_mcp_client_config_skips_invalid_json_without_crashing(tmp_path):
+    config_path = tmp_path / ".mcp.json"
+    config_path.write_text("{not valid json")
+
+    message = _write_json_mcp_client_config(
+        config_path, "mcpServers", {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
+    )
+
+    assert "skipped" in message
+    assert config_path.read_text() == "{not valid json"
+
+
+def test_write_json_mcp_client_config_skips_when_top_level_key_is_not_an_object(tmp_path):
+    config_path = tmp_path / ".mcp.json"
+    config_path.write_text(json.dumps({"mcpServers": "not-an-object"}))
+
+    message = _write_json_mcp_client_config(
+        config_path, "mcpServers", {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
+    )
+
+    assert "skipped" in message
+    assert json.loads(config_path.read_text()) == {"mcpServers": "not-an-object"}
+
+
+def test_write_toml_mcp_client_config_creates_new_file(tmp_path):
+    config_path = tmp_path / ".codex" / "config.toml"
+    entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
+
+    message = _write_toml_mcp_client_config(config_path, "mcp_servers", entry)
+
+    assert "wrote" in message
+    data = tomllib.loads(config_path.read_text())
+    assert data == {"mcp_servers": {"aletheore": entry}}
+
+
+def test_write_toml_mcp_client_config_preserves_other_servers(tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[mcp_servers.other-tool]\ncommand = "uvx"\nargs = ["other"]\n')
+    entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
+
+    _write_toml_mcp_client_config(config_path, "mcp_servers", entry)
+
+    data = tomllib.loads(config_path.read_text())
+    assert data["mcp_servers"]["other-tool"] == {"command": "uvx", "args": ["other"]}
+    assert data["mcp_servers"]["aletheore"] == entry
+
+
+def test_write_toml_mcp_client_config_updates_existing_aletheore_entry(tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('[mcp_servers.aletheore]\ncommand = "aletheore"\nargs = ["mcp", "/old"]\n')
+    new_entry = {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
+
+    message = _write_toml_mcp_client_config(config_path, "mcp_servers", new_entry)
+
+    assert "updated" in message
+    data = tomllib.loads(config_path.read_text())
+    assert data["mcp_servers"]["aletheore"] == new_entry
+    assert len(data["mcp_servers"]) == 1
+
+
+def test_write_toml_mcp_client_config_skips_invalid_toml_without_crashing(tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("not [ valid toml")
+
+    message = _write_toml_mcp_client_config(
+        config_path, "mcp_servers", {"command": "aletheore", "args": ["mcp", str(tmp_path)]}
+    )
+
+    assert "skipped" in message
+    assert config_path.read_text() == "not [ valid toml"
+
+
+def test_mcp_install_writes_all_json_targets_by_default(tmp_path):
+    result = runner.invoke(app, ["mcp-install", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".mcp.json").exists()
+    assert (tmp_path / ".cursor" / "mcp.json").exists()
+    assert (tmp_path / ".vscode" / "mcp.json").exists()
+    assert (tmp_path / ".kiro" / "settings" / "mcp.json").exists()
+    assert (tmp_path / "opencode.json").exists()
+
+
+def test_mcp_install_default_now_includes_codex_cli(tmp_path):
+    result = runner.invoke(app, ["mcp-install", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".codex" / "config.toml").exists()
+
+
+def test_mcp_install_respects_target_flag(tmp_path):
+    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "cursor"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".cursor" / "mcp.json").exists()
+    assert not (tmp_path / ".mcp.json").exists()
+    assert not (tmp_path / "opencode.json").exists()
+
+
+def test_mcp_install_accepts_multiple_target_flags(tmp_path):
+    result = runner.invoke(
+        app, ["mcp-install", str(tmp_path), "--target", "cursor", "--target", "opencode"]
+    )
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".cursor" / "mcp.json").exists()
+    assert (tmp_path / "opencode.json").exists()
+    assert not (tmp_path / ".mcp.json").exists()
+
+
+def test_mcp_install_rejects_unknown_target(tmp_path):
+    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "notatool"])
+
+    assert result.exit_code == 1
+    assert "notatool" in result.stdout
+
+
+def test_mcp_install_written_entry_points_at_the_resolved_repo_path(tmp_path):
+    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "claude-code"])
+
+    assert result.exit_code == 0
+    entry = json.loads((tmp_path / ".mcp.json").read_text())["mcpServers"]["aletheore"]
+    assert entry["args"] == ["mcp", str(tmp_path.resolve())]
+
+
+def test_mcp_install_opencode_entry_uses_command_array(tmp_path):
+    runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "opencode"])
+
+    entry = json.loads((tmp_path / "opencode.json").read_text())["mcp"]["aletheore"]
+    assert entry["command"] == ["aletheore", "mcp", str(tmp_path.resolve())]
+    assert "args" not in entry
+
+
+def test_mcp_install_writes_codex_cli_target(tmp_path):
+    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "codex-cli"])
+
+    assert result.exit_code == 0
+    config_path = tmp_path / ".codex" / "config.toml"
+    assert config_path.exists()
+    entry = tomllib.loads(config_path.read_text())["mcp_servers"]["aletheore"]
+    assert entry == {"command": "aletheore", "args": ["mcp", str(tmp_path.resolve())]}
+
+
+def test_mcp_install_is_idempotent_and_does_not_duplicate_entries(tmp_path):
+    runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "cursor"])
+    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "cursor"])
+
+    assert result.exit_code == 0
+    data = json.loads((tmp_path / ".cursor" / "mcp.json").read_text())
+    assert list(data["mcpServers"].keys()) == ["aletheore"]
+
+
+def test_mcp_install_preserves_other_servers_already_in_the_file(tmp_path):
+    cursor_dir = tmp_path / ".cursor"
+    cursor_dir.mkdir()
+    (cursor_dir / "mcp.json").write_text(
+        json.dumps({"mcpServers": {"other-tool": {"command": "npx", "args": ["-y", "other"]}}})
+    )
+
+    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "cursor"])
+
+    assert result.exit_code == 0
+    data = json.loads((cursor_dir / "mcp.json").read_text())
+    assert "other-tool" in data["mcpServers"]
+    assert "aletheore" in data["mcpServers"]
+
+
+def test_mcp_install_prints_pycharm_and_terminal_editor_guidance(tmp_path):
+    result = runner.invoke(app, ["mcp-install", str(tmp_path)])
+
+    assert "PyCharm" in result.stdout
+    assert "Import a Claude MCP config" in result.stdout
+    assert "avante.nvim" in result.stdout or "no native MCP" in result.stdout
 
 
 def test_progress_printer_prints_each_distinct_phase_on_its_own_line(capsys):
