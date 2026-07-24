@@ -17,11 +17,12 @@ competing for space with five other sections.
 from html import escape
 from urllib.parse import parse_qs
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app_server.admin import _administered_installation_ids
-from app_server.auth import get_current_session
+from app_server.auth import SESSION_COOKIE_NAME, get_current_session
 from app_server.db import (
     add_paddle_ids_to_installation,
     get_pending_subscription_claim_by_token,
@@ -1349,7 +1350,19 @@ async def subscribe_claim_page(request: Request):
     if claim["claimed_at"] is not None:
         return _no_store_html(_claim_already_claimed_page())
 
-    administered_ids = await _administered_installation_ids(session["github_access_token"])
+    try:
+        administered_ids = await _administered_installation_ids(session["github_access_token"])
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            # The stored GitHub token is dead (revoked, expired) - the signed
+            # session cookie itself is still valid, but GitHub no longer honors
+            # the access token inside it. Clear it and send them through a
+            # fresh sign-in rather than a raw 500.
+            response = RedirectResponse(url="/auth/login?next=%2Fsubscribe%2Fclaim", status_code=307)
+            response.delete_cookie(SESSION_COOKIE_NAME)
+            return response
+        raise
+
     installations = await list_installations_for_ids(pool, list(administered_ids))
     if not installations:
         return _no_store_html(_claim_install_prompt_page(claim["plan"]))
@@ -1372,7 +1385,14 @@ async def subscribe_claim_apply(request: Request):
         raise HTTPException(status_code=400, detail="invalid installation_id") from exc
 
     pool = request.app.state.db_pool
-    administered_ids = await _administered_installation_ids(session["github_access_token"])
+    try:
+        administered_ids = await _administered_installation_ids(session["github_access_token"])
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            raise HTTPException(
+                status_code=401, detail="your GitHub session has expired, sign in again"
+            ) from exc
+        raise
     if installation_id not in administered_ids:
         raise HTTPException(status_code=403, detail="you do not administer this installation")
 
