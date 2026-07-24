@@ -53,6 +53,7 @@ from scan_worker.db import (
     list_wiki_subsystems,
     record_llm_spend,
     set_last_reviewed_sha,
+    upsert_mcp_git_mirror,
     upsert_wiki_overview,
     upsert_wiki_subsystem,
 )
@@ -85,6 +86,7 @@ from scan_worker.slack import (
 )
 
 JOBS_ROOT = Path("/tmp/aletheore-jobs")
+MIRROR_ROOT = Path("/var/aletheore/mirrors")
 AUDIT_COMMENT_MARKER = "<!-- aletheore-audit -->"
 FLASH_REVIEW_MARKER = "<!-- aletheore-flash-review -->"
 # Generous: the one-time full build calls a strong model once per
@@ -109,6 +111,57 @@ def _clone_url(repo_full_name: str, token: str) -> str:
 def _clone_ref(url: str, ref: str, dest: Path) -> None:
     subprocess.run(["git", "clone", "-q", "--no-checkout", url, str(dest)], check=True)
     subprocess.run(["git", "checkout", "-q", ref], cwd=dest, check=True)
+
+
+def _mirror_path(installation_id: int, repo_full_name: str) -> Path:
+    return MIRROR_ROOT / str(installation_id) / repo_full_name.replace("/", "__")
+
+
+def _dir_size_bytes(path: Path) -> int:
+    total = 0
+    for entry in path.rglob("*"):
+        if entry.is_file():
+            total += entry.stat().st_size
+    return total
+
+
+def _sync_mcp_mirror(installation_id: int, repo_full_name: str, clone_url: str) -> Path | None:
+    dest = _mirror_path(installation_id, repo_full_name)
+    settings = get_settings()
+    try:
+        if not (dest / ".git").exists():
+            if dest.exists():
+                shutil.rmtree(dest, ignore_errors=True)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "clone", "-q", clone_url, str(dest)], check=True)
+        else:
+            subprocess.run(["git", "fetch", "-q", "origin"], cwd=dest, check=True)
+            default_branch = subprocess.run(
+                ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+                cwd=dest,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip().removeprefix("refs/remotes/")
+            subprocess.run(["git", "reset", "-q", "--hard", default_branch], cwd=dest, check=True)
+
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=dest, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        upsert_mcp_git_mirror(
+            settings.database_url,
+            installation_id,
+            repo_full_name,
+            str(dest),
+            commit,
+            _dir_size_bytes(dest),
+        )
+        return dest
+    except subprocess.CalledProcessError:
+        logging.getLogger(__name__).warning(
+            "mcp mirror sync failed for installation=%s repo=%s", installation_id, repo_full_name
+        )
+        return None
 
 
 def _run_scan(repo_dir: Path) -> Path:
@@ -350,6 +403,16 @@ def run_pr_scan_job(
                 )
             except Exception:  # noqa: BLE001
                 pass
+        try:
+            installation = get_installation_row(settings.database_url, installation_id)
+            if installation is not None and installation["plan"] != "free":
+                mirror_path = _sync_mcp_mirror(installation_id, repo_full_name, clone_url)
+                if mirror_path is not None:
+                    from scan_worker.mcp_embedding_index import reindex_mcp_embeddings
+
+                    reindex_mcp_embeddings(settings.database_url, installation_id, repo_full_name, new, mirror_path)
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as exc:  # noqa: BLE001
         try:
             _post_failure_comment(settings, installation_id, repo_full_name, pr_number, exc)

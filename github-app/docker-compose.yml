@@ -11,6 +11,7 @@ services:
       - GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem
     volumes:
       - ./app-private-key.pem:/run/secrets/github-app-key.pem:ro
+      - aletheore_mcp_mirrors:/var/aletheore/mirrors
     depends_on:
       postgres:
         condition: service_healthy
@@ -34,6 +35,7 @@ services:
       - OLLAMA_BASE_URL=http://ollama:11434
     volumes:
       - ./app-private-key.pem:/run/secrets/github-app-key.pem:ro
+      - aletheore_mcp_mirrors:/var/aletheore/mirrors
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,9 +90,10 @@ services:
         ollama serve &
         sleep 3
         ollama pull nomic-embed-text
+        ollama pull qwen2.5:3b-instruct
         wait
-    cpus: "1.0"
-    mem_limit: 1g
+    cpus: "2.0"
+    mem_limit: 6g
 
   caddy:
     image: caddy:2-alpine
@@ -108,5 +111,6 @@ services:
 volumes:
   aletheore_postgres_data:
   aletheore_ollama_data:
+  aletheore_mcp_mirrors:
   aletheore_caddy_data:
   aletheore_caddy_config:

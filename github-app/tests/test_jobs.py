@@ -1,10 +1,27 @@
 import json
+import os
 import subprocess
 from contextlib import contextmanager
 
 import pytest
 
 from scan_worker.jobs import run_pr_scan_job
+from scan_worker.db import get_mcp_git_mirror
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql://postgres:test@localhost:55433/aletheore_test",
+)
+
+
+async def _insert_installation(pool, installation_id: int, account_login: str, **values) -> None:
+    columns = ["installation_id", "account_login", *values.keys()]
+    params = [installation_id, account_login, *values.values()]
+    placeholders = ", ".join(f"${i}" for i in range(1, len(params) + 1))
+    await pool.execute(
+        f"INSERT INTO installations ({', '.join(columns)}) VALUES ({placeholders})",
+        *params,
+    )
 
 
 @contextmanager
@@ -1560,6 +1577,54 @@ def test_run_live_wiki_full_build_job_skips_without_evidence(monkeypatch):
     run_live_wiki_full_build_job(1, "octocat/hello-world")
 
     assert called == []
+
+
+@pytest.mark.asyncio
+async def test_sync_mcp_mirror_clones_then_fetches(tmp_path, monkeypatch, pool):
+    import scan_worker.jobs as jobs
+
+    monkeypatch.setattr(jobs, "MIRROR_ROOT", tmp_path / "mirrors")
+    monkeypatch.setenv("DATABASE_URL", TEST_DATABASE_URL)
+    await _insert_installation(pool, 710, "acme", plan="team")
+
+    source_repo = tmp_path / "source_origin"
+    source_repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=source_repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=source_repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=source_repo, check=True)
+    (source_repo / "a.py").write_text("def a(): pass\n")
+    subprocess.run(["git", "add", "."], cwd=source_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=source_repo, check=True)
+
+    mirror_path = jobs._sync_mcp_mirror(710, "acme/widgets", f"file://{source_repo}")
+
+    assert mirror_path is not None
+    assert (mirror_path / "a.py").exists()
+    row = get_mcp_git_mirror(TEST_DATABASE_URL, 710, "acme/widgets")
+    assert row is not None
+    assert row["last_synced_commit"]
+
+    (source_repo / "b.py").write_text("def b(): pass\n")
+    subprocess.run(["git", "add", "."], cwd=source_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "second"], cwd=source_repo, check=True)
+
+    mirror_path_2 = jobs._sync_mcp_mirror(710, "acme/widgets", f"file://{source_repo}")
+    assert mirror_path_2 == mirror_path
+    assert (mirror_path / "b.py").exists()
+
+
+@pytest.mark.asyncio
+async def test_sync_mcp_mirror_returns_none_on_clone_failure(tmp_path, monkeypatch, pool):
+    import scan_worker.jobs as jobs
+
+    monkeypatch.setattr(jobs, "MIRROR_ROOT", tmp_path / "mirrors")
+    monkeypatch.setenv("DATABASE_URL", TEST_DATABASE_URL)
+    await _insert_installation(pool, 711, "acme", plan="team")
+
+    result = jobs._sync_mcp_mirror(711, "acme/does-not-exist", "file:///no/such/path")
+
+    assert result is None
+    assert get_mcp_git_mirror(TEST_DATABASE_URL, 711, "acme/does-not-exist") is None
 
 
 def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):

@@ -311,6 +311,143 @@ def get_latest_evidence(dsn: str, installation_id: int, repo_full_name: str) -> 
             return json.loads(row[0]) if isinstance(row[0], str) else row[0]
 
 
+def upsert_mcp_git_mirror(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    local_path: str,
+    last_synced_commit: str,
+    size_bytes: int,
+) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mcp_git_mirrors
+                    (installation_id, repo_full_name, local_path, last_synced_commit, last_synced_at, size_bytes)
+                VALUES (%s, %s, %s, %s, now(), %s)
+                ON CONFLICT (installation_id, repo_full_name) DO UPDATE SET
+                    local_path = EXCLUDED.local_path,
+                    last_synced_commit = EXCLUDED.last_synced_commit,
+                    last_synced_at = now(),
+                    size_bytes = EXCLUDED.size_bytes
+                """,
+                (installation_id, repo_full_name, local_path, last_synced_commit, size_bytes),
+            )
+        conn.commit()
+
+
+def get_mcp_git_mirror(dsn: str, installation_id: int, repo_full_name: str) -> dict | None:
+    import psycopg.rows
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                """
+                SELECT local_path, last_synced_commit, last_synced_at, size_bytes
+                FROM mcp_git_mirrors
+                WHERE installation_id = %s AND repo_full_name = %s
+                """,
+                (installation_id, repo_full_name),
+            )
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def upsert_mcp_code_embedding(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    file_path: str,
+    chunk_index: int,
+    content_hash: str,
+    chunk_text: str,
+    embedding: list[float],
+) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mcp_code_embeddings
+                    (installation_id, repo_full_name, file_path, chunk_index, content_hash, chunk_text, embedding)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (installation_id, repo_full_name, file_path, chunk_index) DO UPDATE SET
+                    content_hash = EXCLUDED.content_hash,
+                    chunk_text = EXCLUDED.chunk_text,
+                    embedding = EXCLUDED.embedding,
+                    created_at = now()
+                """,
+                (
+                    installation_id,
+                    repo_full_name,
+                    file_path,
+                    chunk_index,
+                    content_hash,
+                    chunk_text,
+                    embedding,
+                ),
+            )
+        conn.commit()
+
+
+def get_mcp_code_embedding_hashes(
+    dsn: str, installation_id: int, repo_full_name: str, file_path: str
+) -> dict[int, str]:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT chunk_index, content_hash
+                FROM mcp_code_embeddings
+                WHERE installation_id = %s AND repo_full_name = %s AND file_path = %s
+                """,
+                (installation_id, repo_full_name, file_path),
+            )
+            rows = cur.fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
+def delete_mcp_code_embeddings_for_file(
+    dsn: str, installation_id: int, repo_full_name: str, file_path: str
+) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM mcp_code_embeddings
+                WHERE installation_id = %s AND repo_full_name = %s AND file_path = %s
+                """,
+                (installation_id, repo_full_name, file_path),
+            )
+        conn.commit()
+
+
+def list_mcp_code_embeddings(dsn: str, installation_id: int, repo_full_name: str) -> list[dict]:
+    import psycopg.rows
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                """
+                SELECT file_path, chunk_index, content_hash, chunk_text, embedding
+                FROM mcp_code_embeddings
+                WHERE installation_id = %s AND repo_full_name = %s
+                ORDER BY file_path ASC, chunk_index ASC
+                """,
+                (installation_id, repo_full_name),
+            )
+            rows = cur.fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_last_endpoint_health(
     dsn: str,
     installation_id: int,

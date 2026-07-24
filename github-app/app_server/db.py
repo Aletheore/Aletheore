@@ -319,6 +319,64 @@ async def get_latest_evidence(
     return json.loads(evidence) if isinstance(evidence, str) else evidence
 
 
+def get_mcp_git_mirror(dsn: str, installation_id: int, repo_full_name: str) -> dict | None:
+    import psycopg
+    import psycopg.rows
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                """
+                SELECT local_path, last_synced_commit, last_synced_at, size_bytes
+                FROM mcp_git_mirrors
+                WHERE installation_id = %s AND repo_full_name = %s
+                """,
+                (installation_id, repo_full_name),
+            )
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def list_mcp_code_embeddings(dsn: str, installation_id: int, repo_full_name: str) -> list[dict]:
+    import psycopg
+    import psycopg.rows
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                """
+                SELECT file_path, chunk_index, content_hash, chunk_text, embedding
+                FROM mcp_code_embeddings
+                WHERE installation_id = %s AND repo_full_name = %s
+                ORDER BY file_path ASC, chunk_index ASC
+                """,
+                (installation_id, repo_full_name),
+            )
+            rows = cur.fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_latest_evidence_for_mcp(dsn: str, installation_id: int, repo_full_name: str) -> dict | None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT evidence
+                FROM repo_history
+                WHERE installation_id = %s AND repo_full_name = %s
+                ORDER BY scanned_at DESC, id DESC
+                LIMIT 1
+                """,
+                (installation_id, repo_full_name),
+            )
+            row = cur.fetchone()
+    if row is None:
+        return None
+    return json.loads(row[0]) if isinstance(row[0], str) else row[0]
+
+
 async def get_recent_endpoint_health(
     pool: asyncpg.Pool, installation_id: int, repo_full_name: str
 ) -> list[dict]:
@@ -490,6 +548,25 @@ async def get_installation_by_token_hash(pool: asyncpg.Pool, token_hash: str) ->
         """,
         token_hash,
     )
+    return dict(row) if row else None
+
+
+def get_installation_by_token_hash_for_mcp(dsn: str, token_hash: str) -> dict | None:
+    import psycopg
+    import psycopg.rows
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                """
+                SELECT i.installation_id, i.account_login, i.plan
+                FROM api_tokens t
+                JOIN installations i ON i.installation_id = t.installation_id
+                WHERE t.token_hash = %s AND t.revoked_at IS NULL
+                """,
+                (token_hash,),
+            )
+            row = cur.fetchone()
     return dict(row) if row else None
 
 

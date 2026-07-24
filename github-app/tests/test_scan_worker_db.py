@@ -16,15 +16,21 @@ from scan_worker.db import (
     get_last_reviewed_sha,
     get_latest_evidence,
     get_llm_spend_this_month,
+    get_mcp_code_embedding_hashes,
+    get_mcp_git_mirror,
     get_wiki_overview,
     insert_endpoint_health,
     insert_repo_history,
     installation_spend_lock,
+    list_mcp_code_embeddings,
     list_health_check_targets_all,
     list_repos_for_installation,
     list_wiki_subsystems,
     record_llm_spend,
     set_last_reviewed_sha,
+    delete_mcp_code_embeddings_for_file,
+    upsert_mcp_code_embedding,
+    upsert_mcp_git_mirror,
     upsert_wiki_overview,
     upsert_wiki_subsystem,
 )
@@ -101,6 +107,85 @@ async def test_list_repos_for_installation(pool):
 
     repos = list_repos_for_installation(TEST_DATABASE_URL, 301)
     assert set(repos) == {"a/repo1", "a/repo2"}
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_get_mcp_git_mirror(pool):
+    await _insert_installation(pool, 321, "acme", plan="team")
+
+    upsert_mcp_git_mirror(
+        TEST_DATABASE_URL,
+        321,
+        "acme/widgets",
+        "/var/aletheore/mirrors/321/acme__widgets",
+        "abc123",
+        4096,
+    )
+    row = get_mcp_git_mirror(TEST_DATABASE_URL, 321, "acme/widgets")
+    assert row["local_path"] == "/var/aletheore/mirrors/321/acme__widgets"
+    assert row["last_synced_commit"] == "abc123"
+
+    upsert_mcp_git_mirror(
+        TEST_DATABASE_URL,
+        321,
+        "acme/widgets",
+        "/var/aletheore/mirrors/321/acme__widgets",
+        "def456",
+        5000,
+    )
+    row = get_mcp_git_mirror(TEST_DATABASE_URL, 321, "acme/widgets")
+    assert row["last_synced_commit"] == "def456"
+    assert row["size_bytes"] == 5000
+
+
+@pytest.mark.asyncio
+async def test_mcp_code_embedding_hash_skip_roundtrip(pool):
+    await _insert_installation(pool, 322, "acme", plan="team")
+    upsert_mcp_code_embedding(
+        TEST_DATABASE_URL,
+        322,
+        "acme/widgets",
+        "src/foo.py",
+        0,
+        "hash-a",
+        "def foo(): pass",
+        [0.1, 0.2],
+    )
+    upsert_mcp_code_embedding(
+        TEST_DATABASE_URL,
+        322,
+        "acme/widgets",
+        "src/foo.py",
+        1,
+        "hash-b",
+        "def bar(): pass",
+        [0.3, 0.4],
+    )
+
+    hashes = get_mcp_code_embedding_hashes(TEST_DATABASE_URL, 322, "acme/widgets", "src/foo.py")
+    assert hashes == {0: "hash-a", 1: "hash-b"}
+
+    delete_mcp_code_embeddings_for_file(TEST_DATABASE_URL, 322, "acme/widgets", "src/foo.py")
+    assert get_mcp_code_embedding_hashes(TEST_DATABASE_URL, 322, "acme/widgets", "src/foo.py") == {}
+
+
+@pytest.mark.asyncio
+async def test_mcp_code_embedding_cascade_delete_on_installation_removal(pool):
+    await _insert_installation(pool, 323, "acme", plan="team")
+    upsert_mcp_code_embedding(
+        TEST_DATABASE_URL,
+        323,
+        "acme/widgets",
+        "src/foo.py",
+        0,
+        "hash-a",
+        "text",
+        [0.1],
+    )
+
+    await pool.execute("DELETE FROM installations WHERE installation_id = $1", 323)
+
+    assert list_mcp_code_embeddings(TEST_DATABASE_URL, 323, "acme/widgets") == []
 
 
 @pytest.mark.asyncio

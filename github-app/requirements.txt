@@ -5,6 +5,7 @@ psycopg[binary]>=3.2.0
 redis>=5.0.0
 rq>=1.16.0
 httpx>=0.28.1
+mcp==1.23.3
 pyjwt[crypto]>=2.13.0
 itsdangerous>=2.2.0
 cryptography>=44.0.0
