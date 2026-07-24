@@ -110,6 +110,7 @@ async def test_zero_installations_shows_install_prompt(pool, monkeypatch):
     assert response.status_code == 200
     assert "Install the Aletheore GitHub App" in response.text
     assert "github.com/apps/aletheore/installations/new" in response.text
+    assert 'href="/dashboard"' in response.text
 
 
 @pytest.mark.asyncio
@@ -125,6 +126,7 @@ async def test_one_installation_shows_checkout_with_current_plan(pool, monkeypat
     assert "pri_01ky9jx0gbx02mnn4d166yp3vc" in response.text  # team monthly price id
     assert "customData" in response.text
     assert "successUrl" in response.text and "dashboard" in response.text
+    assert 'href="/dashboard"' in response.text
 
 
 @pytest.mark.asyncio
