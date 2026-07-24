@@ -15,6 +15,8 @@ class Settings:
     public_base_url: str
     internal_metrics_token: str | None
     audit_signing_private_key: str
+    paddle_webhook_secret: str
+    github_app_slug: str
 
 
 def _required_env(name: str) -> str:
@@ -54,4 +56,6 @@ def get_settings() -> Settings:
         public_base_url=os.environ.get("PUBLIC_BASE_URL", "https://aletheore.com"),
         internal_metrics_token=os.environ.get("INTERNAL_METRICS_TOKEN", "").strip() or None,
         audit_signing_private_key=_required_env("AUDIT_SIGNING_PRIVATE_KEY"),
+        paddle_webhook_secret=_required_env("PADDLE_WEBHOOK_SECRET"),
+        github_app_slug=_required_env("GITHUB_APP_SLUG"),
     )

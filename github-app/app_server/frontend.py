@@ -14,10 +14,21 @@ each fetches only the data it needs and can show full detail without
 competing for space with five other sections.
 """
 
-from fastapi import APIRouter, Request
+from html import escape
+from urllib.parse import parse_qs
+
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from app_server.admin import _administered_installation_ids
 from app_server.auth import get_current_session
+from app_server.db import (
+    add_paddle_ids_to_installation,
+    get_pending_subscription_claim_by_token,
+    list_installations_for_ids,
+    mark_subscription_claim_claimed,
+    set_installation_plan,
+)
 
 frontend_router = APIRouter()
 
@@ -248,6 +259,14 @@ table.findings tr:last-child td { border-bottom: none; }
 .token-row:last-child { border-bottom: none; }
 .token-label { font-weight: 500; }
 .token-meta { font-size: 11px; color: var(--slate-600); }
+.claim-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 1.5rem;
+  background-image: radial-gradient(var(--border-strong) 1px, transparent 1px); background-size: 22px 22px; }
+.claim-card { width: 100%; max-width: 520px; background: var(--paper); border: 1px solid var(--border); border-radius: 14px; padding: 2rem; box-shadow: var(--shadow-card); }
+.claim-card h1 { margin: 0 0 0.7rem; font-size: 24px; font-weight: 550; }
+.claim-card p { color: var(--slate-600); line-height: 1.6; font-size: 14px; margin: 0 0 1.2rem; }
+.claim-options { display: flex; flex-direction: column; gap: 8px; margin: 1rem 0; }
+.claim-option { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; }
+.claim-option input { accent-color: var(--accent); }
 
 @media (max-width: 720px) {
   .shell { grid-template-columns: 1fr; }
@@ -1241,6 +1260,138 @@ def _no_store_html(content: str) -> HTMLResponse:
     # request ever reaching the server. no-store excludes the page from
     # bfcache entirely, forcing a real reload that re-checks the session.
     return HTMLResponse(content, headers={"Cache-Control": "no-store"})
+
+
+CLAIM_TOKEN_COOKIE_NAME = "claim_token"
+
+
+def _claim_page(title: str, body: str) -> str:
+    return _page_head(f"{title} — Aletheore") + f"""
+<div class="claim-page">
+  <div class="claim-card">
+    {body}
+  </div>
+</div>
+"""
+
+
+def _claim_polling_page() -> str:
+    return _claim_page(
+        "Confirming your subscription",
+        """
+        <h1>Confirming your payment</h1>
+        <p>This usually takes a few seconds. We are waiting for Paddle to confirm the subscription.</p>
+        <script>setTimeout(() => location.reload(), 2000);</script>
+        """,
+    )
+
+
+def _claim_already_claimed_page() -> str:
+    return _claim_page(
+        "Subscription active",
+        """
+        <h1>Already activated</h1>
+        <p>This subscription is already active for an Aletheore installation.</p>
+        <a class="btn btn-accent" href="/dashboard">Go to dashboard</a>
+        """,
+    )
+
+
+def _claim_install_prompt_page(plan: str) -> str:
+    return _claim_page(
+        "Install the GitHub App",
+        f"""
+        <h1>Install the Aletheore GitHub App</h1>
+        <p>Install the app to activate your {escape(plan.title())} plan on a GitHub organization.</p>
+        <a class="btn btn-accent" href="/auth/login?next=%2Fsubscribe%2Fclaim">Install the Aletheore GitHub App</a>
+        """,
+    )
+
+
+def _claim_selection_page(plan: str, installations: list[dict], claim_token: str) -> str:
+    options = "\n".join(
+        (
+            '<label class="claim-option">'
+            f'<input type="radio" name="installation_id" value="{installation["installation_id"]}" required> '
+            f'{escape(installation["account_login"])}'
+            "</label>"
+        )
+        for installation in installations
+    )
+    return _claim_page(
+        "Apply your plan",
+        f"""
+        <h1>Apply your {escape(plan.title())} plan</h1>
+        <p>Choose the GitHub installation this subscription should activate.</p>
+        <form method="post" action="/subscribe/claim/apply">
+          <input type="hidden" name="claim_token" value="{escape(claim_token)}">
+          <div class="claim-options">{options}</div>
+          <button class="btn btn-accent" type="submit">Apply</button>
+        </form>
+        """,
+    )
+
+
+@frontend_router.get("/subscribe/claim", response_class=HTMLResponse)
+async def subscribe_claim_page(request: Request):
+    session = await get_current_session(request)
+    if session is None:
+        return RedirectResponse(url="/auth/login?next=%2Fsubscribe%2Fclaim", status_code=307)
+
+    claim_token = request.cookies.get(CLAIM_TOKEN_COOKIE_NAME)
+    if not claim_token:
+        return _no_store_html(_claim_polling_page())
+
+    pool = request.app.state.db_pool
+    claim = await get_pending_subscription_claim_by_token(pool, claim_token)
+    if claim is None:
+        return _no_store_html(_claim_polling_page())
+    if claim["claimed_at"] is not None:
+        return _no_store_html(_claim_already_claimed_page())
+
+    administered_ids = await _administered_installation_ids(session["github_access_token"])
+    installations = await list_installations_for_ids(pool, list(administered_ids))
+    if not installations:
+        return _no_store_html(_claim_install_prompt_page(claim["plan"]))
+
+    return _no_store_html(_claim_selection_page(claim["plan"], installations, claim_token))
+
+
+@frontend_router.post("/subscribe/claim/apply")
+async def subscribe_claim_apply(request: Request):
+    session = await get_current_session(request)
+    if session is None:
+        raise HTTPException(status_code=401, detail="login required")
+
+    form = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
+    claim_token = (form.get("claim_token") or [""])[0]
+    installation_id_raw = (form.get("installation_id") or [""])[0]
+    try:
+        installation_id = int(installation_id_raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid installation_id") from exc
+
+    pool = request.app.state.db_pool
+    administered_ids = await _administered_installation_ids(session["github_access_token"])
+    if installation_id not in administered_ids:
+        raise HTTPException(status_code=403, detail="you do not administer this installation")
+
+    claim = await get_pending_subscription_claim_by_token(pool, claim_token)
+    if claim is None or claim["claimed_at"] is not None:
+        raise HTTPException(status_code=409, detail="claim is not available")
+
+    await set_installation_plan(pool, installation_id, claim["plan"])
+    await add_paddle_ids_to_installation(
+        pool,
+        installation_id,
+        claim["paddle_subscription_id"],
+        claim["paddle_customer_id"],
+    )
+    await mark_subscription_claim_claimed(pool, claim_token, installation_id)
+
+    response = _no_store_html(_claim_already_claimed_page())
+    response.delete_cookie(CLAIM_TOKEN_COOKIE_NAME)
+    return response
 
 
 @frontend_router.get("/", response_class=HTMLResponse)

@@ -9,6 +9,7 @@ from app_server.auth import (
     get_current_session,
     sign_session_id,
     unsign_session_id,
+    _is_safe_next_path,
 )
 from app_server.db import create_session, get_session
 from app_server.main import app
@@ -75,6 +76,26 @@ def test_unsign_rejects_tampered_value():
     assert unsign_session_id(tampered, "test-secret") is None
 
 
+def test_safe_relative_next_path_accepted():
+    assert _is_safe_next_path("/subscribe/claim") == "/subscribe/claim"
+
+
+def test_missing_next_defaults_to_dashboard():
+    assert _is_safe_next_path(None) == "/dashboard"
+
+
+def test_absolute_next_url_rejected():
+    assert _is_safe_next_path("https://evil.example.com/phish") == "/dashboard"
+
+
+def test_protocol_relative_next_url_rejected():
+    assert _is_safe_next_path("//evil.example.com/phish") == "/dashboard"
+
+
+def test_next_path_not_starting_with_slash_rejected():
+    assert _is_safe_next_path("evil.example.com") == "/dashboard"
+
+
 @pytest.mark.asyncio
 async def test_login_redirects_to_github_authorize(pool, monkeypatch):
     monkeypatch.setenv("GITHUB_CLIENT_ID", "test-client-id")
@@ -86,6 +107,18 @@ async def test_login_redirects_to_github_authorize(pool, monkeypatch):
     assert response.status_code == 307
     assert "github.com/login/oauth/authorize" in response.headers["location"]
     assert "client_id=test-client-id" in response.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_login_sets_next_cookie(pool, monkeypatch):
+    monkeypatch.setenv("GITHUB_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "http://test")
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/auth/login?next=/subscribe/claim", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.cookies.get("aletheore_oauth_next").strip('"') == "/subscribe/claim"
 
 
 @pytest.mark.asyncio
