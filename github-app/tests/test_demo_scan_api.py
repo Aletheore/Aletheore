@@ -82,6 +82,32 @@ async def test_valid_request_enqueues_job_and_returns_202(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_rejected_oversized_repo_does_not_consume_rate_limit_slot(pool, monkeypatch):
+    # A repo that's too large never reaches a worker - it shouldn't cost
+    # the visitor their one scan every 20 minutes either. The next request
+    # from the same IP, for a repo that fits, must still be allowed.
+    _mock_github_response(monkeypatch, 200, size_kb=(400 * 1024) + 1)
+    fake_queue = _mock_queue(monkeypatch)
+    app.state.db_pool = pool
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"x-forwarded-for": "203.0.113.55"},
+    ) as client:
+        too_big = await client.post(
+            "/v1/demo-scan", json={"repo_url": "https://github.com/torvalds/linux"}
+        )
+        assert too_big.status_code == 413
+
+        _mock_github_response(monkeypatch, 200, size_kb=100)
+        fits = await client.post(
+            "/v1/demo-scan", json={"repo_url": "https://github.com/octocat/Hello-World"}
+        )
+    assert fits.status_code == 202
+    assert fake_queue.enqueue.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_second_request_from_same_ip_within_cooldown_returns_429(pool, monkeypatch):
     _mock_github_response(monkeypatch, 200, size_kb=100)
     _mock_queue(monkeypatch)

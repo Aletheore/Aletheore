@@ -97,6 +97,13 @@ async def start_demo_scan(request: Request, body: StartDemoScanRequest):
 
     settings = get_settings()
     pool = request.app.state.db_pool
+
+    # Size (and existence) is checked before the rate-limit slot is
+    # reserved - a repo that gets rejected here never reaches a worker, so
+    # it shouldn't cost the visitor their one scan every 20 minutes. Only a
+    # request that's actually eligible to run consumes the cooldown.
+    _check_repo_size(owner, repo, settings.github_demo_readonly_token)
+
     allowed = await check_and_reserve_demo_scan(pool, _client_ip(request), DEMO_SCAN_COOLDOWN_SECONDS)
     if not allowed:
         raise HTTPException(
@@ -106,8 +113,6 @@ async def start_demo_scan(request: Request, body: StartDemoScanRequest):
                 "try again shortly"
             ),
         )
-
-    _check_repo_size(owner, repo, settings.github_demo_readonly_token)
 
     queue = _get_queue(settings.redis_url)
     in_flight = queue.count + queue.started_job_registry.count
