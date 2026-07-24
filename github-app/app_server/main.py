@@ -5,6 +5,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app_server.admin import admin_router
@@ -12,6 +13,7 @@ from app_server.auth import auth_router
 from app_server.config import get_settings
 from app_server.dashboard import dashboard_router
 from app_server.db import create_pool
+from app_server.demo_scan_api import demo_scan_router
 from app_server.frontend import frontend_router
 from app_server.logging_config import configure_json_logging
 from app_server.managed_audit_api import managed_audit_router
@@ -34,6 +36,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    # Only the public demo (/v1/demo-scan) is meant to be called from
+    # browser JS on a different origin - the marketing site. Everything
+    # else here is same-site cookie auth or a Bearer-token API not
+    # normally called from a browser, so this stays narrowly scoped
+    # rather than a wildcard.
+    allow_origins=["https://aletheore.com", "https://www.aletheore.com"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
 app.include_router(dashboard_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
@@ -41,6 +54,7 @@ app.include_router(managed_audit_router)
 app.include_router(metrics_router)
 app.include_router(frontend_router)
 app.include_router(paddle_webhook_router)
+app.include_router(demo_scan_router)
 
 
 @app.middleware("http")

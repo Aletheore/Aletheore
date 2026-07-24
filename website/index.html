@@ -297,6 +297,17 @@
             </div>
           </div>
         </div>
+
+        <div class="live-demo">
+          <h3>Now try it on your own repo.</h3>
+          <p class="section-intro">Paste a public GitHub repo below. It runs the real deterministic scanner in an isolated sandbox - no signup, nothing installed on your machine, and the clone is destroyed the moment the scan finishes. One free run every 20 minutes; repos over 400MB need the CLI instead.</p>
+          <form id="live-demo-form" class="live-demo-form">
+            <input type="url" id="live-demo-url" class="live-demo-input" placeholder="https://github.com/owner/repo" required>
+            <button type="submit" class="btn btn-primary" id="live-demo-submit">Scan it</button>
+          </form>
+          <p id="live-demo-status" class="live-demo-status" hidden></p>
+          <div id="live-demo-results" class="live-demo-results" hidden></div>
+        </div>
       </div>
     </section>
 
@@ -354,5 +365,6 @@
   <script src="vendor/motion.js"></script>
   <script src="showcase-data.js"></script>
   <script src="script.js"></script>
+  <script src="live-demo.js"></script>
 </body>
 </html>

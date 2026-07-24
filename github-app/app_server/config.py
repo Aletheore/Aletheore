@@ -17,6 +17,7 @@ class Settings:
     audit_signing_private_key: str
     paddle_webhook_secret: str
     github_app_slug: str
+    github_demo_readonly_token: str | None
 
 
 def _required_env(name: str) -> str:
@@ -58,4 +59,9 @@ def get_settings() -> Settings:
         audit_signing_private_key=_required_env("AUDIT_SIGNING_PRIVATE_KEY"),
         paddle_webhook_secret=_required_env("PADDLE_WEBHOOK_SECRET"),
         github_app_slug=_required_env("GITHUB_APP_SLUG"),
+        # Only used to raise the rate limit on the pre-clone repo-size check
+        # for the public demo (60/hr unauthenticated vs 5000/hr with a
+        # token) - a public_repo-scoped read-only PAT is enough, and the
+        # demo works without one, just at a much lower shared ceiling.
+        github_demo_readonly_token=os.environ.get("GITHUB_DEMO_READONLY_TOKEN", "").strip() or None,
     )
