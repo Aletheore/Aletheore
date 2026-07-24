@@ -44,6 +44,38 @@ services:
     cpus: "1.0"
     mem_limit: 1g
 
+  # Never started via `up` - this service exists purely so `docker compose
+  # build demo-sandbox` produces the aletheore-demo-sandbox:latest image on
+  # the host daemon for demo-scan-worker (which has docker socket access)
+  # to `docker run --runtime=runsc` on demand, one ephemeral container per
+  # live website demo request.
+  demo-sandbox:
+    build:
+      context: ..
+      dockerfile: github-app/Dockerfile.demo-sandbox
+    image: aletheore-demo-sandbox:latest
+    profiles: ["build-only"]
+
+  demo-scan-worker:
+    build:
+      context: ..
+      dockerfile: github-app/Dockerfile.demo-scan-worker
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    # The only service with the host's Docker socket - deliberately gets
+    # no DB credentials, no GitHub App key, no LLM keys (see
+    # Dockerfile.demo-scan-worker). Only consumes the demo_scan queue,
+    # completely separate from paying customers' real scan/audit jobs.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      redis:
+        condition: service_started
+    cpus: "1.0"
+    mem_limit: 512m
+
   postgres:
     image: postgres:16
     restart: unless-stopped

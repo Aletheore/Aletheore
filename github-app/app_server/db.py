@@ -149,6 +149,29 @@ async def check_and_reserve_managed_audit(
     return row is not None
 
 
+async def check_and_reserve_demo_scan(
+    pool: asyncpg.Pool,
+    client_ip: str,
+    cooldown_seconds: int,
+) -> bool:
+    # Same atomic INSERT .. ON CONFLICT .. WHERE pattern as
+    # check_and_reserve_managed_audit, keyed on IP instead of installation -
+    # the public demo has no installation, only an anonymous caller.
+    row = await pool.fetchrow(
+        """
+        INSERT INTO demo_scan_rate_limits (client_ip, last_run_at)
+        VALUES ($1, now())
+        ON CONFLICT (client_ip) DO UPDATE
+        SET last_run_at = EXCLUDED.last_run_at
+        WHERE demo_scan_rate_limits.last_run_at <= now() - make_interval(secs => $2)
+        RETURNING last_run_at
+        """,
+        client_ip,
+        cooldown_seconds,
+    )
+    return row is not None
+
+
 async def get_llm_spend_this_month(pool: asyncpg.Pool, installation_id: int) -> float:
     row = await pool.fetchrow(
         """

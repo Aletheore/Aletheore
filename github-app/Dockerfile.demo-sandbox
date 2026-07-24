@@ -1,0 +1,27 @@
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+
+# This image runs untrusted, arbitrary public repos cloned by strangers on
+# the internet (the live "paste a repo" website demo) - it deliberately
+# contains nothing besides git and the aletheore CLI. No app_server, no
+# scan_worker, no DB credentials, no GitHub App private key, no LLM API
+# keys. It is run with --runtime=runsc and no network egress after clone.
+
+WORKDIR /app
+
+COPY prototype/pyproject.toml prototype/pyproject.toml
+COPY prototype/aletheore prototype/aletheore
+RUN pip install --no-cache-dir ./prototype
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY github-app/scripts/demo_sandbox_entrypoint.sh /app/demo_sandbox_entrypoint.sh
+RUN chmod +x /app/demo_sandbox_entrypoint.sh
+
+RUN groupadd --system sandbox \
+    && useradd --system --gid sandbox --home-dir /work --create-home sandbox
+USER sandbox
+WORKDIR /work
+
+ENTRYPOINT ["/app/demo_sandbox_entrypoint.sh"]
