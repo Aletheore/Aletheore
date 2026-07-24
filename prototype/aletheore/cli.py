@@ -3,12 +3,14 @@ import socket
 import sys
 import threading
 import time
+import tomllib
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
 
 import httpx
+import tomli_w
 import typer
 import uvicorn
 from rich.console import Console
@@ -114,6 +116,7 @@ _COMMAND_SUMMARIES = [
     ("query", "answer a targeted question from existing evidence"),
     ("diff", "compare two evidence snapshots"),
     ("mcp", "run an MCP server so an agent can query a repo directly"),
+    ("mcp-install", "write MCP client config for Claude Code, Cursor, VS Code, Kiro, Opencode, or Codex CLI"),
     ("dashboard", "a live local web UI over the same evidence"),
     ("healthcheck", "GET-only live check of mapped API endpoints"),
     ("init", "scaffold a repository-local .aletheore.json config file"),
@@ -604,6 +607,123 @@ def _mcp(repo_path: str, forced_agent: str | None = None) -> int:
     return 0
 
 
+def _stdio_entry(repo_path: Path, include_type: bool) -> dict:
+    entry: dict = {"command": "aletheore", "args": ["mcp", str(repo_path)]}
+    if include_type:
+        entry = {"type": "stdio", **entry}
+    return entry
+
+
+def _opencode_entry(repo_path: Path) -> dict:
+    return {"type": "local", "command": ["aletheore", "mcp", str(repo_path)], "enabled": True}
+
+
+_MCP_CLIENT_CONFIGS: dict[str, tuple[str, str, Callable[[Path], dict]]] = {
+    "claude-code": (".mcp.json", "mcpServers", lambda p: _stdio_entry(p, include_type=True)),
+    "cursor": (".cursor/mcp.json", "mcpServers", lambda p: _stdio_entry(p, include_type=False)),
+    "vscode": (".vscode/mcp.json", "servers", lambda p: _stdio_entry(p, include_type=True)),
+    "kiro": (".kiro/settings/mcp.json", "mcpServers", lambda p: _stdio_entry(p, include_type=False)),
+    "opencode": ("opencode.json", "mcp", _opencode_entry),
+}
+
+
+def _write_json_mcp_client_config(config_path: Path, top_level_key: str, entry: dict) -> str:
+    if config_path.exists():
+        try:
+            data = json.loads(config_path.read_text())
+        except json.JSONDecodeError:
+            return f"skipped (existing file is not valid JSON): {config_path}"
+        if not isinstance(data, dict):
+            return f"skipped (existing file's top level is not a JSON object): {config_path}"
+    else:
+        data = {}
+
+    servers = data.get(top_level_key, {})
+    if not isinstance(servers, dict):
+        return f"skipped (existing '{top_level_key}' is not a JSON object): {config_path}"
+
+    already_present = "aletheore" in servers
+    servers["aletheore"] = entry
+    data[top_level_key] = servers
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(data, indent=2) + "\n")
+    return f"{'updated' if already_present else 'wrote'} {config_path}"
+
+
+def _write_toml_mcp_client_config(config_path: Path, top_level_key: str, entry: dict) -> str:
+    if config_path.exists():
+        try:
+            data = tomllib.loads(config_path.read_text())
+        except tomllib.TOMLDecodeError:
+            return f"skipped (existing file is not valid TOML): {config_path}"
+        if not isinstance(data, dict):
+            return f"skipped (existing file's top level is not a TOML table): {config_path}"
+    else:
+        data = {}
+
+    servers = data.get(top_level_key, {})
+    if not isinstance(servers, dict):
+        return f"skipped (existing '{top_level_key}' is not a TOML table): {config_path}"
+
+    already_present = "aletheore" in servers
+    servers["aletheore"] = entry
+    data[top_level_key] = servers
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(tomli_w.dumps(data))
+    return f"{'updated' if already_present else 'wrote'} {config_path}"
+
+
+def _mcp_install(path: str, targets: list[str]) -> int:
+    repo_path = Path(path).resolve()
+    all_targets = [*_MCP_CLIENT_CONFIGS.keys(), "codex-cli"]
+    selected = targets or all_targets
+    unknown = [target for target in selected if target not in all_targets]
+    if unknown:
+        console.print(
+            f"[bold red]error:[/bold red] unknown target(s): {', '.join(unknown)}. "
+            f"Valid targets: {', '.join(all_targets)}"
+        )
+        return 1
+
+    for target in selected:
+        if target == "codex-cli":
+            config_path = repo_path / ".codex" / "config.toml"
+            entry = {"command": "aletheore", "args": ["mcp", str(repo_path)]}
+            message = _write_toml_mcp_client_config(config_path, "mcp_servers", entry)
+        else:
+            relative_path, top_level_key, entry_builder = _MCP_CLIENT_CONFIGS[target]
+            config_path = repo_path / relative_path
+            entry = entry_builder(repo_path)
+            message = _write_json_mcp_client_config(config_path, top_level_key, entry)
+        console.print(f"[bold green]{target}[/bold green]: {message}")
+
+    console.print(
+        "\nRestart or reload your coding tool so it picks up the new MCP server - "
+        "Aletheore's tools will then be available without running 'aletheore mcp' yourself."
+    )
+    console.print(
+        "\n[bold]PyCharm / other JetBrains IDEs:[/bold] not auto-configured - there's no single "
+        "stable, documented file format to script against yet. Instead: open Settings | Tools | "
+        "AI Assistant | Model Context Protocol, and use \"Import a Claude MCP config\", pointing "
+        "at the .mcp.json written above."
+    )
+    console.print(
+        "[bold]vim / Neovim / Emacs / other terminal editors:[/bold] no native MCP client exists "
+        "in any of them - support depends entirely on whichever AI plugin you have installed "
+        "(e.g. avante.nvim, codecompanion.nvim). Point that plugin's own MCP config at: "
+        f"aletheore mcp {repo_path}"
+    )
+    console.print(
+        "[bold]OpenAI Codex CLI:[/bold] wrote .codex/config.toml, but Codex only reads "
+        "project-scoped MCP config for projects it already trusts - if the tools don't show up, "
+        "check Codex's own trust prompt for this directory. Also note: writing this file "
+        "reformats it - any hand-written comments in an existing config.toml are not preserved."
+    )
+    return 0
+
+
 def _port_is_available(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -835,6 +955,21 @@ def mcp(
     agent: Optional[str] = typer.Option(None, "--agent", help="provider for the aletheore_answer tool"),
 ) -> None:
     raise typer.Exit(code=_mcp(path, agent))
+
+
+@app.command(
+    name="mcp-install",
+    help="write MCP client config so a coding agent auto-launches this repo's MCP server",
+)
+def mcp_install(
+    path: str = typer.Argument(".", help="repository path"),
+    target: list[str] = typer.Option(
+        [],
+        "--target",
+        help="which client(s) to configure (default: all)",
+    ),
+) -> None:
+    raise typer.Exit(code=_mcp_install(path, target))
 
 
 @app.command(help="run a live local dashboard scoped to a repository")
