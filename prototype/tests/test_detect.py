@@ -39,6 +39,36 @@ def test_detect_languages_counts_files_and_loc(tmp_path):
     assert by_name["javascript"]["file_count"] == 1
 
 
+def test_detect_languages_covers_every_module_graph_language(tmp_path):
+    # detect_languages() used to keep its own, separately-maintained extension
+    # mapping that fell out of sync with graph.py's - it silently reported zero
+    # files for Rust, Java, Ruby, PHP, C, C++, and C# despite all of them being
+    # fully supported by the module graph (found on a real scan: a C/C++-heavy
+    # repo reported zero C or C++ in its language summary). It now reuses
+    # graph.py's mapping directly, so anything the module graph supports must
+    # show up here too.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.rs").write_text("fn main() {}\n")
+    (repo / "Main.java").write_text("class Main {}\n")
+    (repo / "app.rb").write_text("puts 1\n")
+    (repo / "index.php").write_text("<?php echo 1; ?>\n")
+    (repo / "main.c").write_text("int main() { return 0; }\n")
+    (repo / "util.hpp").write_text("int add(int a, int b);\n")
+    (repo / "Program.cs").write_text("class Program {}\n")
+
+    languages = detect_languages(repo)
+    by_name = {entry["name"]: entry for entry in languages}
+
+    assert by_name["rust"]["file_count"] == 1
+    assert by_name["java"]["file_count"] == 1
+    assert by_name["ruby"]["file_count"] == 1
+    assert by_name["php"]["file_count"] == 1
+    assert by_name["c"]["file_count"] == 1
+    assert by_name["cpp"]["file_count"] == 1
+    assert by_name["csharp"]["file_count"] == 1
+
+
 def test_detect_frameworks_reads_requirements_txt(tmp_path):
     repo = make_repo(tmp_path)
     frameworks = detect_frameworks(repo)

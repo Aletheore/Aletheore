@@ -18,15 +18,6 @@ IGNORED_DIRS = {
     "obj",
 }
 
-EXTENSION_TO_LANGUAGE = {
-    ".py": "python",
-    ".js": "javascript",
-    ".jsx": "javascript",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".go": "go",
-}
-
 FRAMEWORK_MARKERS_PY = {
     "fastapi": "fastapi",
     "flask": "flask",
@@ -222,11 +213,21 @@ def _iter_source_files(repo_path: Path):
 
 
 def detect_languages(repo_path: Path) -> list[dict]:
+    # Local import: graph.py already imports IGNORED_DIRS from this module, so a
+    # module-level import here would be circular. LANGUAGE_BY_EXTENSION is the
+    # single source of truth for "which extensions we support" - this used to be
+    # a second, separately-maintained mapping here that fell out of sync (missing
+    # Rust/Java/Ruby/PHP/C/C++/C# entirely - confirmed on a real scan where a
+    # C/C++-heavy repo reported zero C or C++ in its language summary despite
+    # both being fully parsed into the module graph).
+    from aletheore.scanner.graph import LANGUAGE_BY_EXTENSION
+
     counts: dict[str, dict] = {}
     for path in _iter_source_files(repo_path):
-        language = EXTENSION_TO_LANGUAGE.get(path.suffix)
-        if language is None:
+        entry_spec = LANGUAGE_BY_EXTENSION.get(path.suffix)
+        if entry_spec is None:
             continue
+        language = entry_spec[0]
         entry = counts.setdefault(language, {"name": language, "file_count": 0, "loc": 0})
         entry["file_count"] += 1
         try:
