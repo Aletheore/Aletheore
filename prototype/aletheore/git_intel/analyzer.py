@@ -7,11 +7,18 @@ HOTSPOT_LIMIT = 30
 
 
 def _run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
+    # errors="ignore" (matching secrets.py's git-log subprocess) - real commit
+    # history, especially anything spanning many years/contributors, isn't
+    # guaranteed to be valid UTF-8 (confirmed on Linux's own history: strict
+    # decoding crashed with UnicodeDecodeError on a non-UTF-8 byte in an old
+    # commit's author name). A handful of unparseable bytes in one field
+    # shouldn't take down the whole git analysis.
     return subprocess.run(
         ["git", *args],
         cwd=repo_path,
         capture_output=True,
         text=True,
+        errors="ignore",
     )
 
 

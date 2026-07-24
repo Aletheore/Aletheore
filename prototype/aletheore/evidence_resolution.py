@@ -188,6 +188,7 @@ def resolve_recent_commit(repo_path: Path, file_path: str, line: int | None = No
             check=False,
             capture_output=True,
             text=True,
+            errors="ignore",
             timeout=2,
         )
     except (OSError, subprocess.SubprocessError):
