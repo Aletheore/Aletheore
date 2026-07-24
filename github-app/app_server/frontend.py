@@ -1284,6 +1284,7 @@ def _subscribe_install_prompt_page(plan: str, next_path: str) -> str:
         <h1>Install the Aletheore GitHub App</h1>
         <p>Install the app on a GitHub organization to activate your {escape(plan.title())} plan.</p>
         <a class="btn btn-accent" href="{escape(install_url)}">Install the Aletheore GitHub App</a>
+        <p><a href="/dashboard">Cancel</a></p>
         """,
     )
 
@@ -1296,6 +1297,7 @@ def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]
         <h1>Subscribe to {escape(plan.title())}</h1>
         <p>{escape(installation["account_login"])} is currently on {escape(installation["plan"].title())}.</p>
         <button class="btn btn-accent" id="continue-checkout" {continue_attrs}>Continue to checkout</button>
+        <p><a href="/dashboard">Cancel</a></p>
         """
     else:
         options = "\n".join(
@@ -1314,6 +1316,7 @@ def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]
         <p>Choose which installation this subscription applies to.</p>
         <div class="claim-options">{options}</div>
         <button class="btn btn-accent" id="continue-checkout">Continue to checkout</button>
+        <p><a href="/dashboard">Cancel</a></p>
         """
 
     return _subscribe_page("Subscribe", body) + f"""
