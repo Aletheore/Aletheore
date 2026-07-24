@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -11,7 +12,8 @@ from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from app_server.config import get_settings
-from app_server.db import create_session, delete_session, get_session
+from app_server.db import create_session, delete_session, get_session, upsert_installation
+from app_server.github_auth import generate_app_jwt, get_installation_details
 
 SESSION_COOKIE_NAME = "session"
 SESSION_TTL = timedelta(days=30)
@@ -20,6 +22,7 @@ OAUTH_STATE_TTL = timedelta(minutes=10)
 NEXT_COOKIE_NAME = "aletheore_oauth_next"
 
 auth_router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _fernet_key(session_secret: str) -> bytes:
@@ -125,7 +128,7 @@ async def login(next: str | None = None):
 
 
 @auth_router.get("/auth/callback")
-async def callback(code: str, request: Request, state: str | None = None):
+async def callback(code: str, request: Request, state: str | None = None, installation_id: int | None = None):
     settings = get_settings()
 
     # GitHub redirects here from two different entry points: our own
@@ -170,6 +173,23 @@ async def callback(code: str, request: Request, state: str | None = None):
         encrypt_access_token(access_token, settings.session_secret),
         datetime.now(timezone.utc) + SESSION_TTL,
     )
+
+    if installation_id is not None:
+        # A direct "Install" click lands here with installation_id already in
+        # hand, but the `installations` row it powers /subscribe's checkout
+        # page from is normally only written by the async `installation`
+        # webhook - which can arrive after this redirect. Upsert it here too
+        # so /subscribe never races that webhook. Best-effort: the webhook
+        # remains the source of truth, so a failure here just falls back to
+        # the normal (slightly delayed) path instead of breaking sign-in.
+        try:
+            app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+            installation = get_installation_details(installation_id, app_jwt, _github_http_client())
+            await upsert_installation(
+                request.app.state.db_pool, installation_id, installation["account"]["login"]
+            )
+        except Exception:
+            logger.warning("failed to synchronously upsert installation %s", installation_id, exc_info=True)
 
     if signed_state is None and state:
         # A direct "Install" click on GitHub's own App page never goes through

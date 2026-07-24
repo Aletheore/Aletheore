@@ -29,3 +29,20 @@ async def get_installation_token(
     )
     response.raise_for_status()
     return response.json()["token"]
+
+
+def get_installation_details(
+    installation_id: int,
+    app_jwt: str,
+    http_client: httpx.Client | None = None,
+) -> dict:
+    client = http_client or httpx.Client(base_url="https://api.github.com")
+    response = client.get(
+        f"/app/installations/{installation_id}",
+        headers={
+            "Authorization": f"Bearer {app_jwt}",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    response.raise_for_status()
+    return response.json()
