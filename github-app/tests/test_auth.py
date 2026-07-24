@@ -11,7 +11,7 @@ from app_server.auth import (
     unsign_session_id,
     _is_safe_next_path,
 )
-from app_server.db import create_session, get_session
+from app_server.db import create_session, get_installation, get_session
 from app_server.main import app
 
 
@@ -242,6 +242,83 @@ async def test_callback_direct_install_honors_state_as_next_path(pool, monkeypat
 
     assert response.status_code == 307
     assert response.headers["location"] == "/subscribe?plan=team&interval=month"
+
+
+@pytest.mark.asyncio
+async def test_callback_with_installation_id_upserts_installation_synchronously(pool, monkeypatch):
+    # /subscribe reads installations from our DB, which is normally populated
+    # by the async `installation` webhook - a browser redirect straight back
+    # from GitHub's install flow can land here before that webhook arrives.
+    # The callback must upsert the row itself so /subscribe never sees a gap.
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    monkeypatch.setattr("app_server.auth.generate_app_jwt", lambda app_id, key: "fake-app-jwt")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gho_faketoken"})
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 42, "login": "octocat"})
+        if request.url.path == "/app/installations/999":
+            return httpx.Response(200, json={"id": 999, "account": {"login": "acme-corp"}})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        "app_server.auth._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.auth._github_oauth_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
+    )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.get(
+            "/auth/callback?code=fake-code&installation_id=999&setup_action=install",
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 307
+    installation = await get_installation(pool, 999)
+    assert installation is not None
+    assert installation["account_login"] == "acme-corp"
+
+
+@pytest.mark.asyncio
+async def test_callback_installation_upsert_failure_does_not_break_signin(pool, monkeypatch):
+    # The synchronous upsert is best-effort - the webhook is still the
+    # source of truth. If GitHub's /app/installations/{id} call fails (or
+    # the JWT can't be generated), sign-in must still succeed.
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gho_faketoken"})
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 42, "login": "octocat"})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        "app_server.auth._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.auth._github_oauth_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
+    )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.get(
+            "/auth/callback?code=fake-code&installation_id=998&setup_action=install",
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 307
+    assert "session" in response.cookies
+    assert await get_installation(pool, 998) is None
 
 
 @pytest.mark.asyncio
