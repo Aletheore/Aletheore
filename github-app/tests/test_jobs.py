@@ -308,7 +308,74 @@ def test_managed_audit_api_job_returns_report_text(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     from scan_worker.jobs import run_managed_audit_api_job
 
-    result = run_managed_audit_api_job(installation_id=100, evidence={"scanned_at": "2026-01-01"})
+    result = run_managed_audit_api_job(
+        installation_id=100,
+        evidence={"scanned_at": "2026-01-01"},
+        repo_full_name="octocat/widgets",
+    )
+
+    assert "API Report" in result
+
+
+def test_managed_audit_api_job_signs_and_persists_the_report(monkeypatch):
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"}
+    )
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda *a, **k: "# API Report")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    stored = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.insert_audit_report",
+        lambda dsn, iid, repo, token, text, chash, sig: stored.update(
+            installation_id=iid,
+            repo_full_name=repo,
+            token=token,
+            text=text,
+        ),
+    )
+
+    from scan_worker.jobs import run_managed_audit_api_job
+
+    result = run_managed_audit_api_job(
+        installation_id=100,
+        evidence={"scanned_at": "2026-01-01"},
+        repo_full_name="octocat/widgets",
+    )
+
+    assert "API Report" in result
+    assert stored["installation_id"] == 100
+    assert stored["repo_full_name"] == "octocat/widgets"
+    assert stored["text"] == "# API Report"
+    assert len(stored["token"]) == 64
+
+
+def test_managed_audit_api_job_still_returns_report_when_signing_fails(monkeypatch):
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"}
+    )
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda *a, **k: "# API Report")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+
+    def _raise(*a, **k):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr("scan_worker.jobs.insert_audit_report", _raise)
+
+    from scan_worker.jobs import run_managed_audit_api_job
+
+    result = run_managed_audit_api_job(
+        installation_id=100,
+        evidence={"scanned_at": "2026-01-01"},
+        repo_full_name="octocat/widgets",
+    )
 
     assert "API Report" in result
 
@@ -328,7 +395,11 @@ def test_managed_audit_api_job_raises_when_spend_cap_reached(monkeypatch):
     from scan_worker.jobs import run_managed_audit_api_job
 
     with pytest.raises(Exception, match="spend cap"):
-        run_managed_audit_api_job(installation_id=100, evidence={"scanned_at": "2026-01-01"})
+        run_managed_audit_api_job(
+            installation_id=100,
+            evidence={"scanned_at": "2026-01-01"},
+            repo_full_name="octocat/widgets",
+        )
     assert llm_called == []
 
 
@@ -451,6 +522,63 @@ def test_managed_audit_pr_job_persists_and_signs_the_report(monkeypatch, tmp_pat
     assert stored["text"] == "the audit findings"
     assert len(stored["token"]) == 64
     assert stored["token"] in posted["body"]
+
+
+def test_managed_audit_pr_job_still_posts_report_when_signing_fails(monkeypatch, tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True)
+    (work / "app.py").write_text("print('hello')\n")
+    subprocess.run(["git", "add", "."], cwd=work, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "commit"], cwd=work, check=True)
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=work,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(work), str(bare)], check=True)
+    subprocess.run(
+        ["git", "--git-dir", str(bare), "update-ref", "refs/pull/42/head", head_sha],
+        check=True,
+    )
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"})
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: str(bare))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda *a, **k: "the audit findings")
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_managed_audit", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+
+    def _raise(*a, **k):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr("scan_worker.jobs.insert_audit_report", _raise)
+    posted = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo_full_name, pr_number, body, **kwargs: posted.update(
+            body=body,
+            marker=kwargs.get("marker"),
+        ),
+    )
+
+    from scan_worker.jobs import AUDIT_COMMENT_MARKER, run_managed_audit_pr_job
+
+    run_managed_audit_pr_job(1, "octocat/hello-world", 42)
+
+    assert "the audit findings" in posted["body"]
+    assert posted["marker"] == AUDIT_COMMENT_MARKER
+    assert "Verify this report" not in posted["body"]
 
 
 def test_managed_audit_pr_job_skips_llm_call_when_spend_cap_reached(monkeypatch, tmp_path):

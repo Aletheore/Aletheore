@@ -11,7 +11,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
+from rq import get_current_job
 
+from app_server.audit_signing import content_hash, sign_report
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.evidence import write_evidence
@@ -25,7 +27,6 @@ from aletheore.history import compute_diff
 from aletheore.pr_comment import COMMENT_MARKER, format_diff_comment
 from aletheore.healthcheck import run_healthcheck
 from app_server.config import get_settings
-from app_server.audit_signing import content_hash, sign_report
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.llm_cost import cost_for_usage, monthly_cap_for_installation
 from app_server.logging_config import log_job
@@ -368,6 +369,34 @@ def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
     subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
 
 
+def _sign_and_persist_audit_report(
+    settings,
+    installation_id: int,
+    repo_full_name: str,
+    report_text: str,
+) -> str | None:
+    try:
+        verification_token = secrets.token_hex(32)
+        report_hash = content_hash(report_text)
+        signature = sign_report(report_text, settings.audit_signing_private_key)
+        insert_audit_report(
+            settings.database_url,
+            installation_id,
+            repo_full_name,
+            verification_token,
+            report_text,
+            report_hash,
+            signature,
+        )
+        return verification_token
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "audit report signing/persistence failed (%s); report still returned unsigned",
+            type(exc).__name__,
+        )
+        return None
+
+
 @log_job
 def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_number: int) -> None:
     settings = get_settings()
@@ -415,23 +444,20 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                     record_llm_spend(
                         settings.database_url, installation_id, spend_accumulator["total"]
                     )
-                    verification_token = secrets.token_hex(32)
-                    report_hash = content_hash(report_text)
-                    signature = sign_report(report_text, settings.audit_signing_private_key)
-                    insert_audit_report(
-                        settings.database_url,
+                    verification_token = _sign_and_persist_audit_report(
+                        settings,
                         installation_id,
                         repo_full_name,
-                        verification_token,
                         report_text,
-                        report_hash,
-                        signature,
                     )
-                    verify_url = f"{settings.public_base_url}/v1/audit/{verification_token}/verify"
-                    body = (
-                        f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n"
-                        f"{report_text}\n\n[Verify this report]({verify_url})"
-                    )
+                    if verification_token is not None:
+                        verify_url = f"{settings.public_base_url}/v1/audit/{verification_token}/verify"
+                        body = (
+                            f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n"
+                            f"{report_text}\n\n[Verify this report]({verify_url})"
+                        )
+                    else:
+                        body = f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n{report_text}"
         upsert_pr_comment(
             client,
             token,
@@ -450,7 +476,11 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
 
 
 @log_job
-def run_managed_audit_api_job(installation_id: int, evidence: dict | str) -> str:
+def run_managed_audit_api_job(
+    installation_id: int,
+    evidence: dict | str,
+    repo_full_name: str,
+) -> str:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
     plan = installation["plan"] if installation is not None else "indie"
@@ -481,6 +511,16 @@ def run_managed_audit_api_job(installation_id: int, evidence: dict | str) -> str
 
             result = run_managed_audit(job_dir, on_usage=_on_usage, plan=plan)
             record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
+            verification_token = _sign_and_persist_audit_report(
+                settings,
+                installation_id,
+                repo_full_name,
+                result,
+            )
+            job = get_current_job()
+            if job is not None:
+                job.meta["verification_token"] = verification_token
+                job.save_meta()
             return result
         finally:
             shutil.rmtree(job_dir, ignore_errors=True)

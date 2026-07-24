@@ -87,6 +87,7 @@ async def start_managed_audit(request: Request, body: StartManagedAuditRequest):
         job_timeout=900,
         installation_id=installation["installation_id"],
         evidence=body.evidence,
+        repo_full_name=body.repo_full_name,
     )
     return JSONResponse(status_code=202, content={"job_id": job.id})
 
@@ -132,5 +133,9 @@ async def get_managed_audit_status(job_id: str, request: Request):
     if job.is_failed:
         return {"status": "failed"}
     if job.is_finished:
-        return {"status": "finished", "result": job.result}
+        return {
+            "status": "finished",
+            "result": job.result,
+            "verification_token": job.meta.get("verification_token"),
+        }
     return {"status": "pending"}

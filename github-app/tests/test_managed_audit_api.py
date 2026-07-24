@@ -241,6 +241,29 @@ async def test_managed_audit_rate_limit_is_independent_per_repo(pool, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_start_managed_audit_passes_repo_full_name_to_the_job(pool, monkeypatch):
+    await upsert_installation(pool, 100, "octocat")
+    await set_installation_plan(pool, 100, "indie")
+    token_hash = hashlib.sha256(b"real-token").hexdigest()
+    await create_api_token(pool, 100, token_hash, "laptop", "octocat")
+    fake_queue = MagicMock()
+    fake_queue.enqueue.return_value = MagicMock(id="job-123")
+    monkeypatch.setattr("app_server.managed_audit_api._get_queue", lambda redis_url: fake_queue)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/v1/managed-audit",
+            json={"evidence": _evidence_toon(), "repo_full_name": "octocat/widgets"},
+            headers={"Authorization": "Bearer real-token"},
+        )
+
+    _, kwargs = fake_queue.enqueue.call_args
+    assert kwargs["repo_full_name"] == "octocat/widgets"
+
+
+@pytest.mark.asyncio
 async def test_get_job_status_requires_bearer_token(pool):
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
@@ -256,7 +279,13 @@ async def test_get_job_status_returns_result_when_finished(pool, monkeypatch):
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
 
-    fake_job = MagicMock(is_finished=True, is_failed=False, result="# Report", kwargs={"installation_id": 100})
+    fake_job = MagicMock(
+        is_finished=True,
+        is_failed=False,
+        result="# Report",
+        kwargs={"installation_id": 100},
+        meta={},
+    )
     monkeypatch.setattr("app_server.managed_audit_api._fetch_job", lambda job_id, redis_url: fake_job)
 
     app.state.db_pool = pool
@@ -267,7 +296,43 @@ async def test_get_job_status_returns_result_when_finished(pool, monkeypatch):
         )
 
     assert response.status_code == 200
-    assert response.json() == {"status": "finished", "result": "# Report"}
+    assert response.json() == {
+        "status": "finished",
+        "result": "# Report",
+        "verification_token": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_job_status_includes_verification_token_when_present(pool, monkeypatch):
+    await upsert_installation(pool, 100, "octocat")
+    await set_installation_plan(pool, 100, "indie")
+    token_hash = hashlib.sha256(b"real-token").hexdigest()
+    await create_api_token(pool, 100, token_hash, "laptop", "octocat")
+
+    fake_job = MagicMock(
+        is_finished=True,
+        is_failed=False,
+        result="# Report",
+        kwargs={"installation_id": 100},
+        meta={"verification_token": "abc123"},
+    )
+    monkeypatch.setattr("app_server.managed_audit_api._fetch_job", lambda job_id, redis_url: fake_job)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/managed-audit/job-123",
+            headers={"Authorization": "Bearer real-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "finished",
+        "result": "# Report",
+        "verification_token": "abc123",
+    }
 
 
 @pytest.mark.asyncio
