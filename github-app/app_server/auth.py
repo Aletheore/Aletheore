@@ -17,6 +17,7 @@ SESSION_COOKIE_NAME = "session"
 SESSION_TTL = timedelta(days=30)
 OAUTH_STATE_COOKIE_NAME = "oauth_state"
 OAUTH_STATE_TTL = timedelta(minutes=10)
+NEXT_COOKIE_NAME = "aletheore_oauth_next"
 
 auth_router = APIRouter()
 
@@ -86,10 +87,17 @@ async def get_current_session(request: Request) -> dict | None:
     return row
 
 
+def _is_safe_next_path(next_path: str | None) -> str:
+    if not next_path or not next_path.startswith("/") or next_path.startswith("//"):
+        return "/dashboard"
+    return next_path
+
+
 @auth_router.get("/auth/login")
-async def login():
+async def login(next: str | None = None):
     settings = get_settings()
     state = secrets.token_urlsafe(32)
+    safe_next = _is_safe_next_path(next)
     url = (
         "https://github.com/login/oauth/authorize"
         f"?client_id={settings.github_client_id}"
@@ -100,6 +108,14 @@ async def login():
     response.set_cookie(
         OAUTH_STATE_COOKIE_NAME,
         sign_oauth_state(state, settings.session_secret),
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=int(OAUTH_STATE_TTL.total_seconds()),
+    )
+    response.set_cookie(
+        NEXT_COOKIE_NAME,
+        safe_next,
         httponly=True,
         secure=True,
         samesite="lax",
@@ -155,7 +171,8 @@ async def callback(code: str, request: Request, state: str | None = None):
         datetime.now(timezone.utc) + SESSION_TTL,
     )
 
-    response = RedirectResponse(url="/dashboard", status_code=307)
+    next_path = _is_safe_next_path(request.cookies.get(NEXT_COOKIE_NAME))
+    response = RedirectResponse(url=next_path, status_code=307)
     response.set_cookie(
         SESSION_COOKIE_NAME,
         sign_session_id(session_id, settings.session_secret),
@@ -165,6 +182,7 @@ async def callback(code: str, request: Request, state: str | None = None):
         max_age=int(SESSION_TTL.total_seconds()),
     )
     response.delete_cookie(OAUTH_STATE_COOKIE_NAME)
+    response.delete_cookie(NEXT_COOKIE_NAME)
     return response
 
 

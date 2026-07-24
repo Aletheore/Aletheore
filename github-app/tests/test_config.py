@@ -14,19 +14,23 @@ def _clean_env(monkeypatch):
         "GITHUB_CLIENT_ID",
         "GITHUB_CLIENT_SECRET",
         "GITHUB_WEBHOOK_SECRET",
+        "GITHUB_APP_SLUG",
         "SESSION_SECRET",
         "PUBLIC_BASE_URL",
         "AUDIT_SIGNING_PRIVATE_KEY",
+        "PADDLE_WEBHOOK_SECRET",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost/db")
     # Required secrets get a baseline value so tests that aren't specifically
     # exercising fail-closed behavior don't have to restate them.
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "webhook-secret")
+    monkeypatch.setenv("GITHUB_APP_SLUG", "aletheore")
     monkeypatch.setenv("GITHUB_CLIENT_SECRET", "client-secret")
     monkeypatch.setenv("SESSION_SECRET", "session-secret")
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "raw-key-value")
     monkeypatch.setenv("AUDIT_SIGNING_PRIVATE_KEY", "11" * 32)
+    monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", "pdl_ntfset_test_secret")
 
 
 def test_reads_private_key_from_path_when_set(tmp_path, monkeypatch):
@@ -70,10 +74,12 @@ def test_reads_paid_tier_settings(monkeypatch):
     "missing_var",
     [
         "GITHUB_WEBHOOK_SECRET",
+        "GITHUB_APP_SLUG",
         "GITHUB_CLIENT_SECRET",
         "SESSION_SECRET",
         "GITHUB_APP_PRIVATE_KEY",
         "AUDIT_SIGNING_PRIVATE_KEY",
+        "PADDLE_WEBHOOK_SECRET",
     ],
 )
 def test_raises_when_required_secret_is_missing(missing_var, monkeypatch):
@@ -86,10 +92,12 @@ def test_raises_when_required_secret_is_missing(missing_var, monkeypatch):
     "missing_var",
     [
         "GITHUB_WEBHOOK_SECRET",
+        "GITHUB_APP_SLUG",
         "GITHUB_CLIENT_SECRET",
         "SESSION_SECRET",
         "GITHUB_APP_PRIVATE_KEY",
         "AUDIT_SIGNING_PRIVATE_KEY",
+        "PADDLE_WEBHOOK_SECRET",
     ],
 )
 def test_raises_when_required_secret_is_blank(missing_var, monkeypatch):

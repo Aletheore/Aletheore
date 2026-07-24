@@ -18,6 +18,7 @@ from app_server.managed_audit_api import managed_audit_router
 from app_server.metrics import metrics_router
 from app_server.signature import verify_signature
 from app_server.webhooks.installation import handle_installation_event
+from app_server.webhooks.paddle import paddle_webhook_router
 
 configure_json_logging()
 access_logger = logging.getLogger("app_server.access")
@@ -39,6 +40,7 @@ app.include_router(admin_router)
 app.include_router(managed_audit_router)
 app.include_router(metrics_router)
 app.include_router(frontend_router)
+app.include_router(paddle_webhook_router)
 
 
 @app.middleware("http")

@@ -1088,6 +1088,48 @@ pre {
   font-weight: 700;
 }
 
+.price-card button.btn {
+  width: 100%;
+  margin-top: 20px;
+  border: 1px solid var(--accent);
+  font-family: inherit;
+  appearance: none;
+}
+
+.billing-toggle {
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 28px;
+  padding: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 100px;
+  background: var(--card-bg);
+}
+
+.billing-toggle button {
+  padding: 8px 18px;
+  border: none;
+  border-radius: 100px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.billing-toggle button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.billing-toggle-badge {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.85;
+}
+
 .legal-body {
   max-width: 720px;
   padding: 48px 0 80px;

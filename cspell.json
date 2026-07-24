@@ -1,6 +1,10 @@
 {
   "version": "0.2",
   "language": "en",
+  "ignoreRegExpList": [
+    "pri_[0-9a-z]+",
+    "pro_[0-9a-z]+"
+  ],
   "ignorePaths": [
     ".git",
     "**/__pycache__/**",

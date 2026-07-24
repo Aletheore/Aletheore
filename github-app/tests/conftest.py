@@ -16,10 +16,12 @@ os.environ.setdefault("DATABASE_URL", TEST_DATABASE_URL)
 os.environ.setdefault("GITHUB_APP_ID", "12345")
 os.environ.setdefault("GITHUB_APP_PRIVATE_KEY", "test-private-key")
 os.environ.setdefault("GITHUB_WEBHOOK_SECRET", "test-webhook-secret")
+os.environ.setdefault("GITHUB_APP_SLUG", "aletheore")
 os.environ.setdefault("GITHUB_CLIENT_ID", "test-client-id")
 os.environ.setdefault("GITHUB_CLIENT_SECRET", "test-client-secret")
 os.environ.setdefault("SESSION_SECRET", "test-session-secret")
 os.environ.setdefault("AUDIT_SIGNING_PRIVATE_KEY", "11" * 32)
+os.environ.setdefault("PADDLE_WEBHOOK_SECRET", "pdl_ntfset_test_secret")
 os.environ.setdefault("PUBLIC_BASE_URL", "http://test")
 
 

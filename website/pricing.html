@@ -37,6 +37,11 @@
       <h1>Simple, honest pricing.</h1>
       <p class="section-intro">The deterministic scanner is free forever. Indie, Team, and Enterprise add managed AI audits and AIRview - the model writing them, and the seats included, scale with plan.</p>
 
+      <div class="billing-toggle" role="group" aria-label="Billing interval">
+        <button type="button" data-interval="month" class="active">Monthly</button>
+        <button type="button" data-interval="year">Yearly <span class="billing-toggle-badge">2 months free</span></button>
+      </div>
+
       <div class="pricing-grid">
         <article class="price-card">
           <h3>Free</h3>
@@ -50,10 +55,10 @@
           </ul>
         </article>
 
-        <article class="price-card">
+        <article class="price-card" data-tier="indie">
           <h3>Indie</h3>
           <div class="price-now">$29</div>
-          <div class="price-sub">/month, up to 3 team members</div>
+          <div class="price-sub"><span class="price-sub-interval">/month</span>, up to 3 team members</div>
           <ul>
             <li>Everything in Free.</li>
             <li>Managed audits and AIRview, written by DeepSeek.</li>
@@ -63,28 +68,31 @@
             <li>Endpoint health monitoring across multiple targets, with a public status API.</li>
             <li>+$3.99/mo per additional team member.</li>
           </ul>
+          <button type="button" class="btn btn-primary" data-subscribe="indie">Subscribe</button>
         </article>
 
-        <article class="price-card pro">
+        <article class="price-card pro" data-tier="team">
           <h3>Team</h3>
           <div class="price-now">$79</div>
-          <div class="price-sub">/month, up to 10 team members</div>
+          <div class="price-sub"><span class="price-sub-interval">/month</span>, up to 10 team members</div>
           <ul>
             <li>Everything in Indie.</li>
             <li>Managed audits and AIRview, written by GPT-4o.</li>
             <li>+$3.99/mo per additional team member.</li>
           </ul>
+          <button type="button" class="btn btn-primary" data-subscribe="team">Subscribe</button>
         </article>
 
-        <article class="price-card">
+        <article class="price-card" data-tier="enterprise">
           <h3>Enterprise</h3>
           <div class="price-now">$199</div>
-          <div class="price-sub">/month, up to 25 team members</div>
+          <div class="price-sub"><span class="price-sub-interval">/month</span>, up to 25 team members</div>
           <ul>
             <li>Everything in Team.</li>
             <li>Managed audits and AIRview, written by Claude Opus.</li>
             <li>+$3.99/mo per additional team member.</li>
           </ul>
+          <button type="button" class="btn btn-primary" data-subscribe="enterprise">Subscribe</button>
         </article>
       </div>
       <p class="section-intro" style="margin-top: 28px;">
@@ -121,5 +129,7 @@
     </div>
   </footer>
   <script src="vendor/motion.js"></script>
+  <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+  <script src="paddle-checkout.js" defer></script>
 </body>
 </html>
