@@ -161,3 +161,22 @@ def test_build_module_graph_c_file_uses_c_grammar(tmp_path):
     assert "add" in symbol_names(by_path["util.c"]["symbols"]["functions"])
     assert ("util.c", "util.h") in {tuple(e) for e in dependency_graph["edges"]}
     assert unparseable == []
+
+
+def test_build_module_graph_c_file_with_deeply_nested_expression_does_not_crash(tmp_path):
+    # Real Linux kernel source hit this: _extract_c_family's AST walk used to be
+    # recursive (one Python stack frame per AST depth level), and a deeply nested
+    # expression blew past Python's default recursion limit with
+    # "RecursionError: maximum recursion depth exceeded", crashing the whole scan.
+    # 3000 nesting levels comfortably exceeds the default limit (1000) while
+    # staying far short of anything that would need actual C compilation.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    depth = 3000
+    nested_expr = "1" + "".join(f"+({i}" for i in range(depth)) + ")" * depth
+    (repo / "deep.c").write_text(f"int f(void) {{\n    int x = {nested_expr};\n    return x;\n}}\n")
+
+    modules, _, unparseable = build_module_graph(repo)
+
+    assert unparseable == []
+    assert "f" in symbol_names(modules[0]["symbols"]["functions"])
