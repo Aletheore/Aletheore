@@ -133,3 +133,55 @@ async def test_apply_rejects_installation_user_does_not_administer(pool, monkeyp
             headers={"content-type": "application/x-www-form-urlencoded"},
         )
     assert response.status_code == 403
+
+
+async def _logged_in_client_with_dead_token(pool, monkeypatch):
+    """A session whose stored GitHub access token GitHub itself now rejects
+    with 401 - simulates a revoked/expired token, distinct from having no
+    session cookie at all."""
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    await create_session(
+        pool,
+        "dead-token-sess",
+        43,
+        "octocat",
+        encrypt_access_token("gho_deadtoken", "test-session-secret"),
+        datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"message": "Bad credentials"})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    app.state.db_pool = pool
+    signed = sign_session_id("dead-token-sess", "test-session-secret")
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test", cookies={"session": signed})
+
+
+@pytest.mark.asyncio
+async def test_claim_page_dead_github_token_redirects_to_fresh_login_not_500(pool, monkeypatch):
+    await insert_pending_subscription_claim(pool, "tok_dead", "sub_6", "ctm_6", None, "indie")
+    client = await _logged_in_client_with_dead_token(pool, monkeypatch)
+    client.cookies.set("claim_token", "tok_dead")
+    async with client:
+        response = await client.get("/subscribe/claim", follow_redirects=False)
+    assert response.status_code == 307
+    assert "/auth/login" in response.headers["location"]
+    assert "next=%2Fsubscribe%2Fclaim" in response.headers["location"]
+    assert response.cookies.get("session") is None
+
+
+@pytest.mark.asyncio
+async def test_apply_dead_github_token_returns_401_not_500(pool, monkeypatch):
+    await insert_pending_subscription_claim(pool, "tok_dead2", "sub_7", "ctm_7", None, "team")
+    client = await _logged_in_client_with_dead_token(pool, monkeypatch)
+    async with client:
+        response = await client.post(
+            "/subscribe/claim/apply",
+            content="claim_token=tok_dead2&installation_id=1",
+            headers={"content-type": "application/x-www-form-urlencoded"},
+        )
+    assert response.status_code == 401
