@@ -208,6 +208,43 @@ async def test_callback_without_state_cookie_succeeds_for_app_install_flow(pool,
 
 
 @pytest.mark.asyncio
+async def test_callback_direct_install_honors_state_as_next_path(pool, monkeypatch):
+    # github_app_install_url() puts our own next_path in `state` for the
+    # direct-install entry point (no oauth_state cookie, so state isn't a
+    # CSRF nonce here) - the callback should redirect there instead of the
+    # /dashboard default.
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gho_faketoken"})
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 42, "login": "octocat"})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        "app_server.auth._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.auth._github_oauth_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
+    )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.get(
+            "/auth/callback?code=fake-code&installation_id=123&setup_action=install"
+            "&state=%2Fsubscribe%3Fplan%3Dteam%26interval%3Dmonth",
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/subscribe?plan=team&interval=month"
+
+
+@pytest.mark.asyncio
 async def test_get_current_session_decrypts_access_token(pool, monkeypatch):
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     encrypted = encrypt_access_token("gho_realtoken", "test-session-secret")

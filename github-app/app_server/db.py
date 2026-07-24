@@ -45,58 +45,6 @@ async def set_installation_plan(pool: asyncpg.Pool, installation_id: int, plan: 
     )
 
 
-async def insert_pending_subscription_claim(
-    pool: asyncpg.Pool,
-    claim_token: str,
-    paddle_subscription_id: str,
-    paddle_customer_id: str,
-    paddle_customer_email: str | None,
-    plan: str,
-) -> None:
-    await pool.execute(
-        """
-        INSERT INTO pending_subscription_claims
-            (claim_token, paddle_subscription_id, paddle_customer_id, paddle_customer_email, plan)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (paddle_subscription_id) DO UPDATE SET
-            claim_token = EXCLUDED.claim_token,
-            paddle_customer_id = EXCLUDED.paddle_customer_id,
-            paddle_customer_email = EXCLUDED.paddle_customer_email,
-            plan = EXCLUDED.plan
-        """,
-        claim_token,
-        paddle_subscription_id,
-        paddle_customer_id,
-        paddle_customer_email,
-        plan,
-    )
-
-
-async def get_pending_subscription_claim_by_token(pool: asyncpg.Pool, claim_token: str) -> dict | None:
-    row = await pool.fetchrow(
-        """
-        SELECT id, claim_token, paddle_subscription_id, paddle_customer_id, paddle_customer_email,
-               plan, created_at, claimed_at, claimed_by_installation_id
-        FROM pending_subscription_claims
-        WHERE claim_token = $1
-        """,
-        claim_token,
-    )
-    return dict(row) if row else None
-
-
-async def mark_subscription_claim_claimed(pool: asyncpg.Pool, claim_token: str, installation_id: int) -> None:
-    await pool.execute(
-        """
-        UPDATE pending_subscription_claims
-        SET claimed_at = now(), claimed_by_installation_id = $2
-        WHERE claim_token = $1
-        """,
-        claim_token,
-        installation_id,
-    )
-
-
 async def add_paddle_ids_to_installation(
     pool: asyncpg.Pool,
     installation_id: int,
@@ -112,22 +60,6 @@ async def add_paddle_ids_to_installation(
         installation_id,
         paddle_subscription_id,
         paddle_customer_id,
-    )
-
-
-async def backfill_customer_email_for_claims(
-    pool: asyncpg.Pool,
-    paddle_customer_id: str,
-    email: str,
-) -> None:
-    await pool.execute(
-        """
-        UPDATE pending_subscription_claims
-        SET paddle_customer_email = $2
-        WHERE paddle_customer_id = $1 AND paddle_customer_email IS NULL
-        """,
-        paddle_customer_id,
-        email,
     )
 
 

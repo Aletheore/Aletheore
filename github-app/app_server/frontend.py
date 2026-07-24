@@ -15,7 +15,7 @@ competing for space with five other sections.
 """
 
 from html import escape
-from urllib.parse import parse_qs
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -23,13 +23,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app_server.admin import _administered_installation_ids
 from app_server.auth import SESSION_COOKIE_NAME, get_current_session
-from app_server.db import (
-    add_paddle_ids_to_installation,
-    get_pending_subscription_claim_by_token,
-    list_installations_for_ids,
-    mark_subscription_claim_claimed,
-    set_installation_plan,
-)
+from app_server.db import list_installations_for_ids
+from app_server.github_install import github_app_install_url
+from app_server.paddle_pricing import resolve_price_id_for_plan
 
 frontend_router = APIRouter()
 
@@ -1263,10 +1259,14 @@ def _no_store_html(content: str) -> HTMLResponse:
     return HTMLResponse(content, headers={"Cache-Control": "no-store"})
 
 
-CLAIM_TOKEN_COOKIE_NAME = "claim_token"
+PADDLE_CLIENT_TOKEN = "test_4c86268368fd75d088763f49248"
+PADDLE_ENVIRONMENT = "sandbox"
+
+_VALID_PLANS = ("indie", "team", "enterprise")
+_VALID_INTERVALS = ("month", "year")
 
 
-def _claim_page(title: str, body: str) -> str:
+def _subscribe_page(title: str, body: str) -> str:
     return _page_head(f"{title} — Aletheore") + f"""
 <div class="claim-page">
   <div class="claim-card">
@@ -1276,79 +1276,80 @@ def _claim_page(title: str, body: str) -> str:
 """
 
 
-def _claim_polling_page() -> str:
-    return _claim_page(
-        "Confirming your subscription",
-        """
-        <h1>Confirming your payment</h1>
-        <p>This usually takes a few seconds. We are waiting for Paddle to confirm the subscription.</p>
-        <script>setTimeout(() => location.reload(), 2000);</script>
-        """,
-    )
-
-
-def _claim_already_claimed_page() -> str:
-    return _claim_page(
-        "Subscription active",
-        """
-        <h1>Already activated</h1>
-        <p>This subscription is already active for an Aletheore installation.</p>
-        <a class="btn btn-accent" href="/dashboard">Go to dashboard</a>
-        """,
-    )
-
-
-def _claim_install_prompt_page(plan: str) -> str:
-    return _claim_page(
+def _subscribe_install_prompt_page(plan: str, next_path: str) -> str:
+    install_url = github_app_install_url(next_path)
+    return _subscribe_page(
         "Install the GitHub App",
         f"""
         <h1>Install the Aletheore GitHub App</h1>
-        <p>Install the app to activate your {escape(plan.title())} plan on a GitHub organization.</p>
-        <a class="btn btn-accent" href="/auth/login?next=%2Fsubscribe%2Fclaim">Install the Aletheore GitHub App</a>
+        <p>Install the app on a GitHub organization to activate your {escape(plan.title())} plan.</p>
+        <a class="btn btn-accent" href="{escape(install_url)}">Install the Aletheore GitHub App</a>
         """,
     )
 
 
-def _claim_selection_page(plan: str, installations: list[dict], claim_token: str) -> str:
-    options = "\n".join(
-        (
-            '<label class="claim-option">'
-            f'<input type="radio" name="installation_id" value="{installation["installation_id"]}" required> '
-            f'{escape(installation["account_login"])}'
-            "</label>"
+def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]) -> str:
+    if len(installations) == 1:
+        installation = installations[0]
+        continue_attrs = f'data-installation-id="{installation["installation_id"]}"'
+        body = f"""
+        <h1>Subscribe to {escape(plan.title())}</h1>
+        <p>{escape(installation["account_login"])} is currently on {escape(installation["plan"].title())}.</p>
+        <button class="btn btn-accent" id="continue-checkout" {continue_attrs}>Continue to checkout</button>
+        """
+    else:
+        options = "\n".join(
+            (
+                '<label class="claim-option">'
+                f'<input type="radio" name="installation_id" value="{installation["installation_id"]}"'
+                f'{" checked" if index == 0 else ""}> '
+                f'{escape(installation["account_login"])} '
+                f'(currently {escape(installation["plan"].title())})'
+                "</label>"
+            )
+            for index, installation in enumerate(installations)
         )
-        for installation in installations
-    )
-    return _claim_page(
-        "Apply your plan",
-        f"""
-        <h1>Apply your {escape(plan.title())} plan</h1>
-        <p>Choose the GitHub installation this subscription should activate.</p>
-        <form method="post" action="/subscribe/claim/apply">
-          <input type="hidden" name="claim_token" value="{escape(claim_token)}">
-          <div class="claim-options">{options}</div>
-          <button class="btn btn-accent" type="submit">Apply</button>
-        </form>
-        """,
-    )
+        body = f"""
+        <h1>Subscribe to {escape(plan.title())}</h1>
+        <p>Choose which installation this subscription applies to.</p>
+        <div class="claim-options">{options}</div>
+        <button class="btn btn-accent" id="continue-checkout">Continue to checkout</button>
+        """
+
+    return _subscribe_page("Subscribe", body) + f"""
+<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
+<script>
+Paddle.Environment.set("{PADDLE_ENVIRONMENT}");
+Paddle.Initialize({{ token: "{PADDLE_CLIENT_TOKEN}" }});
+document.getElementById("continue-checkout").addEventListener("click", (event) => {{
+  const btn = event.currentTarget;
+  const selected = document.querySelector('input[name="installation_id"]:checked');
+  const installationId = selected ? selected.value : btn.dataset.installationId;
+  Paddle.Checkout.open({{
+    items: [{{ priceId: "{price_id}", quantity: 1 }}],
+    customData: {{ installation_id: installationId }},
+    settings: {{
+      displayMode: "overlay",
+      variant: "one-page",
+      successUrl: "https://app.aletheore.com/dashboard",
+    }},
+  }});
+}});
+</script>
+"""
 
 
-@frontend_router.get("/subscribe/claim", response_class=HTMLResponse)
-async def subscribe_claim_page(request: Request):
+@frontend_router.get("/subscribe", response_class=HTMLResponse)
+async def subscribe_page(request: Request, plan: str = "", interval: str = ""):
+    if plan not in _VALID_PLANS or interval not in _VALID_INTERVALS:
+        raise HTTPException(status_code=400, detail="invalid plan or interval")
+
+    next_path = f"/subscribe?plan={plan}&interval={interval}"
+    encoded_next = quote(next_path, safe="")
+
     session = await get_current_session(request)
     if session is None:
-        return RedirectResponse(url="/auth/login?next=%2Fsubscribe%2Fclaim", status_code=307)
-
-    claim_token = request.cookies.get(CLAIM_TOKEN_COOKIE_NAME)
-    if not claim_token:
-        return _no_store_html(_claim_polling_page())
-
-    pool = request.app.state.db_pool
-    claim = await get_pending_subscription_claim_by_token(pool, claim_token)
-    if claim is None:
-        return _no_store_html(_claim_polling_page())
-    if claim["claimed_at"] is not None:
-        return _no_store_html(_claim_already_claimed_page())
+        return RedirectResponse(url=f"/auth/login?next={encoded_next}", status_code=307)
 
     try:
         administered_ids = await _administered_installation_ids(session["github_access_token"])
@@ -1358,60 +1359,18 @@ async def subscribe_claim_page(request: Request):
             # session cookie itself is still valid, but GitHub no longer honors
             # the access token inside it. Clear it and send them through a
             # fresh sign-in rather than a raw 500.
-            response = RedirectResponse(url="/auth/login?next=%2Fsubscribe%2Fclaim", status_code=307)
+            response = RedirectResponse(url=f"/auth/login?next={encoded_next}", status_code=307)
             response.delete_cookie(SESSION_COOKIE_NAME)
             return response
         raise
 
-    installations = await list_installations_for_ids(pool, list(administered_ids))
-    if not installations:
-        return _no_store_html(_claim_install_prompt_page(claim["plan"]))
-
-    return _no_store_html(_claim_selection_page(claim["plan"], installations, claim_token))
-
-
-@frontend_router.post("/subscribe/claim/apply")
-async def subscribe_claim_apply(request: Request):
-    session = await get_current_session(request)
-    if session is None:
-        raise HTTPException(status_code=401, detail="login required")
-
-    form = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
-    claim_token = (form.get("claim_token") or [""])[0]
-    installation_id_raw = (form.get("installation_id") or [""])[0]
-    try:
-        installation_id = int(installation_id_raw)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="invalid installation_id") from exc
+    if not administered_ids:
+        return _no_store_html(_subscribe_install_prompt_page(plan, next_path))
 
     pool = request.app.state.db_pool
-    try:
-        administered_ids = await _administered_installation_ids(session["github_access_token"])
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 401:
-            raise HTTPException(
-                status_code=401, detail="your GitHub session has expired, sign in again"
-            ) from exc
-        raise
-    if installation_id not in administered_ids:
-        raise HTTPException(status_code=403, detail="you do not administer this installation")
-
-    claim = await get_pending_subscription_claim_by_token(pool, claim_token)
-    if claim is None or claim["claimed_at"] is not None:
-        raise HTTPException(status_code=409, detail="claim is not available")
-
-    await set_installation_plan(pool, installation_id, claim["plan"])
-    await add_paddle_ids_to_installation(
-        pool,
-        installation_id,
-        claim["paddle_subscription_id"],
-        claim["paddle_customer_id"],
-    )
-    await mark_subscription_claim_claimed(pool, claim_token, installation_id)
-
-    response = _no_store_html(_claim_already_claimed_page())
-    response.delete_cookie(CLAIM_TOKEN_COOKIE_NAME)
-    return response
+    installations = await list_installations_for_ids(pool, list(administered_ids))
+    price_id = resolve_price_id_for_plan(plan, interval)
+    return _no_store_html(_subscribe_checkout_page(plan, price_id, installations))
 
 
 @frontend_router.get("/", response_class=HTMLResponse)
