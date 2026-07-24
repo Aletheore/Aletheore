@@ -3,6 +3,7 @@ import httpx
 from scan_worker.slack import (
     format_latency_alert,
     format_reachability_alert,
+    format_shape_change_alert,
     format_slack_message,
     send_health_alert,
     send_slack_alert,
@@ -126,6 +127,41 @@ def test_format_latency_alert_under():
     )
     assert "under threshold" in body["text"]
     assert "controllers/user.controller.ts:42" in body["text"]
+
+
+def test_format_shape_change_alert_reports_added_and_dropped_keys():
+    body = format_shape_change_alert(
+        "octocat/hello-world",
+        "GET",
+        "/api/users",
+        "controllers/user.controller.ts",
+        42,
+        prior_shape=["email", "id", "name"],
+        current_shape=["id", "name", "role"],
+    )
+
+    assert "response shape changed" in body["text"]
+    assert "added keys: role" in body["text"]
+    assert "dropped keys: email" in body["text"]
+    assert "controllers/user.controller.ts:42" in body["text"]
+
+
+def test_format_shape_change_alert_includes_evidence_context():
+    evidence_resolution = {
+        "commit": {"sha": "abcdef123456", "subject": "drop email from response"},
+    }
+    body = format_shape_change_alert(
+        "octocat/hello-world",
+        "GET",
+        "/api/users",
+        None,
+        None,
+        prior_shape=["email", "id"],
+        current_shape=["id"],
+        evidence_resolution=evidence_resolution,
+    )
+
+    assert "Recent commit: `abcdef12`" in body["text"]
 
 
 def test_send_health_alert_posts_message():

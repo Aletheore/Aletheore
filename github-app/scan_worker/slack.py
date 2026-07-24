@@ -141,6 +141,37 @@ def format_latency_alert(
     return {"text": text}
 
 
+def format_shape_change_alert(
+    repo_full_name: str,
+    method: str,
+    path: str,
+    source_file: str | None,
+    source_line: int | None,
+    prior_shape: list[str],
+    current_shape: list[str],
+    evidence_resolution: dict | None = None,
+) -> dict:
+    location = (
+        f" - handled by {source_file}:{source_line}"
+        if source_file and source_line is not None
+        else ""
+    )
+    added = sorted(set(current_shape) - set(prior_shape))
+    dropped = sorted(set(prior_shape) - set(current_shape))
+    changes = []
+    if added:
+        changes.append(f"added keys: {', '.join(added)}")
+    if dropped:
+        changes.append(f"dropped keys: {', '.join(dropped)}")
+    change_summary = "; ".join(changes) if changes else "key order changed"
+    text = (
+        f"*Aletheore*: response shape changed on `{repo_full_name}`\n"
+        f"`{method} {path}` {change_summary}{location}"
+        f"{_format_evidence_context(evidence_resolution)}"
+    )
+    return {"text": text}
+
+
 def send_health_alert(
     webhook_url: str,
     message: dict,

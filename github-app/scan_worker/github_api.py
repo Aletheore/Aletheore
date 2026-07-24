@@ -136,3 +136,38 @@ def fetch_file_content(
         return base64.b64decode(data["content"]).decode("utf-8")
     except (ValueError, UnicodeDecodeError):
         return None
+
+
+def fetch_recent_commits_for_path(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    path: str,
+    limit: int = 1,
+) -> list[dict]:
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    response = client.get(
+        f"/repos/{repo_full_name}/commits",
+        headers=headers,
+        params={"path": path, "per_page": limit},
+    )
+    if response.status_code == 404:
+        return []
+    response.raise_for_status()
+    commits = []
+    for item in response.json():
+        commit = item.get("commit", {})
+        author = commit.get("author", {}) or {}
+        message = commit.get("message") or ""
+        commits.append(
+            {
+                "sha": item.get("sha"),
+                "author": author.get("name"),
+                "date": author.get("date"),
+                "subject": message.split("\n", 1)[0],
+            }
+        )
+    return commits

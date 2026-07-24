@@ -8,6 +8,7 @@ from scan_worker.github_api import (
     fetch_file_content,
     fetch_pr_changed_files,
     fetch_pr_diff,
+    fetch_recent_commits_for_path,
     upsert_pr_comment,
 )
 
@@ -191,3 +192,90 @@ def test_fetch_file_content_returns_none_for_binary():
     result = fetch_file_content(client, "tok", "octocat/hello-world", "image.png", "bbb")
 
     assert result is None
+
+
+def test_fetch_recent_commits_for_path_returns_shaped_commits():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/octocat/hello-world/commits"
+        assert dict(request.url.params) == {
+            "path": "controllers/user.controller.ts",
+            "per_page": "1",
+        }
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "sha": "abc123def456",
+                    "commit": {
+                        "author": {
+                            "name": "Ada Lovelace",
+                            "date": "2026-07-23T10:00:00Z",
+                        },
+                        "message": "fix: guard against null user id\n\nlonger body here",
+                    },
+                }
+            ],
+        )
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.github.com",
+    )
+    commits = fetch_recent_commits_for_path(
+        client,
+        "token",
+        "octocat/hello-world",
+        "controllers/user.controller.ts",
+    )
+
+    assert commits == [
+        {
+            "sha": "abc123def456",
+            "author": "Ada Lovelace",
+            "date": "2026-07-23T10:00:00Z",
+            "subject": "fix: guard against null user id",
+        }
+    ]
+
+
+def test_fetch_recent_commits_for_path_respects_limit():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert dict(request.url.params)["per_page"] == "3"
+        return httpx.Response(200, json=[])
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.github.com",
+    )
+    fetch_recent_commits_for_path(client, "token", "octocat/hello-world", "app.py", limit=3)
+
+
+def test_fetch_recent_commits_for_path_returns_empty_list_for_404():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.github.com",
+    )
+    commits = fetch_recent_commits_for_path(
+        client,
+        "token",
+        "octocat/hello-world",
+        "deleted_file.py",
+    )
+
+    assert commits == []
+
+
+def test_fetch_recent_commits_for_path_returns_empty_list_when_no_commits():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.github.com",
+    )
+    commits = fetch_recent_commits_for_path(client, "token", "octocat/hello-world", "app.py")
+
+    assert commits == []

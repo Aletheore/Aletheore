@@ -1,3 +1,4 @@
+import json
 import re
 import ssl
 import time
@@ -17,6 +18,7 @@ _PATH_PARAM_PATTERNS = (
     re.compile(r"\{[^}]+\}"),
     re.compile(r":[A-Za-z_][A-Za-z0-9_]*"),
 )
+MAX_BODY_BYTES_FOR_SHAPE = 65_536
 
 
 def _substitute_path_params(path: str) -> tuple[str, bool]:
@@ -27,6 +29,22 @@ def _substitute_path_params(path: str) -> tuple[str, bool]:
             had_params = True
             substituted = pattern.sub("1", substituted)
     return substituted, had_params
+
+
+def _response_shape(response) -> list[str] | None:
+    content_type = response.headers.get("Content-Type", "")
+    if "application/json" not in content_type:
+        return None
+    try:
+        raw = response.read(MAX_BODY_BYTES_FOR_SHAPE)
+        data = json.loads(raw)
+    except (ValueError, TypeError, UnicodeDecodeError):
+        return None
+    if isinstance(data, dict):
+        return sorted(data.keys())
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        return sorted(data[0].keys())
+    return None
 
 
 def run_healthcheck(endpoints: list[dict], base_url: str, timeout: float = 5.0) -> dict:
@@ -76,12 +94,15 @@ def run_healthcheck(endpoints: list[dict], base_url: str, timeout: float = 5.0) 
             ) as response:
                 entry["status_code"] = response.status
                 entry["reachable"] = True
+                entry["response_shape"] = _response_shape(response)
         except urllib.error.HTTPError as exc:
             entry["status_code"] = exc.code
             entry["reachable"] = True
+            entry["response_shape"] = None
         except (urllib.error.URLError, TimeoutError, OSError):
             entry["status_code"] = None
             entry["reachable"] = False
+            entry["response_shape"] = None
         entry["latency_ms"] = round((time.monotonic() - start) * 1000, 1)
         results.append(entry)
 

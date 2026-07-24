@@ -1,4 +1,6 @@
 import json
+import logging
+import re
 from collections.abc import Callable
 
 from aletheore.evidence_resolution import (
@@ -13,6 +15,8 @@ from scan_worker.github_api import (
     MAX_CONTEXT_TOTAL_BYTES,
     fetch_file_content,
 )
+
+logger = logging.getLogger(__name__)
 
 FLASH_REVIEW_SYSTEM_PROMPT = """You are reviewing a code diff for potential issues. You may also be
 given the full current content of the changed files for context. You must respond with ONLY a
@@ -105,14 +109,93 @@ def build_code_evidence_context(evidence: dict | None, changed_files: list[str])
     return "--- deterministic code evidence for changed files ---\n" + "\n".join(lines)
 
 
+_FILE_MARKER_RE = re.compile(r"^--- (.+) ---$")
+_HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def _diff_valid_lines(diff_text: str) -> dict[str, set[int]]:
+    """Maps each file to new-file line numbers present in its diff hunks."""
+    valid_lines: dict[str, set[int]] = {}
+    current_file: str | None = None
+    current_line: int | None = None
+    for line in diff_text.splitlines():
+        file_match = _FILE_MARKER_RE.match(line)
+        if file_match:
+            current_file = file_match.group(1)
+            valid_lines.setdefault(current_file, set())
+            current_line = None
+            continue
+        hunk_match = _HUNK_HEADER_RE.match(line)
+        if hunk_match:
+            current_line = int(hunk_match.group(1))
+            continue
+        if line == "":
+            continue
+        if current_file is None or current_line is None:
+            continue
+        if line.startswith("-"):
+            continue
+        valid_lines[current_file].add(current_line)
+        current_line += 1
+    return valid_lines
+
+
+def _validate_findings(findings: list[dict], diff_text: str) -> list[dict]:
+    valid_lines = _diff_valid_lines(diff_text)
+    return [f for f in findings if f["line"] in valid_lines.get(f["file"], set())]
+
+
+_NON_SUBSTANTIVE_FILENAMES = {
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "Pipfile.lock",
+    "Cargo.lock",
+    "Gemfile.lock",
+    "composer.lock",
+    "uv.lock",
+}
+_NON_SUBSTANTIVE_PATH_PREFIXES = ("dist/", "build/", "vendor/", "node_modules/")
+_NON_SUBSTANTIVE_SUFFIXES = (".min.js", ".min.css")
+
+
+def _is_non_substantive_path(path: str) -> bool:
+    filename = path.rsplit("/", 1)[-1]
+    if filename in _NON_SUBSTANTIVE_FILENAMES:
+        return True
+    if path.startswith(_NON_SUBSTANTIVE_PATH_PREFIXES):
+        return True
+    if filename.endswith(_NON_SUBSTANTIVE_SUFFIXES):
+        return True
+    return False
+
+
+def is_non_substantive_diff(changed_files: list[str]) -> bool:
+    return bool(changed_files) and all(_is_non_substantive_path(f) for f in changed_files)
+
+
 def review_diff(
     diff_text: str,
     file_context: str = "",
     code_evidence_context: str = "",
     on_usage: Callable[[int, int], None] | None = None,
+    *,
+    cache_lookup: Callable[[str], list[dict] | None] | None = None,
+    cache_write: Callable[[str, list[dict], str], None] | None = None,
+    model_used: str = "deepseek-v4-flash",
 ) -> list[dict]:
     if not diff_text.strip():
         return []
+
+    if cache_lookup is not None:
+        try:
+            cached = cache_lookup(diff_text)
+        except Exception as exc:
+            logger.warning("flash review cache lookup failed (%s); treating as miss", type(exc).__name__)
+            cached = None
+        if cached is not None:
+            return _validate_findings(cached, diff_text)
 
     adapter = OpenAICompatibleAdapter(
         name="DeepSeek",
@@ -160,4 +243,11 @@ def review_diff(
         if isinstance(suggestion, str) and suggestion.strip() and "```" not in suggestion:
             result["suggestion"] = suggestion.strip()
         valid.append(result)
-    return valid
+
+    if cache_write is not None:
+        try:
+            cache_write(diff_text, valid, model_used)
+        except Exception as exc:
+            logger.warning("flash review cache write failed (%s); continuing without cache", type(exc).__name__)
+
+    return _validate_findings(valid, diff_text)
