@@ -132,6 +132,49 @@ def test_analyze_git_ownership_merges_same_email_different_case(tmp_path):
     assert result["ownership"][0]["commit_count"] == 2
 
 
+def test_analyze_git_survives_non_utf8_author_name(tmp_path):
+    # Found on a real scan of the Linux kernel's 20-year, 1.46M-commit
+    # history: git doesn't require commit metadata to be valid UTF-8, and an
+    # old commit's author name had a raw byte that isn't. Strict UTF-8
+    # decoding crashed the whole scan with UnicodeDecodeError.
+    #
+    # Setting GIT_AUTHOR_NAME to a raw invalid byte doesn't reproduce this -
+    # git itself repairs it (reinterprets as Latin-1, re-encodes to valid
+    # UTF-8) before storing the commit, confirmed directly. hash-object
+    # --stdin stores whatever bytes it's given with no such validation,
+    # which is the only reliable way to get a genuinely invalid byte into a
+    # real commit object for this test.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run(repo, "init", "-b", "main")
+    (repo / "a.txt").write_text("1")
+    run(repo, "add", "a.txt")
+    tree_sha = subprocess.run(
+        ["git", "write-tree"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    timestamp = b"1748736000 +0000"
+    commit_bytes = (
+        b"tree " + tree_sha.encode() + b"\n"
+        b"author Weird" + bytes([0xE9]) + b"Name <old@example.com> " + timestamp + b"\n"
+        b"committer Weird" + bytes([0xE9]) + b"Name <old@example.com> " + timestamp + b"\n"
+        b"\nold commit\n"
+    )
+    commit_sha = subprocess.run(
+        ["git", "hash-object", "-w", "-t", "commit", "--stdin"],
+        cwd=repo,
+        input=commit_bytes,
+        check=True,
+        capture_output=True,
+    ).stdout.decode().strip()
+    run(repo, "update-ref", "refs/heads/main", commit_sha)
+
+    result = analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+    assert result["available"] is True
+    assert result["ownership"][0]["email"] == "old@example.com"
+    assert result["ownership"][0]["commit_count"] == 1
+
+
 def test_analyze_git_ahead_behind_main(tmp_path):
     repo = make_git_repo(tmp_path)
     result = analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
