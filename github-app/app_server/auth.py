@@ -171,7 +171,15 @@ async def callback(code: str, request: Request, state: str | None = None):
         datetime.now(timezone.utc) + SESSION_TTL,
     )
 
-    next_path = _is_safe_next_path(request.cookies.get(NEXT_COOKIE_NAME))
+    if signed_state is None and state:
+        # A direct "Install" click on GitHub's own App page never goes through
+        # /auth/login, so there's no next-cookie - but github_app_install_url()
+        # puts our own next_path in `state` for exactly this entry point (it's
+        # not a CSRF nonce here, since signed_state is absent and nothing was
+        # verified above).
+        next_path = _is_safe_next_path(state)
+    else:
+        next_path = _is_safe_next_path(request.cookies.get(NEXT_COOKIE_NAME))
     response = RedirectResponse(url=next_path, status_code=307)
     response.set_cookie(
         SESSION_COOKIE_NAME,

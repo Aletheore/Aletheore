@@ -34,12 +34,6 @@ function initPaddle() {
   return paddleReady;
 }
 
-function generateClaimToken() {
-  const bytes = new Uint8Array(24);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 async function refreshPrices() {
   const paddle = await initPaddle();
   const items = Object.values(TIERS).map((tier) => ({ priceId: tier.priceId[billingInterval], quantity: 1 }));
@@ -71,22 +65,12 @@ function setBillingInterval(interval) {
   refreshPrices();
 }
 
-async function subscribe(tierKey) {
-  const paddle = await initPaddle();
-  const tier = TIERS[tierKey];
-  const claimToken = generateClaimToken();
-
-  document.cookie = `claim_token=${claimToken}; domain=.aletheore.com; path=/; max-age=3600; secure; samesite=lax`;
-
-  paddle.Checkout.open({
-    items: [{ priceId: tier.priceId[billingInterval], quantity: 1 }],
-    customData: { claim_token: claimToken },
-    settings: {
-      displayMode: "overlay",
-      variant: "one-page",
-      successUrl: "https://app.aletheore.com/subscribe/claim",
-    },
-  });
+function subscribe(tierKey) {
+  // Checkout itself now happens on app.aletheore.com, not here - this page
+  // has no session and no way to know who's paying or which installation to
+  // apply the plan to. app.aletheore.com already knows both (or can ask the
+  // visitor to sign in / install the GitHub App) before any money moves.
+  window.location.href = `https://app.aletheore.com/subscribe?plan=${tierKey}&interval=${billingInterval}`;
 }
 
 document.addEventListener("DOMContentLoaded", () => {
