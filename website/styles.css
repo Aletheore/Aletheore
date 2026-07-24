@@ -967,6 +967,101 @@ pre {
   color: var(--accent);
 }
 
+.stress-test {
+  position: relative;
+  margin-top: 48px;
+  padding: 40px 36px;
+  border: 1px solid rgba(224, 134, 58, 0.35);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(224, 134, 58, 0.08), rgba(0, 0, 0, 0));
+  text-align: center;
+}
+
+.stress-test-badge {
+  display: inline-block;
+  margin-bottom: 14px;
+  padding: 5px 12px;
+  border: 1px solid rgba(224, 134, 58, 0.4);
+  border-radius: 999px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.stress-test h3 {
+  color: #fff;
+  font-size: 26px;
+}
+
+.stress-test .section-intro {
+  max-width: 640px;
+}
+
+.stress-test-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 32px;
+  align-items: center;
+  margin-top: 32px;
+  text-align: left;
+}
+
+.stress-test-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.stress-test-stats dt {
+  color: #b9b1a4;
+  font-size: 12.5px;
+}
+
+.stress-test-stats dd {
+  margin-top: 2px;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  font-size: 22px;
+  font-weight: 760;
+}
+
+.stress-test-graph {
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.stress-test-graph-label {
+  margin-bottom: 8px;
+  color: #7d7568;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.stress-test-graph-label code {
+  color: #b9b1a4;
+}
+
+.stress-test-graph svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.stress-test > .showcase-sha {
+  display: inline-block;
+  margin-top: 24px;
+}
+
+@media (max-width: 760px) {
+  .stress-test-body {
+    grid-template-columns: 1fr;
+  }
+}
+
 .toon-demo {
   margin-top: 56px;
   text-align: center;

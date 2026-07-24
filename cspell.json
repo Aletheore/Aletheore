@@ -50,6 +50,7 @@
     "canonicality",
     "confusables",
     "codex",
+    "datapath",
     "dubbo",
     "dotenv",
     "exploitability",
@@ -63,9 +64,12 @@
     "lockfiles",
     "mypy",
     "namespacing",
+    "netdev",
+    "netlink",
     "networkx",
     "nomic",
     "opencode",
+    "openvswitch",
     "petclinic",
     "psycopg",
     "pyproject",
@@ -87,6 +91,7 @@
     "subprocessor",
     "tree-sitter",
     "unrecovered",
-    "uvicorn"
+    "uvicorn",
+    "vport"
   ]
 }
