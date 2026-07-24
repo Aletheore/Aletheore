@@ -20,6 +20,22 @@ STALE_PRICE_MAX_AGE_DAYS = 90
 
 EXTRA_SEAT_MONTHLY_COST_USD = 2.00
 
+# Base monthly price per plan (github-app/../website/pricing.html) - the hard
+# LLM spend cap is set as a fraction of this, not a flat dollar figure, so it
+# scales with what each tier actually pays rather than penalizing cheaper
+# tiers or under-capping expensive ones.
+PLAN_MONTHLY_PRICE_USD = {
+    "indie": 29.00,
+    "team": 79.00,
+    "enterprise": 199.00,
+}
+
+# Deliberately generous: this is a worst-case abuse/runaway-cost ceiling, not
+# a target for typical spend. Normal usage is expected to land far below it -
+# if real usage routinely approaches this fraction, that's a signal to
+# investigate (a caching regression, a runaway loop), not to raise the cap.
+CAP_FRACTION_OF_PRICE = 0.5
+
 # Warn once per process per model, not once per call - cost_for_usage()
 # runs on every token-usage callback, and a real deploy could otherwise
 # emit thousands of identical warnings for one stale price.
@@ -48,6 +64,13 @@ def cost_for_usage(model: str, prompt_tokens: int, completion_tokens: int) -> fl
         )
         _warned_stale_models.add(model)
     return (prompt_tokens * rates["input"] + completion_tokens * rates["output"]) / 1_000_000
+
+
+def base_cap_for_plan(plan: str) -> float:
+    price = PLAN_MONTHLY_PRICE_USD.get(plan)
+    if price is None:
+        return 0.0
+    return price * CAP_FRACTION_OF_PRICE
 
 
 def monthly_cap_for_installation(base_cap_usd: float, extra_seats: int) -> float:
