@@ -39,8 +39,8 @@ AIR_JSON_PATH = Path(__file__).resolve().parents[2] / ".aletheore" / "air.json"
 # Chosen because it's a single real file with real functions and no
 # dependency on other clusters - small enough to assert on exactly,
 # while still being genuine scanner output, not a fixture.
-REAL_SUBSYSTEM_FILE = "scripts/audit/vdp001_acceptance_audit.py"
-REAL_CLUSTER_ID = 14
+REAL_SUBSYSTEM_FILE = "scripts/extract-showcase-data.py"
+REAL_CLUSTER_ID = 34
 
 
 @pytest.fixture(scope="module")
@@ -64,14 +64,7 @@ def test_build_cluster_briefs_reflects_real_evidence(real_evidence):
     brief = next(b for b in briefs if b["cluster_id"] == REAL_CLUSTER_ID)
     assert [f["path"] for f in brief["files"]] == [REAL_SUBSYSTEM_FILE]
     symbol_names = {s["name"] for s in brief["files"][0]["key_symbols"]}
-    assert symbol_names == {
-        "split_front_matter",
-        "req_group",
-        "body_between",
-        "classify_requirement",
-        "main",
-        "valid_fixture",
-    }
+    assert symbol_names == {"main", "summarize"}
 
 
 def test_build_overview_diagram_reflects_real_clusters(real_evidence):
@@ -188,14 +181,7 @@ def test_generate_subsystems_grounds_output_in_real_evidence(real_evidence):
     assert len(record["files"]) == 1
     assert record["files"][0]["path"] == REAL_SUBSYSTEM_FILE
     stored_symbol_names = {s["name"] for s in record["files"][0]["key_symbols"]}
-    assert stored_symbol_names == {
-        "split_front_matter",
-        "req_group",
-        "body_between",
-        "classify_requirement",
-        "main",
-        "valid_fixture",
-    }
+    assert stored_symbol_names == {"main", "summarize"}
     assert record["diagram_mermaid"].startswith("flowchart TD")
 
 
@@ -253,7 +239,7 @@ async def test_full_pipeline_stores_and_reads_back_through_dashboard_api(pool, r
     # (async asyncpg) agree on what's in the database.
     overview = await get_wiki_overview(pool, installation_id, repo_full_name)
     assert overview is not None
-    assert "Cluster 14 Subsystem" in overview["description"]
+    assert f"Cluster {REAL_CLUSTER_ID} Subsystem" in overview["description"]
     assert overview["diagram_mermaid"].startswith("flowchart TD")
     assert overview["source_commit"] == "deadbeef"
 
@@ -264,7 +250,7 @@ async def test_full_pipeline_stores_and_reads_back_through_dashboard_api(pool, r
 
     detail = await get_wiki_subsystem(pool, installation_id, repo_full_name, str(REAL_CLUSTER_ID))
     assert detail is not None
-    assert detail["name"] == "Cluster 14 Subsystem"
+    assert detail["name"] == f"Cluster {REAL_CLUSTER_ID} Subsystem"
     assert detail["description"] == records[0]["description"]
 
 

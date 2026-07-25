@@ -3,7 +3,7 @@
 **Purpose:** Define how security issues should be reported and handled.
 **Status:** Active baseline
 **Owner:** TODO
-**Related Documents:** [CONTRIBUTING.md](CONTRIBUTING.md), [GOVERNANCE.md](GOVERNANCE.md), [.github/ISSUE_TEMPLATE/security-report.md](.github/ISSUE_TEMPLATE/security-report.md), [docs/operations/DATA-HANDLING.md](docs/operations/DATA-HANDLING.md), [docs/operations/INCIDENT-RESPONSE.md](docs/operations/INCIDENT-RESPONSE.md)
+**Related Documents:** [.github/ISSUE_TEMPLATE/security-report.md](.github/ISSUE_TEMPLATE/security-report.md), [docs/operations/DATA-HANDLING.md](docs/operations/DATA-HANDLING.md), [docs/operations/INCIDENT-RESPONSE.md](docs/operations/INCIDENT-RESPONSE.md)
 **Last Updated:** 2026-07-23
 
 ## Purpose
@@ -20,8 +20,6 @@ Security reports may cover:
 - Managed audit, Flash review, health-check, dashboard, and webhook handling.
 - Repository evidence handling, data retention, token handling, and alert delivery.
 - CI, deployment, and container security configuration.
-
-VDP governance documents are security-relevant only when the issue affects repository authority, release trust, or contributor safety.
 
 ## Reporting
 

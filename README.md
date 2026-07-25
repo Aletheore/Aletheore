@@ -36,12 +36,12 @@ has full setup, every CLI command, the MCP tool list, and the dashboard.
 ## Repository layout
 
 - `prototype/` — the actual, working code (see its README for everything above in detail).
+- `github-app/` — the hosted GitHub App: FastAPI server, RQ workers, migrations.
+- `website/` — the marketing site and live demo.
 - `docs/superpowers/` — design specs and implementation plans written during development.
-- `constitution/`, `GOVERNANCE.md`, `VISION.md`, `ROADMAP.md`, `CONTRIBUTING.md` — an earlier,
-  more elaborate governance/specification framework scaffolded before any real code existed.
-  `prototype/` is explicitly a bypass of that process (see `prototype/README.md`'s "Status"
-  line) rather than a product of it — treat those files as historical, not as documentation of
-  what's actually built.
+- `docs/operations/` — current operational baselines: incident response, data handling, SLOs,
+  deployment verification, branch protection, support process.
+- `SECURITY.md` — vulnerability reporting and response targets.
 
 Aletheore is free and open source. If it's useful to you, consider
 [sponsoring development](https://github.com/sponsors/ArihantK15) — no accounts, no tracking,

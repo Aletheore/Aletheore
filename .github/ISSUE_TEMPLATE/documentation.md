@@ -1,20 +1,9 @@
-# Documentation Request
+---
+name: Documentation
+about: Something is missing, unclear, or wrong in the docs or README files
+labels: documentation
+---
 
-**Purpose:** Capture documentation gaps and improvements.
-**Status:** Placeholder
-**Owner:** TODO
-**Related Documents:** [../../docs/README.md](../../docs/README.md), [../../CONTRIBUTING.md](../../CONTRIBUTING.md)
-**Last Updated:** TODO
+## What's wrong or missing
 
-## Summary
-
-TODO: Describe the documentation request.
-
-## Audience
-
-TODO
-
-## Related Documents
-
-TODO
-
+## Where

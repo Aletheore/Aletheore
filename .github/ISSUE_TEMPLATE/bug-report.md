@@ -1,24 +1,23 @@
-# Bug Report
-
-**Purpose:** Capture actionable bug reports once Aletheore has implemented behavior.
-**Status:** Placeholder
-**Owner:** TODO
-**Related Documents:** [../../CONTRIBUTING.md](../../CONTRIBUTING.md), [../../tests/README.md](../../tests/README.md)
-**Last Updated:** TODO
+---
+name: Bug report
+about: Something in the CLI, hosted app, or GitHub Action isn't working as expected
+labels: bug
+---
 
 ## Summary
 
-TODO: Describe the issue.
+<!-- What's wrong? -->
 
-## Expected Behavior
+## Steps to reproduce
 
-TODO
+<!-- Exact commands or repo/PR that triggers this. -->
 
-## Actual Behavior
+## Expected behavior
 
-TODO
+## Actual behavior
 
-## Evidence
+## Environment
 
-TODO
-
+- Aletheore version (`aletheore --version`):
+- OS:
+- Python version:

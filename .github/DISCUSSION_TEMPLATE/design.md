@@ -1,20 +1,9 @@
-# Design Discussion
-
-**Purpose:** Structure early design discussion before formal proposals exist.
-**Status:** Placeholder
-**Owner:** TODO
-**Related Documents:** [../../proposals/README.md](../../proposals/README.md), [../../constitution/README.md](../../constitution/README.md), [../../standards/README.md](../../standards/README.md)
-**Last Updated:** TODO
-
 ## Topic
 
-TODO
+<!-- What are you trying to figure out? -->
 
 ## Context
 
-TODO
+<!-- What's the current behavior, and why does it need to change? -->
 
-## Open Questions
-
-TODO
-
+## Open questions
