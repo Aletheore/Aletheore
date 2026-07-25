@@ -131,10 +131,23 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
     return {"scanned_files": scanned_files, "findings": findings}
 
 
-def find_secrets_in_history(repo_path: Path, baseline: list[dict] | None = None) -> dict:
+def find_secrets_in_history(
+    repo_path: Path, baseline: list[dict] | None = None, *, max_commits: int | None = None
+) -> dict:
+    # `git log -p` generates a full unified diff for every commit in range -
+    # for a repo at torvalds/linux's scale (1.46M commits) that's over 2GB
+    # of diff text and ~50 minutes of git's own time, confirmed by direct
+    # measurement (1000 commits -> ~1.4MB / ~2s, extrapolated linearly).
+    # Streaming avoids buffering that text, but a hosted PR scan can't
+    # spend 50 minutes walking a repo's entire history on every run
+    # regardless - max_commits bounds it to the most recent N commits,
+    # same pattern as git_intel's depth_cap.
     accepted_keys = _baseline_keys(baseline)
+    args = ["git", "log", "-p", "--format=COMMIT_START\x1f%H\x1f%ad", "--date=iso-strict"]
+    if max_commits is not None:
+        args += ["-n", str(max_commits)]
     process = subprocess.Popen(
-        ["git", "log", "-p", "--format=COMMIT_START\x1f%H\x1f%ad", "--date=iso-strict"],
+        args,
         cwd=repo_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,

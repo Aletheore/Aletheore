@@ -48,6 +48,27 @@ def _git_history_depth_cap() -> int | None:
         return None
 
 
+# Separate env var from the git-graph cap above: `git log -p` (full unified
+# diffs) is far more expensive per commit than the graph engine's
+# `--name-only` walk - confirmed by direct measurement, ~2s/1.4MB per 1000
+# commits, meaning a repo at torvalds/linux's scale would take git itself
+# ~50 minutes and stream over 2GB of diff text regardless of memory
+# bounding. A hosted PR scan can't spend that long on every run, so this
+# gets its own, independently tunable cap rather than reusing the graph
+# engine's value.
+_SECRETS_HISTORY_DEPTH_CAP_ENV = "ALETHEORE_SECRETS_HISTORY_DEPTH_CAP"
+
+
+def _secrets_history_depth_cap() -> int | None:
+    raw = os.environ.get(_SECRETS_HISTORY_DEPTH_CAP_ENV)
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
 def _noop_progress(_message: str) -> None:
     pass
 
@@ -94,7 +115,9 @@ def scan_repository(
     secrets_data = find_secrets(repo_path, baseline=secrets_baseline)
     if scan_git_history:
         report("Scanning git history for secrets (can be slow on large histories)")
-        history_data = find_secrets_in_history(repo_path, baseline=secrets_baseline)
+        history_data = find_secrets_in_history(
+            repo_path, baseline=secrets_baseline, max_commits=_secrets_history_depth_cap()
+        )
     else:
         history_data = {"history_scanned_commits": 0, "history_findings": []}
     secrets_data = {**secrets_data, **history_data}

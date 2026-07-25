@@ -120,6 +120,15 @@ GRAPH_BRANCH = "default"
 # git evidence.
 GRAPH_COLD_SYNC_DEPTH_CAP = 50_000
 
+# `git log -p` (full unified diffs, used by the secrets-in-history scan)
+# costs far more per commit than the graph engine's `--name-only` walk:
+# measured directly at ~2s / ~1.4MB of diff text per 1000 commits, so
+# torvalds/linux's full history would take git itself ~50 minutes and
+# stream over 2GB of diff text on every hosted scan, independent of
+# whether it also OOMs. Capped separately and more conservatively than
+# GRAPH_COLD_SYNC_DEPTH_CAP for that reason.
+SECRETS_HISTORY_DEPTH_CAP = 20_000
+
 
 def _job_temp_dir() -> Path:
     path = JOBS_ROOT / str(uuid.uuid4())
@@ -137,12 +146,17 @@ def _clone_ref(url: str, ref: str, dest: Path) -> None:
 
 
 def _run_scan(repo_dir: Path) -> Path:
-    # See GRAPH_COLD_SYNC_DEPTH_CAP - the CLI's own analyze_git call (inside
-    # this subprocess) hits the exact same cold-sync memory ceiling as the
-    # Postgres sync below, and runs first, so it needs the same cap. Left
-    # unset for a developer running `aletheore scan` directly on their own
-    # machine (see evidence.py's ALETHEORE_GIT_HISTORY_DEPTH_CAP handling).
-    env = {**os.environ, "ALETHEORE_GIT_HISTORY_DEPTH_CAP": str(GRAPH_COLD_SYNC_DEPTH_CAP)}
+    # See GRAPH_COLD_SYNC_DEPTH_CAP and SECRETS_HISTORY_DEPTH_CAP - the
+    # CLI's own analyze_git and find_secrets_in_history calls (inside this
+    # subprocess) hit the same cold-sync cost/memory ceilings as the
+    # Postgres sync below, and run first, so they need the same caps. Both
+    # left unset for a developer running `aletheore scan` directly on their
+    # own machine (see evidence.py's handling of both env vars).
+    env = {
+        **os.environ,
+        "ALETHEORE_GIT_HISTORY_DEPTH_CAP": str(GRAPH_COLD_SYNC_DEPTH_CAP),
+        "ALETHEORE_SECRETS_HISTORY_DEPTH_CAP": str(SECRETS_HISTORY_DEPTH_CAP),
+    }
     subprocess.run(["aletheore", "scan", str(repo_dir)], check=True, env=env)
     return repo_dir / ".aletheore" / "air.json"
 

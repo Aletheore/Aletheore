@@ -5,7 +5,13 @@ from unittest.mock import patch
 
 import pytest
 
-from scan_worker.jobs import GRAPH_BRANCH, GRAPH_COLD_SYNC_DEPTH_CAP, _run_scan, _sync_persistent_git_graph
+from scan_worker.jobs import (
+    GRAPH_BRANCH,
+    GRAPH_COLD_SYNC_DEPTH_CAP,
+    SECRETS_HISTORY_DEPTH_CAP,
+    _run_scan,
+    _sync_persistent_git_graph,
+)
 from scan_worker.postgres_graph_store import PostgresRepoGraphStore
 
 TEST_DATABASE_URL = os.environ.get(
@@ -52,6 +58,7 @@ def test_run_scan_sets_git_history_depth_cap_env_var(tmp_path):
         _run_scan(repo_dir)
     _, kwargs = mock_run.call_args
     assert kwargs["env"]["ALETHEORE_GIT_HISTORY_DEPTH_CAP"] == str(GRAPH_COLD_SYNC_DEPTH_CAP)
+    assert kwargs["env"]["ALETHEORE_SECRETS_HISTORY_DEPTH_CAP"] == str(SECRETS_HISTORY_DEPTH_CAP)
 
 
 def _fake_evidence() -> dict:
