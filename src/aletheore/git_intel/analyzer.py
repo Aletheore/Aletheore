@@ -252,6 +252,23 @@ def compute_hotspots(repo_path: Path, modules: list[dict]) -> list[dict]:
     return sorted(hotspots, key=lambda item: (-item["churn_count"], item["path"]))[:HOTSPOT_LIMIT]
 
 
+def _first_commit_at(repo_path: Path) -> datetime:
+    # `git log --reverse HEAD` walks and formats the *entire* history just to
+    # read its first line - confirmed as the exact query that got OOM-killed
+    # scanning torvalds/linux's 1.46M commits under a 1GB limit. Root commits
+    # are directly enumerable without touching anything in between: normally
+    # there's exactly one, but a repo with merged unrelated histories can
+    # have several, so take the oldest of whichever `--max-parents=0` finds -
+    # still O(root commits), never O(total commits).
+    roots_result = _run_git_or_raise(repo_path, "rev-list", "--max-parents=0", "HEAD")
+    root_shas = [line for line in roots_result.stdout.strip().splitlines() if line]
+    dates = []
+    for sha in root_shas:
+        date_result = _run_git_or_raise(repo_path, "log", "-1", "--format=%ad", "--date=iso-strict", sha)
+        dates.append(datetime.fromisoformat(date_result.stdout.strip()))
+    return min(dates)
+
+
 def analyze_git(repo_path: Path, now: datetime | None = None) -> dict:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -262,12 +279,7 @@ def analyze_git(repo_path: Path, now: datetime | None = None) -> dict:
     total_commits_result = _run_git_or_raise(repo_path, "rev-list", "--count", "HEAD")
     total_commits = int(total_commits_result.stdout.strip())
 
-    first_commit_result = _run_git_or_raise(
-        repo_path, "log", "--reverse", "--format=%ad", "--date=iso-strict", "HEAD"
-    )
-    first_commit_line = first_commit_result.stdout.strip().splitlines()[0]
-    first_commit_at = datetime.fromisoformat(first_commit_line)
-    repo_age_days = (now - first_commit_at).days
+    repo_age_days = (now - _first_commit_at(repo_path)).days
 
     return {
         "available": True,
