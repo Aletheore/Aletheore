@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 import secrets
 import shutil
 import subprocess
@@ -103,6 +104,22 @@ HEALTH_CHECK_DOWN_RETRY_DELAY_SECONDS = 2.0
 # of one) a given clone happens to be on.
 GRAPH_BRANCH = "default"
 
+# Bounds the very first (cold) sync of a repo's history to its most recent
+# N commits, rather than walking the entire history in one pass. Needed
+# independent of the fold()-level memory caps (incremental.py's
+# MAX_CO_CHANGE_PARTNERS_TRACKED): reproduced directly against
+# torvalds/linux (1.46M commits, ~174K files) in a container capped at the
+# same 1GB limit as this worker - even with zero co-change/recent-commit
+# tracking, just the base per-file bookkeeping for that many distinct
+# files was already at the memory limit. A depth cap keeps a cold sync's
+# file count proportional to a bounded recent window instead of a repo's
+# entire lifetime, whatever that repo's total size turns out to be. Later
+# scans extend coverage incrementally (each only processes commits landed
+# since last sync) but never backfill older history beyond the original
+# cap - an accepted trade-off, surfaced via `history_depth_limited` in the
+# git evidence.
+GRAPH_COLD_SYNC_DEPTH_CAP = 50_000
+
 
 def _job_temp_dir() -> Path:
     path = JOBS_ROOT / str(uuid.uuid4())
@@ -120,7 +137,13 @@ def _clone_ref(url: str, ref: str, dest: Path) -> None:
 
 
 def _run_scan(repo_dir: Path) -> Path:
-    subprocess.run(["aletheore", "scan", str(repo_dir)], check=True)
+    # See GRAPH_COLD_SYNC_DEPTH_CAP - the CLI's own analyze_git call (inside
+    # this subprocess) hits the exact same cold-sync memory ceiling as the
+    # Postgres sync below, and runs first, so it needs the same cap. Left
+    # unset for a developer running `aletheore scan` directly on their own
+    # machine (see evidence.py's ALETHEORE_GIT_HISTORY_DEPTH_CAP handling).
+    env = {**os.environ, "ALETHEORE_GIT_HISTORY_DEPTH_CAP": str(GRAPH_COLD_SYNC_DEPTH_CAP)}
+    subprocess.run(["aletheore", "scan", str(repo_dir)], check=True, env=env)
     return repo_dir / ".aletheore" / "air.json"
 
 
@@ -143,9 +166,11 @@ def _sync_persistent_git_graph(installation_id: int, repo_full_name: str, repo_d
         settings = get_settings()
         store = PostgresRepoGraphStore(settings.database_url, installation_id, repo_full_name)
         modules = evidence.get("repository", {}).get("modules", [])
-        git_data = analyze_git(repo_dir, store=store, branch=GRAPH_BRANCH)
+        git_data = analyze_git(repo_dir, store=store, depth_cap=GRAPH_COLD_SYNC_DEPTH_CAP, branch=GRAPH_BRANCH)
         if git_data.get("available"):
-            git_data["hotspots"] = compute_hotspots(repo_dir, modules, store=store, branch=GRAPH_BRANCH)
+            git_data["hotspots"] = compute_hotspots(
+                repo_dir, modules, store=store, depth_cap=GRAPH_COLD_SYNC_DEPTH_CAP, branch=GRAPH_BRANCH
+            )
             evidence["git"] = git_data
     except Exception as exc:  # noqa: BLE001
         # Broad by design: a GitAnalysisError (bad history state) and a

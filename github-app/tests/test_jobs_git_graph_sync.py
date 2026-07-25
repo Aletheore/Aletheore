@@ -1,10 +1,11 @@
 import os
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from scan_worker.jobs import GRAPH_BRANCH, _sync_persistent_git_graph
+from scan_worker.jobs import GRAPH_BRANCH, GRAPH_COLD_SYNC_DEPTH_CAP, _run_scan, _sync_persistent_git_graph
 from scan_worker.postgres_graph_store import PostgresRepoGraphStore
 
 TEST_DATABASE_URL = os.environ.get(
@@ -37,6 +38,20 @@ def _init_repo(tmp_path: Path) -> Path:
     _run(repo, "add", "a.py")
     _run(repo, "commit", "-q", "-m", "initial")
     return repo
+
+
+def test_run_scan_sets_git_history_depth_cap_env_var(tmp_path):
+    # This subprocess call runs `aletheore scan`, which hits the exact same
+    # cold-sync memory ceiling as the Postgres persistence sync - and runs
+    # first, before that sync code ever executes - so it needs the same
+    # depth cap passed through as an env var (see evidence.py's
+    # ALETHEORE_GIT_HISTORY_DEPTH_CAP handling).
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    with patch("scan_worker.jobs.subprocess.run") as mock_run:
+        _run_scan(repo_dir)
+    _, kwargs = mock_run.call_args
+    assert kwargs["env"]["ALETHEORE_GIT_HISTORY_DEPTH_CAP"] == str(GRAPH_COLD_SYNC_DEPTH_CAP)
 
 
 def _fake_evidence() -> dict:

@@ -8,6 +8,14 @@ as a single buffered string or a full in-memory list. Confirmed directly:
 the old approach (`subprocess.run(capture_output=True)`) buffering the
 entire formatted output was what got OOM-killed scanning torvalds/linux's
 1.46M commits under a 1GB memory limit.
+
+A second, independent bound matters just as much for large repos: without
+MAX_CO_CHANGE_PARTNERS_TRACKED, the *aggregate* itself (not the raw log
+text) is what OOM-kills a cold sync of a repo like torvalds/linux under a
+1GB limit - confirmed by reproducing the OOM in a container capped at the
+same limit as the production scan-worker, then tracing it to "hub" files
+(MAINTAINERS, top-level Kconfig) whose co_change_counts dict grows one
+entry per distinct file ever touched alongside them.
 """
 
 from __future__ import annotations
@@ -28,6 +36,16 @@ from aletheore.git_intel.graph_store import (
 MASS_COMMIT_FILE_THRESHOLD = 50
 RECENT_COMMITS_PER_FILE = 10
 CO_CHANGE_PARTNERS_RETURNED = 5
+# "Hub" files (MAINTAINERS, top-level Kconfig/Makefile) get touched
+# alongside nearly every other file over a long enough history - without a
+# cap, one file's co_change_counts dict grows without bound as history
+# grows. Confirmed directly: on torvalds/linux (1.46M commits), MAINTAINERS'
+# co-change JSON alone was ~780KB, and the aggregate across all files was
+# the dominant cost behind a cold sync OOM-killing under a 1GB limit. Far
+# above CO_CHANGE_PARTNERS_RETURNED so real (non-hub) files are never
+# affected - only pathological hub files get their least-frequent, least
+# useful partners evicted to stay bounded.
+MAX_CO_CHANGE_PARTNERS_TRACKED = 200
 
 # A commit header line in the streamed format below always starts with this
 # byte - real file paths never do, so it unambiguously marks "new commit"
@@ -160,6 +178,22 @@ def _week_start(at: datetime) -> date:
     return d - timedelta(days=d.weekday())
 
 
+def _bump_co_change(counts: dict[str, int], partner: str) -> None:
+    if partner in counts:
+        counts[partner] += 1
+        return
+    if len(counts) >= MAX_CO_CHANGE_PARTNERS_TRACKED:
+        # Evict the current weakest partner to make room, rather than let
+        # a hub file's dict grow without bound. This trades exact history
+        # for a hard memory ceiling: once a file is at capacity, a rare new
+        # partner may bump out a still-rarer existing one instead of both
+        # being tracked - only files with more than
+        # MAX_CO_CHANGE_PARTNERS_TRACKED distinct partners are affected.
+        weakest = min(counts, key=counts.get)
+        del counts[weakest]
+    counts[partner] = 1
+
+
 def fold(snapshot: GraphSnapshot, commits: list[CommitTouch]) -> GraphSnapshot:
     """Pure aggregation: merges `commits` into `snapshot`, returning a new
     snapshot. Both store backends call this internally so the aggregation
@@ -200,8 +234,8 @@ def fold(snapshot: GraphSnapshot, commits: list[CommitTouch]) -> GraphSnapshot:
         if len(unique_files) <= MASS_COMMIT_FILE_THRESHOLD:
             for i, first in enumerate(unique_files):
                 for second in unique_files[i + 1 :]:
-                    file_churn[first].co_change_counts[second] = file_churn[first].co_change_counts.get(second, 0) + 1
-                    file_churn[second].co_change_counts[first] = file_churn[second].co_change_counts.get(first, 0) + 1
+                    _bump_co_change(file_churn[first].co_change_counts, second)
+                    _bump_co_change(file_churn[second].co_change_counts, first)
 
     return GraphSnapshot(
         last_synced_sha=snapshot.last_synced_sha,

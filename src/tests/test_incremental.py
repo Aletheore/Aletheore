@@ -7,6 +7,7 @@ import pytest
 
 from aletheore.git_intel.graph_store import CommitTouch, GraphSnapshot
 from aletheore.git_intel.incremental import (
+    MAX_CO_CHANGE_PARTNERS_TRACKED,
     RECENT_COMMITS_PER_FILE,
     GitLogStreamError,
     compute_repo_key,
@@ -168,6 +169,37 @@ def test_fold_skips_co_change_for_mass_commits():
     result = fold(GraphSnapshot.empty(), commits)
     assert result.file_churn["f0.txt"].churn_count == 1
     assert result.file_churn["f0.txt"].co_change_counts == {}
+
+
+def test_fold_caps_co_change_partners_tracked_per_file():
+    # A "hub" file (e.g. MAINTAINERS) touched alongside a different partner
+    # in every commit must not grow its co_change_counts dict without bound
+    # - that unbounded growth is what OOM-killed a cold sync of
+    # torvalds/linux under the production 1GB memory limit.
+    commits = [
+        _touch(f"s{i}", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", ("hub.txt", f"partner{i}.txt"))
+        for i in range(MAX_CO_CHANGE_PARTNERS_TRACKED + 50)
+    ]
+    result = fold(GraphSnapshot.empty(), commits)
+    assert len(result.file_churn["hub.txt"].co_change_counts) == MAX_CO_CHANGE_PARTNERS_TRACKED
+    # churn_count itself is never capped - only the co-change partner dict.
+    assert result.file_churn["hub.txt"].churn_count == MAX_CO_CHANGE_PARTNERS_TRACKED + 50
+
+
+def test_fold_bumping_an_already_tracked_partner_never_evicts():
+    commits = [_touch("s0", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", ("hub.txt", "steady.txt"))]
+    for i in range(MAX_CO_CHANGE_PARTNERS_TRACKED - 1):
+        commits.append(
+            _touch(f"s{i + 1}", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", ("hub.txt", f"p{i}.txt"))
+        )
+    # hub.txt is now exactly at capacity, with "steady.txt" at count 1 like
+    # everything else. Bumping it again should never be at risk of eviction
+    # just because the dict happens to be full.
+    commits.append(_touch("sN", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", ("hub.txt", "steady.txt")))
+    result = fold(GraphSnapshot.empty(), commits)
+    counts = result.file_churn["hub.txt"].co_change_counts
+    assert len(counts) == MAX_CO_CHANGE_PARTNERS_TRACKED
+    assert counts["steady.txt"] == 2
 
 
 def test_fold_caps_recent_commits_per_file_newest_first():
