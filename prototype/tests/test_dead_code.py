@@ -48,6 +48,54 @@ def test_unused_dependency_flagged_when_never_imported(tmp_path):
     assert ("PyPI", "flask") not in unused
 
 
+def test_script_with_main_guard_is_never_unreachable(tmp_path):
+    # Found on this repo: RQ worker processes and standalone CLI scripts are
+    # run directly (`python -m scan_worker.worker`, `python scripts/foo.py`),
+    # never imported by another module - a `__main__` guard is a strong
+    # signal that a file is meant to be invoked that way, filename aside.
+    (tmp_path / "worker.py").write_text(
+        "def main():\n    pass\n\nif __name__ == '__main__':\n    main()\n"
+    )
+    modules = [_module("worker.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "worker.py" in result["entry_points_detected"]
+
+
+def test_script_without_main_guard_is_still_unreachable(tmp_path):
+    # A __main__-guard file with no other references is a legitimate,
+    # deliberately-invoked entry point (see above) - a plain orphan module
+    # with no guard and no importer is not, and must still be flagged. This
+    # is the false-negative guard rail on the fix above.
+    (tmp_path / "orphan.py").write_text("def helper():\n    pass\n")
+    modules = [_module("orphan.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    paths = [module["path"] for module in result["unreachable_modules"]]
+    assert "orphan.py" in paths
+
+
+def test_js_referenced_by_html_script_tag_is_never_unreachable(tmp_path):
+    # Found on this repo: plain <script src="..."> tags (no bundler, no ES
+    # module imports) load website JS - the import graph never sees these
+    # references, so every one of these files looked unreachable.
+    (tmp_path / "index.html").write_text(
+        '<html><body><script src="script.js"></script></body></html>'
+    )
+    (tmp_path / "script.js").write_text("console.log('hi');")
+    modules = [_module("script.js")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "script.js" in result["entry_points_detected"]
+
+
+def test_js_not_referenced_by_any_html_is_still_unreachable(tmp_path):
+    (tmp_path / "index.html").write_text('<html><body>no scripts here</body></html>')
+    modules = [_module("orphan.js")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    paths = [module["path"] for module in result["unreachable_modules"]]
+    assert "orphan.js" in paths
+
+
 def test_npm_transitive_lockfile_dependencies_are_never_reported_as_unused(tmp_path):
     # Confirmed on this repo: a package-lock.json's "packages" map lists every
     # resolved transitive dependency, not just what's declared in package.json
