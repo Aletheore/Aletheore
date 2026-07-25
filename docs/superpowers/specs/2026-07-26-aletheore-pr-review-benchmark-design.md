@@ -106,10 +106,13 @@ benchmarks/pr-review-benchmark/
     check_citations.py      # extends citation_verifier.py's file-existence check with a
                              # real line-bounds check against the actual checkout
     anonymize.py            # relabels tool identities -> Tool A/B/C/D, writes a sealed mapping
+    llm_judge.py            # independent LLM scoring pass over the same anonymized outputs
   results/
     raw/<case-id>/<tool>.json          # CodeRabbit's raw output excluded from public commit
-    scored/<case-id>.md                # blind scoring sheet
-    mapping.sealed.json                 # tool<->label mapping, opened only after scoring locks
+    scored/<case-id>.md                # your blind manual scoring sheet (authoritative)
+    llm_judged/<case-id>.json           # independent LLM judge's blind scoring pass
+    mapping.sealed.json                 # tool<->label mapping, opened only after both scoring
+                                         # passes lock
   REPORT.md
   METHODOLOGY.md
 ```
@@ -138,9 +141,23 @@ Per case, per tool:
   advice that could apply to any codebase.
 
 **Blind process:** `anonymize.py` relabels tool identities to A/B/C/D before any case is
-scored; the sealed mapping for a given case is only reopened after that case's scoring is
-locked, removing the single biggest credibility risk — the benchmark's own author
+scored; the sealed mapping for a given case is only reopened after both scoring passes below
+are locked, removing the single biggest credibility risk — the benchmark's own author
 unconsciously favoring Aletheore's output during judgment calls.
+
+**Dual blind judging.** Every case gets two independent scoring passes against the rubric
+above, both blind to tool identity and blind to each other (the LLM judge never sees your
+scores, and vice versa):
+
+1. **Your manual review** — authoritative for the published headline scorecard.
+2. **An independent LLM judge** (`llm_judge.py`) — a model not itself under test (a different
+   provider/family than whichever model powers Aletheore's audit step and PR-Agent's config in
+   this run, recorded in `METHODOLOGY.md`) scores the same anonymized outputs against the same
+   ground truth and rubric.
+
+The human/LLM agreement rate per rubric dimension is published alongside the headline
+scorecard as an additional credibility signal; a case where the two diverge is called out
+explicitly in the report rather than smoothed over or quietly dropped.
 
 ## Publication & Reproducibility
 
@@ -169,3 +186,8 @@ mixed outcome reads as more credible than a clean sweep.
   Qodo/PR-Agent, or CodeRabbit. It stays in the comparison, but the report calls this out
   explicitly as a caveat on that entry specifically, rather than implying full architectural
   parity across all four.
+- **The LLM judge is a second opinion, not ground truth.** It has its own potential blind
+  spots (e.g., over-weighting confident phrasing) and is not presented as equivalent in
+  authority to the manual review — the human score is what the headline scorecard reports;
+  the LLM judge's role is the published agreement-rate signal and a check against reviewer
+  fatigue, not a replacement for the manual pass.
