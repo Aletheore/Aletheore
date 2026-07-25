@@ -21,7 +21,7 @@ jobs:
           python-version: "3.12"
 
       - name: Build
-        working-directory: prototype
+        working-directory: src
         run: |
           pip install build
           python -m build
@@ -29,4 +29,4 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: prototype/dist
+          packages-dir: src/dist

@@ -8,9 +8,9 @@ FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd
 
 WORKDIR /app
 
-COPY prototype/pyproject.toml prototype/pyproject.toml
-COPY prototype/aletheore prototype/aletheore
-RUN pip install --no-cache-dir ./prototype
+COPY src/pyproject.toml src/pyproject.toml
+COPY src/aletheore src/aletheore
+RUN pip install --no-cache-dir ./src
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \

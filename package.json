@@ -1,15 +1,15 @@
 {
-  "name": "veridion",
+  "name": "aletheore",
   "private": true,
   "version": "0.0.0",
-  "description": "Repository scaffold for the Veridion framework.",
+  "description": "Formatting, linting, and doc-check tooling for the Aletheore monorepo.",
   "scripts": {
     "format:check": "prettier --check \".github/**/*.{yml,yaml}\" \"package.json\"",
     "format": "prettier --write \".github/**/*.{yml,yaml}\" \"package.json\"",
     "lint:markdown": "markdownlint-cli2 \"*.md\" \"!STARTUP_AUDIT_REPORT.md\" \".github/**/*.md\" \"docs/**/*.md\" \"!docs/superpowers/**\"",
     "lint:links": "lychee --config lychee.toml \"README.md\" \"website/**/*.html\" \"docs/**/*.md\"",
     "lint:spelling": "cspell --config cspell.json",
-    "lint:licenses": "cd prototype && pip-licenses --fail-on \"GPL;AGPL\" --format=plain-vertical && cd ../github-app && pip-licenses --fail-on \"GPL;AGPL\" --format=plain-vertical"
+    "lint:licenses": "cd src && pip-licenses --fail-on \"GPL;AGPL\" --format=plain-vertical && cd ../github-app && pip-licenses --fail-on \"GPL;AGPL\" --format=plain-vertical"
   },
   "devDependencies": {
     "cspell": "8.17.5",

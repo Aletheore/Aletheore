@@ -63,7 +63,7 @@ runs:
 
     - name: Install Aletheore
       shell: bash
-      run: pip install "${{ github.action_path }}/prototype"
+      run: pip install "${{ github.action_path }}/src"
 
     - name: Scan base
       shell: bash

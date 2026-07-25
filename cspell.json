@@ -9,7 +9,7 @@
     ".git",
     "**/__pycache__/**",
     "docs/superpowers/**",
-    "prototype/.aletheore/**",
+    "src/.aletheore/**",
     "github-app/backups/**",
     "STARTUP_AUDIT_REPORT.md",
     "website/vendor/**"

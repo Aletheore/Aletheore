@@ -21,8 +21,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Check prototype dependency licenses
-        working-directory: prototype
+      - name: Check aletheore dependency licenses
+        working-directory: src
         run: |
           pip install -e .
           pip install pip-licenses
@@ -30,7 +30,7 @@ jobs:
       - name: Check github-app dependency licenses
         working-directory: github-app
         run: |
-          pip install ../prototype
+          pip install ../src
           pip install -r requirements.txt
           pip install pip-licenses
           pip-licenses --fail-on "GPL;AGPL" --format=plain-vertical

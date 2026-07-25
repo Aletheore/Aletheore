@@ -1,7 +1,7 @@
 # Changelog
 
-Notable changes to Aletheore, by release. The working code lives in `prototype/` — see
-[`prototype/README.md`](prototype/README.md) for the full command reference.
+Notable changes to Aletheore, by release. The working code lives in `src/` — see
+[`src/README.md`](src/README.md) for the full command reference.
 
 ## 0.5.0 — 2026-07-23
 
