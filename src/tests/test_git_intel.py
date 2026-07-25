@@ -272,6 +272,29 @@ def test_analyze_git_commit_cadence_partial_week_flag(tmp_path):
     assert result_complete["commit_cadence"]["most_recent_week_partial"] is False
 
 
+def test_analyze_git_explicit_branch_isolates_detached_head_clones(tmp_path):
+    # Hosted PR scans clone via `git checkout <sha>` (detached HEAD, not a
+    # named branch) - without an explicit branch override, every such clone
+    # would collapse onto the same literal "HEAD" bucket regardless of
+    # which PR/commit it actually came from, letting one PR's scan corrupt
+    # another's incremental delta. An explicit branch argument must isolate
+    # them exactly like two genuinely different branches would.
+    from unittest.mock import MagicMock
+
+    from aletheore.git_intel.graph_store import GraphSnapshot
+
+    repo = make_git_repo(tmp_path)
+    store = MagicMock()
+    store.load.return_value = GraphSnapshot.empty()
+
+    analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc), store=store, branch="pr-123")
+
+    load_branches = {call.args[1] for call in store.load.call_args_list}
+    apply_branches = {call.args[1] for call in store.apply_commits.call_args_list}
+    assert load_branches == {"pr-123"}
+    assert apply_branches == {"pr-123"}
+
+
 def test_analyze_git_totals(tmp_path):
     repo = make_git_repo(tmp_path)
     result = analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))

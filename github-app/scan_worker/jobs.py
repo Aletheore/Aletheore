@@ -17,6 +17,7 @@ from app_server.audit_signing import content_hash, sign_report
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.evidence import write_evidence
+from aletheore.git_intel.analyzer import analyze_git, compute_hotspots
 from aletheore.evidence_resolution import (
     empty_resolution,
     merge_resolution,
@@ -76,6 +77,7 @@ from scan_worker.github_api import (
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.model_tiers import model_for_plan, writing_adapter_for_plan
 from scan_worker.packet_cache import lookup_cached_result, store_result
+from scan_worker.postgres_graph_store import PostgresRepoGraphStore
 from scan_worker.slack import (
     format_latency_alert,
     format_reachability_alert,
@@ -94,6 +96,12 @@ LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS = 1800
 LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS = 300
 HEALTH_CHECK_DOWN_RETRY_ATTEMPTS = 2
 HEALTH_CHECK_DOWN_RETRY_DELAY_SECONDS = 2.0
+# PR scans clone via `git checkout <sha>` (detached HEAD, not a named
+# branch) - the persisted git graph tracks one repo's mainline history
+# across scans, not each individual PR's ephemeral branch, so every hosted
+# sync uses this one fixed key rather than whatever branch name (or lack
+# of one) a given clone happens to be on.
+GRAPH_BRANCH = "default"
 
 
 def _job_temp_dir() -> Path:
@@ -114,6 +122,41 @@ def _clone_ref(url: str, ref: str, dest: Path) -> None:
 def _run_scan(repo_dir: Path) -> Path:
     subprocess.run(["aletheore", "scan", str(repo_dir)], check=True)
     return repo_dir / ".aletheore" / "air.json"
+
+
+def _sync_persistent_git_graph(installation_id: int, repo_full_name: str, repo_dir: Path, evidence: dict) -> dict:
+    # `aletheore scan` (the subprocess above) already computed a `git` key
+    # using its own local, throwaway .aletheore/graph.db inside repo_dir -
+    # safe and memory-bounded now, but every hosted scan clones a fresh
+    # repo copy that gets deleted afterward, so that local cache never
+    # persists between scans on its own. This overrides it with a real,
+    # cross-scan incremental sync backed by Postgres, so a repeat scan of
+    # the same installation's repo only processes commits since last time,
+    # and the resulting ownership/recent-commits data survives to answer
+    # later queries (e.g. runtime-failure correlation) without a fresh
+    # git walk. Never allowed to fail the scan itself: any error here
+    # just leaves the subprocess's own (correct, just non-persistent) git
+    # data in place.
+    if not evidence.get("git", {}).get("available"):
+        return evidence
+    try:
+        settings = get_settings()
+        store = PostgresRepoGraphStore(settings.database_url, installation_id, repo_full_name)
+        modules = evidence.get("repository", {}).get("modules", [])
+        git_data = analyze_git(repo_dir, store=store, branch=GRAPH_BRANCH)
+        if git_data.get("available"):
+            git_data["hotspots"] = compute_hotspots(repo_dir, modules, store=store, branch=GRAPH_BRANCH)
+            evidence["git"] = git_data
+    except Exception as exc:  # noqa: BLE001
+        # Broad by design: a GitAnalysisError (bad history state) and a
+        # Postgres connection failure are both real possibilities in
+        # production, and neither is allowed to break the PR scan itself -
+        # this whole step is a persistence enhancement, not the source of
+        # truth for this scan's own result.
+        logging.getLogger("scan_worker.jobs").warning(
+            "persistent git graph sync failed (%s); keeping this scan's own git data", type(exc).__name__
+        )
+    return evidence
 
 
 def _insert_history(installation_id: int, repo_full_name: str, evidence: dict) -> None:
@@ -315,6 +358,7 @@ def run_pr_scan_job(
 
         client = httpx.Client(base_url="https://api.github.com")
         upsert_pr_comment(client, token, repo_full_name, pr_number, format_diff_comment(diff))
+        new = _sync_persistent_git_graph(installation_id, repo_full_name, head_dir, new)
         _insert_history(installation_id, repo_full_name, new)
 
         # These are side effects, not the primary deliverable above - a failure in
