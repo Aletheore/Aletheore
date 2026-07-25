@@ -15,5 +15,8 @@
     "cspell": "8.17.5",
     "markdownlint-cli2": "^0.23.1",
     "prettier": "3.3.3"
+  },
+  "overrides": {
+    "js-yaml": "^5.2.2"
   }
 }

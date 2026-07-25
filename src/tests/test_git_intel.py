@@ -192,6 +192,8 @@ def _fail_only_on_git_log(returncode: int):
             return subprocess.CompletedProcess(args=["git", *args], returncode=0, stdout="abc123\n", stderr="")
         if args == ("rev-list", "--count", "HEAD"):
             return subprocess.CompletedProcess(args=["git", *args], returncode=0, stdout="5\n", stderr="")
+        if args == ("rev-list", "--max-parents=0", "HEAD"):
+            return subprocess.CompletedProcess(args=["git", *args], returncode=0, stdout="root123\n", stderr="")
         return subprocess.CompletedProcess(args=["git", *args], returncode=0, stdout="", stderr="")
 
     return side_effect
@@ -251,6 +253,57 @@ def test_analyze_git_totals(tmp_path):
     result = analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
     assert result["total_commits"] == 3
     assert result["repo_age_days"] == 43
+
+
+def test_first_commit_lookup_never_walks_full_history(tmp_path):
+    # Confirmed directly: `git log --reverse HEAD` (the old approach) was the
+    # exact query that got OOM-killed scanning torvalds/linux's 1.46M
+    # commits - it has to walk and format the entire history just to read
+    # its first line. The fix must never issue that call.
+    from aletheore.git_intel import analyzer
+
+    repo = make_git_repo(tmp_path)
+    real_run_git = analyzer._run_git
+    calls = []
+
+    def spy(repo_path, *args):
+        calls.append(args)
+        return real_run_git(repo_path, *args)
+
+    with patch("aletheore.git_intel.analyzer._run_git", side_effect=spy):
+        result = analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+
+    assert result["repo_age_days"] == 43
+    assert not any("--reverse" in call for call in calls)
+
+
+def test_analyze_git_repo_age_uses_oldest_of_multiple_root_commits(tmp_path):
+    # A repo merging unrelated histories (git merge --allow-unrelated-histories)
+    # can have more than one root commit - repo age must reflect the oldest
+    # one, not whichever `rev-list --max-parents=0` happens to list first.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run(repo, "init", "-b", "main")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "Alice")
+    (repo / "a.txt").write_text("1")
+    run(repo, "add", "a.txt")
+    commit(repo, "main root", "2026-06-01T00:00:00+00:00")
+
+    run(repo, "checkout", "--orphan", "grafted")
+    run(repo, "reset", "--hard")
+    (repo / "b.txt").write_text("1")
+    run(repo, "add", "b.txt")
+    commit(repo, "older independent root", "2026-01-01T00:00:00+00:00")
+
+    run(repo, "checkout", "main")
+    run(repo, "merge", "--allow-unrelated-histories", "-m", "merge", "grafted")
+
+    result = analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+    # Age measured from the older (January) root, not the newer (June) one.
+    assert result["repo_age_days"] == (
+        datetime(2026, 7, 14, tzinfo=timezone.utc) - datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ).days
 
 
 def test_analyze_git_ignores_remote_head_symbolic_ref(tmp_path):
