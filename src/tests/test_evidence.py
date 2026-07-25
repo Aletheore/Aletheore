@@ -97,6 +97,25 @@ def test_scan_repository_honors_git_history_depth_cap_env_var(tmp_path, monkeypa
     assert evidence["git"]["history_depth_limited"] is True
 
 
+def test_scan_repository_honors_secrets_history_depth_cap_env_var(tmp_path, monkeypatch):
+    # Separate env var from the git-graph cap above - `git log -p` (full
+    # diffs, used for secrets-in-history) is far more expensive per commit
+    # than the graph engine's --name-only walk, so it's tunable
+    # independently. Unset by default for a developer scanning locally.
+    repo = make_repo(tmp_path)
+    monkeypatch.setenv("ALETHEORE_SECRETS_HISTORY_DEPTH_CAP", "7")
+    with (
+        patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check,
+        patch("aletheore.evidence.find_secrets_in_history") as mock_history,
+    ):
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        mock_history.return_value = {"history_scanned_commits": 0, "history_findings": []}
+        scan_repository(repo, check_licenses=False)
+
+    _, kwargs = mock_history.call_args
+    assert kwargs["max_commits"] == 7
+
+
 def test_write_evidence_creates_aletheore_dir(tmp_path):
     repo = make_repo(tmp_path)
     evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
