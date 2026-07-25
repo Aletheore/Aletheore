@@ -9,7 +9,6 @@
     ".git",
     "**/__pycache__/**",
     "docs/superpowers/**",
-    "docs/reviews/VDP--001-SEMANTIC-FIDELITY-REPORT.md",
     "prototype/.aletheore/**",
     "github-app/backups/**",
     "STARTUP_AUDIT_REPORT.md",

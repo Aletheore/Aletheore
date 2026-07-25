@@ -1,23 +1,13 @@
-# Pull Request
-
-**Purpose:** Provide a consistent review checklist for Aletheore changes.
-**Status:** Placeholder
-**Owner:** TODO
-**Related Documents:** [../CONTRIBUTING.md](../CONTRIBUTING.md), [../GOVERNANCE.md](../GOVERNANCE.md), [../SECURITY.md](../SECURITY.md)
-**Last Updated:** TODO
-
 ## Summary
 
-TODO: Describe the change.
+<!-- What does this change do, and why? -->
 
-## Scope
+## Test plan
 
-TODO: Explain what is intentionally included and excluded.
+<!-- How did you verify this? Real command output, not just "tests pass". -->
 
 ## Checklist
 
-- [ ] The change is scoped to repository structure, documentation, tooling, or approved specifications.
-- [ ] The change does not introduce unapproved framework behavior.
-- [ ] Related documents are updated or intentionally left unchanged.
-- [ ] Security and governance implications were considered.
-
+- [ ] Tests pass locally (`cd prototype && pytest` and/or `cd github-app && pytest`, as relevant).
+- [ ] New behavior has test coverage.
+- [ ] Docs updated if user-facing behavior changed.

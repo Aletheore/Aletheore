@@ -1,24 +1,15 @@
-# Proposal
-
-**Purpose:** Capture proposed changes for future governance review.
-**Status:** Placeholder
-**Owner:** TODO
-**Related Documents:** [../../proposals/README.md](../../proposals/README.md), [../../GOVERNANCE.md](../../GOVERNANCE.md), [../../ROADMAP.md](../../ROADMAP.md)
-**Last Updated:** TODO
+---
+name: Feature request
+about: Propose a new feature or change to existing behavior
+labels: enhancement
+---
 
 ## Summary
 
-TODO: Describe the proposal.
+<!-- What are you proposing? -->
 
 ## Motivation
 
-TODO
+<!-- What problem does this solve? -->
 
-## Non-Goals
-
-TODO
-
-## Related Work
-
-TODO
-
+## Alternatives considered

@@ -2,15 +2,10 @@
   <img src="../assets/logo.png" alt="Aletheore" width="360">
 </p>
 
-# Aletheore Prototype
+# Aletheore
 
-**Status:** Unratified prototype under VDP-0000-REQ-009 ("Prototypes and experiments MAY
-precede specifications, but they MUST NOT become normative without the VDP process").
-
-This directory is deliberately out-of-band from the constitutional apparatus in
-`../constitution/`, `../GOVERNANCE.md`, `../VISION.md`, and `../ROADMAP.md`. It does not
-modify, supersede, or depend on any of that. It is not a proposal and should not be treated as
-one — it's just the actual, working tool.
+The real, working Aletheore CLI package - published on PyPI, with a real test suite, and in
+production use by the hosted GitHub App (see `../github-app/`).
 
 ## What this is
 

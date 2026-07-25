@@ -27,6 +27,10 @@ coverage.xml
 .cache/
 .tmp/
 
+# Python bytecode cache
+__pycache__/
+*.pyc
+
 # Environment files
 .env
 .env.*
