@@ -25,11 +25,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
-        working-directory: prototype
+        working-directory: src
         run: pip install -e ".[dev]"
 
       - name: Run tests
-        working-directory: prototype
+        working-directory: src
         run: >
           pytest --cov=aletheore --cov-report=term-missing --cov-report=xml --cov-fail-under=85
 
@@ -37,6 +37,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-prototype-py${{ matrix.python-version }}
-          path: prototype/coverage.xml
+          name: coverage-src-py${{ matrix.python-version }}
+          path: src/coverage.xml
           retention-days: 14

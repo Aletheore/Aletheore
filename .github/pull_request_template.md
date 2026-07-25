@@ -8,6 +8,6 @@
 
 ## Checklist
 
-- [ ] Tests pass locally (`cd prototype && pytest` and/or `cd github-app && pytest`, as relevant).
+- [ ] Tests pass locally (`cd src && pytest` and/or `cd github-app && pytest`, as relevant).
 - [ ] New behavior has test coverage.
 - [ ] Docs updated if user-facing behavior changed.

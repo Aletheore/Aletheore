@@ -7,7 +7,7 @@ comment, and exposes a JSON dashboard endpoint.
 ## Local development
 
 ```bash
-cd prototype
+cd src
 pip install -e .
 
 cd ../github-app

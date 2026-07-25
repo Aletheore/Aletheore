@@ -83,7 +83,7 @@ pipx install aletheore   # or: pip install aletheore
 To work on aletheore itself, install from source instead:
 
 ```bash
-cd prototype
+cd src
 pip install -e ".[dev]"
 pytest
 ```

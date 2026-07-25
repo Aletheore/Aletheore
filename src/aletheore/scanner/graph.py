@@ -947,7 +947,7 @@ def _resolve_csharp_using(prefix_map: dict[str, Path], dotted: str) -> list[Path
 
 def _python_source_roots(repo_path: Path) -> list[Path]:
     # A monorepo can hold several independent Python projects, each with its own
-    # top-level package one or more directories below repo_path (prototype/aletheore/,
+    # top-level package one or more directories below repo_path (src/aletheore/,
     # github-app/app_server/) rather than directly inside it (a plain app/ at the repo
     # root). Absolute imports inside each project resolve against that project's own
     # root, not repo_path itself - walk each __init__.py chain up to the first ancestor

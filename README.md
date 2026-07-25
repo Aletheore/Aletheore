@@ -11,7 +11,7 @@ violations. Everything downstream — the written report, the query tools, the M
 local dashboard — reads from that same evidence and never states a claim it can't point back
 to a specific field in it.
 
-**Working code lives in [`prototype/`](prototype/) — start there:** [`prototype/README.md`](prototype/README.md)
+**Working code lives in [`src/`](src/) — start there:** [`src/README.md`](src/README.md)
 has full setup, every CLI command, the MCP tool list, and the dashboard.
 
 ## What's actually shipped
@@ -21,7 +21,7 @@ has full setup, every CLI command, the MCP tool list, and the dashboard.
 - **`aletheore audit`** — scan, then shell out to an installed coding-agent CLI (Claude Code
   today) to write a full grounded markdown report, citing exact evidence fields. Meant to be
   run by hand against your own repo, not from automation — see
-  [`prototype/README.md`](prototype/README.md) for why.
+  [`src/README.md`](src/README.md) for why.
 - **`aletheore query`** / **`aletheore diff`** — answer targeted questions or compare two scans
   from existing evidence, no re-scan or LLM call needed.
 - **`aletheore mcp`** — a stdio MCP server exposing 13 tools (module lookups, ownership,
@@ -35,7 +35,7 @@ has full setup, every CLI command, the MCP tool list, and the dashboard.
 
 ## Repository layout
 
-- `prototype/` — the actual, working code (see its README for everything above in detail).
+- `src/` — the actual, working code (see its README for everything above in detail).
 - `github-app/` — the hosted GitHub App: FastAPI server, RQ workers, migrations.
 - `website/` — the marketing site and live demo.
 - `docs/superpowers/` — design specs and implementation plans written during development.

@@ -53,8 +53,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install prototype package
-        working-directory: prototype
+      - name: Install aletheore package
+        working-directory: src
         run: pip install -e .
 
       - name: Install github-app dependencies

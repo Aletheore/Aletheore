@@ -6,7 +6,7 @@ WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
 
 run_aletheore() {
-  PYTHONPATH="$ROOT_DIR/prototype" python3 -m aletheore.cli scan "$1"
+  PYTHONPATH="$ROOT_DIR/src" python3 -m aletheore.cli scan "$1"
 }
 
 echo "=== Django (full clone, pinned commit) ==="
