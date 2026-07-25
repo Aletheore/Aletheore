@@ -79,14 +79,15 @@ def _failure_detail(exc_info: str | None) -> str:
     return _GENERIC_FAILURE_DETAIL
 
 
-def _check_repo_size(owner: str, repo: str, token: str | None) -> None:
+async def _check_repo_size(owner: str, repo: str, token: str | None) -> None:
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
-        response = httpx.get(
-            f"https://api.github.com/repos/{owner}/{repo}", headers=headers, timeout=10.0
-        )
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}", headers=headers, timeout=10.0
+            )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="could not reach GitHub - try again shortly") from exc
 
@@ -127,7 +128,7 @@ async def start_demo_scan(request: Request, body: StartDemoScanRequest):
     # reserved - a repo that gets rejected here never reaches a worker, so
     # it shouldn't cost the visitor their one scan every 20 minutes. Only a
     # request that's actually eligible to run consumes the cooldown.
-    _check_repo_size(owner, repo, settings.github_demo_readonly_token)
+    await _check_repo_size(owner, repo, settings.github_demo_readonly_token)
 
     allowed = await check_and_reserve_demo_scan(pool, _client_ip(request), DEMO_SCAN_COOLDOWN_SECONDS)
     if not allowed:

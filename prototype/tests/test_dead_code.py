@@ -46,3 +46,33 @@ def test_unused_dependency_flagged_when_never_imported(tmp_path):
     unused = {(dependency["ecosystem"], dependency["package"]) for dependency in result["unused_dependencies"]}
     assert ("PyPI", "requests") in unused
     assert ("PyPI", "flask") not in unused
+
+
+def test_npm_transitive_lockfile_dependencies_are_never_reported_as_unused(tmp_path):
+    # Confirmed on this repo: a package-lock.json's "packages" map lists every
+    # resolved transitive dependency, not just what's declared in package.json
+    # - checking all of them against import statements flagged ~200 of
+    # cspell's own transitive packages as "unused" even though only cspell
+    # itself is a real, directly-declared dependency your code could ever
+    # import. Only package.json's direct dependencies are valid candidates.
+    import json
+
+    (tmp_path / "package.json").write_text(json.dumps({"devDependencies": {"cspell": "^8.17.5"}}))
+    (tmp_path / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "packages": {
+                    "": {"devDependencies": {"cspell": "^8.17.5"}},
+                    "node_modules/cspell": {"version": "8.17.5"},
+                    "node_modules/cspell-lib": {"version": "8.17.5"},
+                    "node_modules/chalk": {"version": "5.3.0"},
+                }
+            }
+        )
+    )
+    modules = [_module("app/index.js")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    unused = {dependency["package"] for dependency in result["unused_dependencies"]}
+    assert "cspell-lib" not in unused
+    assert "chalk" not in unused
+    assert "cspell" in unused

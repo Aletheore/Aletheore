@@ -93,7 +93,35 @@ def _parse_pip_pins(repo_path: Path) -> list[tuple[str, str, str]]:
     return pins
 
 
+def _parse_npm_direct_pins(repo_path: Path) -> list[tuple[str, str, str]]:
+    # package.json only, deliberately never package-lock.json: this is used
+    # for checks that ask "is a *declared* dependency unused", where a lock
+    # file's full transitive tree would be wrong - a transitive package was
+    # never something your own code could import directly, so it would
+    # always look "unused" and drown every real finding in noise (confirmed
+    # on this repo: cspell's ~200 transitive packages, 0 of them actually
+    # unused - only cspell/markdownlint-cli2/prettier are real candidates).
+    package_json = repo_path / "package.json"
+    if not package_json.exists():
+        return []
+    try:
+        data = json.loads(package_json.read_text(encoding="utf-8", errors="ignore"))
+    except json.JSONDecodeError:
+        return []
+    deps = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
+    pins = []
+    for name, version in deps.items():
+        cleaned = _clean_range_version(version)
+        if cleaned:
+            pins.append((name, cleaned, "npm"))
+    return pins
+
+
 def _parse_npm_pins(repo_path: Path) -> list[tuple[str, str, str]]:
+    # package-lock.json preferred here: vulnerability scanning wants the
+    # full resolved transitive tree, since a vulnerable indirect dependency
+    # is still a real risk. See _parse_npm_direct_pins for the opposite
+    # need (dead-code's unused-dependency check).
     package_lock = repo_path / "package-lock.json"
     if package_lock.exists():
         try:
@@ -111,20 +139,7 @@ def _parse_npm_pins(repo_path: Path) -> list[tuple[str, str, str]]:
         if pins:
             return pins
 
-    package_json = repo_path / "package.json"
-    if not package_json.exists():
-        return []
-    try:
-        data = json.loads(package_json.read_text(encoding="utf-8", errors="ignore"))
-    except json.JSONDecodeError:
-        return []
-    deps = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
-    pins = []
-    for name, version in deps.items():
-        cleaned = _clean_range_version(version)
-        if cleaned:
-            pins.append((name, cleaned, "npm"))
-    return pins
+    return _parse_npm_direct_pins(repo_path)
 
 
 def _parse_go_pins(repo_path: Path) -> list[tuple[str, str, str]]:

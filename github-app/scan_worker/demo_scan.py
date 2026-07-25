@@ -15,13 +15,19 @@ import logging
 import subprocess
 import uuid
 
-from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE
-
 logger = logging.getLogger(__name__)
 
 DEMO_SANDBOX_IMAGE = "aletheore-demo-sandbox:latest"
 CONTAINER_TIMEOUT_SECONDS = 90
 MAX_LISTED_ITEMS = 5
+
+# Mirrors aletheore.git_intel.analyzer.GIT_ANALYSIS_RESOURCE_EXIT_CODE.
+# Inlined rather than imported: this container deliberately excludes the
+# aletheore package and its dependency tree (see Dockerfile.demo-scan-worker)
+# - importing it here would crash this worker on startup with no aletheore
+# installed. The scan runs inside aletheore-demo-sandbox, which does have the
+# real package; only its exit code crosses the container boundary.
+GIT_ANALYSIS_RESOURCE_EXIT_CODE = 2
 
 
 class DemoScanError(RuntimeError):

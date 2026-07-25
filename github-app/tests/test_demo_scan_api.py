@@ -8,10 +8,10 @@ from app_server.main import app
 
 
 def _mock_github_response(monkeypatch, status_code: int, size_kb: int = 100):
-    def fake_get(url, headers=None, timeout=None):
+    async def fake_get(self, url, headers=None, timeout=None):
         return httpx.Response(status_code, json={"size": size_kb}, request=httpx.Request("GET", url))
 
-    monkeypatch.setattr("app_server.demo_scan_api.httpx.get", fake_get)
+    monkeypatch.setattr("app_server.demo_scan_api.httpx.AsyncClient.get", fake_get)
 
 
 def _mock_queue(monkeypatch, count: int = 0, started_count: int = 0, job_id: str = "demo-job-123"):

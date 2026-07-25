@@ -22,6 +22,7 @@ os.environ.setdefault("GITHUB_CLIENT_SECRET", "test-client-secret")
 os.environ.setdefault("SESSION_SECRET", "test-session-secret")
 os.environ.setdefault("AUDIT_SIGNING_PRIVATE_KEY", "11" * 32)
 os.environ.setdefault("PADDLE_WEBHOOK_SECRET", "pdl_ntfset_test_secret")
+os.environ.setdefault("PADDLE_CLIENT_TOKEN", "test_conftest_client_token")
 os.environ.setdefault("PUBLIC_BASE_URL", "http://test")
 
 

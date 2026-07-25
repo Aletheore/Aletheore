@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 
-from aletheore.vulnerabilities import _parse_npm_pins, _parse_pip_pins
+from aletheore.vulnerabilities import _parse_npm_direct_pins, _parse_pip_pins
 
 ENTRY_POINT_FILENAMES = {
     "__init__.py",
@@ -86,7 +86,7 @@ def find_dead_code(repo_path: Path, modules: list[dict], config: dict | None) ->
 
     imported_roots = _import_roots(modules)
     unused_dependencies = []
-    for name, _version, ecosystem in _parse_pip_pins(repo_path) + _parse_npm_pins(repo_path):
+    for name, _version, ecosystem in _parse_pip_pins(repo_path) + _parse_npm_direct_pins(repo_path):
         # Static import-name matching is intentionally conservative. Some packages expose
         # different import roots than their package names; known common aliases live above.
         if imported_roots.isdisjoint(_package_import_names(name)):

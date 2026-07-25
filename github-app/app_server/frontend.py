@@ -23,6 +23,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app_server.admin import _administered_installation_ids
 from app_server.auth import SESSION_COOKIE_NAME, get_current_session
+from app_server.config import get_settings
 from app_server.db import list_installations_for_ids
 from app_server.github_install import github_app_install_url
 from app_server.paddle_pricing import resolve_price_id_for_plan
@@ -1259,9 +1260,6 @@ def _no_store_html(content: str) -> HTMLResponse:
     return HTMLResponse(content, headers={"Cache-Control": "no-store"})
 
 
-PADDLE_CLIENT_TOKEN = "test_4c86268368fd75d088763f49248"
-PADDLE_ENVIRONMENT = "sandbox"
-
 _VALID_PLANS = ("indie", "team", "enterprise")
 _VALID_INTERVALS = ("month", "year")
 
@@ -1319,11 +1317,12 @@ def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]
         <p><a href="/dashboard">Cancel</a></p>
         """
 
+    settings = get_settings()
     return _subscribe_page("Subscribe", body) + f"""
 <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script>
-Paddle.Environment.set("{PADDLE_ENVIRONMENT}");
-Paddle.Initialize({{ token: "{PADDLE_CLIENT_TOKEN}" }});
+Paddle.Environment.set("{settings.paddle_environment}");
+Paddle.Initialize({{ token: "{settings.paddle_client_token}" }});
 document.getElementById("continue-checkout").addEventListener("click", (event) => {{
   const btn = event.currentTarget;
   const selected = document.querySelector('input[name="installation_id"]:checked');
