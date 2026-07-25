@@ -274,3 +274,20 @@ def test_compute_repo_key_uses_remote_when_present(tmp_path):
 
     assert key_without_remote != key_with_remote
     assert "https://github.com/example/repo.git" in key_with_remote
+
+
+def test_stream_commit_touches_normalizes_paths_when_scan_root_is_subdirectory(tmp_path):
+    repo = tmp_path / "repo"
+    subdir = repo / "component"
+    subdir.mkdir(parents=True)
+    run(repo, "init", "-b", "main")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "Alice")
+    (subdir / "a.py").write_text("1")
+    (repo / "README.md").write_text("outside")
+    run(repo, "add", "-A")
+    commit(repo, "initial", "2026-06-01T00:00:00+00:00")
+
+    touches = list(stream_commit_touches(subdir, "HEAD"))
+    assert len(touches) == 1
+    assert touches[0].files == ("a.py",)

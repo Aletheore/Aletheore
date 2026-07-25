@@ -1,9 +1,18 @@
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
-MASS_COMMIT_FILE_THRESHOLD = 50
+from aletheore.git_intel.graph_store import GraphSnapshot, RepoGraphStore
+from aletheore.git_intel.incremental import (
+    CO_CHANGE_PARTNERS_RETURNED,
+    GitLogStreamError,
+    compute_repo_key,
+    stream_commit_touches,
+)
+from aletheore.git_intel.sqlite_store import SQLiteRepoGraphStore, default_graph_db_path
+
 HOTSPOT_LIMIT = 30
+CADENCE_WEEKS_RETURNED = 52
 
 # Distinct from the generic exit code 1 other scan failures use, so callers
 # that only see a subprocess exit code (scan_worker/jobs.py, demo_scan.py)
@@ -131,20 +140,82 @@ def _parse_branches(repo_path: Path, now: datetime) -> list[dict]:
     return branches
 
 
-def _commit_cadence(repo_path: Path, now: datetime) -> dict:
-    result = _run_git_or_raise(repo_path, "log", "--format=%ad", "--date=iso-strict", "HEAD")
-    dates = [datetime.fromisoformat(line) for line in result.stdout.strip().splitlines() if line]
-    if not dates:
+def _current_branch(repo_path: Path) -> str:
+    # Keys the persisted graph - a checkout on a different branch between
+    # scans must not be treated as "the same sync state", or commits unique
+    # to the new branch would look like they'd already been analyzed.
+    # Detached HEAD (bare "HEAD") is a known, accepted gap: multiple
+    # different detached checkouts share one bucket rather than each
+    # getting isolated sync state - rare in practice, since analyze_git
+    # almost always runs against a real checked-out branch.
+    result = _run_git(repo_path, "rev-parse", "--abbrev-ref", "HEAD")
+    branch = result.stdout.strip()
+    return branch if result.returncode == 0 and branch else "HEAD"
+
+
+def _sha_exists(repo_path: Path, sha: str) -> bool:
+    return _run_git(repo_path, "cat-file", "-e", sha).returncode == 0
+
+
+def default_store(repo_path: Path) -> RepoGraphStore:
+    return SQLiteRepoGraphStore(default_graph_db_path(repo_path))
+
+
+def _sync_graph(
+    repo_path: Path, store: RepoGraphStore, now: datetime, depth_cap: int | None
+) -> tuple[GraphSnapshot, bool]:
+    """Brings the persisted graph up to date with HEAD and returns the
+    resulting snapshot, plus whether this was a full (re)baseline rather
+    than an incremental delta - only a baseline can be depth-limited, so
+    callers use this to decide whether to flag history as partial.
+    """
+    repo_key = compute_repo_key(repo_path)
+    branch = _current_branch(repo_path)
+    snapshot = store.load(repo_key, branch)
+
+    if snapshot.last_synced_sha is None or not _sha_exists(repo_path, snapshot.last_synced_sha):
+        # No prior state, or the sync pointer no longer exists in this repo
+        # (history was rewritten out from under it, e.g. a force-push) -
+        # either way, prior aggregates can't be trusted to merge into.
+        rev_range = "HEAD"
+        reset = True
+        max_commits = depth_cap
+    else:
+        rev_range = f"{snapshot.last_synced_sha}..HEAD"
+        reset = False
+        max_commits = None  # a delta is already bounded by however much landed since last sync
+
+    try:
+        commits = list(stream_commit_touches(repo_path, rev_range, max_commits=max_commits))
+    except GitLogStreamError as exc:
+        raise GitAnalysisError(str(exc)) from exc
+
+    new_head = _run_git_or_raise(repo_path, "rev-parse", "HEAD").stdout.strip()
+    store.apply_commits(repo_key, branch, commits, new_sync_sha=new_head, new_sync_at=now, reset=reset)
+    return store.load(repo_key, branch), reset
+
+
+def _ownership_summary(snapshot: GraphSnapshot) -> list[dict]:
+    total = sum(o.commit_count for o in snapshot.ownership.values())
+    if total == 0:
+        return []
+    return [
+        {
+            "email": o.email,
+            "names": sorted(o.names),
+            "commit_count": o.commit_count,
+            "percent": round(o.commit_count / total, 4),
+        }
+        for o in sorted(snapshot.ownership.values(), key=lambda o: -o.commit_count)
+    ]
+
+
+def _cadence_summary(snapshot: GraphSnapshot, now: datetime) -> dict:
+    if not snapshot.cadence_weekly_counts:
         return {"weekly_counts": [], "trend": "flat", "most_recent_week_partial": False}
 
-    dates.sort()
-    buckets: dict[int, int] = {}
-    start = dates[0]
-    for date in dates:
-        week_index = (date - start).days // 7
-        buckets[week_index] = buckets.get(week_index, 0) + 1
-    last_bucket = max(buckets.keys())
-    weekly_counts = [buckets.get(i, 0) for i in range(last_bucket + 1)]
+    sorted_weeks = sorted(snapshot.cadence_weekly_counts.items())
+    weekly_counts = [count for _week, count in sorted_weeks[-CADENCE_WEEKS_RETURNED:]]
 
     if len(weekly_counts) < 2:
         trend = "flat"
@@ -159,8 +230,8 @@ def _commit_cadence(repo_path: Path, now: datetime) -> dict:
         else:
             trend = "flat"
 
-    last_bucket_start = start + timedelta(days=last_bucket * 7)
-    days_into_last_bucket = (now - last_bucket_start).days
+    last_week_start = sorted_weeks[-1][0]
+    days_into_last_bucket = (now.date() - last_week_start).days
     most_recent_week_partial = days_into_last_bucket < 7
 
     return {
@@ -170,86 +241,37 @@ def _commit_cadence(repo_path: Path, now: datetime) -> dict:
     }
 
 
-def _ownership(repo_path: Path) -> list[dict]:
-    result = _run_git_or_raise(repo_path, "log", "--format=%an\x1f%ae", "HEAD")
-    entries = [
-        line.split("\x1f") for line in result.stdout.strip().splitlines() if line
-    ]
-    total = len(entries)
-    counts: dict[str, int] = {}
-    names_by_email: dict[str, set[str]] = {}
-    for name, email in entries:
-        key = email.lower()
-        counts[key] = counts.get(key, 0) + 1
-        names_by_email.setdefault(key, set()).add(name)
-    return [
-        {
-            "email": email,
-            "names": sorted(names_by_email[email]),
-            "commit_count": count,
-            "percent": round(count / total, 4),
-        }
-        for email, count in sorted(counts.items(), key=lambda kv: -kv[1])
-    ]
-
-
-def _commit_file_lists(repo_path: Path) -> list[list[str]]:
-    result = _run_git_or_raise(repo_path, "log", "--format=%x00", "--name-only", "HEAD")
-    prefix_result = _run_git_or_raise(repo_path, "rev-parse", "--show-prefix")
-    prefix = prefix_result.stdout.strip()
-    commits: list[list[str]] = []
-    current: list[str] = []
-    for line in result.stdout.splitlines():
-        if line == "\x00":
-            if current:
-                commits.append(current)
-            current = []
-        elif line.strip():
-            path = line.strip()
-            if prefix:
-                if not path.startswith(prefix):
-                    continue
-                path = path[len(prefix) :]
-            if path:
-                current.append(path)
-    if current:
-        commits.append(current)
-    return commits
-
-
-def compute_hotspots(repo_path: Path, modules: list[dict]) -> list[dict]:
+def _hotspots_summary(snapshot: GraphSnapshot, modules: list[dict]) -> list[dict]:
     dependents_by_path = {module["path"]: len(module.get("imported_by", [])) for module in modules}
-    churn: dict[str, int] = {}
-    co_change: dict[str, dict[str, int]] = {}
-
-    for files in _commit_file_lists(repo_path):
-        unique_files = sorted(set(files))
-        for path in unique_files:
-            churn[path] = churn.get(path, 0) + 1
-        if len(unique_files) > MASS_COMMIT_FILE_THRESHOLD:
-            continue
-        for index, first in enumerate(unique_files):
-            for second in unique_files[index + 1 :]:
-                first_partners = co_change.setdefault(first, {})
-                second_partners = co_change.setdefault(second, {})
-                first_partners[second] = first_partners.get(second, 0) + 1
-                second_partners[first] = second_partners.get(first, 0) + 1
-
     hotspots = []
-    for path, churn_count in churn.items():
-        partners = sorted(co_change.get(path, {}).items(), key=lambda item: (-item[1], item[0]))[:5]
+    for path, churn in snapshot.file_churn.items():
+        partners = sorted(
+            churn.co_change_counts.items(), key=lambda item: (-item[1], item[0])
+        )[:CO_CHANGE_PARTNERS_RETURNED]
         hotspots.append(
             {
                 "path": path,
-                "churn_count": churn_count,
+                "churn_count": churn.churn_count,
                 "co_change_partners": [
                     {"path": partner, "co_occurrences": count} for partner, count in partners
                 ],
                 "dependents_count": dependents_by_path.get(path, 0),
             }
         )
-
     return sorted(hotspots, key=lambda item: (-item["churn_count"], item["path"]))[:HOTSPOT_LIMIT]
+
+
+def compute_hotspots(
+    repo_path: Path, modules: list[dict], *, store: RepoGraphStore | None = None, depth_cap: int | None = None
+) -> list[dict]:
+    owns_store = store is None
+    store = store or default_store(repo_path)
+    try:
+        snapshot, _reset = _sync_graph(repo_path, store, datetime.now(timezone.utc), depth_cap)
+    finally:
+        if owns_store and isinstance(store, SQLiteRepoGraphStore):
+            store.close()
+    return _hotspots_summary(snapshot, modules)
 
 
 def _first_commit_at(repo_path: Path) -> datetime:
@@ -269,7 +291,13 @@ def _first_commit_at(repo_path: Path) -> datetime:
     return min(dates)
 
 
-def analyze_git(repo_path: Path, now: datetime | None = None) -> dict:
+def analyze_git(
+    repo_path: Path,
+    now: datetime | None = None,
+    *,
+    store: RepoGraphStore | None = None,
+    depth_cap: int | None = None,
+) -> dict:
     if now is None:
         now = datetime.now(timezone.utc)
 
@@ -281,11 +309,22 @@ def analyze_git(repo_path: Path, now: datetime | None = None) -> dict:
 
     repo_age_days = (now - _first_commit_at(repo_path)).days
 
+    owns_store = store is None
+    store = store or default_store(repo_path)
+    try:
+        snapshot, was_full_rebuild = _sync_graph(repo_path, store, now, depth_cap)
+    finally:
+        if owns_store and isinstance(store, SQLiteRepoGraphStore):
+            store.close()
+
+    history_depth_limited = was_full_rebuild and depth_cap is not None and total_commits > depth_cap
+
     return {
         "available": True,
         "branches": _parse_branches(repo_path, now),
-        "commit_cadence": _commit_cadence(repo_path, now),
-        "ownership": _ownership(repo_path),
+        "commit_cadence": _cadence_summary(snapshot, now),
+        "ownership": _ownership_summary(snapshot),
         "repo_age_days": repo_age_days,
         "total_commits": total_commits,
+        "history_depth_limited": history_depth_limited,
     }

@@ -50,9 +50,22 @@ class GitLogStreamError(RuntimeError):
     handle that type."""
 
 
+def _scan_root_prefix(repo_path: Path) -> str:
+    # git log's paths are always relative to the repo root, not cwd - when
+    # repo_path is a subdirectory of the actual git root (e.g. a monorepo
+    # component), files must be re-relativized to it, and anything outside
+    # it excluded, matching how the rest of the scanner treats repo_path as
+    # the analysis root.
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-prefix"], cwd=repo_path, capture_output=True, text=True, errors="ignore"
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
 def stream_commit_touches(
     repo_path: Path, rev_range: str, *, max_commits: int | None = None
 ) -> Iterator[CommitTouch]:
+    prefix = _scan_root_prefix(repo_path)
     args = [
         "log",
         f"--format={_RECORD_SEP_FORMAT}%H{_FIELD_SEP}%an{_FIELD_SEP}%ae{_FIELD_SEP}%ad",
@@ -85,7 +98,13 @@ def stream_commit_touches(
                 pending_header = (sha, name, email, datetime.fromisoformat(date_str))
                 pending_files = []
             elif line.strip():
-                pending_files.append(line.strip())
+                path = line.strip()
+                if prefix:
+                    if not path.startswith(prefix):
+                        continue
+                    path = path[len(prefix) :]
+                if path:
+                    pending_files.append(path)
         if pending_header is not None:
             yield CommitTouch(*pending_header, files=tuple(pending_files))
     finally:
@@ -102,6 +121,38 @@ def stream_commit_touches(
                 "history may be too large to analyze with the memory available"
             )
         raise GitLogStreamError(f"git log {rev_range} failed with exit code {returncode}: {stderr}")
+
+
+def compute_repo_key(repo_path: Path) -> str:
+    """Stable identity for a repo across scans, independent of which local
+    directory it happens to be cloned into or which installation is
+    scanning it. Root commit SHA (see analyzer._first_commit_at for why a
+    repo can have more than one - lexicographically smallest is used here
+    to stay deterministic without needing commit dates) plus the origin
+    remote URL where one exists; falls back to the absolute local path for
+    a repo with no remote (e.g. `git init`, never pushed anywhere).
+    """
+    roots_result = subprocess.run(
+        ["git", "rev-list", "--max-parents=0", "HEAD"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        errors="ignore",
+    )
+    root_shas = sorted(line for line in roots_result.stdout.strip().splitlines() if line)
+    root_key = root_shas[0] if root_shas else "no-commits"
+
+    remote_result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        errors="ignore",
+    )
+    remote_url = remote_result.stdout.strip()
+    if remote_result.returncode == 0 and remote_url:
+        return f"{root_key}:{remote_url}"
+    return f"{root_key}:{repo_path.resolve()}"
 
 
 def _week_start(at: datetime) -> date:

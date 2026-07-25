@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from aletheore.git_intel.analyzer import GitAnalysisError, analyze_git, compute_hotspots
+from aletheore.git_intel.incremental import GitLogStreamError
 
 
 def run(repo: Path, *args: str):
@@ -199,26 +200,21 @@ def _fail_only_on_git_log(returncode: int):
     return side_effect
 
 
-def test_analyze_git_raises_clear_error_when_git_log_is_killed(tmp_path):
+def test_analyze_git_raises_clear_error_when_a_supporting_git_call_is_killed(tmp_path):
     # Confirmed directly: a full scan of torvalds/linux under a 1GB memory
     # cgroup got OOM-killed here, and the OS reports a signal-killed process
     # via a negative returncode (Python's documented convention) - this used
     # to surface downstream as an unrelated, confusing IndexError instead of
-    # a clear "this failed, likely out of memory" signal.
+    # a clear "this failed, likely out of memory" signal. This exercises the
+    # cheap supporting calls around the graph sync (e.g. the final
+    # `rev-parse HEAD`) - see the two tests below for the streaming
+    # ownership/cadence/hotspots walk itself being killed, which is the
+    # actual torvalds/linux failure mode.
     repo = make_git_repo(tmp_path)
 
     with patch("aletheore.git_intel.analyzer._run_git", side_effect=_fail_only_on_git_log(-9)):
         with pytest.raises(GitAnalysisError, match="killed"):
             analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
-
-
-def test_compute_hotspots_raises_clear_error_when_git_log_is_killed(tmp_path):
-    repo = make_git_repo(tmp_path)
-    killed = subprocess.CompletedProcess(args=["git", "log"], returncode=-9, stdout="", stderr="")
-
-    with patch("aletheore.git_intel.analyzer._run_git", return_value=killed):
-        with pytest.raises(GitAnalysisError, match="killed"):
-            compute_hotspots(repo, modules=[])
 
 
 def test_analyze_git_raises_clear_error_on_non_signal_git_failure(tmp_path):
@@ -227,6 +223,34 @@ def test_analyze_git_raises_clear_error_on_non_signal_git_failure(tmp_path):
     with patch("aletheore.git_intel.analyzer._run_git", side_effect=_fail_only_on_git_log(128)):
         with pytest.raises(GitAnalysisError, match="exit code 128"):
             analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+
+
+def test_analyze_git_translates_stream_error_from_the_actual_history_walk(tmp_path):
+    # This is the real torvalds/linux failure mode: the streaming
+    # ownership/cadence/hotspots walk itself gets OOM-killed, not one of the
+    # cheap supporting calls around it. Patches at the exact translation
+    # boundary (_sync_graph catches GitLogStreamError from
+    # stream_commit_touches and re-raises as GitAnalysisError) rather than
+    # trying to make a real git subprocess die on cue.
+    repo = make_git_repo(tmp_path)
+
+    with patch(
+        "aletheore.git_intel.analyzer.stream_commit_touches",
+        side_effect=GitLogStreamError("git log HEAD was killed (likely out of memory)"),
+    ):
+        with pytest.raises(GitAnalysisError, match="killed"):
+            analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+
+
+def test_compute_hotspots_translates_stream_error_from_the_actual_history_walk(tmp_path):
+    repo = make_git_repo(tmp_path)
+
+    with patch(
+        "aletheore.git_intel.analyzer.stream_commit_touches",
+        side_effect=GitLogStreamError("git log HEAD was killed (likely out of memory)"),
+    ):
+        with pytest.raises(GitAnalysisError, match="killed"):
+            compute_hotspots(repo, modules=[])
 
 
 def test_analyze_git_ahead_behind_main(tmp_path):
