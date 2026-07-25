@@ -20,11 +20,12 @@ def test_embed_text_returns_vector_on_success(monkeypatch):
     assert result == [0.1, 0.2, 0.3]
 
 
-def test_embed_text_requests_the_models_real_context_window(monkeypatch):
-    # Confirmed in production: Ollama's own default (2048) is far smaller
-    # than nomic-embed-text's real 8192-token context, and every real
-    # embedding call failed against that default - the cache never recorded
-    # a single hit despite running for 38 hours.
+def test_embed_text_sends_the_models_real_context_window(monkeypatch):
+    # Confirmed directly against the running production model: the pulled
+    # nomic-embed-text GGUF has a hard 2048-token trained context (not 8192,
+    # which was a first, wrong assumption - requesting more just got
+    # silently clamped by Ollama with a warning). Sending it explicitly
+    # keeps this self-documenting even though it now matches the default.
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -38,16 +39,15 @@ def test_embed_text_requests_the_models_real_context_window(monkeypatch):
 
     embed_text("some evidence text")
 
-    assert seen["body"]["options"] == {"num_ctx": 8192}
+    assert seen["body"]["options"] == {"num_ctx": 2048}
 
 
 def test_embed_text_truncates_oversized_input(monkeypatch):
-    # A real production packet hit 52k+ tokens - even with num_ctx raised to
-    # the model's real max, that's still too large for a single embedding
-    # call. Truncating keeps the call from failing outright; the exact text
-    # match isn't needed for similarity matching, and any cache hit found
-    # this way is still re-verified against current evidence before being
-    # served.
+    # A real production packet hit 52k+ tokens - nowhere close to fitting
+    # the model's real 2048-token context. Truncating keeps the call from
+    # failing outright; the exact text match isn't needed for similarity
+    # matching, and any cache hit found this way is still re-verified
+    # against current evidence before being served.
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:

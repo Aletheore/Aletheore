@@ -7,22 +7,27 @@ import httpx
 
 EMBEDDING_MODEL = "nomic-embed-text"
 
-# nomic-embed-text supports an 8192-token context, but Ollama's own default
-# (2048) is much smaller and silently truncates/errors past it - confirmed
-# in production: every real embedding call failed with "input (N tokens) is
-# too large to process" against the 2048 default, so the cache never
-# recorded a single hit despite running for 38 hours. num_ctx below asks
-# Ollama to actually use the model's real capacity.
-EMBEDDING_NUM_CTX = 8192
+# The pulled nomic-embed-text GGUF's own metadata caps it at a real,
+# hard 2048-token training context (confirmed directly against the running
+# server: `nomic-bert.context_length = 2048`, and requesting num_ctx=8192
+# just produced "requested context size too large for model" and got
+# silently clamped back to 2048 - the model was never going to accept more,
+# regardless of server or per-request settings). Every real embedding call
+# failed until input was kept under this real limit; the cache had a 0%
+# hit rate for the 38 hours it ran before this was caught.
+EMBEDDING_NUM_CTX = 2048
 
-# A conservative ~3 chars/token estimate for TOON-encoded evidence (denser
-# than prose - lots of short identifiers and punctuation) keeps even the
-# largest real packets seen in production (52k+ tokens) under the model's
-# context window, rather than sending something guaranteed to fail. A
-# truncated embedding is still useful for similarity matching; the exact
-# text match isn't needed, and a cache hit is always re-verified against
-# current evidence regardless of how it was found.
-MAX_EMBEDDING_CHARS = EMBEDDING_NUM_CTX * 3
+# Empirically calibrated against the real running model with text shaped
+# like actual evidence packets (file paths, symbol names, short identifiers
+# - not plain prose, and not a pathological single repeated character
+# either): 6600 chars succeeded, 6990 failed. 5000 chars keeps a real
+# margin below that boundary for token-density variance in different
+# packets and the single-CPU container being busier under real concurrent
+# load than this manual test. A truncated embedding is still useful for
+# similarity matching; the exact text match isn't needed, and a cache hit
+# is always re-verified against current evidence regardless of how it was
+# found.
+MAX_EMBEDDING_CHARS = 5000
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +36,12 @@ def _client(base_url: str | None = None) -> httpx.Client:
     return httpx.Client(base_url=base_url or os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434"))
 
 
-def embed_text(text: str, base_url: str | None = None, timeout_seconds: float = 5.0) -> list[float] | None:
+def embed_text(text: str, base_url: str | None = None, timeout_seconds: float = 10.0) -> list[float] | None:
+    # A 7000-char prompt (above the truncation budget below) measured 3.6s
+    # against the real server - 5.0 left too little margin under real
+    # concurrent load on a single-CPU container; this is a degrade-to-miss
+    # timeout, not a build-blocking one, so erring toward more patience
+    # costs nothing but a slightly slower cache lookup.
     if len(text) > MAX_EMBEDDING_CHARS:
         text = text[:MAX_EMBEDDING_CHARS]
     try:

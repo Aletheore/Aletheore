@@ -112,6 +112,14 @@ services:
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
+    # Tried OLLAMA_CONTEXT_LENGTH=8192 here first, assuming nomic-embed-text
+    # supports an 8192-token context - it doesn't, not on the GGUF this
+    # pulls: confirmed directly against the running server that the model's
+    # own trained context is a hard 2048, and requesting more just logged
+    # "requested context size too large for model" and got silently
+    # clamped back down. The real fix is keeping input within that limit
+    # (see MAX_EMBEDDING_CHARS in scan_worker/embedding_client.py), not a
+    # server setting that can't raise a ceiling the model itself doesn't have.
     volumes:
       - aletheore_ollama_data:/root/.ollama
     entrypoint: ["/bin/sh", "-c"]
