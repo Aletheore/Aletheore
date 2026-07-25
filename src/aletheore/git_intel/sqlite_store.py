@@ -155,22 +155,22 @@ class SQLiteRepoGraphStore:
             )
             self._conn.executemany(
                 "INSERT INTO ownership (repo_key, branch, email, names, commit_count) VALUES (?, ?, ?, ?, ?)",
-                [
+                (
                     (repo_key, branch, email, json.dumps(sorted(total.names)), total.commit_count)
                     for email, total in merged.ownership.items()
-                ],
+                ),
             )
             self._conn.executemany(
                 "INSERT INTO cadence (repo_key, branch, week_start, commit_count) VALUES (?, ?, ?, ?)",
-                [
+                (
                     (repo_key, branch, week_start.isoformat(), count)
                     for week_start, count in merged.cadence_weekly_counts.items()
-                ],
+                ),
             )
             self._conn.executemany(
                 "INSERT INTO file_churn (repo_key, branch, path, churn_count, recent_commits, co_change_counts) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                [
+                (
                     (
                         repo_key,
                         branch,
@@ -190,5 +190,5 @@ class SQLiteRepoGraphStore:
                         json.dumps(churn.co_change_counts),
                     )
                     for path, churn in merged.file_churn.items()
-                ],
+                ),
             )

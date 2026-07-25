@@ -75,6 +75,28 @@ def test_scan_repository_includes_dead_code_and_hotspots(tmp_path):
     assert evidence["git"]["hotspots"][0]["path"] == "main.py"
 
 
+def test_scan_repository_honors_git_history_depth_cap_env_var(tmp_path, monkeypatch):
+    # Proves the hosted scan-worker's ALETHEORE_GIT_HISTORY_DEPTH_CAP env
+    # var (set before invoking `aletheore scan` as a subprocess, see
+    # scan_worker/jobs.py's _run_scan) actually reaches analyze_git - this
+    # is what keeps a cold sync of an oversized repo from OOMing before any
+    # persistence-layer code even runs. Unset by default for a developer
+    # scanning their own repo directly.
+    repo = make_repo(tmp_path)
+    for i in range(4):
+        (repo / "main.py").write_text(f"def hello():\n    return {i}\n")
+        run(repo, "add", "-A")
+        run(repo, "commit", "-q", "-m", f"change {i}")
+
+    monkeypatch.setenv("ALETHEORE_GIT_HISTORY_DEPTH_CAP", "2")
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo, check_licenses=False)
+
+    assert evidence["git"]["total_commits"] == 5
+    assert evidence["git"]["history_depth_limited"] is True
+
+
 def test_write_evidence_creates_aletheore_dir(tmp_path):
     repo = make_repo(tmp_path)
     evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)

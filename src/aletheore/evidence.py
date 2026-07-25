@@ -1,4 +1,5 @@
 import json
+import os
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,26 @@ from aletheore.toon_encoding import to_toon
 from aletheore.vulnerabilities import check_vulnerabilities as check_dependency_vulnerabilities
 
 EVIDENCE_VERSION = "0.1.0"
+
+# Unset by default - a developer scanning their own repo locally wants full
+# history, and isn't running inside a memory-constrained container. The
+# hosted scan-worker sets this (see scan_worker/jobs.py's
+# GRAPH_COLD_SYNC_DEPTH_CAP) before invoking `aletheore scan` as a
+# subprocess, so a customer's very first scan of an oversized repo (e.g.
+# torvalds/linux scale) can't OOM this call before persistence-layer code
+# even runs - reproduced directly in a container at the same 1GB limit as
+# that worker.
+_GIT_HISTORY_DEPTH_CAP_ENV = "ALETHEORE_GIT_HISTORY_DEPTH_CAP"
+
+
+def _git_history_depth_cap() -> int | None:
+    raw = os.environ.get(_GIT_HISTORY_DEPTH_CAP_ENV)
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
 
 
 def _noop_progress(_message: str) -> None:
@@ -66,7 +87,7 @@ def scan_repository(
     modules, dependency_graph, unparseable_files = build_module_graph(repo_path)
 
     report("Analyzing git history and ownership")
-    git_data = analyze_git(repo_path)
+    git_data = analyze_git(repo_path, depth_cap=_git_history_depth_cap())
 
     report("Scanning working tree for secrets")
     secrets_baseline = load_secrets_baseline(repo_path)

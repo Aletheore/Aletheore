@@ -147,7 +147,7 @@ class PostgresRepoGraphStore:
                         "INSERT INTO evidence_git_ownership "
                         "(installation_id, repo_full_name, branch, email, names, commit_count) "
                         "VALUES (%s, %s, %s, %s, %s::jsonb, %s)",
-                        [
+                        (
                             (
                                 self._installation_id,
                                 self._repo_full_name,
@@ -157,7 +157,7 @@ class PostgresRepoGraphStore:
                                 total.commit_count,
                             )
                             for email, total in merged.ownership.items()
-                        ],
+                        ),
                     )
 
                 if merged.cadence_weekly_counts:
@@ -165,10 +165,10 @@ class PostgresRepoGraphStore:
                         "INSERT INTO evidence_git_cadence "
                         "(installation_id, repo_full_name, branch, week_start, commit_count) "
                         "VALUES (%s, %s, %s, %s, %s)",
-                        [
+                        (
                             (self._installation_id, self._repo_full_name, branch, week_start, count)
                             for week_start, count in merged.cadence_weekly_counts.items()
-                        ],
+                        ),
                     )
 
                 if merged.file_churn:
@@ -176,7 +176,7 @@ class PostgresRepoGraphStore:
                         "INSERT INTO evidence_git_file_churn "
                         "(installation_id, repo_full_name, branch, path, churn_count, recent_commits, "
                         "co_change_counts) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)",
-                        [
+                        (
                             (
                                 self._installation_id,
                                 self._repo_full_name,
@@ -197,6 +197,6 @@ class PostgresRepoGraphStore:
                                 json.dumps(churn.co_change_counts),
                             )
                             for path, churn in merged.file_churn.items()
-                        ],
+                        ),
                     )
             conn.commit()
