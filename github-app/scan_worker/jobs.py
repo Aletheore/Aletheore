@@ -731,12 +731,59 @@ def _recheck_single_endpoint(entry: dict, base_url: str) -> dict:
     return results[0]
 
 
+def _owner_attachment_from_graph(installation_id: int, repo_full_name: str, source_file: str) -> dict | None:
+    # Prefers the persisted graph over a live API call: no extra GitHub
+    # round-trip, and it still answers if GitHub itself is degraded. Only
+    # ever supplements the commit attachment below (which stays the
+    # existing, already-proven live lookup) - never the sole source, since
+    # a repo with no PR-triggered scan since this shipped has no graph data
+    # yet and this simply finds nothing to attach.
+    try:
+        settings = get_settings()
+        store = PostgresRepoGraphStore(settings.database_url, installation_id, repo_full_name)
+        snapshot = store.load("unused", GRAPH_BRANCH)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "owner correlation from graph failed (%s); alerting without it", type(exc).__name__
+        )
+        return None
+    churn = snapshot.file_churn.get(source_file)
+    if churn is None or not churn.recent_commits:
+        return None
+    top_author_email = churn.recent_commits[0].author_email.lower()
+    owner = snapshot.ownership.get(top_author_email)
+    owner_name = sorted(owner.names)[0] if owner and owner.names else churn.recent_commits[0].author_name
+    return normalize_resolution(kind="owner", owner=owner_name, confidence="inferred")
+
+
+def _dependency_context_attachment(evidence: dict | None, source_file: str) -> dict | None:
+    # Upstream/downstream modules for the failing file - already computed
+    # by the scan itself (module.imports / module.imported_by), so this is
+    # a lookup against data already in hand, not a new analysis pass.
+    if not evidence:
+        return None
+    modules_by_path = {m["path"]: m for m in evidence.get("repository", {}).get("modules", [])}
+    module = modules_by_path.get(source_file)
+    if module is None:
+        return None
+    upstream = sorted(module.get("imports", []))[:5]
+    downstream = sorted(module.get("imported_by", []))[:5]
+    if not upstream and not downstream:
+        return None
+    return normalize_resolution(
+        kind="dependency",
+        dependency={"upstream": upstream, "downstream": downstream},
+        confidence="exact",
+    )
+
+
 def _attach_recent_commit_for_failure(
     settings,
     installation_id: int,
     repo_full_name: str,
     source_file: str,
     evidence_resolution: dict | None,
+    evidence: dict | None = None,
 ) -> dict | None:
     try:
         app_jwt = generate_app_jwt(
@@ -757,16 +804,22 @@ def _attach_recent_commit_for_failure(
             "commit correlation failed (%s); alerting without it",
             type(exc).__name__,
         )
+        commits = []
+
+    attachments = []
+    if commits:
+        attachments.append(normalize_resolution(kind="commit", commit=commits[0], confidence="weak"))
+    owner_attachment = _owner_attachment_from_graph(installation_id, repo_full_name, source_file)
+    if owner_attachment is not None:
+        attachments.append(owner_attachment)
+    dependency_attachment = _dependency_context_attachment(evidence, source_file)
+    if dependency_attachment is not None:
+        attachments.append(dependency_attachment)
+
+    if not attachments:
         return evidence_resolution
-    if not commits:
-        return evidence_resolution
-    commit_attachment = normalize_resolution(
-        kind="commit",
-        commit=commits[0],
-        confidence="weak",
-    )
     base = evidence_resolution or empty_resolution("endpoint")
-    return merge_resolution(base, commit_attachment)
+    return merge_resolution(base, *attachments)
 
 
 @log_job
@@ -832,6 +885,7 @@ def run_health_check_sweep_job() -> None:
                         repo_full_name,
                         source_file,
                         evidence_resolution,
+                        evidence,
                     )
                 _send_if_webhook_configured(
                     target,
