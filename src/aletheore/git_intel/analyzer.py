@@ -162,15 +162,26 @@ def default_store(repo_path: Path) -> RepoGraphStore:
 
 
 def _sync_graph(
-    repo_path: Path, store: RepoGraphStore, now: datetime, depth_cap: int | None
+    repo_path: Path,
+    store: RepoGraphStore,
+    now: datetime,
+    depth_cap: int | None,
+    branch: str | None = None,
 ) -> tuple[GraphSnapshot, bool]:
     """Brings the persisted graph up to date with HEAD and returns the
     resulting snapshot, plus whether this was a full (re)baseline rather
     than an incremental delta - only a baseline can be depth-limited, so
     callers use this to decide whether to flag history as partial.
+
+    `branch` defaults to auto-detecting the repo's current checkout, which
+    is right for a normal local clone but wrong for a hosted scan clone
+    checked out at a bare SHA (detached HEAD) - every such clone would
+    otherwise collapse onto the same literal "HEAD" bucket regardless of
+    which actual branch/PR it came from, corrupting deltas across unrelated
+    scans. Hosted callers must pass an explicit, stable branch key instead.
     """
     repo_key = compute_repo_key(repo_path)
-    branch = _current_branch(repo_path)
+    branch = branch if branch is not None else _current_branch(repo_path)
     snapshot = store.load(repo_key, branch)
 
     if snapshot.last_synced_sha is None or not _sha_exists(repo_path, snapshot.last_synced_sha):
@@ -262,12 +273,17 @@ def _hotspots_summary(snapshot: GraphSnapshot, modules: list[dict]) -> list[dict
 
 
 def compute_hotspots(
-    repo_path: Path, modules: list[dict], *, store: RepoGraphStore | None = None, depth_cap: int | None = None
+    repo_path: Path,
+    modules: list[dict],
+    *,
+    store: RepoGraphStore | None = None,
+    depth_cap: int | None = None,
+    branch: str | None = None,
 ) -> list[dict]:
     owns_store = store is None
     store = store or default_store(repo_path)
     try:
-        snapshot, _reset = _sync_graph(repo_path, store, datetime.now(timezone.utc), depth_cap)
+        snapshot, _reset = _sync_graph(repo_path, store, datetime.now(timezone.utc), depth_cap, branch)
     finally:
         if owns_store and isinstance(store, SQLiteRepoGraphStore):
             store.close()
@@ -297,6 +313,7 @@ def analyze_git(
     *,
     store: RepoGraphStore | None = None,
     depth_cap: int | None = None,
+    branch: str | None = None,
 ) -> dict:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -312,7 +329,7 @@ def analyze_git(
     owns_store = store is None
     store = store or default_store(repo_path)
     try:
-        snapshot, was_full_rebuild = _sync_graph(repo_path, store, now, depth_cap)
+        snapshot, was_full_rebuild = _sync_graph(repo_path, store, now, depth_cap, branch)
     finally:
         if owns_store and isinstance(store, SQLiteRepoGraphStore):
             store.close()
