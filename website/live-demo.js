@@ -18,6 +18,21 @@ function setStatus(message, isError) {
   el.classList.toggle("is-error", Boolean(isError));
 }
 
+function queueStatusMessage(body) {
+  // Only one worker runs demo scans (see demo_scan_worker.py) - without
+  // this, a visitor waiting behind someone else's scan saw the exact same
+  // "scanning" message as the person actually being scanned, with no way
+  // to tell they were just waiting in line.
+  if (body.status === "queued") {
+    const position = body.queue_position;
+    if (position === null || position === undefined || position <= 0) {
+      return "You're next in line - starting shortly...";
+    }
+    return `Waiting in queue - ${position} request${position === 1 ? "" : "s"} ahead of you...`;
+  }
+  return "Scanning your repo in an isolated sandbox...";
+}
+
 function resetButton() {
   const button = document.getElementById("live-demo-submit");
   button.disabled = false;
@@ -81,7 +96,7 @@ async function pollJob(jobId) {
     resetButton();
     return;
   }
-  setStatus("Scanning your repo in an isolated sandbox...");
+  setStatus(queueStatusMessage(body));
   setTimeout(() => pollJob(jobId), POLL_INTERVAL_MS);
 }
 
@@ -117,7 +132,6 @@ async function handleSubmit(event) {
   }
 
   button.textContent = "Scanning...";
-  setStatus("Scanning your repo in an isolated sandbox...");
   pollJob(body.job_id);
 }
 
