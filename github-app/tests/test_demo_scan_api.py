@@ -296,3 +296,27 @@ async def test_get_status_returns_pending_status_while_running(pool, monkeypatch
         response = await client.get("/v1/demo-scan/demo-job-123")
     assert response.status_code == 200
     assert response.json() == {"status": "started"}
+
+
+@pytest.mark.asyncio
+async def test_get_status_includes_queue_position_while_queued(pool, monkeypatch):
+    # A visitor waiting behind someone else's scan must be told they're
+    # queued (and roughly how long the wait is), not shown the same message
+    # as the person actually being scanned.
+    fake_job = MagicMock(
+        origin="demo_scan",
+        func_name="scan_worker.demo_scan.run_demo_scan_job",
+        is_finished=False,
+        is_failed=False,
+    )
+    fake_job.get_status.return_value = "queued"
+    fake_queue = MagicMock()
+    fake_queue.get_job_position.return_value = 2
+    monkeypatch.setattr("app_server.demo_scan_api._fetch_job", lambda job_id, redis_url: fake_job)
+    monkeypatch.setattr("app_server.demo_scan_api._get_queue", lambda redis_url: fake_queue)
+    app.state.db_pool = pool
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/v1/demo-scan/demo-job-123")
+    assert response.status_code == 200
+    assert response.json() == {"status": "queued", "queue_position": 2}
+    fake_queue.get_job_position.assert_called_once_with(fake_job.id)

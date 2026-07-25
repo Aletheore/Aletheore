@@ -173,4 +173,13 @@ async def get_demo_scan_status(job_id: str):
         return {"status": "failed", "detail": _failure_detail(job.exc_info)}
     if job.is_finished:
         return {"status": "finished", "result": job.result}
-    return {"status": job.get_status()}
+
+    status = job.get_status()
+    if status == "queued":
+        # Only one worker consumes this queue (see demo_scan_worker.py), so
+        # without this a visitor waiting behind someone else's scan sees the
+        # same "scanning" message as the person actually being scanned, with
+        # no way to tell they're just waiting in line.
+        queue = _get_queue(settings.redis_url)
+        return {"status": "queued", "queue_position": queue.get_job_position(job.id)}
+    return {"status": status}
