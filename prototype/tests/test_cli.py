@@ -21,6 +21,7 @@ from aletheore.cli import (
     app,
 )
 from aletheore.device_auth import DeviceFlowError
+from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
 from aletheore.report import (
     AmbiguousAdapterError,
     NoAdapterAvailableError,
@@ -472,6 +473,35 @@ def test_main_audit_invokes_audit_flow(tmp_path):
 
     assert result.exit_code == 0
     mock_audit.assert_called_once_with(str(tmp_path), "claude", True, True, True, True)
+
+
+def test_scan_command_reports_git_analysis_error_cleanly(tmp_path):
+    # Found on a real scan of the Linux kernel under a memory-constrained
+    # container: a git subprocess getting OOM-killed used to surface as a
+    # raw, unrelated IndexError traceback instead of a clear message.
+    with patch(
+        "aletheore.cli.scan_repository",
+        side_effect=GitAnalysisError("git log was killed (likely out of memory)"),
+    ):
+        result = runner.invoke(app, ["scan", str(tmp_path)])
+
+    assert result.exit_code == GIT_ANALYSIS_RESOURCE_EXIT_CODE
+    assert "killed" in result.output
+    assert "Traceback" not in result.output
+    assert not isinstance(result.exception, GitAnalysisError)
+
+
+def test_audit_command_bails_out_cleanly_when_scan_hits_git_analysis_error(tmp_path):
+    with patch(
+        "aletheore.cli.scan_repository",
+        side_effect=GitAnalysisError("git log was killed (likely out of memory)"),
+    ):
+        with patch("aletheore.cli.select_adapter") as mock_select_adapter:
+            result = runner.invoke(app, ["audit", str(tmp_path)])
+
+    assert result.exit_code == GIT_ANALYSIS_RESOURCE_EXIT_CODE
+    assert "killed" in result.output
+    mock_select_adapter.assert_not_called()
 
 
 def test_known_adapters_includes_every_provider():

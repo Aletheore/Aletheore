@@ -96,6 +96,21 @@ def test_run_sandboxed_scan_raises_on_nonzero_exit(monkeypatch):
         _run_sandboxed_scan("https://github.com/octocat/Hello-World.git")
 
 
+def test_run_sandboxed_scan_gives_a_specific_message_when_memory_limited(monkeypatch):
+    # Confirmed directly: a full scan of the Linux kernel got OOM-killed
+    # under this same 1GB container limit, and the CLI (via GitAnalysisError)
+    # exits with GIT_ANALYSIS_RESOURCE_EXIT_CODE for exactly this case -
+    # the demo should say so plainly rather than a generic failure message.
+    from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE
+
+    def fake_run(cmd, capture_output, text, timeout):
+        return subprocess.CompletedProcess(cmd, returncode=GIT_ANALYSIS_RESOURCE_EXIT_CODE, stdout="", stderr="")
+
+    monkeypatch.setattr("scan_worker.demo_scan.subprocess.run", fake_run)
+    with pytest.raises(DemoScanError, match="pip install aletheore"):
+        _run_sandboxed_scan("https://github.com/octocat/Hello-World.git")
+
+
 def test_run_sandboxed_scan_raises_on_non_json_stdout(monkeypatch):
     def fake_run(cmd, capture_output, text, timeout):
         return subprocess.CompletedProcess(cmd, returncode=0, stdout="not json", stderr="")

@@ -28,6 +28,7 @@ from aletheore.adapters.opencode import OpenCodeAdapter
 from aletheore.credentials import get_api_key
 from aletheore.device_auth import infer_repo_full_name_from_cwd_git_remote
 from aletheore.evidence import scan_repository, write_evidence
+from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
 from aletheore.managed_audit_client import ManagedAuditError, run_managed_audit_request
@@ -221,14 +222,18 @@ def _scan(
 ) -> tuple[int, dict, Path]:
     repo = Path(repo_path).resolve()
     console.print(f"Scanning {repo}...")
-    evidence = scan_repository(
-        repo,
-        check_vulnerabilities=check_vulnerabilities,
-        scan_git_history=scan_git_history,
-        check_licenses=check_licenses,
-        map_endpoints=map_endpoints,
-        progress=_make_progress_printer(),
-    )
+    try:
+        evidence = scan_repository(
+            repo,
+            check_vulnerabilities=check_vulnerabilities,
+            scan_git_history=scan_git_history,
+            check_licenses=check_licenses,
+            map_endpoints=map_endpoints,
+            progress=_make_progress_printer(),
+        )
+    except GitAnalysisError as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
+        return GIT_ANALYSIS_RESOURCE_EXIT_CODE, {}, repo
     evidence_path = write_evidence(evidence, repo)
     console.print(f"[green]Evidence written to[/green] {evidence_path}")
     snapshot_path = save_snapshot(evidence, repo)
@@ -244,9 +249,11 @@ def _audit(
     check_licenses: bool = True,
     map_endpoints: bool = True,
 ) -> int:
-    _exit_code, _evidence, evidence_path = _scan(
+    scan_exit_code, _evidence, evidence_path = _scan(
         repo_path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints
     )
+    if scan_exit_code != 0:
+        return scan_exit_code
     repo = Path(repo_path).resolve()
 
     try:
@@ -296,13 +303,15 @@ def _managed_audit(
         console.print("[bold red]error:[/bold red] no managed-audit token available")
         return 1
 
-    _exit_code, evidence, evidence_path = _scan(
+    scan_exit_code, evidence, evidence_path = _scan(
         repo_path,
         check_vulnerabilities,
         scan_git_history,
         check_licenses,
         map_endpoints,
     )
+    if scan_exit_code != 0:
+        return scan_exit_code
     repo = Path(repo_path).resolve()
     repo_full_name = infer_repo_full_name_from_cwd_git_remote(cwd=str(repo))
 

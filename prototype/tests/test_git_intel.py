@@ -3,7 +3,11 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from aletheore.git_intel.analyzer import analyze_git, compute_hotspots
+from unittest.mock import patch
+
+import pytest
+
+from aletheore.git_intel.analyzer import GitAnalysisError, analyze_git, compute_hotspots
 
 
 def run(repo: Path, *args: str):
@@ -173,6 +177,54 @@ def test_analyze_git_survives_non_utf8_author_name(tmp_path):
     assert result["available"] is True
     assert result["ownership"][0]["email"] == "old@example.com"
     assert result["ownership"][0]["commit_count"] == 1
+
+
+def _fail_only_on_git_log(returncode: int):
+    # _has_commits() (rev-parse/rev-list) must keep succeeding so analyze_git
+    # actually reaches the code path under test, rather than short-circuiting
+    # to {"available": False} the moment _run_git is patched to fail broadly.
+    def side_effect(repo_path, *args):
+        if args and args[0] == "log":
+            return subprocess.CompletedProcess(args=["git", *args], returncode=returncode, stdout="", stderr="")
+        if args == ("rev-parse", "--git-dir"):
+            return subprocess.CompletedProcess(args=["git", *args], returncode=0, stdout=".git\n", stderr="")
+        if args == ("rev-list", "-1", "HEAD"):
+            return subprocess.CompletedProcess(args=["git", *args], returncode=0, stdout="abc123\n", stderr="")
+        if args == ("rev-list", "--count", "HEAD"):
+            return subprocess.CompletedProcess(args=["git", *args], returncode=0, stdout="5\n", stderr="")
+        return subprocess.CompletedProcess(args=["git", *args], returncode=0, stdout="", stderr="")
+
+    return side_effect
+
+
+def test_analyze_git_raises_clear_error_when_git_log_is_killed(tmp_path):
+    # Confirmed directly: a full scan of torvalds/linux under a 1GB memory
+    # cgroup got OOM-killed here, and the OS reports a signal-killed process
+    # via a negative returncode (Python's documented convention) - this used
+    # to surface downstream as an unrelated, confusing IndexError instead of
+    # a clear "this failed, likely out of memory" signal.
+    repo = make_git_repo(tmp_path)
+
+    with patch("aletheore.git_intel.analyzer._run_git", side_effect=_fail_only_on_git_log(-9)):
+        with pytest.raises(GitAnalysisError, match="killed"):
+            analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+
+
+def test_compute_hotspots_raises_clear_error_when_git_log_is_killed(tmp_path):
+    repo = make_git_repo(tmp_path)
+    killed = subprocess.CompletedProcess(args=["git", "log"], returncode=-9, stdout="", stderr="")
+
+    with patch("aletheore.git_intel.analyzer._run_git", return_value=killed):
+        with pytest.raises(GitAnalysisError, match="killed"):
+            compute_hotspots(repo, modules=[])
+
+
+def test_analyze_git_raises_clear_error_on_non_signal_git_failure(tmp_path):
+    repo = make_git_repo(tmp_path)
+
+    with patch("aletheore.git_intel.analyzer._run_git", side_effect=_fail_only_on_git_log(128)):
+        with pytest.raises(GitAnalysisError, match="exit code 128"):
+            analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
 
 
 def test_analyze_git_ahead_behind_main(tmp_path):
