@@ -15,6 +15,8 @@ import logging
 import subprocess
 import uuid
 
+from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE
+
 logger = logging.getLogger(__name__)
 
 DEMO_SANDBOX_IMAGE = "aletheore-demo-sandbox:latest"
@@ -58,6 +60,19 @@ def _run_sandboxed_scan(repo_url: str) -> dict:
         # timeout using resources or holding the untrusted repo on disk.
         subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
         raise DemoScanError("scan timed out") from exc
+
+    if result.returncode == GIT_ANALYSIS_RESOURCE_EXIT_CODE:
+        # Confirmed directly: a full scan of the Linux kernel got OOM-killed
+        # under this same 1GB container limit. The demo's own 400MB repo-size
+        # cap makes this rare (400MB needs a small fraction of the memory
+        # Linux's 8.2GB needed), but a pathologically dense repo could still
+        # hit it - when it does, say so plainly instead of a generic failure.
+        logger.info("demo scan hit the memory limit for %s", repo_url)
+        raise DemoScanError(
+            "this repo needs more memory to scan than the live demo allows - install the "
+            "free CLI (`pip install aletheore`) and run `aletheore scan` locally, or "
+            "connect via MCP, with no size limit"
+        )
 
     if result.returncode != 0:
         logger.warning(

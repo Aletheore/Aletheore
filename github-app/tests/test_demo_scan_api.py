@@ -210,13 +210,75 @@ async def test_get_status_returns_failed(pool, monkeypatch):
         func_name="scan_worker.demo_scan.run_demo_scan_job",
         is_finished=False,
         is_failed=True,
+        exc_info=None,
     )
     monkeypatch.setattr("app_server.demo_scan_api._fetch_job", lambda job_id, redis_url: fake_job)
     app.state.db_pool = pool
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/v1/demo-scan/demo-job-123")
     assert response.status_code == 200
-    assert response.json()["status"] == "failed"
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["detail"] == "scan failed - the repo may be invalid, private, or too large"
+
+
+@pytest.mark.asyncio
+async def test_get_status_surfaces_the_demo_scan_error_message(pool, monkeypatch):
+    # A public visitor should see WHY their scan failed when it's our own
+    # deliberate, user-facing DemoScanError (e.g. "too large for the live
+    # demo, install the CLI") - not the generic catch-all message.
+    exc_info = (
+        "Traceback (most recent call last):\n"
+        '  File "job.py", line 1, in run\n'
+        "    raise DemoScanError(msg)\n"
+        "scan_worker.demo_scan.DemoScanError: this repo needs more memory to scan "
+        "than the live demo allows - install the free CLI (`pip install aletheore`)\n"
+    )
+    fake_job = MagicMock(
+        origin="demo_scan",
+        func_name="scan_worker.demo_scan.run_demo_scan_job",
+        is_finished=False,
+        is_failed=True,
+        exc_info=exc_info,
+    )
+    monkeypatch.setattr("app_server.demo_scan_api._fetch_job", lambda job_id, redis_url: fake_job)
+    app.state.db_pool = pool
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/v1/demo-scan/demo-job-123")
+    assert response.status_code == 200
+    detail = response.json()["detail"]
+    assert "pip install aletheore" in detail
+    assert "Traceback" not in detail
+
+
+@pytest.mark.asyncio
+async def test_get_status_never_leaks_an_unexpected_exception_to_the_visitor(pool, monkeypatch):
+    # Any OTHER exception type (a real bug, not our own deliberate
+    # DemoScanError) must fall back to the generic message - never show
+    # internal implementation details on a public, unauthenticated endpoint.
+    exc_info = (
+        "Traceback (most recent call last):\n"
+        '  File "job.py", line 42, in run\n'
+        "    conn.execute(query)\n"
+        "psycopg.OperationalError: connection to server failed: FATAL: password "
+        "authentication failed for user \"internal_svc\"\n"
+    )
+    fake_job = MagicMock(
+        origin="demo_scan",
+        func_name="scan_worker.demo_scan.run_demo_scan_job",
+        is_finished=False,
+        is_failed=True,
+        exc_info=exc_info,
+    )
+    monkeypatch.setattr("app_server.demo_scan_api._fetch_job", lambda job_id, redis_url: fake_job)
+    app.state.db_pool = pool
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/v1/demo-scan/demo-job-123")
+    assert response.status_code == 200
+    detail = response.json()["detail"]
+    assert detail == "scan failed - the repo may be invalid, private, or too large"
+    assert "internal_svc" not in detail
+    assert "psycopg" not in detail
 
 
 @pytest.mark.asyncio

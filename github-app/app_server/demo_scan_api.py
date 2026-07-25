@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 DEMO_SCAN_QUEUE_NAME = "demo_scan"
 DEMO_SCAN_JOB_FUNCTION = "scan_worker.demo_scan.run_demo_scan_job"
 DEMO_SCAN_COOLDOWN_SECONDS = 20 * 60  # ~3 runs/hour per visitor
-DEMO_SCAN_MAX_QUEUE_DEPTH = 4  # queued + running, matches 2 dedicated workers
+DEMO_SCAN_MAX_QUEUE_DEPTH = 4  # queued + running, ahead of the single demo-scan-worker
 DEMO_SCAN_JOB_TIMEOUT_SECONDS = 120
 DEMO_SCAN_RESULT_TTL_SECONDS = 900
 
@@ -52,6 +52,31 @@ def _fetch_job(job_id: str, redis_url: str):
     from rq.job import Job
 
     return Job.fetch(job_id, connection=Redis.from_url(redis_url))
+
+
+_GENERIC_FAILURE_DETAIL = "scan failed - the repo may be invalid, private, or too large"
+
+
+def _failure_detail(exc_info: str | None) -> str:
+    # RQ only stores the failure as a formatted traceback string, no
+    # structured exception object - but that string's own last non-empty
+    # line is always "<ExceptionClassName>: <message>" (Python's own
+    # traceback format), so this reliably recovers just the message for our
+    # own deliberately-raised, user-facing DemoScanError. Anything else
+    # (a real bug, an unexpected exception type) falls back to the generic
+    # message rather than ever showing internal details to a public visitor.
+    if not exc_info:
+        return _GENERIC_FAILURE_DETAIL
+    lines = [line for line in exc_info.strip().splitlines() if line.strip()]
+    if not lines:
+        return _GENERIC_FAILURE_DETAIL
+    last_line = lines[-1]
+    prefix = "scan_worker.demo_scan.DemoScanError: "
+    if last_line.startswith(prefix):
+        return last_line[len(prefix):]
+    if last_line.startswith("DemoScanError: "):
+        return last_line[len("DemoScanError: "):]
+    return _GENERIC_FAILURE_DETAIL
 
 
 def _check_repo_size(owner: str, repo: str, token: str | None) -> None:
@@ -145,7 +170,7 @@ async def get_demo_scan_status(job_id: str):
         raise HTTPException(status_code=404, detail="job not found")
 
     if job.is_failed:
-        return {"status": "failed", "detail": "scan failed - the repo may be invalid, private, or too large"}
+        return {"status": "failed", "detail": _failure_detail(job.exc_info)}
     if job.is_finished:
         return {"status": "finished", "result": job.result}
     return {"status": job.get_status()}

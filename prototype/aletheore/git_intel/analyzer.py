@@ -5,6 +5,23 @@ from pathlib import Path
 MASS_COMMIT_FILE_THRESHOLD = 50
 HOTSPOT_LIMIT = 30
 
+# Distinct from the generic exit code 1 other scan failures use, so callers
+# that only see a subprocess exit code (scan_worker/jobs.py, demo_scan.py)
+# can tell "the repo is likely too large for the memory available" apart
+# from "something else went wrong" without parsing stderr text.
+GIT_ANALYSIS_RESOURCE_EXIT_CODE = 2
+
+
+class GitAnalysisError(RuntimeError):
+    """A git subprocess this module depends on failed or was killed - most
+    commonly the OS OOM killer on a repository whose history is too large
+    to walk in the memory available (confirmed directly: a full scan of
+    torvalds/linux under a 1GB cgroup limit got OOM-killed here). Raised
+    instead of letting execution continue with truncated/empty output,
+    which previously surfaced many call sites downstream as a confusing,
+    unrelated IndexError/ValueError instead of one clear signal.
+    """
+
 
 def _run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
     # errors="ignore" (matching secrets.py's git-log subprocess) - real commit
@@ -20,6 +37,23 @@ def _run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
         text=True,
         errors="ignore",
     )
+
+
+def _run_git_or_raise(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
+    # For call sites past _has_commits() that assume success and parse the
+    # output unconditionally - a negative returncode means the process was
+    # killed by a signal (subprocess.run's documented convention), which for
+    # a `git log` over a huge history is almost always the OOM killer.
+    result = _run_git(repo_path, *args)
+    if result.returncode != 0:
+        command = " ".join(args)
+        if result.returncode < 0:
+            raise GitAnalysisError(
+                f"git {command} was killed (likely out of memory) - this repository's "
+                "history may be too large to analyze with the memory available"
+            )
+        raise GitAnalysisError(f"git {command} failed with exit code {result.returncode}")
+    return result
 
 
 def _has_commits(repo_path: Path) -> bool:
@@ -98,7 +132,7 @@ def _parse_branches(repo_path: Path, now: datetime) -> list[dict]:
 
 
 def _commit_cadence(repo_path: Path, now: datetime) -> dict:
-    result = _run_git(repo_path, "log", "--format=%ad", "--date=iso-strict", "HEAD")
+    result = _run_git_or_raise(repo_path, "log", "--format=%ad", "--date=iso-strict", "HEAD")
     dates = [datetime.fromisoformat(line) for line in result.stdout.strip().splitlines() if line]
     if not dates:
         return {"weekly_counts": [], "trend": "flat", "most_recent_week_partial": False}
@@ -137,7 +171,7 @@ def _commit_cadence(repo_path: Path, now: datetime) -> dict:
 
 
 def _ownership(repo_path: Path) -> list[dict]:
-    result = _run_git(repo_path, "log", "--format=%an\x1f%ae", "HEAD")
+    result = _run_git_or_raise(repo_path, "log", "--format=%an\x1f%ae", "HEAD")
     entries = [
         line.split("\x1f") for line in result.stdout.strip().splitlines() if line
     ]
@@ -160,8 +194,8 @@ def _ownership(repo_path: Path) -> list[dict]:
 
 
 def _commit_file_lists(repo_path: Path) -> list[list[str]]:
-    result = _run_git(repo_path, "log", "--format=%x00", "--name-only", "HEAD")
-    prefix_result = _run_git(repo_path, "rev-parse", "--show-prefix")
+    result = _run_git_or_raise(repo_path, "log", "--format=%x00", "--name-only", "HEAD")
+    prefix_result = _run_git_or_raise(repo_path, "rev-parse", "--show-prefix")
     prefix = prefix_result.stdout.strip()
     commits: list[list[str]] = []
     current: list[str] = []
@@ -225,10 +259,10 @@ def analyze_git(repo_path: Path, now: datetime | None = None) -> dict:
     if not _has_commits(repo_path):
         return {"available": False}
 
-    total_commits_result = _run_git(repo_path, "rev-list", "--count", "HEAD")
+    total_commits_result = _run_git_or_raise(repo_path, "rev-list", "--count", "HEAD")
     total_commits = int(total_commits_result.stdout.strip())
 
-    first_commit_result = _run_git(
+    first_commit_result = _run_git_or_raise(
         repo_path, "log", "--reverse", "--format=%ad", "--date=iso-strict", "HEAD"
     )
     first_commit_line = first_commit_result.stdout.strip().splitlines()[0]
