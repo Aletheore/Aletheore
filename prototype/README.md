@@ -78,14 +78,14 @@ which has no such feature) resolved nothing at all until this was accounted for.
 
 ## Setup
 
-Not yet on PyPI (the packaging and a tag-triggered publish workflow exist, but nothing has
-been published - see `../.github/workflows/publish-pypi.yml`). Once it is:
+Published on PyPI (`pypi.org/project/aletheore`), released via a tag-triggered publish
+workflow (`../.github/workflows/publish-pypi.yml`):
 
 ```bash
 pipx install aletheore   # or: pip install aletheore
 ```
 
-Until then, install from source:
+To work on aletheore itself, install from source instead:
 
 ```bash
 cd prototype
@@ -441,7 +441,7 @@ It only ever calls `aletheore scan` and `aletheore diff`, matching the reasoning
 something fast and deterministic, not a full agent-driven audit.
 
 ```yaml
-- uses: Aletheore/Aletheore@master    # pin to a tagged release once one exists past 0.1.0
+- uses: Aletheore/Aletheore@v0.5.0    # pin to a tagged release, not @master
   with:
     fail-on-new-secrets: true              # exit 1 if a new real (non-placeholder) secret appears
     fail-on-new-vulnerabilities: true      # exit 1 if a new dependency vulnerability appears
