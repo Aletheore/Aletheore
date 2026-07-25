@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -43,6 +44,33 @@ def _github_oauth_http_client() -> httpx.Client:
 
 def _github_http_client() -> httpx.Client:
     return httpx.Client(base_url="https://api.github.com")
+
+
+def _exchange_code_and_fetch_user(code: str, client_id: str, client_secret: str) -> tuple[str, dict]:
+    # Synchronous httpx.Client calls, run off the event loop via
+    # asyncio.to_thread by the caller - this whole function otherwise blocks
+    # every other request the server is handling for its duration.
+    token_response = _github_oauth_http_client().post(
+        "/login/oauth/access_token",
+        headers={"Accept": "application/json"},
+        data={"client_id": client_id, "client_secret": client_secret, "code": code},
+    )
+    token_response.raise_for_status()
+    access_token = token_response.json()["access_token"]
+
+    user_response = _github_http_client().get(
+        "/user",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    user_response.raise_for_status()
+    return access_token, user_response.json()
+
+
+def _fetch_installation_details(installation_id: int, app_jwt: str) -> dict:
+    return get_installation_details(installation_id, app_jwt, _github_http_client())
 
 
 def sign_session_id(session_id: str, secret: str) -> str:
@@ -142,27 +170,9 @@ async def callback(code: str, request: Request, state: str | None = None, instal
         if not expected_state or not state or not hmac.compare_digest(expected_state, state):
             raise HTTPException(status_code=400, detail="invalid oauth state")
 
-    token_response = _github_oauth_http_client().post(
-        "/login/oauth/access_token",
-        headers={"Accept": "application/json"},
-        data={
-            "client_id": settings.github_client_id,
-            "client_secret": settings.github_client_secret,
-            "code": code,
-        },
+    access_token, user = await asyncio.to_thread(
+        _exchange_code_and_fetch_user, code, settings.github_client_id, settings.github_client_secret
     )
-    token_response.raise_for_status()
-    access_token = token_response.json()["access_token"]
-
-    user_response = _github_http_client().get(
-        "/user",
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/vnd.github+json",
-        },
-    )
-    user_response.raise_for_status()
-    user = user_response.json()
 
     session_id = secrets.token_urlsafe(32)
     await create_session(
@@ -184,7 +194,7 @@ async def callback(code: str, request: Request, state: str | None = None, instal
         # the normal (slightly delayed) path instead of breaking sign-in.
         try:
             app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
-            installation = get_installation_details(installation_id, app_jwt, _github_http_client())
+            installation = await asyncio.to_thread(_fetch_installation_details, installation_id, app_jwt)
             await upsert_installation(
                 request.app.state.db_pool, installation_id, installation["account"]["login"]
             )
