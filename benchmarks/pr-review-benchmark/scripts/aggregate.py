@@ -23,15 +23,25 @@ def load_llm_scores(results_dir: Path) -> dict:
     return scores
 
 
-def build_scorecard(manual_scores: dict, llm_scores: dict) -> dict:
+def load_case_label_maps(results_dir: Path) -> dict:
+    maps = {}
+    for path in sorted((Path(results_dir) / "sealed").glob("*.json")):
+        maps[path.stem] = json.loads(path.read_text())
+    return maps
+
+
+def build_scorecard(manual_scores: dict, llm_scores: dict, case_label_maps: dict) -> dict:
     per_tool = {}
     agreement_counts = {"recall": 0, "actionability": 0}
     compared_counts = {"recall": 0, "actionability": 0}
 
     for case_id, case_scores in manual_scores.items():
         llm_case_scores = llm_scores.get(case_id, {})
+        label_to_tool = case_label_maps.get(case_id, {})
         for label, manual in case_scores.items():
-            bucket = per_tool.setdefault(label, {
+            # Resolve anonymized label to real tool name, or fall back to label itself
+            real_tool = label_to_tool.get(label, label)
+            bucket = per_tool.setdefault(real_tool, {
                 "hit": 0, "partial": 0, "miss": 0,
                 "false_positive_count": 0,
                 "actionability_total": 0, "actionability_count": 0,
