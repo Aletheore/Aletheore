@@ -62,6 +62,11 @@ def test_run_migrations_applies_all_files_to_a_fresh_database(fresh_database):
         "llm_spend",
         "flash_review_state",
         "schema_migrations",
+        "code_graph_sync_state",
+        "code_graph_files",
+        "code_graph_symbols",
+        "code_graph_dependency_edges",
+        "code_graph_endpoints",
     ):
         assert expected in tables
 
