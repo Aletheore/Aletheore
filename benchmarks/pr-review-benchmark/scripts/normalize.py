@@ -5,16 +5,21 @@ import re
 from aletheore.citation_verifier import extract_citations
 
 
-def normalize_aletheore(report_text: str) -> list[dict]:
+def normalize_aletheore(raw_comments: list[dict]) -> list[dict]:
+    """`raw_comments` is a list of GitHub PR-comment dicts (already filtered
+    to aletheore[bot] by scripts/adapters.py's aletheore_adapter) posted by
+    Aletheore's hosted Flash Review -- not a whole-repo CLI `audit` report."""
     findings = []
-    for paragraph in report_text.split("\n\n"):
-        for citation in extract_citations(paragraph):
-            findings.append({
-                "file": citation["file"],
-                "line": citation["line"],
-                "message": paragraph.strip(),
-                "severity": None,
-            })
+    for comment in raw_comments:
+        body = comment.get("body", "")
+        for paragraph in body.split("\n\n"):
+            for citation in extract_citations(paragraph):
+                findings.append({
+                    "file": citation["file"],
+                    "line": citation["line"],
+                    "message": paragraph.strip(),
+                    "severity": None,
+                })
     return findings
 
 
@@ -60,14 +65,12 @@ def normalize_pr_agent(raw: dict) -> list[dict]:
 
 
 # DeepSource's GitHub App posts findings as ordinary GitHub PR *review*
-# comments (path/line/body) -- the same shape scripts/normalize.py's
-# normalize_coderabbit already consumes -- not via a separate run_id-keyed
-# issues API returning {"issues": [...]}. Confirmed against a real DeepSource
-# run on the scratch repo on 2026-07-26: both DeepSource's and CodeRabbit's
-# comments arrive through `GET /repos/.../pulls/<n>/comments`/issue comments,
-# distinguished only by `user.login`. The finding title and severity are
-# embedded inside the HTML comment body rather than being separate JSON
-# fields.
+# comments (path/line/body), not via a separate run_id-keyed issues API
+# returning {"issues": [...]}. Confirmed against a real DeepSource run on
+# the scratch repo on 2026-07-26: comments arrive through
+# `GET /repos/.../pulls/<n>/comments`, distinguished by `user.login`. The
+# finding title and severity are embedded inside the HTML comment body
+# rather than being separate JSON fields.
 _DEEPSOURCE_SEVERITY_PATTERN = re.compile(r"severity_indicator_(\w+)\.svg")
 _DEEPSOURCE_TITLE_PATTERN = re.compile(r"<h3>.*?</picture>(.*?)</h3>", re.DOTALL)
 
@@ -89,15 +92,3 @@ def normalize_deepsource(raw_comments: list[dict]) -> list[dict]:
             "severity": severity_match.group(1) if severity_match else None,
         })
     return findings
-
-
-def normalize_coderabbit(raw_comments: list[dict]) -> list[dict]:
-    return [
-        {
-            "file": comment.get("path"),
-            "line": comment.get("line") or comment.get("original_line"),
-            "message": comment.get("body", ""),
-            "severity": None,
-        }
-        for comment in raw_comments
-    ]

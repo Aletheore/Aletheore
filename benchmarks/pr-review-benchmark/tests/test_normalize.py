@@ -2,17 +2,26 @@ from scripts.normalize import (
     normalize_aletheore,
     normalize_pr_agent,
     normalize_deepsource,
-    normalize_coderabbit,
 )
 
 
-def test_normalize_aletheore_extracts_citation_and_paragraph_as_message():
-    report = (
-        "This endpoint has no auth check at `app/routes.py:42`, which allows "
-        "unauthenticated access.\n\n"
-        "Unrelated paragraph with no citation."
-    )
-    findings = normalize_aletheore(report)
+def test_normalize_aletheore_extracts_citations_from_bot_pr_comments():
+    # Aletheore's hosted Flash Review posts findings as a GitHub PR comment
+    # from aletheore[bot] (fetched and bot-filtered the same way as
+    # DeepSource's, in scripts/adapters.py), not a whole CLI `audit` report.
+    # As of 2026-07-26 real PRs have only produced a scan-timeout error
+    # comment from this bot, not yet a successful finding-bearing one --
+    # this citation-extraction approach (carried over from the old
+    # whole-report-text parsing) needs re-verification against a real
+    # successful comment before it's fully trusted.
+    raw_comments = [{
+        "body": (
+            "This endpoint has no auth check at `app/routes.py:42`, which allows "
+            "unauthenticated access.\n\n"
+            "Unrelated paragraph with no citation."
+        ),
+    }]
+    findings = normalize_aletheore(raw_comments)
     assert findings == [{
         "file": "app/routes.py",
         "line": 42,
@@ -76,8 +85,8 @@ def test_normalize_pr_agent_leaves_file_unattributed_for_multi_file_prs():
 
 def test_normalize_deepsource_reads_real_github_pr_review_comments():
     # DeepSource's GitHub App posts findings as ordinary GitHub PR *review*
-    # comments (path/line/body) -- the same shape CodeRabbit uses -- not via
-    # a separate run_id-keyed issues API returning {"issues": [...]}. This
+    # comments (path/line/body), not via a separate run_id-keyed issues API
+    # returning {"issues": [...]}. This
     # fixture is a trimmed real excerpt captured 2026-07-26 from
     # https://github.com/ArihantK15/proctor-browser/pull/214 (case
     # 016-flask-sql-injection-user-lookup); the finding title and severity
@@ -116,18 +125,3 @@ def test_normalize_deepsource_falls_back_to_original_line():
     assert findings[0]["line"] == 9
 
 
-def test_normalize_coderabbit_reads_github_review_comments():
-    raw_comments = [{"path": "app.py", "line": 5, "body": "Missing null check."}]
-    findings = normalize_coderabbit(raw_comments)
-    assert findings == [{
-        "file": "app.py",
-        "line": 5,
-        "message": "Missing null check.",
-        "severity": None,
-    }]
-
-
-def test_normalize_coderabbit_falls_back_to_original_line():
-    raw_comments = [{"path": "app.py", "original_line": 9, "body": "Stale comment."}]
-    findings = normalize_coderabbit(raw_comments)
-    assert findings[0]["line"] == 9
