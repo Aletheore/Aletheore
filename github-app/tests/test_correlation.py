@@ -122,8 +122,8 @@ async def test_commit_attachment_from_graph_uses_most_recent_commit(pool, monkey
         "unused",
         GRAPH_BRANCH,
         [
-            CommitTouch("s1", "Alice", "a@example.com", datetime(2026, 6, 1), ("app/handler.py",)),
-            CommitTouch("s2", "Bob", "b@example.com", datetime(2026, 6, 8), ("app/handler.py",)),
+            CommitTouch("s1", "Alice", "a@example.com", datetime(2026, 6, 1), ("app/handler.py",), "initial handler"),
+            CommitTouch("s2", "Bob", "b@example.com", datetime(2026, 6, 8), ("app/handler.py",), "fix null check"),
         ],
         new_sync_sha="s2",
         new_sync_at=datetime(2026, 6, 8),
@@ -136,6 +136,7 @@ async def test_commit_attachment_from_graph_uses_most_recent_commit(pool, monkey
     assert attachment["kind"] == "commit"
     assert attachment["commit"]["sha"] == "s2"
     assert attachment["commit"]["author_name"] == "Bob"
+    assert attachment["commit"]["subject"] == "fix null check"
 
 
 @pytest.mark.asyncio

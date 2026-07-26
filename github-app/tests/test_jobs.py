@@ -1390,7 +1390,7 @@ def test_sweep_attaches_recent_commit_on_confirmed_down(monkeypatch):
             "symbol": None,
             "owner": None,
             "owner_status": "unavailable",
-            "commit": {"sha": "abc123def456", "author_name": "Ada"},
+            "commit": {"sha": "abc123def456", "author_name": "Ada", "subject": "touched the handler"},
             "commit_status": "available",
             "dependency": None,
             "dependency_status": "unavailable",
@@ -1407,11 +1407,8 @@ def test_sweep_attaches_recent_commit_on_confirmed_down(monkeypatch):
     run_health_check_sweep_job()
 
     assert len(sent) == 1
-    # No commit subject: the persisted graph (RecentCommit) captures
-    # sha/author/date but never a commit message - see the module-level
-    # note on _commit_attachment_from_graph for why this is a deliberate,
-    # disclosed trade-off, not a bug.
     assert "Recent commit: `abc123de`" in sent[0]["text"]
+    assert "touched the handler" in sent[0]["text"]
 
 
 def test_sweep_alerts_without_commit_when_correlation_fails(monkeypatch):

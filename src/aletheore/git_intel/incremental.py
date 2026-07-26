@@ -86,7 +86,7 @@ def stream_commit_touches(
     prefix = _scan_root_prefix(repo_path)
     args = [
         "log",
-        f"--format={_RECORD_SEP_FORMAT}%H{_FIELD_SEP}%an{_FIELD_SEP}%ae{_FIELD_SEP}%ad",
+        f"--format={_RECORD_SEP_FORMAT}%H{_FIELD_SEP}%an{_FIELD_SEP}%ae{_FIELD_SEP}%ad{_FIELD_SEP}%s",
         "--date=iso-strict",
         "--name-only",
     ]
@@ -105,14 +105,19 @@ def stream_commit_touches(
     assert proc.stdout is not None
 
     pending_header: tuple[str, str, str, datetime] | None = None
+    pending_subject: str = ""
     pending_files: list[str] = []
     try:
         for raw_line in proc.stdout:
             line = raw_line.rstrip("\n")
             if line.startswith(_RECORD_SEP):
                 if pending_header is not None:
-                    yield CommitTouch(*pending_header, files=tuple(pending_files))
-                sha, name, email, date_str = line[1:].split(_FIELD_SEP)
+                    yield CommitTouch(*pending_header, files=tuple(pending_files), subject=pending_subject)
+                # maxsplit=4: a subject line containing a literal field-sep
+                # byte (vanishingly unlikely - it's a control character, not
+                # something a real commit message would contain) lands
+                # whole in the subject rather than breaking the unpack.
+                sha, name, email, date_str, pending_subject = line[1:].split(_FIELD_SEP, 4)
                 pending_header = (sha, name, email, datetime.fromisoformat(date_str))
                 pending_files = []
             elif line.strip():
@@ -124,7 +129,7 @@ def stream_commit_touches(
                 if path:
                     pending_files.append(path)
         if pending_header is not None:
-            yield CommitTouch(*pending_header, files=tuple(pending_files))
+            yield CommitTouch(*pending_header, files=tuple(pending_files), subject=pending_subject)
     finally:
         proc.stdout.close()
         returncode = proc.wait()
@@ -221,7 +226,9 @@ def fold(snapshot: GraphSnapshot, commits: list[CommitTouch]) -> GraphSnapshot:
         cadence[week] = cadence.get(week, 0) + 1
 
         unique_files = sorted(set(commit.files))
-        recent = RecentCommit(commit.sha, commit.author_name, commit.author_email, commit.committed_at)
+        recent = RecentCommit(
+            commit.sha, commit.author_name, commit.author_email, commit.committed_at, commit.subject
+        )
         for path in unique_files:
             churn = file_churn.get(path)
             if churn is None:

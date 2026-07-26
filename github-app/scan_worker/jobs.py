@@ -849,18 +849,12 @@ def _commit_attachment_from_graph(installation_id: int, repo_full_name: str, sou
     # Reads the same persisted, incrementally-synced graph
     # _owner_attachment_from_graph (below) already uses, instead of a live
     # GitHub API call (fetch_recent_commits_for_path) - evidence_git_file_churn
-    # already has this exact data cached from the last scan. Degrades to
-    # None (no commit attachment, not a broken alert) if this repo has no
-    # graph data yet or the database is unreachable - same discipline as
-    # every other attachment in this correlation chain.
-    #
-    # Known, deliberate trade-off: RecentCommit (git_intel/graph_store.py)
-    # captures sha/author/committed_at but never a commit message - the
-    # live API path this replaces did show one ("Recent commit: `abc123`
-    # - fixed the bug"). Slack rendering (slack.py) already treats it as
-    # optional, so this only means a slightly less detailed alert line,
-    # not a broken one. Capturing commit subjects in the persisted graph
-    # is a real, separate follow-up if that detail turns out to matter.
+    # already has this exact data cached from the last scan, including the
+    # commit subject (git_intel/incremental.py's stream_commit_touches
+    # captures %s alongside sha/author/date). Degrades to None (no commit
+    # attachment, not a broken alert) if this repo has no graph data yet
+    # or the database is unreachable - same discipline as every other
+    # attachment in this correlation chain.
     try:
         settings = get_settings()
         store = PostgresRepoGraphStore(settings.database_url, installation_id, repo_full_name)
@@ -876,7 +870,12 @@ def _commit_attachment_from_graph(installation_id: int, repo_full_name: str, sou
     latest = churn.recent_commits[0]
     return normalize_resolution(
         kind="commit",
-        commit={"sha": latest.sha, "author_name": latest.author_name, "author_email": latest.author_email},
+        commit={
+            "sha": latest.sha,
+            "author_name": latest.author_name,
+            "author_email": latest.author_email,
+            "subject": latest.subject,
+        },
         confidence="weak",
     )
 

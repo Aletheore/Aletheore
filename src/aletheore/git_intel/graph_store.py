@@ -33,6 +33,7 @@ class RecentCommit:
     author_name: str
     author_email: str
     committed_at: datetime
+    subject: str = ""
 
 
 @dataclass
@@ -69,6 +70,7 @@ class CommitTouch:
     author_email: str
     committed_at: datetime
     files: tuple[str, ...]
+    subject: str = ""
 
 
 @dataclass
