@@ -203,11 +203,28 @@ def _npm_dependencies(repo_path: Path) -> dict[str, str]:
     return {**data.get("dependencies", {}), **data.get("devDependencies", {})}
 
 
+def _nested_git_roots(repo_path: Path) -> set[Path]:
+    """Directories other than repo_path itself that contain their own `.git`
+    entry (file or directory) - a linked worktree (`git worktree add`) or a
+    submodule checked out the classic way, and therefore a separate git
+    working tree, not this repo's own source. Unlike cache/build dirs, these
+    have no fixed name to add to IGNORED_DIRS - a real scan found one at
+    `.claude/worktrees/<name>/`, doubling every file inside it."""
+    return {
+        git_entry.parent
+        for git_entry in repo_path.rglob(".git")
+        if git_entry.parent != repo_path
+    }
+
+
 def _iter_source_files(repo_path: Path):
+    nested_git_roots = _nested_git_roots(repo_path)
     for path in repo_path.rglob("*"):
         if not path.is_file():
             continue
         if any(part in IGNORED_DIRS for part in path.parts):
+            continue
+        if any(root in path.parents for root in nested_git_roots):
             continue
         yield path
 

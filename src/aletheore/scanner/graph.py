@@ -14,7 +14,7 @@ import tree_sitter_rust as tsrust
 import tree_sitter_typescript as tstypescript
 from tree_sitter import Language, Node, Parser
 
-from aletheore.scanner.detect import IGNORED_DIRS
+from aletheore.scanner.detect import IGNORED_DIRS, _nested_git_roots
 
 PY_LANGUAGE = Language(tspython.language())
 JS_LANGUAGE = Language(tsjavascript.language())
@@ -64,10 +64,13 @@ KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR = {
 
 
 def _iter_source_files(repo_path: Path):
+    nested_git_roots = _nested_git_roots(repo_path)
     for path in sorted(repo_path.rglob("*")):
         if not path.is_file():
             continue
         if any(part in IGNORED_DIRS for part in path.parts):
+            continue
+        if any(root in path.parents for root in nested_git_roots):
             continue
         yield path
 

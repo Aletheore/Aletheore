@@ -5,6 +5,7 @@ import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -24,6 +25,11 @@ from aletheore.vulnerabilities import (
 PYPI_URL_TEMPLATE = "https://pypi.org/pypi/{name}/{version}/json"
 NPM_URL_TEMPLATE = "https://registry.npmjs.org/{name}/{version}"
 DEFAULT_TIMEOUT_SECONDS = 10
+# Each check is one blocking registry HTTP call; a repo with hundreds of
+# pinned dependencies (real case: 441) took 3+ minutes fully serial, enough
+# to blow the hosted worker's per-job timeout on its own. Bounded, not
+# unbounded, so this stays polite to registries under a large repo.
+LICENSE_CHECK_CONCURRENCY = 20
 
 # Same reasoning as vulnerabilities.py: certifi's CA bundle explicitly, since a
 # python.org macOS install commonly has no default CA bundle configured.
@@ -234,6 +240,24 @@ _LICENSE_FETCHERS = {
 }
 
 
+def _fetch_one_license(pin: tuple[str, str, str], timeout: int) -> str | None:
+    name, version, ecosystem = pin
+    try:
+        return _LICENSE_FETCHERS[ecosystem](name, version, timeout)
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        json.JSONDecodeError,
+        ElementTree.ParseError,
+    ):
+        # A single package's registry lookup failing (network hiccup, the
+        # package removed, a malformed response) isn't the same as the whole
+        # check being unreachable - it's reported as an "unknown" finding
+        # rather than silently dropped or failing everything else.
+        return None
+
+
 def check_dependency_licenses(
     repo_path: Path,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
@@ -254,34 +278,29 @@ def check_dependency_licenses(
         return {"checked": True, "reason": None, "repo_license": repo_license, "findings": []}
 
     findings = []
-    for index, (name, version, ecosystem) in enumerate(pins, start=1):
-        if on_progress is not None:
-            on_progress(index, len(pins), name)
-        try:
-            license_text = _LICENSE_FETCHERS[ecosystem](name, version, timeout)
-        except (
-            urllib.error.URLError,
-            TimeoutError,
-            OSError,
-            json.JSONDecodeError,
-            ElementTree.ParseError,
+    # Each registry lookup is an independent blocking HTTP call - a thread
+    # pool overlaps their network wait time instead of paying it serially.
+    # executor.map (not as_completed) preserves pins' original order in the
+    # results regardless of which thread finishes first, so progress
+    # reporting and finding order both stay deterministic.
+    with ThreadPoolExecutor(max_workers=LICENSE_CHECK_CONCURRENCY) as executor:
+        license_texts = executor.map(lambda pin: _fetch_one_license(pin, timeout), pins)
+        for index, ((name, version, ecosystem), license_text) in enumerate(
+            zip(pins, license_texts), start=1
         ):
-            # A single package's registry lookup failing (network hiccup, the
-            # package removed, a malformed response) isn't the same as the whole
-            # check being unreachable - it's reported as an "unknown" finding
-            # rather than silently dropped or failing everything else.
-            license_text = None
+            if on_progress is not None:
+                on_progress(index, len(pins), name)
 
-        category = categorize_license(license_text)
-        if category != "permissive":
-            findings.append(
-                {
-                    "ecosystem": ecosystem,
-                    "package": name,
-                    "installed_version": version,
-                    "license": license_text,
-                    "category": category,
-                }
-            )
+            category = categorize_license(license_text)
+            if category != "permissive":
+                findings.append(
+                    {
+                        "ecosystem": ecosystem,
+                        "package": name,
+                        "installed_version": version,
+                        "license": license_text,
+                        "category": category,
+                    }
+                )
 
     return {"checked": True, "reason": None, "repo_license": repo_license, "findings": findings}

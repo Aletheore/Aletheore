@@ -113,6 +113,149 @@ async def test_list_my_repos_returns_repos_across_administered_installations(poo
 
 
 @pytest.mark.asyncio
+async def test_list_my_repos_includes_uninitialized_repos_with_no_scan_yet(pool, monkeypatch):
+    # A freshly installed (or freshly paid) installation has no repo_history
+    # rows at all until its first scan completes - it must still show up,
+    # not vanish entirely, per the real gap found dogfooding this: a user
+    # paid for their personal-account installation and the dashboard kept
+    # showing nothing for it.
+    await upsert_installation(pool, 801, "some-user")
+    await set_installation_plan(pool, 801, "team")
+
+    monkeypatch.setattr("app_server.dashboard.generate_app_jwt", lambda *a, **k: "fake-jwt")
+
+    async def fake_get_installation_token(installation_id, app_jwt, http_client=None):
+        return "fake-installation-token"
+
+    monkeypatch.setattr("app_server.dashboard.get_installation_token", fake_get_installation_token)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/user/installations":
+            return httpx.Response(200, json={"total_count": 1, "installations": [{"id": 801}]})
+        if request.url.path == "/installation/repositories":
+            return httpx.Response(200, json={
+                "repositories": [{"full_name": "some-user/proctor-browser"}],
+            })
+        raise AssertionError(f"unexpected request: {request.url.path}")
+
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    await create_session(
+        pool, "sess-1", 42, "octocat",
+        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.dashboard._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    app.state.db_pool = pool
+    signed = sign_session_id("sess-1", "test-session-secret")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed}) as client:
+        response = await client.get("/app/repos")
+
+    assert response.status_code == 200
+    repos = response.json()["repos"]
+    assert repos == [{
+        "org": "some-user",
+        "repo": "proctor-browser",
+        "repo_full_name": "some-user/proctor-browser",
+        "plan": "team",
+        "initialized": False,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_list_my_repos_does_not_duplicate_already_scanned_repos(pool, monkeypatch):
+    # A repo that already has a completed scan must not ALSO show up as an
+    # "uninitialized" duplicate just because it's still covered by the
+    # installation's real GitHub repo list.
+    await upsert_installation(pool, 802, "some-user")
+    await insert_repo_history(
+        pool, 802, "some-user/already-scanned", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+
+    monkeypatch.setattr("app_server.dashboard.generate_app_jwt", lambda *a, **k: "fake-jwt")
+
+    async def fake_get_installation_token(installation_id, app_jwt, http_client=None):
+        return "fake-installation-token"
+
+    monkeypatch.setattr("app_server.dashboard.get_installation_token", fake_get_installation_token)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/user/installations":
+            return httpx.Response(200, json={"total_count": 1, "installations": [{"id": 802}]})
+        if request.url.path == "/installation/repositories":
+            return httpx.Response(200, json={
+                "repositories": [{"full_name": "some-user/already-scanned"}],
+            })
+        raise AssertionError(f"unexpected request: {request.url.path}")
+
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    await create_session(
+        pool, "sess-1", 42, "octocat",
+        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.dashboard._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    app.state.db_pool = pool
+    signed = sign_session_id("sess-1", "test-session-secret")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed}) as client:
+        response = await client.get("/app/repos")
+
+    assert response.status_code == 200
+    repos = response.json()["repos"]
+    assert repos == [{
+        "org": "some-user",
+        "repo": "already-scanned",
+        "repo_full_name": "some-user/already-scanned",
+        "plan": "free",
+        "initialized": True,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_list_my_repos_ignores_github_failure_when_fetching_uninitialized_repos(pool, monkeypatch):
+    # If the installation-token exchange or repo listing call fails (rate
+    # limit, revoked installation, transient GitHub outage), a user must
+    # still see their already-scanned repos rather than getting a 502 for
+    # the whole page over a "nice to have" enrichment.
+    await upsert_installation(pool, 803, "some-user")
+
+    monkeypatch.setattr("app_server.dashboard.generate_app_jwt", lambda *a, **k: "fake-jwt")
+
+    async def fake_get_installation_token(installation_id, app_jwt, http_client=None):
+        raise httpx.HTTPStatusError(
+            "boom",
+            request=httpx.Request("POST", "https://api.github.com/x"),
+            response=httpx.Response(403),
+        )
+
+    monkeypatch.setattr("app_server.dashboard.get_installation_token", fake_get_installation_token)
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[803])
+    async with client:
+        response = await client.get("/app/repos")
+
+    assert response.status_code == 200
+    assert response.json()["repos"] == []
+
+
+@pytest.mark.asyncio
 async def test_app_repos_response_is_not_cacheable(pool, monkeypatch):
     # /app/... carries per-installation data (which repos someone
     # administers, at minimum) - a cached copy must never be replayable

@@ -114,6 +114,9 @@ a { color: var(--accent); }
 .picker-plan { display: inline-block; margin-top: 7px; font-size: 11px; font-weight: 500; padding: 2px 9px; border-radius: 99px; background: var(--slate-100); color: var(--slate-600); }
 .picker-plan.paid { background: var(--accent-soft); color: var(--accent-strong); }
 .picker-card-arrow { color: var(--slate-400); font-size: 16px; flex-shrink: 0; }
+.picker-card-pending { cursor: default; }
+.picker-card-pending:hover { border-color: var(--border); box-shadow: var(--shadow-card); transform: none; }
+.picker-pending-note { margin-top: 4px; font-size: 11.5px; color: var(--slate-500); }
 
 /* ---- Shared UI atoms ---- */
 .btn { font-family: var(--font-sans); font-size: 12.5px; font-weight: 500; border-radius: 7px; padding: 7px 12px;
@@ -353,10 +356,19 @@ PICKER_HTML = f"""<!DOCTYPE html>
     const group = document.createElement('div');
     group.className = 'picker-org-group';
     const grid = byOrg[org].map(function (r) {{
+      const planBadge = '<span class="picker-plan' + (r.plan !== 'free' ? ' paid' : '') + '">' + escapeHtml(r.plan) + ' plan</span>';
+      if (r.initialized === false) {{
+        return '<div class="picker-card picker-card-pending">' +
+          '<div class="picker-card-icon"><i class="ti ti-git-branch" aria-hidden="true"></i></div>' +
+          '<div class="picker-card-body"><div class="picker-repo">' + escapeHtml(r.repo) + '</div>' +
+          planBadge +
+          '<div class="picker-pending-note">Initialization required &mdash; waiting for the first scan to complete</div></div>' +
+          '</div>';
+      }}
       return '<a class="picker-card" href="/dashboard/' + encodeURIComponent(r.org) + '/' + encodeURIComponent(r.repo) + '">' +
         '<div class="picker-card-icon"><i class="ti ti-git-branch" aria-hidden="true"></i></div>' +
         '<div class="picker-card-body"><div class="picker-repo">' + escapeHtml(r.repo) + '</div>' +
-        '<span class="picker-plan' + (r.plan !== 'free' ? ' paid' : '') + '">' + escapeHtml(r.plan) + ' plan</span></div>' +
+        planBadge + '</div>' +
         '<i class="ti ti-chevron-right picker-card-arrow" aria-hidden="true"></i></a>';
     }}).join('');
     group.innerHTML = '<div class="picker-org-label">' + escapeHtml(org) + '</div><div class="picker-grid">' + grid + '</div>';

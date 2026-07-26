@@ -5,11 +5,13 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from aletheore.evidence_resolution import resolve_code_evidence
 from app_server.admin import (
     _administered_installation_ids_or_401,
+    _github_http_client,
     _repo_installation_id,
     _require_admin_installation,
     _require_seat_if_paid,
 )
 from app_server.auth import get_current_session
+from app_server.config import get_settings
 from app_server.db import (
     get_installation,
     get_endpoint_health_summary_since,
@@ -21,6 +23,7 @@ from app_server.db import (
     list_repos_for_installations,
     list_wiki_subsystems,
 )
+from app_server.github_auth import generate_app_jwt, get_installation_token
 
 dashboard_router = APIRouter()
 MIN_CHECKS_FOR_STALE_CONFIDENCE = 5
@@ -50,6 +53,59 @@ def find_stale_endpoints(
     return stale
 
 
+async def _uninitialized_repos_for_installation(
+    installation_id: int, plan: str, already_known: set[str]
+) -> list[dict]:
+    """Repos a GitHub App installation covers that have never completed a
+    scan yet. Installing (or paying for) an installation creates no
+    per-repo record by itself - webhooks/installation.py's
+    handle_installation_event only upserts the installations table, and a
+    repo only gets a repo_history row once its first scan actually
+    completes. Without this, a freshly installed or freshly upgraded
+    installation shows nothing at all in "Your repositories" until that
+    first scan finishes (which can take minutes), with no feedback in the
+    meantime - confirmed as a real gap dogfooding this against a live
+    installation.
+
+    Best-effort: this is a page enrichment, not the primary data - ANY
+    failure (a bad/missing app key, a revoked installation, a rate limit, a
+    GitHub outage, a network error) returns an empty list rather than
+    failing the whole page. A user's already-scanned repos must still load
+    even if this best-effort lookup can't run at all.
+    """
+    try:
+        settings = get_settings()
+        app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+        token = await get_installation_token(installation_id, app_jwt)
+        response = _github_http_client().get(
+            "/installation/repositories",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
+        )
+        response.raise_for_status()
+    except Exception:
+        return []
+
+    result = []
+    for repo in response.json().get("repositories", []):
+        full_name = repo["full_name"]
+        if full_name in already_known:
+            continue
+        org, _, repo_name = full_name.partition("/")
+        result.append(
+            {
+                "org": org,
+                "repo": repo_name,
+                "repo_full_name": full_name,
+                "plan": plan,
+                "initialized": False,
+            }
+        )
+    return result
+
+
 @dashboard_router.get("/app/repos")
 async def list_my_repos(request: Request):
     session = await get_current_session(request)
@@ -60,6 +116,7 @@ async def list_my_repos(request: Request):
     pool = request.app.state.db_pool
     repos = await list_repos_for_installations(pool, list(administered_ids))
     result = []
+    known_by_installation: dict[int, set[str]] = {}
     for row in repos:
         # repo_full_name is the source of truth for the org/repo split used
         # in every /app/{org}/{repo} route - account_login is a display
@@ -71,8 +128,20 @@ async def list_my_repos(request: Request):
                 "repo": repo,
                 "repo_full_name": row["repo_full_name"],
                 "plan": row["plan"],
+                "initialized": True,
             }
         )
+        known_by_installation.setdefault(row["installation_id"], set()).add(row["repo_full_name"])
+
+    for installation_id in administered_ids:
+        installation = await get_installation(pool, installation_id)
+        if installation is None:
+            continue
+        known = known_by_installation.get(installation_id, set())
+        result.extend(
+            await _uninitialized_repos_for_installation(installation_id, installation["plan"], known)
+        )
+
     return {"repos": result}
 
 

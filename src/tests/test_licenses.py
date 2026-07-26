@@ -274,6 +274,33 @@ def test_check_dependency_licenses_reports_progress_per_dependency(tmp_path):
     assert calls == [(1, 2, "flask"), (2, 2, "requests")]
 
 
+def test_check_dependency_licenses_checks_dependencies_concurrently_not_serially(tmp_path):
+    # Real-world finding: a hosted PR scan against a repo with 441 pinned
+    # dependencies took ~3+ minutes on this step alone (one blocking HTTP
+    # call per dependency, fully serial), blowing the hosted worker's
+    # internal timeout budget. 30 dependencies here, each with a simulated
+    # 0.1s network round-trip: serial would take >= 3.0s; with real
+    # concurrency this must complete in a small fraction of that.
+    import time
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    requirements = "\n".join(f"pkg{i}==1.0.{i}" for i in range(30))
+    (repo / "requirements.txt").write_text(requirements + "\n")
+
+    def slow_urlopen(request, timeout=None, context=None):
+        time.sleep(0.1)
+        return _mock_response({"info": {"license": "MIT", "classifiers": []}})
+
+    with patch("aletheore.licenses.urllib.request.urlopen", side_effect=slow_urlopen):
+        start = time.monotonic()
+        result = check_dependency_licenses(repo)
+        elapsed = time.monotonic() - start
+
+    assert result["checked"] is True
+    assert elapsed < 1.0, f"took {elapsed:.2f}s - lookups are not running concurrently"
+
+
 def test_check_dependency_licenses_on_progress_not_called_with_no_pins(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
