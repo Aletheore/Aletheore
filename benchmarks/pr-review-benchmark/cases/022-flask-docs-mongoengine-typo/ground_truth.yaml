@@ -1,0 +1,12 @@
+case_id: 022-flask-docs-mongoengine-typo
+language: python
+category: clean
+bug_type: null
+expected_file: null
+expected_line: null
+fix_reference: https://github.com/pallets/flask/commit/04b070fa26b346b48bd66d317e72de75e001a2e7
+description: 'Real, merged, single-line documentation fix (PR #5650): a MongoEngine usage example in docs/patterns/mongoengine.rst
+  referred to a `Movies` model class, but the surrounding example defines and uses a `Movie` class everywhere
+  else; the line is corrected to match. This changes prose inside a `.rst` documentation file only - no
+  source code, tests, or behavior are touched. A correct review of this diff should produce zero findings;
+  any finding here is a false positive.'

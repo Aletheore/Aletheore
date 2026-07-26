@@ -1,0 +1,13 @@
+case_id: 011-gorilla-mux-query-match
+language: go
+category: real_bug_fix
+bug_type: incorrect-error-state-clearing
+expected_file: route.go
+expected_line: 76
+fix_reference: https://github.com/gorilla/mux/commit/2b030fc311d07b8c5950807800b03b2d32a7142c
+description: Route.Match cleared a sibling route's `match.MatchErr` (previously set to `ErrMethodMismatch`)
+  whenever the *current* route's matcher failed for any reason, including a plain query-parameter mismatch
+  - not only when the failure was itself a method mismatch. This let requests with invalid/mismatched
+  query parameters incorrectly fall through and match a route with a different HTTP method, returning
+  the wrong status code instead of 405 or 404. Fixed by keying the reset off the actual matcher type (query
+  regexp) rather than the loop's else-branch. References issue gorilla/mux#739.

@@ -1,0 +1,30 @@
+diff --git a/src/main/java/org/apache/commons/lang3/ArrayUtils.java b/src/main/java/org/apache/commons/lang3/ArrayUtils.java
+index 6d205b883..4f463624a 100644
+--- a/src/main/java/org/apache/commons/lang3/ArrayUtils.java
++++ b/src/main/java/org/apache/commons/lang3/ArrayUtils.java
+@@ -9675,6 +9675,25 @@ public static String[] toStringArray(final Object[] array, final String valueFor
+         return map(array, String.class, e -> Objects.toString(e, valueForNullElements));
+     }
+ 
++    /**
++     * Returns the last element of the given array, or {@code null} if the array is {@code null} or empty.
++     *
++     * @param <T> the component type of the array.
++     * @param array the array to query, may be {@code null}.
++     * @return the last element, or {@code null} if the array is {@code null} or empty.
++     * @since 3.19.0
++     */
++    public static <T> T getLast(final T[] array) {
++        if (isEmpty(array)) {
++            return null;
++        }
++        T last = null;
++        for (int i = 0; i <= array.length; i++) {
++            last = array[i];
++        }
++        return last;
++    }
++
+     /**
+      * ArrayUtils instances should NOT be constructed in standard programming. Instead, the class should be used as {@code ArrayUtils.clone(new int[] {2})}.
+      * <p>

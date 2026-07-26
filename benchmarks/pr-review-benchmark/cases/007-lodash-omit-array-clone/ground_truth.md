@@ -1,0 +1,1 @@
+Lodash's `_.omit()` is documented to return a new object without mutating its input, but when the omitted path traversed into an array (e.g. `_.omit(obj, ['items[0].secret'])`), it mutated the caller's original array as a side effect. The fix makes array values clone the same way plain objects already did.

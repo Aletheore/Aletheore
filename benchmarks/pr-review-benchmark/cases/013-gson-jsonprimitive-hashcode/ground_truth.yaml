@@ -1,0 +1,14 @@
+case_id: 013-gson-jsonprimitive-hashcode
+language: java
+category: real_bug_fix
+bug_type: equals-hashcode-contract-violation
+expected_file: gson/src/main/java/com/google/gson/JsonPrimitive.java
+expected_line: 267
+fix_reference: https://github.com/google/gson/commit/5e277e42786ab6441b7dd6b1a8c34d545d132307
+description: 'JsonPrimitive.hashCode() hashed integral numbers from their `long` value and all other numeric
+  types from their `double` bits, but `equals()` considered numbers from different Number subclasses/branches
+  equal to each other (e.g. an `Integer 42` equals a lazily-parsed number "42", and a large `long` equals
+  the `double` it loses precision to). Two JsonPrimitives that compared equal could therefore produce
+  different hash codes, violating the equals/hashCode contract and breaking correctness when used as HashMap/HashSet
+  keys. Fixed by hashing every numeric branch from the same double-derived value that equals ultimately
+  compares. References issue #992.'

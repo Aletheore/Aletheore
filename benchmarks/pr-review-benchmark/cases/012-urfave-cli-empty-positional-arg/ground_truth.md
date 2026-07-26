@@ -1,0 +1,1 @@
+urfave/cli's argument parser silently truncated a command's positional arguments if any one of them happened to be an empty string - dropping that argument and everything after it, rather than passing the empty string through like any other value. The fix lets the parser continue past an empty positional argument instead of stopping there.

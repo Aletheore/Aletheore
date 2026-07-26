@@ -1,0 +1,1 @@
+Flask's `flask run --key` command raised a malformed error message when combined with `--cert` pointing at an SSLContext object: the message was missing a closing double quote around `--key`, so users saw a garbled sentence instead of a clear error. It's a small but real user-facing string bug, fixed by adding the missing quote.

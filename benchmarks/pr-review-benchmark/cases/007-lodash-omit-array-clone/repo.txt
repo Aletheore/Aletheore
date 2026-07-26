@@ -1,0 +1,2 @@
+repo_url=https://github.com/lodash/lodash.git
+base_commit=1fc456c5e4cf43be425f837ad5595747811f7b2d

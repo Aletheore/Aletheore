@@ -1,0 +1,12 @@
+case_id: 018-axios-missing-null-check-charset
+language: javascript
+category: injected_bug
+bug_type: missing-null-check
+expected_file: lib/utils.js
+expected_line: 974
+fix_reference: null
+description: 'Hand-authored (injected) bug: the new `getResponseCharset(response)` helper reads `response.headers[''content-type'']`
+  without checking that `response` or `response.headers` is defined first. Any caller that passes a bare
+  error object, an aborted/network-error response with no headers, or `undefined`, triggers a `TypeError:
+  Cannot read properties of undefined (reading ''content-type'')` instead of falling back gracefully.
+  Missing null/undefined guard.'

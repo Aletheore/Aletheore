@@ -1,0 +1,12 @@
+case_id: 005-axios-progress-negative-clamp
+language: javascript
+category: real_bug_fix
+bug_type: missing-bounds-check
+expected_file: lib/helpers/progressEventReducer.js
+expected_line: 15
+fix_reference: https://github.com/axios/axios/commit/3d253b4f17a5107e6f274ee5b2e96e03508dceb2
+description: 'progressEventReducer computed the `loaded` byte count directly from a ProgressEvent''s `loaded`/`total`
+  fields without clamping to zero. Some environments can report a negative `loaded` value, which then
+  propagated into progress and byte-delta calculations, producing negative `progress`/`bytes` values delivered
+  to onDownloadProgress/onUploadProgress callbacks. Fixed by clamping the computed value with `Math.max(0,
+  ...)`. References PR #11039.'

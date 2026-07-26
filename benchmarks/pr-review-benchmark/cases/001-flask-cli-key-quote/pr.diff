@@ -1,0 +1,15 @@
+diff --git a/src/flask/cli.py b/src/flask/cli.py
+index 751dfd1f..dda266b3 100644
+--- a/src/flask/cli.py
++++ b/src/flask/cli.py
+@@ -795,9 +795,7 @@ def _validate_key(ctx, param, value):
+ 
+         if is_context:
+             raise click.BadParameter(
+-                'When "--cert" is an SSLContext object, "--key" is not used.',
+-                ctx,
+-                param,
++                'When "--cert" is an SSLContext object, "--key is not used.', ctx, param
+             )
+ 
+         if not cert:

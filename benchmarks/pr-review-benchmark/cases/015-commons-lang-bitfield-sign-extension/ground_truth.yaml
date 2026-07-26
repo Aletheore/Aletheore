@@ -1,0 +1,12 @@
+case_id: 015-commons-lang-bitfield-sign-extension
+language: java
+category: real_bug_fix
+bug_type: sign-extension-bug
+expected_file: src/main/java/org/apache/commons/lang3/BitField.java
+expected_line: 199
+fix_reference: https://github.com/apache/commons-lang/commit/98dc24990bf93234cf63ed5c5dd43a4f07847baa
+description: 'BitField.getValue(int) and BitField.getValue(long) shifted the masked raw value right using
+  the arithmetic shift operator (`>>`), which sign-extends the result. For a bit field occupying the top
+  bit of its holder (e.g. bit 31 of an int, or a field built from `0xFF000000`), this produced a large
+  negative or otherwise incorrect value instead of the intended unsigned bit-field value. Fixed by switching
+  both overloads to the unsigned right-shift operator (`>>>`). References PR #1749.'

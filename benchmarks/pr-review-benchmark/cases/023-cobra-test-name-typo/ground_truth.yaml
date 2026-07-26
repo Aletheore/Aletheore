@@ -1,0 +1,11 @@
+case_id: 023-cobra-test-name-typo
+language: go
+category: clean
+bug_type: null
+expected_file: null
+expected_line: null
+fix_reference: https://github.com/spf13/cobra/commit/60d056d1574d04c859638354bc9cacab70bab296
+description: 'Real, merged, single-line fix (PR #2000): renames a Go test function from `TestManPrintFlagsHidesShortDeperecated`
+  to `TestManPrintFlagsHidesShortDeprecated`, correcting a misspelling in the test''s own name. The test''s
+  body, assertions, and behavior are completely unchanged - only the identifier''s spelling changes. A
+  correct review of this diff should produce zero findings; any finding here is a false positive.'

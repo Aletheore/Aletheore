@@ -1,0 +1,12 @@
+case_id: 009-cobra-completions-args-mutation
+language: go
+category: real_bug_fix
+bug_type: shared-backing-array-mutation
+expected_file: completions.go
+expected_line: 320
+fix_reference: https://github.com/spf13/cobra/commit/746ef07158728502482cea9f880a6f4b21ef29a9
+description: 'getCompletions() built `trimmedArgs` as a re-sliced view of the caller''s original args
+  slice (ultimately backed by `os.Args` when TraverseChildren is enabled), then later called `append(finalArgs,
+  "--")`. If that sub-slice had spare capacity in its backing array, the append wrote `"--"` directly
+  into the shared backing array, silently corrupting `os.Args` for the rest of the program. Fixed by copying
+  `trimmedArgs` into a freshly allocated slice. References issue #2257.'

@@ -1,0 +1,2 @@
+repo_url=https://github.com/axios/axios.git
+base_commit=e566ea39a22e55a05073b035c51852b4863de012

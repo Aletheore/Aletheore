@@ -1,0 +1,13 @@
+case_id: 019-gin-request-counter-race
+language: go
+category: injected_bug
+bug_type: race-condition
+expected_file: gin.go
+expected_line: 677
+fix_reference: null
+description: 'Hand-authored (injected) bug: a package-level `requestCount` variable is incremented with
+  the non-atomic `requestCount++` inside `Engine.ServeHTTP`, which Go''s net/http server invokes concurrently
+  in a separate goroutine per in-flight request/connection. `requestCount++` is a read-modify-write of
+  a plain int with no mutex or atomic operation, so concurrent requests can race and lose increments (or,
+  under the race detector, report a data race outright). Classic unsynchronized read-modify-write race
+  condition.'

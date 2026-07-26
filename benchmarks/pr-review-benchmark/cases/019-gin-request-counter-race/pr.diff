@@ -1,0 +1,29 @@
+diff --git a/gin.go b/gin.go
+index 2e033bf..bd45348 100644
+--- a/gin.go
++++ b/gin.go
+@@ -658,12 +658,24 @@ func (engine *Engine) RunListener(listener net.Listener) (err error) {
+ 	return
+ }
+ 
++// requestCount tracks the total number of requests handled by the process.
++// It is read via RequestCount and incremented once per request in ServeHTTP,
++// which net/http invokes concurrently from a separate goroutine per connection.
++var requestCount int
++
++// RequestCount returns the total number of requests handled so far.
++func RequestCount() int {
++	return requestCount
++}
++
+ // ServeHTTP conforms to the http.Handler interface.
+ func (engine *Engine) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+ 	engine.routeTreesUpdated.Do(func() {
+ 		engine.updateRouteTrees()
+ 	})
+ 
++	requestCount++
++
+ 	c := engine.pool.Get().(*Context)
+ 	c.writermem.reset(w)
+ 	c.Request = req

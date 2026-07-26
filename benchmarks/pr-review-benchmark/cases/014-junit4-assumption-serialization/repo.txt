@@ -1,0 +1,2 @@
+repo_url=https://github.com/junit-team/junit4.git
+base_commit=f8ee412316b1a94d3dc35498359cc2f0ca273216

@@ -1,0 +1,11 @@
+case_id: 012-urfave-cli-empty-positional-arg
+language: go
+category: real_bug_fix
+bug_type: premature-loop-termination
+expected_file: command_parse.go
+expected_line: 82
+fix_reference: https://github.com/urfave/cli/commit/b4f42d397e229039b5ffffe996daccc3fb3ae358
+description: parseFlags() treated any empty-string positional argument as the end of the argument list
+  (`break`), silently dropping that argument and every argument after it from `cmd.Args()`, instead of
+  treating the empty string as a legitimate positional value. Fixed by appending the empty argument to
+  `posArgs` and continuing the parse loop. References issue_2292.

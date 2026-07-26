@@ -1,0 +1,1 @@
+Click's `--version` option would crash with a RuntimeError for command-line tools built on packages whose importable module name differs from their installed distribution name (a common pattern, e.g. `PIL`/`Pillow`) - even though the package genuinely was installed. The fix teaches `version_option` to resolve such names before giving up.

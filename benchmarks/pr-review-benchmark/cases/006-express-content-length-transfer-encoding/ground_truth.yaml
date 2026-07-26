@@ -1,0 +1,11 @@
+case_id: 006-express-content-length-transfer-encoding
+language: javascript
+category: real_bug_fix
+bug_type: http-spec-violation
+expected_file: lib/response.js
+expected_line: 167
+fix_reference: https://github.com/expressjs/express/commit/18e5985b8a9d5e8423db0a9121f22bdaecd5b120
+description: 'res.send() always computed and set a Content-Length header whenever a body chunk was provided,
+  even when the response also carried a Transfer-Encoding header. HTTP/1.1 forbids sending both headers
+  on the same response, so this could confuse clients and intermediaries about how to frame the response
+  body. Fixed by only computing Content-Length when Transfer-Encoding is absent. References PR #4893.'

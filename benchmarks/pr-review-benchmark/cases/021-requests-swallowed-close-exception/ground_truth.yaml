@@ -1,0 +1,12 @@
+case_id: 021-requests-swallowed-close-exception
+language: python
+category: injected_bug
+bug_type: swallowed-exception
+expected_file: src/requests/sessions.py
+expected_line: 916
+fix_reference: null
+description: 'Hand-authored (injected) bug: the new `Session.close_quietly()` method calls `v.close()`
+  on each adapter inside a `try/except Exception: pass` with no logging, so any failure while closing
+  an adapter (e.g. a socket error, a permissions error, or a bug in a third-party adapter''s `close()`)
+  is silently discarded. Callers have no way to know cleanup failed, resources may leak, and the underlying
+  error is unrecoverable/undebuggable once swallowed. Classic swallowed-exception anti-pattern.'

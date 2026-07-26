@@ -1,0 +1,1 @@
+Gin's `Engine.RunFd()`, used to start the server on an already-open file descriptor (a common pattern for socket activation / systemd), never closed the `os.File` wrapper it created around that descriptor, leaking a file descriptor on every call. The fix adds a deferred close.

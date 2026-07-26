@@ -1,0 +1,1 @@
+This is a deliberately injected bug for the benchmark, not a real historical fix. A new `Session.close_quietly()` method closes each connection adapter inside a bare `try/except Exception: pass`, discarding any error with no logging at all. If closing an adapter ever fails, the failure vanishes silently - resources can leak and there's no way to diagnose what went wrong.

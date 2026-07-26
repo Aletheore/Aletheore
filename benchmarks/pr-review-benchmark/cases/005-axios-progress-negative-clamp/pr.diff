@@ -1,0 +1,13 @@
+diff --git a/lib/helpers/progressEventReducer.js b/lib/helpers/progressEventReducer.js
+index 703fd13..e2c15c0 100644
+--- a/lib/helpers/progressEventReducer.js
++++ b/lib/helpers/progressEventReducer.js
+@@ -12,7 +12,7 @@ export const progressEventReducer = (listener, isDownloadStream, freq = 3) => {
+     }
+     const rawLoaded = e.loaded;
+     const total = e.lengthComputable ? e.total : undefined;
+-    const loaded = Math.max(0, total != null ? Math.min(rawLoaded, total) : rawLoaded);
++    const loaded = total != null ? Math.min(rawLoaded, total) : rawLoaded;
+     const progressBytes = Math.max(0, loaded - bytesNotified);
+     const rate = _speedometer(progressBytes);
+ 

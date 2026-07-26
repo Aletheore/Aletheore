@@ -1,0 +1,1 @@
+Express's `res.send()` could send both a `Content-Length` and a `Transfer-Encoding` header on the same HTTP response, which the HTTP/1.1 spec explicitly disallows and which can lead to request/response smuggling or parsing ambiguity in clients and proxies. The fix only sets `Content-Length` when `Transfer-Encoding` is not already present.

@@ -1,0 +1,12 @@
+case_id: 007-lodash-omit-array-clone
+language: javascript
+category: real_bug_fix
+bug_type: unintended-mutation
+expected_file: lodash.js
+expected_line: 5689
+fix_reference: https://github.com/lodash/lodash/commit/1fc456c5e4cf43be425f837ad5595747811f7b2d
+description: 'customOmitClone (used internally by `_.omit`) returned arrays by reference instead of deferring
+  them to `cloneDeep` the way plain objects already were. As a result, when an omit path traversed into
+  an array (e.g. `_.omit(obj, [''a[0].b''])`), `baseUnset` mutated the caller''s original array in place
+  rather than a clone. Fixed by treating arrays the same as plain objects in customOmitClone. References
+  issue #5610.'

@@ -1,0 +1,22 @@
+diff --git a/src/main/java/org/apache/commons/lang3/BitField.java b/src/main/java/org/apache/commons/lang3/BitField.java
+index 177a84d3f..91ed6ca00 100644
+--- a/src/main/java/org/apache/commons/lang3/BitField.java
++++ b/src/main/java/org/apache/commons/lang3/BitField.java
+@@ -196,7 +196,7 @@ public short getShortValue(final short holder) {
+      * @see #setValue(int,int)
+      */
+     public int getValue(final int holder) {
+-        return getRawValue(holder) >>> shiftCount;
++        return getRawValue(holder) >> shiftCount;
+     }
+ 
+     /**
+@@ -212,7 +212,7 @@ public int getValue(final int holder) {
+      * @since 3.21.0
+      */
+     public long getValue(final long holder) {
+-        return getRawValue(holder) >>> shiftCount;
++        return getRawValue(holder) >> shiftCount;
+     }
+ 
+     /**

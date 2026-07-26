@@ -1,0 +1,1 @@
+Axios's upload/download progress event handling could report negative progress and byte counts if the underlying ProgressEvent ever reported a negative `loaded` value, confusing any UI that renders a progress bar from these callbacks. The fix clamps the computed value to a minimum of zero.
