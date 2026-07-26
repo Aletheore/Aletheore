@@ -115,16 +115,20 @@ def fetch_file_content(
     token: str,
     repo_full_name: str,
     path: str,
-    ref: str,
+    ref: str | None = None,
 ) -> str | None:
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
     }
+    # ref=None omits the query param entirely rather than sending a literal
+    # "HEAD" or similar - GitHub's Contents API only accepts a real
+    # branch/tag/commit ref, and resolves to the repo's default branch
+    # automatically when the param is absent.
     response = client.get(
         f"/repos/{repo_full_name}/contents/{path}",
         headers=headers,
-        params={"ref": ref},
+        params={"ref": ref} if ref else {},
     )
     if response.status_code == 404:
         return None

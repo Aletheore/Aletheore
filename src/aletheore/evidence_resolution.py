@@ -14,6 +14,7 @@ CANONICAL_FIELDS = (
     "commit",
     "dependency",
     "risk",
+    "suggestion",
     "confidence",
     "evidence_path",
 )
@@ -34,6 +35,8 @@ def empty_resolution(kind: str = "unknown") -> dict:
         "dependency_status": "unavailable",
         "risk": [],
         "risk_status": "unavailable",
+        "suggestion": None,
+        "suggestion_status": "unavailable",
         "confidence": "unavailable",
         "evidence_path": None,
         "evidence_status": "unavailable",
@@ -51,6 +54,7 @@ def normalize_resolution(
     commit: dict | None = None,
     dependency: str | list[str] | None = None,
     risk: list[dict] | None = None,
+    suggestion: str | None = None,
     confidence: str = "unavailable",
     evidence_path: str | None = None,
 ) -> dict:
@@ -69,6 +73,8 @@ def normalize_resolution(
             "dependency_status": "available" if dependency else "unavailable",
             "risk": risk or [],
             "risk_status": "available" if risk else "unavailable",
+            "suggestion": suggestion,
+            "suggestion_status": "available" if suggestion else "unavailable",
             "confidence": confidence if confidence in CONFIDENCE_ORDER else "unavailable",
             "evidence_path": evidence_path,
             "evidence_status": "available" if evidence_path else "unavailable",

@@ -220,6 +220,24 @@ def test_attach_risk_evidence_attaches_matching_findings():
     assert result["risk_status"] == "available"
 
 
+def test_normalize_resolution_sets_suggestion_and_status():
+    result = normalize_resolution(kind="owner", suggestion="add a null check here", confidence="inferred")
+    assert result["suggestion"] == "add a null check here"
+    assert result["suggestion_status"] == "available"
+
+    empty = empty_resolution("owner")
+    assert empty["suggestion"] is None
+    assert empty["suggestion_status"] == "unavailable"
+
+
+def test_merge_resolution_carries_suggestion_from_attachment():
+    base = empty_resolution("endpoint")
+    attachment = normalize_resolution(kind="suggestion", suggestion="fix by X", confidence="inferred")
+    merged = merge_resolution(base, attachment)
+    assert merged["suggestion"] == "fix by X"
+    assert merged["suggestion_status"] == "available"
+
+
 def test_resolution_is_json_serializable():
     result = attach_risk_evidence(
         make_evidence(),

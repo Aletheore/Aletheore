@@ -72,13 +72,14 @@ from scan_worker.flash_review_cache import (
 )
 from scan_worker.github_api import (
     create_check_run,
+    fetch_file_content,
     fetch_pr_changed_files,
     fetch_pr_diff,
     fetch_recent_commits_for_path,
     upsert_pr_comment,
 )
 from scan_worker.managed_audit import run_managed_audit
-from scan_worker.model_tiers import model_for_plan, writing_adapter_for_plan
+from scan_worker.model_tiers import PRO_FALLBACK_MODEL, model_for_plan, writing_adapter_for_plan
 from scan_worker.packet_cache import lookup_cached_result, store_result
 from scan_worker.postgres_graph_store import PostgresRepoGraphStore
 from scan_worker.slack import (
@@ -830,6 +831,95 @@ def _dependency_context_attachment(evidence: dict | None, source_file: str) -> d
     )
 
 
+FIX_SUGGESTION_SYSTEM_PROMPT = """You are diagnosing why an API endpoint stopped responding. You are given
+the endpoint, its status, the exact file/line/symbol implicated by static analysis, and the surrounding
+source code. Respond with ONLY a concise, specific, actionable fix suggestion (2-3 sentences, plain text, no
+markdown fences) - name the actual likely cause and what to change, never a vague "check your code" answer.
+If you cannot identify a plausible concrete cause from what's given, respond with exactly: unknown."""
+
+
+def _health_fix_suggestion_adapter() -> OpenAICompatibleAdapter:
+    # Always Pro, never tier-routed through model_tiers.writing_adapter_for_plan -
+    # this feature is part of every Pro subscription at one fixed cost, not
+    # something that varies by a tier that no longer exists.
+    return OpenAICompatibleAdapter(
+        name="DeepSeek",
+        base_url="https://api.deepseek.com",
+        api_key_env_var="DEEPSEEK_API_KEY",
+        model=PRO_FALLBACK_MODEL,
+        supports_tool_choice=False,
+    )
+
+
+def _find_enclosing_symbol(evidence: dict | None, source_file: str, source_line: int | None) -> str | None:
+    if not evidence or source_line is None:
+        return None
+    modules = evidence.get("repository", {}).get("modules", [])
+    module = next((m for m in modules if m.get("path") == source_file), None)
+    if module is None:
+        return None
+    symbols = module.get("symbols", {})
+    for group in ("functions", "classes"):
+        for entry in symbols.get(group, []):
+            start, end = entry.get("start_line"), entry.get("end_line")
+            if start is not None and end is not None and start <= source_line <= end:
+                return entry.get("name")
+    return None
+
+
+def _fix_suggestion_attachment(
+    installation_id: int,
+    repo_full_name: str,
+    source_file: str,
+    source_line: int | None,
+    method: str,
+    path: str,
+    status_code: int | None,
+    evidence: dict | None,
+) -> dict | None:
+    # Grounded in the file/line/symbol already pinpointed deterministically
+    # by the owner/dependency attachments - the one LLM call in this whole
+    # correlation chain, and it only ever supplements what's already found.
+    # Same degrade-on-any-failure discipline as every other attachment
+    # here: missing code context, a DeepSeek outage, or a low-confidence
+    # model response just means the alert goes out without a suggestion,
+    # never blocks it.
+    try:
+        settings = get_settings()
+        app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+        token = _token_sync(installation_id, app_jwt)
+        with httpx.Client(base_url="https://api.github.com") as client:
+            file_content = fetch_file_content(client, token, repo_full_name, source_file)
+        if not file_content:
+            return None
+
+        lines = file_content.splitlines()
+        anchor = (source_line or 1) - 1
+        snippet = "\n".join(lines[max(0, anchor - 15) : min(len(lines), anchor + 15)])
+        user_prompt = json.dumps(
+            {
+                "endpoint": f"{method} {path}",
+                "status_code": status_code,
+                "file": source_file,
+                "line": source_line,
+                "symbol": _find_enclosing_symbol(evidence, source_file, source_line),
+                "code_context": snippet,
+            }
+        )
+        raw = _health_fix_suggestion_adapter().simple_completion(
+            FIX_SUGGESTION_SYSTEM_PROMPT, user_prompt, cwd="."
+        )
+        suggestion = raw.strip()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "fix-suggestion generation failed (%s); alerting without it", type(exc).__name__
+        )
+        return None
+    if not suggestion or suggestion.lower() == "unknown":
+        return None
+    return normalize_resolution(kind="suggestion", suggestion=suggestion, confidence="inferred")
+
+
 def _attach_recent_commit_for_failure(
     settings,
     installation_id: int,
@@ -837,6 +927,10 @@ def _attach_recent_commit_for_failure(
     source_file: str,
     evidence_resolution: dict | None,
     evidence: dict | None = None,
+    method: str = "",
+    path: str = "",
+    status_code: int | None = None,
+    source_line: int | None = None,
 ) -> dict | None:
     try:
         app_jwt = generate_app_jwt(
@@ -868,6 +962,18 @@ def _attach_recent_commit_for_failure(
     dependency_attachment = _dependency_context_attachment(evidence, source_file)
     if dependency_attachment is not None:
         attachments.append(dependency_attachment)
+    suggestion_attachment = _fix_suggestion_attachment(
+        installation_id,
+        repo_full_name,
+        source_file,
+        source_line,
+        method,
+        path,
+        status_code,
+        evidence,
+    )
+    if suggestion_attachment is not None:
+        attachments.append(suggestion_attachment)
 
     if not attachments:
         return evidence_resolution
@@ -939,6 +1045,10 @@ def run_health_check_sweep_job() -> None:
                         source_file,
                         evidence_resolution,
                         evidence,
+                        method=method,
+                        path=path,
+                        status_code=status_code,
+                        source_line=source_line,
                     )
                 _send_if_webhook_configured(
                     target,
