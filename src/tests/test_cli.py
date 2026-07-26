@@ -521,6 +521,7 @@ def test_known_adapters_includes_every_provider():
         "grok-build",
         "grok",
         "ollama",
+        "deepseek",
     }
 
 
