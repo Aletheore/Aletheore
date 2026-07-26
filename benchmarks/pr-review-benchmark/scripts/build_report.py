@@ -1,28 +1,24 @@
-"""Merges the automated grounding check (Task 4, real tool names, no
-blinding needed) into the blind-scored scorecard (Task 8, label-keyed)
-after each case's mapping has been revealed, and renders the final
-report table."""
+"""Merges the automated grounding check (Task 4, keyed by real tool name)
+into the blind-scored scorecard (Task 8, already de-anonymized and keyed
+by real tool name thanks to Task 8's internal de-anonymization) after
+grounding results are loaded, and renders the final report table."""
 
 
-def merge_grounding_into_scorecard(scorecard: dict, grounding_by_case_and_tool: dict, case_label_maps: dict) -> dict:
-    real_name_by_label = {}
-    for case_id, label_to_tool in case_label_maps.items():
-        for label, tool in label_to_tool.items():
-            real_name_by_label[label] = tool
-
+def merge_grounding_into_scorecard(scorecard: dict, grounding_by_case_and_tool: dict) -> dict:
     grounding_rates_by_tool = {}
     for case_id, grounding_by_tool in grounding_by_case_and_tool.items():
         for tool, grounding in grounding_by_tool.items():
-            grounding_rates_by_tool.setdefault(tool, []).append(grounding["grounding_rate"])
+            rate = grounding.get("grounding_rate")
+            if rate is not None:
+                grounding_rates_by_tool.setdefault(tool, []).append(rate)
 
     per_tool = {}
-    for label, stats in scorecard["per_tool"].items():
-        real_name = real_name_by_label.get(label, label)
+    for tool, stats in scorecard["per_tool"].items():
         merged_stats = dict(stats)
-        rates = grounding_rates_by_tool.get(real_name)
+        rates = grounding_rates_by_tool.get(tool)
         if rates:
             merged_stats["grounding_rate"] = sum(rates) / len(rates)
-        per_tool[real_name] = merged_stats
+        per_tool[tool] = merged_stats
 
     return {"per_tool": per_tool, "human_llm_agreement": scorecard["human_llm_agreement"]}
 
