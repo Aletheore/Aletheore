@@ -121,6 +121,31 @@ async def insert_repo_history(
             )
 
 
+async def count_other_repos_audited_this_month(
+    pool: asyncpg.Pool, installation_id: int, repo_full_name: str
+) -> int:
+    """Distinct repos, other than repo_full_name, that have run a managed
+    audit for this installation since the start of the current calendar
+    month - repo_full_name is excluded so a repeat audit of an already-seen
+    repo never counts against the new-repo limit, only genuinely new repos
+    do. Protects against a single Pro subscription burst-connecting many
+    repos to front-load one-time audit cost, without capping total repos
+    an installation can ever connect.
+    """
+    row = await pool.fetchrow(
+        """
+        SELECT COUNT(DISTINCT repo_full_name) AS count
+        FROM managed_audit_rate_limits
+        WHERE installation_id = $1
+          AND repo_full_name != $2
+          AND last_run_at >= date_trunc('month', now())
+        """,
+        installation_id,
+        repo_full_name,
+    )
+    return row["count"]
+
+
 async def check_and_reserve_managed_audit(
     pool: asyncpg.Pool,
     installation_id: int,

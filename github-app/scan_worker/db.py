@@ -106,6 +106,39 @@ def record_llm_spend(dsn: str, installation_id: int, cost_usd: float) -> None:
         conn.commit()
 
 
+def get_flash_review_count_this_month(dsn: str, installation_id: int) -> int:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT review_count FROM flash_review_monthly_count
+                WHERE installation_id = %s AND month = date_trunc('month', now())::date
+                """,
+                (installation_id,),
+            )
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+
+
+def increment_flash_review_count(dsn: str, installation_id: int) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO flash_review_monthly_count (installation_id, month, review_count)
+                VALUES (%s, date_trunc('month', now())::date, 1)
+                ON CONFLICT (installation_id, month) DO UPDATE
+                SET review_count = flash_review_monthly_count.review_count + 1
+                """,
+                (installation_id,),
+            )
+        conn.commit()
+
+
 def insert_audit_report(
     dsn: str,
     installation_id: int,
