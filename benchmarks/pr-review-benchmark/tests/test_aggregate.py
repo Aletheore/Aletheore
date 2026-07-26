@@ -56,3 +56,20 @@ def test_build_scorecard_handles_no_llm_scores_at_all():
     scorecard = build_scorecard(manual_scores, llm_scores={})
     assert scorecard["human_llm_agreement"]["recall"] is None
     assert scorecard["human_llm_agreement"]["actionability"] is None
+
+
+def test_build_scorecard_ignores_llm_scores_for_unscored_manual_cases():
+    # Case 001: real matching comparison (both scored the same)
+    # Case 002: LLM scored but manual is None (unscored) — should not count as comparison
+    manual_scores = {
+        "001": {"Tool A": {"recall": "hit", "false_positives": [], "actionability": 4}},
+        "002": {"Tool A": {"recall": None, "false_positives": [], "actionability": None}},
+    }
+    llm_scores = {
+        "001": {"Tool A": {"recall": "hit", "actionability": 4}},
+        "002": {"Tool A": {"recall": "hit", "actionability": 5}},
+    }
+    scorecard = build_scorecard(manual_scores, llm_scores)
+    # Agreement rate should reflect only case 001 (the real comparison)
+    assert scorecard["human_llm_agreement"]["recall"] == 1.0
+    assert scorecard["human_llm_agreement"]["actionability"] == 1.0

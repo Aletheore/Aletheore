@@ -46,11 +46,11 @@ def build_scorecard(manual_scores: dict, llm_scores: dict) -> dict:
 
             llm = llm_case_scores.get(label)
             if llm is not None:
-                if "recall" in llm:
+                if recall is not None and "recall" in llm:
                     compared_counts["recall"] += 1
                     if llm["recall"] == recall:
                         agreement_counts["recall"] += 1
-                if "actionability" in llm:
+                if manual.get("actionability") is not None and "actionability" in llm:
                     compared_counts["actionability"] += 1
                     if llm["actionability"] == manual.get("actionability"):
                         agreement_counts["actionability"] += 1
