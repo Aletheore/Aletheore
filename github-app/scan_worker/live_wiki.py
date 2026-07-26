@@ -109,12 +109,16 @@ def _sanitize_written_files(written_files, brief_files: list[dict]) -> list[dict
     return sanitized
 
 
-def _validate_written_output(parsed: dict | None, evidence: dict) -> tuple[dict, str] | None:
+def _validate_written_output(
+    parsed: dict | None,
+    evidence: dict,
+    fetch_line_count: Callable[[str], int | None] | None = None,
+) -> tuple[dict, str] | None:
     if parsed is None or not isinstance(parsed.get("description"), str) or not parsed["description"].strip():
         return None
 
     description = parsed["description"].strip()
-    if not verify_citations(description, evidence)["all_verified"]:
+    if not verify_citations(description, evidence, fetch_line_count=fetch_line_count)["all_verified"]:
         return None
     return parsed, description
 
@@ -129,6 +133,7 @@ def build_subsystem_record(
     cache_lookup: Callable[[dict], tuple[dict, str] | None] | None = None,
     cache_write: Callable[[dict, dict, str], None] | None = None,
     model_used: str = "",
+    fetch_line_count: Callable[[str], int | None] | None = None,
 ) -> dict | None:
     packet = build_evidence_packet(
         evidence, cluster, brief, model_used, cache_eligible=cache_lookup is not None
@@ -144,7 +149,7 @@ def build_subsystem_record(
             cached = None
         if cached is not None:
             cached_output, _cached_model_used = cached
-            candidate = _validate_written_output(cached_output, evidence)
+            candidate = _validate_written_output(cached_output, evidence, fetch_line_count)
             if candidate is not None:
                 parsed, description = candidate
 
@@ -152,7 +157,7 @@ def build_subsystem_record(
         user_prompt = json.dumps({"name": name, "brief": brief})
         raw = writing_adapter.simple_completion(SUBSYSTEM_WRITING_SYSTEM_PROMPT, user_prompt, cwd=".")
         raw_parsed = _parse_json_object(raw)
-        candidate = _validate_written_output(raw_parsed, evidence)
+        candidate = _validate_written_output(raw_parsed, evidence, fetch_line_count)
         if candidate is None:
             return None
         parsed, description = candidate
@@ -192,6 +197,7 @@ def generate_subsystems(
     cache_lookup: Callable[[dict], tuple[dict, str] | None] | None = None,
     cache_write: Callable[[dict, dict, str], None] | None = None,
     model_used: str = "",
+    fetch_line_count: Callable[[str], int | None] | None = None,
 ) -> list[dict]:
     """Generates subsystem records. If cluster_ids is given, only those
     clusters are processed (incremental update); otherwise every cluster
@@ -221,13 +227,20 @@ def generate_subsystems(
             cache_lookup=cache_lookup,
             cache_write=cache_write,
             model_used=model_used,
+            fetch_line_count=fetch_line_count,
         )
         if record is not None:
             records.append(record)
     return records
 
 
-def generate_overview(evidence: dict, all_subsystem_records: list[dict], writing_adapter) -> dict:
+def generate_overview(
+    evidence: dict,
+    all_subsystem_records: list[dict],
+    writing_adapter,
+    *,
+    fetch_line_count: Callable[[str], int | None] | None = None,
+) -> dict:
     """all_subsystem_records must be the full current set (freshly
     generated ones merged with unchanged ones already in storage) - the
     overview narrates how every subsystem relates, not just the ones that
@@ -242,7 +255,7 @@ def generate_overview(evidence: dict, all_subsystem_records: list[dict], writing
     description = parsed.get("description") if parsed else None
     if not isinstance(description, str) or not description.strip():
         description = "Overview description unavailable."
-    elif not verify_citations(description, evidence)["all_verified"]:
+    elif not verify_citations(description, evidence, fetch_line_count=fetch_line_count)["all_verified"]:
         description = "Overview description unavailable."
 
     return {"description": description, "diagram_mermaid": diagram}

@@ -69,6 +69,28 @@ def gather_file_context(
     return "\n\n".join(parts)
 
 
+def fetch_changed_file_contents(
+    client,
+    token: str,
+    repo_full_name: str,
+    changed_files: list[str],
+    head_ref: str,
+) -> dict[str, str]:
+    """Structured file->content lookup for _line_citation_content_matches -
+    a parallel fetch to gather_file_context's formatted prompt blob, since
+    that function's return type (one joined string) can't answer "what's
+    the real content of this specific file" for verification."""
+    contents = {}
+    for path in changed_files[:MAX_CONTEXT_FILES]:
+        content = fetch_file_content(client, token, repo_full_name, path, head_ref)
+        if content is None:
+            continue
+        if len(content.encode("utf-8")) > MAX_CONTEXT_FILE_BYTES:
+            continue
+        contents[path] = content
+    return contents
+
+
 def build_code_evidence_context(evidence: dict | None, changed_files: list[str]) -> str:
     if not evidence:
         return ""
@@ -204,6 +226,60 @@ def build_referenced_symbol_context(
     return "\n\n".join(parts)
 
 
+_QUOTED_STRING_RE = re.compile(r"'([^'\n]{8,})'|\"([^\"\n]{8,})\"")
+LINE_CITATION_CONTEXT_WINDOW = 2
+
+
+def _quoted_strings(text: str) -> list[str]:
+    """Literal quoted snippets in a finding's own text - a real anchor to
+    check the finding's claimed line against, when one exists. Short
+    quotes (under 8 chars) are skipped: real code is full of short quoted
+    tokens ('x', "ok") that aren't meaningful evidence of a specific
+    location."""
+    matches = []
+    for match in _QUOTED_STRING_RE.finditer(text):
+        matches.append(match.group(1) if match.group(1) is not None else match.group(2))
+    return matches
+
+
+def _line_citation_content_matches(finding: dict, file_contents: dict[str, str]) -> bool:
+    """Verifies a finding's claimed line against the real file content
+    already fetched for this diff, when there's something concrete to
+    check it against.
+
+    Confirmed as a real production gap: on a real PR (case
+    001-flask-cli-key-quote, pr-review-benchmark corpus, PR #213), Flash
+    Review correctly quoted the exact buggy string verbatim but cited it
+    at line 561 in a ~1000-line file, when that string only actually
+    appears at line 798. `_diff_valid_lines`'s coarse diff-range check
+    couldn't catch this: the whole file counted as "in the diff" (each of
+    this benchmark's cases is opened as a brand-new file in its scratch
+    repo, so GitHub reports the entire file as added), so any line number
+    the model invented passed that check. This proves the claimed
+    content is actually near the claimed line, independent of diff shape.
+
+    Returns True (pass) when there's nothing to check: no real content
+    was fetched for this file (e.g. it was skipped for size, or the fetch
+    failed - this check only ever adds scrutiny, never rejects for a
+    reason unrelated to the citation itself), or the finding names no
+    literal quoted string to verify against.
+    """
+    content = file_contents.get(finding["file"])
+    if content is None:
+        return True
+    lines = content.splitlines()
+    line = finding["line"]
+    if line < 1 or line > len(lines):
+        return False
+    quoted = _quoted_strings(finding.get("issue") or "") + _quoted_strings(finding.get("suggestion") or "")
+    if not quoted:
+        return True
+    window_start = max(0, line - 1 - LINE_CITATION_CONTEXT_WINDOW)
+    window_end = min(len(lines), line + LINE_CITATION_CONTEXT_WINDOW)
+    window_text = "\n".join(lines[window_start:window_end])
+    return any(q in window_text for q in quoted)
+
+
 _FILE_MARKER_RE = re.compile(r"^--- (.+) ---$")
 _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
@@ -235,9 +311,14 @@ def _diff_valid_lines(diff_text: str) -> dict[str, set[int]]:
     return valid_lines
 
 
-def _validate_findings(findings: list[dict], diff_text: str) -> list[dict]:
+def _validate_findings(
+    findings: list[dict], diff_text: str, file_contents: dict[str, str] | None = None
+) -> list[dict]:
     valid_lines = _diff_valid_lines(diff_text)
-    return [f for f in findings if f["line"] in valid_lines.get(f["file"], set())]
+    in_diff = [f for f in findings if f["line"] in valid_lines.get(f["file"], set())]
+    if not file_contents:
+        return in_diff
+    return [f for f in in_diff if _line_citation_content_matches(f, file_contents)]
 
 
 _NON_SUBSTANTIVE_FILENAMES = {
@@ -280,6 +361,7 @@ def review_diff(
     cache_lookup: Callable[[str], list[dict] | None] | None = None,
     cache_write: Callable[[str, list[dict], str], None] | None = None,
     model_used: str = "deepseek-v4-flash",
+    file_contents: dict[str, str] | None = None,
 ) -> list[dict]:
     if not diff_text.strip():
         return []
@@ -291,7 +373,7 @@ def review_diff(
             logger.warning("flash review cache lookup failed (%s); treating as miss", type(exc).__name__)
             cached = None
         if cached is not None:
-            return _validate_findings(cached, diff_text)
+            return _validate_findings(cached, diff_text, file_contents)
 
     adapter = OpenAICompatibleAdapter(
         name="DeepSeek",
@@ -348,4 +430,4 @@ def review_diff(
         except Exception as exc:
             logger.warning("flash review cache write failed (%s); continuing without cache", type(exc).__name__)
 
-    return _validate_findings(valid, diff_text)
+    return _validate_findings(valid, diff_text, file_contents)

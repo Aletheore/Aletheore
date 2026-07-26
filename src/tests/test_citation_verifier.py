@@ -79,3 +79,44 @@ def test_verify_citations_handles_report_with_no_citations():
         "unverified": [],
         "all_verified": True,
     }
+
+
+def test_verify_citations_without_fetch_line_count_ignores_fabricated_lines():
+    # Documents the existing, acknowledged limitation: without a real line
+    # count to check against, a citation naming a real file but a
+    # fabricated line number is still reported as verified.
+    text = "Issue found at `server/routes/billing.ts:99999`."
+    result = verify_citations(text, make_evidence())
+
+    assert result["all_verified"] is True
+
+
+def test_verify_citations_with_fetch_line_count_catches_a_fabricated_line():
+    # Closes the gap above when a real line count is available: this is
+    # the same category of bug confirmed in Flash Review on a real PR (see
+    # flash_review.py's _line_citation_content_matches) - a citation
+    # naming a real file but a line beyond its real length is a fabricated
+    # citation, not a verified one.
+    text = "Issue found at `server/routes/billing.ts:99999`."
+    result = verify_citations(text, make_evidence(), fetch_line_count=lambda path: 200)
+
+    assert result["all_verified"] is False
+    assert result["unverified"] == [{"file": "server/routes/billing.ts", "line": 99999}]
+
+
+def test_verify_citations_with_fetch_line_count_keeps_a_real_line():
+    text = "Issue found at `server/routes/billing.ts:142`."
+    result = verify_citations(text, make_evidence(), fetch_line_count=lambda path: 200)
+
+    assert result["all_verified"] is True
+    assert result["verified"] == [{"file": "server/routes/billing.ts", "line": 142}]
+
+
+def test_verify_citations_with_fetch_line_count_returning_none_skips_bounds_check():
+    # A fetcher that can't determine a file's line count (e.g. a fetch
+    # failure) must not turn into a false "unverified" - the citation
+    # falls back to file-existence-only, same as without a fetcher at all.
+    text = "Issue found at `server/routes/billing.ts:99999`."
+    result = verify_citations(text, make_evidence(), fetch_line_count=lambda path: None)
+
+    assert result["all_verified"] is True

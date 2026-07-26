@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -63,6 +64,7 @@ from scan_worker.db import (
 from scan_worker.flash_review import (
     build_code_evidence_context,
     build_referenced_symbol_context,
+    fetch_changed_file_contents,
     gather_file_context,
     is_non_substantive_diff,
     review_diff,
@@ -666,6 +668,7 @@ def run_flash_review_job(
             findings: list[dict] = []
         else:
             file_context = gather_file_context(client, token, repo_full_name, changed_files, head_sha)
+            file_contents = fetch_changed_file_contents(client, token, repo_full_name, changed_files, head_sha)
             evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
             code_evidence_context = build_code_evidence_context(evidence, changed_files)
 
@@ -701,6 +704,7 @@ def run_flash_review_job(
                     cache_lookup=_cache_lookup,
                     cache_write=_cache_write,
                     model_used="deepseek-v4-flash",
+                    file_contents=file_contents,
                 )
             else:
                 findings = review_diff(
@@ -711,6 +715,7 @@ def run_flash_review_job(
                     cache_lookup=_cache_lookup,
                     cache_write=_cache_write,
                     model_used="deepseek-v4-flash",
+                    file_contents=file_contents,
                 )
         record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
         increment_flash_review_count(settings.database_url, installation_id)
@@ -1167,6 +1172,42 @@ def _live_wiki_update_writing_adapter() -> OpenAICompatibleAdapter:
     )
 
 
+def _real_line_count_fetcher(
+    installation_id: int, repo_full_name: str, ref: str | None
+) -> Callable[[str], int | None] | None:
+    """Backs generate_subsystems/generate_overview's fetch_line_count
+    param with a real GitHub Contents API lookup, closing the same
+    documented citation-verification gap fixed in flash_review.py and
+    citation_verifier.py: without this, a citation naming a real file but
+    a fabricated line number is reported as verified. Degrades to None
+    (falls back to file-existence-only verification) on any setup
+    failure - this is a verification enhancement, never allowed to break
+    wiki generation itself.
+    """
+    try:
+        settings = get_settings()
+        app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+        token = _token_sync(installation_id, app_jwt)
+        client = httpx.Client(base_url="https://api.github.com")
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "could not set up line-count fetcher (%s); citations checked for file existence only",
+            type(exc).__name__,
+        )
+        return None
+
+    def _fetch_line_count(path: str) -> int | None:
+        try:
+            content = fetch_file_content(client, token, repo_full_name, path, ref)
+        except Exception:  # noqa: BLE001
+            return None
+        if content is None:
+            return None
+        return len(content.splitlines())
+
+    return _fetch_line_count
+
+
 def _store_wiki_generation(
     dsn: str,
     installation_id: int,
@@ -1175,6 +1216,7 @@ def _store_wiki_generation(
     fresh_records: list[dict],
     writing_adapter,
     source_commit: str | None,
+    fetch_line_count: Callable[[str], int | None] | None = None,
 ) -> None:
     """Upserts freshly-generated subsystem records, prunes any subsystem
     whose cluster no longer exists in the current evidence at all, then
@@ -1204,7 +1246,9 @@ def _store_wiki_generation(
     if not all_records:
         return
 
-    overview = live_wiki.generate_overview(evidence, list(all_records.values()), writing_adapter)
+    overview = live_wiki.generate_overview(
+        evidence, list(all_records.values()), writing_adapter, fetch_line_count=fetch_line_count
+    )
     upsert_wiki_overview(
         dsn, installation_id, repo_full_name, overview["description"], overview["diagram_mermaid"], source_commit
     )
@@ -1223,6 +1267,7 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
 
     naming_adapter = _live_wiki_naming_adapter()
     writing_adapter = _live_wiki_full_build_writing_adapter(plan)
+    fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, None)
     records = live_wiki.generate_subsystems(
         evidence,
         naming_adapter,
@@ -1232,8 +1277,12 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
             dsn, installation_id, repo_full_name, packet, output, used
         ),
         model_used=model_used,
+        fetch_line_count=fetch_line_count,
     )
-    _store_wiki_generation(dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None)
+    _store_wiki_generation(
+        dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None,
+        fetch_line_count=fetch_line_count,
+    )
 
 
 @log_job
@@ -1275,6 +1324,7 @@ def _maybe_update_live_wiki(
     dsn = settings.database_url
     naming_adapter = _live_wiki_naming_adapter()
     writing_adapter = _live_wiki_update_writing_adapter()
+    fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, head_sha)
     records = live_wiki.generate_subsystems(
         evidence,
         naming_adapter,
@@ -1285,7 +1335,9 @@ def _maybe_update_live_wiki(
             dsn, installation_id, repo_full_name, packet, output, used
         ),
         model_used=live_wiki.UPDATE_MODEL,
+        fetch_line_count=fetch_line_count,
     )
     _store_wiki_generation(
-        settings.database_url, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha
+        settings.database_url, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
+        fetch_line_count=fetch_line_count,
     )

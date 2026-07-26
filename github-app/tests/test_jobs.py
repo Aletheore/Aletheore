@@ -820,6 +820,7 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
     monkeypatch.setattr("scan_worker.jobs.gather_file_context", lambda *a, **k: "")
+    monkeypatch.setattr("scan_worker.jobs.fetch_changed_file_contents", lambda *a, **k: {})
     monkeypatch.setattr(
         "scan_worker.jobs.review_diff",
         lambda diff_text, file_context="", **kwargs: [
@@ -877,6 +878,7 @@ def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkey
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["dashboard.py"])
     monkeypatch.setattr("scan_worker.jobs.gather_file_context", lambda *a, **k: "")
+    monkeypatch.setattr("scan_worker.jobs.fetch_changed_file_contents", lambda *a, **k: {})
     monkeypatch.setattr(
         "scan_worker.jobs._latest_evidence_or_none",
         lambda *a, **k: {
@@ -922,6 +924,49 @@ def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkey
     assert "def _github_http_client() -> httpx.Client" in captured["referenced_symbol_context"]
 
 
+def test_flash_review_job_passes_changed_file_contents_to_review_diff(monkeypatch):
+    # Real production gap this closes: Flash Review can correctly quote a
+    # buggy string verbatim while citing the wrong line for it (confirmed
+    # on a real PR - see _line_citation_content_matches's docstring in
+    # flash_review.py). review_diff can only catch that if it's actually
+    # given the changed files' real content to check citations against.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_diff",
+        lambda *a, **k: "--- app.py ---\n@@ -1,1 +1,1 @@\n+broken",
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.gather_file_context", lambda *a, **k: "")
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_changed_file_contents",
+        lambda *a, **k: {"app.py": "real content of app.py"},
+    )
+    captured = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: captured.update(kwargs) or [],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert captured["file_contents"] == {"app.py": "real content of app.py"}
+
+
 def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestion_syntax(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(
@@ -940,6 +985,7 @@ def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestio
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
     monkeypatch.setattr("scan_worker.jobs.gather_file_context", lambda *a, **k: "")
+    monkeypatch.setattr("scan_worker.jobs.fetch_changed_file_contents", lambda *a, **k: {})
     monkeypatch.setattr(
         "scan_worker.jobs.review_diff",
         lambda diff_text, file_context="", **kwargs: [
@@ -980,6 +1026,7 @@ def test_flash_review_job_posts_no_issues_found_when_findings_empty(monkeypatch)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+fine")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
     monkeypatch.setattr("scan_worker.jobs.gather_file_context", lambda *a, **k: "")
+    monkeypatch.setattr("scan_worker.jobs.fetch_changed_file_contents", lambda *a, **k: {})
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda diff_text, file_context="", **kwargs: [])
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
@@ -1598,7 +1645,7 @@ def test_maybe_update_live_wiki_generates_and_stores_for_affected_clusters(monke
     stored = {}
     monkeypatch.setattr(
         "scan_worker.jobs._store_wiki_generation",
-        lambda dsn, iid, repo, evidence, records, adapter, commit: stored.update(
+        lambda dsn, iid, repo, evidence, records, adapter, commit, **k: stored.update(
             records=records, commit=commit
         ),
     )
@@ -1685,7 +1732,7 @@ def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
     stored = {}
     monkeypatch.setattr(
         "scan_worker.jobs._store_wiki_generation",
-        lambda dsn, iid, repo, evidence, records, adapter, commit: stored.update(
+        lambda dsn, iid, repo, evidence, records, adapter, commit, **k: stored.update(
             records=records, commit=commit
         ),
     )
@@ -1694,6 +1741,85 @@ def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
 
     assert stored["records"] == [fake_record]
     assert stored["commit"] is None
+
+
+def test_real_line_count_fetcher_returns_none_when_token_setup_fails(monkeypatch):
+    from scan_worker.jobs import _real_line_count_fetcher
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.generate_app_jwt",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no key configured")),
+    )
+
+    assert _real_line_count_fetcher(1, "octocat/hello-world", None) is None
+
+
+def test_real_line_count_fetcher_returns_real_line_count(monkeypatch):
+    from scan_worker.jobs import _real_line_count_fetcher
+
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_file_content",
+        lambda client, token, repo, path, ref: "one\ntwo\nthree" if path == "app.py" else None,
+    )
+
+    fetch_line_count = _real_line_count_fetcher(1, "octocat/hello-world", "sha1")
+
+    assert fetch_line_count is not None
+    assert fetch_line_count("app.py") == 3
+    assert fetch_line_count("missing.py") is None
+
+
+def test_run_live_wiki_full_build_job_passes_fetch_line_count_through(monkeypatch):
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"})
+    sentinel = lambda path: 42  # noqa: E731
+    monkeypatch.setattr("scan_worker.jobs._real_line_count_fetcher", lambda *a, **k: sentinel)
+
+    captured_subsystems = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems",
+        lambda *a, **k: captured_subsystems.update(k) or [],
+    )
+    captured_store = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs._store_wiki_generation",
+        lambda *a, **k: captured_store.update(k),
+    )
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert captured_subsystems["fetch_line_count"] is sentinel
+    assert captured_store["fetch_line_count"] is sentinel
+
+
+def test_maybe_update_live_wiki_passes_fetch_line_count_through(monkeypatch):
+    from scan_worker.jobs import _maybe_update_live_wiki
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"})
+    sentinel = lambda path: 42  # noqa: E731
+    monkeypatch.setattr("scan_worker.jobs._real_line_count_fetcher", lambda *a, **k: sentinel)
+
+    captured_subsystems = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems",
+        lambda *a, **k: captured_subsystems.update(k) or [],
+    )
+    captured_store = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs._store_wiki_generation",
+        lambda *a, **k: captured_store.update(k),
+    )
+
+    _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["auth/login.py"], "sha1")
+
+    assert captured_subsystems["fetch_line_count"] is sentinel
+    assert captured_store["fetch_line_count"] is sentinel
 
 
 def test_run_live_wiki_full_build_for_installation_job_enqueues_per_repo(monkeypatch):
