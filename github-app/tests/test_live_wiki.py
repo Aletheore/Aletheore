@@ -191,6 +191,41 @@ def test_build_subsystem_record_rejects_description_with_hallucinated_citation()
     assert build_subsystem_record(evidence, cluster, brief, "Authentication", adapter) is None
 
 
+def test_build_subsystem_record_rejects_description_citation_beyond_real_line_count():
+    # Closes the same documented gap as citation_verifier.py's
+    # verify_citations: without a real line count, a citation naming a
+    # real file but a fabricated line is reported as verified. When
+    # fetch_line_count is given, a citation beyond the file's real length
+    # is rejected the same way an unknown file already is.
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    adapter = _adapter(
+        json.dumps({"description": "See `auth/login.py:99999` for details.", "files": []})
+    )
+
+    record = build_subsystem_record(
+        evidence, cluster, brief, "Authentication", adapter, fetch_line_count=lambda path: 20
+    )
+
+    assert record is None
+
+
+def test_build_subsystem_record_keeps_description_citation_within_real_line_count():
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    adapter = _adapter(
+        json.dumps({"description": "See `auth/login.py:10` for details.", "files": []})
+    )
+
+    record = build_subsystem_record(
+        evidence, cluster, brief, "Authentication", adapter, fetch_line_count=lambda path: 20
+    )
+
+    assert record is not None
+
+
 def test_build_subsystem_record_uses_cache_hit_and_skips_model_call():
     evidence = make_evidence()
     cluster = evidence["architecture"]["clusters"][0]
@@ -348,6 +383,26 @@ def test_generate_overview_falls_back_on_hallucinated_citation():
     overview = generate_overview(evidence, subsystem_records, adapter)
 
     assert overview["description"] == "Overview description unavailable."
+
+
+def test_generate_overview_rejects_citation_beyond_real_line_count():
+    evidence = make_evidence()
+    subsystem_records = [{"subsystem_id": "0", "name": "Authentication", "description": "Handles login."}]
+    adapter = _adapter(json.dumps({"description": "See `auth/login.py:99999` for the entry point."}))
+
+    overview = generate_overview(evidence, subsystem_records, adapter, fetch_line_count=lambda path: 20)
+
+    assert overview["description"] == "Overview description unavailable."
+
+
+def test_generate_overview_keeps_citation_within_real_line_count():
+    evidence = make_evidence()
+    subsystem_records = [{"subsystem_id": "0", "name": "Authentication", "description": "Handles login."}]
+    adapter = _adapter(json.dumps({"description": "See `auth/login.py:10` for the entry point."}))
+
+    overview = generate_overview(evidence, subsystem_records, adapter, fetch_line_count=lambda path: 20)
+
+    assert overview["description"] == "See `auth/login.py:10` for the entry point."
 
 
 def test_affected_cluster_ids_maps_changed_files_to_clusters():

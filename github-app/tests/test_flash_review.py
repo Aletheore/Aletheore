@@ -4,7 +4,9 @@ from unittest.mock import MagicMock, patch
 from scan_worker.flash_review import (
     FLASH_REVIEW_SYSTEM_PROMPT,
     _diff_valid_lines,
+    _line_citation_content_matches,
     _names_referenced_in_diff,
+    _quoted_strings,
     _validate_findings,
     build_code_evidence_context,
     build_referenced_symbol_context,
@@ -50,6 +52,86 @@ def test_validate_findings_drops_finding_outside_diff_hunks():
     ]
 
     assert _validate_findings(findings, diff_text) == [{"file": "a.py", "line": 1, "issue": "valid"}]
+
+
+def test_quoted_strings_extracts_single_and_double_quoted_literals():
+    text = 'Missing quote: \'When "--cert" is set, "--key is not used.\''
+    assert _quoted_strings(text) == ['When "--cert" is set, "--key is not used.']
+
+
+def test_quoted_strings_ignores_short_quotes():
+    # Real code has lots of short quoted tokens ('x', "ok") that aren't
+    # meaningful anchors - only longer literal snippets are worth checking.
+    assert _quoted_strings("set x = 'ok'") == []
+
+
+def test_quoted_strings_returns_empty_for_no_quotes():
+    assert _quoted_strings("this issue names no literal string") == []
+
+
+def test_line_citation_content_matches_true_when_quoted_string_is_at_claimed_line():
+    finding = {"file": "a.py", "line": 3, "issue": 'missing quote: \'a specific buggy string here\''}
+    file_contents = {"a.py": "one\ntwo\na specific buggy string here\nfour"}
+
+    assert _line_citation_content_matches(finding, file_contents) is True
+
+
+def test_line_citation_content_matches_false_when_quoted_string_is_elsewhere():
+    # Reproduces the real production case: Flash Review quoted the exact
+    # buggy string verbatim but cited line 561 in a ~1000 line file when
+    # the string only actually appears at line 798 - the coarse diff-range
+    # check alone can't catch this because 561 is still "in the diff"
+    # (see PR #213, case 001-flask-cli-key-quote in the pr-review-benchmark
+    # corpus). This proves the claimed line's real content backs the claim.
+    lines = ["filler"] * 20
+    lines[1] = "a specific buggy string here"  # real location: line 2
+    finding = {"file": "a.py", "line": 15, "issue": "missing quote: 'a specific buggy string here'"}
+    file_contents = {"a.py": "\n".join(lines)}
+
+    assert _line_citation_content_matches(finding, file_contents) is False
+
+
+def test_line_citation_content_matches_tolerates_a_small_context_window():
+    finding = {"file": "a.py", "line": 2, "issue": 'missing quote: \'a specific buggy string here\''}
+    file_contents = {"a.py": "one\ntwo\na specific buggy string here\nfour"}
+
+    assert _line_citation_content_matches(finding, file_contents) is True
+
+
+def test_line_citation_content_matches_true_when_no_quoted_string_to_check():
+    finding = {"file": "a.py", "line": 1, "issue": "a vague issue with no literal quote"}
+    file_contents = {"a.py": "one\ntwo"}
+
+    assert _line_citation_content_matches(finding, file_contents) is True
+
+
+def test_line_citation_content_matches_true_when_file_content_unavailable():
+    finding = {"file": "missing.py", "line": 1, "issue": "'some specific quoted text'"}
+
+    assert _line_citation_content_matches(finding, {}) is True
+
+
+def test_line_citation_content_matches_false_when_line_out_of_bounds():
+    finding = {"file": "a.py", "line": 99, "issue": "anything"}
+    file_contents = {"a.py": "one\ntwo"}
+
+    assert _line_citation_content_matches(finding, file_contents) is False
+
+
+def test_validate_findings_drops_finding_whose_quoted_content_is_at_the_wrong_line():
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    findings = [
+        {"file": "a.py", "line": 15, "issue": "wrong line: 'a specific buggy string here'"},
+        {"file": "a.py", "line": 2, "issue": "right line: 'a specific buggy string here'"},
+    ]
+    file_lines = ["filler"] * 20
+    file_lines[1] = "a specific buggy string here"  # real location: line 2
+    file_contents = {"a.py": "\n".join(file_lines)}
+
+    assert _validate_findings(findings, diff_text, file_contents=file_contents) == [
+        {"file": "a.py", "line": 2, "issue": "right line: 'a specific buggy string here'"}
+    ]
 
 
 def test_is_non_substantive_diff_true_for_lockfile_only():
@@ -553,3 +635,61 @@ def test_gather_file_context_stops_at_total_byte_budget(monkeypatch):
     result = flash_review.gather_file_context(None, "tok", "o/r", ["a.py", "b.py", "c.py"], "sha")
 
     assert result.count("0123456789") == 1
+
+
+def test_fetch_changed_file_contents_returns_path_to_content_mapping(monkeypatch):
+    from scan_worker import flash_review
+
+    def fake_fetch(client, token, repo, path, ref):
+        return f"content of {path}"
+
+    monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
+
+    result = flash_review.fetch_changed_file_contents(None, "tok", "o/r", ["a.py", "b.py"], "sha")
+
+    assert result == {"a.py": "content of a.py", "b.py": "content of b.py"}
+
+
+def test_fetch_changed_file_contents_skips_files_where_fetch_returns_none(monkeypatch):
+    from scan_worker import flash_review
+
+    def fake_fetch(client, token, repo, path, ref):
+        return None if path == "missing.py" else "real content"
+
+    monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
+
+    result = flash_review.fetch_changed_file_contents(None, "tok", "o/r", ["a.py", "missing.py"], "sha")
+
+    assert result == {"a.py": "real content"}
+
+
+def test_fetch_changed_file_contents_skips_oversized_files(monkeypatch):
+    from scan_worker import flash_review
+
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILE_BYTES", 5)
+
+    def fake_fetch(client, token, repo, path, ref):
+        return "way too long for the cap"
+
+    monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
+
+    result = flash_review.fetch_changed_file_contents(None, "tok", "o/r", ["a.py"], "sha")
+
+    assert result == {}
+
+
+def test_fetch_changed_file_contents_stops_at_max_files(monkeypatch):
+    from scan_worker import flash_review
+
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILES", 2)
+    fetched = []
+
+    def fake_fetch(client, token, repo, path, ref):
+        fetched.append(path)
+        return "x" * 10
+
+    monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
+
+    flash_review.fetch_changed_file_contents(None, "tok", "o/r", ["a.py", "b.py", "c.py", "d.py"], "sha")
+
+    assert fetched == ["a.py", "b.py"]
