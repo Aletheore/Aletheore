@@ -109,6 +109,24 @@ async def _administered_installation_ids(github_token: str) -> set[int]:
     return {item["id"] for item in response.json().get("installations", [])}
 
 
+async def _administered_installation_ids_or_401(github_token: str) -> set[int]:
+    """Same as _administered_installation_ids, but for JSON API callers that
+    just want a clean 401/502 rather than handling httpx.HTTPStatusError
+    themselves - unlike /subscribe (frontend.py), which needs the raw
+    exception to redirect to sign-in and clear the dead session cookie, a
+    JSON endpoint's caller is the frontend's own apiGet() helper, which
+    already redirects to sign-in on any 401 response. Before this existed,
+    a revoked/expired GitHub token here surfaced as an unhandled 500 whose
+    non-JSON body then crashed the page trying to parse it as JSON.
+    """
+    try:
+        return await _administered_installation_ids(github_token)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (401, 403):
+            raise HTTPException(status_code=401, detail="GitHub session expired - please sign in again") from exc
+        raise HTTPException(status_code=502, detail="GitHub API unavailable") from exc
+
+
 def _bearer_github_token(request: Request) -> str:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -149,7 +167,7 @@ async def _require_admin_installation(request: Request, org: str, repo: str) -> 
 
     pool = request.app.state.db_pool
     installation_id = await _repo_installation_id(pool, org, repo)
-    administered_ids = await _administered_installation_ids(session["github_access_token"])
+    administered_ids = await _administered_installation_ids_or_401(session["github_access_token"])
     if installation_id not in administered_ids:
         raise HTTPException(status_code=403, detail="you do not administer this installation")
 
@@ -292,7 +310,7 @@ async def remove_health_check_target_route(org: str, repo: str, target_id: int, 
 @admin_router.get("/v1/my-installations")
 async def my_installations(request: Request):
     github_token = _bearer_github_token(request)
-    administered_ids = await _administered_installation_ids(github_token)
+    administered_ids = await _administered_installation_ids_or_401(github_token)
     rows = await request.app.state.db_pool.fetch(
         """
         SELECT installation_id, account_login
@@ -310,7 +328,7 @@ async def create_cli_token(request: Request, body: CreateCliTokenRequest):
     github_token = _bearer_github_token(request)
     installation_id = body.installation_id
 
-    administered_ids = await _administered_installation_ids(github_token)
+    administered_ids = await _administered_installation_ids_or_401(github_token)
     if installation_id not in administered_ids:
         raise HTTPException(status_code=403, detail="you do not administer this installation")
 

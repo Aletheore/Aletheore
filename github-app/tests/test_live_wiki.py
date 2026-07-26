@@ -2,11 +2,23 @@ import json
 from unittest.mock import MagicMock
 
 from scan_worker.live_wiki import (
+    FLASH_MODEL,
+    UPDATE_MODEL,
     build_subsystem_record,
     generate_overview,
     generate_subsystems,
     propose_cluster_names,
 )
+
+
+def test_incremental_update_model_stays_on_flash():
+    # Regression guard: incremental updates fire on every push, for every
+    # paid tier, per this module's own docstring ("so it stays cheap even
+    # for higher tiers"). UPDATE_MODEL was accidentally set to the Pro
+    # model from the very first commit - this went undetected until real
+    # billing data surfaced it, since nothing asserted the constant's
+    # actual value.
+    assert UPDATE_MODEL == FLASH_MODEL
 
 
 def make_evidence() -> dict:

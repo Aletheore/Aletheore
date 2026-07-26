@@ -124,6 +124,51 @@ async def test_app_repos_response_is_not_cacheable(pool, monkeypatch):
     assert response.headers["cache-control"] == "no-store"
 
 
+async def _logged_in_client_with_github_failure(pool, monkeypatch, status_code: int):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    await create_session(
+        pool,
+        "sess-1",
+        42,
+        "octocat",
+        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, text="not json")
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    app.state.db_pool = pool
+    signed = sign_session_id("sess-1", "test-session-secret")
+    transport = ASGITransport(app=app)
+    return AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed})
+
+
+@pytest.mark.asyncio
+async def test_list_my_repos_returns_401_when_github_token_expired(pool, monkeypatch):
+    # A stored GitHub token can be revoked or expire after the local
+    # session was created - this must surface as a clean 401 (which every
+    # frontend page's apiGet() already redirects to sign-in on), not an
+    # unhandled 500 whose non-JSON body then crashes the page's res.json().
+    client = await _logged_in_client_with_github_failure(pool, monkeypatch, status_code=401)
+    async with client:
+        response = await client.get("/app/repos")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_list_my_repos_returns_502_on_github_outage(pool, monkeypatch):
+    client = await _logged_in_client_with_github_failure(pool, monkeypatch, status_code=503)
+    async with client:
+        response = await client.get("/app/repos")
+    assert response.status_code == 502
+
+
 @pytest.mark.asyncio
 async def test_list_my_repos_empty_for_no_administered_installations(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[])

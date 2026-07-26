@@ -232,14 +232,14 @@ table.findings tr:last-child td { border-bottom: none; }
 .diagram-wrap.diagram-zoomable { cursor: zoom-in; }
 .diagram-zoom-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(10, 8, 4, 0.82);
   overflow: auto; padding: 100px 40px; cursor: zoom-out; }
-.diagram-zoom-content { cursor: default; display: table; margin: 0 auto; }
+.diagram-zoom-content { cursor: default; display: inline-block; }
 .diagram-zoom-content svg { max-width: none; display: block; }
 .diagram-zoom-hint { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 1001;
   font-size: 12px; color: #F5F0E6; background: rgba(0, 0, 0, 0.45); padding: 6px 13px; border-radius: 99px; pointer-events: none; }
 .subsystem-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .subsystem-card { border: 1px solid var(--border); border-radius: 9px; padding: 11px 12px; text-align: left; background: var(--paper); cursor: pointer; font-family: var(--font-sans); }
 .subsystem-card:hover { border-color: var(--border-strong); }
-.subsystem-name { font-size: 13px; font-weight: 500; margin-bottom: 3px; }
+.subsystem-name { font-size: 13px; font-weight: 500; margin-bottom: 3px; color: var(--accent-strong); }
 .subsystem-desc { font-size: 12px; color: var(--slate-600); line-height: 1.55; }
 .subsystem-files { font-family: var(--font-mono); font-size: 10.5px; color: var(--slate-400); margin-top: 8px; }
 .subsystem-detail { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }
@@ -279,6 +279,10 @@ FETCH_HELPERS = """
 async function apiGet(url) {
   const res = await fetch(url);
   if (res.status === 401) { window.location.href = '/'; return null; }
+  if (!res.ok) {
+    console.error('apiGet failed: ' + url + ' -> ' + res.status);
+    return null;
+  }
   return res;
 }
 function relativeTime(iso) {
@@ -973,6 +977,14 @@ function openDiagramZoom(svgHtml) {{
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
   document.addEventListener('keydown', onDiagramZoomKeydown);
+  // Centering via margin:auto (the previous approach) leaves half of a
+  // diagram wider than the viewport permanently unreachable by scroll in
+  // most browsers - overflow past a centered element's near edge doesn't
+  // register as scrollable range. Centering the scroll position instead,
+  // on an unadorned top-left-anchored content box, keeps every part of
+  // the diagram reachable in both directions regardless of its size.
+  overlay.scrollLeft = (content.scrollWidth - overlay.clientWidth) / 2;
+  overlay.scrollTop = (content.scrollHeight - overlay.clientHeight) / 2;
 }}
 
 function onDiagramZoomKeydown(e) {{

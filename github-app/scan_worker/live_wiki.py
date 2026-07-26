@@ -4,10 +4,10 @@ the deterministic briefs/diagrams in aletheore.wiki_mapping/wiki_diagrams.
 Naming always uses Flash - cheap, fast, low-stakes (just picking a
 readable label for a cluster the scanner already found). Writing uses
 the pricing tier's model (see scan_worker/model_tiers.py) for the
-one-time initial build, and Flash/DeepSeek for every incremental update
-after that regardless of tier - frequent, on every push, so it stays
-cheap even for higher tiers. Both use this module's same functions -
-which adapter to pass in is the caller's decision (see jobs.py).
+one-time initial build, and Flash for every incremental update after
+that regardless of tier - frequent, on every push, so it stays cheap
+even for higher tiers. Both use this module's same functions - which
+adapter to pass in is the caller's decision (see jobs.py).
 
 Every model response is validated against the deterministic brief it was
 given before being trusted: a file, function, or line number the model
@@ -27,7 +27,7 @@ from aletheore.wiki_diagrams import build_overview_diagram, build_subsystem_diag
 from aletheore.wiki_mapping import build_cluster_briefs
 
 FLASH_MODEL = "deepseek-v4-flash"
-UPDATE_MODEL = "deepseek-v4-pro"
+UPDATE_MODEL = "deepseek-v4-flash"
 
 logger = logging.getLogger(__name__)
 
