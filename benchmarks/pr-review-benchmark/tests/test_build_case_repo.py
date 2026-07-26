@@ -44,3 +44,34 @@ def test_prepare_case_checkout_applies_pr_diff_on_base_commit(tmp_path):
     )
 
     assert (checkout_dir / "x.py").read_text() == "value = 2\n"
+
+
+def test_prepare_case_checkout_raises_runtime_error_with_stderr_on_git_apply_failure(tmp_path):
+    """Test that git apply failures are surfaced with stderr text."""
+    remote, base_commit, diff_path = make_fixture_repo(tmp_path)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    # Create a diff that won't apply by modifying the file after base_commit
+    # in a way that makes the original diff incompatible
+    bad_diff_path = tmp_path / "bad.diff"
+    bad_diff_path.write_text(
+        """--- a/x.py
++++ b/x.py
+@@ -1 +1 @@
+-value = 999
++value = 2
+"""
+    )
+
+    try:
+        prepare_case_checkout(
+            {"repo_url": str(remote), "base_commit": base_commit}, bad_diff_path, workdir
+        )
+        assert False, "Expected RuntimeError to be raised"
+    except RuntimeError as e:
+        error_msg = str(e)
+        # Verify the error message contains "git apply failed" and stderr content
+        assert "git apply failed" in error_msg
+        # stderr should contain indication of patch failure
+        assert "patch" in error_msg.lower() or "error" in error_msg.lower()
