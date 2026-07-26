@@ -270,21 +270,21 @@ print(f"Anonymized outputs in {anon['anon_dir']}/")
 **Output structure after running all cases:**
 ```
 benchmarks/pr-review-benchmark/results/
-  raw/<case-id>/
-    aletheore.json          # tool's raw output
+  raw/<case-id>/              # (all local/uncommitted working state)
+    aletheore.json            # tool's raw output
     pr_agent.json
     deepsource.json
-    coderabbit.json         # (not committed to repo)
-  grounding/<case-id>/
-    aletheore.json          # grounding check: {total_findings, verified, unverified, grounding_rate}
+    coderabbit.json
+  grounding/<case-id>/        # (all local/uncommitted working state)
+    aletheore.json            # grounding check: {total_findings, verified, unverified, grounding_rate}
     pr_agent.json
     ...
-  anon/<case-id>/
-    tool_a.json             # anonymized findings
+  anon/<case-id>/             # (all local/uncommitted working state)
+    tool_a.json               # anonymized findings
     tool_b.json
     tool_c.json
     tool_d.json
-  sealed/<case-id>.json     # mapping: {"Tool A": "aletheore", "Tool B": "pr_agent", ...}
+  sealed/<case-id>.json       # (local/uncommitted working state)
 ```
 
 ## Step 4: Manual Blind Scoring
