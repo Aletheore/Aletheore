@@ -854,6 +854,74 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     assert recorded_spend == [0.0]
 
 
+def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkeypatch):
+    # Real hallucination this exists to prevent: Flash Review claimed an
+    # imported function needed `await`, citing "usage in admin.py", when
+    # admin.py's real (synchronous) definition was never in its context.
+    # Proves the job actually wires a changed file's imported-and-referenced
+    # symbol's real source into review_diff, not just that the pure
+    # function (already covered in test_flash_review.py) works in isolation.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_diff",
+        lambda *a, **k: "--- dashboard.py ---\n@@ -1,1 +75,1 @@\n+_github_http_client()\n",
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["dashboard.py"])
+    monkeypatch.setattr("scan_worker.jobs.gather_file_context", lambda *a, **k: "")
+    monkeypatch.setattr(
+        "scan_worker.jobs._latest_evidence_or_none",
+        lambda *a, **k: {
+            "repository": {
+                "modules": [
+                    {"path": "dashboard.py", "imports": ["admin.py"], "symbols": {"functions": [], "classes": []}},
+                    {
+                        "path": "admin.py",
+                        "imports": [],
+                        "symbols": {
+                            "functions": [
+                                {"name": "_github_http_client", "start_line": 2, "end_line": 3}
+                            ],
+                            "classes": [],
+                        },
+                    },
+                ],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_file_content",
+        lambda client, token, repo_full_name, path, ref: (
+            "line1\ndef _github_http_client() -> httpx.Client:\n    return httpx.Client()\nline4"
+            if path == "admin.py"
+            else None
+        ),
+    )
+    captured = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: captured.update(kwargs) or [],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert "admin.py:_github_http_client" in captured["referenced_symbol_context"]
+    assert "def _github_http_client() -> httpx.Client" in captured["referenced_symbol_context"]
+
+
 def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestion_syntax(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(

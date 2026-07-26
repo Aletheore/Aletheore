@@ -4,8 +4,10 @@ from unittest.mock import MagicMock, patch
 from scan_worker.flash_review import (
     FLASH_REVIEW_SYSTEM_PROMPT,
     _diff_valid_lines,
+    _names_referenced_in_diff,
     _validate_findings,
     build_code_evidence_context,
+    build_referenced_symbol_context,
     is_non_substantive_diff,
     review_diff,
 )
@@ -298,6 +300,135 @@ def test_review_diff_suggestion_field_is_optional(mock_adapter_class):
     findings = review_diff("--- a.py ---\n@@ -1,1 +3,1 @@\n+thing")
 
     assert findings == [{"file": "a.py", "line": 3, "issue": "off-by-one"}]
+
+
+def test_names_referenced_in_diff_extracts_identifiers_from_added_lines_only():
+    diff_text = (
+        "--- a.py ---\n@@ -1,2 +1,3 @@\n"
+        " unchanged_name(x)\n"
+        "+result = _github_http_client().get(x)\n"
+        "-removed_name(x)\n"
+    )
+    names = _names_referenced_in_diff(diff_text)
+    assert "_github_http_client" in names
+    assert "result" in names
+    assert "unchanged_name" not in names
+    assert "removed_name" not in names
+
+
+def _evidence_with_two_modules():
+    return {
+        "repository": {
+            "modules": [
+                {
+                    "path": "dashboard.py",
+                    "imports": ["admin.py"],
+                    "symbols": {"functions": [], "classes": []},
+                },
+                {
+                    "path": "admin.py",
+                    "imports": [],
+                    "symbols": {
+                        "functions": [
+                            {"name": "_github_http_client", "start_line": 10, "end_line": 12}
+                        ],
+                        "classes": [],
+                    },
+                },
+            ],
+        },
+    }
+
+
+def test_build_referenced_symbol_context_includes_symbol_actually_referenced_in_diff():
+    # Root cause of a real hallucinated finding: Flash Review claimed an
+    # imported function needed `await`, citing "usage in admin.py" as
+    # justification - but admin.py's real (synchronous) definition was
+    # never in its context at all, since only CHANGED files' content and
+    # evidence were ever gathered. This resolves the real source of any
+    # symbol a changed file imports from an unchanged file, when that
+    # symbol is actually referenced by name in the diff.
+    evidence = _evidence_with_two_modules()
+    diff_text = (
+        "--- dashboard.py ---\n@@ -1,1 +75,3 @@\n"
+        "+        response = _github_http_client().get(\n"
+    )
+    fetched = {}
+
+    def fake_fetch(file_path, start_line, end_line):
+        fetched["args"] = (file_path, start_line, end_line)
+        return "def _github_http_client() -> httpx.Client:\n    return httpx.Client(...)"
+
+    context = build_referenced_symbol_context(evidence, ["dashboard.py"], diff_text, fake_fetch)
+
+    assert fetched["args"] == ("admin.py", 10, 12)
+    assert "admin.py:_github_http_client" in context
+    assert "def _github_http_client() -> httpx.Client" in context
+
+
+def test_build_referenced_symbol_context_skips_symbols_not_referenced_in_diff():
+    evidence = _evidence_with_two_modules()
+    diff_text = "--- dashboard.py ---\n@@ -1,1 +1,1 @@\n+something_unrelated()\n"
+
+    def fake_fetch(*args):
+        raise AssertionError("must not fetch a symbol never referenced in the diff")
+
+    context = build_referenced_symbol_context(evidence, ["dashboard.py"], diff_text, fake_fetch)
+    assert context == ""
+
+
+def test_build_referenced_symbol_context_skips_imports_that_are_also_changed_files():
+    # If the imported file is itself part of this diff, its own content is
+    # already in file_context - re-including it here would be redundant,
+    # not a grounding gap.
+    evidence = _evidence_with_two_modules()
+    diff_text = "--- dashboard.py ---\n@@ -1,1 +1,1 @@\n+_github_http_client()\n"
+
+    def fake_fetch(*args):
+        raise AssertionError("must not re-fetch a symbol from a file already in changed_files")
+
+    context = build_referenced_symbol_context(
+        evidence, ["dashboard.py", "admin.py"], diff_text, fake_fetch
+    )
+    assert context == ""
+
+
+def test_build_referenced_symbol_context_returns_empty_without_evidence():
+    context = build_referenced_symbol_context(None, ["dashboard.py"], "+_github_http_client()", lambda *a: "x")
+    assert context == ""
+
+
+def test_build_referenced_symbol_context_skips_when_fetch_returns_none():
+    evidence = _evidence_with_two_modules()
+    diff_text = "--- dashboard.py ---\n@@ -1,1 +1,1 @@\n+_github_http_client()\n"
+    context = build_referenced_symbol_context(evidence, ["dashboard.py"], diff_text, lambda *a: None)
+    assert context == ""
+
+
+@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+def test_review_diff_includes_referenced_symbol_context_in_prompt(mock_adapter_class):
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = "[]"
+    mock_adapter_class.return_value = mock_adapter
+
+    review_diff(
+        "--- a.py ---\n@@ -1,1 +1,1 @@\n+thing",
+        referenced_symbol_context="--- referenced definition (not part of this diff): admin.py:_github_http_client ---\ndef _github_http_client() -> httpx.Client: ...",
+    )
+
+    user_prompt = mock_adapter.simple_completion.call_args[0][1]
+    assert "referenced definition" in user_prompt
+    assert "_github_http_client" in user_prompt
+
+
+def test_system_prompt_instructs_model_not_to_guess_about_unresolved_symbols():
+    # The same real hallucination this whole change exists to prevent: a
+    # claim about an imported symbol's behavior with no real definition in
+    # context. Proves the instruction exists, not that a live model obeys
+    # it (untestable without a real call).
+    normalized = " ".join(FLASH_REVIEW_SYSTEM_PROMPT.lower().split())
+    assert "referenced definition" in normalized
+    assert "do not guess" in normalized or "never guess" in normalized
 
 
 def test_system_prompt_instructs_model_to_treat_diff_content_as_data_not_instructions():

@@ -62,6 +62,7 @@ from scan_worker.db import (
 )
 from scan_worker.flash_review import (
     build_code_evidence_context,
+    build_referenced_symbol_context,
     gather_file_context,
     is_non_substantive_diff,
     review_diff,
@@ -667,6 +668,16 @@ def run_flash_review_job(
             file_context = gather_file_context(client, token, repo_full_name, changed_files, head_sha)
             evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
             code_evidence_context = build_code_evidence_context(evidence, changed_files)
+
+            def _fetch_symbol_source(file_path: str, start_line: int, end_line: int) -> str | None:
+                content = fetch_file_content(client, token, repo_full_name, file_path, head_sha)
+                if content is None:
+                    return None
+                return "\n".join(content.splitlines()[start_line - 1 : end_line])
+
+            referenced_symbol_context = build_referenced_symbol_context(
+                evidence, changed_files, diff_text, _fetch_symbol_source
+            )
             dsn = settings.database_url
 
             def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
@@ -686,6 +697,7 @@ def run_flash_review_job(
                     file_context=file_context,
                     code_evidence_context=code_evidence_context,
                     on_usage=_on_usage,
+                    referenced_symbol_context=referenced_symbol_context,
                     cache_lookup=_cache_lookup,
                     cache_write=_cache_write,
                     model_used="deepseek-v4-flash",
@@ -695,6 +707,7 @@ def run_flash_review_job(
                     diff_text,
                     file_context=file_context,
                     on_usage=_on_usage,
+                    referenced_symbol_context=referenced_symbol_context,
                     cache_lookup=_cache_lookup,
                     cache_write=_cache_write,
                     model_used="deepseek-v4-flash",
