@@ -105,6 +105,25 @@ def test_build_module_graph_ignores_cache_and_build_dirs(tmp_path):
     assert {m["path"] for m in modules} == {"main.py"}
 
 
+def test_build_module_graph_ignores_nested_git_worktree(tmp_path):
+    # Same real-world bug as test_detect.py's version of this test: a linked git
+    # worktree is a directory (any name) containing its own `.git` file, and its
+    # contents duplicated every real module in a live scan (confirmed: 203 of 492
+    # modules were `.claude/worktrees/<name>/`-prefixed duplicates of real files).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("x = 1\n")
+
+    worktree = repo / "some-custom-worktree-name"
+    worktree.mkdir()
+    (worktree / ".git").write_text("gitdir: /elsewhere/.git/worktrees/some-custom-worktree-name\n")
+    (worktree / "main.py").write_text("x = 1\ny = 2\n")
+
+    modules, _, unparseable = build_module_graph(repo)
+    assert unparseable == []
+    assert {m["path"] for m in modules} == {"main.py"}
+
+
 def test_build_module_graph_extracts_typescript_imports(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
