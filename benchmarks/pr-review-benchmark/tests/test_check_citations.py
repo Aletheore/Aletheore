@@ -50,3 +50,23 @@ def test_verify_findings_handles_empty_findings_list(tmp_path):
         "unverified": [],
         "grounding_rate": None,
     }
+
+
+def test_verify_findings_rejects_absolute_path_outside_checkout(tmp_path):
+    checkout = make_checkout(tmp_path)
+    # Absolute path that escapes checkout_dir
+    findings = [{"file": "/etc/hosts", "line": 1, "message": "absolute path", "severity": None}]
+    result = verify_findings_against_checkout(findings, checkout)
+    assert result["verified"] == []
+    assert result["unverified"] == findings
+    assert result["grounding_rate"] == 0.0
+
+
+def test_verify_findings_rejects_traversal_path_outside_checkout(tmp_path):
+    checkout = make_checkout(tmp_path)
+    # Path traversal that escapes checkout_dir
+    findings = [{"file": "../../../../../../etc/hosts", "line": 1, "message": "traversal", "severity": None}]
+    result = verify_findings_against_checkout(findings, checkout)
+    assert result["verified"] == []
+    assert result["unverified"] == findings
+    assert result["grounding_rate"] == 0.0

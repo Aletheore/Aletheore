@@ -8,13 +8,18 @@ from pathlib import Path
 def verify_findings_against_checkout(findings: list[dict], checkout_dir: Path) -> dict:
     verified = []
     unverified = []
+    checkout_dir = Path(checkout_dir).resolve()
     for finding in findings:
         file_path = finding.get("file")
         line = finding.get("line")
         if not file_path:
             unverified.append(finding)
             continue
-        full_path = Path(checkout_dir) / file_path
+        full_path = (checkout_dir / file_path).resolve()
+        # Ensure the resolved path is actually within checkout_dir (no escapes)
+        if not full_path.is_relative_to(checkout_dir):
+            unverified.append(finding)
+            continue
         if not full_path.is_file():
             unverified.append(finding)
             continue
