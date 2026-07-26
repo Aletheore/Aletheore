@@ -7,6 +7,8 @@ from scan_worker.jobs import (
     GRAPH_BRANCH,
     _attach_recent_commit_for_failure,
     _dependency_context_attachment,
+    _find_enclosing_symbol,
+    _fix_suggestion_attachment,
     _owner_attachment_from_graph,
 )
 from scan_worker.postgres_graph_store import PostgresRepoGraphStore
@@ -139,6 +141,7 @@ def test_attach_recent_commit_for_failure_combines_commit_owner_and_dependency_a
             "evidence_status": "unavailable",
         },
     )
+    monkeypatch.setattr("scan_worker.jobs._fix_suggestion_attachment", lambda *a, **k: None)
 
     result = _attach_recent_commit_for_failure(
         FakeSettings(),
@@ -164,6 +167,7 @@ def test_attach_recent_commit_for_failure_still_returns_something_when_only_comm
         ],
     )
     monkeypatch.setattr("scan_worker.jobs._owner_attachment_from_graph", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._fix_suggestion_attachment", lambda *a, **k: None)
 
     class FakeSettings:
         github_app_id = "x"
@@ -182,6 +186,7 @@ def test_attach_recent_commit_for_failure_returns_original_resolution_when_nothi
     monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "token")
     monkeypatch.setattr("scan_worker.jobs.fetch_recent_commits_for_path", lambda *a, **k: [])
     monkeypatch.setattr("scan_worker.jobs._owner_attachment_from_graph", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._fix_suggestion_attachment", lambda *a, **k: None)
 
     class FakeSettings:
         github_app_id = "x"
@@ -191,3 +196,131 @@ def test_attach_recent_commit_for_failure_returns_original_resolution_when_nothi
     result = _attach_recent_commit_for_failure(FakeSettings(), 901, "org/repo", "x.py", original, None)
 
     assert result is original
+
+
+def _module_with_symbol(path: str, name: str, start: int, end: int) -> dict:
+    return {
+        "path": path,
+        "imports": [],
+        "imported_by": [],
+        "symbols": {"functions": [{"name": name, "start_line": start, "end_line": end}], "classes": []},
+    }
+
+
+def test_find_enclosing_symbol_finds_containing_function():
+    evidence = {"repository": {"modules": [_module_with_symbol("app/handler.py", "do_login", 10, 25)]}}
+    assert _find_enclosing_symbol(evidence, "app/handler.py", 15) == "do_login"
+
+
+def test_find_enclosing_symbol_returns_none_outside_any_symbol_range():
+    evidence = {"repository": {"modules": [_module_with_symbol("app/handler.py", "do_login", 10, 25)]}}
+    assert _find_enclosing_symbol(evidence, "app/handler.py", 100) is None
+
+
+def test_find_enclosing_symbol_returns_none_without_line_or_evidence():
+    assert _find_enclosing_symbol(None, "app/handler.py", 15) is None
+    evidence = {"repository": {"modules": [_module_with_symbol("app/handler.py", "do_login", 10, 25)]}}
+    assert _find_enclosing_symbol(evidence, "app/handler.py", None) is None
+
+
+class FakeHealthSettings:
+    github_app_id = "x"
+    github_app_private_key = "y"
+
+
+def test_fix_suggestion_attachment_returns_none_when_file_content_unavailable(monkeypatch):
+    monkeypatch.setattr("scan_worker.jobs.get_settings", lambda: FakeHealthSettings())
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "jwt")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "token")
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
+
+    result = _fix_suggestion_attachment(901, "org/repo", "app/handler.py", 15, "GET", "/v1/users", 500, None)
+
+    assert result is None
+
+
+def test_fix_suggestion_attachment_returns_none_when_model_says_unknown(monkeypatch):
+    monkeypatch.setattr("scan_worker.jobs.get_settings", lambda: FakeHealthSettings())
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "jwt")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "token")
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "def do_login():\n    pass\n")
+
+    class FakeAdapter:
+        def simple_completion(self, system_prompt, user_prompt, cwd):
+            return "unknown"
+
+    monkeypatch.setattr("scan_worker.jobs._health_fix_suggestion_adapter", lambda: FakeAdapter())
+
+    result = _fix_suggestion_attachment(901, "org/repo", "app/handler.py", 15, "GET", "/v1/users", 500, None)
+
+    assert result is None
+
+
+def test_fix_suggestion_attachment_returns_suggestion_when_model_succeeds(monkeypatch):
+    monkeypatch.setattr("scan_worker.jobs.get_settings", lambda: FakeHealthSettings())
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "jwt")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "token")
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "def do_login():\n    pass\n")
+
+    class FakeAdapter:
+        def simple_completion(self, system_prompt, user_prompt, cwd):
+            return "  The DB connection pool is exhausted; increase max_connections.  "
+
+    monkeypatch.setattr("scan_worker.jobs._health_fix_suggestion_adapter", lambda: FakeAdapter())
+
+    result = _fix_suggestion_attachment(901, "org/repo", "app/handler.py", 15, "GET", "/v1/users", 500, None)
+
+    assert result is not None
+    assert result["kind"] == "suggestion"
+    assert result["suggestion"] == "The DB connection pool is exhausted; increase max_connections."
+    assert result["suggestion_status"] == "available"
+
+
+def test_fix_suggestion_attachment_degrades_gracefully_on_any_failure(monkeypatch):
+    def _raise(*a, **k):
+        raise RuntimeError("github app auth broken")
+
+    monkeypatch.setattr("scan_worker.jobs.get_settings", lambda: FakeHealthSettings())
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", _raise)
+
+    result = _fix_suggestion_attachment(901, "org/repo", "app/handler.py", 15, "GET", "/v1/users", 500, None)
+
+    assert result is None
+
+
+def test_attach_recent_commit_for_failure_includes_suggestion_when_available(monkeypatch):
+    class FakeSettings:
+        github_app_id = "x"
+        github_app_private_key = "y"
+
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "jwt")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "token")
+    monkeypatch.setattr("scan_worker.jobs.fetch_recent_commits_for_path", lambda *a, **k: [])
+    monkeypatch.setattr("scan_worker.jobs._owner_attachment_from_graph", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs._fix_suggestion_attachment",
+        lambda *a, **k: {
+            "kind": "suggestion",
+            "file": None,
+            "line": None,
+            "end_line": None,
+            "symbol": None,
+            "owner": None,
+            "owner_status": "unavailable",
+            "commit": None,
+            "commit_status": "unavailable",
+            "dependency": None,
+            "dependency_status": "unavailable",
+            "risk": [],
+            "risk_status": "unavailable",
+            "suggestion": "increase the connection pool size",
+            "suggestion_status": "available",
+            "confidence": "inferred",
+            "evidence_path": None,
+            "evidence_status": "unavailable",
+        },
+    )
+
+    result = _attach_recent_commit_for_failure(FakeSettings(), 901, "org/repo", "app/handler.py", None, None)
+
+    assert result["suggestion"] == "increase the connection pool size"
