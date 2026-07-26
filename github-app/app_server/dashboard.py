@@ -304,3 +304,19 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
             for row in rows
         ],
     }
+
+
+@dashboard_router.get("/api/admin/github-rate-limit")
+async def github_rate_limit(request: Request) -> dict:
+    session = await get_current_session(request)
+    await _administered_installation_ids_or_401(session["github_access_token"])
+
+    response = _github_http_client().get("/rate_limit")
+    response.raise_for_status()
+    payload = response.json()
+
+    return {
+        "limit": payload["resources"]["core"]["limit"],
+        "remaining": payload["resources"]["core"]["remaining"],
+        "reset_at": payload["resources"]["core"]["reset"],
+    }
