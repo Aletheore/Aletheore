@@ -49,7 +49,7 @@ __pycache__/
 # Brainstorming visual-companion mockups (local scratch, not part of the shipped site)
 .superpowers/
 
-# PR-review benchmark: CodeRabbit's raw transcript is never committed (ToS §4.2 — see
-# docs/superpowers/specs/2026-07-26-aletheore-pr-review-benchmark-design.md); only its
-# anonymized scored summary is published.
-benchmarks/pr-review-benchmark/results/raw/*/coderabbit.json
+# PR-review benchmark: results/ is working state (raw tool outputs, grounding checks,
+# anonymized findings, scored results, llm judge output) — only the published deliverables
+# (REPORT.md, METHODOLOGY.md, cases/) are committed. See README.md → Step 3 for details.
+benchmarks/pr-review-benchmark/results/

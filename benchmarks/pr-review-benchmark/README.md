@@ -21,7 +21,7 @@ See the full design spec in `docs/superpowers/specs/2026-07-26-aletheore-pr-revi
 The benchmark corpus lives in `benchmarks/pr-review-benchmark/cases/`, with one subdirectory per case. Cases must be authored before running the pipeline; see `docs/superpowers/specs/2026-07-26-aletheore-pr-review-benchmark-design.md` → "Test Corpus & Ground Truth" for the full procedure, and refer to `cases/001-flask-cli-key-quote/` as a worked example.
 
 **Each case directory must contain:**
-- `repo.txt` — two lines: `repo_url=<https://github.com/...>` and `base_commit=<commit-hash>`
+- `repo.txt` — initially two lines: `repo_url=<https://github.com/...>` and `base_commit=<commit-hash>`. After opening the real PR in Step 1, append two more lines: `pr_url=<the PR URL>` and `deepsource_run_id=<from DeepSource's API once configured>` (see Step 3 for how to populate these after running tools)
 - `pr.diff` — the PR diff (for real bugs, this is the *inverse* of the fix, reintroducing the bug)
 - `ground_truth.yaml` — structured metadata: `case_id`, `language`, `category` (one of `real_bug_fix`, `injected_bug`, `clean`), `bug_type`, `expected_file`, `expected_line`, `fix_reference` (URL to the fix or `null`), and `description`
 - `ground_truth.md` — 2–4 sentence prose explanation for the published report
@@ -81,26 +81,31 @@ export DEEPSEEK_API_KEY="<your-deepseek-api-key>"
 
 ### Aletheore Configuration
 
-Aletheore supports OpenAI-compatible endpoints via the `openai_compatible` adapter. To run Aletheore's audit against DeepSeek:
+Aletheore supports OpenAI-compatible endpoints via the `OpenAICompatibleAdapter` class. However, **DeepSeek is not yet registered** in `src/aletheore/cli.py`'s `KNOWN_ADAPTERS` list (which currently includes `openai`, `mistral`, `grok`, `ollama`, and `gemini`).
 
-```bash
-aletheore audit <checkout_dir> --agent openai_compatible
+**Prerequisite: Add DeepSeek to KNOWN_ADAPTERS**
+
+Before running the benchmark, add a new adapter entry to `src/aletheore/cli.py:50-91`. Add this after the existing adapter entries:
+
+```python
+OpenAICompatibleAdapter(
+    name="deepseek",
+    base_url="https://api.deepseek.com/v1",
+    api_key_env_var="DEEPSEEK_API_KEY",
+    model="deepseek-v4-pro",
+)
 ```
 
-**Configuration Details:**
-- The adapter looks for environment variables to configure the endpoint:
-  - `DEEPSEEK_API_KEY` — API key
-  - `base_url` — typically set to `https://api.deepseek.com`
-  - Model — typically `deepseek-reasoner` or the latest DeepSeek model
+After this change, run Aletheore's audit against DeepSeek:
 
-**TODO: Confirm exact env var names and flags**
-
-Check `aletheore audit --help` for the exact flag names:
 ```bash
-aletheore audit --help | grep -A 10 "agent"
+aletheore audit <checkout_dir> --agent deepseek
 ```
 
-The adapter code is in `src/aletheore/adapters/openai_compatible.py`; if the CLI flags aren't clear, you may need to configure the adapter directly in code or via a config file. Document this step with what you actually use.
+**Configuration:**
+- Set the environment variable: `export DEEPSEEK_API_KEY=<your-key>`
+- The model used is `deepseek-v4-pro` (as of 2026-07-26; see `github-app/scan_worker/model_tiers.py:19` for the canonical model name used in this codebase)
+- The base URL is `https://api.deepseek.com/v1` (DeepSeek's OpenAI-compatible endpoint)
 
 ### PR-Agent Configuration
 
@@ -203,7 +208,14 @@ Both run locally and write to stdout/files; the adapters invoke them directly vi
        return json.loads(result.stdout)
    ```
 
-3. **Note on raw output storage**: CodeRabbit's raw output is **never committed** (see `.gitignore`); only its anonymized scored summary is included in the public repository, per the ToS (CodeRabbit §4.2 bars publishing results without consent). Store the raw JSON privately during the run; delete it after scoring if it contains identifying information.
+3. **Note on output storage**: All intermediate results (raw tool outputs, grounding checks, anonymized findings, sealed mappings, manual scores, LLM judge scores) are **working state, not published artifacts**. The entire `benchmarks/pr-review-benchmark/results/` directory is `.gitignore`d and stays local to your machine.
+   
+   The published deliverables are only:
+   - `benchmarks/pr-review-benchmark/REPORT.md` — the final scored summary
+   - `benchmarks/pr-review-benchmark/METHODOLOGY.md` — runtime metadata
+   - `benchmarks/pr-review-benchmark/cases/` — the test corpus (contains no CodeRabbit or other tool outputs, only ground truth)
+   
+   Per CodeRabbit's ToS (§4.2), CodeRabbit's raw output is not published; only its anonymized scored summary is included in the headline scorecard. The same applies to all intermediate results: they're kept local to prevent accidental publication of raw tool output (which may contain vendor-identifying information even if anonymized).
 
 ### Running the Pipeline
 
@@ -316,18 +328,17 @@ scores:
 
 ### Template Generation
 
-To generate blank scorecards for all cases:
+To generate blank scorecards for all cases (without peeking at the sealed mapping until scoring is done):
 
 ```python
 from pathlib import Path
 from scripts.scoring_template import write_blank_scorecard
-from scripts.anonymize import reveal_mapping
 
 results_dir = Path("benchmarks/pr-review-benchmark/results")
-for sealed_path in sorted((results_dir / "sealed").glob("*.json")):
-    case_id = sealed_path.stem
-    label_to_tool = reveal_mapping(case_id, results_dir)
-    labels = list(label_to_tool.keys())
+for anon_dir in sorted((results_dir / "anon").glob("*")):
+    case_id = anon_dir.name
+    # Extract tool labels from anonymized findings, without opening the sealed mapping
+    labels = sorted([f.stem.replace("_", " ").title() for f in anon_dir.glob("*.json")])
     
     out_path = results_dir / "scored" / f"{case_id}.yaml"
     write_blank_scorecard(case_id, labels, out_path)
@@ -344,10 +355,11 @@ The benchmark includes a second, independent scoring pass by an LLM judge to mea
    ```python
    from scripts.llm_judge import build_judge_prompt
    import json
+   import yaml
    from pathlib import Path
    
    case_id = "001-flask-cli-key-quote"
-   ground_truth = json.loads((Path("benchmarks/pr-review-benchmark/cases") / case_id / "ground_truth.yaml").read_text())
+   ground_truth = yaml.safe_load((Path("benchmarks/pr-review-benchmark/cases") / case_id / "ground_truth.yaml").read_text())
    
    anon_dir = Path("benchmarks/pr-review-benchmark/results/anon") / case_id
    anonymized_findings = {}
@@ -461,14 +473,9 @@ Before publishing, record runtime values in `benchmarks/pr-review-benchmark/METH
 
 ## Troubleshooting
 
-### "aletheore audit --agent openai_compatible" doesn't work
+### "aletheore audit --agent deepseek" fails with "requested adapter 'deepseek' is not available"
 
-Check `aletheore audit --help` for the exact flag:
-```bash
-aletheore audit --help | grep -E "(agent|openai)"
-```
-
-If the flag isn't obvious, check `src/aletheore/cli.py` to see how adapters are registered, or read `src/aletheore/adapters/openai_compatible.py` to understand the adapter's interface. You may need to configure it via environment variables or a config file instead of a CLI flag.
+This means the DeepSeek adapter entry hasn't been added to `KNOWN_ADAPTERS` yet. See the "Prerequisite: Add DeepSeek to KNOWN_ADAPTERS" section in Step 2 above — you need to edit `src/aletheore/cli.py:50-91` and add the new `OpenAICompatibleAdapter` entry before running the audit.
 
 ### DeepSource isn't connected
 
