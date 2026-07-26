@@ -88,6 +88,12 @@ KNOWN_ADAPTERS = [
         api_key_env_var="GEMINI_API_KEY",
         model="gemini-3.5-flash",
     ),
+    OpenAICompatibleAdapter(
+        name="deepseek",
+        base_url="https://api.deepseek.com",
+        api_key_env_var="DEEPSEEK_API_KEY",
+        model="deepseek-v4-pro",
+    ),
 ]
 
 MANUAL_DIR = str(Path(__file__).resolve().parent / "manual")
