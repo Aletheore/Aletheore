@@ -38,38 +38,40 @@ The benchmark runs against real PRs opened on a **scratch repo** that you contro
 
 **Scratch repo:** `https://github.com/ArihantK15/proctor-browser` (user controls; Aletheore's GitHub App — paid plan — and DeepSource's GitHub App are both already installed on it)
 
+All 25 cases share this **one** scratch repo, so each case's files are nested under `benchmark-sandbox/<case-id>/` within it — this avoids collisions between concurrently-open case PRs (two cases could otherwise both touch `src/flask/cli.py` in the scratch repo's root and step on each other). Because of this nesting, every tool's cited file paths for a case come back prefixed with `benchmark-sandbox/<case-id>/` — `scripts/run_case.py`'s `_strip_sandbox_prefix()` strips it back off before the grounding check runs against the case's own standalone checkout.
+
 For each case in the corpus:
 
-1. Check out the case's base commit locally:
+1. Check out the case's base commit in a scratch clone (separate from the `proctor-browser` scratch repo — this is just to materialize the case's real repo tree):
    ```bash
-   git clone <case repo_url> /tmp/scratch
-   cd /tmp/scratch
+   git clone <case repo_url> /tmp/case-source
+   cd /tmp/case-source
    git checkout <base_commit>
-   ```
-
-2. Apply the case's PR diff:
-   ```bash
    git apply <path-to-benchmarks/pr-review-benchmark/cases/<case-id>/pr.diff>
    ```
 
-3. Create a feature branch and push to the scratch repo:
+2. Copy the resulting tree into the scratch repo under `benchmark-sandbox/<case-id>/`:
    ```bash
+   git clone https://github.com/ArihantK15/proctor-browser /tmp/proctor-browser
+   cd /tmp/proctor-browser
    git checkout -b case-<case-id>
-   git add .
+   mkdir -p benchmark-sandbox/<case-id>
+   rsync -a --exclude='.git' /tmp/case-source/ benchmark-sandbox/<case-id>/
+   git add benchmark-sandbox/<case-id>
    git commit -m "test case: <case-id>"
    git push -u origin case-<case-id>
    ```
 
-4. Open a PR on the scratch repo via `gh`:
+3. Open a PR on the scratch repo via `gh`:
    ```bash
    gh pr create --repo ArihantK15/proctor-browser --base main --head ArihantK15:case-<case-id> \
-     --title "Test Case: <case-id>" \
+     --title "[benchmark] <case-id>" \
      --body "Benchmark case from pr-review-benchmark; see ground_truth.md for the real issue."
    ```
 
    Note the PR URL from the output; you'll need it for the Aletheore, PR-Agent, and DeepSource steps below.
 
-5. Wait for Aletheore's Flash Review and DeepSource to post their reviews (both GitHub Apps do this automatically; may take a minute or two).
+4. Wait for Aletheore's Flash Review and DeepSource to post their reviews (both GitHub Apps do this automatically; may take a minute or two).
 
 ## Step 2: Set Up Models — Model Parity (DeepSeek)
 
