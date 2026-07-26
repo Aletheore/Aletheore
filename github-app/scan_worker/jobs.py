@@ -40,11 +40,13 @@ from scan_worker.db import (
     delete_expired_sessions,
     delete_wiki_subsystems_not_in,
     get_extra_seats,
+    get_flash_review_count_this_month,
     get_installation as get_installation_row,
     get_last_endpoint_health,
     get_last_reviewed_sha,
     get_latest_evidence,
     get_llm_spend_this_month,
+    increment_flash_review_count,
     insert_audit_report,
     insert_endpoint_health,
     insert_repo_history,
@@ -128,6 +130,15 @@ GRAPH_COLD_SYNC_DEPTH_CAP = 50_000
 # whether it also OOMs. Capped separately and more conservatively than
 # GRAPH_COLD_SYNC_DEPTH_CAP for that reason.
 SECRETS_HISTORY_DEPTH_CAP = 20_000
+
+# The real, customer-facing promise for Pro ($34.99/mo): up to 300 PR
+# reviews/month. Worst-case cost at 300 reviews hitting the max context
+# caps each is well under $3 (deepseek-v4-flash, ~$0.14/M input +
+# $0.28/M output) - this is a usage ceiling for the promise itself, not a
+# cost-protection measure; the existing dollar-based monthly_cap_for_installation
+# check stays in place as a separate defense against a pathological
+# per-review cost blowing past what 300 reviews should ever cost.
+MAX_FLASH_REVIEWS_PER_MONTH = 300
 
 
 def _job_temp_dir() -> Path:
@@ -633,6 +644,8 @@ def run_flash_review_job(
         current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
         if current_spend >= monthly_cap:
             return
+        if get_flash_review_count_this_month(settings.database_url, installation_id) >= MAX_FLASH_REVIEWS_PER_MONTH:
+            return
 
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
         token = _token_sync(installation_id, app_jwt)
@@ -686,6 +699,7 @@ def run_flash_review_job(
                     model_used="deepseek-v4-flash",
                 )
         record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
+        increment_flash_review_count(settings.database_url, installation_id)
 
         if findings:
             lines = [f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n"]

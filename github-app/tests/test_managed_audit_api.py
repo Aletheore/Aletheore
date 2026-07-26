@@ -241,6 +241,76 @@ async def test_managed_audit_rate_limit_is_independent_per_repo(pool, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_managed_audit_blocks_11th_new_repo_this_month(pool, monkeypatch):
+    await upsert_installation(pool, 100, "octocat")
+    await set_installation_plan(pool, 100, "indie")
+    token_hash = hashlib.sha256(b"real-token").hexdigest()
+    await create_api_token(pool, 100, token_hash, "laptop", "octocat")
+    for i in range(10):
+        await pool.execute(
+            """
+            INSERT INTO managed_audit_rate_limits (installation_id, repo_full_name, last_run_at)
+            VALUES (100, $1, now() - interval '1 day')
+            """,
+            f"octocat/repo-{i}",
+        )
+    fake_queue = MagicMock()
+    fake_queue.enqueue.return_value = MagicMock(id="job-123")
+    monkeypatch.setattr("app_server.managed_audit_api._get_queue", lambda redis_url: fake_queue)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/managed-audit",
+            json={"evidence": _evidence_toon(), "repo_full_name": "octocat/the-11th-repo"},
+            headers={"Authorization": "Bearer real-token"},
+        )
+
+    assert response.status_code == 429
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_managed_audit_new_repo_limit_does_not_block_repeat_audit(pool, monkeypatch):
+    # A repo that already ran its audit this month must not count against
+    # the new-repo limit on a repeat run - only genuinely new repos do.
+    await upsert_installation(pool, 100, "octocat")
+    await set_installation_plan(pool, 100, "indie")
+    token_hash = hashlib.sha256(b"real-token").hexdigest()
+    await create_api_token(pool, 100, token_hash, "laptop", "octocat")
+    for i in range(9):
+        await pool.execute(
+            """
+            INSERT INTO managed_audit_rate_limits (installation_id, repo_full_name, last_run_at)
+            VALUES (100, $1, now() - interval '1 day')
+            """,
+            f"octocat/repo-{i}",
+        )
+    # octocat/widgets already ran an audit this month, well outside its own cooldown.
+    await pool.execute(
+        """
+        INSERT INTO managed_audit_rate_limits (installation_id, repo_full_name, last_run_at)
+        VALUES (100, 'octocat/widgets', now() - interval '1 day')
+        """
+    )
+    fake_queue = MagicMock()
+    fake_queue.enqueue.return_value = MagicMock(id="job-123")
+    monkeypatch.setattr("app_server.managed_audit_api._get_queue", lambda redis_url: fake_queue)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/managed-audit",
+            json={"evidence": _evidence_toon(), "repo_full_name": "octocat/widgets"},
+            headers={"Authorization": "Bearer real-token"},
+        )
+
+    assert response.status_code == 202
+
+
+@pytest.mark.asyncio
 async def test_start_managed_audit_passes_repo_full_name_to_the_job(pool, monkeypatch):
     await upsert_installation(pool, 100, "octocat")
     await set_installation_plan(pool, 100, "indie")
