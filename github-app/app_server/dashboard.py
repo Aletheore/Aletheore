@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from aletheore.evidence_resolution import resolve_code_evidence
 from app_server.admin import (
-    _administered_installation_ids_or_401,
+    _administered_installation_ids_for_session_or_401,
     _github_http_client,
     _repo_installation_id,
     _require_admin_installation,
@@ -13,6 +13,8 @@ from app_server.admin import (
 from app_server.auth import get_current_session
 from app_server.config import get_settings
 from app_server.db import (
+    MAX_SCANNED_REPOS_PER_MONTH,
+    count_monthly_scanned_repos,
     get_installation,
     get_endpoint_health_summary_since,
     get_latest_evidence,
@@ -54,7 +56,7 @@ def find_stale_endpoints(
 
 
 async def _uninitialized_repos_for_installation(
-    installation_id: int, plan: str, already_known: set[str]
+    installation_id: int, plan: str, already_known: set[str], scan_limit_reached: bool = False
 ) -> list[dict]:
     """Repos a GitHub App installation covers that have never completed a
     scan yet. Installing (or paying for) an installation creates no
@@ -101,6 +103,7 @@ async def _uninitialized_repos_for_installation(
                 "repo_full_name": full_name,
                 "plan": plan,
                 "initialized": False,
+                "scan_limit_reached": scan_limit_reached,
             }
         )
     return result
@@ -112,8 +115,8 @@ async def list_my_repos(request: Request):
     if session is None:
         raise HTTPException(status_code=401, detail="login required")
 
-    administered_ids = await _administered_installation_ids_or_401(session["github_access_token"])
     pool = request.app.state.db_pool
+    administered_ids = await _administered_installation_ids_for_session_or_401(pool, session)
     repos = await list_repos_for_installations(pool, list(administered_ids))
     result = []
     known_by_installation: dict[int, set[str]] = {}
@@ -138,8 +141,14 @@ async def list_my_repos(request: Request):
         if installation is None:
             continue
         known = known_by_installation.get(installation_id, set())
+        scan_limit_reached = False
+        if installation["plan"] != "free":
+            scanned_this_month = await count_monthly_scanned_repos(pool, installation_id)
+            scan_limit_reached = scanned_this_month >= MAX_SCANNED_REPOS_PER_MONTH
         result.extend(
-            await _uninitialized_repos_for_installation(installation_id, installation["plan"], known)
+            await _uninitialized_repos_for_installation(
+                installation_id, installation["plan"], known, scan_limit_reached
+            )
         )
 
     return {"repos": result}
@@ -155,7 +164,7 @@ async def _require_dashboard_installation(request: Request, org: str, repo: str)
     pool = request.app.state.db_pool
     installation_id = await _repo_installation_id(pool, org, repo)
 
-    administered_ids = await _administered_installation_ids_or_401(session["github_access_token"])
+    administered_ids = await _administered_installation_ids_for_session_or_401(pool, session)
     if installation_id not in administered_ids:
         raise HTTPException(status_code=403, detail="you do not administer this installation")
 

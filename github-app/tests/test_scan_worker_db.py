@@ -9,6 +9,7 @@ from app_server.evidence_limits import EvidenceTooLargeError, MAX_EVIDENCE_BYTES
 from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
+    check_and_reserve_monthly_repo_scan_slot,
     delete_expired_sessions,
     delete_wiki_subsystems_not_in,
     get_extra_seats,
@@ -469,6 +470,42 @@ async def test_check_and_reserve_managed_audit_allows_after_cooldown_elapses(poo
             old_run,
         )
     allowed = check_and_reserve_managed_audit(TEST_DATABASE_URL, 301, "a/repo1", cooldown_seconds=3600)
+    assert allowed is True
+
+
+@pytest.mark.asyncio
+async def test_monthly_repo_scan_slot_allows_up_to_the_limit(pool):
+    await _insert_installation(pool, 302, "a")
+    for i in range(3):
+        allowed = check_and_reserve_monthly_repo_scan_slot(TEST_DATABASE_URL, 302, f"a/repo{i}", limit=3)
+        assert allowed is True
+
+
+@pytest.mark.asyncio
+async def test_monthly_repo_scan_slot_blocks_a_new_repo_past_the_limit(pool):
+    await _insert_installation(pool, 303, "a")
+    for i in range(3):
+        check_and_reserve_monthly_repo_scan_slot(TEST_DATABASE_URL, 303, f"a/repo{i}", limit=3)
+    blocked = check_and_reserve_monthly_repo_scan_slot(TEST_DATABASE_URL, 303, "a/repo-new", limit=3)
+    assert blocked is False
+
+
+@pytest.mark.asyncio
+async def test_monthly_repo_scan_slot_always_allows_an_already_counted_repo(pool):
+    await _insert_installation(pool, 304, "a")
+    for i in range(3):
+        check_and_reserve_monthly_repo_scan_slot(TEST_DATABASE_URL, 304, f"a/repo{i}", limit=3)
+    allowed_again = check_and_reserve_monthly_repo_scan_slot(TEST_DATABASE_URL, 304, "a/repo0", limit=3)
+    assert allowed_again is True
+
+
+@pytest.mark.asyncio
+async def test_monthly_repo_scan_slot_is_scoped_per_installation(pool):
+    await _insert_installation(pool, 305, "a")
+    await _insert_installation(pool, 306, "b")
+    for i in range(3):
+        check_and_reserve_monthly_repo_scan_slot(TEST_DATABASE_URL, 305, f"a/repo{i}", limit=3)
+    allowed = check_and_reserve_monthly_repo_scan_slot(TEST_DATABASE_URL, 306, "b/repo0", limit=3)
     assert allowed is True
 
 

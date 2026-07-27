@@ -42,6 +42,15 @@ def test_build_overview_diagram_draws_inter_cluster_edge_not_intra_cluster():
     assert diagram.count("-->") == 1
 
 
+def test_build_overview_diagram_omits_clusters_with_no_cross_cluster_edges():
+    evidence = make_evidence()
+    evidence["architecture"]["clusters"].append({"id": 2, "modules": ["scripts/standalone.py"], "internal_edges": 0})
+    diagram = build_overview_diagram(evidence)
+    assert 'C2["Cluster 2"]' not in diagram
+    assert 'C0["Cluster 0"]' in diagram
+    assert 'C1["Cluster 1"]' in diagram
+
+
 def test_build_overview_diagram_uses_provided_names():
     diagram = build_overview_diagram(make_evidence(), cluster_names={0: "Authentication", 1: "Database"})
     assert 'C0["Authentication"]' in diagram

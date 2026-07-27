@@ -31,6 +31,7 @@ from aletheore.history import compute_diff
 from aletheore.pr_comment import COMMENT_MARKER, format_diff_comment
 from aletheore.healthcheck import run_healthcheck
 from app_server.config import get_settings
+from app_server.db import MAX_SCANNED_REPOS_PER_MONTH
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation
 from app_server.logging_config import log_job
@@ -39,6 +40,7 @@ from scan_worker import live_wiki
 from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
+    check_and_reserve_monthly_repo_scan_slot,
     delete_expired_sessions,
     delete_wiki_subsystems_not_in,
     get_extra_seats,
@@ -82,7 +84,7 @@ from scan_worker.github_api import (
     upsert_pr_comment,
 )
 from scan_worker.managed_audit import run_managed_audit
-from scan_worker.model_tiers import PRO_FALLBACK_MODEL, model_for_plan, writing_adapter_for_plan
+from scan_worker.model_tiers import PRO_MODEL, model_for_plan, writing_adapter_for_plan
 from scan_worker.packet_cache import lookup_cached_result, store_result
 from scan_worker.code_graph_store import CodeGraphStore
 from scan_worker.postgres_graph_store import PostgresRepoGraphStore
@@ -557,6 +559,17 @@ def run_pr_scan_job(
     head_sha: str,
 ) -> None:
     settings = get_settings()
+
+    # Pro plan: unlimited repos may be connected, but only
+    # MAX_SCANNED_REPOS_PER_MONTH distinct repos actually get scanned per
+    # calendar month - free plan is not subject to this cap.
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is not None and installation["plan"] != "free":
+        if not check_and_reserve_monthly_repo_scan_slot(
+            settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
+        ):
+            return
+
     job_dir = _job_temp_dir()
     try:
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
@@ -673,9 +686,15 @@ def _sign_and_persist_audit_report(
 @log_job
 def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_number: int) -> None:
     settings = get_settings()
-    job_dir = _job_temp_dir()
     installation = get_installation_row(settings.database_url, installation_id)
     plan = installation["plan"] if installation is not None else "indie"
+
+    if plan != "free" and not check_and_reserve_monthly_repo_scan_slot(
+        settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
+    ):
+        return
+
+    job_dir = _job_temp_dir()
     try:
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
         token = _token_sync(installation_id, app_jwt)
@@ -810,6 +829,11 @@ def run_flash_review_job(
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
     if installation is None or installation["plan"] == "free":
+        return
+
+    if not check_and_reserve_monthly_repo_scan_slot(
+        settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
+    ):
         return
 
     if not check_and_reserve_flash_review_attempt(
@@ -1070,7 +1094,7 @@ def _health_fix_suggestion_adapter() -> OpenAICompatibleAdapter:
         name="DeepSeek",
         base_url="https://api.deepseek.com",
         api_key_env_var="DEEPSEEK_API_KEY",
-        model=PRO_FALLBACK_MODEL,
+        model=PRO_MODEL,
         supports_tool_choice=False,
     )
 
@@ -1392,12 +1416,8 @@ def _live_wiki_naming_adapter() -> OpenAICompatibleAdapter:
 
 
 def _live_wiki_full_build_writing_adapter(plan: str) -> OpenAICompatibleAdapter | AnthropicAdapter:
-    # The one-time full build uses the same tier model as managed audits
-    # (see model_tiers.py) rather than a fixed model - an Indie repo's
-    # first AIRview build is written by the same DeepSeek model as its
-    # ongoing updates, an Enterprise repo's by Claude Opus. Falls back
-    # toward DeepSeek if a higher tier's provider key isn't configured
-    # yet, so a build never hard-fails on missing infra.
+    # The one-time full build uses the same model as managed audits (see
+    # model_tiers.py) - always DeepSeek Pro, for every plan.
     return writing_adapter_for_plan(plan)
 
 

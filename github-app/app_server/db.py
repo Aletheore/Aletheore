@@ -121,29 +121,79 @@ async def insert_repo_history(
             )
 
 
-async def count_other_repos_audited_this_month(
-    pool: asyncpg.Pool, installation_id: int, repo_full_name: str
-) -> int:
-    """Distinct repos, other than repo_full_name, that have run a managed
-    audit for this installation since the start of the current calendar
-    month - repo_full_name is excluded so a repeat audit of an already-seen
-    repo never counts against the new-repo limit, only genuinely new repos
-    do. Protects against a single Pro subscription burst-connecting many
-    repos to front-load one-time audit cost, without capping total repos
-    an installation can ever connect.
-    """
+# Pro plan: unlimited repos may be connected, but only this many distinct
+# repos per installation may actually be scanned (PR scan, Flash review,
+# managed audit - any of them count against the same shared cap) per
+# calendar month. Free plan is not subject to this cap. Both
+# scan_worker.jobs (sync, single sequential worker) and this module
+# (async, genuinely concurrent HTTP callers via the managed-audit API)
+# enforce the same cap against the same monthly_scanned_repos table.
+MAX_SCANNED_REPOS_PER_MONTH = 10
+
+
+async def count_monthly_scanned_repos(pool: asyncpg.Pool, installation_id: int) -> int:
     row = await pool.fetchrow(
         """
-        SELECT COUNT(DISTINCT repo_full_name) AS count
-        FROM managed_audit_rate_limits
-        WHERE installation_id = $1
-          AND repo_full_name != $2
-          AND last_run_at >= date_trunc('month', now())
+        SELECT COUNT(*) AS count FROM monthly_scanned_repos
+        WHERE installation_id = $1 AND month = date_trunc('month', now())::date
         """,
         installation_id,
-        repo_full_name,
     )
     return row["count"]
+
+
+async def check_and_reserve_monthly_repo_scan_slot(
+    pool: asyncpg.Pool, installation_id: int, repo_full_name: str, limit: int
+) -> bool:
+    """True if repo_full_name may be scanned this calendar month - either
+    it's already one of this installation's counted repos this month, or
+    there's still room under `limit` distinct repos and a slot gets
+    reserved for it now. False means the monthly distinct-repo cap has
+    already been reached by other repos, so this (new) repo must wait for
+    next month.
+
+    Wrapped in a per-installation advisory lock (released automatically
+    at transaction end) rather than a plain check-then-insert: two
+    concurrent managed-audit API requests for two different new repos on
+    an installation right at its cap must not both read "still room" and
+    both get let through.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", installation_id)
+
+            existing = await conn.fetchval(
+                """
+                SELECT 1 FROM monthly_scanned_repos
+                WHERE installation_id = $1 AND repo_full_name = $2
+                  AND month = date_trunc('month', now())::date
+                """,
+                installation_id,
+                repo_full_name,
+            )
+            if existing is not None:
+                return True
+
+            count = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM monthly_scanned_repos
+                WHERE installation_id = $1 AND month = date_trunc('month', now())::date
+                """,
+                installation_id,
+            )
+            if count >= limit:
+                return False
+
+            await conn.execute(
+                """
+                INSERT INTO monthly_scanned_repos (installation_id, repo_full_name, month)
+                VALUES ($1, $2, date_trunc('month', now())::date)
+                ON CONFLICT (installation_id, repo_full_name, month) DO NOTHING
+                """,
+                installation_id,
+                repo_full_name,
+            )
+            return True
 
 
 async def check_and_reserve_managed_audit(
@@ -457,17 +507,19 @@ async def create_session(
     github_login: str,
     access_token: str,
     expires_at: datetime,
+    refresh_token: str | None = None,
 ) -> None:
     await pool.execute(
         """
-        INSERT INTO sessions (id, github_user_id, github_login, github_access_token, expires_at)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO sessions (id, github_user_id, github_login, github_access_token, expires_at, github_refresh_token)
+        VALUES ($1, $2, $3, $4, $5, $6)
         """,
         session_id,
         github_user_id,
         github_login,
         access_token,
         expires_at,
+        refresh_token,
     )
 
 
@@ -478,13 +530,27 @@ async def get_session(pool: asyncpg.Pool, session_id: str) -> dict | None:
     # takes effect immediately rather than whenever cleanup next runs.
     row = await pool.fetchrow(
         """
-        SELECT id, github_user_id, github_login, github_access_token, expires_at
+        SELECT id, github_user_id, github_login, github_access_token, github_refresh_token, expires_at
         FROM sessions
         WHERE id = $1 AND expires_at > now()
         """,
         session_id,
     )
     return dict(row) if row else None
+
+
+async def update_session_tokens(
+    pool: asyncpg.Pool,
+    session_id: str,
+    access_token: str,
+    refresh_token: str | None,
+) -> None:
+    await pool.execute(
+        "UPDATE sessions SET github_access_token = $2, github_refresh_token = $3 WHERE id = $1",
+        session_id,
+        access_token,
+        refresh_token,
+    )
 
 
 async def delete_session(pool: asyncpg.Pool, session_id: str) -> None:

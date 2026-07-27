@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from app_server.auth import (
     encrypt_access_token,
     get_current_session,
+    refresh_github_access_token,
     sign_session_id,
     unsign_session_id,
     _is_safe_next_path,
@@ -156,6 +157,79 @@ async def test_callback_creates_session_and_sets_cookie(pool, monkeypatch):
     row = await get_session(pool, session_id)
     assert row["github_login"] == "octocat"
     assert row["github_access_token"] != "gho_faketoken"
+
+
+@pytest.mark.asyncio
+async def test_callback_stores_refresh_token_when_github_returns_one(pool, monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gho_faketoken", "refresh_token": "ghr_realrefresh"})
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 42, "login": "octocat"})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        "app_server.auth._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.auth._github_oauth_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
+    )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        login_response = await client.get("/auth/login", follow_redirects=False)
+        state = login_response.headers["location"].split("state=")[1]
+        response = await client.get(
+            f"/auth/callback?code=fake-code&state={state}", follow_redirects=False
+        )
+
+    session_id = unsign_session_id(response.cookies["session"], "test-session-secret")
+    row = await get_session(pool, session_id)
+    assert row["github_refresh_token"] != "ghr_realrefresh"  # stored encrypted, not raw
+    assert row["github_refresh_token"] is not None
+
+
+@pytest.mark.asyncio
+async def test_callback_handles_missing_refresh_token(pool, monkeypatch):
+    # GitHub only issues a refresh_token when the App has "Expire user
+    # authorization tokens" enabled - absent otherwise, and sign-in must
+    # not break just because this field is missing.
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gho_faketoken"})
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 42, "login": "octocat"})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(
+        "app_server.auth._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.auth._github_oauth_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
+    )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        login_response = await client.get("/auth/login", follow_redirects=False)
+        state = login_response.headers["location"].split("state=")[1]
+        response = await client.get(
+            f"/auth/callback?code=fake-code&state={state}", follow_redirects=False
+        )
+
+    assert response.status_code == 307
+    session_id = unsign_session_id(response.cookies["session"], "test-session-secret")
+    row = await get_session(pool, session_id)
+    assert row["github_refresh_token"] is None
 
 
 @pytest.mark.asyncio
@@ -335,3 +409,70 @@ async def test_get_current_session_decrypts_access_token(pool, monkeypatch):
 
     session = await get_current_session(FakeRequest())
     assert session["github_access_token"] == "gho_realtoken"
+
+
+@pytest.mark.asyncio
+async def test_get_current_session_decrypts_refresh_token_when_present(pool, monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    encrypted_access = encrypt_access_token("gho_realtoken", "test-session-secret")
+    encrypted_refresh = encrypt_access_token("ghr_realrefresh", "test-session-secret")
+    expires = datetime.now(timezone.utc) + timedelta(hours=1)
+    await create_session(
+        pool, "sess-4", 42, "octocat", encrypted_access, expires, refresh_token=encrypted_refresh
+    )
+    signed = sign_session_id("sess-4", "test-session-secret")
+
+    class FakeRequest:
+        cookies = {"session": signed}
+        app = type("App", (), {"state": type("State", (), {"db_pool": pool})()})()
+
+    session = await get_current_session(FakeRequest())
+    assert session["github_refresh_token"] == "ghr_realrefresh"
+
+
+@pytest.mark.asyncio
+async def test_get_current_session_leaves_refresh_token_none_when_absent(pool, monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    encrypted_access = encrypt_access_token("gho_realtoken", "test-session-secret")
+    expires = datetime.now(timezone.utc) + timedelta(hours=1)
+    await create_session(pool, "sess-5", 42, "octocat", encrypted_access, expires)
+    signed = sign_session_id("sess-5", "test-session-secret")
+
+    class FakeRequest:
+        cookies = {"session": signed}
+        app = type("App", (), {"state": type("State", (), {"db_pool": pool})()})()
+
+    session = await get_current_session(FakeRequest())
+    assert session["github_refresh_token"] is None
+
+
+def test_refresh_github_access_token_returns_new_tokens(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/login/oauth/access_token"
+        return httpx.Response(
+            200, json={"access_token": "gho_newtoken", "refresh_token": "ghr_newrefresh"}
+        )
+
+    monkeypatch.setattr(
+        "app_server.auth._github_oauth_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
+    )
+
+    access_token, refresh_token = refresh_github_access_token("ghr_oldrefresh", "client-id", "client-secret")
+    assert access_token == "gho_newtoken"
+    assert refresh_token == "ghr_newrefresh"
+
+
+def test_refresh_github_access_token_raises_when_github_reports_an_error(monkeypatch):
+    # GitHub's refresh endpoint returns 200 with an `error` field for a
+    # dead/revoked refresh_token, not a 4xx status.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error": "bad_refresh_token", "error_description": "expired"})
+
+    monkeypatch.setattr(
+        "app_server.auth._github_oauth_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
+    )
+
+    with pytest.raises(RuntimeError):
+        refresh_github_access_token("ghr_deadrefresh", "client-id", "client-secret")

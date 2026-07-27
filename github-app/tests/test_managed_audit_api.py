@@ -249,8 +249,8 @@ async def test_managed_audit_blocks_11th_new_repo_this_month(pool, monkeypatch):
     for i in range(10):
         await pool.execute(
             """
-            INSERT INTO managed_audit_rate_limits (installation_id, repo_full_name, last_run_at)
-            VALUES (100, $1, now() - interval '1 day')
+            INSERT INTO monthly_scanned_repos (installation_id, repo_full_name, month)
+            VALUES (100, $1, date_trunc('month', now())::date)
             """,
             f"octocat/repo-{i}",
         )
@@ -273,21 +273,31 @@ async def test_managed_audit_blocks_11th_new_repo_this_month(pool, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_managed_audit_new_repo_limit_does_not_block_repeat_audit(pool, monkeypatch):
-    # A repo that already ran its audit this month must not count against
-    # the new-repo limit on a repeat run - only genuinely new repos do.
+    # A repo that's already one of this installation's counted repos this
+    # month must not count against the cap again on a repeat run - only
+    # genuinely new repos do.
     await upsert_installation(pool, 100, "octocat")
     await set_installation_plan(pool, 100, "indie")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
-    for i in range(9):
+    # Already at the cap with 10 *other* repos - if the already-counted
+    # bypass didn't work, a repeat run for octocat/widgets below would be
+    # blocked too.
+    for i in range(10):
         await pool.execute(
             """
-            INSERT INTO managed_audit_rate_limits (installation_id, repo_full_name, last_run_at)
-            VALUES (100, $1, now() - interval '1 day')
+            INSERT INTO monthly_scanned_repos (installation_id, repo_full_name, month)
+            VALUES (100, $1, date_trunc('month', now())::date)
             """,
             f"octocat/repo-{i}",
         )
     # octocat/widgets already ran an audit this month, well outside its own cooldown.
+    await pool.execute(
+        """
+        INSERT INTO monthly_scanned_repos (installation_id, repo_full_name, month)
+        VALUES (100, 'octocat/widgets', date_trunc('month', now())::date)
+        """
+    )
     await pool.execute(
         """
         INSERT INTO managed_audit_rate_limits (installation_id, repo_full_name, last_run_at)

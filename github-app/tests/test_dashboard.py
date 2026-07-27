@@ -167,6 +167,69 @@ async def test_list_my_repos_includes_uninitialized_repos_with_no_scan_yet(pool,
         "repo_full_name": "some-user/proctor-browser",
         "plan": "team",
         "initialized": False,
+        "scan_limit_reached": False,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_list_my_repos_flags_uninitialized_repos_when_monthly_scan_cap_reached(pool, monkeypatch):
+    await upsert_installation(pool, 802, "some-user")
+    await set_installation_plan(pool, 802, "team")
+    for i in range(10):
+        await pool.execute(
+            """
+            INSERT INTO monthly_scanned_repos (installation_id, repo_full_name, month)
+            VALUES (802, $1, date_trunc('month', now())::date)
+            """,
+            f"some-user/already-scanned-{i}",
+        )
+
+    monkeypatch.setattr("app_server.dashboard.generate_app_jwt", lambda *a, **k: "fake-jwt")
+
+    async def fake_get_installation_token(installation_id, app_jwt, http_client=None):
+        return "fake-installation-token"
+
+    monkeypatch.setattr("app_server.dashboard.get_installation_token", fake_get_installation_token)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/user/installations":
+            return httpx.Response(200, json={"total_count": 1, "installations": [{"id": 802}]})
+        if request.url.path == "/installation/repositories":
+            return httpx.Response(200, json={
+                "repositories": [{"full_name": "some-user/proctor-browser"}],
+            })
+        raise AssertionError(f"unexpected request: {request.url.path}")
+
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    await create_session(
+        pool, "sess-2", 42, "octocat",
+        encrypt_access_token("gho_faketoken", "test-session-secret"),
+        datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.dashboard._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    app.state.db_pool = pool
+    signed = sign_session_id("sess-2", "test-session-secret")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed}) as client:
+        response = await client.get("/app/repos")
+
+    assert response.status_code == 200
+    repos = response.json()["repos"]
+    assert repos == [{
+        "org": "some-user",
+        "repo": "proctor-browser",
+        "repo_full_name": "some-user/proctor-browser",
+        "plan": "team",
+        "initialized": False,
+        "scan_limit_reached": True,
     }]
 
 

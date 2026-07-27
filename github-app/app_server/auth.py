@@ -46,7 +46,9 @@ def _github_http_client() -> httpx.Client:
     return httpx.Client(base_url="https://api.github.com")
 
 
-def _exchange_code_and_fetch_user(code: str, client_id: str, client_secret: str) -> tuple[str, dict]:
+def _exchange_code_and_fetch_user(
+    code: str, client_id: str, client_secret: str
+) -> tuple[str, str | None, dict]:
     # Synchronous httpx.Client calls, run off the event loop via
     # asyncio.to_thread by the caller - this whole function otherwise blocks
     # every other request the server is handling for its duration.
@@ -56,7 +58,11 @@ def _exchange_code_and_fetch_user(code: str, client_id: str, client_secret: str)
         data={"client_id": client_id, "client_secret": client_secret, "code": code},
     )
     token_response.raise_for_status()
-    access_token = token_response.json()["access_token"]
+    token_data = token_response.json()
+    access_token = token_data["access_token"]
+    # Only present when the GitHub App has "Expire user authorization
+    # tokens" turned on - absent (None) otherwise, and stored as such.
+    refresh_token = token_data.get("refresh_token")
 
     user_response = _github_http_client().get(
         "/user",
@@ -66,7 +72,33 @@ def _exchange_code_and_fetch_user(code: str, client_id: str, client_secret: str)
         },
     )
     user_response.raise_for_status()
-    return access_token, user_response.json()
+    return access_token, refresh_token, user_response.json()
+
+
+def refresh_github_access_token(
+    refresh_token: str, client_id: str, client_secret: str
+) -> tuple[str, str | None]:
+    """Exchanges a still-valid refresh_token for a new access_token (and
+    usually a new refresh_token - GitHub rotates it on each use). Raises
+    RuntimeError on failure: GitHub's refresh endpoint returns 200 with an
+    `error` field in the body rather than a 4xx status, so a missing
+    access_token in an otherwise-successful response is the failure signal.
+    """
+    response = _github_oauth_http_client().post(
+        "/login/oauth/access_token",
+        headers={"Accept": "application/json"},
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        },
+    )
+    response.raise_for_status()
+    data = response.json()
+    if "access_token" not in data:
+        raise RuntimeError(data.get("error_description") or data.get("error") or "refresh failed")
+    return data["access_token"], data.get("refresh_token")
 
 
 def _fetch_installation_details(installation_id: int, app_jwt: str) -> dict:
@@ -115,6 +147,10 @@ async def get_current_session(request: Request) -> dict | None:
     row["github_access_token"] = decrypt_access_token(
         row["github_access_token"], settings.session_secret
     )
+    if row["github_refresh_token"] is not None:
+        row["github_refresh_token"] = decrypt_access_token(
+            row["github_refresh_token"], settings.session_secret
+        )
     return row
 
 
@@ -170,7 +206,7 @@ async def callback(code: str, request: Request, state: str | None = None, instal
         if not expected_state or not state or not hmac.compare_digest(expected_state, state):
             raise HTTPException(status_code=400, detail="invalid oauth state")
 
-    access_token, user = await asyncio.to_thread(
+    access_token, refresh_token, user = await asyncio.to_thread(
         _exchange_code_and_fetch_user, code, settings.github_client_id, settings.github_client_secret
     )
 
@@ -182,6 +218,9 @@ async def callback(code: str, request: Request, state: str | None = None, instal
         user["login"],
         encrypt_access_token(access_token, settings.session_secret),
         datetime.now(timezone.utc) + SESSION_TTL,
+        refresh_token=encrypt_access_token(refresh_token, settings.session_secret)
+        if refresh_token
+        else None,
     )
 
     if installation_id is not None:
