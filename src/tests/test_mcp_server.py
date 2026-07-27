@@ -108,6 +108,46 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
     return repo
 
 
+def test_read_evidence_caches_parsed_result_until_the_file_changes(tmp_path, monkeypatch):
+    # Before this fix, every single MCP tool call re-read and re-parsed the
+    # whole evidence file from disk, with no caching across calls in the
+    # same long-lived MCP server process - real, entirely avoidable latency
+    # on a large repo's multi-hundred-MB evidence file.
+    import time
+
+    from aletheore.mcp_server import read_evidence
+
+    monkeypatch.setattr("aletheore.mcp_server._evidence_cache", {})
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".aletheore" / "air.json"
+
+    read_count = {"n": 0}
+    real_read_text = Path.read_text
+
+    def counting_read_text(self, *args, **kwargs):
+        if self == evidence_path:
+            read_count["n"] += 1
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+
+    first = read_evidence(repo)
+    second = read_evidence(repo)
+
+    assert read_count["n"] == 1
+    assert first is second
+
+    time.sleep(0.01)
+    updated = json.loads(real_read_text(evidence_path))
+    updated["scanned_at"] = "2026-07-16T00:00:00+00:00 - a longer value to change file size too"
+    evidence_path.write_text(json.dumps(updated))
+
+    third = read_evidence(repo)
+
+    assert read_count["n"] == 2
+    assert third["scanned_at"].startswith("2026-07-16")
+
+
 @pytest.mark.asyncio
 async def test_build_server_registers_expected_tools(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
@@ -139,6 +179,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_symbol_source",
         "aletheore_scan",
         "aletheore_healthcheck",
+        "aletheore_index",
         "aletheore_search_codebase",
         "aletheore_managed_audit",
         "aletheore_find_evidence_for_endpoint",
@@ -146,8 +187,48 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_dependency",
     }
     assert expected.issubset(names)
-    assert len(names) == 27
+    assert len(names) == 28
     assert "aletheore_answer" not in names
+
+
+@pytest.mark.asyncio
+async def test_dynamic_query_tools_have_distinct_non_generic_descriptions(tmp_path):
+    # Before this fix, every one of these 16 tools shared the same templated
+    # description ("Query 'X' from the scanned repository's evidence.") with
+    # no indication of what `target` means for that specific tool - an LLM
+    # caller had no way to tell "target is a file path" from "target is a
+    # branch name" from "this tool takes no target at all".
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    tools = await server.list_tools()
+    by_name = {t.name: t for t in tools}
+
+    dynamic_tool_names = [
+        "aletheore_imports",
+        "aletheore_imported_by",
+        "aletheore_symbols",
+        "aletheore_branch",
+        "aletheore_ownership",
+        "aletheore_secrets",
+        "aletheore_vulnerabilities",
+        "aletheore_licenses",
+        "aletheore_endpoints",
+        "aletheore_cluster",
+        "aletheore_layer_violations",
+        "aletheore_dead_code",
+        "aletheore_hotspots",
+        "aletheore_database",
+        "aletheore_infrastructure",
+        "aletheore_environment_variables",
+    ]
+    descriptions = [by_name[name].description for name in dynamic_tool_names]
+
+    assert len(set(descriptions)) == len(dynamic_tool_names)
+    assert not any(d.startswith("Query '") for d in descriptions)
+    assert "file path" in by_name["aletheore_imports"].description
+    assert "branch name" in by_name["aletheore_branch"].description
+    assert "Takes no target" in by_name["aletheore_vulnerabilities"].description
 
 
 @pytest.mark.asyncio
@@ -175,6 +256,36 @@ async def test_aletheore_search_codebase_returns_toon_results(tmp_path):
         )
 
     assert tool_result_body(result)["result"] == [{"module_path": "a.py", "symbol_name": "foo"}]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_index_tool_builds_the_search_index(tmp_path):
+    # Before this fix, aletheore_search_codebase/aletheore_answer required
+    # .aletheore/index.lancedb, buildable only via the CLI's `aletheore
+    # index` command - no MCP tool existed to build it, forcing an agent
+    # using only MCP tools to shell out anyway.
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    with patch("aletheore.search_index.build_index", return_value=7) as mock_build_index:
+        result = await server.call_tool("aletheore_index", {})
+
+    assert tool_result_body(result)["result"] == {"indexed_chunks": 7}
+    mock_build_index.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_aletheore_index_tool_returns_error_instead_of_raising(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("no embedding provider available")
+
+    with patch("aletheore.search_index.build_index", side_effect=_raise):
+        result = await server.call_tool("aletheore_index", {})
+
+    assert tool_result_body(result)["result"] == {"error": "no embedding provider available"}
 
 
 @pytest.mark.asyncio
@@ -299,6 +410,36 @@ async def test_aletheore_managed_audit_tool_calls_client(tmp_path, monkeypatch):
 
     result = await server.call_tool("aletheore_managed_audit", {"token": "real-token"})
 
+    assert tool_result_body(result)["result"]["report"].startswith("# Report")
+
+
+@pytest.mark.asyncio
+async def test_aletheore_managed_audit_tool_falls_back_to_saved_credential(tmp_path, monkeypatch):
+    # Before this fix, this tool only checked os.environ.get("ALETHEORE_API_TOKEN")
+    # directly - a user who ran `aletheore login` (saved to the OS
+    # keychain/credentials file, no env var set) got a false "no token
+    # available" error through MCP even though the CLI's own `audit --managed`
+    # worked fine for the exact same saved credential.
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+    monkeypatch.delenv("ALETHEORE_API_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "aletheore.mcp_server.get_api_key",
+        lambda env_var, provider_name, **kwargs: "token-from-keychain",
+    )
+    captured = {}
+
+    def fake_run_managed_audit_request(evidence, token):
+        captured["token"] = token
+        return "# Report"
+
+    monkeypatch.setattr(
+        "aletheore.mcp_server.run_managed_audit_request", fake_run_managed_audit_request
+    )
+
+    result = await server.call_tool("aletheore_managed_audit", {})
+
+    assert captured["token"] == "token-from-keychain"
     assert tool_result_body(result)["result"]["report"].startswith("# Report")
 
 

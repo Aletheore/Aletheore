@@ -294,6 +294,7 @@ call.
 aletheore query imports app/routes.py --path .
 aletheore query imported-by app/routes.py --path .
 aletheore query symbols app/routes.py --path .
+aletheore query symbol-source app/routes.py handle_login --path .
 aletheore query branch main --path .
 aletheore query ownership --path .
 aletheore query secrets app/routes.py --path .        # findings within just that file
@@ -302,6 +303,14 @@ aletheore query licenses --path .
 aletheore query endpoints --path .
 aletheore query cluster app/routes.py --path .
 aletheore query layer-violations --path .
+aletheore query dead-code --path .
+aletheore query hotspots --path .                     # files with the most git churn/co-change
+aletheore query database --path .                     # detected ORMs, connection strings, migrations
+aletheore query infrastructure --path .                # detected Docker/CI/IaC config
+aletheore query environment-variables --path .
+aletheore query evidence-for-endpoint "GET /users/:id" --path .
+aletheore query evidence-for-symbol handle_login --path .
+aletheore query evidence-for-dependency requests --path .
 aletheore query changes --path .              # diff against the previous history snapshot
 aletheore query search-codebase "how does auth work?" --path .
 aletheore query answer "how does auth work?" --path . --agent ollama
@@ -346,25 +355,38 @@ Starts a stdio MCP server scoped to one repository, so a coding agent can query 
 directly instead of shelling out via Bash or re-reading files on every lookup. Every tool
 result is [TOON](https://toonformat.dev)-encoded rather than plain JSON — the calling agent's
 own token budget is what actually pays for reading these results, and evidence's shape (almost
-entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 17 tools
+entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 28 tools
 by default, plus one optional answer tool when started with `--agent`:
 
-- The 11 query kinds above as tools (`aletheore_imports`, `aletheore_imported_by`,
-  `aletheore_symbols`, `aletheore_branch`, `aletheore_ownership`, `aletheore_secrets`,
-  `aletheore_vulnerabilities`, `aletheore_licenses`, `aletheore_endpoints`, `aletheore_cluster`,
-  `aletheore_layer_violations`), plus `aletheore_changes`.
+- The 16 query kinds above as tools, each named `aletheore_<kind>` with underscores in place of
+  hyphens (`aletheore_imports`, `aletheore_imported_by`, `aletheore_symbols`, `aletheore_branch`,
+  `aletheore_ownership`, `aletheore_secrets`, `aletheore_vulnerabilities`, `aletheore_licenses`,
+  `aletheore_endpoints`, `aletheore_cluster`, `aletheore_layer_violations`, `aletheore_dead_code`,
+  `aletheore_hotspots`, `aletheore_database`, `aletheore_infrastructure`,
+  `aletheore_environment_variables`) — each tool's own description states what `target` expects
+  (a file path, a branch name, or that the tool takes no target at all).
+- `aletheore_changes(full=False)` — what changed between the two most recent scans.
 - `aletheore_neighborhood(target)` — a module's imports, dependents, and cluster in one call,
   instead of three round-trips.
 - `aletheore_search(pattern, regex=False, path_glob=None)` — literal or regex full-text search
   over tracked source files, capped at 200 matches.
-- `aletheore_search_codebase(query, k=10)` — semantic search over the local code index.
-- Optional: `aletheore_answer(question, k=5)` — available only when the MCP server is started
-  with `--agent`, answers from the semantic index using the selected provider.
-- `aletheore_scan()` — triggers a fresh deterministic scan and returns a compact summary (not
+- `aletheore_symbol_source(module, symbol)` — exact source text for one named function/class,
+  with resolved line bounds.
+- `aletheore_find_evidence_for_endpoint(method, path)`, `aletheore_find_evidence_for_symbol(symbol)`,
+  `aletheore_find_evidence_for_dependency(dependency)` — resolve an endpoint/symbol/dependency to
+  full source evidence: file, line, owner, commit, and (for endpoints) live-health risk.
+- `aletheore_scan(...)` — triggers a fresh deterministic scan and returns a compact summary (not
   the full evidence dump). Does **not** run the agent-driven `audit` report — see the note
   under `aletheore audit` above for why that's a deliberate boundary, not a gap.
 - `aletheore_healthcheck(base_url)` — runs the same GET-only live health check as the CLI and
   persists the result under `.aletheore/healthchecks/`.
+- `aletheore_index()` — builds the local semantic search index, same as `aletheore index`.
+- `aletheore_search_codebase(query, k=10)` — semantic search over the local code index.
+- `aletheore_managed_audit(token=None)` — runs a full managed audit report via Aletheore's
+  hosted service, resolving the token the same way `aletheore login` does: an explicit `token`
+  argument, then `ALETHEORE_API_TOKEN`, then the credential saved by `aletheore login`.
+- Optional: `aletheore_answer(question, k=5)` — available only when the MCP server is started
+  with `--agent`, answers from the semantic index using the selected provider.
 
 ```bash
 aletheore mcp .
