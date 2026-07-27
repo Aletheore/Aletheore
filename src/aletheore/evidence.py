@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from collections.abc import Callable
@@ -79,6 +80,92 @@ def _load_unchanged_scan_cache() -> tuple[dict[str, dict] | None, dict[str, list
     return data.get("modules"), data.get("endpoints")
 
 
+# The hosted worker's cache above requires the persistent-checkout diffing
+# only it maintains - a plain local `aletheore scan` had no incremental
+# path at all, always re-parsing every file from scratch even when nothing
+# changed since the last run. This is a fully self-contained equivalent:
+# written by every scan of a given repo, read by the next one. Keyed by
+# each file's own content hash rather than mtime - a git checkout that
+# touches mtimes without changing content (switching branches back and
+# forth) shouldn't cause a false cache miss.
+_LOCAL_SCAN_CACHE_FILENAME = "scan-cache.json"
+
+
+def _local_scan_cache_path(repo_path: Path) -> Path:
+    return repo_path / ".aletheore" / _LOCAL_SCAN_CACHE_FILENAME
+
+
+def _hash_file(path: Path) -> str | None:
+    try:
+        return hashlib.blake2b(path.read_bytes(), digest_size=16).hexdigest()
+    except OSError:
+        return None
+
+
+def _load_local_scan_cache(
+    repo_path: Path,
+) -> tuple[dict[str, dict] | None, dict[str, list[dict]] | None]:
+    cache_path = _local_scan_cache_path(repo_path)
+    if not cache_path.exists():
+        return None, None
+    try:
+        cache = json.loads(cache_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None, None
+
+    cached_hashes = cache.get("hashes", {})
+    cached_modules = cache.get("modules", {})
+    cached_endpoints = cache.get("endpoints", {})
+
+    unchanged_modules: dict[str, dict] = {}
+    unchanged_endpoints: dict[str, list[dict]] = {}
+    for rel_path, cached_hash in cached_hashes.items():
+        if _hash_file(repo_path / rel_path) != cached_hash:
+            continue
+        if rel_path in cached_modules:
+            unchanged_modules[rel_path] = cached_modules[rel_path]
+        if rel_path in cached_endpoints:
+            unchanged_endpoints[rel_path] = cached_endpoints[rel_path]
+
+    return (unchanged_modules or None), (unchanged_endpoints or None)
+
+
+def _write_local_scan_cache(
+    repo_path: Path, modules: list[dict], api_endpoints: list[dict]
+) -> None:
+    hashes: dict[str, str] = {}
+    modules_by_path: dict[str, dict] = {}
+    for module in modules:
+        rel_path = module["path"]
+        modules_by_path[rel_path] = module
+        file_hash = _hash_file(repo_path / rel_path)
+        if file_hash is not None:
+            hashes[rel_path] = file_hash
+
+    endpoints_by_path: dict[str, list[dict]] = {}
+    for endpoint in api_endpoints:
+        file_path = endpoint.get("file")
+        if file_path is None:
+            continue
+        endpoints_by_path.setdefault(file_path, []).append(endpoint)
+        if file_path not in hashes:
+            file_hash = _hash_file(repo_path / file_path)
+            if file_hash is not None:
+                hashes[file_path] = file_hash
+
+    cache_path = _local_scan_cache_path(repo_path)
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(
+            json.dumps({"hashes": hashes, "modules": modules_by_path, "endpoints": endpoints_by_path})
+        )
+    except OSError:
+        # Best-effort: a failure to write the cache (disk full, permissions)
+        # must never fail the scan itself - it only costs the next run its
+        # incremental speedup, not correctness.
+        pass
+
+
 def _secrets_history_depth_cap() -> int | None:
     raw = os.environ.get(_SECRETS_HISTORY_DEPTH_CAP_ENV)
     if not raw:
@@ -124,7 +211,14 @@ def scan_repository(
     infrastructure = detect_infrastructure(repo_path)
     environment_variables = detect_environment_variables(repo_path)
 
+    # The hosted worker's own cache (env var) takes priority when set; a
+    # plain local `aletheore scan` has no such env var, so it falls back to
+    # the CLI's own self-contained, content-hash-keyed cache from the
+    # previous scan of this repo.
+    using_hosted_cache = bool(os.environ.get(_UNCHANGED_SCAN_CACHE_ENV))
     unchanged_modules, unchanged_endpoints = _load_unchanged_scan_cache()
+    if not using_hosted_cache:
+        unchanged_modules, unchanged_endpoints = _load_local_scan_cache(repo_path)
 
     report("Building module dependency graph (parsing source with tree-sitter)")
     modules, dependency_graph, unparseable_files = build_module_graph(
@@ -192,6 +286,15 @@ def scan_repository(
             "reason": "skipped (--no-map-endpoints)",
             "endpoints": [],
         }
+
+    if not using_hosted_cache:
+        # --no-map-endpoints leaves api_endpoints_data["endpoints"] empty for
+        # this run only - don't write that as if it were real, or the next
+        # normal scan would wrongly treat every file as having zero
+        # endpoints instead of re-checking them.
+        _write_local_scan_cache(
+            repo_path, modules, api_endpoints_data["endpoints"] if map_endpoints else []
+        )
 
     report("Done")
 
