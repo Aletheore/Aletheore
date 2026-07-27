@@ -1,0 +1,41 @@
+name: Action self-test
+
+# Dogfoods action.yml itself, end to end, the same way a real consumer's
+# workflow would invoke it (uses: Aletheore/Aletheore@vX) - every other
+# check in this repo only exercises the underlying `aletheore scan`/`diff`
+# CLI commands as unit tests, never the composite action's own wiring
+# (checkout-into-subdir, GITHUB_OUTPUT multiline heredoc, step summary,
+# conditional PR-comment step). A break in any of that would only be
+# caught by an actual user's CI failing.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Aletheore action against this PR's own base/head
+        id: aletheore
+        uses: ./
+        with:
+          # post-pr-comment defaults to true - left off here on purpose,
+          # since this is a self-test of the action's own machinery, not
+          # a real product interaction, and must never post a comment onto
+          # this repo's own maintenance PRs.
+          post-pr-comment: "false"
+
+      - name: Verify the action produced a real diff-json output
+        shell: bash
+        run: |
+          if [ -z "${{ steps.aletheore.outputs.diff-json }}" ]; then
+            echo "::error::diff-json output was empty - the action did not run to completion"
+            exit 1
+          fi
+          echo '${{ steps.aletheore.outputs.diff-json }}' | python3 -m json.tool > /dev/null
+          echo "diff-json output is valid, non-empty JSON"
