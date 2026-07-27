@@ -75,7 +75,7 @@ async def test_invalid_plan_returns_400(pool):
 async def test_invalid_interval_returns_400(pool):
     app.state.db_pool = pool
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/subscribe?plan=indie&interval=daily")
+        response = await client.get("/subscribe?plan=air&interval=daily")
     assert response.status_code == 400
 
 
@@ -83,12 +83,12 @@ async def test_invalid_interval_returns_400(pool):
 async def test_not_signed_in_redirects_to_login_preserving_plan_and_interval(pool):
     app.state.db_pool = pool
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/subscribe?plan=team&interval=year", follow_redirects=False)
+        response = await client.get("/subscribe?plan=air&interval=year", follow_redirects=False)
     assert response.status_code == 307
     location = response.headers["location"]
     assert "/auth/login" in location
     assert "next=" in location
-    assert "plan%3Dteam" in location
+    assert "plan%3Dair" in location
     assert "interval%3Dyear" in location
 
 
@@ -96,7 +96,7 @@ async def test_not_signed_in_redirects_to_login_preserving_plan_and_interval(poo
 async def test_dead_github_token_redirects_to_login_and_clears_session(pool, monkeypatch):
     client = await _logged_in_client_with_dead_token(pool, monkeypatch)
     async with client:
-        response = await client.get("/subscribe?plan=indie&interval=month", follow_redirects=False)
+        response = await client.get("/subscribe?plan=air&interval=month", follow_redirects=False)
     assert response.status_code == 307
     assert "/auth/login" in response.headers["location"]
     assert response.cookies.get("session") is None
@@ -106,7 +106,7 @@ async def test_dead_github_token_redirects_to_login_and_clears_session(pool, mon
 async def test_zero_installations_shows_install_prompt(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch, [])
     async with client:
-        response = await client.get("/subscribe?plan=indie&interval=month")
+        response = await client.get("/subscribe?plan=air&interval=month")
     assert response.status_code == 200
     assert "Install the Aletheore GitHub App" in response.text
     assert "github.com/apps/aletheore/installations/new" in response.text
@@ -118,12 +118,12 @@ async def test_one_installation_shows_checkout_with_current_plan(pool, monkeypat
     await upsert_installation(pool, 2001, "acme")
     client = await _logged_in_client(pool, monkeypatch, [2001])
     async with client:
-        response = await client.get("/subscribe?plan=team&interval=month")
+        response = await client.get("/subscribe?plan=air&interval=month")
     assert response.status_code == 200
     assert "acme" in response.text
-    assert "currently on Free" in response.text
+    assert "currently on Aletheore Community" in response.text
     assert 'data-installation-id="2001"' in response.text
-    assert "pri_01ky9jx0gbx02mnn4d166yp3vc" in response.text  # team monthly price id
+    assert "pri_01kyhevc8bkcghfpwjymz16y2h" in response.text  # air monthly price id
     assert "customData" in response.text
     assert "successUrl" in response.text and "dashboard" in response.text
     assert 'href="/dashboard"' in response.text
@@ -135,10 +135,10 @@ async def test_multiple_installations_shows_selection(pool, monkeypatch):
     await upsert_installation(pool, 2003, "beta-corp")
     client = await _logged_in_client(pool, monkeypatch, [2002, 2003])
     async with client:
-        response = await client.get("/subscribe?plan=enterprise&interval=year")
+        response = await client.get("/subscribe?plan=air&interval=year")
     assert response.status_code == 200
     assert 'value="2002"' in response.text
     assert 'value="2003"' in response.text
     assert "acme" in response.text
     assert "beta-corp" in response.text
-    assert "pri_01ky9jx1pbbpsexbmtbk1wfej1" in response.text  # enterprise yearly price id
+    assert "pri_01kyhevc9xn6z2nghmy8057jvp" in response.text  # air yearly price id

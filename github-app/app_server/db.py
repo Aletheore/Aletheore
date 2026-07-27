@@ -279,8 +279,8 @@ async def get_extra_seats(pool: asyncpg.Pool, installation_id: int) -> int:
     return row["extra_seats"] if row else 0
 
 
-INCLUDED_SEATS = {"indie": 3, "team": 10, "enterprise": 25}
-DEFAULT_SEAT_LIMIT = 3
+INCLUDED_SEATS = {"air": 5}
+DEFAULT_SEAT_LIMIT = 5
 
 
 async def add_installation_member(
@@ -338,9 +338,8 @@ async def is_installation_member(pool: asyncpg.Pool, installation_id: int, githu
 
 # Health check targets live behind the same paid-plan gate as the rest of
 # Settings (_require_admin_installation rejects free plans before any of
-# this is ever reached), so there is no meaningful "free" entry here - this
-# only needs to distinguish among the plans that actually get this far.
-INCLUDED_HEALTH_CHECK_TARGETS = {"indie": 5, "team": 5, "enterprise": 5}
+# this is ever reached), so there is no meaningful "free" entry here.
+INCLUDED_HEALTH_CHECK_TARGETS = {"air": 5}
 DEFAULT_HEALTH_CHECK_TARGET_LIMIT = 5
 
 

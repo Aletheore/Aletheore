@@ -687,7 +687,7 @@ def _sign_and_persist_audit_report(
 def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_number: int) -> None:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    plan = installation["plan"] if installation is not None else "indie"
+    plan = installation["plan"] if installation is not None else "air"
 
     if plan != "free" and not check_and_reserve_monthly_repo_scan_slot(
         settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
@@ -775,7 +775,7 @@ def run_managed_audit_api_job(
 ) -> str:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    plan = installation["plan"] if installation is not None else "indie"
+    plan = installation["plan"] if installation is not None else "air"
     with installation_spend_lock(settings.database_url, installation_id):
         extra_seats = get_extra_seats(settings.database_url, installation_id)
         monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
@@ -1274,127 +1274,157 @@ def run_health_check_sweep_job() -> None:
         base_url = target["base_url"]
         threshold_ms = target["latency_threshold_ms"]
 
-        evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
-        if evidence is None:
-            continue
-
-        for entry in _endpoint_results(evidence, base_url):
-            if entry.get("skipped"):
-                continue
-            method = entry["method"]
-            path = entry["path"]
-            source_file = entry.get("file")
-            source_line = entry.get("line")
-            evidence_resolution = entry.get("evidence_resolution")
-            reachable = entry["reachable"]
-            status_code = entry.get("status_code")
-            latency_ms = entry.get("latency_ms")
-            response_shape = entry.get("response_shape")
-            prior = get_last_endpoint_health(
-                dsn,
+        try:
+            _run_health_check_sweep_for_target(
+                dsn, target, installation_id, repo_full_name, target_id, base_url, threshold_ms
+            )
+        except Exception as exc:  # noqa: BLE001
+            # One customer's dead webhook URL, an unreachable target, or any
+            # other failure here must not take down the sweep for every
+            # other installation - this loop runs every
+            # HEALTH_SWEEP_INTERVAL_SECONDS for the whole paying customer
+            # base, so one bad target skipping its own cycle is far
+            # preferable to all of them silently going stale.
+            logging.getLogger("scan_worker.jobs").warning(
+                "health check sweep failed for installation=%s repo=%s target=%s (%s)",
                 installation_id,
                 repo_full_name,
-                method,
-                path,
-                target_id=target_id,
+                target_id,
+                type(exc).__name__,
+                exc_info=True,
             )
 
+
+def _run_health_check_sweep_for_target(
+    dsn: str,
+    target: dict,
+    installation_id: int,
+    repo_full_name: str,
+    target_id: int,
+    base_url: str,
+    threshold_ms: int | None,
+) -> None:
+    evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
+    if evidence is None:
+        return
+
+    for entry in _endpoint_results(evidence, base_url):
+        if entry.get("skipped"):
+            continue
+        method = entry["method"]
+        path = entry["path"]
+        source_file = entry.get("file")
+        source_line = entry.get("line")
+        evidence_resolution = entry.get("evidence_resolution")
+        reachable = entry["reachable"]
+        status_code = entry.get("status_code")
+        latency_ms = entry.get("latency_ms")
+        response_shape = entry.get("response_shape")
+        prior = get_last_endpoint_health(
+            dsn,
+            installation_id,
+            repo_full_name,
+            method,
+            path,
+            target_id=target_id,
+        )
+
+        reachability_flipped = (prior is None and not reachable) or (
+            prior is not None and prior.get("reachable") != reachable
+        )
+
+        if reachability_flipped and not reachable:
+            for _ in range(HEALTH_CHECK_DOWN_RETRY_ATTEMPTS):
+                time.sleep(HEALTH_CHECK_DOWN_RETRY_DELAY_SECONDS)
+                retry_result = _recheck_single_endpoint(entry, base_url)
+                if retry_result.get("reachable"):
+                    reachable = True
+                    status_code = retry_result.get("status_code")
+                    latency_ms = retry_result.get("latency_ms")
+                    response_shape = retry_result.get("response_shape")
+                    break
             reachability_flipped = (prior is None and not reachable) or (
                 prior is not None and prior.get("reachable") != reachable
             )
 
-            if reachability_flipped and not reachable:
-                for _ in range(HEALTH_CHECK_DOWN_RETRY_ATTEMPTS):
-                    time.sleep(HEALTH_CHECK_DOWN_RETRY_DELAY_SECONDS)
-                    retry_result = _recheck_single_endpoint(entry, base_url)
-                    if retry_result.get("reachable"):
-                        reachable = True
-                        status_code = retry_result.get("status_code")
-                        latency_ms = retry_result.get("latency_ms")
-                        response_shape = retry_result.get("response_shape")
-                        break
-                reachability_flipped = (prior is None and not reachable) or (
-                    prior is not None and prior.get("reachable") != reachable
+        if reachability_flipped:
+            if not reachable and source_file:
+                evidence_resolution = _attach_recent_commit_for_failure(
+                    installation_id,
+                    repo_full_name,
+                    source_file,
+                    evidence_resolution,
+                    evidence,
+                    method=method,
+                    path=path,
+                    status_code=status_code,
+                    source_line=source_line,
                 )
-
-            if reachability_flipped:
-                if not reachable and source_file:
-                    evidence_resolution = _attach_recent_commit_for_failure(
-                        installation_id,
-                        repo_full_name,
-                        source_file,
-                        evidence_resolution,
-                        evidence,
-                        method=method,
-                        path=path,
-                        status_code=status_code,
-                        source_line=source_line,
-                    )
-                _send_if_webhook_configured(
-                    target,
-                    format_reachability_alert(
-                        repo_full_name,
-                        method,
-                        path,
-                        source_file,
-                        source_line,
-                        reachable,
-                        evidence_resolution=evidence_resolution,
-                    ),
-                )
-
-            if _latency_flipped(prior, reachable, latency_ms, threshold_ms):
-                _send_if_webhook_configured(
-                    target,
-                    format_latency_alert(
-                        repo_full_name,
-                        method,
-                        path,
-                        source_file,
-                        source_line,
-                        latency_ms,
-                        threshold_ms,
-                        latency_ms > threshold_ms,
-                        evidence_resolution=evidence_resolution,
-                    ),
-                )
-
-            shape_changed = (
-                reachable
-                and not reachability_flipped
-                and prior is not None
-                and prior.get("reachable") is True
-                and prior.get("response_shape") is not None
-                and response_shape is not None
-                and prior["response_shape"] != response_shape
+            _send_if_webhook_configured(
+                target,
+                format_reachability_alert(
+                    repo_full_name,
+                    method,
+                    path,
+                    source_file,
+                    source_line,
+                    reachable,
+                    evidence_resolution=evidence_resolution,
+                ),
             )
-            if shape_changed:
-                _send_if_webhook_configured(
-                    target,
-                    format_shape_change_alert(
-                        repo_full_name,
-                        method,
-                        path,
-                        source_file,
-                        source_line,
-                        prior["response_shape"],
-                        response_shape,
-                        evidence_resolution=evidence_resolution,
-                    ),
-                )
 
-            insert_endpoint_health(
-                dsn,
-                installation_id,
-                repo_full_name,
-                method,
-                path,
-                reachable,
-                status_code,
-                latency_ms,
-                response_shape=response_shape,
-                target_id=target_id,
+        if _latency_flipped(prior, reachable, latency_ms, threshold_ms):
+            _send_if_webhook_configured(
+                target,
+                format_latency_alert(
+                    repo_full_name,
+                    method,
+                    path,
+                    source_file,
+                    source_line,
+                    latency_ms,
+                    threshold_ms,
+                    latency_ms > threshold_ms,
+                    evidence_resolution=evidence_resolution,
+                ),
             )
+
+        shape_changed = (
+            reachable
+            and not reachability_flipped
+            and prior is not None
+            and prior.get("reachable") is True
+            and prior.get("response_shape") is not None
+            and response_shape is not None
+            and prior["response_shape"] != response_shape
+        )
+        if shape_changed:
+            _send_if_webhook_configured(
+                target,
+                format_shape_change_alert(
+                    repo_full_name,
+                    method,
+                    path,
+                    source_file,
+                    source_line,
+                    prior["response_shape"],
+                    response_shape,
+                    evidence_resolution=evidence_resolution,
+                ),
+            )
+
+        insert_endpoint_health(
+            dsn,
+            installation_id,
+            repo_full_name,
+            method,
+            path,
+            reachable,
+            status_code,
+            latency_ms,
+            response_shape=response_shape,
+            target_id=target_id,
+        )
 
 
 @log_job
@@ -1520,7 +1550,7 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
         return  # nothing scanned for this repo yet - nothing to build from
 
     installation = get_installation_row(dsn, installation_id)
-    plan = installation["plan"] if installation is not None else "indie"
+    plan = installation["plan"] if installation is not None else "air"
     model_used = model_for_plan(plan)
 
     naming_adapter = _live_wiki_naming_adapter()
