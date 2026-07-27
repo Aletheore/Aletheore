@@ -89,6 +89,7 @@ from scan_worker.postgres_graph_store import PostgresRepoGraphStore
 from scan_worker.slack import (
     format_latency_alert,
     format_reachability_alert,
+    format_runtime_error_alert,
     format_shape_change_alert,
     send_health_alert,
     send_slack_alert,
@@ -161,7 +162,127 @@ def _clone_ref(url: str, ref: str, dest: Path) -> None:
     subprocess.run(["git", "checkout", "-q", ref], cwd=dest, check=True)
 
 
-def _run_scan(repo_dir: Path) -> Path:
+# Root for persistent, reused-across-scans checkouts (see
+# _ensure_persistent_checkout) - overridable so a real deployment can point
+# it at a mounted volume and tests aren't stuck with a hardcoded path.
+_REPO_CHECKOUT_ROOT_ENV = "ALETHEORE_REPO_CHECKOUT_ROOT"
+_DEFAULT_REPO_CHECKOUT_ROOT = "/data/aletheore-repo-checkouts"
+
+
+def _persistent_checkout_dir(installation_id: int, repo_full_name: str) -> Path:
+    root = Path(os.environ.get(_REPO_CHECKOUT_ROOT_ENV, _DEFAULT_REPO_CHECKOUT_ROOT))
+    safe_name = repo_full_name.replace("/", "__")
+    return root / str(installation_id) / safe_name
+
+
+def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path) -> None:
+    """Keeps one real checkout per repo, reused across scans, instead of
+    the clone-fresh-and-delete pattern _clone_ref/_clone_pr_head use for
+    the ephemeral per-job checkouts above. This is what gives a later
+    scan a real "last time" to `git diff` against locally, and is a
+    prerequisite for the incremental scan cache
+    (aletheore.evidence._load_unchanged_scan_cache) actually helping -
+    without a persistent checkout, every scan starts from nothing to
+    diff against, same as a fresh clone.
+
+    Mirrors _clone_ref's exact proven-working shape: a plain `git fetch`
+    (no explicit refspec) followed by `git checkout <sha>`, rather than
+    fetching the SHA directly - GitHub does not reliably allow fetching a
+    bare SHA unless it happens to be reachable from an advertised ref,
+    the same reason _clone_ref itself relies on a full clone's implicit
+    ref fetching rather than fetching head_sha directly.
+
+    `git remote set-url` runs on every reuse so a rotated access token
+    (see _clone_url - `url` always carries a fresh one) doesn't leave
+    this checkout stuck fetching against a stale URL baked in at clone
+    time.
+    """
+    if (checkout_dir / ".git").exists():
+        subprocess.run(["git", "remote", "set-url", "origin", url], cwd=checkout_dir, check=True)
+        subprocess.run(["git", "fetch", "-q", "origin"], cwd=checkout_dir, check=True)
+        subprocess.run(["git", "checkout", "-q", "-f", checkout_sha], cwd=checkout_dir, check=True)
+        subprocess.run(["git", "clean", "-q", "-fdx"], cwd=checkout_dir, check=True)
+    else:
+        checkout_dir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "clone", "-q", "--no-checkout", url, str(checkout_dir)], check=True)
+        subprocess.run(["git", "checkout", "-q", checkout_sha], cwd=checkout_dir, check=True)
+
+
+def _prepare_head_checkout(
+    clone_url: str, head_sha: str, installation_id: int, repo_full_name: str, fallback_dir: Path
+) -> Path:
+    """Uses a persistent, reused-across-scans checkout when one is
+    available (see _ensure_persistent_checkout), falling back to the
+    original ephemeral clone-and-delete pattern (_clone_ref) if
+    persistent storage isn't mounted, isn't writable, or fails for any
+    other reason - this must never be the reason a PR scan fails
+    outright, it only ever gates whether the upcoming scan can be
+    incremental.
+    """
+    try:
+        checkout_dir = _persistent_checkout_dir(installation_id, repo_full_name)
+        _ensure_persistent_checkout(clone_url, head_sha, checkout_dir)
+        return checkout_dir
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "persistent checkout unavailable (%s); falling back to an ephemeral clone", type(exc).__name__
+        )
+        _clone_ref(clone_url, head_sha, fallback_dir)
+        return fallback_dir
+
+
+def _build_unchanged_scan_cache(
+    installation_id: int,
+    repo_full_name: str,
+    checkout_dir: Path,
+    previous_sha: str | None,
+    current_sha: str,
+    cache_path: Path,
+) -> Path | None:
+    """Writes a JSON cache file (see
+    aletheore.evidence._load_unchanged_scan_cache) listing every
+    currently-tracked file NOT touched between previous_sha and
+    current_sha, with its previously-persisted module/endpoint data, so
+    the upcoming `aletheore scan` can skip re-parsing it. Returns None
+    (no cache - a full scan, matching today's behavior exactly) whenever
+    there's no solid basis for a diff: no previous sync yet, `git diff`
+    itself failing (e.g. previous_sha isn't reachable in this checkout -
+    expected on a fallback ephemeral clone), or the graph database being
+    unreachable. This only ever narrows what gets scanned; any failure
+    here just means "scan everything," never "silently skip something
+    that might have changed."
+    """
+    if previous_sha is None:
+        return None
+    diff_result = subprocess.run(
+        ["git", "diff", "--name-only", previous_sha, current_sha],
+        cwd=checkout_dir, capture_output=True, text=True,
+    )
+    if diff_result.returncode != 0:
+        return None
+    changed_files = set(diff_result.stdout.splitlines())
+
+    try:
+        settings = get_settings()
+        store = CodeGraphStore(settings.database_url, installation_id, repo_full_name)
+        all_modules = store.load_all_modules(GRAPH_BRANCH)
+        all_endpoints = store.load_all_endpoints(GRAPH_BRANCH)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "could not build unchanged-scan cache (%s); falling back to a full scan", type(exc).__name__
+        )
+        return None
+
+    unchanged_modules = {path: m for path, m in all_modules.items() if path not in changed_files}
+    unchanged_endpoints = {path: e for path, e in all_endpoints.items() if path not in changed_files}
+    if not unchanged_modules and not unchanged_endpoints:
+        return None
+
+    cache_path.write_text(json.dumps({"modules": unchanged_modules, "endpoints": unchanged_endpoints}))
+    return cache_path
+
+
+def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> Path:
     # See GRAPH_COLD_SYNC_DEPTH_CAP and SECRETS_HISTORY_DEPTH_CAP - the
     # CLI's own analyze_git and find_secrets_in_history calls (inside this
     # subprocess) hit the same cold-sync cost/memory ceilings as the
@@ -173,6 +294,8 @@ def _run_scan(repo_dir: Path) -> Path:
         "ALETHEORE_GIT_HISTORY_DEPTH_CAP": str(GRAPH_COLD_SYNC_DEPTH_CAP),
         "ALETHEORE_SECRETS_HISTORY_DEPTH_CAP": str(SECRETS_HISTORY_DEPTH_CAP),
     }
+    if unchanged_scan_cache_path is not None:
+        env["ALETHEORE_UNCHANGED_SCAN_CACHE"] = str(unchanged_scan_cache_path)
     subprocess.run(["aletheore", "scan", str(repo_dir)], check=True, env=env)
     return repo_dir / ".aletheore" / "air.json"
 
@@ -441,12 +564,22 @@ def run_pr_scan_job(
 
         clone_url = _clone_url(repo_full_name, token)
         base_dir = job_dir / "base"
-        head_dir = job_dir / "head"
         _clone_ref(clone_url, base_sha, base_dir)
-        _clone_ref(clone_url, head_sha, head_dir)
+        head_dir = _prepare_head_checkout(clone_url, head_sha, installation_id, repo_full_name, job_dir / "head")
+
+        try:
+            previous_sha = CodeGraphStore(
+                settings.database_url, installation_id, repo_full_name
+            ).load_last_synced_sha(GRAPH_BRANCH)
+        except Exception:  # noqa: BLE001
+            previous_sha = None
+        unchanged_scan_cache_path = _build_unchanged_scan_cache(
+            installation_id, repo_full_name, head_dir, previous_sha, head_sha,
+            job_dir / "unchanged-scan-cache.json",
+        )
 
         base_evidence_path = _run_scan(base_dir)
-        head_evidence_path = _run_scan(head_dir)
+        head_evidence_path = _run_scan(head_dir, unchanged_scan_cache_path=unchanged_scan_cache_path)
         old = json.loads(base_evidence_path.read_text())
         new = json.loads(head_evidence_path.read_text())
         diff = compute_diff(old, new, full=False)
@@ -1049,6 +1182,60 @@ def _attach_recent_commit_for_failure(
         return evidence_resolution
     base = evidence_resolution or empty_resolution("endpoint")
     return merge_resolution(base, *attachments)
+
+
+@log_job
+def run_runtime_event_job(
+    installation_id: int,
+    repo_full_name: str,
+    exception_type: str,
+    exception_value: str,
+    source_file: str,
+    source_line: int,
+    method: str = "",
+    path: str = "",
+) -> None:
+    """Phase 3 - runtime-to-code evidence: resolves an inbound
+    Sentry-compatible error event through the SAME correlation chain
+    already proven for HTTP health-check failures
+    (_attach_recent_commit_for_failure: handler symbol, dependent
+    modules, recent commit, likely owner, optional fix suggestion) -
+    "zero-hop debugging" for a second real trigger, not a second
+    implementation. See app_server/runtime_events.py for the inbound
+    webhook this is enqueued from.
+    """
+    settings = get_settings()
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is None or installation["plan"] == "free":
+        return
+
+    webhook_url = installation.get("webhook_url")
+    if not webhook_url:
+        return
+
+    evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
+    evidence_resolution = _attach_recent_commit_for_failure(
+        installation_id,
+        repo_full_name,
+        source_file,
+        None,
+        evidence,
+        method=method,
+        path=path,
+        source_line=source_line,
+    )
+
+    message = format_runtime_error_alert(
+        repo_full_name,
+        exception_type,
+        exception_value,
+        source_file,
+        source_line,
+        method=method,
+        path=path,
+        evidence_resolution=evidence_resolution,
+    )
+    send_health_alert(webhook_url, message)
 
 
 @log_job

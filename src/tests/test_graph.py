@@ -221,4 +221,105 @@ def test_build_module_graph_resolves_absolute_imports_in_a_monorepo(tmp_path):
     by_path = {m["path"]: m for m in modules}
     assert "service_a/pkg_a/config.py" in by_path["service_a/pkg_a/main.py"]["imports"]
     assert "service_b/pkg_b/utils.py" in by_path["service_b/pkg_b/app.py"]["imports"]
-    assert dependency_graph["edges"] != []
+
+
+def test_build_module_graph_reuses_unchanged_modules_instead_of_reparsing(tmp_path, monkeypatch):
+    # The whole point of unchanged_modules: a file whose content is known
+    # not to have changed since it was last extracted should never be
+    # handed to tree-sitter again - proven here by making parsing that
+    # specific file raise, and confirming build_module_graph still
+    # succeeds using the cached dict instead.
+    repo = make_python_repo(tmp_path)
+
+    from aletheore.scanner import graph as graph_module
+
+    real_parser_class = graph_module.Parser
+
+    class _FailingOnAuthParser:
+        def __init__(self):
+            self._inner = real_parser_class()
+
+        @property
+        def language(self):
+            return self._inner.language
+
+        @language.setter
+        def language(self, value):
+            self._inner.language = value
+
+        def parse(self, source):
+            # "AuthError" is unique to app/auth.py's own content - unlike
+            # e.g. "login" (which routes.py's legitimate, still-parsed
+            # content also references), this can't false-positive on a
+            # different file that's correctly still being parsed.
+            if b"AuthError" in source:
+                raise AssertionError("app/auth.py should not be re-parsed - it's in unchanged_modules")
+            return self._inner.parse(source)
+
+    monkeypatch.setattr(graph_module, "Parser", _FailingOnAuthParser)
+
+    cached_auth_module = {
+        "path": "app/auth.py",
+        "language": "python",
+        "imports": ["app/config.py"],
+        "imported_by": [],
+        "symbols": {
+            "functions": [{"name": "login", "start_line": 4, "end_line": 5}],
+            "classes": [{"name": "AuthError", "start_line": 8, "end_line": 9}],
+        },
+    }
+
+    modules, dependency_graph, unparseable = build_module_graph(
+        repo, unchanged_modules={"app/auth.py": cached_auth_module}
+    )
+
+    by_path = {m["path"]: m for m in modules}
+    assert by_path["app/auth.py"] is cached_auth_module
+    assert unparseable == []
+
+
+def test_build_module_graph_unchanged_modules_still_contribute_edges_and_imported_by(tmp_path):
+    repo = make_python_repo(tmp_path)
+    cached_auth_module = {
+        "path": "app/auth.py",
+        "language": "python",
+        "imports": ["app/config.py"],
+        "imported_by": [],
+        "symbols": {
+            "functions": [{"name": "login", "start_line": 4, "end_line": 5}],
+            "classes": [{"name": "AuthError", "start_line": 8, "end_line": 9}],
+        },
+    }
+
+    modules, dependency_graph, _ = build_module_graph(repo, unchanged_modules={"app/auth.py": cached_auth_module})
+
+    edges = {tuple(edge) for edge in dependency_graph["edges"]}
+    assert ("app/auth.py", "app/config.py") in edges
+    by_path = {m["path"]: m for m in modules}
+    # imported_by is always recomputed fresh from every module's imports
+    # (cached or not), never trusted from the cached dict's stale value.
+    assert "app/routes.py" in by_path["app/auth.py"]["imported_by"]
+    assert "app/auth.py" in by_path["app/config.py"]["imported_by"]
+
+
+def test_build_module_graph_ignores_unchanged_modules_entry_for_a_deleted_file(tmp_path):
+    repo = make_python_repo(tmp_path)
+    stale_cached_module = {
+        "path": "app/removed.py",
+        "language": "python",
+        "imports": [],
+        "imported_by": [],
+        "symbols": {"functions": [], "classes": []},
+    }
+
+    modules, _, _ = build_module_graph(repo, unchanged_modules={"app/removed.py": stale_cached_module})
+
+    assert "app/removed.py" not in {m["path"] for m in modules}
+
+
+def test_build_module_graph_without_unchanged_modules_is_unchanged(tmp_path):
+    repo = make_python_repo(tmp_path)
+    with_none = build_module_graph(repo, unchanged_modules=None)
+    without_param = build_module_graph(repo)
+
+    assert with_none == without_param

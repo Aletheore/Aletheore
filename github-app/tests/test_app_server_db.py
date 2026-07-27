@@ -1,6 +1,12 @@
 import pytest
 
-from app_server.db import add_paddle_ids_to_installation, check_and_reserve_demo_scan, get_installation
+from app_server.db import (
+    add_paddle_ids_to_installation,
+    check_and_reserve_demo_scan,
+    count_telemetry_events,
+    get_installation,
+    record_telemetry_event,
+)
 
 
 @pytest.mark.asyncio
@@ -30,3 +36,24 @@ async def test_check_and_reserve_demo_scan_different_ips_are_independent(pool):
 async def test_check_and_reserve_demo_scan_allows_again_after_cooldown_elapses(pool):
     assert await check_and_reserve_demo_scan(pool, "203.0.113.20", cooldown_seconds=0) is True
     assert await check_and_reserve_demo_scan(pool, "203.0.113.20", cooldown_seconds=0) is True
+
+
+@pytest.mark.asyncio
+async def test_record_telemetry_event_then_count(pool):
+    await record_telemetry_event(pool, "scan", "machine-a")
+    await record_telemetry_event(pool, "scan", "machine-a")
+    await record_telemetry_event(pool, "scan", "machine-b")
+
+    counts = await count_telemetry_events(pool, "scan")
+
+    assert counts == {"total": 3, "unique_machines": 2}
+
+
+@pytest.mark.asyncio
+async def test_count_telemetry_events_only_counts_the_given_event_type(pool):
+    await record_telemetry_event(pool, "scan", "machine-a")
+    await record_telemetry_event(pool, "other-event", "machine-a")
+
+    counts = await count_telemetry_events(pool, "scan")
+
+    assert counts["total"] == 1

@@ -62,6 +62,96 @@ class CodeGraphStore:
                 )
                 return [row[0] for row in cur.fetchall()]
 
+    def load_last_synced_sha(self, branch: str) -> str | None:
+        import psycopg
+
+        with psycopg.connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT last_synced_sha FROM code_graph_sync_state "
+                    "WHERE installation_id = %s AND repo_full_name = %s AND branch = %s",
+                    (self._installation_id, self._repo_full_name, branch),
+                )
+                row = cur.fetchone()
+                return row[0] if row else None
+
+    def load_all_modules(self, branch: str) -> dict[str, dict]:
+        """Reconstructs full build_module_graph-shaped module dicts (path,
+        language, imports, symbols) for every currently-persisted file -
+        the read side that powers the incremental scan cache
+        (aletheore.evidence._load_unchanged_scan_cache): a file the
+        caller has determined is unchanged since this data was computed
+        can be fed straight back into build_module_graph without
+        re-parsing it. imported_by is always left empty here -
+        build_module_graph recomputes it fresh from every module's
+        imports (cached or not) regardless of what's passed in.
+        """
+        import psycopg
+
+        ids = (self._installation_id, self._repo_full_name, branch)
+        with psycopg.connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT path, language FROM code_graph_files "
+                    "WHERE installation_id = %s AND repo_full_name = %s AND branch = %s",
+                    ids,
+                )
+                modules = {
+                    path: {
+                        "path": path,
+                        "language": language,
+                        "imports": [],
+                        "imported_by": [],
+                        "symbols": {"functions": [], "classes": []},
+                    }
+                    for path, language in cur.fetchall()
+                }
+
+                cur.execute(
+                    "SELECT path, name, kind, start_line, end_line FROM code_graph_symbols "
+                    "WHERE installation_id = %s AND repo_full_name = %s AND branch = %s",
+                    ids,
+                )
+                for path, name, kind, start_line, end_line in cur.fetchall():
+                    if path not in modules:
+                        continue
+                    group = "functions" if kind == "function" else "classes"
+                    modules[path]["symbols"][group].append(
+                        {"name": name, "start_line": start_line, "end_line": end_line}
+                    )
+
+                cur.execute(
+                    "SELECT from_path, to_path FROM code_graph_dependency_edges "
+                    "WHERE installation_id = %s AND repo_full_name = %s AND branch = %s",
+                    ids,
+                )
+                for from_path, to_path in cur.fetchall():
+                    if from_path not in modules:
+                        continue
+                    modules[from_path]["imports"].append(to_path)
+
+        return modules
+
+    def load_all_endpoints(self, branch: str) -> dict[str, list[dict]]:
+        """path -> list of endpoint dicts found in that file - the read
+        side powering the incremental scan cache's endpoint reuse,
+        mirroring load_all_modules above."""
+        import psycopg
+
+        grouped: dict[str, list[dict]] = {}
+        with psycopg.connect(self._dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT method, endpoint_path, file_path, line FROM code_graph_endpoints "
+                    "WHERE installation_id = %s AND repo_full_name = %s AND branch = %s",
+                    (self._installation_id, self._repo_full_name, branch),
+                )
+                for method, endpoint_path, file_path, line in cur.fetchall():
+                    grouped.setdefault(file_path, []).append(
+                        {"method": method, "path": endpoint_path, "file": file_path, "line": line}
+                    )
+        return grouped
+
     def load_endpoint_keys(self, branch: str) -> dict[tuple, dict]:
         import psycopg
 

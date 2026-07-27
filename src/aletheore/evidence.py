@@ -58,6 +58,26 @@ def _git_history_depth_cap() -> int | None:
 # engine's value.
 _SECRETS_HISTORY_DEPTH_CAP_ENV = "ALETHEORE_SECRETS_HISTORY_DEPTH_CAP"
 
+# Unset by default - true incremental scanning needs a persistent, kept-up-
+# to-date local checkout to diff against (a fresh clone has no "last time"
+# to compare to), which only the hosted scan-worker maintains. Points at a
+# JSON file: {"modules": {<path>: <build_module_graph module dict>},
+# "endpoints": {<path>: [<endpoint dict>, ...]}} for files the worker has
+# determined are unchanged since their data was last computed - see
+# scan_worker/jobs.py for how that file gets built and where it points.
+_UNCHANGED_SCAN_CACHE_ENV = "ALETHEORE_UNCHANGED_SCAN_CACHE"
+
+
+def _load_unchanged_scan_cache() -> tuple[dict[str, dict] | None, dict[str, list[dict]] | None]:
+    raw_path = os.environ.get(_UNCHANGED_SCAN_CACHE_ENV)
+    if not raw_path:
+        return None, None
+    try:
+        data = json.loads(Path(raw_path).read_text())
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    return data.get("modules"), data.get("endpoints")
+
 
 def _secrets_history_depth_cap() -> int | None:
     raw = os.environ.get(_SECRETS_HISTORY_DEPTH_CAP_ENV)
@@ -104,8 +124,12 @@ def scan_repository(
     infrastructure = detect_infrastructure(repo_path)
     environment_variables = detect_environment_variables(repo_path)
 
+    unchanged_modules, unchanged_endpoints = _load_unchanged_scan_cache()
+
     report("Building module dependency graph (parsing source with tree-sitter)")
-    modules, dependency_graph, unparseable_files = build_module_graph(repo_path)
+    modules, dependency_graph, unparseable_files = build_module_graph(
+        repo_path, unchanged_modules=unchanged_modules
+    )
 
     report("Analyzing git history and ownership")
     git_data = analyze_git(repo_path, depth_cap=_git_history_depth_cap())
@@ -161,7 +185,7 @@ def scan_repository(
 
     if map_endpoints:
         report("Mapping API endpoints")
-        api_endpoints_data = map_api_endpoints(repo_path)
+        api_endpoints_data = map_api_endpoints(repo_path, unchanged_endpoints=unchanged_endpoints)
     else:
         api_endpoints_data = {
             "checked": False,

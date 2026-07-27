@@ -665,3 +665,20 @@ async def get_wiki_subsystem(
     if isinstance(entry["files"], str):
         entry["files"] = json.loads(entry["files"])
     return entry
+
+
+async def record_telemetry_event(pool: asyncpg.Pool, event_type: str, anonymous_id: str) -> None:
+    await pool.execute(
+        "INSERT INTO cli_telemetry_events (event_type, anonymous_id) VALUES ($1, $2)",
+        event_type,
+        anonymous_id,
+    )
+
+
+async def count_telemetry_events(pool: asyncpg.Pool, event_type: str) -> dict:
+    row = await pool.fetchrow(
+        "SELECT count(*) AS total, count(DISTINCT anonymous_id) AS unique_machines "
+        "FROM cli_telemetry_events WHERE event_type = $1",
+        event_type,
+    )
+    return {"total": row["total"], "unique_machines": row["unique_machines"]}
