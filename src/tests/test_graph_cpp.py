@@ -180,3 +180,18 @@ def test_build_module_graph_c_file_with_deeply_nested_expression_does_not_crash(
 
     assert unparseable == []
     assert "f" in symbol_names(modules[0]["symbols"]["functions"])
+
+
+def test_build_module_graph_c_include_escaping_repo_root_does_not_crash(tmp_path):
+    # Before this fix, a quoted #include resolving above the repo root (a real
+    # file on disk, just outside repo_path) crashed the whole scan with an
+    # unhandled ValueError from path.relative_to().
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "outside.h").write_text("int outside(void);\n")
+    (repo / "main.c").write_text('#include "../outside.h"\n\nint main(void) { return 0; }\n')
+
+    _, dependency_graph, unparseable = build_module_graph(repo)
+
+    assert dependency_graph["edges"] == []
+    assert unparseable == []

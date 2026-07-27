@@ -136,3 +136,23 @@ def test_build_module_graph_dotnet_obj_directory_is_excluded(tmp_path):
     modules, _, _ = build_module_graph(repo)
 
     assert [m["path"] for m in modules] == ["Program.cs"]
+
+
+def test_build_module_graph_csharp_using_escaping_repo_root_does_not_crash(tmp_path):
+    # Before this fix, this crashed with an unhandled ValueError from
+    # path.relative_to(). A file directly at the repo root whose single-segment
+    # namespace matches the repo directory's own name (here "App") makes
+    # _csharp_prefix_and_root_for infer a resolution root one level ABOVE
+    # repo_path - a real coincidence for any project namespaced after its own
+    # folder. A "using" statement resolving relative to that escaped root can
+    # then fan out to real files genuinely outside repo_path.
+    repo = tmp_path / "App"
+    repo.mkdir()
+    (repo / "Foo.cs").write_text("namespace App;\n\nclass Foo {}\n")
+    (tmp_path / "Other").mkdir()
+    (tmp_path / "Other" / "Outside.cs").write_text("class Outside {}\n")
+    (repo / "Main.cs").write_text("using Other;\n\nclass Main {}\n")
+
+    _, dependency_graph, _ = build_module_graph(repo)
+
+    assert dependency_graph["edges"] == []

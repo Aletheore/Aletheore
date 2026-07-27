@@ -131,6 +131,21 @@ def test_build_module_graph_ruby_require_relative_with_dot_prefix_resolves(tmp_p
     assert ("main.rb", "helper.rb") in edges
 
 
+def test_build_module_graph_ruby_require_relative_escaping_repo_root_does_not_crash(tmp_path):
+    # Before this fix, a require_relative resolving above the repo root (a real
+    # file on disk, just outside repo_path) crashed the whole scan with an
+    # unhandled ValueError from path.relative_to() - treated the same as any
+    # other unresolved/external require instead.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "outside.rb").write_text("def outside\nend\n")
+    (repo / "main.rb").write_text('require_relative "../outside"\n')
+
+    _, dependency_graph, _ = build_module_graph(repo)
+
+    assert dependency_graph["edges"] == []
+
+
 def test_build_module_graph_ruby_method_call_with_receiver_is_not_mistaken_for_require(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
