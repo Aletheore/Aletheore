@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import secrets
 
@@ -5,7 +6,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app_server.auth import get_current_session
+from app_server.auth import encrypt_access_token, get_current_session, refresh_github_access_token
+from app_server.config import get_settings
 from app_server.db import (
     DEFAULT_HEALTH_CHECK_TARGET_LIMIT,
     DEFAULT_SEAT_LIMIT,
@@ -17,6 +19,7 @@ from app_server.db import (
     count_health_check_targets,
     count_installation_members,
     create_api_token,
+    delete_session,
     get_extra_seats,
     get_installation,
     get_max_tokens,
@@ -28,6 +31,7 @@ from app_server.db import (
     remove_installation_member,
     revoke_api_token,
     set_webhook_url,
+    update_session_tokens,
 )
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
 
@@ -127,6 +131,71 @@ async def _administered_installation_ids_or_401(github_token: str) -> set[int]:
         raise HTTPException(status_code=502, detail="GitHub API unavailable") from exc
 
 
+async def _try_refresh_session_token(pool, session: dict) -> str | None:
+    """Attempts to renew a session's GitHub access token via its stored
+    refresh_token. Returns the new access token on success, None if
+    there's no refresh_token on file or GitHub rejects it - callers treat
+    None as "refresh isn't possible," not as an error to bubble up.
+    """
+    refresh_token = session.get("github_refresh_token")
+    if not refresh_token:
+        return None
+
+    settings = get_settings()
+    try:
+        new_access_token, new_refresh_token = await asyncio.to_thread(
+            refresh_github_access_token,
+            refresh_token,
+            settings.github_client_id,
+            settings.github_client_secret,
+        )
+    except Exception:
+        return None
+
+    await update_session_tokens(
+        pool,
+        session["id"],
+        encrypt_access_token(new_access_token, settings.session_secret),
+        # GitHub rotates the refresh token on every use but doesn't always
+        # send a new one back - keep the still-valid old one on file
+        # rather than stranding the session with none at all.
+        encrypt_access_token(new_refresh_token or refresh_token, settings.session_secret),
+    )
+    return new_access_token
+
+
+async def _administered_installation_ids_for_session_or_401(pool, session: dict) -> set[int]:
+    """Same idea as _administered_installation_ids_or_401, but for
+    session-cookie callers specifically: a 401/403 from GitHub here means
+    the session's stored access token is dead, not necessarily that the
+    user needs to fully re-authenticate. If a refresh_token is on file,
+    this transparently renews it and retries once before giving up.
+
+    The session cookie itself has its own 30-day TTL and no way to know
+    the GitHub token it wraps expired early (get_current_session only
+    checks the cookie's own signature/TTL) - if refresh isn't possible or
+    also fails, the session is deleted outright so the cookie stops
+    looking valid, and the frontend's redirect to /auth/logout on a 401
+    actually resolves something instead of looping forever.
+    """
+    try:
+        return await _administered_installation_ids(session["github_access_token"])
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code not in (401, 403):
+            raise HTTPException(status_code=502, detail="GitHub API unavailable") from exc
+
+    refreshed_token = await _try_refresh_session_token(pool, session)
+    if refreshed_token is not None:
+        try:
+            return await _administered_installation_ids(refreshed_token)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in (401, 403):
+                raise HTTPException(status_code=502, detail="GitHub API unavailable") from exc
+
+    await delete_session(pool, session["id"])
+    raise HTTPException(status_code=401, detail="GitHub session expired - please sign in again")
+
+
 def _bearer_github_token(request: Request) -> str:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -167,7 +236,7 @@ async def _require_admin_installation(request: Request, org: str, repo: str) -> 
 
     pool = request.app.state.db_pool
     installation_id = await _repo_installation_id(pool, org, repo)
-    administered_ids = await _administered_installation_ids_or_401(session["github_access_token"])
+    administered_ids = await _administered_installation_ids_for_session_or_401(pool, session)
     if installation_id not in administered_ids:
         raise HTTPException(status_code=403, detail="you do not administer this installation")
 

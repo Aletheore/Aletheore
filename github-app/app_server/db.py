@@ -507,17 +507,19 @@ async def create_session(
     github_login: str,
     access_token: str,
     expires_at: datetime,
+    refresh_token: str | None = None,
 ) -> None:
     await pool.execute(
         """
-        INSERT INTO sessions (id, github_user_id, github_login, github_access_token, expires_at)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO sessions (id, github_user_id, github_login, github_access_token, expires_at, github_refresh_token)
+        VALUES ($1, $2, $3, $4, $5, $6)
         """,
         session_id,
         github_user_id,
         github_login,
         access_token,
         expires_at,
+        refresh_token,
     )
 
 
@@ -528,13 +530,27 @@ async def get_session(pool: asyncpg.Pool, session_id: str) -> dict | None:
     # takes effect immediately rather than whenever cleanup next runs.
     row = await pool.fetchrow(
         """
-        SELECT id, github_user_id, github_login, github_access_token, expires_at
+        SELECT id, github_user_id, github_login, github_access_token, github_refresh_token, expires_at
         FROM sessions
         WHERE id = $1 AND expires_at > now()
         """,
         session_id,
     )
     return dict(row) if row else None
+
+
+async def update_session_tokens(
+    pool: asyncpg.Pool,
+    session_id: str,
+    access_token: str,
+    refresh_token: str | None,
+) -> None:
+    await pool.execute(
+        "UPDATE sessions SET github_access_token = $2, github_refresh_token = $3 WHERE id = $1",
+        session_id,
+        access_token,
+        refresh_token,
+    )
 
 
 async def delete_session(pool: asyncpg.Pool, session_id: str) -> None:

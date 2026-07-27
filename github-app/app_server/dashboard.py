@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from aletheore.evidence_resolution import resolve_code_evidence
 from app_server.admin import (
-    _administered_installation_ids_or_401,
+    _administered_installation_ids_for_session_or_401,
     _github_http_client,
     _repo_installation_id,
     _require_admin_installation,
@@ -115,8 +115,8 @@ async def list_my_repos(request: Request):
     if session is None:
         raise HTTPException(status_code=401, detail="login required")
 
-    administered_ids = await _administered_installation_ids_or_401(session["github_access_token"])
     pool = request.app.state.db_pool
+    administered_ids = await _administered_installation_ids_for_session_or_401(pool, session)
     repos = await list_repos_for_installations(pool, list(administered_ids))
     result = []
     known_by_installation: dict[int, set[str]] = {}
@@ -164,7 +164,7 @@ async def _require_dashboard_installation(request: Request, org: str, repo: str)
     pool = request.app.state.db_pool
     installation_id = await _repo_installation_id(pool, org, repo)
 
-    administered_ids = await _administered_installation_ids_or_401(session["github_access_token"])
+    administered_ids = await _administered_installation_ids_for_session_or_401(pool, session)
     if installation_id not in administered_ids:
         raise HTTPException(status_code=403, detail="you do not administer this installation")
 

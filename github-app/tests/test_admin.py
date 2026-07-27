@@ -3,12 +3,15 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
-from app_server.auth import encrypt_access_token, sign_session_id
+from app_server.admin import _administered_installation_ids_for_session_or_401
+from app_server.auth import decrypt_access_token, encrypt_access_token, sign_session_id
 from app_server.db import (
     create_session,
     get_max_tokens,
+    get_session,
     insert_repo_history,
     set_installation_plan,
     upsert_installation,
@@ -73,6 +76,168 @@ async def _mock_github_installations(monkeypatch, installation_ids: list[int]):
         "app_server.admin._github_http_client",
         lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
     )
+
+
+async def _create_session_with_tokens(
+    pool, monkeypatch, session_id, access_token, refresh_token=None
+):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    await create_session(
+        pool,
+        session_id,
+        42,
+        "octocat",
+        encrypt_access_token(access_token, "test-session-secret"),
+        datetime.now(timezone.utc) + timedelta(hours=1),
+        refresh_token=encrypt_access_token(refresh_token, "test-session-secret") if refresh_token else None,
+    )
+    return {
+        "id": session_id,
+        "github_login": "octocat",
+        "github_access_token": access_token,
+        "github_refresh_token": refresh_token,
+    }
+
+
+@pytest.mark.asyncio
+async def test_administered_ids_for_session_succeeds_without_refresh_when_token_valid(pool, monkeypatch):
+    session = await _create_session_with_tokens(pool, monkeypatch, "sess-valid", "gho_valid")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "Bearer gho_valid"
+        return httpx.Response(200, json={"installations": [{"id": 1}, {"id": 2}]})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    ids = await _administered_installation_ids_for_session_or_401(pool, session)
+    assert ids == {1, 2}
+    # Untouched - no refresh was needed.
+    row = await get_session(pool, "sess-valid")
+    assert decrypt_access_token(row["github_access_token"], "test-session-secret") == "gho_valid"
+
+
+@pytest.mark.asyncio
+async def test_administered_ids_for_session_refreshes_and_retries_on_401(pool, monkeypatch):
+    session = await _create_session_with_tokens(
+        pool, monkeypatch, "sess-refresh", "gho_dead", refresh_token="ghr_stillgood"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.headers["Authorization"] == "Bearer gho_dead":
+            return httpx.Response(401, json={"message": "Bad credentials"})
+        if request.headers["Authorization"] == "Bearer gho_fresh":
+            return httpx.Response(200, json={"installations": [{"id": 7}]})
+        raise AssertionError("unexpected token")
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    def fake_refresh(refresh_token, client_id, client_secret):
+        assert refresh_token == "ghr_stillgood"
+        return "gho_fresh", "ghr_rotated"
+
+    monkeypatch.setattr("app_server.admin.refresh_github_access_token", fake_refresh)
+
+    ids = await _administered_installation_ids_for_session_or_401(pool, session)
+    assert ids == {7}
+
+    row = await get_session(pool, "sess-refresh")
+    assert decrypt_access_token(row["github_access_token"], "test-session-secret") == "gho_fresh"
+    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret") == "ghr_rotated"
+
+
+@pytest.mark.asyncio
+async def test_administered_ids_for_session_keeps_old_refresh_token_if_github_omits_a_new_one(
+    pool, monkeypatch
+):
+    session = await _create_session_with_tokens(
+        pool, monkeypatch, "sess-norotate", "gho_dead", refresh_token="ghr_stillgood"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.headers["Authorization"] == "Bearer gho_dead":
+            return httpx.Response(401, json={"message": "Bad credentials"})
+        return httpx.Response(200, json={"installations": [{"id": 7}]})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.admin.refresh_github_access_token",
+        lambda refresh_token, client_id, client_secret: ("gho_fresh", None),
+    )
+
+    await _administered_installation_ids_for_session_or_401(pool, session)
+
+    row = await get_session(pool, "sess-norotate")
+    assert decrypt_access_token(row["github_refresh_token"], "test-session-secret") == "ghr_stillgood"
+
+
+@pytest.mark.asyncio
+async def test_administered_ids_for_session_deletes_session_when_no_refresh_token(pool, monkeypatch):
+    session = await _create_session_with_tokens(pool, monkeypatch, "sess-norefresh", "gho_dead")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"message": "Bad credentials"})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _administered_installation_ids_for_session_or_401(pool, session)
+    assert exc_info.value.status_code == 401
+    assert await get_session(pool, "sess-norefresh") is None
+
+
+@pytest.mark.asyncio
+async def test_administered_ids_for_session_deletes_session_when_refresh_fails(pool, monkeypatch):
+    session = await _create_session_with_tokens(
+        pool, monkeypatch, "sess-refreshfails", "gho_dead", refresh_token="ghr_alsodead"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"message": "Bad credentials"})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    def fake_refresh(refresh_token, client_id, client_secret):
+        raise RuntimeError("bad_refresh_token")
+
+    monkeypatch.setattr("app_server.admin.refresh_github_access_token", fake_refresh)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _administered_installation_ids_for_session_or_401(pool, session)
+    assert exc_info.value.status_code == 401
+    assert await get_session(pool, "sess-refreshfails") is None
+
+
+@pytest.mark.asyncio
+async def test_administered_ids_for_session_propagates_502_without_deleting_session(pool, monkeypatch):
+    session = await _create_session_with_tokens(pool, monkeypatch, "sess-outage", "gho_valid")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"message": "internal error"})
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _administered_installation_ids_for_session_or_401(pool, session)
+    assert exc_info.value.status_code == 502
+    assert await get_session(pool, "sess-outage") is not None
 
 
 @pytest.mark.asyncio
