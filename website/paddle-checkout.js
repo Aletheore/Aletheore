@@ -1,19 +1,11 @@
 // Paddle checkout wiring for the pricing page.
-const PADDLE_ENVIRONMENT = "sandbox";
-const PADDLE_CLIENT_TOKEN = "test_4c86268368fd75d088763f49248";
+const PADDLE_ENVIRONMENT = "production";
+const PADDLE_CLIENT_TOKEN = "live_e7aef6edd9b215cd9059dab0c3d";
 
 const TIERS = {
-  indie: {
-    name: "Indie",
-    priceId: { month: "pri_01ky9jwz35hvj5xs6f8xqw6htt", year: "pri_01ky9jwzd6k9rhmnj8b4drbygg" },
-  },
-  team: {
-    name: "Team",
-    priceId: { month: "pri_01ky9jx0gbx02mnn4d166yp3vc", year: "pri_01ky9jx0rkkkz75atfb29me9mn" },
-  },
-  enterprise: {
-    name: "Enterprise",
-    priceId: { month: "pri_01ky9jx1bkbbkfd9zspcgzd7p8", year: "pri_01ky9jx1pbbpsexbmtbk1wfej1" },
+  air: {
+    name: "Aletheore AIR",
+    priceId: { month: "pri_01kyhevc8bkcghfpwjymz16y2h", year: "pri_01kyhevc9xn6z2nghmy8057jvp" },
   },
 };
 
