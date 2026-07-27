@@ -31,6 +31,7 @@ from aletheore.evidence import scan_repository, write_evidence
 from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
+from aletheore.telemetry import report_scan_event
 from aletheore.managed_audit_client import ManagedAuditError, run_managed_audit_request
 from aletheore.query import (
     BranchNotFoundInEvidenceError,
@@ -244,6 +245,11 @@ def _scan(
     console.print(f"[green]Evidence written to[/green] {evidence_path}")
     snapshot_path = save_snapshot(evidence, repo)
     console.print(f"Snapshot saved to {snapshot_path}")
+    # Fire-and-forget, off the main thread: report_scan_event already has
+    # its own short timeout and swallows every exception, but a background
+    # thread means even a slow/hanging network path can never add latency
+    # to a real scan.
+    threading.Thread(target=report_scan_event, daemon=True).start()
     return 0, evidence, evidence_path
 
 

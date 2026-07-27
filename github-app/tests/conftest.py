@@ -40,7 +40,9 @@ async def pool():
         migrations_dir = Path(__file__).resolve().parents[1] / "migrations"
         for migration in sorted(migrations_dir.glob("*.sql")):
             await conn.execute(migration.read_text())
-        await conn.execute("TRUNCATE installations, sessions, demo_scan_rate_limits CASCADE")
+        await conn.execute(
+            "TRUNCATE installations, sessions, demo_scan_rate_limits, cli_telemetry_events CASCADE"
+        )
     yield p
     await p.close()
 
