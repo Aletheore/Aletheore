@@ -1052,7 +1052,18 @@ def _resolve_js_import(repo_path: Path, from_file: Path, spec: str) -> str | Non
     return None
 
 
-def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
+def build_module_graph(
+    repo_path: Path, *, unchanged_modules: dict[str, dict] | None = None
+) -> tuple[list[dict], dict, list[dict]]:
+    """unchanged_modules: path -> a previously-computed module dict (same
+    shape this function itself produces) for files known not to have
+    changed since that data was computed - skips tree-sitter parsing for
+    those paths entirely, reusing the cached dict as-is. A stale entry
+    for a file no longer present in repo_path is simply never consulted
+    (the walk below only ever looks paths up as it encounters them on
+    disk). Defaults to None: fully backward compatible, every file parsed
+    fresh, matching this function's behavior before this parameter
+    existed."""
     modules: list[dict] = []
     unparseable: list[dict] = []
     imported_by_map: dict[str, list[str]] = {}
@@ -1104,6 +1115,15 @@ def build_module_graph(repo_path: Path) -> tuple[list[dict], dict, list[dict]]:
 
     for path in _iter_source_files(repo_path):
         rel_path = _rel(repo_path, path)
+
+        if unchanged_modules is not None and rel_path in unchanged_modules:
+            cached_module = unchanged_modules[rel_path]
+            modules.append(cached_module)
+            for target in cached_module.get("imports", []):
+                edges.append([rel_path, target])
+                imported_by_map.setdefault(target, []).append(rel_path)
+            continue
+
         language_info = LANGUAGE_BY_EXTENSION.get(path.suffix)
         if language_info is None:
             if path.suffix in KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR:

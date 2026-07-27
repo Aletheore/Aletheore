@@ -210,3 +210,75 @@ async def test_installation_deletion_cascades_to_code_graph_tables(pool):
     await pool.execute("DELETE FROM installations WHERE installation_id = 711")
 
     assert store.load_content_hashes("main") == {}
+
+
+@pytest.mark.asyncio
+async def test_load_last_synced_sha_returns_none_for_unknown_repo(pool):
+    await _insert_installation(pool, 712, "org")
+    store = CodeGraphStore(TEST_DATABASE_URL, 712, "org/repo")
+
+    assert store.load_last_synced_sha("main") is None
+
+
+@pytest.mark.asyncio
+async def test_load_last_synced_sha_returns_the_most_recent_sync(pool):
+    await _insert_installation(pool, 713, "org")
+    store = CodeGraphStore(TEST_DATABASE_URL, 713, "org/repo")
+    store.apply_module_deltas(
+        "main", [_module("a.py", "hash-a")], deleted_paths=[], new_sync_sha="s1", new_sync_at=datetime(2026, 7, 26)
+    )
+    store.apply_module_deltas(
+        "main", [], deleted_paths=[], new_sync_sha="s2", new_sync_at=datetime(2026, 7, 27)
+    )
+
+    assert store.load_last_synced_sha("main") == "s2"
+
+
+@pytest.mark.asyncio
+async def test_load_all_modules_reconstructs_full_module_dicts(pool):
+    await _insert_installation(pool, 714, "org")
+    store = CodeGraphStore(TEST_DATABASE_URL, 714, "org/repo")
+    store.apply_module_deltas(
+        "main",
+        [
+            _module(
+                "a.py", "hash-a", imports=["b.py"],
+                functions=[{"name": "f", "start_line": 1, "end_line": 5}],
+                classes=[{"name": "C", "start_line": 10, "end_line": 20}],
+            ),
+            _module("b.py", "hash-b"),
+        ],
+        deleted_paths=[],
+        new_sync_sha="s1",
+        new_sync_at=datetime(2026, 7, 26),
+    )
+
+    modules = store.load_all_modules("main")
+
+    assert set(modules.keys()) == {"a.py", "b.py"}
+    assert modules["a.py"]["language"] == "python"
+    assert modules["a.py"]["imports"] == ["b.py"]
+    assert {"name": "f", "start_line": 1, "end_line": 5} in modules["a.py"]["symbols"]["functions"]
+    assert {"name": "C", "start_line": 10, "end_line": 20} in modules["a.py"]["symbols"]["classes"]
+    assert modules["b.py"]["imports"] == []
+
+
+@pytest.mark.asyncio
+async def test_load_all_endpoints_groups_by_file(pool):
+    await _insert_installation(pool, 715, "org")
+    store = CodeGraphStore(TEST_DATABASE_URL, 715, "org/repo")
+    store.apply_endpoint_deltas(
+        "main",
+        [
+            _endpoint("GET", "/users", "app.py", 10),
+            _endpoint("POST", "/users", "app.py", 20),
+            _endpoint("GET", "/health", "health.py", 1),
+        ],
+        deleted_keys=[],
+    )
+
+    endpoints = store.load_all_endpoints("main")
+
+    assert {e["path"] for e in endpoints["app.py"]} == {"/users"}
+    assert len(endpoints["app.py"]) == 2
+    assert len(endpoints["health.py"]) == 1
