@@ -552,6 +552,23 @@ def _post_failure_comment(
     upsert_pr_comment(client, token, repo_full_name, pr_number, _failure_body(error))
 
 
+def _post_flash_review_failure_comment(
+    settings,
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    error: Exception,
+) -> None:
+    app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+    token = _token_sync(installation_id, app_jwt)
+    client = httpx.Client(base_url="https://api.github.com")
+    body = (
+        f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
+        f"Aletheore couldn't complete this flash review: {error}"
+    )
+    upsert_pr_comment(client, token, repo_full_name, pr_number, body, marker=FLASH_REVIEW_MARKER)
+
+
 @log_job
 def run_pr_scan_job(
     installation_id: int,
@@ -909,92 +926,113 @@ def run_flash_review_job(
         if get_flash_review_count_this_month(settings.database_url, installation_id) >= MAX_FLASH_REVIEWS_PER_MONTH:
             return
 
-        app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
-        token = _token_sync(installation_id, app_jwt)
-        client = httpx.Client(base_url="https://api.github.com")
-
-        last_reviewed_sha = get_last_reviewed_sha(
-            settings.database_url, installation_id, repo_full_name, pr_number
-        )
-        diff_base = last_reviewed_sha or base_sha
-        diff_text = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha)
-        changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
-
-        spend_accumulator = {"total": 0.0}
-
-        if is_non_substantive_diff(changed_files):
-            findings: list[dict] = []
-        else:
-            file_context = gather_file_context(client, token, repo_full_name, changed_files, head_sha)
-            file_contents = fetch_changed_file_contents(client, token, repo_full_name, changed_files, head_sha)
-            evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
-            code_evidence_context = build_code_evidence_context(evidence, changed_files)
-
-            def _fetch_symbol_source(file_path: str, start_line: int, end_line: int) -> str | None:
-                content = fetch_file_content(client, token, repo_full_name, file_path, head_sha)
-                if content is None:
-                    return None
-                return "\n".join(content.splitlines()[start_line - 1 : end_line])
-
-            referenced_symbol_context = build_referenced_symbol_context(
-                evidence, changed_files, diff_text, _fetch_symbol_source
+        try:
+            _run_flash_review(
+                settings, installation_id, repo_full_name, pr_number, base_sha, head_sha
             )
-            dsn = settings.database_url
-
-            def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-                spend_accumulator["total"] += cost_for_usage(
-                    "deepseek-v4-flash", prompt_tokens, completion_tokens
+        except Exception as exc:  # noqa: BLE001
+            try:
+                _post_flash_review_failure_comment(
+                    settings, installation_id, repo_full_name, pr_number, exc
                 )
+            except Exception:  # noqa: BLE001
+                pass
 
-            def _cache_lookup(diff: str) -> list[dict] | None:
-                return lookup_cached_flash_review_result(dsn, installation_id, repo_full_name, diff)
 
-            def _cache_write(diff: str, found: list[dict], used: str) -> None:
-                store_flash_review_result(dsn, installation_id, repo_full_name, diff, found, used)
+def _run_flash_review(
+    settings,
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    base_sha: str,
+    head_sha: str,
+) -> None:
+    app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+    token = _token_sync(installation_id, app_jwt)
+    client = httpx.Client(base_url="https://api.github.com")
 
-            if code_evidence_context:
-                findings = review_diff(
-                    diff_text,
-                    file_context=file_context,
-                    code_evidence_context=code_evidence_context,
-                    on_usage=_on_usage,
-                    referenced_symbol_context=referenced_symbol_context,
-                    cache_lookup=_cache_lookup,
-                    cache_write=_cache_write,
-                    model_used="deepseek-v4-flash",
-                    file_contents=file_contents,
-                )
-            else:
-                findings = review_diff(
-                    diff_text,
-                    file_context=file_context,
-                    on_usage=_on_usage,
-                    referenced_symbol_context=referenced_symbol_context,
-                    cache_lookup=_cache_lookup,
-                    cache_write=_cache_write,
-                    model_used="deepseek-v4-flash",
-                    file_contents=file_contents,
-                )
-        record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
-        increment_flash_review_count(settings.database_url, installation_id)
+    last_reviewed_sha = get_last_reviewed_sha(
+        settings.database_url, installation_id, repo_full_name, pr_number
+    )
+    diff_base = last_reviewed_sha or base_sha
+    diff_text = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha)
+    changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
 
-        if findings:
-            lines = [f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n"]
-            for finding in findings:
-                lines.append(f"- `{finding['file']}:{finding['line']}` — {finding['issue']}")
-                suggestion = finding.get("suggestion")
-                if suggestion:
-                    lines.append(f"  ```\n  {suggestion}\n  ```")
-            body = "\n".join(lines)
-        else:
-            body = (
-                f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\nNo issues found in this diff."
+    spend_accumulator = {"total": 0.0}
+
+    if is_non_substantive_diff(changed_files):
+        findings: list[dict] = []
+    else:
+        file_context = gather_file_context(client, token, repo_full_name, changed_files, head_sha)
+        file_contents = fetch_changed_file_contents(client, token, repo_full_name, changed_files, head_sha)
+        evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
+        code_evidence_context = build_code_evidence_context(evidence, changed_files)
+
+        def _fetch_symbol_source(file_path: str, start_line: int, end_line: int) -> str | None:
+            content = fetch_file_content(client, token, repo_full_name, file_path, head_sha)
+            if content is None:
+                return None
+            return "\n".join(content.splitlines()[start_line - 1 : end_line])
+
+        referenced_symbol_context = build_referenced_symbol_context(
+            evidence, changed_files, diff_text, _fetch_symbol_source
+        )
+        dsn = settings.database_url
+
+        def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+            spend_accumulator["total"] += cost_for_usage(
+                "deepseek-v4-flash", prompt_tokens, completion_tokens
             )
 
-        upsert_pr_comment(client, token, repo_full_name, pr_number, body, marker=FLASH_REVIEW_MARKER)
-        set_last_reviewed_sha(
-            settings.database_url, installation_id, repo_full_name, pr_number, head_sha
+        def _cache_lookup(diff: str) -> list[dict] | None:
+            return lookup_cached_flash_review_result(dsn, installation_id, repo_full_name, diff)
+
+        def _cache_write(diff: str, found: list[dict], used: str) -> None:
+            store_flash_review_result(dsn, installation_id, repo_full_name, diff, found, used)
+
+        if code_evidence_context:
+            findings = review_diff(
+                diff_text,
+                file_context=file_context,
+                code_evidence_context=code_evidence_context,
+                on_usage=_on_usage,
+                referenced_symbol_context=referenced_symbol_context,
+                cache_lookup=_cache_lookup,
+                cache_write=_cache_write,
+                model_used="deepseek-v4-flash",
+                file_contents=file_contents,
+            )
+        else:
+            findings = review_diff(
+                diff_text,
+                file_context=file_context,
+                on_usage=_on_usage,
+                referenced_symbol_context=referenced_symbol_context,
+                cache_lookup=_cache_lookup,
+                cache_write=_cache_write,
+                model_used="deepseek-v4-flash",
+                file_contents=file_contents,
+            )
+    record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
+    increment_flash_review_count(settings.database_url, installation_id)
+
+    if findings:
+        lines = [f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n"]
+        for finding in findings:
+            lines.append(f"- `{finding['file']}:{finding['line']}` — {finding['issue']}")
+            suggestion = finding.get("suggestion")
+            if suggestion:
+                lines.append(f"  ```\n  {suggestion}\n  ```")
+        body = "\n".join(lines)
+    else:
+        body = (
+            f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\nNo issues found in this diff."
         )
+
+    upsert_pr_comment(client, token, repo_full_name, pr_number, body, marker=FLASH_REVIEW_MARKER)
+    set_last_reviewed_sha(
+        settings.database_url, installation_id, repo_full_name, pr_number, head_sha
+    )
 
 
 def _send_if_webhook_configured(installation: dict, message: dict) -> None:

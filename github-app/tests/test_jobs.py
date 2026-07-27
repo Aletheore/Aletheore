@@ -1092,6 +1092,44 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     assert recorded_spend == [0.0]
 
 
+def test_flash_review_job_posts_failure_comment_instead_of_raising(monkeypatch):
+    # Before this fix, any exception in the review body (LLM call, GitHub
+    # API, cache lookup) propagated straight out of the RQ job with zero
+    # customer-visible signal - the PR would just never get a comment, and
+    # nothing would tell the customer flash review had failed.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+
+    def _raise_diff_fetch(*a, **k):
+        raise RuntimeError("GitHub API timed out")
+
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", _raise_diff_fetch)
+
+    posted = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo_full_name, pr_number, body, **kwargs: posted.update(
+            body=body, marker=kwargs.get("marker")
+        ),
+    )
+    from scan_worker.jobs import FLASH_REVIEW_MARKER, run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert posted["marker"] == FLASH_REVIEW_MARKER
+    assert "couldn't complete this flash review" in posted["body"]
+    assert "GitHub API timed out" in posted["body"]
+
+
 def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkeypatch):
     # Real hallucination this exists to prevent: Flash Review claimed an
     # imported function needed `await`, citing "usage in admin.py", when
