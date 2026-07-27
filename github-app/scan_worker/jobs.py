@@ -89,6 +89,7 @@ from scan_worker.postgres_graph_store import PostgresRepoGraphStore
 from scan_worker.slack import (
     format_latency_alert,
     format_reachability_alert,
+    format_runtime_error_alert,
     format_shape_change_alert,
     send_health_alert,
     send_slack_alert,
@@ -1181,6 +1182,60 @@ def _attach_recent_commit_for_failure(
         return evidence_resolution
     base = evidence_resolution or empty_resolution("endpoint")
     return merge_resolution(base, *attachments)
+
+
+@log_job
+def run_runtime_event_job(
+    installation_id: int,
+    repo_full_name: str,
+    exception_type: str,
+    exception_value: str,
+    source_file: str,
+    source_line: int,
+    method: str = "",
+    path: str = "",
+) -> None:
+    """Phase 3 - runtime-to-code evidence: resolves an inbound
+    Sentry-compatible error event through the SAME correlation chain
+    already proven for HTTP health-check failures
+    (_attach_recent_commit_for_failure: handler symbol, dependent
+    modules, recent commit, likely owner, optional fix suggestion) -
+    "zero-hop debugging" for a second real trigger, not a second
+    implementation. See app_server/runtime_events.py for the inbound
+    webhook this is enqueued from.
+    """
+    settings = get_settings()
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is None or installation["plan"] == "free":
+        return
+
+    webhook_url = installation.get("webhook_url")
+    if not webhook_url:
+        return
+
+    evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
+    evidence_resolution = _attach_recent_commit_for_failure(
+        installation_id,
+        repo_full_name,
+        source_file,
+        None,
+        evidence,
+        method=method,
+        path=path,
+        source_line=source_line,
+    )
+
+    message = format_runtime_error_alert(
+        repo_full_name,
+        exception_type,
+        exception_value,
+        source_file,
+        source_line,
+        method=method,
+        path=path,
+        evidence_resolution=evidence_resolution,
+    )
+    send_health_alert(webhook_url, message)
 
 
 @log_job

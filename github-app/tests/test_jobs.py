@@ -1584,6 +1584,77 @@ def test_sweep_alerts_without_commit_when_correlation_fails(monkeypatch):
     assert "Recent commit" not in sent[0]["text"]
 
 
+def test_run_runtime_event_job_sends_alert_with_resolved_chain(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "indie", "webhook_url": "https://hooks.slack.com/runtime"},
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._latest_evidence_or_none",
+        lambda *a, **k: {"repository": {"modules": []}},
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._attach_recent_commit_for_failure",
+        lambda installation_id, repo_full_name, source_file, evidence_resolution, evidence=None, **k: {
+            "symbol": "handle_request",
+            "owner": ["@api-team"],
+            "commit": {"sha": "abc123def456", "subject": "touched the handler"},
+        },
+    )
+    sent = []
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: sent.append((url, msg)))
+
+    from scan_worker.jobs import run_runtime_event_job
+
+    run_runtime_event_job(
+        1,
+        "octocat/hello-world",
+        "ZeroDivisionError",
+        "division by zero",
+        "app/handler.py",
+        42,
+        method="GET",
+        path="/v1/users",
+    )
+
+    assert len(sent) == 1
+    url, message = sent[0]
+    assert url == "https://hooks.slack.com/runtime"
+    assert "ZeroDivisionError" in message["text"]
+    assert "app/handler.py:42" in message["text"]
+    assert "handle_request" in message["text"]
+    assert "@api-team" in message["text"]
+
+
+def test_run_runtime_event_job_skips_free_plan(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    called = []
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda *a, **k: called.append(True))
+
+    from scan_worker.jobs import run_runtime_event_job
+
+    run_runtime_event_job(1, "octocat/hello-world", "Error", "x", "a.py", 1)
+
+    assert called == []
+
+
+def test_run_runtime_event_job_skips_when_no_webhook_configured(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"})
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._attach_recent_commit_for_failure", lambda *a, **k: None)
+    called = []
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda *a, **k: called.append(True))
+
+    from scan_worker.jobs import run_runtime_event_job
+
+    run_runtime_event_job(1, "octocat/hello-world", "Error", "x", "a.py", 1)
+
+    assert called == []
+
+
 def test_sweep_sends_shape_change_alert_while_still_reachable(monkeypatch):
     sent = _patch_sweep(
         monkeypatch,

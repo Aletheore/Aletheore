@@ -3,6 +3,7 @@ import httpx
 from scan_worker.slack import (
     format_latency_alert,
     format_reachability_alert,
+    format_runtime_error_alert,
     format_shape_change_alert,
     format_slack_message,
     send_health_alert,
@@ -174,3 +175,39 @@ def test_send_health_alert_posts_message():
     client = httpx.Client(transport=httpx.MockTransport(handler))
     send_health_alert("https://hooks.slack.com/x", {"text": "test"}, http_client=client)
     assert len(calls) == 1
+
+
+def test_format_runtime_error_alert_includes_exception_and_location():
+    evidence_resolution = {
+        "symbol": "handle_request",
+        "owner": ["@api-team"],
+        "commit": {"sha": "abcdef123456", "subject": "change handler"},
+        "dependency": ["UserService"],
+    }
+    body = format_runtime_error_alert(
+        "octocat/hello-world",
+        "ZeroDivisionError",
+        "division by zero",
+        "app/handler.py",
+        42,
+        method="GET",
+        path="/v1/users",
+        evidence_resolution=evidence_resolution,
+    )
+
+    assert "ZeroDivisionError" in body["text"]
+    assert "division by zero" in body["text"]
+    assert "app/handler.py:42" in body["text"]
+    assert "GET /v1/users" in body["text"]
+    assert "handle_request" in body["text"]
+    assert "@api-team" in body["text"]
+    assert "abcdef12" in body["text"]
+
+
+def test_format_runtime_error_alert_handles_missing_method_and_path():
+    body = format_runtime_error_alert(
+        "octocat/hello-world", "ValueError", "bad input", "app/handler.py", 10, method="", path=""
+    )
+
+    assert "ValueError" in body["text"]
+    assert "app/handler.py:10" in body["text"]

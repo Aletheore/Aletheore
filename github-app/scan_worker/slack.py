@@ -172,6 +172,27 @@ def format_shape_change_alert(
     return {"text": text}
 
 
+def format_runtime_error_alert(
+    repo_full_name: str,
+    exception_type: str,
+    exception_value: str,
+    source_file: str,
+    source_line: int,
+    *,
+    method: str = "",
+    path: str = "",
+    evidence_resolution: dict | None = None,
+) -> dict:
+    request_context = f" while handling `{method} {path}`" if method and path else ""
+    text = (
+        f"*Aletheore*: runtime error on `{repo_full_name}`\n"
+        f"`{exception_type}`: {exception_value}{request_context}\n"
+        f"at `{source_file}:{source_line}`"
+        f"{_format_evidence_context(evidence_resolution)}"
+    )
+    return {"text": text}
+
+
 def send_health_alert(
     webhook_url: str,
     message: dict,
