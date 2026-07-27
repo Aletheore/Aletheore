@@ -27,8 +27,22 @@ def _subscription_created_payload(price_id: str, installation_id: int) -> dict:
         "data": {
             "id": "sub_test_123",
             "customer_id": "ctm_test_456",
+            "status": "active",
             "custom_data": {"installation_id": str(installation_id)},
             "items": [{"price": {"id": price_id}}],
+        },
+    }
+
+
+def _subscription_event_payload(event_type: str, status: str, installation_id: int, price_id: str | None = None) -> dict:
+    return {
+        "event_type": event_type,
+        "data": {
+            "id": "sub_test_123",
+            "customer_id": "ctm_test_456",
+            "status": status,
+            "custom_data": {"installation_id": str(installation_id)},
+            "items": [{"price": {"id": price_id}}] if price_id else [],
         },
     }
 
@@ -162,3 +176,98 @@ async def test_replaying_subscription_created_only_triggers_wiki_build_once(pool
     await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
 
     fake_queue.enqueue.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_subscription_canceled_revokes_to_free(pool):
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (300, 'acme', 'indie')"
+    )
+    payload = _subscription_event_payload("subscription.canceled", "canceled", 300)
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    installation = await get_installation(pool, 300)
+    assert installation["plan"] == "free"
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_subscription_paused_revokes_to_free(pool):
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (301, 'acme', 'team')"
+    )
+    payload = _subscription_event_payload("subscription.paused", "paused", 301)
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    installation = await get_installation(pool, 301)
+    assert installation["plan"] == "free"
+
+
+@pytest.mark.asyncio
+async def test_subscription_past_due_revokes_to_free(pool):
+    # No dunning-aware grace tier yet - a lapsed payment cuts access
+    # immediately rather than silently continuing to grant it.
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (302, 'acme', 'indie')"
+    )
+    payload = _subscription_event_payload("subscription.updated", "past_due", 302)
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    installation = await get_installation(pool, 302)
+    assert installation["plan"] == "free"
+
+
+@pytest.mark.asyncio
+async def test_subscription_updated_downgrades_between_paid_tiers(pool):
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (303, 'acme', 'team')"
+    )
+    payload = _subscription_event_payload(
+        "subscription.updated", "active", 303, price_id="pri_01ky9jwz35hvj5xs6f8xqw6htt"
+    )
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    installation = await get_installation(pool, 303)
+    assert installation["plan"] == "indie"
+    # Paid-to-paid change must not re-trigger the one-time wiki build.
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_subscription_resumed_restores_paid_access(pool):
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (304, 'acme', 'free')"
+    )
+    payload = _subscription_event_payload(
+        "subscription.resumed", "active", 304, price_id="pri_01ky9jwz35hvj5xs6f8xqw6htt"
+    )
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    installation = await get_installation(pool, 304)
+    assert installation["plan"] == "indie"
+    # Resuming after a cancellation is a free -> paid transition again,
+    # so the one-time wiki build fires once more.
+    fake_queue.enqueue.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_unhandled_event_type_is_ignored(pool):
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (305, 'acme', 'indie')"
+    )
+    payload = _subscription_event_payload("transaction.completed", "completed", 305)
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    installation = await get_installation(pool, 305)
+    assert installation["plan"] == "indie"

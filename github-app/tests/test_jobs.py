@@ -1759,6 +1759,64 @@ def test_sweep_sends_down_alert_on_first_unreachable_check(monkeypatch):
     assert "down" in sent[0]["text"]
 
 
+def test_sweep_isolates_one_targets_failure_from_others(monkeypatch):
+    # One installation's broken webhook URL (or any other failure) must not
+    # take down the sweep for every other installation - this job runs
+    # every HEALTH_SWEEP_INTERVAL_SECONDS for the whole customer base.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_health_check_targets_all",
+        lambda dsn: [
+            {
+                "target_id": 1,
+                "installation_id": 1,
+                "repo_full_name": "acme/broken",
+                "label": "Primary",
+                "base_url": "https://api.example.com",
+                "latency_threshold_ms": None,
+                "webhook_url": "https://hooks.slack.com/broken",
+            },
+            {
+                "target_id": 2,
+                "installation_id": 2,
+                "repo_full_name": "acme/healthy",
+                "label": "Primary",
+                "base_url": "https://api.example.com",
+                "latency_threshold_ms": None,
+                "webhook_url": "https://hooks.slack.com/healthy",
+            },
+        ],
+    )
+
+    def fake_get_latest_evidence(dsn, installation_id, repo_full_name):
+        if installation_id == 1:
+            raise RuntimeError("simulated failure for installation 1")
+        return {"repository": {"api_endpoints": {"endpoints": [{"method": "GET", "path": "/x"}]}}}
+
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", fake_get_latest_evidence)
+    monkeypatch.setattr(
+        "scan_worker.jobs.run_healthcheck",
+        lambda endpoints, base_url: {
+            "results": [{"method": "GET", "path": "/x", "reachable": True, "status_code": 200, "latency_ms": 90.0}]
+        },
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_last_endpoint_health", lambda dsn, iid, repo, method, path, target_id=None: None
+    )
+    inserted = []
+    monkeypatch.setattr("scan_worker.jobs.insert_endpoint_health", lambda *a, **k: inserted.append(a))
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: None)
+
+    from scan_worker.jobs import run_health_check_sweep_job
+
+    run_health_check_sweep_job()
+
+    # Installation 2's target was still processed despite installation 1's
+    # get_latest_evidence blowing up first in iteration order.
+    assert len(inserted) == 1
+    assert inserted[0][1] == 2
+
+
 def test_sweep_threads_endpoint_source_location_into_alert(monkeypatch):
     sent = _patch_sweep(
         monkeypatch,
