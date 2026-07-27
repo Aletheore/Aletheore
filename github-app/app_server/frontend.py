@@ -281,7 +281,16 @@ table.findings tr:last-child td { border-bottom: none; }
 FETCH_HELPERS = """
 async function apiGet(url) {
   const res = await fetch(url);
-  if (res.status === 401) { window.location.href = '/'; return null; }
+  if (res.status === 401) {
+    // A 401 here means the session cookie still looks valid (get_current_session
+    // only checks the cookie's own signature/TTL) but the GitHub token it wraps
+    // no longer works - redirecting to '/' bounces right back into the same
+    // "valid" session and re-triggers this exact call, looping forever.
+    // /auth/logout actually deletes the server-side session, so the next load
+    // of '/' correctly shows the real sign-in page instead.
+    window.location.href = '/auth/logout';
+    return null;
+  }
   if (!res.ok) {
     console.error('apiGet failed: ' + url + ' -> ' + res.status);
     return null;
