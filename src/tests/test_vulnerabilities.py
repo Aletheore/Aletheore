@@ -95,6 +95,86 @@ def test_check_vulnerabilities_no_pins_short_circuits_without_network_call(tmp_p
     assert result == {"checked": True, "reason": None, "findings": []}
 
 
+def test_check_vulnerabilities_second_scan_skips_network_call_entirely(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("fastapi==0.100.0\n")
+
+    batch_response = _mock_response({"results": [{}]})
+    with patch(
+        "aletheore.vulnerabilities.urllib.request.urlopen", return_value=batch_response
+    ) as mock_urlopen:
+        first = check_vulnerabilities(repo)
+    assert mock_urlopen.call_count == 1
+
+    # Second scan of the same repo, same pin - the OSV.dev round-trip must
+    # not happen again within the cache's TTL, even if the mock would now
+    # error if called (proving it really isn't called, not just returning
+    # a stale-but-coincidentally-correct answer).
+    with patch(
+        "aletheore.vulnerabilities.urllib.request.urlopen",
+        side_effect=AssertionError("network must not be called on a cache hit"),
+    ) as mock_urlopen:
+        second = check_vulnerabilities(repo)
+
+    mock_urlopen.assert_not_called()
+    assert second == first
+
+
+def test_check_vulnerabilities_only_queries_the_uncached_subset(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("fastapi==0.100.0\n")
+    (repo / "package.json").write_text(
+        json.dumps({"dependencies": {"left-pad": "^1.3.0"}})
+    )
+
+    # First scan caches both pins.
+    batch_response = _mock_response({"results": [{}, {}]})
+    with patch("aletheore.vulnerabilities.urllib.request.urlopen", return_value=batch_response):
+        check_vulnerabilities(repo)
+
+    # Second scan adds a brand-new dependency - only that one should reach
+    # OSV.dev, cached fastapi/left-pad must not be re-queried.
+    (repo / "requirements.txt").write_text("fastapi==0.100.0\nrequests==2.31.0\n")
+    second_batch_response = _mock_response({"results": [{}]})
+    with patch(
+        "aletheore.vulnerabilities.urllib.request.urlopen", return_value=second_batch_response
+    ) as mock_urlopen:
+        check_vulnerabilities(repo)
+
+    sent_request = mock_urlopen.call_args[0][0]
+    sent_body = json.loads(sent_request.data)
+    queried_names = {q["package"]["name"] for q in sent_body["queries"]}
+    assert queried_names == {"requests"}
+
+
+def test_check_vulnerabilities_expired_cache_entry_is_requeried(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("fastapi==0.100.0\n")
+
+    batch_response = _mock_response({"results": [{}]})
+    with patch("aletheore.vulnerabilities.urllib.request.urlopen", return_value=batch_response):
+        check_vulnerabilities(repo)
+
+    # Force every cache entry to look 25 hours old - past the 24h TTL.
+    import aletheore.vulnerabilities as vulnerabilities_module
+
+    cache_path = vulnerabilities_module.DEFAULT_VULNERABILITY_CACHE_PATH
+    cache = json.loads(cache_path.read_text())
+    for entry in cache.values():
+        entry["cached_at"] -= 25 * 60 * 60
+    cache_path.write_text(json.dumps(cache))
+
+    with patch(
+        "aletheore.vulnerabilities.urllib.request.urlopen", return_value=batch_response
+    ) as mock_urlopen:
+        check_vulnerabilities(repo)
+
+    mock_urlopen.assert_called_once()
+
+
 def test_parse_go_pins_reads_require_block(tmp_path):
     from aletheore.vulnerabilities import _parse_go_pins
 

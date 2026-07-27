@@ -162,6 +162,56 @@ def test_check_dependency_licenses_no_pins_short_circuits_without_network_call(t
     assert result["findings"] == []
 
 
+def test_check_dependency_licenses_second_scan_skips_network_call_entirely(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("pyqt5==5.15.10\n")
+
+    response = _mock_response({"info": {"license": "GPL v3", "classifiers": []}})
+    with patch(
+        "aletheore.licenses.urllib.request.urlopen", return_value=response
+    ) as mock_urlopen:
+        first = check_dependency_licenses(repo)
+    assert mock_urlopen.call_count == 1
+
+    # A second scan of the same repo (or, since this is a global cache, any
+    # other repo pinning the same exact package+version) must reuse the
+    # cached license instead of paying another registry round-trip.
+    with patch(
+        "aletheore.licenses.urllib.request.urlopen",
+        side_effect=AssertionError("network must not be called on a cache hit"),
+    ) as mock_urlopen:
+        second = check_dependency_licenses(repo)
+
+    mock_urlopen.assert_not_called()
+    assert second == first
+
+
+def test_check_dependency_licenses_different_repo_reuses_the_same_global_cache(tmp_path):
+    # The license cache is keyed purely by (ecosystem, name, version), not
+    # by repo path - two entirely different repos pinning the same exact
+    # dependency version share one cached lookup.
+    repo_a = tmp_path / "repo_a"
+    repo_a.mkdir()
+    (repo_a / "requirements.txt").write_text("pyqt5==5.15.10\n")
+    repo_b = tmp_path / "repo_b"
+    repo_b.mkdir()
+    (repo_b / "requirements.txt").write_text("pyqt5==5.15.10\n")
+
+    response = _mock_response({"info": {"license": "GPL v3", "classifiers": []}})
+    with patch("aletheore.licenses.urllib.request.urlopen", return_value=response):
+        check_dependency_licenses(repo_a)
+
+    with patch(
+        "aletheore.licenses.urllib.request.urlopen",
+        side_effect=AssertionError("network must not be called on a cache hit"),
+    ) as mock_urlopen:
+        result = check_dependency_licenses(repo_b)
+
+    mock_urlopen.assert_not_called()
+    assert result["findings"][0]["package"] == "pyqt5"
+
+
 def test_check_dependency_licenses_reports_a_copyleft_pypi_dependency(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -1,6 +1,7 @@
 import json
 import re
 import ssl
+import time
 import tomllib
 import urllib.error
 import urllib.request
@@ -12,6 +13,15 @@ import certifi
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 OSV_VULN_URL_TEMPLATE = "https://api.osv.dev/v1/vulns/{vuln_id}"
 DEFAULT_TIMEOUT_SECONDS = 10
+
+# Unlike a package's license (effectively invariant once published), new
+# vulnerabilities get disclosed against already-published old versions all
+# the time - a long cache here risks silently missing a newly-disclosed CVE.
+# Short enough that a day of repeated scans (of this or any other repo) on
+# the same machine doesn't re-pay the same OSV.dev round-trip for every one,
+# without letting real staleness accumulate for long.
+DEFAULT_VULNERABILITY_CACHE_PATH = Path.home() / ".cache" / "aletheore" / "vulnerability-cache.json"
+_VULNERABILITY_CACHE_TTL_SECONDS = 24 * 60 * 60
 
 # Use certifi's CA bundle explicitly rather than the system default SSL context.
 # On macOS, Python installed from python.org commonly has no default CA bundle
@@ -437,7 +447,37 @@ def _fetch_vuln_detail(vuln_id: str, timeout: int) -> dict:
         return json.loads(response.read())
 
 
-def check_vulnerabilities(repo_path: Path, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> dict:
+def _vulnerability_cache_key(ecosystem: str, name: str, version: str) -> str:
+    return f"{ecosystem}|{name}|{version}"
+
+
+def _load_vulnerability_cache(cache_path: Path) -> dict[str, dict]:
+    try:
+        return json.loads(cache_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_vulnerability_cache(cache_path: Path, cache: dict[str, dict]) -> None:
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(cache))
+    except OSError:
+        # Best-effort: a failure to persist the cache must never fail the
+        # vulnerability check itself.
+        pass
+
+
+def check_vulnerabilities(
+    repo_path: Path,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    cache_path: Path | None = None,
+) -> dict:
+    # Resolved inside the function body so a test monkeypatching
+    # DEFAULT_VULNERABILITY_CACHE_PATH actually takes effect - see the
+    # matching comment in licenses.py's check_dependency_licenses.
+    if cache_path is None:
+        cache_path = DEFAULT_VULNERABILITY_CACHE_PATH
     pins = (
         _parse_pip_pins(repo_path)
         + _parse_npm_pins(repo_path)
@@ -451,14 +491,39 @@ def check_vulnerabilities(repo_path: Path, timeout: int = DEFAULT_TIMEOUT_SECOND
     if not pins:
         return {"checked": True, "reason": None, "findings": []}
 
-    try:
-        results = _query_batch(pins, timeout)
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        return {
-            "checked": False,
-            "reason": f"OSV.dev unreachable or timed out: {exc}",
-            "findings": [],
-        }
+    cache = _load_vulnerability_cache(cache_path)
+    now = time.time()
+
+    results: list[dict | None] = [None] * len(pins)
+    uncached_indices: list[int] = []
+    uncached_pins: list[tuple[str, str, str]] = []
+    for index, (name, version, ecosystem) in enumerate(pins):
+        key = _vulnerability_cache_key(ecosystem, name, version)
+        cached = cache.get(key)
+        if cached is not None and now - cached.get("cached_at", 0) < _VULNERABILITY_CACHE_TTL_SECONDS:
+            results[index] = cached["result"]
+        else:
+            uncached_indices.append(index)
+            uncached_pins.append((name, version, ecosystem))
+
+    if uncached_pins:
+        try:
+            fresh_results = _query_batch(uncached_pins, timeout)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            return {
+                "checked": False,
+                "reason": f"OSV.dev unreachable or timed out: {exc}",
+                "findings": [],
+            }
+        for index, (name, version, ecosystem), result in zip(
+            uncached_indices, uncached_pins, fresh_results
+        ):
+            results[index] = result
+            cache[_vulnerability_cache_key(ecosystem, name, version)] = {
+                "result": result,
+                "cached_at": now,
+            }
+        _save_vulnerability_cache(cache_path, cache)
 
     findings = []
     for (name, version, ecosystem), result in zip(pins, results):
