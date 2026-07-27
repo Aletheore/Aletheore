@@ -36,6 +36,7 @@ from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation
 from app_server.logging_config import log_job
 from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
+from app_server.url_validation import UnsafeURLError, validate_external_https_url
 from scan_worker import live_wiki
 from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
@@ -1304,6 +1305,27 @@ def _run_health_check_sweep_for_target(
     base_url: str,
     threshold_ms: int | None,
 ) -> None:
+    # validate_external_https_url only ever ran once, when the target was
+    # saved (admin.py) - re-checking here, immediately before every fetch,
+    # closes the DNS-rebinding window down to the gap between this call and
+    # the actual request instead of "until someone edits the target again."
+    # A customer could otherwise register a domain that resolves to a public
+    # IP at save time, pass validation, then repoint DNS at an internal
+    # service or cloud metadata endpoint before the next sweep - whose
+    # response would then get echoed back to that customer's own dashboard
+    # via response_shape.
+    try:
+        validate_external_https_url(base_url)
+    except UnsafeURLError as exc:
+        logging.getLogger("scan_worker.jobs").warning(
+            "skipping health check for installation=%s repo=%s target=%s - %s",
+            installation_id,
+            repo_full_name,
+            target_id,
+            exc,
+        )
+        return
+
     evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
     if evidence is None:
         return
