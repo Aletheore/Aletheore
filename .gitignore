@@ -8,6 +8,11 @@ Thumbs.db
 *.swp
 *.swo
 
+# Machine-local MCP client config (aletheore mcp-install writes an absolute
+# path to whatever machine/checkout generated it - not portable, never
+# meant to be shared)
+.mcp.json
+
 # Logs
 *.log
 logs/
