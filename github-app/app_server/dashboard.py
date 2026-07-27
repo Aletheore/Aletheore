@@ -20,6 +20,7 @@ from app_server.db import (
     get_latest_evidence,
     get_recent_endpoint_health,
     get_recent_history,
+    get_wiki_build_status,
     get_wiki_overview,
     get_wiki_subsystem,
     list_repos_for_installations,
@@ -247,10 +248,14 @@ async def get_dashboard_wiki(org: str, repo: str, request: Request):
     if overview is not None:
         overview["updated_at"] = overview["updated_at"].isoformat()
 
+    build_status = await get_wiki_build_status(pool, installation_id, repo_full_name)
+
     subsystems = await list_wiki_subsystems(pool, installation_id, repo_full_name)
     return {
         "repo_full_name": repo_full_name,
         "overview": overview,
+        "build_status": build_status["status"] if build_status is not None else None,
+        "build_error": build_status["error_message"] if build_status is not None else None,
         "subsystems": [
             {
                 "subsystem_id": s["subsystem_id"],

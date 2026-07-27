@@ -40,6 +40,21 @@ async def _seed_wiki_subsystem(pool, installation_id, repo_full_name, subsystem_
     )
 
 
+async def _seed_wiki_build_status(pool, installation_id, repo_full_name, status, error_message=None):
+    await pool.execute(
+        """
+        INSERT INTO wiki_build_status (installation_id, repo_full_name, status, error_message)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (installation_id, repo_full_name) DO UPDATE
+        SET status = EXCLUDED.status, error_message = EXCLUDED.error_message
+        """,
+        installation_id,
+        repo_full_name,
+        status,
+        error_message,
+    )
+
+
 async def _logged_in_client(pool, monkeypatch, administered_ids):
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     await create_session(
@@ -782,6 +797,35 @@ async def test_dashboard_wiki_returns_null_overview_when_not_yet_generated(pool,
     body = response.json()
     assert body["overview"] is None
     assert body["subsystems"] == []
+    assert body["build_status"] is None
+    assert body["build_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_dashboard_wiki_surfaces_failed_build_status(pool, monkeypatch):
+    # Before this fix, a failed build left the dashboard indistinguishable
+    # from "hasn't been built yet" - the customer had no way to tell a
+    # transient in-progress state apart from a build that's never coming.
+    await upsert_installation(pool, 605, "octocat")
+    await set_installation_plan(pool, 605, "indie")
+    await insert_repo_history(
+        pool,
+        605,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {"repository": {"modules": []}},
+    )
+    await _seed_wiki_build_status(pool, 605, "octocat/hello-world", "failed", "model provider unavailable")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[605])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/wiki")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overview"] is None
+    assert body["build_status"] == "failed"
+    assert body["build_error"] == "model provider unavailable"
 
 
 @pytest.mark.asyncio

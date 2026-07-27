@@ -54,9 +54,9 @@ def _llm_based_suggestion_section(
 
 def run_managed_audit(
     repo_path: Path,
+    plan: str,
     manual_dir: str | None = None,
     on_usage: Callable[[int, int], None] | None = None,
-    plan: str = "pro",
 ) -> str:
     adapter = writing_adapter_for_plan(plan, on_usage=on_usage)
     report_path = run_reasoning_phase(

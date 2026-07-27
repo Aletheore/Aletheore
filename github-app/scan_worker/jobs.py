@@ -36,6 +36,7 @@ from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation
 from app_server.logging_config import log_job
 from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
+from app_server.url_validation import UnsafeURLError, validate_external_https_url
 from scan_worker import live_wiki
 from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
@@ -61,6 +62,7 @@ from scan_worker.db import (
     list_wiki_subsystems,
     record_llm_spend,
     set_last_reviewed_sha,
+    set_wiki_build_status,
     upsert_wiki_overview,
     upsert_wiki_subsystem,
 )
@@ -78,6 +80,7 @@ from scan_worker.flash_review_cache import (
 )
 from scan_worker.github_api import (
     create_check_run,
+    fetch_default_branch_head_sha,
     fetch_file_content,
     fetch_pr_changed_files,
     fetch_pr_diff,
@@ -550,6 +553,23 @@ def _post_failure_comment(
     upsert_pr_comment(client, token, repo_full_name, pr_number, _failure_body(error))
 
 
+def _post_flash_review_failure_comment(
+    settings,
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    error: Exception,
+) -> None:
+    app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+    token = _token_sync(installation_id, app_jwt)
+    client = httpx.Client(base_url="https://api.github.com")
+    body = (
+        f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
+        f"Aletheore couldn't complete this flash review: {error}"
+    )
+    upsert_pr_comment(client, token, repo_full_name, pr_number, body, marker=FLASH_REVIEW_MARKER)
+
+
 @log_job
 def run_pr_scan_job(
     installation_id: int,
@@ -641,6 +661,63 @@ def run_pr_scan_job(
             _post_failure_comment(settings, installation_id, repo_full_name, pr_number, exc)
         except Exception:  # noqa: BLE001
             pass
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+@log_job
+def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
+    """Scans a repo's default branch once, right after it's connected (a
+    brand-new installation, or a repo added to an existing one) - see
+    webhooks/installation.py. Without this, a repo with no open pull
+    requests never gets scanned at all: run_pr_scan_job is the only other
+    thing that ever writes a repo_history row, and it only fires on a PR
+    event. A repo could otherwise sit "Initialization required" on the
+    dashboard forever with no feedback or path forward.
+
+    Best-effort and silent on failure - there's no PR to comment a
+    failure on, and the dashboard's existing "Initialization required"
+    state is already a truthful (if unhelpful) signal rather than one
+    this job needs to actively correct.
+    """
+    settings = get_settings()
+
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is not None and installation["plan"] != "free":
+        if not check_and_reserve_monthly_repo_scan_slot(
+            settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
+        ):
+            return
+
+    job_dir = _job_temp_dir()
+    try:
+        app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+        token = _token_sync(installation_id, app_jwt)
+        client = httpx.Client(base_url="https://api.github.com")
+
+        head_sha = fetch_default_branch_head_sha(client, token, repo_full_name)
+        clone_url = _clone_url(repo_full_name, token)
+        repo_dir = job_dir / "repo"
+        _clone_ref(clone_url, head_sha, repo_dir)
+
+        evidence_path = _run_scan(repo_dir)
+        evidence = json.loads(evidence_path.read_text())
+        evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
+        _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
+        _insert_history(installation_id, repo_full_name, evidence)
+
+        # A repo added to an already-paid installation should get its
+        # AIRview build right away too, rather than waiting for enough
+        # incremental pushes to slowly build clusters one at a time - the
+        # same gap the Paddle subscription.created wiki-build trigger
+        # closed for brand-new upgrades.
+        if installation is not None and installation["plan"] != "free":
+            try:
+                run_live_wiki_full_build_job(installation_id, repo_full_name)
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001
+        pass
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
 
@@ -850,92 +927,113 @@ def run_flash_review_job(
         if get_flash_review_count_this_month(settings.database_url, installation_id) >= MAX_FLASH_REVIEWS_PER_MONTH:
             return
 
-        app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
-        token = _token_sync(installation_id, app_jwt)
-        client = httpx.Client(base_url="https://api.github.com")
-
-        last_reviewed_sha = get_last_reviewed_sha(
-            settings.database_url, installation_id, repo_full_name, pr_number
-        )
-        diff_base = last_reviewed_sha or base_sha
-        diff_text = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha)
-        changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
-
-        spend_accumulator = {"total": 0.0}
-
-        if is_non_substantive_diff(changed_files):
-            findings: list[dict] = []
-        else:
-            file_context = gather_file_context(client, token, repo_full_name, changed_files, head_sha)
-            file_contents = fetch_changed_file_contents(client, token, repo_full_name, changed_files, head_sha)
-            evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
-            code_evidence_context = build_code_evidence_context(evidence, changed_files)
-
-            def _fetch_symbol_source(file_path: str, start_line: int, end_line: int) -> str | None:
-                content = fetch_file_content(client, token, repo_full_name, file_path, head_sha)
-                if content is None:
-                    return None
-                return "\n".join(content.splitlines()[start_line - 1 : end_line])
-
-            referenced_symbol_context = build_referenced_symbol_context(
-                evidence, changed_files, diff_text, _fetch_symbol_source
+        try:
+            _run_flash_review(
+                settings, installation_id, repo_full_name, pr_number, base_sha, head_sha
             )
-            dsn = settings.database_url
-
-            def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-                spend_accumulator["total"] += cost_for_usage(
-                    "deepseek-v4-flash", prompt_tokens, completion_tokens
+        except Exception as exc:  # noqa: BLE001
+            try:
+                _post_flash_review_failure_comment(
+                    settings, installation_id, repo_full_name, pr_number, exc
                 )
+            except Exception:  # noqa: BLE001
+                pass
 
-            def _cache_lookup(diff: str) -> list[dict] | None:
-                return lookup_cached_flash_review_result(dsn, installation_id, repo_full_name, diff)
 
-            def _cache_write(diff: str, found: list[dict], used: str) -> None:
-                store_flash_review_result(dsn, installation_id, repo_full_name, diff, found, used)
+def _run_flash_review(
+    settings,
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    base_sha: str,
+    head_sha: str,
+) -> None:
+    app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+    token = _token_sync(installation_id, app_jwt)
+    client = httpx.Client(base_url="https://api.github.com")
 
-            if code_evidence_context:
-                findings = review_diff(
-                    diff_text,
-                    file_context=file_context,
-                    code_evidence_context=code_evidence_context,
-                    on_usage=_on_usage,
-                    referenced_symbol_context=referenced_symbol_context,
-                    cache_lookup=_cache_lookup,
-                    cache_write=_cache_write,
-                    model_used="deepseek-v4-flash",
-                    file_contents=file_contents,
-                )
-            else:
-                findings = review_diff(
-                    diff_text,
-                    file_context=file_context,
-                    on_usage=_on_usage,
-                    referenced_symbol_context=referenced_symbol_context,
-                    cache_lookup=_cache_lookup,
-                    cache_write=_cache_write,
-                    model_used="deepseek-v4-flash",
-                    file_contents=file_contents,
-                )
-        record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
-        increment_flash_review_count(settings.database_url, installation_id)
+    last_reviewed_sha = get_last_reviewed_sha(
+        settings.database_url, installation_id, repo_full_name, pr_number
+    )
+    diff_base = last_reviewed_sha or base_sha
+    diff_text = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha)
+    changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
 
-        if findings:
-            lines = [f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n"]
-            for finding in findings:
-                lines.append(f"- `{finding['file']}:{finding['line']}` — {finding['issue']}")
-                suggestion = finding.get("suggestion")
-                if suggestion:
-                    lines.append(f"  ```\n  {suggestion}\n  ```")
-            body = "\n".join(lines)
-        else:
-            body = (
-                f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\nNo issues found in this diff."
+    spend_accumulator = {"total": 0.0}
+
+    if is_non_substantive_diff(changed_files):
+        findings: list[dict] = []
+    else:
+        file_context = gather_file_context(client, token, repo_full_name, changed_files, head_sha)
+        file_contents = fetch_changed_file_contents(client, token, repo_full_name, changed_files, head_sha)
+        evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
+        code_evidence_context = build_code_evidence_context(evidence, changed_files)
+
+        def _fetch_symbol_source(file_path: str, start_line: int, end_line: int) -> str | None:
+            content = fetch_file_content(client, token, repo_full_name, file_path, head_sha)
+            if content is None:
+                return None
+            return "\n".join(content.splitlines()[start_line - 1 : end_line])
+
+        referenced_symbol_context = build_referenced_symbol_context(
+            evidence, changed_files, diff_text, _fetch_symbol_source
+        )
+        dsn = settings.database_url
+
+        def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+            spend_accumulator["total"] += cost_for_usage(
+                "deepseek-v4-flash", prompt_tokens, completion_tokens
             )
 
-        upsert_pr_comment(client, token, repo_full_name, pr_number, body, marker=FLASH_REVIEW_MARKER)
-        set_last_reviewed_sha(
-            settings.database_url, installation_id, repo_full_name, pr_number, head_sha
+        def _cache_lookup(diff: str) -> list[dict] | None:
+            return lookup_cached_flash_review_result(dsn, installation_id, repo_full_name, diff)
+
+        def _cache_write(diff: str, found: list[dict], used: str) -> None:
+            store_flash_review_result(dsn, installation_id, repo_full_name, diff, found, used)
+
+        if code_evidence_context:
+            findings = review_diff(
+                diff_text,
+                file_context=file_context,
+                code_evidence_context=code_evidence_context,
+                on_usage=_on_usage,
+                referenced_symbol_context=referenced_symbol_context,
+                cache_lookup=_cache_lookup,
+                cache_write=_cache_write,
+                model_used="deepseek-v4-flash",
+                file_contents=file_contents,
+            )
+        else:
+            findings = review_diff(
+                diff_text,
+                file_context=file_context,
+                on_usage=_on_usage,
+                referenced_symbol_context=referenced_symbol_context,
+                cache_lookup=_cache_lookup,
+                cache_write=_cache_write,
+                model_used="deepseek-v4-flash",
+                file_contents=file_contents,
+            )
+    record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
+    increment_flash_review_count(settings.database_url, installation_id)
+
+    if findings:
+        lines = [f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n"]
+        for finding in findings:
+            lines.append(f"- `{finding['file']}:{finding['line']}` — {finding['issue']}")
+            suggestion = finding.get("suggestion")
+            if suggestion:
+                lines.append(f"  ```\n  {suggestion}\n  ```")
+        body = "\n".join(lines)
+    else:
+        body = (
+            f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\nNo issues found in this diff."
         )
+
+    upsert_pr_comment(client, token, repo_full_name, pr_number, body, marker=FLASH_REVIEW_MARKER)
+    set_last_reviewed_sha(
+        settings.database_url, installation_id, repo_full_name, pr_number, head_sha
+    )
 
 
 def _send_if_webhook_configured(installation: dict, message: dict) -> None:
@@ -1304,6 +1402,27 @@ def _run_health_check_sweep_for_target(
     base_url: str,
     threshold_ms: int | None,
 ) -> None:
+    # validate_external_https_url only ever ran once, when the target was
+    # saved (admin.py) - re-checking here, immediately before every fetch,
+    # closes the DNS-rebinding window down to the gap between this call and
+    # the actual request instead of "until someone edits the target again."
+    # A customer could otherwise register a domain that resolves to a public
+    # IP at save time, pass validation, then repoint DNS at an internal
+    # service or cloud metadata endpoint before the next sweep - whose
+    # response would then get echoed back to that customer's own dashboard
+    # via response_shape.
+    try:
+        validate_external_https_url(base_url)
+    except UnsafeURLError as exc:
+        logging.getLogger("scan_worker.jobs").warning(
+            "skipping health check for installation=%s repo=%s target=%s - %s",
+            installation_id,
+            repo_full_name,
+            target_id,
+            exc,
+        )
+        return
+
     evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
     if evidence is None:
         return
@@ -1553,24 +1672,36 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
     plan = installation["plan"] if installation is not None else "air"
     model_used = model_for_plan(plan)
 
-    naming_adapter = _live_wiki_naming_adapter()
-    writing_adapter = _live_wiki_full_build_writing_adapter(plan)
-    fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, None)
-    records = live_wiki.generate_subsystems(
-        evidence,
-        naming_adapter,
-        writing_adapter,
-        cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
-        cache_write=lambda packet, output, used: store_result(
-            dsn, installation_id, repo_full_name, packet, output, used
-        ),
-        model_used=model_used,
-        fetch_line_count=fetch_line_count,
-    )
-    _store_wiki_generation(
-        dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None,
-        fetch_line_count=fetch_line_count,
-    )
+    try:
+        naming_adapter = _live_wiki_naming_adapter()
+        writing_adapter = _live_wiki_full_build_writing_adapter(plan)
+        fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, None)
+        records = live_wiki.generate_subsystems(
+            evidence,
+            naming_adapter,
+            writing_adapter,
+            cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
+            cache_write=lambda packet, output, used: store_result(
+                dsn, installation_id, repo_full_name, packet, output, used
+            ),
+            model_used=model_used,
+            fetch_line_count=fetch_line_count,
+        )
+        _store_wiki_generation(
+            dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None,
+            fetch_line_count=fetch_line_count,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Without this, a failed build (LLM error, DB error) just leaves the
+        # AIRview page permanently blank with no way for the customer to
+        # tell "still building" apart from "broke and is never coming back".
+        logging.getLogger("scan_worker.jobs").warning(
+            "live wiki full build failed for installation=%s repo=%s (%s)",
+            installation_id, repo_full_name, exc,
+        )
+        set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+        return
+    set_wiki_build_status(dsn, installation_id, repo_full_name, "ready")
 
 
 @log_job

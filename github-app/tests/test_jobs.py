@@ -1092,6 +1092,44 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     assert recorded_spend == [0.0]
 
 
+def test_flash_review_job_posts_failure_comment_instead_of_raising(monkeypatch):
+    # Before this fix, any exception in the review body (LLM call, GitHub
+    # API, cache lookup) propagated straight out of the RQ job with zero
+    # customer-visible signal - the PR would just never get a comment, and
+    # nothing would tell the customer flash review had failed.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+
+    def _raise_diff_fetch(*a, **k):
+        raise RuntimeError("GitHub API timed out")
+
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", _raise_diff_fetch)
+
+    posted = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo_full_name, pr_number, body, **kwargs: posted.update(
+            body=body, marker=kwargs.get("marker")
+        ),
+    )
+    from scan_worker.jobs import FLASH_REVIEW_MARKER, run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert posted["marker"] == FLASH_REVIEW_MARKER
+    assert "couldn't complete this flash review" in posted["body"]
+    assert "GitHub API timed out" in posted["body"]
+
+
 def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkeypatch):
     # Real hallucination this exists to prevent: Flash Review claimed an
     # imported function needed `await`, citing "usage in admin.py", when
@@ -1334,6 +1372,7 @@ def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch)
     monkeypatch.setattr("scan_worker.jobs._live_wiki_full_build_writing_adapter", lambda plan: _SpyAdapter())
     monkeypatch.setattr("scan_worker.jobs._live_wiki_naming_adapter", lambda: _NamingAdapter())
     monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
 
     run_live_wiki_full_build_job(1, "octocat/hello-world")
 
@@ -1352,6 +1391,9 @@ def _patch_sweep(
 ):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.time.sleep", lambda *a, **k: None)
+    # Real DNS resolution has no place in a unit test - SSRF re-validation
+    # itself is covered by its own dedicated tests below.
+    monkeypatch.setattr("scan_worker.jobs.validate_external_https_url", lambda url: url)
     monkeypatch.setattr(
         "scan_worker.jobs.list_health_check_targets_all",
         lambda dsn: [
@@ -1764,6 +1806,7 @@ def test_sweep_isolates_one_targets_failure_from_others(monkeypatch):
     # take down the sweep for every other installation - this job runs
     # every HEALTH_SWEEP_INTERVAL_SECONDS for the whole customer base.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.validate_external_https_url", lambda url: url)
     monkeypatch.setattr(
         "scan_worker.jobs.list_health_check_targets_all",
         lambda dsn: [
@@ -1815,6 +1858,105 @@ def test_sweep_isolates_one_targets_failure_from_others(monkeypatch):
     # get_latest_evidence blowing up first in iteration order.
     assert len(inserted) == 1
     assert inserted[0][1] == 2
+
+
+def test_sweep_revalidates_target_url_before_every_fetch_and_skips_on_ssrf_failure(monkeypatch):
+    # A target that passed SSRF validation when it was saved (admin.py)
+    # must be re-checked on every sweep cycle, not trusted forever - DNS
+    # can be repointed at an internal/cloud-metadata address any time
+    # after that one-time save-time check.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_health_check_targets_all",
+        lambda dsn: [
+            {
+                "target_id": 1,
+                "installation_id": 1,
+                "repo_full_name": "acme/rebound",
+                "label": "Primary",
+                "base_url": "https://rebound.example.com",
+                "latency_threshold_ms": None,
+                "webhook_url": "https://hooks.slack.com/health",
+            }
+        ],
+    )
+
+    from app_server.url_validation import UnsafeURLError
+
+    def fake_validate(url):
+        raise UnsafeURLError(f"'{url}' now resolves to a disallowed address")
+
+    monkeypatch.setattr("scan_worker.jobs.validate_external_https_url", fake_validate)
+
+    evidence_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_latest_evidence",
+        lambda dsn, iid, repo: evidence_calls.append(True)
+        or {"repository": {"api_endpoints": {"endpoints": [{"method": "GET", "path": "/x"}]}}},
+    )
+    fetch_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.run_healthcheck",
+        lambda endpoints, base_url: fetch_calls.append(True)
+        or {"results": [{"method": "GET", "path": "/x", "reachable": True, "status_code": 200, "latency_ms": 1.0}]},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_endpoint_health", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: None)
+
+    from scan_worker.jobs import run_health_check_sweep_job
+
+    run_health_check_sweep_job()
+
+    # Rejected before ever touching evidence or making the actual request.
+    assert evidence_calls == []
+    assert fetch_calls == []
+
+
+def test_sweep_proceeds_when_target_url_still_passes_validation(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_health_check_targets_all",
+        lambda dsn: [
+            {
+                "target_id": 1,
+                "installation_id": 1,
+                "repo_full_name": "acme/fine",
+                "label": "Primary",
+                "base_url": "https://fine.example.com",
+                "latency_threshold_ms": None,
+                "webhook_url": "https://hooks.slack.com/health",
+            }
+        ],
+    )
+
+    validated_urls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.validate_external_https_url",
+        lambda url: validated_urls.append(url) or url,
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_latest_evidence",
+        lambda dsn, iid, repo: {"repository": {"api_endpoints": {"endpoints": [{"method": "GET", "path": "/x"}]}}},
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.run_healthcheck",
+        lambda endpoints, base_url: {
+            "results": [{"method": "GET", "path": "/x", "reachable": True, "status_code": 200, "latency_ms": 1.0}]
+        },
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_last_endpoint_health", lambda dsn, iid, repo, method, path, target_id=None: None
+    )
+    inserted = []
+    monkeypatch.setattr("scan_worker.jobs.insert_endpoint_health", lambda *a, **k: inserted.append(a))
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: None)
+
+    from scan_worker.jobs import run_health_check_sweep_job
+
+    run_health_check_sweep_job()
+
+    assert validated_urls == ["https://fine.example.com"]
+    assert len(inserted) == 1
 
 
 def test_sweep_threads_endpoint_source_location_into_alert(monkeypatch):
@@ -1888,6 +2030,7 @@ def test_sweep_checks_every_target_independently(monkeypatch):
     # one up - must each be checked and alerted on their own, not merged or
     # short-circuited after the first.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.validate_external_https_url", lambda url: url)
     monkeypatch.setattr(
         "scan_worker.jobs.list_health_check_targets_all",
         lambda dsn: [
@@ -2208,11 +2351,39 @@ def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
             records=records, commit=commit
         ),
     )
+    build_status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error=None: build_status_calls.append((status, error)),
+    )
 
     run_live_wiki_full_build_job(1, "octocat/hello-world")
 
     assert stored["records"] == [fake_record]
     assert stored["commit"] is None
+    assert build_status_calls == [("ready", None)]
+
+
+def test_run_live_wiki_full_build_job_records_failed_status_on_error(monkeypatch):
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+
+    def _raise(*a, **k):
+        raise RuntimeError("model provider unavailable")
+
+    monkeypatch.setattr("scan_worker.jobs.live_wiki.generate_subsystems", _raise)
+    build_status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error=None: build_status_calls.append((status, error)),
+    )
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert build_status_calls == [("failed", "model provider unavailable")]
 
 
 def test_real_line_count_fetcher_returns_none_when_token_setup_fails(monkeypatch):
@@ -2262,6 +2433,7 @@ def test_run_live_wiki_full_build_job_passes_fetch_line_count_through(monkeypatc
         "scan_worker.jobs._store_wiki_generation",
         lambda *a, **k: captured_store.update(k),
     )
+    monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
 
     run_live_wiki_full_build_job(1, "octocat/hello-world")
 

@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import hashlib
 import hmac
 import logging
 import secrets
@@ -8,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
@@ -26,8 +27,24 @@ auth_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _derive_key(session_secret: str, purpose: bytes, length: int = 32) -> bytes:
+    """One root SESSION_SECRET, cryptographically independent subkeys per
+    purpose - encrypting stored GitHub tokens and signing session/oauth
+    cookies used to share raw key material, so anything that weakened one
+    (a side channel, a future flaw in either primitive) could compromise
+    the other for no reason beyond convenience.
+    """
+    return HKDF(algorithm=hashes.SHA256(), length=length, salt=None, info=purpose).derive(
+        session_secret.encode()
+    )
+
+
 def _fernet_key(session_secret: str) -> bytes:
-    return base64.urlsafe_b64encode(hashlib.sha256(session_secret.encode()).digest())
+    return base64.urlsafe_b64encode(_derive_key(session_secret, b"aletheore-token-encryption"))
+
+
+def _signing_secret(session_secret: str) -> str:
+    return _derive_key(session_secret, b"aletheore-cookie-signing").hex()
 
 
 def encrypt_access_token(access_token: str, session_secret: str) -> str:
@@ -106,12 +123,12 @@ def _fetch_installation_details(installation_id: int, app_jwt: str) -> dict:
 
 
 def sign_session_id(session_id: str, secret: str) -> str:
-    return URLSafeTimedSerializer(secret).dumps(session_id)
+    return URLSafeTimedSerializer(_signing_secret(secret)).dumps(session_id)
 
 
 def unsign_session_id(signed: str, secret: str) -> str | None:
     try:
-        return URLSafeTimedSerializer(secret).loads(
+        return URLSafeTimedSerializer(_signing_secret(secret)).loads(
             signed,
             max_age=int(SESSION_TTL.total_seconds()),
         )
@@ -120,12 +137,12 @@ def unsign_session_id(signed: str, secret: str) -> str | None:
 
 
 def sign_oauth_state(state: str, secret: str) -> str:
-    return URLSafeTimedSerializer(secret, salt="oauth-state").dumps(state)
+    return URLSafeTimedSerializer(_signing_secret(secret), salt="oauth-state").dumps(state)
 
 
 def unsign_oauth_state(signed: str, secret: str) -> str | None:
     try:
-        return URLSafeTimedSerializer(secret, salt="oauth-state").loads(
+        return URLSafeTimedSerializer(_signing_secret(secret), salt="oauth-state").loads(
             signed,
             max_age=int(OAUTH_STATE_TTL.total_seconds()),
         )

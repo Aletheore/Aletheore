@@ -26,6 +26,9 @@ def verify_paddle_signature(
     if abs(time.time() - ts) > tolerance_seconds:
         return False
 
-    signed_payload = f"{ts}:{raw_body.decode('utf-8')}"
+    try:
+        signed_payload = f"{ts}:{raw_body.decode('utf-8')}"
+    except UnicodeDecodeError:
+        return False
     expected = hmac.new(secret.encode("utf-8"), signed_payload.encode("utf-8"), hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, h1)

@@ -19,7 +19,7 @@ def test_run_managed_audit_returns_report_text(tmp_path, monkeypatch):
 
     monkeypatch.setattr("scan_worker.managed_audit.run_reasoning_phase", fake_run_reasoning_phase)
 
-    assert "Real Report" in run_managed_audit(repo_path)
+    assert "Real Report" in run_managed_audit(repo_path, plan="air")
 
     adapter = captured_adapters[0]
     assert adapter.name == "DeepSeek"
@@ -45,7 +45,7 @@ def test_run_managed_audit_threads_on_usage_to_the_adapter(tmp_path, monkeypatch
     monkeypatch.setattr("scan_worker.managed_audit.run_reasoning_phase", fake_run_reasoning_phase)
 
     received = []
-    run_managed_audit(repo_path, on_usage=lambda p, c: received.append((p, c)))
+    run_managed_audit(repo_path, plan="air", on_usage=lambda p, c: received.append((p, c)))
 
     adapter = captured_adapters[0]
     assert adapter._on_usage is not None
@@ -138,7 +138,7 @@ def test_run_managed_audit_appends_llm_suggestion_section_when_available(tmp_pat
         lambda plan, on_usage=None: _FakeSuggestionAdapter(response),
     )
 
-    result = run_managed_audit(repo_path)
+    result = run_managed_audit(repo_path, plan="air")
 
     assert "# Real Report" in result
     assert "LLM Based Suggestion (Not Evidence Backed)" in result

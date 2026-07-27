@@ -198,7 +198,7 @@ async def test_administered_ids_for_session_deletes_session_when_no_refresh_toke
 
 
 @pytest.mark.asyncio
-async def test_administered_ids_for_session_deletes_session_when_refresh_fails(pool, monkeypatch):
+async def test_administered_ids_for_session_deletes_session_when_refresh_fails(pool, monkeypatch, caplog):
     session = await _create_session_with_tokens(
         pool, monkeypatch, "sess-refreshfails", "gho_dead", refresh_token="ghr_alsodead"
     )
@@ -216,10 +216,16 @@ async def test_administered_ids_for_session_deletes_session_when_refresh_fails(p
 
     monkeypatch.setattr("app_server.admin.refresh_github_access_token", fake_refresh)
 
-    with pytest.raises(HTTPException) as exc_info:
-        await _administered_installation_ids_for_session_or_401(pool, session)
+    # Before this fix, a failed refresh attempt (dead refresh_token, GitHub
+    # outage, unexpected response shape) was swallowed with a bare `except
+    # Exception: return None` - nothing distinguished it in logs from the
+    # unremarkable "no refresh_token on file" case.
+    with caplog.at_level("WARNING", logger="app_server.admin"):
+        with pytest.raises(HTTPException) as exc_info:
+            await _administered_installation_ids_for_session_or_401(pool, session)
     assert exc_info.value.status_code == 401
     assert await get_session(pool, "sess-refreshfails") is None
+    assert any("token refresh failed" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio
