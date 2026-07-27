@@ -130,7 +130,7 @@ async def webhook(request: Request):
     pool = request.app.state.db_pool
 
     if event in ("installation", "installation_repositories"):
-        await handle_installation_event(event, payload, pool)
+        await handle_installation_event(event, payload, pool, settings.redis_url)
     elif event == "marketplace_purchase":
         from app_server.webhooks.marketplace import handle_marketplace_event
 

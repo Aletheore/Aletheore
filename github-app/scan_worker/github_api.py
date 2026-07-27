@@ -110,6 +110,27 @@ def fetch_pr_changed_files(
     return [file["filename"] for file in response.json().get("files", [])]
 
 
+def fetch_default_branch_head_sha(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+) -> str:
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    repo_response = client.get(f"/repos/{repo_full_name}", headers=headers)
+    repo_response.raise_for_status()
+    default_branch = repo_response.json()["default_branch"]
+
+    commit_response = client.get(
+        f"/repos/{repo_full_name}/commits/{default_branch}",
+        headers=headers,
+    )
+    commit_response.raise_for_status()
+    return commit_response.json()["sha"]
+
+
 def fetch_file_content(
     client: httpx.Client,
     token: str,

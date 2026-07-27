@@ -79,6 +79,7 @@ from scan_worker.flash_review_cache import (
 )
 from scan_worker.github_api import (
     create_check_run,
+    fetch_default_branch_head_sha,
     fetch_file_content,
     fetch_pr_changed_files,
     fetch_pr_diff,
@@ -642,6 +643,63 @@ def run_pr_scan_job(
             _post_failure_comment(settings, installation_id, repo_full_name, pr_number, exc)
         except Exception:  # noqa: BLE001
             pass
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+@log_job
+def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
+    """Scans a repo's default branch once, right after it's connected (a
+    brand-new installation, or a repo added to an existing one) - see
+    webhooks/installation.py. Without this, a repo with no open pull
+    requests never gets scanned at all: run_pr_scan_job is the only other
+    thing that ever writes a repo_history row, and it only fires on a PR
+    event. A repo could otherwise sit "Initialization required" on the
+    dashboard forever with no feedback or path forward.
+
+    Best-effort and silent on failure - there's no PR to comment a
+    failure on, and the dashboard's existing "Initialization required"
+    state is already a truthful (if unhelpful) signal rather than one
+    this job needs to actively correct.
+    """
+    settings = get_settings()
+
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is not None and installation["plan"] != "free":
+        if not check_and_reserve_monthly_repo_scan_slot(
+            settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
+        ):
+            return
+
+    job_dir = _job_temp_dir()
+    try:
+        app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+        token = _token_sync(installation_id, app_jwt)
+        client = httpx.Client(base_url="https://api.github.com")
+
+        head_sha = fetch_default_branch_head_sha(client, token, repo_full_name)
+        clone_url = _clone_url(repo_full_name, token)
+        repo_dir = job_dir / "repo"
+        _clone_ref(clone_url, head_sha, repo_dir)
+
+        evidence_path = _run_scan(repo_dir)
+        evidence = json.loads(evidence_path.read_text())
+        evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
+        _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
+        _insert_history(installation_id, repo_full_name, evidence)
+
+        # A repo added to an already-paid installation should get its
+        # AIRview build right away too, rather than waiting for enough
+        # incremental pushes to slowly build clusters one at a time - the
+        # same gap the Paddle subscription.created wiki-build trigger
+        # closed for brand-new upgrades.
+        if installation is not None and installation["plan"] != "free":
+            try:
+                run_live_wiki_full_build_job(installation_id, repo_full_name)
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001
+        pass
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
 
