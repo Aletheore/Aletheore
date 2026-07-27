@@ -1088,7 +1088,13 @@ async function loadWiki() {{
   if (!res.ok) {{ body.innerHTML = '<div class="empty-state">AIRview unavailable.</div>'; return; }}
   const data = await res.json();
   if (!data.overview) {{
-    body.innerHTML = '<div class="empty-state">AIRview hasn\\'t been built yet - it generates automatically shortly after upgrading.</div>';
+    if (data.build_status === 'failed') {{
+      body.innerHTML = '<div class="empty-state">AIRview build failed' +
+        (data.build_error ? ': ' + escapeHtml(data.build_error) : '.') +
+        ' Contact support if this persists.</div>';
+    }} else {{
+      body.innerHTML = '<div class="empty-state">AIRview hasn\\'t been built yet - it generates automatically shortly after upgrading.</div>';
+    }}
     return;
   }}
   let html = '<div class="wiki-banner"><div class="wiki-banner-text"><b>Built once by a frontier model, kept current by a fast one.</b> Every diagram edge below is a real import in this repo, never inferred.</div></div>' +

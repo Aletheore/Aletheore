@@ -1372,6 +1372,7 @@ def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch)
     monkeypatch.setattr("scan_worker.jobs._live_wiki_full_build_writing_adapter", lambda plan: _SpyAdapter())
     monkeypatch.setattr("scan_worker.jobs._live_wiki_naming_adapter", lambda: _NamingAdapter())
     monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
 
     run_live_wiki_full_build_job(1, "octocat/hello-world")
 
@@ -2350,11 +2351,39 @@ def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
             records=records, commit=commit
         ),
     )
+    build_status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error=None: build_status_calls.append((status, error)),
+    )
 
     run_live_wiki_full_build_job(1, "octocat/hello-world")
 
     assert stored["records"] == [fake_record]
     assert stored["commit"] is None
+    assert build_status_calls == [("ready", None)]
+
+
+def test_run_live_wiki_full_build_job_records_failed_status_on_error(monkeypatch):
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+
+    def _raise(*a, **k):
+        raise RuntimeError("model provider unavailable")
+
+    monkeypatch.setattr("scan_worker.jobs.live_wiki.generate_subsystems", _raise)
+    build_status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error=None: build_status_calls.append((status, error)),
+    )
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert build_status_calls == [("failed", "model provider unavailable")]
 
 
 def test_real_line_count_fetcher_returns_none_when_token_setup_fails(monkeypatch):
@@ -2404,6 +2433,7 @@ def test_run_live_wiki_full_build_job_passes_fetch_line_count_through(monkeypatc
         "scan_worker.jobs._store_wiki_generation",
         lambda *a, **k: captured_store.update(k),
     )
+    monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
 
     run_live_wiki_full_build_job(1, "octocat/hello-world")
 

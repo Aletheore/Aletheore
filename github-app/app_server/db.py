@@ -678,6 +678,19 @@ async def list_repos_for_installations(pool: asyncpg.Pool, installation_ids: lis
     return [dict(row) for row in rows]
 
 
+async def get_wiki_build_status(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT status, error_message, updated_at
+        FROM wiki_build_status
+        WHERE installation_id = $1 AND repo_full_name = $2
+        """,
+        installation_id,
+        repo_full_name,
+    )
+    return dict(row) if row else None
+
+
 async def get_wiki_overview(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> dict | None:
     row = await pool.fetchrow(
         """

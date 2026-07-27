@@ -656,6 +656,32 @@ def delete_wiki_subsystems_not_in(
         conn.commit()
 
 
+def set_wiki_build_status(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    status: str,
+    error_message: str | None = None,
+) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO wiki_build_status
+                    (installation_id, repo_full_name, status, error_message, updated_at)
+                VALUES (%s, %s, %s, %s, now())
+                ON CONFLICT (installation_id, repo_full_name) DO UPDATE
+                SET status = EXCLUDED.status,
+                    error_message = EXCLUDED.error_message,
+                    updated_at = now()
+                """,
+                (installation_id, repo_full_name, status, error_message),
+            )
+        conn.commit()
+
+
 def insert_evidence_packet_cache_row(
     dsn: str,
     installation_id: int,

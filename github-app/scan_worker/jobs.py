@@ -62,6 +62,7 @@ from scan_worker.db import (
     list_wiki_subsystems,
     record_llm_spend,
     set_last_reviewed_sha,
+    set_wiki_build_status,
     upsert_wiki_overview,
     upsert_wiki_subsystem,
 )
@@ -1671,24 +1672,36 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
     plan = installation["plan"] if installation is not None else "air"
     model_used = model_for_plan(plan)
 
-    naming_adapter = _live_wiki_naming_adapter()
-    writing_adapter = _live_wiki_full_build_writing_adapter(plan)
-    fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, None)
-    records = live_wiki.generate_subsystems(
-        evidence,
-        naming_adapter,
-        writing_adapter,
-        cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
-        cache_write=lambda packet, output, used: store_result(
-            dsn, installation_id, repo_full_name, packet, output, used
-        ),
-        model_used=model_used,
-        fetch_line_count=fetch_line_count,
-    )
-    _store_wiki_generation(
-        dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None,
-        fetch_line_count=fetch_line_count,
-    )
+    try:
+        naming_adapter = _live_wiki_naming_adapter()
+        writing_adapter = _live_wiki_full_build_writing_adapter(plan)
+        fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, None)
+        records = live_wiki.generate_subsystems(
+            evidence,
+            naming_adapter,
+            writing_adapter,
+            cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
+            cache_write=lambda packet, output, used: store_result(
+                dsn, installation_id, repo_full_name, packet, output, used
+            ),
+            model_used=model_used,
+            fetch_line_count=fetch_line_count,
+        )
+        _store_wiki_generation(
+            dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None,
+            fetch_line_count=fetch_line_count,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Without this, a failed build (LLM error, DB error) just leaves the
+        # AIRview page permanently blank with no way for the customer to
+        # tell "still building" apart from "broke and is never coming back".
+        logging.getLogger("scan_worker.jobs").warning(
+            "live wiki full build failed for installation=%s repo=%s (%s)",
+            installation_id, repo_full_name, exc,
+        )
+        set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+        return
+    set_wiki_build_status(dsn, installation_id, repo_full_name, "ready")
 
 
 @log_job
