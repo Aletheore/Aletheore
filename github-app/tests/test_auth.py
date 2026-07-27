@@ -10,7 +10,10 @@ from app_server.auth import (
     refresh_github_access_token,
     sign_session_id,
     unsign_session_id,
+    _derive_key,
+    _fernet_key,
     _is_safe_next_path,
+    _signing_secret,
 )
 from app_server.db import create_session, get_installation, get_session
 from app_server.main import app
@@ -75,6 +78,19 @@ def test_unsign_rejects_tampered_value():
     tampered_first = ("a" if first[0] != "a" else "b") + first[1:]
     tampered = f"{tampered_first}.{rest}"
     assert unsign_session_id(tampered, "test-secret") is None
+
+
+def test_signing_and_encryption_keys_derived_from_same_secret_are_independent():
+    # Before this fix, both the session/oauth-state cookie signature and
+    # the Fernet key encrypting stored GitHub tokens were derived straight
+    # from SESSION_SECRET with no domain separation - reusing one secret
+    # across a signing primitive and an encryption primitive is the kind
+    # of key reuse that can let a weakness in either compromise both.
+    signing_material = _derive_key("test-secret", b"aletheore-cookie-signing")
+    encryption_material = _derive_key("test-secret", b"aletheore-token-encryption")
+    assert signing_material != encryption_material
+    assert _signing_secret("test-secret") != "test-secret"
+    assert _fernet_key("test-secret") != _fernet_key("wrong-secret")
 
 
 def test_safe_relative_next_path_accepted():
