@@ -24,9 +24,10 @@ has full setup, every CLI command, the MCP tool list, and the dashboard.
   [`src/README.md`](src/README.md) for why.
 - **`aletheore query`** / **`aletheore diff`** — answer targeted questions or compare two scans
   from existing evidence, no re-scan or LLM call needed.
-- **`aletheore mcp`** — a stdio MCP server exposing 13 tools (module lookups, ownership,
-  clusters, full-text search, a compact scan trigger) so a coding agent can query a repo's
-  structure directly instead of shelling out or re-reading files.
+- **`aletheore mcp`** — a stdio MCP server exposing 28 tools (module/symbol/dependency
+  lookups, ownership, clusters, dead code, hotspots, full-text and semantic search, scan and
+  index triggers) so a coding agent can query a repo's structure directly instead of shelling
+  out or re-reading files. See [`src/README.md`](src/README.md) for the full tool list.
 - **`aletheore dashboard`** — a live local web UI: dependency graph, an Obsidian-style cluster
   graph, trend charts, MCP tool list.
 - **A GitHub Action** (`action.yml`) — scans a PR's base and head refs and posts a diff (new
