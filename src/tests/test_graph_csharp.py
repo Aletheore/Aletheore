@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import patch
 
 from aletheore.scanner.graph import build_module_graph
 from conftest import symbol_names
@@ -136,3 +137,25 @@ def test_build_module_graph_dotnet_obj_directory_is_excluded(tmp_path):
     modules, _, _ = build_module_graph(repo)
 
     assert [m["path"] for m in modules] == ["Program.cs"]
+
+
+def test_build_module_graph_reads_each_csharp_file_only_once(tmp_path):
+    # Before this fix, the namespace/root-inference pre-pass and the main
+    # extraction loop each independently read_bytes() and re-parsed every
+    # .cs file from scratch - a real, avoidable 2x tree-sitter parse cost
+    # per file.
+    repo = make_csharp_repo(tmp_path)
+
+    real_read_bytes = Path.read_bytes
+    read_counts: dict[str, int] = {}
+
+    def counting_read_bytes(self):
+        if self.suffix == ".cs":
+            read_counts[str(self)] = read_counts.get(str(self), 0) + 1
+        return real_read_bytes(self)
+
+    with patch.object(Path, "read_bytes", counting_read_bytes):
+        build_module_graph(repo)
+
+    assert read_counts
+    assert all(count == 1 for count in read_counts.values())

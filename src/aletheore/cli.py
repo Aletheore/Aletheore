@@ -820,7 +820,9 @@ def _main_callback(
 @app.command(help="audit a repository")
 def audit(
     path: str = typer.Argument(".", help="repository path"),
-    agent: Optional[str] = typer.Option(None, "--agent", help="force a specific agent adapter by name"),
+    agent: Optional[str] = typer.Option(
+        None, "--agent", help="force a specific agent adapter by name (ignored with --managed)"
+    ),
     managed: bool = typer.Option(
         False,
         "--managed",
@@ -829,7 +831,7 @@ def audit(
     token: Optional[str] = typer.Option(
         None,
         "--token",
-        help="managed-audit API token (or set ALETHEORE_API_TOKEN)",
+        help="managed-audit API token, or set ALETHEORE_API_TOKEN (only has effect with --managed)",
     ),
     check_vulnerabilities: bool = typer.Option(
         True,
@@ -853,6 +855,11 @@ def audit(
     ),
 ) -> None:
     if managed:
+        if agent is not None:
+            console.print(
+                "[bold yellow]warning:[/bold yellow] --agent has no effect with --managed "
+                "(the managed audit always uses Aletheore's own service, not a local agent) - ignored."
+            )
         raise typer.Exit(
             code=_managed_audit(
                 path,
@@ -862,6 +869,10 @@ def audit(
                 check_licenses,
                 map_endpoints,
             )
+        )
+    if token is not None:
+        console.print(
+            "[bold yellow]warning:[/bold yellow] --token has no effect without --managed - ignored."
         )
     raise typer.Exit(
         code=_audit(path, agent, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints)
@@ -922,7 +933,14 @@ def init(path: str = typer.Argument(".", help="repository path")) -> None:
     console.print("  accepted_secrets: baseline of reviewed secret findings to suppress (leave empty for now)")
 
 
-@app.command(help="build a local semantic search index over the repository's code")
+@app.command(
+    help=(
+        "build a local semantic search index over the repository's code "
+        "(requires a prior 'aletheore scan'; embeds via a local Ollama instance, "
+        "falling back to OpenAI if Ollama is unavailable - needed by 'query search-codebase'/"
+        "'query answer' and the aletheore_search_codebase/aletheore_answer MCP tools)"
+    )
+)
 def index(path: str = typer.Argument(".", help="repository path")) -> None:
     raise typer.Exit(code=_index(path))
 
@@ -987,7 +1005,10 @@ def mcp_install(
     target: list[str] = typer.Option(
         [],
         "--target",
-        help="which client(s) to configure (default: all)",
+        help=(
+            "which client(s) to configure (default: all); one of: "
+            f"{', '.join([*_MCP_CLIENT_CONFIGS.keys(), 'codex-cli'])}"
+        ),
     ),
 ) -> None:
     raise typer.Exit(code=_mcp_install(path, target))

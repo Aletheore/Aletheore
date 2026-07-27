@@ -16,6 +16,20 @@ convention violations, dependency licenses, and static API endpoint maps. Every 
 below is built on top of that same evidence and
 never states anything it can't cite back to a specific field in it.
 
+## Quickstart
+
+```bash
+pipx install aletheore
+aletheore scan .
+cat .aletheore/air.json   # the evidence everything else reads from
+```
+
+That's the whole deterministic path: no LLM call, no account, no network access beyond the
+dependency-vulnerability/license registry lookups (skip those with `--no-check-vulnerabilities
+--no-check-licenses` for a fully offline run). Everything below - the per-language import
+resolution details, `audit`'s LLM-written report, the MCP server, the dashboard - builds on
+top of that one `air.json` file.
+
 Secrets, git activity, and dependency-vulnerability checks are language-agnostic. The module
 dependency graph (imports, clusters, layer violations) currently understands **Python,
 JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Ruby, PHP, C, C++, and C#** — other languages
@@ -101,11 +115,15 @@ doesn't break reproducibility: same repo content in, same evidence out).
 {
   "layer_markers": { "biz": 1 },
   "cluster_resolution": 1.5,
+  "dead_code_entry_points": ["scripts/migrate.py"],
   "accepted_secrets": [
     { "path": "tests/fixtures/sample.py", "pattern": "aws_access_key_id", "match_preview": "AKIA****...MNOP" }
   ]
 }
 ```
+
+`aletheore init [path]` scaffolds this file with all four keys present (empty/default), plus
+a one-line explanation of each printed to the console.
 
 - `layer_markers` — extends/overrides the built-in folder-name -> layer-rank table used by
   layer-violation detection (e.g. a repo using a `biz/` folder that isn't one of the built-in
@@ -113,6 +131,10 @@ doesn't break reproducibility: same repo content in, same evidence out).
   for non-overlapping keys; only overlapping keys get overridden.
 - `cluster_resolution` — passed straight into the modularity-clustering algorithm (default
   `1.0`). Higher values favor more, smaller clusters; lower values favor fewer, larger ones.
+- `dead_code_entry_points` — extra file paths (beyond what's auto-detected: a framework's
+  `main.py`/`app.py`, test files, `__init__.py` re-exports) to treat as reachable roots when
+  computing unreferenced code - a script only ever invoked by a cron job or CI step, never
+  imported from anywhere else in the repo, would otherwise be flagged as dead code.
 - `accepted_secrets` — a baseline of reviewed, accepted secret findings (e.g. a genuinely
   fake key in a test fixture that will always match a pattern). Every secrets scanner needs
   this: without it, `--fail-on-new-secrets` has no escape hatch for a known false positive -
@@ -124,13 +146,23 @@ doesn't break reproducibility: same repo content in, same evidence out).
   `"accepted": true`/labeled "accepted (in .aletheore.json baseline)" - only the fail-gates and
   inline PR annotations skip them.
 
-All three keys are optional and independently defaulted/empty if the file is missing,
+All four keys are optional and independently defaulted/empty if the file is missing,
 malformed, or only sets some of them. `layer_markers`/`cluster_resolution` (or `null` if
 there's no config file at all) are recorded verbatim in `air.json` at
 `architecture.config_applied`, so a report can cite exactly what convention was in effect for
 that scan.
 
 ## Commands
+
+### `aletheore init [path]`
+
+Scaffolds a `.aletheore.json` at the repository root with all four Configuration keys above
+present (empty/default), refusing to overwrite an existing one. Entirely optional - `scan`/
+`audit` work identically with no config file at all.
+
+```bash
+aletheore init .
+```
 
 ### `aletheore scan [path]`
 
@@ -284,6 +316,41 @@ aletheore audit . --agent codex
 aletheore audit . --agent openai
 aletheore audit . --agent ollama
 ```
+
+#### `--managed`: BYOK vs. Aletheore's own key
+
+Everything above is **BYOK** (bring your own key) - `audit` uses whichever provider/CLI *you*
+already have configured, and the reasoning cost is yours. `aletheore audit . --managed` is the
+alternative: it runs the identical report against Aletheore's own hosted reasoning service
+instead, using a token tied to a paid GitHub App installation rather than any of your own
+provider credentials.
+
+```bash
+aletheore login             # GitHub device-flow auth, saves a managed-audit token
+aletheore audit . --managed
+aletheore status             # confirm login state and installed version
+aletheore logout             # clear the saved token
+```
+
+`--managed` reads the token from `ALETHEORE_API_TOKEN` first, then the credential
+`aletheore login` saved to `~/.config/aletheore/credentials.json` (`--token` overrides both,
+and only has any effect together with `--managed`). `--agent` is BYOK-only and has no effect
+with `--managed`, since there's no local/API provider selection to make.
+
+### `aletheore login`
+
+Authenticates with GitHub via device flow (prints a one-time code and a URL to enter it at),
+resolves which of your paid GitHub App installations to attach to (prompting if you have more
+than one), and saves a managed-audit API token locally. Replaces any previously saved token.
+
+### `aletheore logout`
+
+Clears the locally saved managed-audit token. Safe to run even if not currently logged in.
+
+### `aletheore status`
+
+Prints the installed version, whether a newer one is available on PyPI, and - if a
+managed-audit token is saved - who it's logged in as and which plan that installation is on.
 
 ### `aletheore query <kind> [target]`
 

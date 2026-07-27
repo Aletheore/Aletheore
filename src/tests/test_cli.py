@@ -606,6 +606,47 @@ def test_main_audit_threads_no_check_licenses_flag(tmp_path):
     assert evidence["security"]["dependency_licenses"]["reason"] == "skipped (--no-check-licenses)"
 
 
+def test_audit_warns_when_token_passed_without_managed(tmp_path):
+    # --token only has any effect when --managed is also passed - passing
+    # it alone silently did nothing before this fix, with no indication to
+    # the user that the flag they set had no effect.
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    with patch("aletheore.cli._audit", return_value=0):
+        result = runner.invoke(app, ["audit", str(repo), "--token", "sometoken"])
+
+    assert "--token has no effect without --managed" in result.stdout
+
+
+def test_audit_warns_when_agent_passed_with_managed(tmp_path):
+    # --agent is silently dropped when --managed is set (the managed
+    # branch never reads forced_agent) - before this fix, nothing told the
+    # user their --agent choice was being ignored.
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    with patch("aletheore.cli._managed_audit", return_value=0):
+        result = runner.invoke(
+            app, ["audit", str(repo), "--managed", "--agent", "claude-code"]
+        )
+
+    assert "--agent has no effect with --managed" in result.stdout
+
+
+def test_audit_does_not_warn_when_flags_are_used_correctly(tmp_path):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    with patch("aletheore.cli._audit", return_value=0):
+        result = runner.invoke(app, ["audit", str(repo), "--agent", "claude-code"])
+    assert "has no effect" not in result.stdout
+
+    with patch("aletheore.cli._managed_audit", return_value=0):
+        result = runner.invoke(app, ["audit", str(repo), "--managed", "--token", "sometoken"])
+    assert "has no effect" not in result.stdout
+
+
 def test_main_scan_threads_no_check_licenses_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
