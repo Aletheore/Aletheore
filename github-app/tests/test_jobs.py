@@ -12,6 +12,96 @@ def _noop_spend_lock(*args, **kwargs):
     yield
 
 
+class _FakeCodeGraphStore:
+    """Stands in for scan_worker.code_graph_store.CodeGraphStore so
+    _sync_code_graph's wiring can be tested without a real database - the
+    store's own persistence is already covered directly, against a real
+    Postgres instance, in test_code_graph_store.py."""
+
+    def __init__(self, dsn, installation_id, repo_full_name):
+        self.installation_id = installation_id
+        self.repo_full_name = repo_full_name
+        self.content_hashes = {}
+        self.endpoint_keys = {}
+        self.applied_module_deltas = None
+        self.applied_endpoint_deltas = None
+
+    def load_content_hashes(self, branch):
+        return self.content_hashes
+
+    def load_endpoint_keys(self, branch):
+        return self.endpoint_keys
+
+    def apply_module_deltas(self, branch, changed_modules, deleted_paths, new_sync_sha, new_sync_at):
+        self.applied_module_deltas = {
+            "branch": branch, "changed_modules": changed_modules,
+            "deleted_paths": deleted_paths, "new_sync_sha": new_sync_sha,
+        }
+
+    def apply_endpoint_deltas(self, branch, changed_endpoints, deleted_keys):
+        self.applied_endpoint_deltas = {
+            "branch": branch, "changed_endpoints": changed_endpoints, "deleted_keys": deleted_keys,
+        }
+
+
+def test_sync_code_graph_applies_module_and_endpoint_deltas(monkeypatch):
+    from scan_worker.jobs import _sync_code_graph
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    fake_store = _FakeCodeGraphStore("dsn", 1, "octocat/hello-world")
+    monkeypatch.setattr("scan_worker.jobs.CodeGraphStore", lambda *a, **k: fake_store)
+
+    evidence = {
+        "repository": {
+            "modules": [
+                {"path": "a.py", "language": "python", "imports": [], "symbols": {"functions": [], "classes": []}}
+            ],
+            "api_endpoints": {"endpoints": [{"method": "GET", "path": "/x", "file": "a.py", "line": 1}]},
+        }
+    }
+
+    _sync_code_graph(1, "octocat/hello-world", "sha1", evidence)
+
+    assert fake_store.applied_module_deltas["changed_modules"][0]["path"] == "a.py"
+    assert fake_store.applied_module_deltas["new_sync_sha"] == "sha1"
+    assert fake_store.applied_endpoint_deltas["changed_endpoints"] == [
+        {"method": "GET", "path": "/x", "file": "a.py", "line": 1}
+    ]
+
+
+def test_sync_code_graph_skips_unchanged_modules(monkeypatch):
+    from scan_worker.jobs import _sync_code_graph
+    from aletheore.code_graph_diff import module_content_hash
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    module = {"path": "a.py", "language": "python", "imports": [], "symbols": {"functions": [], "classes": []}}
+    fake_store = _FakeCodeGraphStore("dsn", 1, "octocat/hello-world")
+    fake_store.content_hashes = {"a.py": module_content_hash(module)}
+    monkeypatch.setattr("scan_worker.jobs.CodeGraphStore", lambda *a, **k: fake_store)
+
+    evidence = {"repository": {"modules": [module]}}
+
+    _sync_code_graph(1, "octocat/hello-world", "sha1", evidence)
+
+    assert fake_store.applied_module_deltas["changed_modules"] == []
+    assert fake_store.applied_module_deltas["deleted_paths"] == []
+
+
+def test_sync_code_graph_degrades_gracefully_on_store_failure(monkeypatch):
+    from scan_worker.jobs import _sync_code_graph
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+
+    def _broken_store(*a, **k):
+        raise RuntimeError("no database")
+
+    monkeypatch.setattr("scan_worker.jobs.CodeGraphStore", _broken_store)
+
+    # Must not raise - this is a persistence enhancement, never allowed to
+    # break the scan job itself.
+    _sync_code_graph(1, "octocat/hello-world", "sha1", {"repository": {"modules": []}})
+
+
 def test_happy_path_posts_comment_and_writes_history(bare_repo_with_two_commits, monkeypatch):
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     posted = {}
@@ -1290,18 +1380,26 @@ def test_sweep_attaches_recent_commit_on_confirmed_down(monkeypatch):
         },
     )
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "indie"})
-    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
-    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr(
-        "scan_worker.jobs.fetch_recent_commits_for_path",
-        lambda client, token, repo, path, limit=1: [
-            {
-                "sha": "abc123def456",
-                "author": "Ada",
-                "date": "2026-07-23T10:00:00Z",
-                "subject": "touched the handler",
-            }
-        ],
+        "scan_worker.jobs._commit_attachment_from_graph",
+        lambda installation_id, repo_full_name, source_file: {
+            "kind": "commit",
+            "file": None,
+            "line": None,
+            "end_line": None,
+            "symbol": None,
+            "owner": None,
+            "owner_status": "unavailable",
+            "commit": {"sha": "abc123def456", "author_name": "Ada", "subject": "touched the handler"},
+            "commit_status": "available",
+            "dependency": None,
+            "dependency_status": "unavailable",
+            "risk": [],
+            "risk_status": "unavailable",
+            "confidence": "weak",
+            "evidence_path": None,
+            "evidence_status": "unavailable",
+        },
     )
 
     from scan_worker.jobs import run_health_check_sweep_job

@@ -18,6 +18,7 @@ from rq import get_current_job
 from app_server.audit_signing import content_hash, sign_report
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
+from aletheore.code_graph_diff import diff_endpoints, diff_modules
 from aletheore.evidence import write_evidence
 from aletheore.git_intel.analyzer import analyze_git, compute_hotspots
 from aletheore.evidence_resolution import (
@@ -78,12 +79,12 @@ from scan_worker.github_api import (
     fetch_file_content,
     fetch_pr_changed_files,
     fetch_pr_diff,
-    fetch_recent_commits_for_path,
     upsert_pr_comment,
 )
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.model_tiers import PRO_FALLBACK_MODEL, model_for_plan, writing_adapter_for_plan
 from scan_worker.packet_cache import lookup_cached_result, store_result
+from scan_worker.code_graph_store import CodeGraphStore
 from scan_worker.postgres_graph_store import PostgresRepoGraphStore
 from scan_worker.slack import (
     format_latency_alert,
@@ -211,6 +212,46 @@ def _sync_persistent_git_graph(installation_id: int, repo_full_name: str, repo_d
             "persistent git graph sync failed (%s); keeping this scan's own git data", type(exc).__name__
         )
     return evidence
+
+
+def _sync_code_graph(installation_id: int, repo_full_name: str, head_sha: str, evidence: dict) -> None:
+    """Updates the durable, incrementally-queryable code graph
+    (code_graph_files/symbols/dependency_edges/endpoints) from this
+    scan's fresh evidence - the counterpart to _sync_persistent_git_graph
+    above, for the code model rather than git history. repo_history's
+    evidence JSONB blob is a whole-repo snapshot rewritten on every single
+    scan; this only touches the rows for files whose extracted content
+    actually changed (see aletheore.code_graph_diff), so the durable
+    graph is addressable and queryable at file/symbol/edge/endpoint
+    granularity instead of "re-parse the latest blob every time you need
+    one fact from it." Never allowed to fail the scan itself: any error
+    here just leaves the durable graph stale until the next successful
+    scan, same discipline as the git graph sync above.
+    """
+    try:
+        settings = get_settings()
+        store = CodeGraphStore(settings.database_url, installation_id, repo_full_name)
+
+        modules = evidence.get("repository", {}).get("modules", [])
+        previous_hashes = store.load_content_hashes(GRAPH_BRANCH)
+        changed_modules, deleted_paths = diff_modules(previous_hashes, modules)
+        store.apply_module_deltas(
+            GRAPH_BRANCH,
+            changed_modules,
+            deleted_paths,
+            new_sync_sha=head_sha,
+            new_sync_at=datetime.now(timezone.utc),
+        )
+
+        endpoints = evidence.get("repository", {}).get("api_endpoints", {}).get("endpoints", [])
+        previous_endpoints = store.load_endpoint_keys(GRAPH_BRANCH)
+        changed_endpoints, deleted_keys = diff_endpoints(previous_endpoints, endpoints)
+        store.apply_endpoint_deltas(GRAPH_BRANCH, changed_endpoints, deleted_keys)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "code graph sync failed (%s); durable graph left stale until next successful scan",
+            type(exc).__name__,
+        )
 
 
 def _insert_history(installation_id: int, repo_full_name: str, evidence: dict) -> None:
@@ -413,6 +454,7 @@ def run_pr_scan_job(
         client = httpx.Client(base_url="https://api.github.com")
         upsert_pr_comment(client, token, repo_full_name, pr_number, format_diff_comment(diff))
         new = _sync_persistent_git_graph(installation_id, repo_full_name, head_dir, new)
+        _sync_code_graph(installation_id, repo_full_name, head_sha, new)
         _insert_history(installation_id, repo_full_name, new)
 
         # These are side effects, not the primary deliverable above - a failure in
@@ -803,13 +845,44 @@ def _recheck_single_endpoint(entry: dict, base_url: str) -> dict:
     return results[0]
 
 
+def _commit_attachment_from_graph(installation_id: int, repo_full_name: str, source_file: str) -> dict | None:
+    # Reads the same persisted, incrementally-synced graph
+    # _owner_attachment_from_graph (below) already uses, instead of a live
+    # GitHub API call (fetch_recent_commits_for_path) - evidence_git_file_churn
+    # already has this exact data cached from the last scan, including the
+    # commit subject (git_intel/incremental.py's stream_commit_touches
+    # captures %s alongside sha/author/date). Degrades to None (no commit
+    # attachment, not a broken alert) if this repo has no graph data yet
+    # or the database is unreachable - same discipline as every other
+    # attachment in this correlation chain.
+    try:
+        settings = get_settings()
+        store = PostgresRepoGraphStore(settings.database_url, installation_id, repo_full_name)
+        snapshot = store.load("unused", GRAPH_BRANCH)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "commit correlation from graph failed (%s); alerting without it", type(exc).__name__
+        )
+        return None
+    churn = snapshot.file_churn.get(source_file)
+    if churn is None or not churn.recent_commits:
+        return None
+    latest = churn.recent_commits[0]
+    return normalize_resolution(
+        kind="commit",
+        commit={
+            "sha": latest.sha,
+            "author_name": latest.author_name,
+            "author_email": latest.author_email,
+            "subject": latest.subject,
+        },
+        confidence="weak",
+    )
+
+
 def _owner_attachment_from_graph(installation_id: int, repo_full_name: str, source_file: str) -> dict | None:
     # Prefers the persisted graph over a live API call: no extra GitHub
-    # round-trip, and it still answers if GitHub itself is degraded. Only
-    # ever supplements the commit attachment below (which stays the
-    # existing, already-proven live lookup) - never the sole source, since
-    # a repo with no PR-triggered scan since this shipped has no graph data
-    # yet and this simply finds nothing to attach.
+    # round-trip, and it still answers if GitHub itself is degraded.
     try:
         settings = get_settings()
         store = PostgresRepoGraphStore(settings.database_url, installation_id, repo_full_name)
@@ -939,7 +1012,6 @@ def _fix_suggestion_attachment(
 
 
 def _attach_recent_commit_for_failure(
-    settings,
     installation_id: int,
     repo_full_name: str,
     source_file: str,
@@ -950,30 +1022,10 @@ def _attach_recent_commit_for_failure(
     status_code: int | None = None,
     source_line: int | None = None,
 ) -> dict | None:
-    try:
-        app_jwt = generate_app_jwt(
-            settings.github_app_id,
-            settings.github_app_private_key,
-        )
-        token = _token_sync(installation_id, app_jwt)
-        with httpx.Client(base_url="https://api.github.com") as client:
-            commits = fetch_recent_commits_for_path(
-                client,
-                token,
-                repo_full_name,
-                source_file,
-                limit=1,
-            )
-    except Exception as exc:  # noqa: BLE001
-        logging.getLogger("scan_worker.jobs").warning(
-            "commit correlation failed (%s); alerting without it",
-            type(exc).__name__,
-        )
-        commits = []
-
     attachments = []
-    if commits:
-        attachments.append(normalize_resolution(kind="commit", commit=commits[0], confidence="weak"))
+    commit_attachment = _commit_attachment_from_graph(installation_id, repo_full_name, source_file)
+    if commit_attachment is not None:
+        attachments.append(commit_attachment)
     owner_attachment = _owner_attachment_from_graph(installation_id, repo_full_name, source_file)
     if owner_attachment is not None:
         attachments.append(owner_attachment)
@@ -1057,7 +1109,6 @@ def run_health_check_sweep_job() -> None:
             if reachability_flipped:
                 if not reachable and source_file:
                     evidence_resolution = _attach_recent_commit_for_failure(
-                        settings,
                         installation_id,
                         repo_full_name,
                         source_file,

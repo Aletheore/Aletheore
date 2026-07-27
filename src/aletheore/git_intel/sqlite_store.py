@@ -112,6 +112,9 @@ class SQLiteRepoGraphStore:
                     author_name=r["author_name"],
                     author_email=r["author_email"],
                     committed_at=datetime.fromisoformat(r["committed_at"]),
+                    # .get(): rows written before subject-capture was added
+                    # have no such key - default "" rather than KeyError.
+                    subject=r.get("subject", ""),
                 )
                 for r in json.loads(recent_json)
             ]
@@ -183,6 +186,7 @@ class SQLiteRepoGraphStore:
                                     "author_name": r.author_name,
                                     "author_email": r.author_email,
                                     "committed_at": r.committed_at.isoformat(),
+                                    "subject": r.subject,
                                 }
                                 for r in churn.recent_commits
                             ]
