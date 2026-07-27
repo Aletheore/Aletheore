@@ -2,12 +2,14 @@ import hashlib
 import hmac
 import json
 import time
+from unittest.mock import MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app_server.db import get_installation
+from app_server.db import get_installation, upsert_installation
 from app_server.main import app
+from app_server.webhooks.paddle import handle_paddle_webhook_event
 
 WEBHOOK_SECRET = "pdl_ntfset_test_secret"
 
@@ -117,3 +119,46 @@ async def test_duplicate_delivery_is_idempotent(pool, monkeypatch):
     assert r2.status_code == 200
     installation = await get_installation(pool, 105)
     assert installation["plan"] == "team"
+
+
+@pytest.mark.asyncio
+async def test_free_to_paid_transition_triggers_live_wiki_full_build(pool):
+    fake_queue = MagicMock()
+    await upsert_installation(pool, 200, "acme")  # defaults to plan='free'
+
+    payload = _subscription_created_payload("pri_01ky9jwz35hvj5xs6f8xqw6htt", 200)
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    installation = await get_installation(pool, 200)
+    assert installation["plan"] == "indie"
+    fake_queue.enqueue.assert_called_once()
+    args, kwargs = fake_queue.enqueue.call_args
+    assert args[0] == "scan_worker.jobs.run_live_wiki_full_build_for_installation_job"
+    assert kwargs["installation_id"] == 200
+
+
+@pytest.mark.asyncio
+async def test_paid_to_paid_change_does_not_retrigger_live_wiki_full_build(pool):
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (201, 'acme', 'indie')"
+    )
+
+    payload = _subscription_created_payload("pri_01ky9jx0gbx02mnn4d166yp3vc", 201)
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    installation = await get_installation(pool, 201)
+    assert installation["plan"] == "team"
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_replaying_subscription_created_only_triggers_wiki_build_once(pool):
+    fake_queue = MagicMock()
+    await upsert_installation(pool, 202, "acme")  # defaults to plan='free'
+    payload = _subscription_created_payload("pri_01ky9jwz35hvj5xs6f8xqw6htt", 202)
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    fake_queue.enqueue.assert_called_once()

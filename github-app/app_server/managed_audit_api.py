@@ -8,8 +8,9 @@ from pydantic import BaseModel, Field
 from app_server.audit_signing import public_key_hex_from_private, verify_report
 from app_server.config import get_settings
 from app_server.db import (
+    MAX_SCANNED_REPOS_PER_MONTH,
     check_and_reserve_managed_audit,
-    count_other_repos_audited_this_month,
+    check_and_reserve_monthly_repo_scan_slot,
     get_audit_report_by_token,
     get_installation_by_token_hash,
     touch_api_token,
@@ -18,12 +19,6 @@ from app_server.evidence_limits import MAX_EVIDENCE_BYTES
 from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
 
 managed_audit_router = APIRouter()
-
-# Protects against a single Pro subscription burst-connecting many repos to
-# front-load one-time audit cost onto one $34.99/mo install - total repos an
-# installation can connect stays unlimited, only how many *new* ones can
-# each run their first audit within a calendar month is bounded.
-MAX_NEW_REPOS_AUDITED_PER_MONTH = 10
 
 
 class StartManagedAuditRequest(BaseModel):
@@ -75,16 +70,15 @@ async def start_managed_audit(request: Request, body: StartManagedAuditRequest):
     except Exception as exc:
         raise HTTPException(status_code=400, detail="evidence could not be decoded") from exc
 
-    other_repos_this_month = await count_other_repos_audited_this_month(
-        pool, installation["installation_id"], body.repo_full_name
-    )
-    if other_repos_this_month >= MAX_NEW_REPOS_AUDITED_PER_MONTH:
+    if not await check_and_reserve_monthly_repo_scan_slot(
+        pool, installation["installation_id"], body.repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
+    ):
         raise HTTPException(
             status_code=429,
             detail=(
-                f"this installation has already run first-time audits on "
-                f"{MAX_NEW_REPOS_AUDITED_PER_MONTH} different repos this month - "
-                "try again next month, or re-run an audit on a repo you've already audited"
+                f"this installation has already scanned {MAX_SCANNED_REPOS_PER_MONTH} different "
+                "repos this month (across PR scans, Flash review, and managed audits) - try "
+                "again next month, or re-run against a repo you've already scanned"
             ),
         )
 

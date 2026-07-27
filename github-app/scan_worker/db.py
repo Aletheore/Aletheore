@@ -73,6 +73,65 @@ def check_and_reserve_managed_audit(
     return row is not None
 
 
+def check_and_reserve_monthly_repo_scan_slot(
+    dsn: str, installation_id: int, repo_full_name: str, limit: int
+) -> bool:
+    """True if repo_full_name may be scanned this calendar month - either
+    it's already one of this installation's counted repos this month, or
+    there's still room under `limit` distinct repos and a slot gets
+    reserved for it now. False means the monthly distinct-repo cap has
+    already been reached by other repos, so this (new) repo must wait
+    for next month.
+
+    This is a real cost-control gate shared by every scan type (PR scan,
+    Flash review, managed audit), reachable both from this single
+    sequential scan-worker process and, via the managed-audit API's own
+    HTTP-concurrent path (see app_server.db's async mirror of this
+    function), from genuinely concurrent callers - so the check-then-insert
+    is wrapped in a per-installation advisory lock rather than left as a
+    racy read-then-write, matching check_and_reserve_managed_audit's
+    atomicity elsewhere in this module.
+    """
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (installation_id,))
+            cur.execute(
+                """
+                SELECT 1 FROM monthly_scanned_repos
+                WHERE installation_id = %s AND repo_full_name = %s
+                  AND month = date_trunc('month', now())::date
+                """,
+                (installation_id, repo_full_name),
+            )
+            if cur.fetchone() is not None:
+                conn.commit()
+                return True
+
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM monthly_scanned_repos
+                WHERE installation_id = %s AND month = date_trunc('month', now())::date
+                """,
+                (installation_id,),
+            )
+            if cur.fetchone()[0] >= limit:
+                conn.commit()
+                return False
+
+            cur.execute(
+                """
+                INSERT INTO monthly_scanned_repos (installation_id, repo_full_name, month)
+                VALUES (%s, %s, date_trunc('month', now())::date)
+                ON CONFLICT (installation_id, repo_full_name, month) DO NOTHING
+                """,
+                (installation_id, repo_full_name),
+            )
+        conn.commit()
+    return True
+
+
 def get_llm_spend_this_month(dsn: str, installation_id: int) -> float:
     import psycopg
 

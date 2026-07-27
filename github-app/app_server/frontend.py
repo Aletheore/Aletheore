@@ -80,7 +80,8 @@ STYLE = """
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; font-family: var(--font-sans); color: var(--ink-900); background: var(--page-bg); }
+body { margin: 0; font-family: var(--font-sans); color: var(--ink-900); background-color: var(--page-bg);
+  background-image: radial-gradient(var(--border-strong) 1px, transparent 1px); background-size: 22px 22px; }
 a { color: var(--accent); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
@@ -367,11 +368,14 @@ PICKER_HTML = f"""<!DOCTYPE html>
     const grid = byOrg[org].map(function (r) {{
       const planBadge = '<span class="picker-plan' + (r.plan !== 'free' ? ' paid' : '') + '">' + escapeHtml(r.plan) + ' plan</span>';
       if (r.initialized === false) {{
+        const note = r.scan_limit_reached
+          ? '10 repos per month limit reached &mdash; please wait for next month'
+          : 'Initialization required &mdash; waiting for the first scan to complete';
         return '<div class="picker-card picker-card-pending">' +
           '<div class="picker-card-icon"><i class="ti ti-git-branch" aria-hidden="true"></i></div>' +
           '<div class="picker-card-body"><div class="picker-repo">' + escapeHtml(r.repo) + '</div>' +
           planBadge +
-          '<div class="picker-pending-note">Initialization required &mdash; waiting for the first scan to complete</div></div>' +
+          '<div class="picker-pending-note">' + note + '</div></div>' +
           '</div>';
       }}
       return '<a class="picker-card" href="/dashboard/' + encodeURIComponent(r.org) + '/' + encodeURIComponent(r.repo) + '">' +
@@ -606,15 +610,21 @@ async function loadOverview() {{
   document.getElementById('stat-modules-sub').textContent = history.length + ' scan' + (history.length === 1 ? '' : 's') + ' recorded';
 
   const recentBody = document.getElementById('recent-security-body');
-  const preview = secretFindings.slice(0, 5);
-  if (preview.length === 0 && vulnFindings.length === 0) {{
+  const securePreview = secretFindings.slice(0, 5);
+  const vulnPreview = vulnFindings.slice(0, 5 - securePreview.length);
+  if (securePreview.length === 0 && vulnPreview.length === 0) {{
     recentBody.innerHTML = '<div class="empty-state">No open findings.</div>';
   }} else {{
     let rows = '';
-    preview.forEach(function (f) {{
+    securePreview.forEach(function (f) {{
       rows += '<tr><td><span class="sev-stripe critical"></span><span class="finding-title">Possible ' + escapeHtml(f.pattern) + ' secret</span></td>' +
         '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
         '<td><span class="chip critical">Critical</span></td></tr>';
+    }});
+    vulnPreview.forEach(function (f) {{
+      rows += '<tr><td><span class="sev-stripe warning"></span><span class="finding-title">' + escapeHtml(f.advisory_id) + ': ' + escapeHtml(f.summary || 'known vulnerability') + '</span></td>' +
+        '<td class="finding-cite">' + escapeHtml(f.package) + '@' + escapeHtml(f.installed_version) + '</td>' +
+        '<td><span class="chip warning">Warning</span></td></tr>';
     }});
     recentBody.innerHTML = '<table class="findings"><thead><tr><th>Finding</th><th>Evidence</th><th>Severity</th></tr></thead><tbody>' + rows + '</tbody></table>';
   }}
@@ -625,7 +635,11 @@ async function loadUptimeStat() {{
   if (!res || !res.ok) return;
   const data = await res.json();
   const endpoints = data.endpoints || [];
-  if (endpoints.length === 0) {{ document.getElementById('stat-uptime').textContent = 'n/a'; return; }}
+  if (endpoints.length === 0) {{
+    document.getElementById('stat-uptime').textContent = 'Not configured';
+    document.getElementById('stat-uptime-sub').textContent = 'Add a target in Endpoint health';
+    return;
+  }}
   const up = endpoints.filter(function (e) {{ return e.reachable; }}).length;
   const pct = Math.round((up / endpoints.length) * 100);
   document.getElementById('stat-uptime').textContent = pct + '%';

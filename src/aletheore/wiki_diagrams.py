@@ -23,7 +23,19 @@ def _file_to_cluster_map(clusters: list[dict]) -> dict[str, int]:
 
 
 def build_overview_diagram(evidence: dict, cluster_names: dict[int, str] | None = None) -> str:
-    """One node per subsystem (cluster), edges for inter-cluster dependencies."""
+    """One node per subsystem (cluster), edges for inter-cluster dependencies.
+
+    Clusters with zero cross-cluster edges are omitted when at least one
+    other cluster does have cross-cluster edges (they still show up as
+    subsystem cards elsewhere) - a codebase with many small, independent
+    modules can produce dozens or hundreds of clusters, and a single
+    flowchart is not a useful "how do subsystems relate" view once most of
+    its nodes are floating boxes with no connections at all. But if NO
+    cluster has any cross-cluster edge (a single-cluster repo, or one
+    where nothing happens to import across cluster boundaries yet), there
+    is no meaningful subset to narrow down to - showing every cluster is
+    strictly better than showing none.
+    """
     cluster_names = cluster_names or {}
     clusters = evidence.get("architecture", {}).get("clusters", [])
     edges = evidence.get("repository", {}).get("dependency_graph", {}).get("edges", [])
@@ -39,9 +51,13 @@ def build_overview_diagram(evidence: dict, cluster_names: dict[int, str] | None 
             continue
         cluster_edges.add((source_cluster, target_cluster))
 
+    connected_clusters = {cid for pair in cluster_edges for cid in pair}
+
     lines = ["flowchart TD"]
     for cluster in clusters:
         cid = cluster["id"]
+        if connected_clusters and cid not in connected_clusters:
+            continue
         label = _mermaid_safe_label(cluster_names.get(cid, f"Cluster {cid}"))
         lines.append(f'    C{cid}["{label}"]')
     for source_id, target_id in sorted(cluster_edges):

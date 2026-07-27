@@ -25,6 +25,7 @@ def test_pull_request_webhook_to_pr_comment_end_to_end(
         posted["pr_number"] = pr_number
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
