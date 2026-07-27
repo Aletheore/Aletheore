@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import logging
 import secrets
 
 import httpx
@@ -36,6 +37,7 @@ from app_server.db import (
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
 
 admin_router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # No control characters (including newlines/tabs) or DEL - a label is a
 # single line of display text stored verbatim and shown back in the admin
@@ -150,6 +152,9 @@ async def _try_refresh_session_token(pool, session: dict) -> str | None:
             settings.github_client_secret,
         )
     except Exception:
+        logger.warning(
+            "GitHub token refresh failed for session %s", session["id"], exc_info=True
+        )
         return None
 
     await update_session_tokens(
