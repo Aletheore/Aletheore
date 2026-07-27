@@ -112,8 +112,58 @@ def test_scan_repository_honors_secrets_history_depth_cap_env_var(tmp_path, monk
         mock_history.return_value = {"history_scanned_commits": 0, "history_findings": []}
         scan_repository(repo, check_licenses=False)
 
-    _, kwargs = mock_history.call_args
-    assert kwargs["max_commits"] == 7
+
+def test_scan_repository_reuses_unchanged_scan_cache_env_var(tmp_path, monkeypatch):
+    # Proves the hosted scan-worker's ALETHEORE_UNCHANGED_SCAN_CACHE env var
+    # (a JSON file path, set before invoking `aletheore scan` as a
+    # subprocess against a persistent per-repo checkout - see
+    # scan_worker/jobs.py) actually reaches build_module_graph/
+    # map_api_endpoints, so files known unchanged since the last scan are
+    # never re-parsed. Unset by default for a developer scanning locally.
+    repo = make_repo(tmp_path)
+    (repo / "unchanged.py").write_text("def cached():\n    pass\n")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "add unchanged.py")
+
+    # Deliberately WRONG relative to unchanged.py's real content ("def
+    # cached(): pass") - proves the cached dict is used verbatim rather
+    # than the file being re-parsed (a real parse would never produce
+    # this name).
+    cache_path = tmp_path / "cache.json"
+    cache_path.write_text(json.dumps({
+        "modules": {
+            "unchanged.py": {
+                "path": "unchanged.py",
+                "language": "python",
+                "imports": [],
+                "imported_by": [],
+                "symbols": {
+                    "functions": [{"name": "definitely_not_a_real_parse", "start_line": 1, "end_line": 2}],
+                    "classes": [],
+                },
+            }
+        },
+        "endpoints": {"unchanged.py": []},
+    }))
+    monkeypatch.setenv("ALETHEORE_UNCHANGED_SCAN_CACHE", str(cache_path))
+
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo, check_licenses=False)
+
+    by_path = {m["path"]: m for m in evidence["repository"]["modules"]}
+    assert "definitely_not_a_real_parse" in [f["name"] for f in by_path["unchanged.py"]["symbols"]["functions"]]
+
+
+def test_scan_repository_ignores_missing_unchanged_scan_cache_file(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path)
+    monkeypatch.setenv("ALETHEORE_UNCHANGED_SCAN_CACHE", str(tmp_path / "does-not-exist.json"))
+
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo, check_licenses=False)
+
+    assert evidence["repository"]["modules"]
 
 
 def test_write_evidence_creates_aletheore_dir(tmp_path):

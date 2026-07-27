@@ -1049,7 +1049,12 @@ def _extract_aspnet_minimal_routes(root: Node, source: bytes, rel_path: str) -> 
     return entries
 
 
-def map_api_endpoints(repo_path: Path) -> dict:
+def map_api_endpoints(repo_path: Path, *, unchanged_endpoints: dict[str, list[dict]] | None = None) -> dict:
+    """unchanged_endpoints: path -> the list of endpoint dicts previously
+    found in that file (possibly empty), for files known not to have
+    changed since that data was computed - skips tree-sitter parsing for
+    those paths entirely, reusing the cached list as-is. Defaults to
+    None: fully backward compatible, every file parsed fresh."""
     endpoints: list[dict] = []
 
     parsers: dict[str, Parser] = {}
@@ -1071,6 +1076,11 @@ def map_api_endpoints(repo_path: Path) -> dict:
 
     for path in _iter_source_files(repo_path):
         rel_path = _rel(repo_path, path)
+
+        if unchanged_endpoints is not None and rel_path in unchanged_endpoints:
+            endpoints.extend(unchanged_endpoints[rel_path])
+            continue
+
         suffix = path.suffix
 
         if suffix == ".py":

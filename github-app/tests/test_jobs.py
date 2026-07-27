@@ -1,10 +1,16 @@
 import json
+import os
 import subprocess
 from contextlib import contextmanager
 
 import pytest
 
 from scan_worker.jobs import MAX_FLASH_REVIEWS_PER_MONTH, run_pr_scan_job
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql://postgres:test@localhost:55433/aletheore_test",
+)
 
 
 @contextmanager
@@ -100,6 +106,130 @@ def test_sync_code_graph_degrades_gracefully_on_store_failure(monkeypatch):
     # Must not raise - this is a persistence enhancement, never allowed to
     # break the scan job itself.
     _sync_code_graph(1, "octocat/hello-world", "sha1", {"repository": {"modules": []}})
+
+
+def _make_local_repo(path, files: dict) -> str:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
+    for name, content in files.items():
+        (path / name).write_text(content)
+    subprocess.run(["git", "add", "-A"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "commit"], cwd=path, check=True)
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+@pytest.mark.asyncio
+async def test_build_unchanged_scan_cache_excludes_changed_files_includes_unchanged(pool, tmp_path, monkeypatch):
+    from scan_worker.jobs import _build_unchanged_scan_cache
+    from scan_worker.code_graph_store import CodeGraphStore
+
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login) VALUES ($1, $2)", 950, "org"
+    )
+    monkeypatch.setenv("DATABASE_URL", TEST_DATABASE_URL)
+
+    checkout_dir = tmp_path / "checkout"
+    sha1 = _make_local_repo(checkout_dir, {"a.py": "def old():\n    pass\n", "b.py": "def stable():\n    pass\n"})
+    (checkout_dir / "a.py").write_text("def new():\n    pass\n")
+    subprocess.run(["git", "add", "-A"], cwd=checkout_dir, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "change a.py only"], cwd=checkout_dir, check=True)
+    sha2 = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=checkout_dir, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    store = CodeGraphStore(TEST_DATABASE_URL, 950, "org/repo")
+    from datetime import datetime as dt
+
+    store.apply_module_deltas(
+        "default",
+        [
+            {"path": "a.py", "language": "python", "imports": [], "content_hash": "old-a-hash",
+             "symbols": {"functions": [{"name": "old", "start_line": 1, "end_line": 2}], "classes": []}},
+            {"path": "b.py", "language": "python", "imports": [], "content_hash": "b-hash",
+             "symbols": {"functions": [{"name": "stable", "start_line": 1, "end_line": 2}], "classes": []}},
+        ],
+        deleted_paths=[],
+        new_sync_sha=sha1,
+        new_sync_at=dt(2026, 7, 27),
+    )
+
+    cache_path = _build_unchanged_scan_cache(950, "org/repo", checkout_dir, sha1, sha2, tmp_path / "cache.json")
+
+    assert cache_path is not None
+    cache_data = json.loads(cache_path.read_text())
+    assert "b.py" in cache_data["modules"]
+    assert "a.py" not in cache_data["modules"]
+    assert cache_data["modules"]["b.py"]["symbols"]["functions"][0]["name"] == "stable"
+
+
+def test_build_unchanged_scan_cache_returns_none_without_a_previous_sync(tmp_path):
+    from scan_worker.jobs import _build_unchanged_scan_cache
+
+    checkout_dir = tmp_path / "checkout"
+    _make_local_repo(checkout_dir, {"a.py": "pass\n"})
+
+    result = _build_unchanged_scan_cache(1, "org/repo", checkout_dir, None, "somesha", tmp_path / "cache.json")
+
+    assert result is None
+
+
+def test_run_pr_scan_job_uses_persistent_checkout_and_unchanged_cache_for_head(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # Proves run_pr_scan_job actually wires the persistent-checkout +
+    # incremental-scan-cache path for the HEAD scan specifically (not
+    # base, which stays an ephemeral clone - see _build_unchanged_scan_cache's
+    # module docstring for why only head feeds the durable code graph).
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
+
+    prepare_head_calls = []
+    real_prepare_head_checkout = None
+    from scan_worker import jobs as jobs_module
+
+    real_prepare_head_checkout = jobs_module._prepare_head_checkout
+
+    def spy_prepare_head_checkout(clone_url, head_sha_arg, installation_id, repo_full_name, fallback_dir):
+        prepare_head_calls.append(
+            {"clone_url": clone_url, "head_sha": head_sha_arg, "installation_id": installation_id}
+        )
+        return real_prepare_head_checkout(clone_url, head_sha_arg, installation_id, repo_full_name, fallback_dir)
+
+    monkeypatch.setattr("scan_worker.jobs._prepare_head_checkout", spy_prepare_head_checkout)
+
+    cache_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._build_unchanged_scan_cache",
+        lambda *a, **k: cache_calls.append(a) or None,
+    )
+
+    run_pr_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        pr_number=7,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert len(prepare_head_calls) == 1
+    assert prepare_head_calls[0]["head_sha"] == head_sha
+    assert prepare_head_calls[0]["installation_id"] == 1
+    assert len(cache_calls) == 1
+    assert cache_calls[0][0] == 1  # installation_id
+    assert cache_calls[0][4] == head_sha  # current_sha
 
 
 def test_happy_path_posts_comment_and_writes_history(bare_repo_with_two_commits, monkeypatch):

@@ -302,6 +302,40 @@ def test_map_api_endpoints_only_treats_urls_py_as_django_routes(tmp_path):
     assert result["endpoints"] == []
 
 
+def test_map_api_endpoints_reuses_unchanged_endpoints_instead_of_reparsing(tmp_path, monkeypatch):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "routes.py").write_text(
+        '@app.route("/users")\ndef list_users():\n    pass\n'
+    )
+    (tmp_path / "server.js").write_text('app.get("/health", healthCheck);\n')
+
+    from aletheore import endpoints as endpoints_module
+
+    def _failing_flask_extractor(*a, **k):
+        raise AssertionError("app/routes.py should not be re-parsed - it's in unchanged_endpoints")
+
+    monkeypatch.setattr(endpoints_module, "_extract_flask_fastapi_routes", _failing_flask_extractor)
+
+    cached = [{"method": "GET", "path": "/users", "file": "app/routes.py", "line": 1, "handler": "list_users"}]
+    result = map_api_endpoints(tmp_path, unchanged_endpoints={"app/routes.py": cached})
+
+    assert result["checked"] is True
+    paths = {e["path"] for e in result["endpoints"]}
+    assert paths == {"/users", "/health"}
+
+
+def test_map_api_endpoints_without_unchanged_endpoints_is_unchanged(tmp_path):
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "routes.py").write_text(
+        '@app.route("/users")\ndef list_users():\n    pass\n'
+    )
+
+    with_none = map_api_endpoints(tmp_path, unchanged_endpoints=None)
+    without_param = map_api_endpoints(tmp_path)
+
+    assert with_none == without_param
+
+
 def test_map_api_endpoints_empty_repo_returns_checked_true_empty_list(tmp_path):
     (tmp_path / "README.md").write_text("hello\n")
 

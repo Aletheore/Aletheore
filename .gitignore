@@ -39,6 +39,11 @@ __pycache__/
 # Secret key material (GitHub App private key, etc.)
 *.pem
 
+# Persistent per-repo git checkouts (scan_worker's docker-compose bind
+# mount for _ensure_persistent_checkout) - real customer repo content,
+# never something to commit.
+github-app/repo-checkouts/
+
 # Aletheore prototype scan output (generated locally by `aletheore audit`)
 .aletheore/
 
