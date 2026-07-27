@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -53,14 +54,22 @@ SECRET_PATTERNS = [
 
 
 def iter_all_files(repo_path: Path):
-    for path in repo_path.rglob("*"):
-        if not path.is_file():
-            continue
-        if any(part in IGNORED_DIRS for part in path.parts):
-            continue
-        if path.suffix in BINARY_EXTENSIONS:
-            continue
-        yield path
+    # os.walk(followlinks=False) rather than Path.rglob("*") - a symlinked
+    # directory anywhere in the tree (real case: a monorepo tool, or an
+    # accidental symlink to something outside the checkout) would otherwise
+    # have its contents walked and reported on as if they were part of this
+    # repo. followlinks only stops descent into symlinked *directories* -
+    # a symlinked file sitting directly in a real directory still needs its
+    # own explicit is_symlink() check below.
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        for filename in filenames:
+            path = Path(dirpath) / filename
+            if path.is_symlink() or not path.is_file():
+                continue
+            if path.suffix in BINARY_EXTENSIONS:
+                continue
+            yield path
 
 
 def _is_likely_placeholder(rel_path: str) -> bool:

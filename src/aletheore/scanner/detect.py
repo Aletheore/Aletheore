@@ -1,4 +1,5 @@
 import json
+import os
 import tomllib
 from pathlib import Path
 
@@ -209,24 +210,37 @@ def _nested_git_roots(repo_path: Path) -> set[Path]:
     submodule checked out the classic way, and therefore a separate git
     working tree, not this repo's own source. Unlike cache/build dirs, these
     have no fixed name to add to IGNORED_DIRS - a real scan found one at
-    `.claude/worktrees/<name>/`, doubling every file inside it."""
-    return {
-        git_entry.parent
-        for git_entry in repo_path.rglob(".git")
-        if git_entry.parent != repo_path
-    }
+    `.claude/worktrees/<name>/`, doubling every file inside it.
+
+    os.walk(followlinks=False) rather than Path.rglob(".git") - a symlinked
+    directory shouldn't be descended into just to look for a nested repo.
+    """
+    roots = set()
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+        current_dir = Path(dirpath)
+        if current_dir != repo_path and (".git" in dirnames or ".git" in filenames):
+            roots.add(current_dir)
+    return roots
 
 
 def _iter_source_files(repo_path: Path):
+    # os.walk(followlinks=False) rather than Path.rglob("*") - a symlinked
+    # directory would otherwise have its contents walked and reported on as
+    # if they were part of this repo. followlinks only stops descent into
+    # symlinked *directories* - a symlinked file sitting directly in a real
+    # directory still needs its own is_symlink() check below.
     nested_git_roots = _nested_git_roots(repo_path)
-    for path in repo_path.rglob("*"):
-        if not path.is_file():
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        current_dir = Path(dirpath)
+        if any(root in current_dir.parents or root == current_dir for root in nested_git_roots):
+            dirnames[:] = []
             continue
-        if any(part in IGNORED_DIRS for part in path.parts):
-            continue
-        if any(root in path.parents for root in nested_git_roots):
-            continue
-        yield path
+        for filename in filenames:
+            path = current_dir / filename
+            if path.is_symlink() or not path.is_file():
+                continue
+            yield path
 
 
 def detect_languages(repo_path: Path) -> list[dict]:

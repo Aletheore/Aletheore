@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import tree_sitter_c as tsc
@@ -64,15 +65,25 @@ KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR = {
 
 
 def _iter_source_files(repo_path: Path):
+    # os.walk(followlinks=False) rather than Path.rglob("*") - a symlinked
+    # directory in the tree would otherwise have its contents walked and
+    # parsed as if they were part of this repo. followlinks only stops
+    # descent into symlinked *directories* - a symlinked file sitting
+    # directly in a real directory still needs its own is_symlink() check.
     nested_git_roots = _nested_git_roots(repo_path)
-    for path in sorted(repo_path.rglob("*")):
-        if not path.is_file():
+    paths = []
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        current_dir = Path(dirpath)
+        if any(root in current_dir.parents or root == current_dir for root in nested_git_roots):
+            dirnames[:] = []
             continue
-        if any(part in IGNORED_DIRS for part in path.parts):
-            continue
-        if any(root in path.parents for root in nested_git_roots):
-            continue
-        yield path
+        for filename in filenames:
+            path = current_dir / filename
+            if path.is_symlink() or not path.is_file():
+                continue
+            paths.append(path)
+    yield from sorted(paths)
 
 
 def _rel(repo_path: Path, path: Path) -> str | None:
