@@ -17,11 +17,10 @@ competing for space with five other sections.
 from html import escape
 from urllib.parse import quote
 
-import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from app_server.admin import _administered_installation_ids
+from app_server.admin import _administered_installation_ids_for_session_or_401
 from app_server.auth import SESSION_COOKIE_NAME, get_current_session
 from app_server.config import get_settings
 from app_server.db import list_installations_for_ids
@@ -313,6 +312,9 @@ function escapeHtml(s) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
   });
 }
+function planDisplayName(plan) {
+  return plan === 'free' ? 'Aletheore Community' : 'Aletheore AIR';
+}
 """
 
 SIGNIN_HTML = f"""<!DOCTYPE html>
@@ -366,7 +368,7 @@ PICKER_HTML = f"""<!DOCTYPE html>
     const group = document.createElement('div');
     group.className = 'picker-org-group';
     const grid = byOrg[org].map(function (r) {{
-      const planBadge = '<span class="picker-plan' + (r.plan !== 'free' ? ' paid' : '') + '">' + escapeHtml(r.plan) + ' plan</span>';
+      const planBadge = '<span class="picker-plan' + (r.plan !== 'free' ? ' paid' : '') + '">' + escapeHtml(planDisplayName(r.plan)) + '</span>';
       if (r.initialized === false) {{
         const note = r.scan_limit_reached
           ? '10 repos per month limit reached &mdash; please wait for next month'
@@ -472,13 +474,13 @@ async function loadPlanBadge() {
   const subEl = document.getElementById('plan-sub');
   if (!res) return null;
   if (res.status === 402) {
-    nameEl.textContent = 'free';
+    nameEl.textContent = planDisplayName('free');
     subEl.textContent = 'Upgrade for AIRview and settings.';
     return 'free';
   }
   if (!res.ok) { nameEl.textContent = ''; subEl.textContent = ''; return null; }
   const data = await res.json();
-  nameEl.textContent = data.installation.plan + ' plan';
+  nameEl.textContent = planDisplayName(data.installation.plan);
   subEl.textContent = data.installation.plan === 'free' ? 'Upgrade for AIRview and settings.' : 'AIRview and priority scans included.';
   return data;
 }
@@ -1307,8 +1309,12 @@ def _no_store_html(content: str) -> HTMLResponse:
     return HTMLResponse(content, headers={"Cache-Control": "no-store"})
 
 
-_VALID_PLANS = ("indie", "team", "enterprise")
+_VALID_PLANS = ("air",)
 _VALID_INTERVALS = ("month", "year")
+
+
+def _plan_display_name(plan: str) -> str:
+    return "Aletheore Community" if plan == "free" else "Aletheore AIR"
 
 
 def _subscribe_page(title: str, body: str) -> str:
@@ -1327,7 +1333,7 @@ def _subscribe_install_prompt_page(plan: str, next_path: str) -> str:
         "Install the GitHub App",
         f"""
         <h1>Install the Aletheore GitHub App</h1>
-        <p>Install the app on a GitHub organization to activate your {escape(plan.title())} plan.</p>
+        <p>Install the app on a GitHub organization to activate your {escape(_plan_display_name(plan))} plan.</p>
         <a class="btn btn-accent" href="{escape(install_url)}">Install the Aletheore GitHub App</a>
         <p><a href="/dashboard">Cancel</a></p>
         """,
@@ -1339,8 +1345,8 @@ def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]
         installation = installations[0]
         continue_attrs = f'data-installation-id="{installation["installation_id"]}"'
         body = f"""
-        <h1>Subscribe to {escape(plan.title())}</h1>
-        <p>{escape(installation["account_login"])} is currently on {escape(installation["plan"].title())}.</p>
+        <h1>Subscribe to {escape(_plan_display_name(plan))}</h1>
+        <p>{escape(installation["account_login"])} is currently on {escape(_plan_display_name(installation["plan"]))}.</p>
         <button class="btn btn-accent" id="continue-checkout" {continue_attrs}>Continue to checkout</button>
         <p><a href="/dashboard">Cancel</a></p>
         """
@@ -1351,13 +1357,13 @@ def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]
                 f'<input type="radio" name="installation_id" value="{installation["installation_id"]}"'
                 f'{" checked" if index == 0 else ""}> '
                 f'{escape(installation["account_login"])} '
-                f'(currently {escape(installation["plan"].title())})'
+                f'(currently {escape(_plan_display_name(installation["plan"]))})'
                 "</label>"
             )
             for index, installation in enumerate(installations)
         )
         body = f"""
-        <h1>Subscribe to {escape(plan.title())}</h1>
+        <h1>Subscribe to {escape(_plan_display_name(plan))}</h1>
         <p>Choose which installation this subscription applies to.</p>
         <div class="claim-options">{options}</div>
         <button class="btn btn-accent" id="continue-checkout">Continue to checkout</button>
@@ -1400,14 +1406,16 @@ async def subscribe_page(request: Request, plan: str = "", interval: str = ""):
     if session is None:
         return RedirectResponse(url=f"/auth/login?next={encoded_next}", status_code=307)
 
+    pool = request.app.state.db_pool
     try:
-        administered_ids = await _administered_installation_ids(session["github_access_token"])
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 401:
-            # The stored GitHub token is dead (revoked, expired) - the signed
-            # session cookie itself is still valid, but GitHub no longer honors
-            # the access token inside it. Clear it and send them through a
-            # fresh sign-in rather than a raw 500.
+        administered_ids = await _administered_installation_ids_for_session_or_401(pool, session)
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            # The stored GitHub token is dead - _administered_installation_ids_for_session_or_401
+            # already tried a transparent refresh-and-retry and, having no
+            # refresh_token or failing anyway, deleted the session server-side.
+            # Clear the now-stale cookie too and send them through a fresh
+            # sign-in rather than a raw 401.
             response = RedirectResponse(url=f"/auth/login?next={encoded_next}", status_code=307)
             response.delete_cookie(SESSION_COOKIE_NAME)
             return response
@@ -1416,7 +1424,6 @@ async def subscribe_page(request: Request, plan: str = "", interval: str = ""):
     if not administered_ids:
         return _no_store_html(_subscribe_install_prompt_page(plan, next_path))
 
-    pool = request.app.state.db_pool
     installations = await list_installations_for_ids(pool, list(administered_ids))
     price_id = resolve_price_id_for_plan(plan, interval)
     return _no_store_html(_subscribe_checkout_page(plan, price_id, installations))

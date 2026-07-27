@@ -687,7 +687,7 @@ def _sign_and_persist_audit_report(
 def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_number: int) -> None:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    plan = installation["plan"] if installation is not None else "indie"
+    plan = installation["plan"] if installation is not None else "air"
 
     if plan != "free" and not check_and_reserve_monthly_repo_scan_slot(
         settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
@@ -775,7 +775,7 @@ def run_managed_audit_api_job(
 ) -> str:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    plan = installation["plan"] if installation is not None else "indie"
+    plan = installation["plan"] if installation is not None else "air"
     with installation_spend_lock(settings.database_url, installation_id):
         extra_seats = get_extra_seats(settings.database_url, installation_id)
         monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
@@ -1550,7 +1550,7 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
         return  # nothing scanned for this repo yet - nothing to build from
 
     installation = get_installation_row(dsn, installation_id)
-    plan = installation["plan"] if installation is not None else "indie"
+    plan = installation["plan"] if installation is not None else "air"
     model_used = model_for_plan(plan)
 
     naming_adapter = _live_wiki_naming_adapter()

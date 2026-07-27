@@ -18,16 +18,16 @@ MODEL_RATES_PER_MILLION_USD = {
 
 STALE_PRICE_MAX_AGE_DAYS = 90
 
-EXTRA_SEAT_MONTHLY_COST_USD = 2.00
+EXTRA_SEAT_MONTHLY_COST_USD = 3.99
 
 # Base monthly price per plan (github-app/../website/pricing.html) - the hard
 # LLM spend cap is set as a fraction of this, not a flat dollar figure, so it
-# scales with what each tier actually pays rather than penalizing cheaper
-# tiers or under-capping expensive ones.
+# scales with what the tier actually pays rather than under- or over-capping
+# it. Single paid tier (Aletheore AIR) - priced monthly regardless of
+# whether a given customer actually pays monthly or annually, since the
+# spend cap is a monthly rolling figure either way.
 PLAN_MONTHLY_PRICE_USD = {
-    "indie": 29.00,
-    "team": 79.00,
-    "enterprise": 199.00,
+    "air": 29.99,
 }
 
 # Deliberately generous: this is a worst-case abuse/runaway-cost ceiling, not

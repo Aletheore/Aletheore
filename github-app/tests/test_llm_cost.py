@@ -24,9 +24,7 @@ def test_cost_for_usage_small_real_call():
 
 
 def test_base_cap_for_plan_is_half_of_tier_price():
-    assert base_cap_for_plan("indie") == pytest.approx(14.50)
-    assert base_cap_for_plan("team") == pytest.approx(39.50)
-    assert base_cap_for_plan("enterprise") == pytest.approx(99.50)
+    assert base_cap_for_plan("air") == pytest.approx(14.995)
 
 
 def test_base_cap_for_plan_free_or_unknown_plan_has_no_budget():
@@ -39,7 +37,7 @@ def test_monthly_cap_for_installation_base_only():
 
 
 def test_monthly_cap_for_installation_with_extra_seats():
-    assert monthly_cap_for_installation(7.00, 3) == pytest.approx(13.00)
+    assert monthly_cap_for_installation(7.00, 3) == pytest.approx(18.97)
 
 
 def test_stale_models_returns_empty_when_all_recently_verified():
