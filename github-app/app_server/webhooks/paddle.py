@@ -96,7 +96,13 @@ async def handle_paddle_webhook(request: Request) -> Response:
     if not signature or not verify_paddle_signature(raw_body, signature, settings.paddle_webhook_secret):
         return Response(status_code=401)
 
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except ValueError:
+        return Response(status_code=401)
+    if not isinstance(payload, dict):
+        return Response(status_code=401)
+
     await handle_paddle_webhook_event(payload, request.app.state.db_pool, settings.redis_url)
 
     return Response(status_code=200)

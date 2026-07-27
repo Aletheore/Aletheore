@@ -82,6 +82,30 @@ async def test_invalid_signature_rejected_with_no_write(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_malformed_json_body_with_valid_signature_returns_401_not_500(pool, monkeypatch):
+    # Before this fix, a validly-signed but non-JSON body reached
+    # `await request.json()` uncaught - json.JSONDecodeError propagated as
+    # an unhandled 500 instead of the 401 every other verification failure
+    # in this handler returns.
+    monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    app.state.db_pool = pool
+    body = b"not valid json at all"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/webhooks/paddle", content=body, headers={"paddle-signature": _sign(body)})
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_non_object_json_body_with_valid_signature_returns_401_not_500(pool, monkeypatch):
+    monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    app.state.db_pool = pool
+    body = b"[1, 2, 3]"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/webhooks/paddle", content=body, headers={"paddle-signature": _sign(body)})
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_missing_signature_header_rejected(pool):
     app.state.db_pool = pool
     body = json.dumps(_subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 102)).encode()
