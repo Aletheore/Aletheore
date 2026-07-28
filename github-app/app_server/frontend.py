@@ -226,6 +226,9 @@ table.findings tr:last-child td { border-bottom: none; }
 .health-target-group { margin-bottom: 1.2rem; }
 .health-target-group:last-child { margin-bottom: 0; }
 .health-target-group-label { font-size: 12px; font-weight: 500; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.health-history { grid-column: 1 / -1; background: var(--slate-50); border-radius: 8px; padding: 8px 10px; margin: -4px 0 4px; }
+.health-history-list { display: flex; flex-direction: column; gap: 5px; }
+.health-history-row { display: flex; align-items: center; gap: 10px; font-size: 11.5px; }
 
 .wiki-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; background: var(--accent-soft); border-radius: 10px; padding: 12px 15px; margin: 10px 0 14px; flex-wrap: wrap; }
 .wiki-banner-text { font-size: 12.5px; color: var(--accent-strong); line-height: 1.5; max-width: 46ch; }
@@ -907,6 +910,8 @@ async function loadResults() {{
     (groups[key] = groups[key] || []).push(e);
   }});
   let html = '';
+  let rowIndex = 0;
+  const rowMeta = {{}};
   Object.keys(groups).sort().forEach(function (label) {{
     const rows = groups[label];
     const up = rows.filter(function (e) {{ return e.reachable; }}).length;
@@ -914,14 +919,20 @@ async function loadResults() {{
       '<span class="chip ' + (up === rows.length ? 'success' : 'critical') + '">' + up + ' of ' + rows.length + ' up</span></div>' +
       '<div class="health-grid">';
     rows.forEach(function (e) {{
-      html += '<div class="health-row"><span class="health-status ' + (e.reachable ? 'up' : 'down') + '"></span>' +
+      const rowId = 'health-row-' + rowIndex;
+      rowMeta[rowId] = {{ target_id: e.target_id, method: e.method, path: e.path }};
+      html += '<div class="health-row" id="' + rowId + '" style="cursor:pointer;" onclick="toggleEndpointHistory(\\'' + rowId + '\\')">' +
+        '<span class="health-status ' + (e.reachable ? 'up' : 'down') + '"></span>' +
         '<span class="health-endpoint">' + escapeHtml(e.method) + ' ' + escapeHtml(e.path) + '</span>' +
         '<span class="health-latency"' + (e.reachable ? '' : ' style="color:var(--critical);"') + '>' + (e.reachable ? Math.round(e.latency_ms) + 'ms' : (e.status_code || 'unreachable')) + '</span>' +
-        '<span class="health-checked">' + relativeTime(e.checked_at) + '</span></div>';
+        '<span class="health-checked">' + relativeTime(e.checked_at) + '</span></div>' +
+        '<div class="health-history" id="' + rowId + '-history" style="display:none;"></div>';
+      rowIndex += 1;
     }});
     html += '</div></div>';
   }});
   body.innerHTML = html;
+  window._healthRowMeta = rowMeta;
 
   const staleEndpoints = data.stale_endpoints || [];
   const staleSection = document.getElementById('stale-endpoints-section');
@@ -941,6 +952,35 @@ async function loadResults() {{
     staleHtml += '</div>';
     staleBody.innerHTML = staleHtml;
   }}
+}}
+
+async function toggleEndpointHistory(rowId) {{
+  const panel = document.getElementById(rowId + '-history');
+  if (!panel) return;
+  if (panel.style.display !== 'none') {{ panel.style.display = 'none'; return; }}
+
+  const meta = (window._healthRowMeta || {{}})[rowId];
+  if (!meta) return;
+  panel.style.display = '';
+  panel.innerHTML = '<div class="empty-state">Loading&hellip;</div>';
+
+  const params = new URLSearchParams({{ method: meta.method, path: meta.path }});
+  if (meta.target_id !== null && meta.target_id !== undefined) {{ params.set('target_id', meta.target_id); }}
+  const res = await apiGet(base + '/health/history?' + params.toString());
+  if (!res || !res.ok) {{ panel.innerHTML = '<div class="empty-state">History unavailable.</div>'; return; }}
+  const data = await res.json();
+  const checks = data.checks || [];
+  if (checks.length === 0) {{ panel.innerHTML = '<div class="empty-state">No history yet.</div>'; return; }}
+
+  let html = '<div class="health-history-list">';
+  checks.forEach(function (c) {{
+    html += '<div class="health-history-row"><span class="health-status ' + (c.reachable ? 'up' : 'down') + '"></span>' +
+      '<span class="health-latency"' + (c.reachable ? '' : ' style="color:var(--critical);"') + '>' +
+      (c.reachable ? Math.round(c.latency_ms) + 'ms' : (c.status_code || 'unreachable')) + '</span>' +
+      '<span class="health-checked">' + relativeTime(c.checked_at) + '</span></div>';
+  }});
+  html += '</div>';
+  panel.innerHTML = html;
 }}
 
 loadTargets();

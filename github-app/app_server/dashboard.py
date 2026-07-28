@@ -15,8 +15,10 @@ from app_server.config import get_settings
 from app_server.db import (
     MAX_SCANNED_REPOS_PER_MONTH,
     count_monthly_scanned_repos,
-    get_installation,
+    get_endpoint_health_history,
     get_endpoint_health_summary_since,
+    get_endpoint_uptime_pct_since,
+    get_installation,
     get_latest_evidence,
     get_recent_endpoint_health,
     get_recent_history,
@@ -237,6 +239,39 @@ async def get_dashboard_health(org: str, repo: str, request: Request):
     }
 
 
+@dashboard_router.get("/app/{org}/{repo}/health/history")
+async def get_dashboard_health_history(
+    org: str,
+    repo: str,
+    request: Request,
+    method: str,
+    path: str,
+    target_id: int | None = None,
+    limit: int = 50,
+):
+    installation_id = await _require_dashboard_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    repo_full_name = f"{org}/{repo}"
+
+    rows = await get_endpoint_health_history(
+        pool, installation_id, repo_full_name, target_id, method, path, limit
+    )
+    return {
+        "repo_full_name": repo_full_name,
+        "method": method,
+        "path": path,
+        "checks": [
+            {
+                "reachable": row["reachable"],
+                "status_code": row["status_code"],
+                "latency_ms": float(row["latency_ms"]) if row["latency_ms"] is not None else None,
+                "checked_at": row["checked_at"].isoformat(),
+            }
+            for row in rows
+        ],
+    }
+
+
 @dashboard_router.get("/app/{org}/{repo}/wiki")
 async def get_dashboard_wiki(org: str, repo: str, request: Request):
     installation = await _require_admin_installation(request, org, repo)
@@ -304,6 +339,13 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
             headers={"Access-Control-Allow-Origin": "*"},
         )
 
+    # An aggregate 7-day uptime percentage, not raw history - this is a
+    # public, unauthenticated, CORS-open endpoint, so it gets a trend
+    # signal without handing out granular check-by-check timing data to
+    # anyone who asks (the authenticated dashboard endpoint has that).
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    uptime_by_endpoint = await get_endpoint_uptime_pct_since(request.app.state.db_pool, repo_full_name, since)
+
     return {
         "repo_full_name": repo_full_name,
         "endpoints": [
@@ -314,6 +356,7 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
                 "status_code": row["status_code"],
                 "latency_ms": float(row["latency_ms"]) if row["latency_ms"] is not None else None,
                 "checked_at": row["checked_at"].isoformat(),
+                "uptime_pct_7d": uptime_by_endpoint.get((row["endpoint_method"], row["endpoint_path"])),
             }
             for row in rows
         ],

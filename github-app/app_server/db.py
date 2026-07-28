@@ -473,6 +473,69 @@ async def get_recent_endpoint_health(
     return [dict(row) for row in rows]
 
 
+MAX_ENDPOINT_HEALTH_HISTORY_ROWS = 100
+
+
+async def get_endpoint_health_history(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    repo_full_name: str,
+    target_id: int | None,
+    endpoint_method: str,
+    endpoint_path: str,
+    limit: int = 50,
+) -> list[dict]:
+    # Every sweep persists a row per (target, endpoint) check, but until
+    # this every read path only ever surfaced the single latest one -
+    # a customer paying for "endpoint health monitoring" had no way to
+    # see a trend, only a live dot. target_id can legitimately be NULL
+    # (rows written before multi-target support existed), so this can't
+    # just be "= $3" - IS NOT DISTINCT FROM treats two NULLs as equal.
+    limit = min(max(limit, 1), MAX_ENDPOINT_HEALTH_HISTORY_ROWS)
+    rows = await pool.fetch(
+        """
+        SELECT reachable, status_code, latency_ms, checked_at
+        FROM endpoint_health
+        WHERE installation_id = $1 AND repo_full_name = $2
+          AND target_id IS NOT DISTINCT FROM $3
+          AND endpoint_method = $4 AND endpoint_path = $5
+        ORDER BY checked_at DESC, id DESC
+        LIMIT $6
+        """,
+        installation_id,
+        repo_full_name,
+        target_id,
+        endpoint_method,
+        endpoint_path,
+        limit,
+    )
+    return [dict(row) for row in rows]
+
+
+async def get_endpoint_uptime_pct_since(
+    pool: asyncpg.Pool,
+    repo_full_name: str,
+    since: datetime,
+) -> dict[tuple[str, str], float]:
+    # Backs the public status API's trend signal. Deliberately an
+    # aggregate percentage rather than the raw per-check history exposed
+    # on the authenticated dashboard endpoint - an unauthenticated,
+    # CORS-open route shouldn't hand out granular check-by-check timing
+    # data to anyone who asks.
+    rows = await pool.fetch(
+        """
+        SELECT endpoint_method, endpoint_path,
+               (count(*) FILTER (WHERE reachable))::float / count(*) AS uptime_pct
+        FROM endpoint_health
+        WHERE repo_full_name = $1 AND checked_at >= $2
+        GROUP BY endpoint_method, endpoint_path
+        """,
+        repo_full_name,
+        since,
+    )
+    return {(row["endpoint_method"], row["endpoint_path"]): row["uptime_pct"] for row in rows}
+
+
 async def get_endpoint_health_summary_since(
     pool: asyncpg.Pool,
     installation_id: int,

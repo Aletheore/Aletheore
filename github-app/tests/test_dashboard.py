@@ -484,6 +484,9 @@ async def test_public_health_returns_latest_per_endpoint(pool):
     assert endpoints[("GET", "/api/users")]["latency_ms"] == 88.0
     assert endpoints[("GET", "/api/orders")]["reachable"] is False
     assert endpoints[("GET", "/api/orders")]["status_code"] is None
+    # /api/users: 2 of 2 checks reachable; /api/orders: 0 of 1.
+    assert endpoints[("GET", "/api/users")]["uptime_pct_7d"] == 1.0
+    assert endpoints[("GET", "/api/orders")]["uptime_pct_7d"] == 0.0
     for endpoint in endpoints.values():
         assert set(endpoint.keys()) == {
             "method",
@@ -492,7 +495,34 @@ async def test_public_health_returns_latest_per_endpoint(pool):
             "status_code",
             "latency_ms",
             "checked_at",
+            "uptime_pct_7d",
         }
+
+
+@pytest.mark.asyncio
+async def test_public_health_uptime_pct_excludes_checks_older_than_7_days(pool):
+    await upsert_installation(pool, 507, "octocat")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path,
+                 reachable, status_code, latency_ms, checked_at)
+            VALUES
+                (507, 'octocat/hello-world', 'GET', '/api/users', false, 500, 90.5, now() - interval '10 days'),
+                (507, 'octocat/hello-world', 'GET', '/api/users', true, 200, 88.0, now())
+            """
+        )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/health/octocat/hello-world")
+
+    assert response.status_code == 200
+    endpoints = {(e["method"], e["path"]): e for e in response.json()["endpoints"]}
+    # Only the recent, reachable check falls inside the 7-day window.
+    assert endpoints[("GET", "/api/users")]["uptime_pct_7d"] == 1.0
 
 
 @pytest.mark.asyncio
@@ -558,6 +588,104 @@ async def test_dashboard_health_keeps_results_separate_per_target(pool, monkeypa
     by_label = {e["target_label"]: e for e in endpoints}
     assert by_label["Staging"]["reachable"] is True
     assert by_label["Production"]["reachable"] is False
+
+
+@pytest.mark.asyncio
+async def test_dashboard_health_history_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/app/octocat/hello-world/health/history", params={"method": "GET", "path": "/api/users"}
+        )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_dashboard_health_history_returns_checks_newest_first(pool, monkeypatch):
+    await upsert_installation(pool, 504, "octocat")
+    await insert_repo_history(
+        pool, 504, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    async with pool.acquire() as conn:
+        target_id = await conn.fetchval(
+            """
+            INSERT INTO health_check_targets (installation_id, repo_full_name, label, base_url)
+            VALUES (504, 'octocat/hello-world', 'Production', 'https://prod.example.com') RETURNING id
+            """
+        )
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path,
+                 reachable, status_code, latency_ms, checked_at, target_id)
+            VALUES
+                (504, 'octocat/hello-world', 'GET', '/api/users', true, 200, 80.0, now() - interval '2 minutes', $1),
+                (504, 'octocat/hello-world', 'GET', '/api/users', false, 500, NULL, now() - interval '1 minute', $1),
+                (504, 'octocat/hello-world', 'GET', '/api/users', true, 200, 95.0, now(), $1)
+            """,
+            target_id,
+        )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[504])
+    async with client:
+        response = await client.get(
+            "/app/octocat/hello-world/health/history",
+            params={"method": "GET", "path": "/api/users", "target_id": target_id},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    checks = body["checks"]
+    assert len(checks) == 3
+    # Newest first.
+    assert checks[0]["reachable"] is True
+    assert checks[0]["latency_ms"] == 95.0
+    assert checks[1]["reachable"] is False
+    assert checks[1]["status_code"] == 500
+    assert checks[2]["latency_ms"] == 80.0
+
+
+@pytest.mark.asyncio
+async def test_dashboard_health_history_respects_limit(pool, monkeypatch):
+    await upsert_installation(pool, 505, "octocat")
+    await insert_repo_history(
+        pool, 505, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    async with pool.acquire() as conn:
+        for i in range(5):
+            await conn.execute(
+                """
+                INSERT INTO endpoint_health
+                    (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable, checked_at)
+                VALUES (505, 'octocat/hello-world', 'GET', '/api/users', true, now() - ($1 || ' minutes')::interval)
+                """,
+                str(i),
+            )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[505])
+    async with client:
+        response = await client.get(
+            "/app/octocat/hello-world/health/history",
+            params={"method": "GET", "path": "/api/users", "limit": 2},
+        )
+
+    assert response.status_code == 200
+    assert len(response.json()["checks"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_dashboard_health_history_rejects_unadministered_installation(pool, monkeypatch):
+    await upsert_installation(pool, 506, "octocat")
+    await insert_repo_history(
+        pool, 506, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[])
+    async with client:
+        response = await client.get(
+            "/app/octocat/hello-world/health/history", params={"method": "GET", "path": "/api/users"}
+        )
+    assert response.status_code == 403
 
 
 @pytest.mark.asyncio
