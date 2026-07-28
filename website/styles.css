@@ -484,12 +484,19 @@ section h2 {
   padding-top: 34px;
 }
 
+.cta-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 14px;
+}
+
 .cta-note {
   max-width: 560px;
-  margin-top: 14px;
+  margin: 14px auto 0;
   color: var(--text-muted);
   font-size: 15px;
-  text-align: left;
+  text-align: center;
 }
 
 .workflow-grid {
