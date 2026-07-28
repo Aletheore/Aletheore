@@ -84,7 +84,10 @@ class AddMemberRequest(BaseModel):
 BRANCH_PROTECTION_DISCLOSURE = (
     "Aletheore reports a Check Run result on new secrets found - it does not and cannot "
     "unilaterally block a merge. To require it, mark \"Aletheore secrets check\" as a "
-    "required status check in this repository's branch protection settings."
+    "required status check in this repository's branch protection settings. Managed audits "
+    "(paid plans) also post an \"Aletheore Audit Certificate\" check with a cryptographically "
+    "signed (Ed25519), independently verifiable record of the audit - mark that as required "
+    "too to block merges lacking a valid, freshly-signed audit."
 )
 
 

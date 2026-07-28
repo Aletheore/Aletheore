@@ -741,6 +741,13 @@ def test_managed_audit_pr_job_persists_and_signs_the_report(monkeypatch, tmp_pat
             sig=sig,
         ),
     )
+    check_runs = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="Aletheore secrets check": check_runs.append(
+            {"repo": repo, "sha": sha, "conclusion": conclusion, "summary": summary, "name": name}
+        ),
+    )
 
     from scan_worker.jobs import run_managed_audit_pr_job
 
@@ -751,6 +758,67 @@ def test_managed_audit_pr_job_persists_and_signs_the_report(monkeypatch, tmp_pat
     assert stored["text"] == "the audit findings"
     assert len(stored["token"]) == 64
     assert stored["token"] in posted["body"]
+
+    assert len(check_runs) == 1
+    assert check_runs[0]["name"] == "Aletheore Audit Certificate"
+    assert check_runs[0]["repo"] == "octocat/hello-world"
+    assert check_runs[0]["sha"] == head_sha
+    assert check_runs[0]["conclusion"] == "success"
+    assert stored["token"] in check_runs[0]["summary"]
+
+
+def test_managed_audit_pr_job_skips_check_run_when_signing_fails(monkeypatch, tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=work, check=True)
+    (work / "app.py").write_text("print('hello')\n")
+    subprocess.run(["git", "add", "."], cwd=work, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "commit"], cwd=work, check=True)
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=work,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(work), str(bare)], check=True)
+    subprocess.run(
+        ["git", "--git-dir", str(bare), "update-ref", "refs/pull/42/head", head_sha],
+        check=True,
+    )
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: str(bare))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda *a, **k: "the audit findings")
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_managed_audit", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+
+    def _raise(*a, **k):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr("scan_worker.jobs.insert_audit_report", _raise)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    check_runs = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run", lambda *a, **k: check_runs.append(True)
+    )
+
+    from scan_worker.jobs import run_managed_audit_pr_job
+
+    run_managed_audit_pr_job(1, "octocat/hello-world", 42)
+
+    # No certificate to point to if signing itself failed.
+    assert check_runs == []
 
 
 def test_managed_audit_pr_job_still_posts_report_when_signing_fails(monkeypatch, tmp_path):
