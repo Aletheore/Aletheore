@@ -3,6 +3,12 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.6.1 — 2026-07-28
+
+- Fixed `aletheore_search_codebase`/`aletheore_answer` telling an MCP-connected agent to run
+  `aletheore index <path>` (a shell command it can't execute) when the semantic index hasn't been
+  built yet, instead of pointing it at the `aletheore_index` tool it actually has.
+
 ## 0.6.0 — 2026-07-28
 
 - Gave the CLI its own on-disk incremental-scan cache (content-hash keyed) plus on-disk
