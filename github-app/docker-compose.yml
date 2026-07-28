@@ -111,6 +111,10 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      - GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem
+    volumes:
+      - ./app-private-key.pem:/run/secrets/github-app-key.pem:ro
     depends_on:
       redis:
         condition: service_started
