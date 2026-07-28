@@ -1,4 +1,4 @@
-from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
+from app_server.rate_limit import cooldown_seconds_for_loc, is_rate_limited, total_loc_from_evidence
 
 
 def test_cooldown_seconds_for_loc_small_repo_is_three_hours():
@@ -36,3 +36,23 @@ def test_total_loc_from_evidence_sums_all_languages():
 def test_total_loc_from_evidence_handles_missing_sections():
     assert total_loc_from_evidence({}) == 0
     assert total_loc_from_evidence({"repository": {}}) == 0
+
+
+def test_is_rate_limited_allows_calls_under_the_limit(redis_conn):
+    key = "test:ratelimit:under"
+    for _ in range(5):
+        assert is_rate_limited(redis_conn, key, limit=5, window_seconds=60) is False
+
+
+def test_is_rate_limited_blocks_calls_over_the_limit(redis_conn):
+    key = "test:ratelimit:over"
+    for _ in range(3):
+        assert is_rate_limited(redis_conn, key, limit=3, window_seconds=60) is False
+    assert is_rate_limited(redis_conn, key, limit=3, window_seconds=60) is True
+
+
+def test_is_rate_limited_keys_are_independent(redis_conn):
+    for _ in range(3):
+        is_rate_limited(redis_conn, "test:ratelimit:a", limit=3, window_seconds=60)
+    # A different key starts its own fresh window.
+    assert is_rate_limited(redis_conn, "test:ratelimit:b", limit=3, window_seconds=60) is False

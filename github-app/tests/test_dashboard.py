@@ -526,6 +526,98 @@ async def test_public_health_uptime_pct_excludes_checks_older_than_7_days(pool):
 
 
 @pytest.mark.asyncio
+async def test_public_health_rate_limits_after_threshold(pool, monkeypatch, redis_conn):
+    from app_server import dashboard
+
+    await upsert_installation(pool, 508, "octocat")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+            VALUES (508, 'octocat/hello-world', 'GET', '/api/users', true)
+            """
+        )
+
+    monkeypatch.setattr(dashboard, "PUBLIC_HEALTH_RATE_LIMIT", 2)
+    monkeypatch.setattr("redis.Redis.from_url", lambda url: redis_conn)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    headers = {"x-forwarded-for": "203.0.113.50"}
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.get("/v1/health/octocat/hello-world", headers=headers)
+        second = await client.get("/v1/health/octocat/hello-world", headers=headers)
+        third = await client.get("/v1/health/octocat/hello-world", headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert third.status_code == 429
+    assert third.headers["access-control-allow-origin"] == "*"
+    assert "retry-after" in third.headers
+
+
+@pytest.mark.asyncio
+async def test_public_health_rate_limit_is_keyed_per_ip(pool, monkeypatch, redis_conn):
+    from app_server import dashboard
+
+    await upsert_installation(pool, 509, "octocat")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+            VALUES (509, 'octocat/hello-world', 'GET', '/api/users', true)
+            """
+        )
+
+    monkeypatch.setattr(dashboard, "PUBLIC_HEALTH_RATE_LIMIT", 1)
+    monkeypatch.setattr("redis.Redis.from_url", lambda url: redis_conn)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.get(
+            "/v1/health/octocat/hello-world", headers={"x-forwarded-for": "1.1.1.1"}
+        )
+        second_same_ip = await client.get(
+            "/v1/health/octocat/hello-world", headers={"x-forwarded-for": "1.1.1.1"}
+        )
+        first_other_ip = await client.get(
+            "/v1/health/octocat/hello-world", headers={"x-forwarded-for": "2.2.2.2"}
+        )
+
+    assert first.status_code == 200
+    assert second_same_ip.status_code == 429
+    assert first_other_ip.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_public_health_fails_open_when_redis_is_unreachable(pool, monkeypatch):
+    await upsert_installation(pool, 510, "octocat")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+            VALUES (510, 'octocat/hello-world', 'GET', '/api/users', true)
+            """
+        )
+
+    def _boom(url):
+        raise ConnectionError("redis unreachable")
+
+    monkeypatch.setattr("redis.Redis.from_url", _boom)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/health/octocat/hello-world")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_public_health_404s_with_no_data(pool):
     app.state.db_pool = pool
     transport = ASGITransport(app=app)

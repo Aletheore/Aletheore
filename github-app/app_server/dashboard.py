@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -318,9 +319,49 @@ async def get_dashboard_wiki_subsystem(org: str, repo: str, subsystem_id: str, r
     return {"repo_full_name": repo_full_name, "subsystem": subsystem}
 
 
+PUBLIC_HEALTH_RATE_LIMIT = 60
+PUBLIC_HEALTH_RATE_LIMIT_WINDOW_SECONDS = 60
+
+
 @dashboard_router.get("/v1/health/{org}/{repo}")
 async def get_public_health(org: str, repo: str, request: Request, response: Response):
     response.headers["Access-Control-Allow-Origin"] = "*"
+
+    from redis import Redis
+
+    from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for
+    from app_server.rate_limit import is_rate_limited
+
+    client_ip = client_ip_from_forwarded_for(
+        request.headers.get("x-forwarded-for"),
+        request.client.host if request.client else "",
+    )
+    try:
+        rate_limited = is_rate_limited(
+            Redis.from_url(get_settings().redis_url),
+            f"ratelimit:public_health:{client_ip}",
+            PUBLIC_HEALTH_RATE_LIMIT,
+            PUBLIC_HEALTH_RATE_LIMIT_WINDOW_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # A Redis outage should degrade this endpoint's abuse protection,
+        # not take down the public status API itself - fail open, same as
+        # the Paddle IP allowlist does when it can't reach Paddle's /ips.
+        logging.getLogger("app_server.dashboard").warning(
+            "public health rate limit check failed (%s); allowing request", exc
+        )
+        rate_limited = False
+
+    if rate_limited:
+        raise HTTPException(
+            status_code=429,
+            detail="too many requests",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Retry-After": str(PUBLIC_HEALTH_RATE_LIMIT_WINDOW_SECONDS),
+            },
+        )
+
     repo_full_name = f"{org}/{repo}"
     rows = await request.app.state.db_pool.fetch(
         """
