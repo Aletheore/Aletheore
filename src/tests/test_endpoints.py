@@ -275,6 +275,32 @@ def test_extract_express_ignores_unrelated_method_calls():
     assert entries == []
 
 
+def test_extract_express_ignores_non_path_get_calls():
+    # Regression test: a bare .get("key")/.set("key") on a Map-like object
+    # (e.g. an animation library's internal state, or any generic getter)
+    # must not be misidentified as an Express route just because the method
+    # name matches and the first argument is a string literal. Real
+    # production false positive: a vendored Motion library's
+    # e.get("stroke-dasharray") / e.get("transformOrigin") state getters.
+    root, source = parse_js(
+        'e.get("stroke-dasharray");\n'
+        'e.get("transformOrigin");\n'
+        'e.get("transform");\n'
+    )
+
+    entries = _extract_express_routes(root, source, "vendor/motion.js")
+
+    assert entries == []
+
+
+def test_extract_express_accepts_wildcard_path():
+    root, source = parse_js('app.get("*", catchAll);\n')
+
+    entries = _extract_express_routes(root, source, "server.js")
+
+    assert entries[0]["path"] == "*"
+
+
 def test_map_api_endpoints_combines_all_frameworks(tmp_path):
     (tmp_path / "app").mkdir()
     (tmp_path / "app" / "routes.py").write_text(

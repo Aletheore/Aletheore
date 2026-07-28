@@ -127,6 +127,13 @@ async def verify_audit_report(verification_token: str, request: Request):
         "content_hash": report["content_hash"],
         "signed_at": report["created_at"].isoformat(),
         "verified": verified,
+        # Included so this is an actual verifiable certificate, not just an
+        # "our database says so" boolean - anyone can independently confirm
+        # signature over content_hash using this public key, without
+        # trusting this endpoint's own "verified" field.
+        "algorithm": "Ed25519",
+        "signature": report["signature"],
+        "public_key": public_key_hex,
     }
 
 

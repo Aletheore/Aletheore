@@ -7,7 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from app_server.db import create_api_token, set_installation_plan, upsert_installation
 from app_server.evidence_limits import MAX_EVIDENCE_BYTES
 from app_server.main import app
-from app_server.audit_signing import content_hash, sign_report
+from app_server.audit_signing import content_hash, public_key_hex_from_private, sign_report, verify_report
 from aletheore.toon_encoding import to_toon
 
 
@@ -42,6 +42,14 @@ async def test_verify_audit_report_returns_verified_true_for_untampered_report(p
     assert body["repo_full_name"] == "octocat/hello-world"
     assert body["content_hash"] == content_hash(report_text)
     assert "report_text" not in body
+    assert body["algorithm"] == "Ed25519"
+    assert body["signature"] == signature
+    assert body["public_key"] == public_key_hex_from_private("11" * 32)
+    # The point of returning signature + public_key is that a caller who
+    # already has the report text (e.g. from the PR comment it was posted
+    # alongside) can verify authenticity themselves, without trusting this
+    # endpoint's own "verified" boolean.
+    assert verify_report(report_text, body["signature"], body["public_key"]) is True
 
 
 @pytest.mark.asyncio

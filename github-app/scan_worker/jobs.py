@@ -796,6 +796,16 @@ def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
     subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
 
 
+def _git_rev_parse_head(repo_dir: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo_dir, check=True, capture_output=True, text=True
+        )
+        return result.stdout.strip()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _sign_and_persist_audit_report(
     settings,
     installation_id: int,
@@ -822,6 +832,39 @@ def _sign_and_persist_audit_report(
             type(exc).__name__,
         )
         return None
+
+
+def _maybe_create_audit_certificate_check_run(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    head_sha: str | None,
+    verify_url: str,
+) -> None:
+    # Best-effort, like every other Check Run this codebase posts - a
+    # customer's actual audit result must never be blocked on GitHub's
+    # check-runs API being reachable. head_sha can be None if `git
+    # rev-parse` itself failed; there's nothing to attach a check run to
+    # in that case.
+    if head_sha is None:
+        return
+    try:
+        create_check_run(
+            client,
+            token,
+            repo_full_name,
+            head_sha,
+            "success",
+            "A cryptographically signed (Ed25519) record of this audit is available for "
+            f"independent verification: {verify_url}\n\n"
+            "Require this check in branch protection to block merges without a valid, "
+            "freshly-signed Aletheore audit certificate.",
+            name="Aletheore Audit Certificate",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "audit certificate check run failed for repo=%s (%s)", repo_full_name, exc,
+        )
 
 
 @log_job
@@ -888,6 +931,13 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                         body = (
                             f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n"
                             f"{report_text}\n\n[Verify this report]({verify_url})"
+                        )
+                        _maybe_create_audit_certificate_check_run(
+                            client,
+                            token,
+                            repo_full_name,
+                            _git_rev_parse_head(repo_dir),
+                            verify_url,
                         )
                     else:
                         body = f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n{report_text}"
