@@ -3,6 +3,35 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.6.0 — 2026-07-28
+
+- Gave the CLI its own on-disk incremental-scan cache (content-hash keyed) plus on-disk
+  license/vulnerability registry-lookup caches, so a repeat `scan`/`audit` on an unchanged repo
+  skips re-parsing and re-querying work it already did.
+- Hardened the module-graph builder against relative-import path escapes in Ruby, PHP, C/C++,
+  Java, and C# (a coincidentally-matching package/namespace and directory name could previously
+  crash the scan with an unhandled `ValueError`), fixed Java/C# files being parsed twice per
+  scan, and made repo walks skip symlinked files and directories instead of following them.
+- Verified LLM-claimed citation lines against real file content instead of just file existence,
+  closing a grounding gap in audit output.
+- Regenerated MCP tool docs from the actual server registry, gave each dynamic MCP query tool
+  its own description, routed the MCP managed-audit tool through the shared credential store,
+  added an `aletheore_index` tool to build the semantic search index on demand, and cached
+  parsed evidence in-process so repeated MCP queries against the same evidence file don't
+  re-read and re-parse it.
+- Added a durable, incrementally-updated code graph (files/symbols/edges/endpoints) backing the
+  hosted service, with a persistent-checkout + skip-unchanged-files fast path, anonymous CLI scan
+  usage telemetry, and Sentry-compatible runtime event ingestion for zero-hop debugging.
+- Added a DeepSeek adapter, parallelized dependency license checks instead of running them
+  serially, and fixed the GitHub Action workflow's git worktree/submodule exclusion and
+  first-commit-lookup performance.
+- Hardened the hosted GitHub App: automatic GitHub access-token refresh for long-lived sessions,
+  fixed several dashboard issues (401 reload loop, missing security findings, endpoint display,
+  AIRview/Live Wiki sections, Mermaid graph rendering), and added a monthly scanned-repos cap.
+- Gave the CLI real spinner animation (in place of a static arrow) on long-running phases and
+  wrapped scan/audit/managed-audit completion messages in a bordered panel, matching the
+  existing banner/sponsor panel style.
+
 ## 0.5.0 — 2026-07-23
 
 - Launched the redesigned Aletheore marketing website with clearer positioning, pricing,
