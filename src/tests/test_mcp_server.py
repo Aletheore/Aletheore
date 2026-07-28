@@ -8,6 +8,7 @@ import toon
 from mcp.server.fastmcp.exceptions import ToolError
 
 from aletheore.mcp_server import build_server
+from aletheore.search_index import IndexNotFoundError
 
 
 def tool_result_body(result):
@@ -256,6 +257,43 @@ async def test_aletheore_search_codebase_returns_toon_results(tmp_path):
         )
 
     assert tool_result_body(result)["result"] == [{"module_path": "a.py", "symbol_name": "foo"}]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_search_codebase_returns_friendly_error_when_index_not_built(tmp_path):
+    # Before this fix, this raised IndexNotFoundError straight through FastMCP's
+    # own exception wrapping, which reused the CLI's own message ("run
+    # 'aletheore index <path>' first") - correct advice for a human at a
+    # terminal, useless for an agent that only has MCP tools and can't run
+    # shell commands. It should be told to call aletheore_index instead.
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    with patch(
+        "aletheore.mcp_server.search_index",
+        side_effect=IndexNotFoundError("no index found"),
+    ):
+        result = await server.call_tool("aletheore_search_codebase", {"query": "where is foo"})
+
+    assert tool_result_body(result)["result"] == {
+        "error": "no semantic index built yet for this repository - call the aletheore_index tool first"
+    }
+
+
+@pytest.mark.asyncio
+async def test_aletheore_answer_returns_friendly_error_when_index_not_built(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, answer_adapter=MagicMock())
+
+    with patch(
+        "aletheore.mcp_server.answer_question",
+        side_effect=IndexNotFoundError("no index found"),
+    ):
+        result = await server.call_tool("aletheore_answer", {"question": "what does foo do"})
+
+    assert tool_result_body(result)["result"] == {
+        "error": "no semantic index built yet for this repository - call the aletheore_index tool first"
+    }
 
 
 @pytest.mark.asyncio
