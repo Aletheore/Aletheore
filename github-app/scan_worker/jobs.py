@@ -629,8 +629,11 @@ def run_pr_scan_job(
         # comment we already posted with a generic failure message.
         try:
             _maybe_send_slack_alert(installation_id, repo_full_name, pr_number, diff)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("scan_worker.jobs").warning(
+                "alert webhook send failed for installation=%s repo=%s (%s)",
+                installation_id, repo_full_name, exc,
+            )
         try:
             _maybe_create_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
         except Exception:  # noqa: BLE001
@@ -642,8 +645,14 @@ def run_pr_scan_job(
         if changed_files is not None:
             try:
                 _maybe_update_live_wiki(installation_id, repo_full_name, new, changed_files, head_sha)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                # _maybe_update_live_wiki already records failures to
+                # wiki_build_status itself; this only catches something
+                # failing before that handling could run (e.g. get_settings).
+                logging.getLogger("scan_worker.jobs").warning(
+                    "live wiki incremental update failed for installation=%s repo=%s (%s)",
+                    installation_id, repo_full_name, exc,
+                )
             try:
                 _maybe_create_regression_risk_check_run(
                     client,
@@ -1741,22 +1750,36 @@ def _maybe_update_live_wiki(
         return
 
     dsn = settings.database_url
-    naming_adapter = _live_wiki_naming_adapter()
-    writing_adapter = _live_wiki_update_writing_adapter()
-    fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, head_sha)
-    records = live_wiki.generate_subsystems(
-        evidence,
-        naming_adapter,
-        writing_adapter,
-        cluster_ids=cluster_ids,
-        cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
-        cache_write=lambda packet, output, used: store_result(
-            dsn, installation_id, repo_full_name, packet, output, used
-        ),
-        model_used=live_wiki.UPDATE_MODEL,
-        fetch_line_count=fetch_line_count,
-    )
-    _store_wiki_generation(
-        settings.database_url, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
-        fetch_line_count=fetch_line_count,
-    )
+    try:
+        naming_adapter = _live_wiki_naming_adapter()
+        writing_adapter = _live_wiki_update_writing_adapter()
+        fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, head_sha)
+        records = live_wiki.generate_subsystems(
+            evidence,
+            naming_adapter,
+            writing_adapter,
+            cluster_ids=cluster_ids,
+            cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
+            cache_write=lambda packet, output, used: store_result(
+                dsn, installation_id, repo_full_name, packet, output, used
+            ),
+            model_used=live_wiki.UPDATE_MODEL,
+            fetch_line_count=fetch_line_count,
+        )
+        _store_wiki_generation(
+            dsn, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
+            fetch_line_count=fetch_line_count,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Without this, a failed incremental update just leaves stale
+        # content in place with zero signal - the customer (and
+        # wiki_build_status) has no way to tell "stale" apart from
+        # "current", especially once a first full build has already
+        # succeeded and populated an overview.
+        logging.getLogger("scan_worker.jobs").warning(
+            "live wiki incremental update failed for installation=%s repo=%s (%s)",
+            installation_id, repo_full_name, exc,
+        )
+        set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+        return
+    set_wiki_build_status(dsn, installation_id, repo_full_name, "ready")

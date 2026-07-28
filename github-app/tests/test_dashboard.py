@@ -829,6 +829,35 @@ async def test_dashboard_wiki_surfaces_failed_build_status(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_wiki_surfaces_failed_status_alongside_existing_overview(pool, monkeypatch):
+    # A later incremental update can fail after the first full build already
+    # succeeded - the API must keep reporting that failure (not silently
+    # drop it just because an overview now exists), so the dashboard can
+    # tell the customer their AIRview content may be stale.
+    await upsert_installation(pool, 606, "octocat")
+    await set_installation_plan(pool, 606, "indie")
+    await insert_repo_history(
+        pool,
+        606,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {"repository": {"modules": []}},
+    )
+    await _seed_wiki_overview(pool, 606, "octocat/hello-world")
+    await _seed_wiki_build_status(pool, 606, "octocat/hello-world", "failed", "LLM API unavailable")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[606])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/wiki")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overview"] is not None
+    assert body["build_status"] == "failed"
+    assert body["build_error"] == "LLM API unavailable"
+
+
+@pytest.mark.asyncio
 async def test_dashboard_wiki_subsystem_requires_login(pool):
     app.state.db_pool = pool
     transport = ASGITransport(app=app)

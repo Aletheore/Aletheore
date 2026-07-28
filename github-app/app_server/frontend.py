@@ -1123,7 +1123,18 @@ async function loadWiki() {{
     }}
     return;
   }}
-  let html = '<div class="wiki-banner"><div class="wiki-banner-text"><b>Built once by a frontier model, kept current by a fast one.</b> Every diagram edge below is a real import in this repo, never inferred.</div></div>' +
+  // A failed status here means a later incremental update broke, not the
+  // first build (which is what the branch above handles) - without this,
+  // the customer just sees increasingly stale content with zero signal
+  // that anything is wrong.
+  let staleBanner = '';
+  if (data.build_status === 'failed') {{
+    staleBanner = '<div class="empty-state" style="color:var(--critical);margin-bottom:12px;">' +
+      'The latest AIRview update failed' + (data.build_error ? ': ' + escapeHtml(data.build_error) : '.') +
+      ' Showing the last successful build below - it may be stale.</div>';
+  }}
+  let html = staleBanner +
+    '<div class="wiki-banner"><div class="wiki-banner-text"><b>Built once by a frontier model, kept current by a fast one.</b> Every diagram edge below is a real import in this repo, never inferred.</div></div>' +
     '<div class="diagram-wrap"><div class="mermaid" id="overview-diagram"></div></div>' +
     '<div class="subsystem-grid" id="subsystem-grid"></div>';
   body.innerHTML = html;
