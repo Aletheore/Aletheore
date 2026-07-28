@@ -226,6 +226,18 @@ def _express_handler_label(node: Node | None, source: bytes) -> str:
     return "<inline handler>"
 
 
+def _looks_like_express_path(path: str) -> bool:
+    # `.get(...)`/`.post(...)`/`.use(...)` are extremely common method names
+    # on plain objects, Maps, and third-party libraries that have nothing to
+    # do with Express (e.g. a Motion/animation library's internal state
+    # getters: e.get("stroke-dasharray"), e.get("transformOrigin")). Without
+    # this, any such call with a string literal first argument gets
+    # misidentified as a registered route. A real Express path always
+    # starts with "/" (or is the "*" wildcard) - this cheaply rejects the
+    # overwhelming majority of false positives with no risk to real routes.
+    return path == "*" or path.startswith("/")
+
+
 def _extract_express_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
@@ -242,37 +254,38 @@ def _extract_express_routes(root: Node, source: bytes, rel_path: str) -> list[di
                     named = args.named_children
                     if named and named[0].type == "string":
                         path = _js_string_literal_text(named[0], source)
-                        line = n.start_point[0] + 1
-                        handler_node = named[1] if len(named) > 1 else None
+                        if _looks_like_express_path(path):
+                            line = n.start_point[0] + 1
+                            handler_node = named[1] if len(named) > 1 else None
 
-                        if method_name in _EXPRESS_ROUTE_METHODS:
-                            entries.append(
-                                {
-                                    "method": (
-                                        "ANY" if method_name == "all" else method_name.upper()
-                                    ),
-                                    "path": path,
-                                    "framework": "express",
-                                    "file": rel_path,
-                                    "line": line,
-                                    "handler": _express_handler_label(handler_node, source),
-                                    "unresolved": False,
-                                    "note": None,
-                                }
-                            )
-                        elif method_name == "use":
-                            entries.append(
-                                {
-                                    "method": None,
-                                    "path": path,
-                                    "framework": "express",
-                                    "file": rel_path,
-                                    "line": line,
-                                    "handler": "app.use(...)",
-                                    "unresolved": True,
-                                    "note": None,
-                                }
-                            )
+                            if method_name in _EXPRESS_ROUTE_METHODS:
+                                entries.append(
+                                    {
+                                        "method": (
+                                            "ANY" if method_name == "all" else method_name.upper()
+                                        ),
+                                        "path": path,
+                                        "framework": "express",
+                                        "file": rel_path,
+                                        "line": line,
+                                        "handler": _express_handler_label(handler_node, source),
+                                        "unresolved": False,
+                                        "note": None,
+                                    }
+                                )
+                            elif method_name == "use":
+                                entries.append(
+                                    {
+                                        "method": None,
+                                        "path": path,
+                                        "framework": "express",
+                                        "file": rel_path,
+                                        "line": line,
+                                        "handler": "app.use(...)",
+                                        "unresolved": True,
+                                        "note": None,
+                                    }
+                                )
         for child in n.children:
             walk(child)
 
