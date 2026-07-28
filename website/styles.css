@@ -484,6 +484,14 @@ section h2 {
   padding-top: 34px;
 }
 
+.cta-note {
+  max-width: 560px;
+  margin-top: 14px;
+  color: var(--text-muted);
+  font-size: 15px;
+  text-align: left;
+}
+
 .workflow-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
