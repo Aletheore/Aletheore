@@ -5,10 +5,10 @@ from scripts.llm_judge import build_judge_prompt, parse_judge_response, call_jud
 
 def test_build_judge_prompt_includes_ground_truth_and_findings():
     ground_truth = {"category": "injected_bug", "expected_file": "x.py", "expected_line": 5}
-    anonymized_findings = {"Tool A": [{"file": "x.py", "line": 5, "message": "bug here"}]}
-    prompt = build_judge_prompt(ground_truth, anonymized_findings)
+    findings_by_tool = {"aletheore": [{"file": "x.py", "line": 5, "message": "bug here"}]}
+    prompt = build_judge_prompt(ground_truth, findings_by_tool)
     assert "injected_bug" in prompt
-    assert "Tool A" in prompt
+    assert "aletheore" in prompt
     assert "bug here" in prompt
     assert "recall" in prompt
 

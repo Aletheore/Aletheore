@@ -100,6 +100,12 @@ export OPENAI_API_BASE="https://api.deepseek.com/v1"
 
 Refer to PR-Agent's official documentation if `--config.model` needs a different key format for your installed version.
 
+PR-Agent also needs its own GitHub token, separate from `gh`'s: without it, the CLI fails with `GitHub token is required when using user deployment`. Set it via PR-Agent's own (dynaconf) config key, `github.user_token`:
+
+```bash
+export GITHUB__USER_TOKEN="$(gh auth token)"
+```
+
 ## Step 3: Run the Case Pipeline
 
 For each case, run `scripts/run_case.py`. This orchestrates:
@@ -319,10 +325,16 @@ The benchmark includes a second, independent scoring pass by an LLM judge to mea
    case_id = "001-flask-cli-key-quote"
    ground_truth = yaml.safe_load((Path("benchmarks/pr-review-benchmark/cases") / case_id / "ground_truth.yaml").read_text())
    
-   raw_dir = Path("benchmarks/pr-review-benchmark/results/raw") / case_id
+   # Use results/grounding/ (normalized findings), not results/raw/ (raw tool
+   # API responses -- full GitHub comment objects with avatar URLs, HTML diff
+   # hunks, etc.). Passing raw/ directly bloats the judge prompt by ~80x with
+   # no benefit (confirmed via a live dry run: 233KB vs 2.9KB for one case)
+   # and dilutes the judge's attention with irrelevant metadata.
+   grounding_dir = Path("benchmarks/pr-review-benchmark/results/grounding") / case_id
    findings_by_tool = {}
-   for tool_file in sorted(raw_dir.glob("*.json")):
-       findings_by_tool[tool_file.stem] = json.loads(tool_file.read_text())
+   for tool_file in sorted(grounding_dir.glob("*.json")):
+       data = json.loads(tool_file.read_text())
+       findings_by_tool[tool_file.stem] = data["verified"] + data["unverified"]
    
    prompt = build_judge_prompt(ground_truth, findings_by_tool)
    ```

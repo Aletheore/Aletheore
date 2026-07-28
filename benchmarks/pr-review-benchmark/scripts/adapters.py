@@ -13,6 +13,7 @@ made it unusable for a fair comparison); the remaining lineup is a named
 3-way comparison: Aletheore vs. Qodo/PR-Agent vs. DeepSource.
 """
 import subprocess
+import sys
 
 ALETHEORE_BOT_LOGIN = "aletheore[bot]"
 DEEPSOURCE_BOT_LOGIN = "deepsource-io[bot]"
@@ -32,10 +33,10 @@ def pr_agent_adapter(checkout_dir, case, fetch_review, runner=subprocess.run):
     pr_url = case["repo"]["pr_url"]
     runner(
         [
-            "python", "-m", "pr_agent.cli",
+            sys.executable, "-m", "pr_agent.cli",
             "--pr_url", pr_url,
-            "--config.model=deepseek/deepseek-v4-flash",
             "review",
+            "--config.model=deepseek/deepseek-v4-flash",
         ],
         capture_output=True, text=True, check=True,
     )

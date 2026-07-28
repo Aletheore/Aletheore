@@ -1,3 +1,5 @@
+import sys
+
 from scripts.adapters import aletheore_adapter, pr_agent_adapter, deepsource_adapter
 
 
@@ -56,10 +58,10 @@ def test_pr_agent_adapter_invokes_cli_with_deepseek_flash_model_and_fetches_revi
     result = pr_agent_adapter(tmp_path, case, runner=fake_runner, fetch_review=fake_fetch_review)
 
     assert calls == [[
-        "python", "-m", "pr_agent.cli",
+        sys.executable, "-m", "pr_agent.cli",
         "--pr_url", "https://github.com/example/repo/pull/1",
-        "--config.model=deepseek/deepseek-v4-flash",
         "review",
+        "--config.model=deepseek/deepseek-v4-flash",
     ]]
     assert captured["pr_url"] == "https://github.com/example/repo/pull/1"
     assert result == {"comment_body": "## PR Reviewer Guide", "changed_files": ["src/flask/cli.py"]}
