@@ -731,6 +731,61 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
         shutil.rmtree(job_dir, ignore_errors=True)
 
 
+@log_job
+def run_push_scan_job(
+    installation_id: int, repo_full_name: str, head_sha: str, changed_files: list[str]
+) -> None:
+    """Re-scans a repo's default branch after a direct push or a PR merge,
+    and reconciles AIRview against that scan.
+
+    Before this job existed, AIRview only ever updated off pull_request
+    events using the PR's *head* SHA - proposed, possibly-unmerged code -
+    via _maybe_update_live_wiki inside run_pr_scan_job. Nothing ever
+    re-scanned the actual default branch after the fact, so a merge could
+    leave the wiki describing the PR's pre-merge state indefinitely, and a
+    PR closed without merging left the wiki describing abandoned branch
+    content forever. Routing every push to main through the same
+    incremental update path used for PRs means merges (and direct pushes)
+    become the recurring correction against real merged code.
+    """
+    settings = get_settings()
+
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is not None and installation["plan"] != "free":
+        if not check_and_reserve_monthly_repo_scan_slot(
+            settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
+        ):
+            return
+
+    job_dir = _job_temp_dir()
+    try:
+        app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+        token = _token_sync(installation_id, app_jwt)
+        clone_url = _clone_url(repo_full_name, token)
+        repo_dir = _prepare_head_checkout(clone_url, head_sha, installation_id, repo_full_name, job_dir / "repo")
+
+        evidence_path = _run_scan(repo_dir)
+        evidence = json.loads(evidence_path.read_text())
+        evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
+        _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
+        _insert_history(installation_id, repo_full_name, evidence)
+
+        if installation is not None and installation["plan"] != "free":
+            try:
+                _maybe_update_live_wiki(installation_id, repo_full_name, evidence, changed_files, head_sha)
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("scan_worker.jobs").warning(
+                    "live wiki reconciliation after push failed for installation=%s repo=%s (%s)",
+                    installation_id, repo_full_name, exc,
+                )
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "push scan job failed for installation=%s repo=%s (%s)", installation_id, repo_full_name, exc,
+        )
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
 def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
     subprocess.run(["git", "clone", "-q", "--no-checkout", url, str(dest)], check=True)
     subprocess.run(
