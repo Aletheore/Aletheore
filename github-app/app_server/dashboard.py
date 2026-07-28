@@ -125,6 +125,16 @@ async def list_my_repos(request: Request):
     result = []
     known_by_installation: dict[int, set[str]] = {}
     for row in repos:
+        known_by_installation.setdefault(row["installation_id"], set()).add(row["repo_full_name"])
+        # The hosted dashboard is an AIR (paid) feature. Community is free,
+        # self-service, and unmanaged by design - the CLI, the free GitHub
+        # Action, and free GitHub App usage are all meant to work without
+        # ever touching a shared web view. Listing a free installation's
+        # repos here would let every GitHub admin on that org click into a
+        # full managed dashboard for free - exactly the team-collaboration
+        # capability AIR itself sells.
+        if row["plan"] == "free":
+            continue
         # repo_full_name is the source of truth for the org/repo split used
         # in every /app/{org}/{repo} route - account_login is a display
         # value only and isn't guaranteed to match the org segment exactly.
@@ -138,17 +148,14 @@ async def list_my_repos(request: Request):
                 "initialized": True,
             }
         )
-        known_by_installation.setdefault(row["installation_id"], set()).add(row["repo_full_name"])
 
     for installation_id in administered_ids:
         installation = await get_installation(pool, installation_id)
-        if installation is None:
+        if installation is None or installation["plan"] == "free":
             continue
         known = known_by_installation.get(installation_id, set())
-        scan_limit_reached = False
-        if installation["plan"] != "free":
-            scanned_this_month = await count_monthly_scanned_repos(pool, installation_id)
-            scan_limit_reached = scanned_this_month >= MAX_SCANNED_REPOS_PER_MONTH
+        scanned_this_month = await count_monthly_scanned_repos(pool, installation_id)
+        scan_limit_reached = scanned_this_month >= MAX_SCANNED_REPOS_PER_MONTH
         result.extend(
             await _uninitialized_repos_for_installation(
                 installation_id, installation["plan"], known, scan_limit_reached
@@ -174,6 +181,8 @@ async def _require_dashboard_installation(request: Request, org: str, repo: str)
 
     installation = await get_installation(pool, installation_id)
     if installation is not None:
+        if installation["plan"] == "free":
+            raise HTTPException(status_code=402, detail="the managed dashboard requires a paid plan")
         await _require_seat_if_paid(pool, installation, session["github_login"])
 
     return installation_id

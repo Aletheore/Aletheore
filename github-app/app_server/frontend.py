@@ -359,7 +359,7 @@ PICKER_HTML = f"""<!DOCTYPE html>
   if (!res) return;
   const data = await res.json();
   if (data.repos.length === 0) {{
-    body.innerHTML = '<div class="empty-state">No repositories yet. Install the Aletheore GitHub App on an organization to get started.</div>';
+    body.innerHTML = '<div class="empty-state">No managed repositories yet. Aletheore Community (free) runs self-service - the CLI, the free GitHub Action, and free GitHub App usage all work without a hosted dashboard, so a free installation won\\'t appear here. Install the Aletheore GitHub App on an organization and subscribe to AIR to get a managed dashboard.</div>';
     return;
   }}
   const byOrg = {{}};

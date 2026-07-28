@@ -98,6 +98,7 @@ async def test_list_my_repos_requires_login(pool):
 @pytest.mark.asyncio
 async def test_list_my_repos_returns_repos_across_administered_installations(pool, monkeypatch):
     await upsert_installation(pool, 701, "octocat")
+    await set_installation_plan(pool, 701, "indie")
     await upsert_installation(pool, 702, "another-org")
     await set_installation_plan(pool, 702, "indie")
     await insert_repo_history(
@@ -123,8 +124,27 @@ async def test_list_my_repos_returns_repos_across_administered_installations(poo
     by_name = {r["repo_full_name"]: r for r in repos}
     assert by_name["octocat/hello-world"]["org"] == "octocat"
     assert by_name["octocat/hello-world"]["repo"] == "hello-world"
-    assert by_name["octocat/hello-world"]["plan"] == "free"
+    assert by_name["octocat/hello-world"]["plan"] == "indie"
     assert by_name["another-org/service-b"]["plan"] == "indie"
+
+
+@pytest.mark.asyncio
+async def test_list_my_repos_excludes_free_plan_installations(pool, monkeypatch):
+    # The hosted dashboard is an AIR (paid) feature - Community is free,
+    # self-service, and unmanaged by design. Listing a free installation's
+    # repos here would let every GitHub admin on that org click into a full
+    # managed dashboard for free, without anyone paying for it.
+    await upsert_installation(pool, 704, "octocat")  # defaults to plan='free'
+    await insert_repo_history(
+        pool, 704, "octocat/free-repo", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[704])
+    async with client:
+        response = await client.get("/app/repos")
+
+    assert response.status_code == 200
+    assert response.json()["repos"] == []
 
 
 @pytest.mark.asyncio
@@ -254,6 +274,7 @@ async def test_list_my_repos_does_not_duplicate_already_scanned_repos(pool, monk
     # "uninitialized" duplicate just because it's still covered by the
     # installation's real GitHub repo list.
     await upsert_installation(pool, 802, "some-user")
+    await set_installation_plan(pool, 802, "team")
     await insert_repo_history(
         pool, 802, "some-user/already-scanned", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -301,7 +322,7 @@ async def test_list_my_repos_does_not_duplicate_already_scanned_repos(pool, monk
         "org": "some-user",
         "repo": "already-scanned",
         "repo_full_name": "some-user/already-scanned",
-        "plan": "free",
+        "plan": "team",
         "initialized": True,
     }]
 
@@ -313,6 +334,7 @@ async def test_list_my_repos_ignores_github_failure_when_fetching_uninitialized_
     # still see their already-scanned repos rather than getting a 502 for
     # the whole page over a "nice to have" enrichment.
     await upsert_installation(pool, 803, "some-user")
+    await set_installation_plan(pool, 803, "team")
 
     monkeypatch.setattr("app_server.dashboard.generate_app_jwt", lambda *a, **k: "fake-jwt")
 
@@ -436,8 +458,37 @@ async def test_dashboard_rejects_unadministered_installation(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_requires_paid_plan(pool, monkeypatch):
+    # Community is free, self-service, and unmanaged by design - the hosted
+    # dashboard (scan history, health monitoring, AIRview) is an AIR-only
+    # feature. Without this, any GitHub admin on a free-plan org could click
+    # into a full managed dashboard for free.
+    await upsert_installation(pool, 511, "octocat")  # defaults to plan='free'
+    await insert_repo_history(
+        pool, 511, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[511])
+    async with client:
+        response = await client.get("/app/octocat/hello-world")
+    assert response.status_code == 402
+
+
+@pytest.mark.asyncio
+async def test_dashboard_health_requires_paid_plan(pool, monkeypatch):
+    await upsert_installation(pool, 512, "octocat")  # defaults to plan='free'
+    await insert_repo_history(
+        pool, 512, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[512])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/health")
+    assert response.status_code == 402
+
+
+@pytest.mark.asyncio
 async def test_dashboard_returns_data_for_known_repo(pool, monkeypatch):
     await upsert_installation(pool, 1, "octocat")
+    await set_installation_plan(pool, 1, "indie")
     await insert_repo_history(
         pool,
         1,
@@ -642,6 +693,7 @@ async def test_dashboard_health_keeps_results_separate_per_target(pool, monkeypa
     # targets checking the exact same method+path collapse into one row
     # and one target's result silently vanishes.
     await upsert_installation(pool, 503, "octocat")
+    await set_installation_plan(pool, 503, "indie")
     await insert_repo_history(
         pool, 503, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -696,6 +748,7 @@ async def test_dashboard_health_history_requires_login(pool):
 @pytest.mark.asyncio
 async def test_dashboard_health_history_returns_checks_newest_first(pool, monkeypatch):
     await upsert_installation(pool, 504, "octocat")
+    await set_installation_plan(pool, 504, "indie")
     await insert_repo_history(
         pool, 504, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -741,6 +794,7 @@ async def test_dashboard_health_history_returns_checks_newest_first(pool, monkey
 @pytest.mark.asyncio
 async def test_dashboard_health_history_respects_limit(pool, monkeypatch):
     await upsert_installation(pool, 505, "octocat")
+    await set_installation_plan(pool, 505, "indie")
     await insert_repo_history(
         pool, 505, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -807,6 +861,7 @@ async def test_dashboard_health_rejects_unadministered_installation(pool, monkey
 @pytest.mark.asyncio
 async def test_dashboard_health_includes_evidence_resolution(pool, monkeypatch):
     await upsert_installation(pool, 502, "octocat")
+    await set_installation_plan(pool, 502, "indie")
     await insert_repo_history(
         pool,
         502,
@@ -853,6 +908,7 @@ async def test_dashboard_health_includes_evidence_resolution(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_health_includes_stale_endpoints(pool, monkeypatch):
     await upsert_installation(pool, 504, "octocat")
+    await set_installation_plan(pool, 504, "indie")
     await insert_repo_history(
         pool,
         504,
@@ -903,6 +959,7 @@ async def test_dashboard_health_includes_stale_endpoints(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_health_omits_stale_endpoints_with_recent_success(pool, monkeypatch):
     await upsert_installation(pool, 505, "octocat")
+    await set_installation_plan(pool, 505, "indie")
     await insert_repo_history(
         pool,
         505,
