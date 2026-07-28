@@ -1058,14 +1058,29 @@ function openDiagramZoom(svgHtml) {{
   content.className = 'diagram-zoom-content';
   content.innerHTML = svgHtml;
   const svg = content.querySelector('svg');
+  let naturalWidth = 800;
+  let naturalHeight = 600;
   if (svg) {{
     const vb = svg.viewBox && svg.viewBox.baseVal;
-    const naturalWidth = (vb && vb.width) || parseFloat(svg.style.maxWidth) || 800;
-    svg.style.width = naturalWidth + 'px';
+    naturalWidth = (vb && vb.width) || parseFloat(svg.getAttribute('width')) || naturalWidth;
+    naturalHeight = (vb && vb.height) || parseFloat(svg.getAttribute('height')) || naturalHeight;
     svg.style.maxWidth = 'none';
-    svg.removeAttribute('height');
+    svg.style.display = 'block';
   }}
-  content.style.transform = 'scale(' + scale + ')';
+  // CSS transform: scale() was the previous approach here, but a
+  // transformed element's LAYOUT size (and so its ancestor's scrollable
+  // overflow area) never changes to match - only its painted appearance
+  // does. On a genuinely large diagram, zooming in painted content well
+  // past the unscaled scroll boundary, making that region permanently
+  // unreachable by scroll (the exact "shows only small section" bug).
+  // Resizing the SVG's real width/height instead makes the browser's own
+  // scrollWidth/scrollHeight grow with it, so every part stays reachable.
+  function applyScale() {{
+    if (!svg) return;
+    svg.style.width = (naturalWidth * scale) + 'px';
+    svg.style.height = (naturalHeight * scale) + 'px';
+  }}
+  applyScale();
   const hint = document.createElement('div');
   hint.className = 'diagram-zoom-hint';
   hint.textContent = 'Scroll to zoom · click to close';
@@ -1074,13 +1089,22 @@ function openDiagramZoom(svgHtml) {{
   overlay.addEventListener('click', closeDiagramZoom);
   overlay.addEventListener('wheel', function (e) {{
     e.preventDefault();
+    const prevScale = scale;
     scale = Math.min(4, Math.max(0.5, scale + (e.deltaY < 0 ? 0.15 : -0.15)));
-    content.style.transform = 'scale(' + scale + ')';
+    const ratio = scale / prevScale;
+    // Keep the viewport's current center point anchored across zoom
+    // steps, rather than letting the view drift toward the top-left as
+    // the content grows underneath a fixed scroll offset.
+    const centerX = overlay.scrollLeft + overlay.clientWidth / 2;
+    const centerY = overlay.scrollTop + overlay.clientHeight / 2;
+    applyScale();
+    overlay.scrollLeft = centerX * ratio - overlay.clientWidth / 2;
+    overlay.scrollTop = centerY * ratio - overlay.clientHeight / 2;
   }}, {{ passive: false }});
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
   document.addEventListener('keydown', onDiagramZoomKeydown);
-  // Centering via margin:auto (the previous approach) leaves half of a
+  // Centering via margin:auto (an even earlier approach) leaves half of a
   // diagram wider than the viewport permanently unreachable by scroll in
   // most browsers - overflow past a centered element's near edge doesn't
   // register as scrollable range. Centering the scroll position instead,
