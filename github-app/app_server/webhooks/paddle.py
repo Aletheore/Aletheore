@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request, Response
 
 from app_server.config import get_settings
 from app_server.db import add_paddle_ids_to_installation, get_installation, set_installation_plan
+from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for, is_known_paddle_ip
 from app_server.paddle_pricing import resolve_plan_for_price_id
 from app_server.paddle_webhook_verify import verify_paddle_signature
 
@@ -94,6 +95,19 @@ async def handle_paddle_webhook(request: Request) -> Response:
     signature = request.headers.get("paddle-signature", "")
     settings = get_settings()
     if not signature or not verify_paddle_signature(raw_body, signature, settings.paddle_webhook_secret):
+        return Response(status_code=401)
+
+    # Defense-in-depth on top of signature verification, not a replacement
+    # for it: reject only when the source IP is definitively not one of
+    # Paddle's published addresses. A fetch failure returns None (can't
+    # verify) rather than False, so a transient outage reaching Paddle's own
+    # /ips endpoint can't turn into rejecting every real webhook.
+    client_ip = client_ip_from_forwarded_for(
+        request.headers.get("x-forwarded-for"),
+        request.client.host if request.client else "",
+    )
+    if await is_known_paddle_ip(client_ip) is False:
+        logger.warning("rejected webhook from non-Paddle IP %s despite a valid signature", client_ip)
         return Response(status_code=401)
 
     try:

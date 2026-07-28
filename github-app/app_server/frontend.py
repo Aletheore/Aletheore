@@ -1373,8 +1373,10 @@ def _subscribe_install_prompt_page(plan: str, next_path: str) -> str:
 
 
 def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]) -> str:
+    pw_customer_id: str | None = None
     if len(installations) == 1:
         installation = installations[0]
+        pw_customer_id = installation.get("paddle_customer_id")
         continue_attrs = f'data-installation-id="{installation["installation_id"]}"'
         body = f"""
         <h1>Subscribe to {escape(_plan_display_name(plan))}</h1>
@@ -1403,11 +1405,16 @@ def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]
         """
 
     settings = get_settings()
+    # pwCustomer (Paddle Retain) only makes sense for a known, already-Paddle
+    # customer - only wireable here when there's exactly one installation to
+    # check out for, since Paddle.Initialize() runs once for the whole page,
+    # before the customer (if there's a choice) has picked which installation.
+    pw_customer_config = f', pwCustomer: {{ id: "{pw_customer_id}" }}' if pw_customer_id else ""
     return _subscribe_page("Subscribe", body) + f"""
 <script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script>
 Paddle.Environment.set("{settings.paddle_environment}");
-Paddle.Initialize({{ token: "{settings.paddle_client_token}" }});
+Paddle.Initialize({{ token: "{settings.paddle_client_token}"{pw_customer_config} }});
 document.getElementById("continue-checkout").addEventListener("click", (event) => {{
   const btn = event.currentTarget;
   const selected = document.querySelector('input[name="installation_id"]:checked');

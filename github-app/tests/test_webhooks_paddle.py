@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import ipaddress
 import json
 import time
 from unittest.mock import MagicMock
@@ -7,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app_server import paddle_ip_allowlist
 from app_server.db import get_installation, upsert_installation
 from app_server.main import app
 from app_server.webhooks.paddle import handle_paddle_webhook_event
@@ -103,6 +105,54 @@ async def test_non_object_json_body_with_valid_signature_returns_401_not_500(poo
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/webhooks/paddle", content=body, headers={"paddle-signature": _sign(body)})
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_confirmed_non_paddle_ip_rejected_despite_valid_signature(pool, monkeypatch):
+    monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", WEBHOOK_SECRET)
+
+    async def _fake_fetch():
+        return [ipaddress.ip_network("203.0.113.0/24")]
+
+    monkeypatch.setattr(paddle_ip_allowlist, "_fetch_paddle_networks", _fake_fetch)
+    app.state.db_pool = pool
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (106, 'acme', 'free')"
+    )
+    body = json.dumps(_subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 106)).encode()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/webhooks/paddle",
+            content=body,
+            headers={"paddle-signature": _sign(body), "x-forwarded-for": "198.51.100.1"},
+        )
+    assert response.status_code == 401
+    installation = await get_installation(pool, 106)
+    assert installation["plan"] == "free"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_paddle_ip_accepted(pool, monkeypatch):
+    monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", WEBHOOK_SECRET)
+
+    async def _fake_fetch():
+        return [ipaddress.ip_network("203.0.113.0/24")]
+
+    monkeypatch.setattr(paddle_ip_allowlist, "_fetch_paddle_networks", _fake_fetch)
+    app.state.db_pool = pool
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (107, 'acme', 'free')"
+    )
+    body = json.dumps(_subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 107)).encode()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/webhooks/paddle",
+            content=body,
+            headers={"paddle-signature": _sign(body), "x-forwarded-for": "10.0.0.1, 203.0.113.5"},
+        )
+    assert response.status_code == 200
+    installation = await get_installation(pool, 107)
+    assert installation["plan"] == "air"
 
 
 @pytest.mark.asyncio

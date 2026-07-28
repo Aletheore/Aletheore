@@ -61,6 +61,25 @@ def redis_conn():
     conn.close()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_paddle_ip_fetch(monkeypatch):
+    # Without this, every full-route webhook test would make a real network
+    # call to Paddle's /ips endpoint on the first request (module-level
+    # cache miss) - slow and flaky in a sandboxed/offline CI runner. Default
+    # to "can't verify" (None), the same fail-open outcome a real fetch
+    # failure produces, so this doesn't change what any existing test
+    # asserts. Tests that need to exercise the actual allow/reject paths
+    # patch is_known_paddle_ip directly instead.
+    from app_server import paddle_ip_allowlist
+
+    monkeypatch.setattr(paddle_ip_allowlist, "_cache", None)
+
+    async def _fake_fetch():
+        return None
+
+    monkeypatch.setattr(paddle_ip_allowlist, "_fetch_paddle_networks", _fake_fetch)
+
+
 def _make_git_repo(path: Path, files: dict[str, str]) -> str:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q"], cwd=path, check=True)
