@@ -118,6 +118,17 @@ def _sponsor_panel() -> Panel:
     return Panel(body, border_style="magenta", width=78)
 
 
+def _result_panel(title: str, lines: list[str], border_style: str = "green") -> Panel:
+    body = Text("\n".join(lines))
+    return Panel(
+        body,
+        title=f"[bold {border_style}]{title}[/bold {border_style}]",
+        title_align="left",
+        border_style=border_style,
+        width=78,
+    )
+
+
 _COMMAND_SUMMARIES = [
     ("scan", "run the scanner, write evidence, no LLM call"),
     ("audit", "scan, then have a coding agent write a grounded report"),
@@ -157,6 +168,9 @@ def _banner_panel() -> Panel:
     )
 
 
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
 def _make_progress_printer(is_tty: bool | None = None) -> Callable[[str], None]:
     # License checks report one message per pinned dependency (can be dozens).
     # In a real terminal those overwrite in place via \r instead of scrolling,
@@ -166,12 +180,18 @@ def _make_progress_printer(is_tty: bool | None = None) -> Callable[[str], None]:
     # output instead prints every message on its own line: more lines, but a
     # real, readable history in a log rather than concatenated garbage.
     is_tty = sys.stdout.isatty() if is_tty is None else is_tty
-    state = {"in_place": False}
+    state = {"in_place": False, "frame": 0}
 
     def report(message: str) -> None:
         overwritable = is_tty and message.startswith("Checking dependency licenses:")
         if overwritable:
-            print(f"\r  → {message}" + " " * 15, end="", flush=True)
+            # A single phase repeating many times in place is the one spot
+            # where a rotating glyph is actually visible (many updates over
+            # time) rather than flashing past on a single-shot phase
+            # announcement, so only this line gets a real spinner frame.
+            spinner = _SPINNER_FRAMES[state["frame"] % len(_SPINNER_FRAMES)]
+            state["frame"] += 1
+            print(f"\r  {spinner} {message}" + " " * 15, end="", flush=True)
             state["in_place"] = True
         else:
             if state["in_place"]:
@@ -198,9 +218,12 @@ class _ElapsedTicker:
 
     def _run(self) -> None:
         start = time.monotonic()
+        frame = 0
         while not self._stop.wait(self._interval):
             elapsed = int(time.monotonic() - start)
-            print(f"\r  → {self._label}... ({elapsed}s elapsed)" + " " * 10, end="", flush=True)
+            spinner = _SPINNER_FRAMES[frame % len(_SPINNER_FRAMES)]
+            frame += 1
+            print(f"\r  {spinner} {self._label}... ({elapsed}s elapsed)" + " " * 10, end="", flush=True)
 
     def __enter__(self) -> "_ElapsedTicker":
         self._start = time.monotonic()
@@ -242,9 +265,13 @@ def _scan(
         console.print(f"[bold red]error:[/bold red] {exc}")
         return GIT_ANALYSIS_RESOURCE_EXIT_CODE, {}, repo
     evidence_path = write_evidence(evidence, repo)
-    console.print(f"[green]Evidence written to[/green] {evidence_path}")
     snapshot_path = save_snapshot(evidence, repo)
-    console.print(f"Snapshot saved to {snapshot_path}")
+    console.print(
+        _result_panel(
+            "Scan complete",
+            [f"Evidence written to {evidence_path}", f"Snapshot saved to {snapshot_path}"],
+        )
+    )
     # Fire-and-forget, off the main thread: report_scan_event already has
     # its own short timeout and swallows every exception, but a background
     # thread means even a slow/hanging network path can never add latency
@@ -296,7 +323,7 @@ def _audit(
         console.print(f"Evidence is still available at {evidence_path} for manual use.")
         return 1
 
-    console.print(f"[green]Audit report written to[/green] {report_path}")
+    console.print(_result_panel("Audit complete", [f"Report written to {report_path}"]))
     console.print()
     console.print(_sponsor_panel())
     return 0
@@ -338,7 +365,7 @@ def _managed_audit(
 
     report_path = repo / ".aletheore" / "audit-report.md"
     report_path.write_text(report_text)
-    console.print(f"[green]Managed audit report written to[/green] {report_path}")
+    console.print(_result_panel("Managed audit complete", [f"Report written to {report_path}"]))
     return 0
 
 
