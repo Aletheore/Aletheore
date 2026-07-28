@@ -9,7 +9,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app_server import paddle_ip_allowlist
-from app_server.db import get_installation, upsert_installation
+from app_server.db import get_extra_seats, get_installation, upsert_installation
 from app_server.main import app
 from app_server.webhooks.paddle import handle_paddle_webhook_event
 
@@ -314,6 +314,66 @@ async def test_subscription_updated_refreshes_plan_without_retriggering_wiki_bui
     # Paid-to-paid change (e.g. switching monthly <-> annual) must not
     # re-trigger the one-time wiki build.
     fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_subscription_updated_reconciles_extra_seats_from_items(pool):
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, extra_seats) "
+        "VALUES (305, 'acme', 'air', 0)"
+    )
+    payload = {
+        "event_type": "subscription.updated",
+        "data": {
+            "id": "sub_test_123",
+            "customer_id": "ctm_test_456",
+            "status": "active",
+            "custom_data": {"installation_id": "305"},
+            "items": [
+                {"price": {"id": "pri_01kyhevc8bkcghfpwjymz16y2h"}, "quantity": 1},
+                {"price": {"id": "pri_01kym2q99kevmdg7h71nwpm4ej"}, "quantity": 3},
+            ],
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    installation = await get_installation(pool, 305)
+    assert installation["plan"] == "air"
+    assert await get_extra_seats(pool, 305) == 3
+
+
+@pytest.mark.asyncio
+async def test_subscription_canceled_resets_extra_seats_to_zero(pool):
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, extra_seats) "
+        "VALUES (306, 'acme', 'air', 3)"
+    )
+    payload = _subscription_event_payload("subscription.canceled", "canceled", 306)
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    installation = await get_installation(pool, 306)
+    assert installation["plan"] == "free"
+    assert await get_extra_seats(pool, 306) == 0
+
+
+@pytest.mark.asyncio
+async def test_subscription_updated_with_no_extra_seat_item_resets_to_zero(pool):
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, extra_seats) "
+        "VALUES (307, 'acme', 'air', 3)"
+    )
+    payload = _subscription_event_payload(
+        "subscription.updated", "active", 307, price_id="pri_01kyhevc8bkcghfpwjymz16y2h"
+    )
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert await get_extra_seats(pool, 307) == 0
 
 
 @pytest.mark.asyncio

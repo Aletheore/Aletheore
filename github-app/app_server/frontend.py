@@ -1332,6 +1332,38 @@ async function sendTestNotification() {{
   status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
 }}
 
+async function buySeat() {{
+  const status = document.getElementById('seat-billing-status');
+  status.textContent = 'Updating billing...';
+  status.style.color = 'var(--slate-600)';
+  const res = await fetch(adminBase + '/seats/buy', {{ method: 'POST' }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  if (res.ok) {{
+    status.textContent = 'Seat added - billing updated. Refreshing...';
+    status.style.color = 'var(--success)';
+    loadSettings();
+  }} else {{
+    status.textContent = data.detail || 'Could not buy a seat.';
+    status.style.color = 'var(--critical)';
+  }}
+}}
+
+async function removeSeat() {{
+  const status = document.getElementById('seat-billing-status');
+  status.textContent = 'Updating billing...';
+  status.style.color = 'var(--slate-600)';
+  const res = await fetch(adminBase + '/seats/remove', {{ method: 'POST' }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  if (res.ok) {{
+    status.textContent = 'Seat removed - billing updated. Refreshing...';
+    status.style.color = 'var(--success)';
+    loadSettings();
+  }} else {{
+    status.textContent = data.detail || 'Could not remove a seat.';
+    status.style.color = 'var(--critical)';
+  }}
+}}
+
 async function loadSettings() {{
   const body = document.getElementById('settings-body');
   const res = await apiGet(adminBase);
@@ -1350,6 +1382,15 @@ async function loadSettings() {{
   }}
   const data = await res.json();
   const installation = data.installation;
+  window._hasActiveSubscription = !!installation.paddle_subscription_id;
+  window._extraSeats = data.extra_seats || 0;
+
+  const seatBillingHtml = window._hasActiveSubscription
+    ? '<div class="form-row">' +
+      '<button class="btn" onclick="buySeat()">Buy extra seat ($3.99/mo)</button>' +
+      (window._extraSeats > 0 ? '<button class="btn" onclick="removeSeat()" style="margin-left:6px;">Remove a seat</button>' : '') +
+      '</div><div id="seat-billing-status" class="settings-block-hint"></div>'
+    : '<div class="settings-block-hint">Extra seats need an active subscription - subscribe first to buy one.</div>';
 
   body.innerHTML =
     '<div class="settings-grid">' +
@@ -1360,7 +1401,7 @@ async function loadSettings() {{
           '<div class="form-row"><input class="field" id="new-member-login" placeholder="GitHub username">' +
           '<button class="btn" onclick="addMember()">Add</button></div>' +
           '<div id="member-status" class="settings-block-hint"></div>' +
-          '<div class="settings-block-hint">Extra seats beyond the plan\\'s limit aren\\'t billable yet - adding past the cap is blocked for now.</div>' +
+          seatBillingHtml +
         '</div>' +
         '<div class="settings-block">' +
           '<div class="settings-block-label">API tokens</div>' +

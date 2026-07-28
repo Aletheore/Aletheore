@@ -6,9 +6,10 @@ import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
-from app_server.admin import _administered_installation_ids_for_session_or_401
+from app_server.admin import _administered_installation_ids_for_session_or_401, _build_updated_seat_items
 from app_server.auth import decrypt_access_token, encrypt_access_token, sign_session_id
 from app_server.db import (
+    add_paddle_ids_to_installation,
     create_session,
     get_max_tokens,
     get_session,
@@ -17,6 +18,8 @@ from app_server.db import (
     upsert_installation,
 )
 from app_server.main import app
+from app_server.paddle_client import PaddleAPIError
+from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
 
 
 async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="air"):
@@ -721,6 +724,167 @@ async def test_add_member_enforces_seat_cap(pool, monkeypatch):
         response = await client.post("/admin/octocat/hello-world/members", json={"github_login": "erin"})
     assert response.status_code == 409
     assert "seat limit reached" in response.json()["detail"]
+
+
+def test_build_updated_seat_items_adds_new_seat_item_when_none_exists():
+    items = _build_updated_seat_items(
+        [{"price": {"id": "pri_base"}, "quantity": 1}], delta=1
+    )
+    assert {"price_id": "pri_base", "quantity": 1} in items
+    assert {"price_id": EXTRA_SEAT_PRICE_ID, "quantity": 1} in items
+
+
+def test_build_updated_seat_items_increments_existing_seat_item():
+    items = _build_updated_seat_items(
+        [
+            {"price": {"id": "pri_base"}, "quantity": 1},
+            {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": 2},
+        ],
+        delta=1,
+    )
+    assert {"price_id": EXTRA_SEAT_PRICE_ID, "quantity": 3} in items
+
+
+def test_build_updated_seat_items_decrements_and_drops_item_at_zero():
+    items = _build_updated_seat_items(
+        [
+            {"price": {"id": "pri_base"}, "quantity": 1},
+            {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": 1},
+        ],
+        delta=-1,
+    )
+    assert items == [{"price_id": "pri_base", "quantity": 1}]
+
+
+def test_build_updated_seat_items_returns_none_when_nothing_to_remove():
+    assert _build_updated_seat_items([{"price": {"id": "pri_base"}, "quantity": 1}], delta=-1) is None
+
+
+@pytest.mark.asyncio
+async def test_buy_extra_seat_requires_active_subscription(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/seats/buy")
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_buy_extra_seat_degrades_gracefully_without_api_key_configured(pool, monkeypatch):
+    # Real-world current state until PADDLE_API_KEY is added to the server's
+    # env - must fail as a clean 502, not crash the request with a 500.
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_seat", "ctm_test_seat")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/seats/buy")
+
+    assert response.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_buy_extra_seat_updates_paddle_subscription(pool, monkeypatch):
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_seat", "ctm_test_seat")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    monkeypatch.setattr(
+        "app_server.admin.get_paddle_subscription",
+        lambda api_key, sub_id: {"items": [{"price": {"id": "pri_base"}, "quantity": 1}]},
+    )
+    captured = {}
+
+    def fake_update(api_key, sub_id, items, proration_billing_mode):
+        captured["sub_id"] = sub_id
+        captured["items"] = items
+        captured["mode"] = proration_billing_mode
+        return {}
+
+    monkeypatch.setattr("app_server.admin.update_paddle_subscription_items", fake_update)
+
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/seats/buy")
+
+    assert response.status_code == 200
+    assert captured["sub_id"] == "sub_test_seat"
+    assert {"price_id": EXTRA_SEAT_PRICE_ID, "quantity": 1} in captured["items"]
+    assert captured["mode"] == "prorated_immediately"
+
+
+@pytest.mark.asyncio
+async def test_buy_extra_seat_reports_paddle_api_failure(pool, monkeypatch):
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_seat", "ctm_test_seat")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    def _boom(api_key, sub_id):
+        raise PaddleAPIError("could not fetch subscription")
+
+    monkeypatch.setattr("app_server.admin.get_paddle_subscription", _boom)
+
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/seats/buy")
+
+    assert response.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_remove_extra_seat_requires_active_subscription(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/seats/remove")
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_remove_extra_seat_returns_409_when_no_seats_to_remove(pool, monkeypatch):
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_seat", "ctm_test_seat")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    monkeypatch.setattr(
+        "app_server.admin.get_paddle_subscription",
+        lambda api_key, sub_id: {"items": [{"price": {"id": "pri_base"}, "quantity": 1}]},
+    )
+    called = []
+    monkeypatch.setattr(
+        "app_server.admin.update_paddle_subscription_items",
+        lambda *a, **k: called.append(True),
+    )
+
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/seats/remove")
+
+    assert response.status_code == 409
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_remove_extra_seat_updates_paddle_subscription(pool, monkeypatch):
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test_seat", "ctm_test_seat")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    monkeypatch.setattr(
+        "app_server.admin.get_paddle_subscription",
+        lambda api_key, sub_id: {
+            "items": [
+                {"price": {"id": "pri_base"}, "quantity": 1},
+                {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": 2},
+            ]
+        },
+    )
+    captured = {}
+    monkeypatch.setattr(
+        "app_server.admin.update_paddle_subscription_items",
+        lambda api_key, sub_id, items, proration_billing_mode: captured.update(items=items),
+    )
+
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/seats/remove")
+
+    assert response.status_code == 200
+    assert {"price_id": EXTRA_SEAT_PRICE_ID, "quantity": 1} in captured["items"]
 
 
 @pytest.mark.asyncio

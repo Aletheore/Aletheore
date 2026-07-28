@@ -279,6 +279,18 @@ async def get_extra_seats(pool: asyncpg.Pool, installation_id: int) -> int:
     return row["extra_seats"] if row else 0
 
 
+async def set_extra_seats(pool: asyncpg.Pool, installation_id: int, extra_seats: int) -> None:
+    # The Paddle subscription's extra-seat line item quantity is the source
+    # of truth, reconciled here from webhook events - never set directly by
+    # the buy/remove-seat button, the same pattern installations.plan
+    # already follows for the base subscription price.
+    await pool.execute(
+        "UPDATE installations SET extra_seats = $2 WHERE installation_id = $1",
+        installation_id,
+        extra_seats,
+    )
+
+
 INCLUDED_SEATS = {"air": 5}
 DEFAULT_SEAT_LIMIT = 5
 

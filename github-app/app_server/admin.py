@@ -34,6 +34,10 @@ from app_server.db import (
     set_webhook_url,
     update_session_tokens,
 )
+from app_server.paddle_client import PaddleAPIError
+from app_server.paddle_client import get_subscription as get_paddle_subscription
+from app_server.paddle_client import update_subscription_items as update_paddle_subscription_items
+from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
 
 admin_router = APIRouter()
@@ -263,7 +267,8 @@ async def admin_page(org: str, repo: str, request: Request):
     tokens = await list_api_tokens(pool, installation_id)
     members = await list_installation_members(pool, installation_id)
     included_seats = INCLUDED_SEATS.get(installation["plan"], DEFAULT_SEAT_LIMIT)
-    seat_limit = included_seats + await get_extra_seats(pool, installation_id)
+    extra_seats = await get_extra_seats(pool, installation_id)
+    seat_limit = included_seats + extra_seats
     health_targets = await list_health_check_targets(pool, installation_id, repo_full_name)
     health_target_limit = INCLUDED_HEALTH_CHECK_TARGETS.get(installation["plan"], DEFAULT_HEALTH_CHECK_TARGET_LIMIT)
     return {
@@ -271,6 +276,7 @@ async def admin_page(org: str, repo: str, request: Request):
         "tokens": tokens,
         "members": members,
         "seat_limit": seat_limit,
+        "extra_seats": extra_seats,
         "health_targets": health_targets,
         "health_target_limit": health_target_limit,
         "public_status_url": f"/v1/health/{org}/{repo}",
@@ -292,11 +298,77 @@ async def add_member(org: str, repo: str, request: Request, body: AddMemberReque
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"seat limit reached ({seat_limit}) - additional seats need billing, "
-                    "which isn't wired up yet. Remove someone or check back soon."
+                    f"seat limit reached ({seat_limit}) - buy an extra seat in Settings "
+                    "($3.99/mo) or remove someone first."
                 ),
             )
         await add_installation_member(pool, installation_id, body.github_login, session["github_login"])
+    return {"ok": True}
+
+
+def _build_updated_seat_items(subscription_items: list[dict], delta: int) -> list[dict] | None:
+    # Paddle requires the complete item list on every subscription update -
+    # this rebuilds it with the extra-seat item's quantity adjusted by
+    # delta (adding the item at quantity 1 if it doesn't exist yet).
+    # Returns None if delta would take the seat item below zero.
+    items = []
+    seat_item_found = False
+    for item in subscription_items:
+        price_id = item["price"]["id"]
+        quantity = item["quantity"]
+        if price_id == EXTRA_SEAT_PRICE_ID:
+            seat_item_found = True
+            quantity += delta
+            if quantity < 0:
+                return None
+            if quantity == 0:
+                continue
+        items.append({"price_id": price_id, "quantity": quantity})
+    if not seat_item_found:
+        if delta <= 0:
+            return None
+        items.append({"price_id": EXTRA_SEAT_PRICE_ID, "quantity": delta})
+    return items
+
+
+@admin_router.post("/admin/{org}/{repo}/seats/buy")
+async def buy_extra_seat(org: str, repo: str, request: Request):
+    installation = await _require_admin_installation(request, org, repo)
+    subscription_id = installation.get("paddle_subscription_id")
+    if not subscription_id:
+        raise HTTPException(status_code=400, detail="no active subscription to add a seat to")
+
+    settings = get_settings()
+    try:
+        subscription = get_paddle_subscription(settings.paddle_api_key, subscription_id)
+        items = _build_updated_seat_items(subscription.get("items", []), delta=1)
+        update_paddle_subscription_items(settings.paddle_api_key, subscription_id, items, "prorated_immediately")
+    except PaddleAPIError as exc:
+        raise HTTPException(status_code=502, detail=f"could not update billing: {exc}") from exc
+
+    # extra_seats itself is reconciled from the resulting subscription.updated
+    # webhook, not set optimistically here - same pattern installations.plan
+    # already follows for the base subscription price.
+    return {"ok": True}
+
+
+@admin_router.post("/admin/{org}/{repo}/seats/remove")
+async def remove_extra_seat(org: str, repo: str, request: Request):
+    installation = await _require_admin_installation(request, org, repo)
+    subscription_id = installation.get("paddle_subscription_id")
+    if not subscription_id:
+        raise HTTPException(status_code=400, detail="no active subscription to remove a seat from")
+
+    settings = get_settings()
+    try:
+        subscription = get_paddle_subscription(settings.paddle_api_key, subscription_id)
+        items = _build_updated_seat_items(subscription.get("items", []), delta=-1)
+        if items is None:
+            raise HTTPException(status_code=409, detail="no extra seats to remove")
+        update_paddle_subscription_items(settings.paddle_api_key, subscription_id, items, "prorated_immediately")
+    except PaddleAPIError as exc:
+        raise HTTPException(status_code=502, detail=f"could not update billing: {exc}") from exc
+
     return {"ok": True}
 
 
