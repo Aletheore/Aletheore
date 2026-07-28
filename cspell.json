@@ -92,6 +92,8 @@
     "tree-sitter",
     "unrecovered",
     "uvicorn",
-    "vport"
+    "vport",
+    "worktree",
+    "worktrees"
   ]
 }

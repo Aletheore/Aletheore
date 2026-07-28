@@ -525,7 +525,7 @@ It only ever calls `aletheore scan` and `aletheore diff`, matching the reasoning
 something fast and deterministic, not a full agent-driven audit.
 
 ```yaml
-- uses: Aletheore/Aletheore@v0.5.0    # pin to a tagged release, not @master
+- uses: Aletheore/Aletheore@v0.6.0    # pin to a tagged release, not @master
   with:
     fail-on-new-secrets: true              # exit 1 if a new real (non-placeholder) secret appears
     fail-on-new-vulnerabilities: true      # exit 1 if a new dependency vulnerability appears
