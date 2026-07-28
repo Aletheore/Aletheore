@@ -13,7 +13,7 @@ import tree_sitter_python as tspython
 import tree_sitter_ruby as tsruby
 import tree_sitter_rust as tsrust
 import tree_sitter_typescript as tstypescript
-from tree_sitter import Language, Node, Parser
+from tree_sitter import Language, Node, Parser, Tree
 
 from aletheore.scanner.detect import IGNORED_DIRS, _nested_git_roots
 
@@ -1096,6 +1096,11 @@ def build_module_graph(
     # declaration implies about its directory, so every .java file needs a quick
     # pre-parse before any of them can have their imports resolved.
     java_source_roots: list[Path] = []
+    # Cached alongside the source root inference below so the main loop's
+    # own per-file parse doesn't read and re-parse every .java file a
+    # second time from scratch - this pre-pass already did the identical
+    # work once.
+    java_pre_parsed: dict[Path, tuple[bytes, Tree]] = {}
     pre_parser = Parser()
     pre_parser.language = JAVA_LANGUAGE
     for path in _iter_source_files(repo_path):
@@ -1103,6 +1108,7 @@ def build_module_graph(
             continue
         pre_source = path.read_bytes()
         tree = pre_parser.parse(pre_source)
+        java_pre_parsed[path] = (pre_source, tree)
         package = _extract_java_package(tree.root_node, pre_source)
         root = _java_source_root_for(path, package)
         if root is not None and root not in java_source_roots:
@@ -1116,6 +1122,7 @@ def build_module_graph(
     # (prefix -> root) map rather than a plain root list, PSR-4-style, to handle
     # <RootNamespace>'s implicit prefix (see _csharp_prefix_and_root_for).
     csharp_prefix_map: dict[str, Path] = {}
+    csharp_pre_parsed: dict[Path, tuple[bytes, Tree]] = {}
     cs_pre_parser = Parser()
     cs_pre_parser.language = CSHARP_LANGUAGE
     for path in _iter_source_files(repo_path):
@@ -1123,6 +1130,7 @@ def build_module_graph(
             continue
         pre_source = path.read_bytes()
         tree = cs_pre_parser.parse(pre_source)
+        csharp_pre_parsed[path] = (pre_source, tree)
         namespace = _extract_csharp_namespace(tree.root_node, pre_source)
         result = _csharp_prefix_and_root_for(path, namespace)
         if result is not None:
@@ -1151,9 +1159,14 @@ def build_module_graph(
             continue
 
         language_name, ts_language = language_info
-        parser.language = ts_language
-        source = path.read_bytes()
-        tree = parser.parse(source)
+        if language_name == "java" and path in java_pre_parsed:
+            source, tree = java_pre_parsed[path]
+        elif language_name == "csharp" and path in csharp_pre_parsed:
+            source, tree = csharp_pre_parsed[path]
+        else:
+            parser.language = ts_language
+            source = path.read_bytes()
+            tree = parser.parse(source)
 
         if language_name == "python":
             plain_imports, from_imports, functions, classes = _extract_python(

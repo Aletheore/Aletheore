@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import patch
 
 from aletheore.scanner.graph import build_module_graph
 from conftest import symbol_names
@@ -217,3 +218,25 @@ def test_build_module_graph_java_import_escaping_repo_root_does_not_crash(tmp_pa
     _, dependency_graph, _ = build_module_graph(repo)
 
     assert dependency_graph["edges"] == []
+
+
+def test_build_module_graph_reads_each_java_file_only_once(tmp_path):
+    # Before this fix, the source-root-inference pre-pass and the main
+    # extraction loop each independently read_bytes() and re-parsed every
+    # .java file from scratch - a real, avoidable 2x tree-sitter parse cost
+    # per file.
+    repo = make_java_repo(tmp_path)
+
+    real_read_bytes = Path.read_bytes
+    read_counts: dict[str, int] = {}
+
+    def counting_read_bytes(self):
+        if self.suffix == ".java":
+            read_counts[str(self)] = read_counts.get(str(self), 0) + 1
+        return real_read_bytes(self)
+
+    with patch.object(Path, "read_bytes", counting_read_bytes):
+        build_module_graph(repo)
+
+    assert read_counts
+    assert all(count == 1 for count in read_counts.values())

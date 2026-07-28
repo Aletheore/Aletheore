@@ -6,6 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 from aletheore.adapters.base import AgentAdapter
 from aletheore.answer import answer_question
+from aletheore.credentials import get_api_key
 from aletheore.evidence import scan_repository, write_evidence
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
@@ -26,6 +27,20 @@ from aletheore.search_index import search_index
 from aletheore.toon_encoding import to_toon
 
 
+# repo_path -> ((mtime, size) of the evidence file at load time, parsed
+# evidence dict). An MCP server process lives for the whole session, and
+# every tool call was re-reading and re-parsing the entire evidence file
+# from scratch - for a large repo (hundreds of MB of JSON) that's real,
+# entirely avoidable latency on every single tool call. Keyed by (mtime,
+# size) rather than unconditional for the process lifetime so a fresh
+# `aletheore scan` (or the aletheore_scan tool) invalidates it automatically
+# - mtime alone can be too coarse-grained on some filesystems to catch a
+# rewrite that lands in the same second, size is a cheap extra check from
+# the same stat() call. Nothing here ever mutates the returned dict, so
+# sharing one parsed copy across calls is safe.
+_evidence_cache: dict[Path, tuple[tuple[float, int], dict]] = {}
+
+
 def read_evidence(repo_path: Path) -> dict:
     evidence_path = repo_path / ".aletheore" / "air.json"
     if not evidence_path.exists():
@@ -33,7 +48,14 @@ def read_evidence(repo_path: Path) -> dict:
             f"no evidence found at {evidence_path} - run 'aletheore scan {repo_path}' first "
             "or call the aletheore_scan tool"
         )
-    return json.loads(evidence_path.read_text())
+    stat = evidence_path.stat()
+    cache_key = (stat.st_mtime, stat.st_size)
+    cached = _evidence_cache.get(repo_path)
+    if cached is not None and cached[0] == cache_key:
+        return cached[1]
+    evidence = json.loads(evidence_path.read_text())
+    _evidence_cache[repo_path] = (cache_key, evidence)
+    return evidence
 
 
 def _toon_result(data: object) -> str:
@@ -64,6 +86,31 @@ _TOOL_NAME_TO_QUERY_KIND = {
     "aletheore_environment_variables": "environment-variables",
 }
 
+# One real description per query kind, naming exactly what `target` expects
+# where the underlying query function actually takes one (see
+# QUERY_FUNCTIONS' requires_target flag in query.py) - a shared templated
+# docstring left every one of these indistinguishable to a calling LLM,
+# which had no way to tell "target is a file path" from "target is a
+# branch name" from "this tool takes no target at all".
+_QUERY_TOOL_DESCRIPTIONS = {
+    "imports": "This module's own list of imports. target: file path exactly as it appears in evidence (e.g. 'src/app.py').",
+    "imported-by": "Which modules import this one. target: file path exactly as it appears in evidence.",
+    "symbols": "This module's extracted functions and classes. target: file path exactly as it appears in evidence.",
+    "branch": "Git branch metadata (head commit, tracking info). target: branch name (e.g. 'main').",
+    "ownership": "Per-file code ownership derived from git blame history. Takes no target.",
+    "secrets": "Secret-scanner findings for one file. target: file path exactly as it appears in evidence.",
+    "vulnerabilities": "All dependency vulnerability findings for this repo. Takes no target.",
+    "licenses": "All dependency license findings for this repo. Takes no target.",
+    "endpoints": "All API endpoints mapped from source. Takes no target.",
+    "cluster": "The architecture cluster containing this module. target: file path exactly as it appears in evidence.",
+    "layer-violations": "Layer-convention violations detected in the architecture. Takes no target.",
+    "dead-code": "Unreferenced functions/classes and unused dependencies. Takes no target.",
+    "hotspots": "Files with the most git churn/co-change activity. Takes no target.",
+    "database": "Detected database usage - ORMs, connection strings, migrations. Takes no target.",
+    "infrastructure": "Detected infrastructure config - Docker, CI, IaC files. Takes no target.",
+    "environment-variables": "Environment variables referenced in the codebase. Takes no target.",
+}
+
 _SEARCH_MATCH_CAP = 200
 
 
@@ -88,7 +135,7 @@ def _register_query_wrapper_tools(mcp_instance: FastMCP, repo_path: Path) -> Non
 
         tool_func = make_tool()
         tool_func.__name__ = tool_name
-        tool_func.__doc__ = f"Query '{kind}' from the scanned repository's evidence."
+        tool_func.__doc__ = _QUERY_TOOL_DESCRIPTIONS[kind]
         mcp_instance.tool(name=tool_name)(tool_func)
 
 
@@ -249,6 +296,23 @@ def _register_healthcheck_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
         return _toon_result(result)
 
 
+def _register_index_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_index")
+    def aletheore_index() -> str:
+        """Build the semantic search index this repo's evidence, required
+        before aletheore_search_codebase or aletheore_answer can be used.
+        Embeds via a local Ollama instance, falling back to OpenAI if
+        unavailable."""
+        from aletheore.search_index import build_index
+
+        evidence = read_evidence(repo_path)
+        try:
+            count = build_index(repo_path, evidence)
+        except Exception as exc:  # noqa: BLE001
+            return _toon_result({"error": str(exc)})
+        return _toon_result({"indexed_chunks": count})
+
+
 def _register_search_codebase_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search_codebase")
     def aletheore_search_codebase(query: str, k: int = 10) -> str:
@@ -269,12 +333,19 @@ def _register_managed_audit_tool(mcp_instance: FastMCP, repo_path: Path) -> None
     @mcp_instance.tool(name="aletheore_managed_audit")
     def aletheore_managed_audit(token: str | None = None) -> str:
         """Run a full audit report using Aletheore's managed audit service."""
-        import os
-
-        resolved_token = token or os.environ.get("ALETHEORE_API_TOKEN")
+        # Same resolution the CLI's own `aletheore audit --managed` uses -
+        # before this fix, this only checked the raw env var, so a user who
+        # ran `aletheore login` (saved to the OS keychain/credentials file,
+        # no env var set) got a false "no token available" through MCP even
+        # though the CLI itself worked. prompt_fn is a no-op: an MCP tool
+        # call is driven by an agent, not a human at a terminal, and must
+        # never block waiting for interactive input.
+        resolved_token = token or get_api_key(
+            "ALETHEORE_API_TOKEN", "aletheore-managed-audit", prompt_fn=lambda _: ""
+        )
         if not resolved_token:
             return _toon_result(
-                {"error": "no managed-audit token available (set ALETHEORE_API_TOKEN or pass token)"}
+                {"error": "no managed-audit token available (run 'aletheore login', set ALETHEORE_API_TOKEN, or pass token)"}
             )
         evidence = read_evidence(repo_path)
         return _toon_result({"report": run_managed_audit_request(evidence, resolved_token)})
@@ -290,6 +361,7 @@ def build_server(repo_path: Path, answer_adapter: AgentAdapter | None = None) ->
     _register_code_evidence_tools(mcp_instance, repo_path)
     _register_scan_tool(mcp_instance, repo_path)
     _register_healthcheck_tool(mcp_instance, repo_path)
+    _register_index_tool(mcp_instance, repo_path)
     _register_search_codebase_tool(mcp_instance, repo_path)
     _register_managed_audit_tool(mcp_instance, repo_path)
     if answer_adapter is not None:

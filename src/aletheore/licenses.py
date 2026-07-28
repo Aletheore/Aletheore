@@ -1,6 +1,7 @@
 import json
 import re
 import ssl
+import time
 import tomllib
 import urllib.error
 import urllib.request
@@ -30,6 +31,17 @@ DEFAULT_TIMEOUT_SECONDS = 10
 # to blow the hosted worker's per-job timeout on its own. Bounded, not
 # unbounded, so this stays polite to registries under a large repo.
 LICENSE_CHECK_CONCURRENCY = 20
+
+# A registry lookup for one exact (ecosystem, name, version) triple returns
+# the same answer forever in the overwhelming majority of cases - a
+# published package version's license doesn't change - so every scan of
+# every repo on this machine re-paying the same network round-trip for the
+# same dependency is pure waste. Cached across repos and across
+# invocations, not per-scan. 30 days is defensive against the rare
+# corrected-metadata case, not a sign this data actually changes on that
+# timescale.
+DEFAULT_LICENSE_CACHE_PATH = Path.home() / ".cache" / "aletheore" / "license-cache.json"
+_LICENSE_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
 
 # Same reasoning as vulnerabilities.py: certifi's CA bundle explicitly, since a
 # python.org macOS install commonly has no default CA bundle configured.
@@ -258,11 +270,57 @@ def _fetch_one_license(pin: tuple[str, str, str], timeout: int) -> str | None:
         return None
 
 
+def _license_cache_key(ecosystem: str, name: str, version: str) -> str:
+    return f"{ecosystem}|{name}|{version}"
+
+
+def _load_license_cache(cache_path: Path) -> dict[str, dict]:
+    try:
+        return json.loads(cache_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_license_cache(cache_path: Path, cache: dict[str, dict]) -> None:
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(cache))
+    except OSError:
+        # Best-effort: a failure to persist the cache must never fail the
+        # license check itself - it only costs the next scan (of this or any
+        # other repo) its cache hit, not correctness.
+        pass
+
+
+def _fetch_one_license_cached(
+    pin: tuple[str, str, str], timeout: int, cache: dict[str, dict]
+) -> str | None:
+    name, version, ecosystem = pin
+    key = _license_cache_key(ecosystem, name, version)
+    cached = cache.get(key)
+    if cached is not None and time.time() - cached.get("cached_at", 0) < _LICENSE_CACHE_TTL_SECONDS:
+        return cached.get("license")
+
+    license_text = _fetch_one_license(pin, timeout)
+    # Safe to mutate from multiple worker threads: dict item assignment on
+    # distinct keys is atomic under the GIL, and every pin has its own
+    # distinct key here.
+    cache[key] = {"license": license_text, "cached_at": time.time()}
+    return license_text
+
+
 def check_dependency_licenses(
     repo_path: Path,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     on_progress: Callable[[int, int, str], None] | None = None,
+    cache_path: Path | None = None,
 ) -> dict:
+    # Resolved inside the function body (not as the default argument value
+    # itself) so a test monkeypatching DEFAULT_LICENSE_CACHE_PATH actually
+    # takes effect - a default argument's value is bound once at function
+    # definition time, before any test ever runs.
+    if cache_path is None:
+        cache_path = DEFAULT_LICENSE_CACHE_PATH
     repo_license = detect_repo_license(repo_path)
     pins = (
         _parse_pip_pins(repo_path)
@@ -278,13 +336,16 @@ def check_dependency_licenses(
         return {"checked": True, "reason": None, "repo_license": repo_license, "findings": []}
 
     findings = []
+    cache = _load_license_cache(cache_path)
     # Each registry lookup is an independent blocking HTTP call - a thread
     # pool overlaps their network wait time instead of paying it serially.
     # executor.map (not as_completed) preserves pins' original order in the
     # results regardless of which thread finishes first, so progress
     # reporting and finding order both stay deterministic.
     with ThreadPoolExecutor(max_workers=LICENSE_CHECK_CONCURRENCY) as executor:
-        license_texts = executor.map(lambda pin: _fetch_one_license(pin, timeout), pins)
+        license_texts = executor.map(
+            lambda pin: _fetch_one_license_cached(pin, timeout, cache), pins
+        )
         for index, ((name, version, ecosystem), license_text) in enumerate(
             zip(pins, license_texts), start=1
         ):
@@ -302,5 +363,6 @@ def check_dependency_licenses(
                         "category": category,
                     }
                 )
+    _save_license_cache(cache_path, cache)
 
     return {"checked": True, "reason": None, "repo_license": repo_license, "findings": findings}
