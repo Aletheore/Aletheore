@@ -98,8 +98,13 @@ def test_build_module_graph_cpp_out_of_class_methods_are_extracted(tmp_path):
     assert "Handler" in symbol_names(handler_cpp["symbols"]["functions"])
     assert "getUser" in symbol_names(handler_cpp["symbols"]["functions"])
 
+    get_user_fn = next(f for f in handler_cpp["symbols"]["functions"] if f["name"] == "getUser")
+    assert get_user_fn["params"] == "(int id)"
+
     logger_cpp = by_path["src/logger.cpp"]
     assert "info" in symbol_names(logger_cpp["symbols"]["functions"])
+    info_fn = next(f for f in logger_cpp["symbols"]["functions"] if f["name"] == "info")
+    assert info_fn["params"] == "(const std::string& msg)"
 
 
 def test_build_module_graph_cpp_same_directory_include_resolves(tmp_path):

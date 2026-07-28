@@ -30,6 +30,7 @@ from aletheore.evidence_resolution import (
 from aletheore.history import compute_diff
 from aletheore.pr_comment import COMMENT_MARKER, format_diff_comment
 from aletheore.healthcheck import run_healthcheck
+from aletheore.signature_diff import find_regression_fence_violations
 from app_server.config import get_settings
 from app_server.db import MAX_SCANNED_REPOS_PER_MONTH
 from app_server.github_auth import generate_app_jwt, get_installation_token
@@ -525,6 +526,47 @@ def _maybe_create_regression_risk_check_run(
     )
 
 
+def _maybe_create_regression_fence_check_run(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    head_sha: str,
+    installation_id: int,
+    old_evidence: dict,
+    new_evidence: dict,
+    changed_files: list[str],
+) -> None:
+    settings = get_settings()
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is None or installation["plan"] == "free":
+        return
+
+    violations = find_regression_fence_violations(old_evidence, new_evidence, changed_files)
+    if not violations:
+        return
+
+    lines = []
+    for v in violations:
+        callers = ", ".join(f"`{c}`" for c in v["untouched_callers"])
+        lines.append(
+            f"- `{v['function']}` in `{v['file']}`: `{v['old_params']}` -> `{v['new_params']}`, "
+            f"but these importers weren't updated in this PR: {callers}"
+        )
+    summary = (
+        "This PR changes a function signature without updating all known importers:\n"
+        + "\n".join(lines)
+    )
+    create_check_run(
+        client,
+        token,
+        repo_full_name,
+        head_sha,
+        "neutral",
+        summary,
+        name="Aletheore Regression Fence",
+    )
+
+
 async def _resolve_token(installation_id: int, app_jwt: str) -> str:
     result = get_installation_token(installation_id, app_jwt)
     if inspect.isawaitable(result):
@@ -660,6 +702,19 @@ def run_pr_scan_job(
                     repo_full_name,
                     head_sha,
                     installation_id,
+                    new,
+                    changed_files,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                _maybe_create_regression_fence_check_run(
+                    client,
+                    token,
+                    repo_full_name,
+                    head_sha,
+                    installation_id,
+                    old,
                     new,
                     changed_files,
                 )

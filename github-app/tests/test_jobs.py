@@ -523,6 +523,128 @@ def test_maybe_create_regression_risk_check_run_skips_free_plan(monkeypatch):
     assert touched_incidents == []
 
 
+def test_maybe_create_regression_fence_check_run_creates_neutral_check_run(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="Aletheore secrets check": created.append(
+            (conclusion, name, summary)
+        ),
+    )
+    old_evidence = {
+        "repository": {
+            "modules": [
+                {"path": "billing.py", "symbols": {"functions": [{"name": "get_billing", "params": "(user_id)"}]}},
+                {"path": "reports/export.py", "symbols": {"functions": []}},
+            ]
+        }
+    }
+    new_evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "billing.py",
+                    "symbols": {
+                        "functions": [{"name": "get_billing", "params": "(user_id, include_history)"}]
+                    },
+                    "imported_by": ["reports/export.py"],
+                },
+                {"path": "reports/export.py", "symbols": {"functions": []}},
+            ]
+        }
+    }
+
+    from scan_worker.jobs import _maybe_create_regression_fence_check_run
+
+    _maybe_create_regression_fence_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        old_evidence=old_evidence,
+        new_evidence=new_evidence,
+        changed_files=["billing.py"],
+    )
+
+    assert len(created) == 1
+    assert created[0][0] == "neutral"
+    assert created[0][1] == "Aletheore Regression Fence"
+    assert "get_billing" in created[0][2]
+    assert "reports/export.py" in created[0][2]
+
+
+def test_maybe_create_regression_fence_check_run_skips_when_no_violations(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    created = []
+    monkeypatch.setattr("scan_worker.jobs.create_check_run", lambda *a, **k: created.append(True))
+    evidence = {
+        "repository": {
+            "modules": [
+                {"path": "billing.py", "symbols": {"functions": [{"name": "get_billing", "params": "(user_id)"}]}}
+            ]
+        }
+    }
+
+    from scan_worker.jobs import _maybe_create_regression_fence_check_run
+
+    _maybe_create_regression_fence_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        old_evidence=evidence,
+        new_evidence=evidence,
+        changed_files=["billing.py"],
+    )
+
+    assert created == []
+
+
+def test_maybe_create_regression_fence_check_run_skips_free_plan(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    created = []
+    monkeypatch.setattr("scan_worker.jobs.create_check_run", lambda *a, **k: created.append(True))
+    old_evidence = {
+        "repository": {
+            "modules": [
+                {"path": "billing.py", "symbols": {"functions": [{"name": "get_billing", "params": "(user_id)"}]}}
+            ]
+        }
+    }
+    new_evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "billing.py",
+                    "symbols": {"functions": [{"name": "get_billing", "params": "(user_id, x)"}]},
+                    "imported_by": ["reports/export.py"],
+                }
+            ]
+        }
+    }
+
+    from scan_worker.jobs import _maybe_create_regression_fence_check_run
+
+    _maybe_create_regression_fence_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        old_evidence=old_evidence,
+        new_evidence=new_evidence,
+        changed_files=["billing.py"],
+    )
+
+    assert created == []
+
+
 def test_managed_audit_api_job_returns_report_text(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
