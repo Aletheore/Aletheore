@@ -88,6 +88,11 @@ def test_build_module_graph_extracts_rust_symbols(tmp_path):
     assert "Handler" in symbol_names(handlers["symbols"]["classes"])
     assert "get_user" in symbol_names(handlers["symbols"]["functions"])
 
+    get_user_fn = next(f for f in handlers["symbols"]["functions"] if f["name"] == "get_user")
+    assert get_user_fn["params"] == "(&self, id: u32)"
+    handler_cls = next(c for c in handlers["symbols"]["classes"] if c["name"] == "Handler")
+    assert handler_cls["params"] is None
+
     store = by_path["src/store/mod.rs"]
     assert "User" in symbol_names(store["symbols"]["classes"])
     assert "Store" in symbol_names(store["symbols"]["classes"])

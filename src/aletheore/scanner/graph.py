@@ -100,11 +100,37 @@ def _rel(repo_path: Path, path: Path) -> str | None:
         return None
 
 
+def _params_text(source: bytes, enclosing_node: Node) -> str | None:
+    """Raw source text of a function/method's parameter list, whitespace-
+    normalized so purely cosmetic reformatting (wrapping a long parameter
+    list across lines, extra spaces) doesn't look like a signature change.
+    None for symbols with no parameter list at all (classes, interfaces).
+
+    Every grammar checked (Python, JS/TS, Go, Rust, Java, Ruby, PHP, C#)
+    names this field "parameters" directly on the function/method node,
+    despite the node TYPE differing (parameters, formal_parameters,
+    parameter_list, method_parameters) - confirmed empirically per
+    language, not assumed. C/C++ is the one exception: the parameter list
+    hangs off a nested function_declarator ("declarator" field) rather
+    than the function_definition node directly.
+    """
+    params_node = enclosing_node.child_by_field_name("parameters")
+    if params_node is None:
+        declarator = enclosing_node.child_by_field_name("declarator")
+        if declarator is not None:
+            params_node = declarator.child_by_field_name("parameters")
+    if params_node is None:
+        return None
+    raw = source[params_node.start_byte:params_node.end_byte].decode()
+    return " ".join(raw.split())
+
+
 def _symbol_entry(source: bytes, name_node: Node, enclosing_node: Node) -> dict:
     return {
         "name": source[name_node.start_byte:name_node.end_byte].decode(),
         "start_line": enclosing_node.start_point[0] + 1,
         "end_line": enclosing_node.end_point[0] + 1,
+        "params": _params_text(source, enclosing_node),
     }
 
 
@@ -821,6 +847,7 @@ def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[dict],
                                 "name": name,
                                 "start_line": n.start_point[0] + 1,
                                 "end_line": n.end_point[0] + 1,
+                                "params": _params_text(source, n),
                             }
                         )
             elif n.type in ("struct_specifier", "class_specifier", "union_specifier", "enum_specifier"):

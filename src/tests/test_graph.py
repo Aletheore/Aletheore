@@ -43,10 +43,36 @@ def test_build_module_graph_records_symbol_line_bounds(tmp_path):
     login_fn = next(f for f in auth["symbols"]["functions"] if f["name"] == "login")
     assert login_fn["start_line"] == 4
     assert login_fn["end_line"] == 5
+    assert login_fn["params"] == "()"
 
     auth_error_cls = next(c for c in auth["symbols"]["classes"] if c["name"] == "AuthError")
     assert auth_error_cls["start_line"] == 8
     assert auth_error_cls["end_line"] == 9
+    # Classes have no parameter list - unlike functions, params is always
+    # None for them, not an empty string.
+    assert auth_error_cls["params"] is None
+
+
+def test_build_module_graph_normalizes_multiline_function_signatures(tmp_path):
+    # A signature reformatted across multiple lines (wrapped for length,
+    # extra indentation) must diff identically to its single-line
+    # equivalent - this is what makes "did the signature actually change"
+    # detection resilient to pure formatting changes.
+    repo = tmp_path / "repo"
+    app = repo / "app"
+    app.mkdir(parents=True)
+    (app / "__init__.py").write_text("")
+    (app / "billing.py").write_text(
+        "def get_billing(\n"
+        "    user_id: int,\n"
+        "    include_history: bool = False,\n"
+        ") -> dict:\n"
+        "    return {}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+    billing_fn = next(f for f in by_path["app/billing.py"]["symbols"]["functions"] if f["name"] == "get_billing")
+    assert billing_fn["params"] == "( user_id: int, include_history: bool = False, )"
 
 
 def test_build_module_graph_dependency_edges(tmp_path):
@@ -77,6 +103,8 @@ def test_build_module_graph_extracts_javascript_imports(tmp_path):
     by_path = {m["path"]: m for m in modules}
     assert "index.js" in by_path
     assert "utils.js" in by_path["index.js"]["imports"]
+    add_fn = next(f for f in by_path["utils.js"]["symbols"]["functions"] if f["name"] == "add")
+    assert add_fn["params"] == "(a, b)"
     assert unparseable == []
 
 
@@ -169,6 +197,8 @@ def test_build_module_graph_extracts_typescript_imports(tmp_path):
     assert "index.ts" in by_path
     assert "utils.ts" in by_path["index.ts"]["imports"]
     assert "add" in symbol_names(by_path["utils.ts"]["symbols"]["functions"])
+    add_fn = next(f for f in by_path["utils.ts"]["symbols"]["functions"] if f["name"] == "add")
+    assert add_fn["params"] == "(a: number, b: number)"
     assert unparseable == []
 
 

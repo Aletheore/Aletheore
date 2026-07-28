@@ -53,6 +53,11 @@ def test_build_module_graph_extracts_go_imports_and_symbols(tmp_path):
     assert "Hello" in symbol_names(service["symbols"]["functions"])
     assert "Greeter" in symbol_names(service["symbols"]["classes"])
 
+    hello_fn = next(f for f in service["symbols"]["functions"] if f["name"] == "Hello")
+    assert hello_fn["params"] == "()"
+    greeter_cls = next(c for c in service["symbols"]["classes"] if c["name"] == "Greeter")
+    assert greeter_cls["params"] is None
+
     assert unparseable == []
 
 
