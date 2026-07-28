@@ -2170,11 +2170,41 @@ def test_maybe_update_live_wiki_generates_and_stores_for_affected_clusters(monke
             records=records, commit=commit
         ),
     )
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error_message=None: status_calls.append(status),
+    )
 
     _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["auth/login.py"], "sha1")
 
     assert stored["records"] == [fake_record]
     assert stored["commit"] == "sha1"
+    assert status_calls == ["ready"]
+
+
+def test_maybe_update_live_wiki_records_failure_status_on_exception(monkeypatch):
+    from scan_worker.jobs import _maybe_update_live_wiki
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+
+    def _boom(*a, **k):
+        raise RuntimeError("LLM API unavailable")
+
+    monkeypatch.setattr("scan_worker.jobs.live_wiki.generate_subsystems", _boom)
+
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error_message=None: status_calls.append((status, error_message)),
+    )
+
+    # Must not raise - a failed incremental update is a recorded status,
+    # not a crash that would take down the rest of run_pr_scan_job.
+    _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["auth/login.py"], "sha1")
+
+    assert status_calls == [("failed", "LLM API unavailable")]
 
 
 def test_run_pr_scan_job_wires_changed_files_into_live_wiki_update(bare_repo_with_two_commits, monkeypatch):
@@ -2214,6 +2244,149 @@ def test_run_pr_scan_job_wires_changed_files_into_live_wiki_update(bare_repo_wit
     assert called["repo_full_name"] == "octocat/hello-world"
     assert called["changed_files"] == ["app.py"]
     assert called["head_sha"] == head_sha
+
+
+def test_run_pr_scan_job_logs_slack_alert_failure_instead_of_swallowing_it(
+    bare_repo_with_two_commits, monkeypatch, caplog
+):
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+
+    def _boom(*a, **k):
+        raise RuntimeError("Slack API error: invalid_token")
+
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", _boom)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: None)
+
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        # Must not raise - a dead/wrong webhook must never take down the
+        # rest of the PR scan (the diff comment is already posted by now).
+        run_pr_scan_job(
+            installation_id=1,
+            repo_full_name="octocat/hello-world",
+            pr_number=7,
+            base_sha=base_sha,
+            head_sha=head_sha,
+        )
+
+    assert any(
+        "alert webhook send failed" in record.message and "octocat/hello-world" in record.message
+        for record in caplog.records
+    )
+
+
+def test_run_push_scan_job_scans_and_reconciles_wiki(bare_repo_with_two_commits, monkeypatch):
+    from scan_worker.jobs import run_push_scan_job
+
+    bare_path, _base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+
+    called = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs._maybe_update_live_wiki",
+        lambda installation_id, repo_full_name, evidence, changed_files, head_sha: called.update(
+            installation_id=installation_id,
+            repo_full_name=repo_full_name,
+            changed_files=changed_files,
+            head_sha=head_sha,
+        ),
+    )
+
+    run_push_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        head_sha=head_sha,
+        changed_files=["app.py"],
+    )
+
+    assert called["installation_id"] == 1
+    assert called["repo_full_name"] == "octocat/hello-world"
+    assert called["changed_files"] == ["app.py"]
+    assert called["head_sha"] == head_sha
+
+
+def test_run_push_scan_job_skips_wiki_update_for_free_plan(bare_repo_with_two_commits, monkeypatch):
+    from scan_worker.jobs import run_push_scan_job
+
+    bare_path, _base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    called = []
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: called.append(True))
+
+    run_push_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        head_sha=head_sha,
+        changed_files=["app.py"],
+    )
+
+    assert called == []
+
+
+def test_run_push_scan_job_skips_paid_repo_past_monthly_scan_cap(bare_repo_with_two_commits, monkeypatch):
+    from scan_worker.jobs import run_push_scan_job
+
+    bare_path, _base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: False)
+    cloned = []
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: cloned.append(True))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+
+    run_push_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        head_sha=head_sha,
+        changed_files=["app.py"],
+    )
+
+    assert cloned == []
+
+
+def test_run_push_scan_job_logs_and_does_not_raise_on_scan_failure(bare_repo_with_two_commits, monkeypatch, caplog):
+    from scan_worker.jobs import run_push_scan_job
+
+    _bare_path, _base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+
+    def _boom(*a, **k):
+        raise RuntimeError("clone failed")
+
+    monkeypatch.setattr("scan_worker.jobs._clone_url", _boom)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        run_push_scan_job(
+            installation_id=1,
+            repo_full_name="octocat/hello-world",
+            head_sha=head_sha,
+            changed_files=["app.py"],
+        )
+
+    assert any("push scan job failed" in record.message for record in caplog.records)
 
 
 def test_run_pr_scan_job_skips_paid_repo_past_monthly_scan_cap(bare_repo_with_two_commits, monkeypatch):
@@ -2459,6 +2632,7 @@ def test_maybe_update_live_wiki_passes_fetch_line_count_through(monkeypatch):
         "scan_worker.jobs._store_wiki_generation",
         lambda *a, **k: captured_store.update(k),
     )
+    monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
 
     _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["auth/login.py"], "sha1")
 

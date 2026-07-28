@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -15,8 +16,10 @@ from app_server.config import get_settings
 from app_server.db import (
     MAX_SCANNED_REPOS_PER_MONTH,
     count_monthly_scanned_repos,
-    get_installation,
+    get_endpoint_health_history,
     get_endpoint_health_summary_since,
+    get_endpoint_uptime_pct_since,
+    get_installation,
     get_latest_evidence,
     get_recent_endpoint_health,
     get_recent_history,
@@ -122,6 +125,16 @@ async def list_my_repos(request: Request):
     result = []
     known_by_installation: dict[int, set[str]] = {}
     for row in repos:
+        known_by_installation.setdefault(row["installation_id"], set()).add(row["repo_full_name"])
+        # The hosted dashboard is an AIR (paid) feature. Community is free,
+        # self-service, and unmanaged by design - the CLI, the free GitHub
+        # Action, and free GitHub App usage are all meant to work without
+        # ever touching a shared web view. Listing a free installation's
+        # repos here would let every GitHub admin on that org click into a
+        # full managed dashboard for free - exactly the team-collaboration
+        # capability AIR itself sells.
+        if row["plan"] == "free":
+            continue
         # repo_full_name is the source of truth for the org/repo split used
         # in every /app/{org}/{repo} route - account_login is a display
         # value only and isn't guaranteed to match the org segment exactly.
@@ -135,17 +148,14 @@ async def list_my_repos(request: Request):
                 "initialized": True,
             }
         )
-        known_by_installation.setdefault(row["installation_id"], set()).add(row["repo_full_name"])
 
     for installation_id in administered_ids:
         installation = await get_installation(pool, installation_id)
-        if installation is None:
+        if installation is None or installation["plan"] == "free":
             continue
         known = known_by_installation.get(installation_id, set())
-        scan_limit_reached = False
-        if installation["plan"] != "free":
-            scanned_this_month = await count_monthly_scanned_repos(pool, installation_id)
-            scan_limit_reached = scanned_this_month >= MAX_SCANNED_REPOS_PER_MONTH
+        scanned_this_month = await count_monthly_scanned_repos(pool, installation_id)
+        scan_limit_reached = scanned_this_month >= MAX_SCANNED_REPOS_PER_MONTH
         result.extend(
             await _uninitialized_repos_for_installation(
                 installation_id, installation["plan"], known, scan_limit_reached
@@ -171,6 +181,8 @@ async def _require_dashboard_installation(request: Request, org: str, repo: str)
 
     installation = await get_installation(pool, installation_id)
     if installation is not None:
+        if installation["plan"] == "free":
+            raise HTTPException(status_code=402, detail="the managed dashboard requires a paid plan")
         await _require_seat_if_paid(pool, installation, session["github_login"])
 
     return installation_id
@@ -237,6 +249,39 @@ async def get_dashboard_health(org: str, repo: str, request: Request):
     }
 
 
+@dashboard_router.get("/app/{org}/{repo}/health/history")
+async def get_dashboard_health_history(
+    org: str,
+    repo: str,
+    request: Request,
+    method: str,
+    path: str,
+    target_id: int | None = None,
+    limit: int = 50,
+):
+    installation_id = await _require_dashboard_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    repo_full_name = f"{org}/{repo}"
+
+    rows = await get_endpoint_health_history(
+        pool, installation_id, repo_full_name, target_id, method, path, limit
+    )
+    return {
+        "repo_full_name": repo_full_name,
+        "method": method,
+        "path": path,
+        "checks": [
+            {
+                "reachable": row["reachable"],
+                "status_code": row["status_code"],
+                "latency_ms": float(row["latency_ms"]) if row["latency_ms"] is not None else None,
+                "checked_at": row["checked_at"].isoformat(),
+            }
+            for row in rows
+        ],
+    }
+
+
 @dashboard_router.get("/app/{org}/{repo}/wiki")
 async def get_dashboard_wiki(org: str, repo: str, request: Request):
     installation = await _require_admin_installation(request, org, repo)
@@ -283,9 +328,49 @@ async def get_dashboard_wiki_subsystem(org: str, repo: str, subsystem_id: str, r
     return {"repo_full_name": repo_full_name, "subsystem": subsystem}
 
 
+PUBLIC_HEALTH_RATE_LIMIT = 60
+PUBLIC_HEALTH_RATE_LIMIT_WINDOW_SECONDS = 60
+
+
 @dashboard_router.get("/v1/health/{org}/{repo}")
 async def get_public_health(org: str, repo: str, request: Request, response: Response):
     response.headers["Access-Control-Allow-Origin"] = "*"
+
+    from redis import Redis
+
+    from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for
+    from app_server.rate_limit import is_rate_limited
+
+    client_ip = client_ip_from_forwarded_for(
+        request.headers.get("x-forwarded-for"),
+        request.client.host if request.client else "",
+    )
+    try:
+        rate_limited = is_rate_limited(
+            Redis.from_url(get_settings().redis_url),
+            f"ratelimit:public_health:{client_ip}",
+            PUBLIC_HEALTH_RATE_LIMIT,
+            PUBLIC_HEALTH_RATE_LIMIT_WINDOW_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # A Redis outage should degrade this endpoint's abuse protection,
+        # not take down the public status API itself - fail open, same as
+        # the Paddle IP allowlist does when it can't reach Paddle's /ips.
+        logging.getLogger("app_server.dashboard").warning(
+            "public health rate limit check failed (%s); allowing request", exc
+        )
+        rate_limited = False
+
+    if rate_limited:
+        raise HTTPException(
+            status_code=429,
+            detail="too many requests",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Retry-After": str(PUBLIC_HEALTH_RATE_LIMIT_WINDOW_SECONDS),
+            },
+        )
+
     repo_full_name = f"{org}/{repo}"
     rows = await request.app.state.db_pool.fetch(
         """
@@ -304,6 +389,13 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
             headers={"Access-Control-Allow-Origin": "*"},
         )
 
+    # An aggregate 7-day uptime percentage, not raw history - this is a
+    # public, unauthenticated, CORS-open endpoint, so it gets a trend
+    # signal without handing out granular check-by-check timing data to
+    # anyone who asks (the authenticated dashboard endpoint has that).
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    uptime_by_endpoint = await get_endpoint_uptime_pct_since(request.app.state.db_pool, repo_full_name, since)
+
     return {
         "repo_full_name": repo_full_name,
         "endpoints": [
@@ -314,6 +406,7 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
                 "status_code": row["status_code"],
                 "latency_ms": float(row["latency_ms"]) if row["latency_ms"] is not None else None,
                 "checked_at": row["checked_at"].isoformat(),
+                "uptime_pct_7d": uptime_by_endpoint.get((row["endpoint_method"], row["endpoint_path"])),
             }
             for row in rows
         ],

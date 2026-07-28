@@ -3,9 +3,9 @@ import logging
 from fastapi import APIRouter, Request, Response
 
 from app_server.config import get_settings
-from app_server.db import add_paddle_ids_to_installation, get_installation, set_installation_plan
+from app_server.db import add_paddle_ids_to_installation, get_installation, set_extra_seats, set_installation_plan
 from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for, is_known_paddle_ip
-from app_server.paddle_pricing import resolve_plan_for_price_id
+from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID, resolve_plan_for_price_id
 from app_server.paddle_webhook_verify import verify_paddle_signature
 
 paddle_webhook_router = APIRouter()
@@ -50,13 +50,22 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
         logger.warning("%s missing installation_id in custom_data", event_type)
         return
 
+    items = data.get("items") or []
     if data.get("status") in _ACTIVE_SUBSCRIPTION_STATUSES:
-        items = data.get("items") or []
-        price_id = items[0].get("price", {}).get("id") if items else None
-        plan = resolve_plan_for_price_id(price_id) if price_id else None
+        # The base plan price is whichever item resolves to a known plan -
+        # not necessarily items[0], since the extra-seat add-on can be
+        # either item once seats are involved.
+        plan = next(
+            (
+                resolved
+                for item in items
+                if (resolved := resolve_plan_for_price_id((item.get("price") or {}).get("id")))
+            ),
+            None,
+        )
         if not plan:
             logger.warning(
-                "%s has an active status but no resolvable price id: price_id=%s", event_type, price_id
+                "%s has an active status but no resolvable plan price id in items", event_type
             )
             return
     else:
@@ -68,6 +77,21 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     await set_installation_plan(pool, installation_id, plan)
     if "id" in data and "customer_id" in data:
         await add_paddle_ids_to_installation(pool, installation_id, data["id"], data["customer_id"])
+
+    # The extra-seat line item's quantity is the source of truth for billed
+    # seats - reconciled here, the same way the plan itself is, rather than
+    # trusting the buy/remove-seat button's own optimism about what Paddle
+    # actually charged.
+    extra_seats = (
+        sum(
+            item.get("quantity", 0)
+            for item in items
+            if (item.get("price") or {}).get("id") == EXTRA_SEAT_PRICE_ID
+        )
+        if plan != "free"
+        else 0
+    )
+    await set_extra_seats(pool, installation_id, extra_seats)
 
     # One-time Live Wiki build, mirroring the GitHub Marketplace path in
     # webhooks/marketplace.py - fires exactly once, on the free -> paid

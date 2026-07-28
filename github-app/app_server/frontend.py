@@ -226,6 +226,9 @@ table.findings tr:last-child td { border-bottom: none; }
 .health-target-group { margin-bottom: 1.2rem; }
 .health-target-group:last-child { margin-bottom: 0; }
 .health-target-group-label { font-size: 12px; font-weight: 500; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.health-history { grid-column: 1 / -1; background: var(--slate-50); border-radius: 8px; padding: 8px 10px; margin: -4px 0 4px; }
+.health-history-list { display: flex; flex-direction: column; gap: 5px; }
+.health-history-row { display: flex; align-items: center; gap: 10px; font-size: 11.5px; }
 
 .wiki-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; background: var(--accent-soft); border-radius: 10px; padding: 12px 15px; margin: 10px 0 14px; flex-wrap: wrap; }
 .wiki-banner-text { font-size: 12.5px; color: var(--accent-strong); line-height: 1.5; max-width: 46ch; }
@@ -356,7 +359,7 @@ PICKER_HTML = f"""<!DOCTYPE html>
   if (!res) return;
   const data = await res.json();
   if (data.repos.length === 0) {{
-    body.innerHTML = '<div class="empty-state">No repositories yet. Install the Aletheore GitHub App on an organization to get started.</div>';
+    body.innerHTML = '<div class="empty-state">No managed repositories yet. Aletheore Community (free) runs self-service - the CLI, the free GitHub Action, and free GitHub App usage all work without a hosted dashboard, so a free installation won\\'t appear here. Install the Aletheore GitHub App on an organization and subscribe to AIR to get a managed dashboard.</div>';
     return;
   }}
   const byOrg = {{}};
@@ -907,6 +910,8 @@ async function loadResults() {{
     (groups[key] = groups[key] || []).push(e);
   }});
   let html = '';
+  let rowIndex = 0;
+  const rowMeta = {{}};
   Object.keys(groups).sort().forEach(function (label) {{
     const rows = groups[label];
     const up = rows.filter(function (e) {{ return e.reachable; }}).length;
@@ -914,14 +919,20 @@ async function loadResults() {{
       '<span class="chip ' + (up === rows.length ? 'success' : 'critical') + '">' + up + ' of ' + rows.length + ' up</span></div>' +
       '<div class="health-grid">';
     rows.forEach(function (e) {{
-      html += '<div class="health-row"><span class="health-status ' + (e.reachable ? 'up' : 'down') + '"></span>' +
+      const rowId = 'health-row-' + rowIndex;
+      rowMeta[rowId] = {{ target_id: e.target_id, method: e.method, path: e.path }};
+      html += '<div class="health-row" id="' + rowId + '" style="cursor:pointer;" onclick="toggleEndpointHistory(\\'' + rowId + '\\')">' +
+        '<span class="health-status ' + (e.reachable ? 'up' : 'down') + '"></span>' +
         '<span class="health-endpoint">' + escapeHtml(e.method) + ' ' + escapeHtml(e.path) + '</span>' +
         '<span class="health-latency"' + (e.reachable ? '' : ' style="color:var(--critical);"') + '>' + (e.reachable ? Math.round(e.latency_ms) + 'ms' : (e.status_code || 'unreachable')) + '</span>' +
-        '<span class="health-checked">' + relativeTime(e.checked_at) + '</span></div>';
+        '<span class="health-checked">' + relativeTime(e.checked_at) + '</span></div>' +
+        '<div class="health-history" id="' + rowId + '-history" style="display:none;"></div>';
+      rowIndex += 1;
     }});
     html += '</div></div>';
   }});
   body.innerHTML = html;
+  window._healthRowMeta = rowMeta;
 
   const staleEndpoints = data.stale_endpoints || [];
   const staleSection = document.getElementById('stale-endpoints-section');
@@ -941,6 +952,35 @@ async function loadResults() {{
     staleHtml += '</div>';
     staleBody.innerHTML = staleHtml;
   }}
+}}
+
+async function toggleEndpointHistory(rowId) {{
+  const panel = document.getElementById(rowId + '-history');
+  if (!panel) return;
+  if (panel.style.display !== 'none') {{ panel.style.display = 'none'; return; }}
+
+  const meta = (window._healthRowMeta || {{}})[rowId];
+  if (!meta) return;
+  panel.style.display = '';
+  panel.innerHTML = '<div class="empty-state">Loading&hellip;</div>';
+
+  const params = new URLSearchParams({{ method: meta.method, path: meta.path }});
+  if (meta.target_id !== null && meta.target_id !== undefined) {{ params.set('target_id', meta.target_id); }}
+  const res = await apiGet(base + '/health/history?' + params.toString());
+  if (!res || !res.ok) {{ panel.innerHTML = '<div class="empty-state">History unavailable.</div>'; return; }}
+  const data = await res.json();
+  const checks = data.checks || [];
+  if (checks.length === 0) {{ panel.innerHTML = '<div class="empty-state">No history yet.</div>'; return; }}
+
+  let html = '<div class="health-history-list">';
+  checks.forEach(function (c) {{
+    html += '<div class="health-history-row"><span class="health-status ' + (c.reachable ? 'up' : 'down') + '"></span>' +
+      '<span class="health-latency"' + (c.reachable ? '' : ' style="color:var(--critical);"') + '>' +
+      (c.reachable ? Math.round(c.latency_ms) + 'ms' : (c.status_code || 'unreachable')) + '</span>' +
+      '<span class="health-checked">' + relativeTime(c.checked_at) + '</span></div>';
+  }});
+  html += '</div>';
+  panel.innerHTML = html;
 }}
 
 loadTargets();
@@ -1123,7 +1163,18 @@ async function loadWiki() {{
     }}
     return;
   }}
-  let html = '<div class="wiki-banner"><div class="wiki-banner-text"><b>Built once by a frontier model, kept current by a fast one.</b> Every diagram edge below is a real import in this repo, never inferred.</div></div>' +
+  // A failed status here means a later incremental update broke, not the
+  // first build (which is what the branch above handles) - without this,
+  // the customer just sees increasingly stale content with zero signal
+  // that anything is wrong.
+  let staleBanner = '';
+  if (data.build_status === 'failed') {{
+    staleBanner = '<div class="empty-state" style="color:var(--critical);margin-bottom:12px;">' +
+      'The latest AIRview update failed' + (data.build_error ? ': ' + escapeHtml(data.build_error) : '.') +
+      ' Showing the last successful build below - it may be stale.</div>';
+  }}
+  let html = staleBanner +
+    '<div class="wiki-banner"><div class="wiki-banner-text"><b>Built once by a frontier model, kept current by a fast one.</b> Every diagram edge below is a real import in this repo, never inferred.</div></div>' +
     '<div class="diagram-wrap"><div class="mermaid" id="overview-diagram"></div></div>' +
     '<div class="subsystem-grid" id="subsystem-grid"></div>';
   body.innerHTML = html;
@@ -1271,6 +1322,48 @@ async function saveWebhook() {{
   status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
 }}
 
+async function sendTestNotification() {{
+  const status = document.getElementById('webhook-status');
+  status.textContent = 'Sending...';
+  status.style.color = 'var(--slate-600)';
+  const res = await fetch(adminBase + '/webhook-url/test', {{ method: 'POST' }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  status.textContent = res.ok ? 'Test notification sent.' : (data.detail || 'Could not send test notification.');
+  status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
+}}
+
+async function buySeat() {{
+  const status = document.getElementById('seat-billing-status');
+  status.textContent = 'Updating billing...';
+  status.style.color = 'var(--slate-600)';
+  const res = await fetch(adminBase + '/seats/buy', {{ method: 'POST' }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  if (res.ok) {{
+    status.textContent = 'Seat added - billing updated. Refreshing...';
+    status.style.color = 'var(--success)';
+    loadSettings();
+  }} else {{
+    status.textContent = data.detail || 'Could not buy a seat.';
+    status.style.color = 'var(--critical)';
+  }}
+}}
+
+async function removeSeat() {{
+  const status = document.getElementById('seat-billing-status');
+  status.textContent = 'Updating billing...';
+  status.style.color = 'var(--slate-600)';
+  const res = await fetch(adminBase + '/seats/remove', {{ method: 'POST' }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  if (res.ok) {{
+    status.textContent = 'Seat removed - billing updated. Refreshing...';
+    status.style.color = 'var(--success)';
+    loadSettings();
+  }} else {{
+    status.textContent = data.detail || 'Could not remove a seat.';
+    status.style.color = 'var(--critical)';
+  }}
+}}
+
 async function loadSettings() {{
   const body = document.getElementById('settings-body');
   const res = await apiGet(adminBase);
@@ -1289,6 +1382,15 @@ async function loadSettings() {{
   }}
   const data = await res.json();
   const installation = data.installation;
+  window._hasActiveSubscription = !!installation.paddle_subscription_id;
+  window._extraSeats = data.extra_seats || 0;
+
+  const seatBillingHtml = window._hasActiveSubscription
+    ? '<div class="form-row">' +
+      '<button class="btn" onclick="buySeat()">Buy extra seat ($3.99/mo)</button>' +
+      (window._extraSeats > 0 ? '<button class="btn" onclick="removeSeat()" style="margin-left:6px;">Remove a seat</button>' : '') +
+      '</div><div id="seat-billing-status" class="settings-block-hint"></div>'
+    : '<div class="settings-block-hint">Extra seats need an active subscription - subscribe first to buy one.</div>';
 
   body.innerHTML =
     '<div class="settings-grid">' +
@@ -1299,7 +1401,7 @@ async function loadSettings() {{
           '<div class="form-row"><input class="field" id="new-member-login" placeholder="GitHub username">' +
           '<button class="btn" onclick="addMember()">Add</button></div>' +
           '<div id="member-status" class="settings-block-hint"></div>' +
-          '<div class="settings-block-hint">Extra seats beyond the plan\\'s limit aren\\'t billable yet - adding past the cap is blocked for now.</div>' +
+          seatBillingHtml +
         '</div>' +
         '<div class="settings-block">' +
           '<div class="settings-block-label">API tokens</div>' +
@@ -1312,9 +1414,9 @@ async function loadSettings() {{
       '<div>' +
         '<div class="settings-block">' +
           '<div class="settings-block-label">Alert webhook</div>' +
-          '<input class="field" id="webhook-url-input" placeholder="https://hooks.slack.com/..." value="' + escapeHtml(installation.webhook_url || '') + '">' +
-          '<div class="form-row"><button class="btn" onclick="saveWebhook()">Save</button><span id="webhook-status" class="settings-block-hint"></span></div>' +
-          '<div class="settings-block-hint">New critical findings are posted here shortly after a scan finishes.</div>' +
+          '<input class="field" id="webhook-url-input" placeholder="Slack or Teams webhook URL" value="' + escapeHtml(installation.webhook_url || '') + '">' +
+          '<div class="form-row"><button class="btn" onclick="saveWebhook()">Save</button><button class="btn" onclick="sendTestNotification()" style="margin-left:6px;">Send test</button><span id="webhook-status" class="settings-block-hint"></span></div>' +
+          '<div class="settings-block-hint">New critical findings are posted here shortly after a scan finishes. Paste a Slack incoming-webhook URL or a Teams workflow webhook URL - both are auto-detected.</div>' +
         '</div>' +
         '<div class="settings-block">' +
           '<div class="settings-block-label">Endpoint health targets</div>' +

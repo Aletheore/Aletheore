@@ -98,6 +98,7 @@ async def test_list_my_repos_requires_login(pool):
 @pytest.mark.asyncio
 async def test_list_my_repos_returns_repos_across_administered_installations(pool, monkeypatch):
     await upsert_installation(pool, 701, "octocat")
+    await set_installation_plan(pool, 701, "indie")
     await upsert_installation(pool, 702, "another-org")
     await set_installation_plan(pool, 702, "indie")
     await insert_repo_history(
@@ -123,8 +124,27 @@ async def test_list_my_repos_returns_repos_across_administered_installations(poo
     by_name = {r["repo_full_name"]: r for r in repos}
     assert by_name["octocat/hello-world"]["org"] == "octocat"
     assert by_name["octocat/hello-world"]["repo"] == "hello-world"
-    assert by_name["octocat/hello-world"]["plan"] == "free"
+    assert by_name["octocat/hello-world"]["plan"] == "indie"
     assert by_name["another-org/service-b"]["plan"] == "indie"
+
+
+@pytest.mark.asyncio
+async def test_list_my_repos_excludes_free_plan_installations(pool, monkeypatch):
+    # The hosted dashboard is an AIR (paid) feature - Community is free,
+    # self-service, and unmanaged by design. Listing a free installation's
+    # repos here would let every GitHub admin on that org click into a full
+    # managed dashboard for free, without anyone paying for it.
+    await upsert_installation(pool, 704, "octocat")  # defaults to plan='free'
+    await insert_repo_history(
+        pool, 704, "octocat/free-repo", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[704])
+    async with client:
+        response = await client.get("/app/repos")
+
+    assert response.status_code == 200
+    assert response.json()["repos"] == []
 
 
 @pytest.mark.asyncio
@@ -254,6 +274,7 @@ async def test_list_my_repos_does_not_duplicate_already_scanned_repos(pool, monk
     # "uninitialized" duplicate just because it's still covered by the
     # installation's real GitHub repo list.
     await upsert_installation(pool, 802, "some-user")
+    await set_installation_plan(pool, 802, "team")
     await insert_repo_history(
         pool, 802, "some-user/already-scanned", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -301,7 +322,7 @@ async def test_list_my_repos_does_not_duplicate_already_scanned_repos(pool, monk
         "org": "some-user",
         "repo": "already-scanned",
         "repo_full_name": "some-user/already-scanned",
-        "plan": "free",
+        "plan": "team",
         "initialized": True,
     }]
 
@@ -313,6 +334,7 @@ async def test_list_my_repos_ignores_github_failure_when_fetching_uninitialized_
     # still see their already-scanned repos rather than getting a 502 for
     # the whole page over a "nice to have" enrichment.
     await upsert_installation(pool, 803, "some-user")
+    await set_installation_plan(pool, 803, "team")
 
     monkeypatch.setattr("app_server.dashboard.generate_app_jwt", lambda *a, **k: "fake-jwt")
 
@@ -436,8 +458,37 @@ async def test_dashboard_rejects_unadministered_installation(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_requires_paid_plan(pool, monkeypatch):
+    # Community is free, self-service, and unmanaged by design - the hosted
+    # dashboard (scan history, health monitoring, AIRview) is an AIR-only
+    # feature. Without this, any GitHub admin on a free-plan org could click
+    # into a full managed dashboard for free.
+    await upsert_installation(pool, 511, "octocat")  # defaults to plan='free'
+    await insert_repo_history(
+        pool, 511, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[511])
+    async with client:
+        response = await client.get("/app/octocat/hello-world")
+    assert response.status_code == 402
+
+
+@pytest.mark.asyncio
+async def test_dashboard_health_requires_paid_plan(pool, monkeypatch):
+    await upsert_installation(pool, 512, "octocat")  # defaults to plan='free'
+    await insert_repo_history(
+        pool, 512, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[512])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/health")
+    assert response.status_code == 402
+
+
+@pytest.mark.asyncio
 async def test_dashboard_returns_data_for_known_repo(pool, monkeypatch):
     await upsert_installation(pool, 1, "octocat")
+    await set_installation_plan(pool, 1, "indie")
     await insert_repo_history(
         pool,
         1,
@@ -484,6 +535,9 @@ async def test_public_health_returns_latest_per_endpoint(pool):
     assert endpoints[("GET", "/api/users")]["latency_ms"] == 88.0
     assert endpoints[("GET", "/api/orders")]["reachable"] is False
     assert endpoints[("GET", "/api/orders")]["status_code"] is None
+    # /api/users: 2 of 2 checks reachable; /api/orders: 0 of 1.
+    assert endpoints[("GET", "/api/users")]["uptime_pct_7d"] == 1.0
+    assert endpoints[("GET", "/api/orders")]["uptime_pct_7d"] == 0.0
     for endpoint in endpoints.values():
         assert set(endpoint.keys()) == {
             "method",
@@ -492,7 +546,126 @@ async def test_public_health_returns_latest_per_endpoint(pool):
             "status_code",
             "latency_ms",
             "checked_at",
+            "uptime_pct_7d",
         }
+
+
+@pytest.mark.asyncio
+async def test_public_health_uptime_pct_excludes_checks_older_than_7_days(pool):
+    await upsert_installation(pool, 507, "octocat")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path,
+                 reachable, status_code, latency_ms, checked_at)
+            VALUES
+                (507, 'octocat/hello-world', 'GET', '/api/users', false, 500, 90.5, now() - interval '10 days'),
+                (507, 'octocat/hello-world', 'GET', '/api/users', true, 200, 88.0, now())
+            """
+        )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/health/octocat/hello-world")
+
+    assert response.status_code == 200
+    endpoints = {(e["method"], e["path"]): e for e in response.json()["endpoints"]}
+    # Only the recent, reachable check falls inside the 7-day window.
+    assert endpoints[("GET", "/api/users")]["uptime_pct_7d"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_public_health_rate_limits_after_threshold(pool, monkeypatch, redis_conn):
+    from app_server import dashboard
+
+    await upsert_installation(pool, 508, "octocat")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+            VALUES (508, 'octocat/hello-world', 'GET', '/api/users', true)
+            """
+        )
+
+    monkeypatch.setattr(dashboard, "PUBLIC_HEALTH_RATE_LIMIT", 2)
+    monkeypatch.setattr("redis.Redis.from_url", lambda url: redis_conn)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    headers = {"x-forwarded-for": "203.0.113.50"}
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.get("/v1/health/octocat/hello-world", headers=headers)
+        second = await client.get("/v1/health/octocat/hello-world", headers=headers)
+        third = await client.get("/v1/health/octocat/hello-world", headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert third.status_code == 429
+    assert third.headers["access-control-allow-origin"] == "*"
+    assert "retry-after" in third.headers
+
+
+@pytest.mark.asyncio
+async def test_public_health_rate_limit_is_keyed_per_ip(pool, monkeypatch, redis_conn):
+    from app_server import dashboard
+
+    await upsert_installation(pool, 509, "octocat")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+            VALUES (509, 'octocat/hello-world', 'GET', '/api/users', true)
+            """
+        )
+
+    monkeypatch.setattr(dashboard, "PUBLIC_HEALTH_RATE_LIMIT", 1)
+    monkeypatch.setattr("redis.Redis.from_url", lambda url: redis_conn)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.get(
+            "/v1/health/octocat/hello-world", headers={"x-forwarded-for": "1.1.1.1"}
+        )
+        second_same_ip = await client.get(
+            "/v1/health/octocat/hello-world", headers={"x-forwarded-for": "1.1.1.1"}
+        )
+        first_other_ip = await client.get(
+            "/v1/health/octocat/hello-world", headers={"x-forwarded-for": "2.2.2.2"}
+        )
+
+    assert first.status_code == 200
+    assert second_same_ip.status_code == 429
+    assert first_other_ip.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_public_health_fails_open_when_redis_is_unreachable(pool, monkeypatch):
+    await upsert_installation(pool, 510, "octocat")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+            VALUES (510, 'octocat/hello-world', 'GET', '/api/users', true)
+            """
+        )
+
+    def _boom(url):
+        raise ConnectionError("redis unreachable")
+
+    monkeypatch.setattr("redis.Redis.from_url", _boom)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/health/octocat/hello-world")
+
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -520,6 +693,7 @@ async def test_dashboard_health_keeps_results_separate_per_target(pool, monkeypa
     # targets checking the exact same method+path collapse into one row
     # and one target's result silently vanishes.
     await upsert_installation(pool, 503, "octocat")
+    await set_installation_plan(pool, 503, "indie")
     await insert_repo_history(
         pool, 503, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -561,6 +735,106 @@ async def test_dashboard_health_keeps_results_separate_per_target(pool, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_dashboard_health_history_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/app/octocat/hello-world/health/history", params={"method": "GET", "path": "/api/users"}
+        )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_dashboard_health_history_returns_checks_newest_first(pool, monkeypatch):
+    await upsert_installation(pool, 504, "octocat")
+    await set_installation_plan(pool, 504, "indie")
+    await insert_repo_history(
+        pool, 504, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    async with pool.acquire() as conn:
+        target_id = await conn.fetchval(
+            """
+            INSERT INTO health_check_targets (installation_id, repo_full_name, label, base_url)
+            VALUES (504, 'octocat/hello-world', 'Production', 'https://prod.example.com') RETURNING id
+            """
+        )
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path,
+                 reachable, status_code, latency_ms, checked_at, target_id)
+            VALUES
+                (504, 'octocat/hello-world', 'GET', '/api/users', true, 200, 80.0, now() - interval '2 minutes', $1),
+                (504, 'octocat/hello-world', 'GET', '/api/users', false, 500, NULL, now() - interval '1 minute', $1),
+                (504, 'octocat/hello-world', 'GET', '/api/users', true, 200, 95.0, now(), $1)
+            """,
+            target_id,
+        )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[504])
+    async with client:
+        response = await client.get(
+            "/app/octocat/hello-world/health/history",
+            params={"method": "GET", "path": "/api/users", "target_id": target_id},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    checks = body["checks"]
+    assert len(checks) == 3
+    # Newest first.
+    assert checks[0]["reachable"] is True
+    assert checks[0]["latency_ms"] == 95.0
+    assert checks[1]["reachable"] is False
+    assert checks[1]["status_code"] == 500
+    assert checks[2]["latency_ms"] == 80.0
+
+
+@pytest.mark.asyncio
+async def test_dashboard_health_history_respects_limit(pool, monkeypatch):
+    await upsert_installation(pool, 505, "octocat")
+    await set_installation_plan(pool, 505, "indie")
+    await insert_repo_history(
+        pool, 505, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    async with pool.acquire() as conn:
+        for i in range(5):
+            await conn.execute(
+                """
+                INSERT INTO endpoint_health
+                    (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable, checked_at)
+                VALUES (505, 'octocat/hello-world', 'GET', '/api/users', true, now() - ($1 || ' minutes')::interval)
+                """,
+                str(i),
+            )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[505])
+    async with client:
+        response = await client.get(
+            "/app/octocat/hello-world/health/history",
+            params={"method": "GET", "path": "/api/users", "limit": 2},
+        )
+
+    assert response.status_code == 200
+    assert len(response.json()["checks"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_dashboard_health_history_rejects_unadministered_installation(pool, monkeypatch):
+    await upsert_installation(pool, 506, "octocat")
+    await insert_repo_history(
+        pool, 506, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[])
+    async with client:
+        response = await client.get(
+            "/app/octocat/hello-world/health/history", params={"method": "GET", "path": "/api/users"}
+        )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_dashboard_health_rejects_unadministered_installation(pool, monkeypatch):
     await upsert_installation(pool, 501, "octocat")
     await insert_repo_history(
@@ -587,6 +861,7 @@ async def test_dashboard_health_rejects_unadministered_installation(pool, monkey
 @pytest.mark.asyncio
 async def test_dashboard_health_includes_evidence_resolution(pool, monkeypatch):
     await upsert_installation(pool, 502, "octocat")
+    await set_installation_plan(pool, 502, "indie")
     await insert_repo_history(
         pool,
         502,
@@ -633,6 +908,7 @@ async def test_dashboard_health_includes_evidence_resolution(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_health_includes_stale_endpoints(pool, monkeypatch):
     await upsert_installation(pool, 504, "octocat")
+    await set_installation_plan(pool, 504, "indie")
     await insert_repo_history(
         pool,
         504,
@@ -683,6 +959,7 @@ async def test_dashboard_health_includes_stale_endpoints(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_health_omits_stale_endpoints_with_recent_success(pool, monkeypatch):
     await upsert_installation(pool, 505, "octocat")
+    await set_installation_plan(pool, 505, "indie")
     await insert_repo_history(
         pool,
         505,
@@ -826,6 +1103,35 @@ async def test_dashboard_wiki_surfaces_failed_build_status(pool, monkeypatch):
     assert body["overview"] is None
     assert body["build_status"] == "failed"
     assert body["build_error"] == "model provider unavailable"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_wiki_surfaces_failed_status_alongside_existing_overview(pool, monkeypatch):
+    # A later incremental update can fail after the first full build already
+    # succeeded - the API must keep reporting that failure (not silently
+    # drop it just because an overview now exists), so the dashboard can
+    # tell the customer their AIRview content may be stale.
+    await upsert_installation(pool, 606, "octocat")
+    await set_installation_plan(pool, 606, "indie")
+    await insert_repo_history(
+        pool,
+        606,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {"repository": {"modules": []}},
+    )
+    await _seed_wiki_overview(pool, 606, "octocat/hello-world")
+    await _seed_wiki_build_status(pool, 606, "octocat/hello-world", "failed", "LLM API unavailable")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[606])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/wiki")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overview"] is not None
+    assert body["build_status"] == "failed"
+    assert body["build_error"] == "LLM API unavailable"
 
 
 @pytest.mark.asyncio

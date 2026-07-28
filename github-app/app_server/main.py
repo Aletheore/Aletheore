@@ -139,6 +139,10 @@ async def webhook(request: Request):
         from app_server.webhooks.pull_request import handle_pull_request_event
 
         await handle_pull_request_event(payload, settings.redis_url)
+    elif event == "push":
+        from app_server.webhooks.push import handle_push_event
+
+        await handle_push_event(payload, settings.redis_url)
     elif event == "issue_comment":
         from app_server.webhooks.issue_comment import handle_issue_comment_event
 

@@ -629,8 +629,11 @@ def run_pr_scan_job(
         # comment we already posted with a generic failure message.
         try:
             _maybe_send_slack_alert(installation_id, repo_full_name, pr_number, diff)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("scan_worker.jobs").warning(
+                "alert webhook send failed for installation=%s repo=%s (%s)",
+                installation_id, repo_full_name, exc,
+            )
         try:
             _maybe_create_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
         except Exception:  # noqa: BLE001
@@ -642,8 +645,14 @@ def run_pr_scan_job(
         if changed_files is not None:
             try:
                 _maybe_update_live_wiki(installation_id, repo_full_name, new, changed_files, head_sha)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                # _maybe_update_live_wiki already records failures to
+                # wiki_build_status itself; this only catches something
+                # failing before that handling could run (e.g. get_settings).
+                logging.getLogger("scan_worker.jobs").warning(
+                    "live wiki incremental update failed for installation=%s repo=%s (%s)",
+                    installation_id, repo_full_name, exc,
+                )
             try:
                 _maybe_create_regression_risk_check_run(
                     client,
@@ -718,6 +727,61 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
                 pass
     except Exception:  # noqa: BLE001
         pass
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+@log_job
+def run_push_scan_job(
+    installation_id: int, repo_full_name: str, head_sha: str, changed_files: list[str]
+) -> None:
+    """Re-scans a repo's default branch after a direct push or a PR merge,
+    and reconciles AIRview against that scan.
+
+    Before this job existed, AIRview only ever updated off pull_request
+    events using the PR's *head* SHA - proposed, possibly-unmerged code -
+    via _maybe_update_live_wiki inside run_pr_scan_job. Nothing ever
+    re-scanned the actual default branch after the fact, so a merge could
+    leave the wiki describing the PR's pre-merge state indefinitely, and a
+    PR closed without merging left the wiki describing abandoned branch
+    content forever. Routing every push to main through the same
+    incremental update path used for PRs means merges (and direct pushes)
+    become the recurring correction against real merged code.
+    """
+    settings = get_settings()
+
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is not None and installation["plan"] != "free":
+        if not check_and_reserve_monthly_repo_scan_slot(
+            settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
+        ):
+            return
+
+    job_dir = _job_temp_dir()
+    try:
+        app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+        token = _token_sync(installation_id, app_jwt)
+        clone_url = _clone_url(repo_full_name, token)
+        repo_dir = _prepare_head_checkout(clone_url, head_sha, installation_id, repo_full_name, job_dir / "repo")
+
+        evidence_path = _run_scan(repo_dir)
+        evidence = json.loads(evidence_path.read_text())
+        evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
+        _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
+        _insert_history(installation_id, repo_full_name, evidence)
+
+        if installation is not None and installation["plan"] != "free":
+            try:
+                _maybe_update_live_wiki(installation_id, repo_full_name, evidence, changed_files, head_sha)
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("scan_worker.jobs").warning(
+                    "live wiki reconciliation after push failed for installation=%s repo=%s (%s)",
+                    installation_id, repo_full_name, exc,
+                )
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "push scan job failed for installation=%s repo=%s (%s)", installation_id, repo_full_name, exc,
+        )
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
 
@@ -1741,22 +1805,36 @@ def _maybe_update_live_wiki(
         return
 
     dsn = settings.database_url
-    naming_adapter = _live_wiki_naming_adapter()
-    writing_adapter = _live_wiki_update_writing_adapter()
-    fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, head_sha)
-    records = live_wiki.generate_subsystems(
-        evidence,
-        naming_adapter,
-        writing_adapter,
-        cluster_ids=cluster_ids,
-        cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
-        cache_write=lambda packet, output, used: store_result(
-            dsn, installation_id, repo_full_name, packet, output, used
-        ),
-        model_used=live_wiki.UPDATE_MODEL,
-        fetch_line_count=fetch_line_count,
-    )
-    _store_wiki_generation(
-        settings.database_url, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
-        fetch_line_count=fetch_line_count,
-    )
+    try:
+        naming_adapter = _live_wiki_naming_adapter()
+        writing_adapter = _live_wiki_update_writing_adapter()
+        fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, head_sha)
+        records = live_wiki.generate_subsystems(
+            evidence,
+            naming_adapter,
+            writing_adapter,
+            cluster_ids=cluster_ids,
+            cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
+            cache_write=lambda packet, output, used: store_result(
+                dsn, installation_id, repo_full_name, packet, output, used
+            ),
+            model_used=live_wiki.UPDATE_MODEL,
+            fetch_line_count=fetch_line_count,
+        )
+        _store_wiki_generation(
+            dsn, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
+            fetch_line_count=fetch_line_count,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Without this, a failed incremental update just leaves stale
+        # content in place with zero signal - the customer (and
+        # wiki_build_status) has no way to tell "stale" apart from
+        # "current", especially once a first full build has already
+        # succeeded and populated an overview.
+        logging.getLogger("scan_worker.jobs").warning(
+            "live wiki incremental update failed for installation=%s repo=%s (%s)",
+            installation_id, repo_full_name, exc,
+        )
+        set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+        return
+    set_wiki_build_status(dsn, installation_id, repo_full_name, "ready")

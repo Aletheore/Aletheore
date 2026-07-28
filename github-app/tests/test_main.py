@@ -67,6 +67,41 @@ async def test_webhook_dispatches_pull_request_enqueue(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_webhook_dispatches_push_enqueue(monkeypatch):
+    app.state.db_pool = object()
+    payload = {
+        "ref": "refs/heads/main",
+        "after": "def456",
+        "installation": {"id": 123},
+        "repository": {"full_name": "octocat/hello-world", "default_branch": "main"},
+        "commits": [],
+    }
+    body = json.dumps(payload).encode()
+    called = {}
+
+    async def fake_handle(payload_arg, redis_url):
+        called["payload"] = payload_arg
+        called["redis_url"] = redis_url
+
+    monkeypatch.setattr("app_server.webhooks.push.handle_push_event", fake_handle)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhook",
+            content=body,
+            headers={
+                "X-Hub-Signature-256": _signature(body, settings.github_webhook_secret),
+                "X-GitHub-Event": "push",
+            },
+        )
+
+    assert response.status_code == 200
+    assert called["payload"]["after"] == "def456"
+    assert called["redis_url"] == settings.redis_url
+
+
+@pytest.mark.asyncio
 async def test_healthz_returns_200_when_dependencies_are_healthy(monkeypatch):
     app.state.db_pool = MagicMock()
     app.state.db_pool.fetchval = AsyncMock(return_value=1)

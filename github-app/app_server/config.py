@@ -18,6 +18,7 @@ class Settings:
     paddle_webhook_secret: str
     paddle_client_token: str
     paddle_environment: str
+    paddle_api_key: str | None
     github_app_slug: str
     github_demo_readonly_token: str | None
 
@@ -86,6 +87,12 @@ def get_settings() -> Settings:
         paddle_webhook_secret=_required_env("PADDLE_WEBHOOK_SECRET"),
         paddle_client_token=_paddle_client_token(paddle_environment),
         paddle_environment=paddle_environment,
+        # Optional, not required: the server ran fine before any code ever
+        # needed to call OUT to Paddle (webhooks only ever came in). Seat
+        # billing is the first feature that needs this - degrade that one
+        # feature gracefully rather than refusing to start over a key
+        # nothing else depends on.
+        paddle_api_key=os.environ.get("PADDLE_API_KEY", "").strip() or None,
         github_app_slug=_required_env("GITHUB_APP_SLUG"),
         # Only used to raise the rate limit on the pre-clone repo-size check
         # for the public demo (60/hr unauthenticated vs 5000/hr with a
