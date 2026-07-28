@@ -1282,6 +1282,16 @@ async function saveWebhook() {{
   status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
 }}
 
+async function sendTestNotification() {{
+  const status = document.getElementById('webhook-status');
+  status.textContent = 'Sending...';
+  status.style.color = 'var(--slate-600)';
+  const res = await fetch(adminBase + '/webhook-url/test', {{ method: 'POST' }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  status.textContent = res.ok ? 'Test notification sent.' : (data.detail || 'Could not send test notification.');
+  status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
+}}
+
 async function loadSettings() {{
   const body = document.getElementById('settings-body');
   const res = await apiGet(adminBase);
@@ -1323,9 +1333,9 @@ async function loadSettings() {{
       '<div>' +
         '<div class="settings-block">' +
           '<div class="settings-block-label">Alert webhook</div>' +
-          '<input class="field" id="webhook-url-input" placeholder="https://hooks.slack.com/..." value="' + escapeHtml(installation.webhook_url || '') + '">' +
-          '<div class="form-row"><button class="btn" onclick="saveWebhook()">Save</button><span id="webhook-status" class="settings-block-hint"></span></div>' +
-          '<div class="settings-block-hint">New critical findings are posted here shortly after a scan finishes.</div>' +
+          '<input class="field" id="webhook-url-input" placeholder="Slack or Teams webhook URL" value="' + escapeHtml(installation.webhook_url || '') + '">' +
+          '<div class="form-row"><button class="btn" onclick="saveWebhook()">Save</button><button class="btn" onclick="sendTestNotification()" style="margin-left:6px;">Send test</button><span id="webhook-status" class="settings-block-hint"></span></div>' +
+          '<div class="settings-block-hint">New critical findings are posted here shortly after a scan finishes. Paste a Slack incoming-webhook URL or a Teams workflow webhook URL - both are auto-detected.</div>' +
         '</div>' +
         '<div class="settings-block">' +
           '<div class="settings-block-label">Endpoint health targets</div>' +

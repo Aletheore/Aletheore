@@ -348,6 +348,29 @@ async def set_webhook_url_route(org: str, repo: str, request: Request, body: Set
     return {"ok": True}
 
 
+@admin_router.post("/admin/{org}/{repo}/webhook-url/test")
+async def test_webhook_url_route(org: str, repo: str, request: Request):
+    # Without this, a customer has no way to confirm a webhook URL is
+    # correctly configured short of waiting for a real finding or
+    # incident to fire one - by then a typo or a dead/rotated URL has
+    # already meant silently missed alerts.
+    installation = await _require_admin_installation(request, org, repo)
+    webhook_url = installation.get("webhook_url")
+    if not webhook_url:
+        raise HTTPException(status_code=400, detail="no alert webhook is configured yet")
+
+    from scan_worker.slack import send_health_alert
+
+    try:
+        send_health_alert(
+            webhook_url,
+            {"text": f"*Aletheore*: test notification for `{org}/{repo}` - your alert webhook is configured correctly."},
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"could not reach webhook: {exc}") from exc
+    return {"ok": True}
+
+
 @admin_router.post("/admin/{org}/{repo}/health-targets")
 async def add_health_check_target_route(org: str, repo: str, request: Request, body: AddHealthCheckTargetRequest):
     installation = await _require_admin_installation(request, org, repo)

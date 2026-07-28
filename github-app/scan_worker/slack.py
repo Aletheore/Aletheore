@@ -1,4 +1,62 @@
+import re
+
 import httpx
+
+
+def _detect_platform(webhook_url: str) -> str:
+    # Slack incoming webhooks are always hooks.slack.com. Modern Teams
+    # webhooks are Power Automate "Workflows" (logic.azure.com); the
+    # classic Office 365 Connector webhooks (webhook.office.com) were
+    # retired by Microsoft in 2024 but are matched too in case a customer
+    # still has one working. Anything unrecognized defaults to Slack's
+    # plain {"text": ...} shape, since that's the only format this
+    # webhook field has ever actually sent.
+    url_lower = webhook_url.lower()
+    if "logic.azure.com" in url_lower or "office.com" in url_lower or "teams.microsoft.com" in url_lower:
+        return "teams"
+    return "slack"
+
+
+def _slack_markdown_to_adaptive_card_markdown(text: str) -> str:
+    # Slack mrkdwn uses single-asterisk bold (*bold*); Adaptive Cards use
+    # CommonMark-style double-asterisk (**bold**). Backtick code spans and
+    # newlines already mean the same thing in both, so only bold needs
+    # translating.
+    return re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"**\1**", text)
+
+
+def _to_teams_payload(message: dict) -> dict:
+    # Classic Teams "Incoming Webhook" connectors (MessageCard payloads)
+    # were retired by Microsoft in 2024 in favor of Power Automate
+    # "Workflows" webhooks, which expect this envelope - a message
+    # containing an Adaptive Card attachment - rather than a bare
+    # MessageCard or Slack-shaped {"text": ...} body.
+    return {
+        "type": "message",
+        "attachments": [
+            {
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": _slack_markdown_to_adaptive_card_markdown(message.get("text", "")),
+                            "wrap": True,
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+
+
+def _render_payload(webhook_url: str, message: dict) -> dict:
+    if _detect_platform(webhook_url) == "teams":
+        return _to_teams_payload(message)
+    return message
 
 
 def _format_list(value) -> str | None:
@@ -77,7 +135,8 @@ def send_slack_alert(
     if not _has_new_findings(diff):
         return
     client = http_client or httpx.Client()
-    response = client.post(webhook_url, json=format_slack_message(diff, repo_full_name, pr_number))
+    payload = _render_payload(webhook_url, format_slack_message(diff, repo_full_name, pr_number))
+    response = client.post(webhook_url, json=payload)
     response.raise_for_status()
 
 
@@ -199,5 +258,6 @@ def send_health_alert(
     http_client: httpx.Client | None = None,
 ) -> None:
     client = http_client or httpx.Client()
-    response = client.post(webhook_url, json=message)
+    payload = _render_payload(webhook_url, message)
+    response = client.post(webhook_url, json=payload)
     response.raise_for_status()

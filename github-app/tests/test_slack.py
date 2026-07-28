@@ -1,6 +1,11 @@
+import json
+
 import httpx
 
 from scan_worker.slack import (
+    _detect_platform,
+    _slack_markdown_to_adaptive_card_markdown,
+    _to_teams_payload,
     format_latency_alert,
     format_reachability_alert,
     format_runtime_error_alert,
@@ -211,3 +216,97 @@ def test_format_runtime_error_alert_handles_missing_method_and_path():
 
     assert "ValueError" in body["text"]
     assert "app/handler.py:10" in body["text"]
+
+
+def test_detect_platform_recognizes_slack_url():
+    assert _detect_platform("https://hooks.slack.com/services/T00/B00/xyz") == "slack"
+
+
+def test_detect_platform_recognizes_teams_workflow_url():
+    assert _detect_platform("https://prod-12.westus.logic.azure.com:443/workflows/abc/triggers/manual") == "teams"
+
+
+def test_detect_platform_recognizes_classic_teams_connector_url():
+    assert _detect_platform("https://outlook.office.com/webhook/abc") == "teams"
+
+
+def test_detect_platform_defaults_to_slack_for_unknown_url():
+    assert _detect_platform("https://example.com/my-webhook") == "slack"
+
+
+def test_slack_markdown_to_adaptive_card_markdown_converts_bold():
+    assert _slack_markdown_to_adaptive_card_markdown("*Aletheore*: new findings") == "**Aletheore**: new findings"
+
+
+def test_slack_markdown_to_adaptive_card_markdown_leaves_code_spans_alone():
+    text = "Secret: `a.py:1` (aws_key)"
+    assert _slack_markdown_to_adaptive_card_markdown(text) == text
+
+
+def test_to_teams_payload_wraps_text_in_adaptive_card():
+    payload = _to_teams_payload({"text": "*Aletheore*: new findings on `octocat/hello-world` PR #42"})
+
+    assert payload["type"] == "message"
+    card = payload["attachments"][0]["content"]
+    assert payload["attachments"][0]["contentType"] == "application/vnd.microsoft.card.adaptive"
+    assert card["type"] == "AdaptiveCard"
+    body_text = card["body"][0]["text"]
+    assert "**Aletheore**" in body_text
+    assert "octocat/hello-world" in body_text
+
+
+def test_send_slack_alert_sends_adaptive_card_to_teams_webhook():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        return httpx.Response(200)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    send_slack_alert(
+        "https://prod-12.westus.logic.azure.com:443/workflows/abc/triggers/manual",
+        _diff_with_new_secret(),
+        "octocat/hello-world",
+        42,
+        http_client=client,
+    )
+    assert len(calls) == 1
+    assert calls[0]["type"] == "message"
+    assert calls[0]["attachments"][0]["contentType"] == "application/vnd.microsoft.card.adaptive"
+
+
+def test_send_slack_alert_sends_plain_text_to_slack_webhook():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        return httpx.Response(200)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    send_slack_alert(
+        "https://hooks.slack.com/services/x",
+        _diff_with_new_secret(),
+        "octocat/hello-world",
+        42,
+        http_client=client,
+    )
+    assert len(calls) == 1
+    assert "text" in calls[0]
+    assert "attachments" not in calls[0]
+
+
+def test_send_health_alert_sends_adaptive_card_to_teams_webhook():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        return httpx.Response(200)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    send_health_alert(
+        "https://prod-12.westus.logic.azure.com:443/workflows/abc/triggers/manual",
+        {"text": "*Aletheore*: endpoint down"},
+        http_client=client,
+    )
+    assert len(calls) == 1
+    assert calls[0]["attachments"][0]["contentType"] == "application/vnd.microsoft.card.adaptive"

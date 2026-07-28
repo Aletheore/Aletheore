@@ -304,6 +304,64 @@ async def test_set_webhook_url(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_send_test_notification_requires_a_saved_webhook(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/webhook-url/test")
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_send_test_notification_posts_to_saved_webhook(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    sent = []
+
+    def fake_send_health_alert(webhook_url, message, http_client=None):
+        sent.append((webhook_url, message))
+
+    monkeypatch.setattr("scan_worker.slack.send_health_alert", fake_send_health_alert)
+    async with client:
+        put_response = await client.put(
+            "/admin/octocat/hello-world/webhook-url",
+            json={"webhook_url": "https://hooks.slack.com/services/x"},
+        )
+        assert put_response.status_code == 200
+        response = await client.post("/admin/octocat/hello-world/webhook-url/test")
+
+    assert response.status_code == 200
+    assert len(sent) == 1
+    assert sent[0][0] == "https://hooks.slack.com/services/x"
+    assert "octocat/hello-world" in sent[0][1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_send_test_notification_reports_delivery_failure(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+
+    def fake_send_health_alert(webhook_url, message, http_client=None):
+        raise httpx.HTTPStatusError("bad gateway", request=None, response=httpx.Response(502))
+
+    monkeypatch.setattr("scan_worker.slack.send_health_alert", fake_send_health_alert)
+    async with client:
+        await client.put(
+            "/admin/octocat/hello-world/webhook-url",
+            json={"webhook_url": "https://hooks.slack.com/services/x"},
+        )
+        response = await client.post("/admin/octocat/hello-world/webhook-url/test")
+
+    assert response.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_send_test_notification_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/admin/octocat/hello-world/webhook-url/test")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_add_health_check_target(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch, installation_id=100)
     async with client:
