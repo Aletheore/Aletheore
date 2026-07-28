@@ -5,7 +5,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app_server.auth import encrypt_access_token, sign_session_id
-from app_server.db import create_session, upsert_installation
+from app_server.db import add_paddle_ids_to_installation, create_session, upsert_installation
 from app_server.main import app
 
 
@@ -127,6 +127,22 @@ async def test_one_installation_shows_checkout_with_current_plan(pool, monkeypat
     assert "customData" in response.text
     assert "successUrl" in response.text and "dashboard" in response.text
     assert 'href="/dashboard"' in response.text
+    assert "pwCustomer" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_one_installation_with_existing_paddle_customer_wires_pw_customer(pool, monkeypatch):
+    # Before this fix, Paddle.Initialize() never passed pwCustomer at all, so
+    # Paddle Retain had no way to recognize a returning customer re-subscribing
+    # through this page - even though the installation already has a real
+    # Paddle customer ID from a previous subscription.
+    await upsert_installation(pool, 2004, "returning-corp")
+    await add_paddle_ids_to_installation(pool, 2004, "sub_existing", "ctm_existing123")
+    client = await _logged_in_client(pool, monkeypatch, [2004])
+    async with client:
+        response = await client.get("/subscribe?plan=air&interval=month")
+    assert response.status_code == 200
+    assert 'pwCustomer: { id: "ctm_existing123" }' in response.text
 
 
 @pytest.mark.asyncio

@@ -68,7 +68,7 @@ async def list_installations_for_ids(pool: asyncpg.Pool, installation_ids: list[
         return []
     rows = await pool.fetch(
         """
-        SELECT installation_id, account_login, plan
+        SELECT installation_id, account_login, plan, paddle_customer_id
         FROM installations
         WHERE installation_id = ANY($1::bigint[])
         ORDER BY account_login ASC
