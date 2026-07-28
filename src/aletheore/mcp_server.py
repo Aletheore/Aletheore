@@ -23,7 +23,7 @@ from aletheore.query import (
     find_symbol_source,
 )
 from aletheore.secrets import iter_all_files
-from aletheore.search_index import search_index
+from aletheore.search_index import IndexNotFoundError, search_index
 from aletheore.toon_encoding import to_toon
 
 
@@ -313,11 +313,19 @@ def _register_index_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
         return _toon_result({"indexed_chunks": count})
 
 
+_NO_INDEX_ERROR = {
+    "error": "no semantic index built yet for this repository - call the aletheore_index tool first"
+}
+
+
 def _register_search_codebase_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search_codebase")
     def aletheore_search_codebase(query: str, k: int = 10) -> str:
         """Semantic search over the repository's indexed code."""
-        return _toon_result(search_index(repo_path, query, k=k))
+        try:
+            return _toon_result(search_index(repo_path, query, k=k))
+        except IndexNotFoundError:
+            return _toon_result(_NO_INDEX_ERROR)
 
 
 def _register_answer_tool(
@@ -326,7 +334,10 @@ def _register_answer_tool(
     @mcp_instance.tool(name="aletheore_answer")
     def aletheore_answer(question: str, k: int = 5) -> str:
         """Answer a natural-language question about this repository from the semantic index."""
-        return _toon_result(answer_question(repo_path, question, answer_adapter, k=k))
+        try:
+            return _toon_result(answer_question(repo_path, question, answer_adapter, k=k))
+        except IndexNotFoundError:
+            return _toon_result(_NO_INDEX_ERROR)
 
 
 def _register_managed_audit_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
