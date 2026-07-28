@@ -82,6 +82,37 @@ def test_find_secrets_no_matches_in_ordinary_file(tmp_path):
     assert result["scanned_files"] == 1
 
 
+def test_find_secrets_does_not_follow_a_symlinked_file_outside_the_repo(tmp_path):
+    # Before this fix, a symlinked file was still is_file() == True and got
+    # scanned/reported on even though it points outside the intended repo root.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "outside.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+    (repo / "linked.py").symlink_to(tmp_path / "outside.py")
+
+    result = find_secrets(repo)
+
+    assert result["findings"] == []
+    assert result["scanned_files"] == 0
+
+
+def test_find_secrets_does_not_descend_into_a_symlinked_directory_outside_the_repo(tmp_path):
+    # A symlinked directory isn't itself is_file(), so the first check alone
+    # doesn't protect against it - Path.rglob("*") still recurses through a
+    # symlinked directory's contents by default, scanning real files outside
+    # the repo as if they were part of it.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "outside" / "config.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+    (repo / "linked_dir").symlink_to(tmp_path / "outside")
+
+    result = find_secrets(repo)
+
+    assert result["findings"] == []
+    assert result["scanned_files"] == 0
+
+
 def test_find_secrets_generic_credential_preview_previews_the_value_not_the_keyword(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

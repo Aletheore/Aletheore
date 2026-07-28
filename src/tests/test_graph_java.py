@@ -200,6 +200,26 @@ def test_build_module_graph_java_no_package_declaration_still_scans_the_file(tmp
     assert unparseable == []
 
 
+def test_build_module_graph_java_import_escaping_repo_root_does_not_crash(tmp_path):
+    # Before this fix, this crashed with an unhandled ValueError from
+    # path.relative_to(). A file directly at the repo root whose package name's
+    # last segment matches the repo directory's own name (here "app") makes
+    # _java_source_root_for infer a source root one level ABOVE repo_path - a
+    # real, if unusual, coincidence, not a hypothetical. An import that then
+    # resolves relative to that escaped root can land on a real file genuinely
+    # outside repo_path.
+    repo = tmp_path / "app"
+    repo.mkdir()
+    (repo / "Foo.java").write_text("package app;\n\nclass Foo {}\n")
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other" / "Outside.java").write_text("class Outside {}\n")
+    (repo / "Main.java").write_text("import other.Outside;\n\nclass Main {}\n")
+
+    _, dependency_graph, _ = build_module_graph(repo)
+
+    assert dependency_graph["edges"] == []
+
+
 def test_build_module_graph_reads_each_java_file_only_once(tmp_path):
     # Before this fix, the source-root-inference pre-pass and the main
     # extraction loop each independently read_bytes() and re-parsed every

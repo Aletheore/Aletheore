@@ -130,6 +130,20 @@ def test_build_module_graph_php_relative_require_resolves(tmp_path):
     assert ("main.php", "helper.php") in edges
 
 
+def test_build_module_graph_php_include_escaping_repo_root_does_not_crash(tmp_path):
+    # Before this fix, a require/include resolving above the repo root (a real
+    # file on disk, just outside repo_path) crashed the whole scan with an
+    # unhandled ValueError from path.relative_to().
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "outside.php").write_text("<?php\nfunction outside() {}\n")
+    (repo / "main.php").write_text("<?php\nrequire '../outside.php';\n")
+
+    _, dependency_graph, _ = build_module_graph(repo)
+
+    assert dependency_graph["edges"] == []
+
+
 def test_build_module_graph_php_use_of_unmapped_namespace_does_not_resolve(tmp_path):
     repo = tmp_path / "repo"
     (repo / "src").mkdir(parents=True)

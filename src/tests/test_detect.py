@@ -156,6 +156,31 @@ def test_detect_languages_ignores_nested_git_worktree(tmp_path):
     assert by_name["python"]["file_count"] == 1
 
 
+def test_detect_languages_does_not_follow_a_symlinked_file_outside_the_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "outside.py").write_text("x = 1\n")
+    (repo / "linked.py").symlink_to(tmp_path / "outside.py")
+    (repo / "main.py").write_text("x = 1\n")
+
+    languages = detect_languages(repo)
+    by_name = {entry["name"]: entry for entry in languages}
+    assert by_name["python"]["file_count"] == 1
+
+
+def test_detect_languages_does_not_descend_into_a_symlinked_directory_outside_the_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "outside" / "module.py").write_text("x = 1\n")
+    (repo / "linked_dir").symlink_to(tmp_path / "outside")
+    (repo / "main.py").write_text("x = 1\n")
+
+    languages = detect_languages(repo)
+    by_name = {entry["name"]: entry for entry in languages}
+    assert by_name["python"]["file_count"] == 1
+
+
 def test_detect_ai_usage_finds_a_provider_in_requirements_txt(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

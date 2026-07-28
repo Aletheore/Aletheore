@@ -124,6 +124,37 @@ def test_build_module_graph_ignores_nested_git_worktree(tmp_path):
     assert {m["path"] for m in modules} == {"main.py"}
 
 
+def test_build_module_graph_does_not_follow_a_symlinked_file_outside_the_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "outside.py").write_text("def outside():\n    pass\n")
+    (repo / "linked.py").symlink_to(tmp_path / "outside.py")
+    (repo / "main.py").write_text("x = 1\n")
+
+    modules, _, unparseable = build_module_graph(repo)
+
+    assert unparseable == []
+    assert {m["path"] for m in modules} == {"main.py"}
+
+
+def test_build_module_graph_does_not_descend_into_a_symlinked_directory_outside_the_repo(tmp_path):
+    # A symlinked directory isn't itself is_file(), so a naive per-path check
+    # alone doesn't protect against it - Path.rglob("*") still recurses through
+    # a symlinked directory's contents by default, parsing real files outside
+    # the repo as if they were part of it.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "outside" / "module.py").write_text("def outside():\n    pass\n")
+    (repo / "linked_dir").symlink_to(tmp_path / "outside")
+    (repo / "main.py").write_text("x = 1\n")
+
+    modules, _, unparseable = build_module_graph(repo)
+
+    assert unparseable == []
+    assert {m["path"] for m in modules} == {"main.py"}
+
+
 def test_build_module_graph_extracts_typescript_imports(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

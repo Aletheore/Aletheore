@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import tree_sitter_c as tsc
@@ -64,19 +65,39 @@ KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR = {
 
 
 def _iter_source_files(repo_path: Path):
+    # os.walk(followlinks=False) rather than Path.rglob("*") - a symlinked
+    # directory in the tree would otherwise have its contents walked and
+    # parsed as if they were part of this repo. followlinks only stops
+    # descent into symlinked *directories* - a symlinked file sitting
+    # directly in a real directory still needs its own is_symlink() check.
     nested_git_roots = _nested_git_roots(repo_path)
-    for path in sorted(repo_path.rglob("*")):
-        if not path.is_file():
+    paths = []
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        current_dir = Path(dirpath)
+        if any(root in current_dir.parents or root == current_dir for root in nested_git_roots):
+            dirnames[:] = []
             continue
-        if any(part in IGNORED_DIRS for part in path.parts):
-            continue
-        if any(root in path.parents for root in nested_git_roots):
-            continue
-        yield path
+        for filename in filenames:
+            path = current_dir / filename
+            if path.is_symlink() or not path.is_file():
+                continue
+            paths.append(path)
+    yield from sorted(paths)
 
 
-def _rel(repo_path: Path, path: Path) -> str:
-    return path.relative_to(repo_path).as_posix()
+def _rel(repo_path: Path, path: Path) -> str | None:
+    """None when path resolves outside repo_path entirely - a relative
+    import/include that climbs above the repo root (e.g. `#include
+    "../../../../etc/passwd"`, or excess `super::` segments in Rust)
+    resolves to a real file on disk that simply isn't part of this repo.
+    Treated the same as an unresolved/external import rather than letting
+    path.relative_to()'s ValueError crash the whole scan.
+    """
+    try:
+        return path.relative_to(repo_path).as_posix()
+    except ValueError:
+        return None
 
 
 def _symbol_entry(source: bytes, name_node: Node, enclosing_node: Node) -> dict:
@@ -1045,10 +1066,7 @@ def _resolve_js_import(repo_path: Path, from_file: Path, spec: str) -> str | Non
         candidates.append(base / f"index{ext}")
     for candidate in candidates:
         if candidate.exists() and candidate.is_file():
-            try:
-                return _rel(repo_path, candidate)
-            except ValueError:
-                return None
+            return _rel(repo_path, candidate)
     return None
 
 
@@ -1208,7 +1226,7 @@ def build_module_graph(
                     java_source_roots, dotted, is_static, is_wildcard
                 ):
                     target = _rel(repo_path, target_path)
-                    if target == rel_path:
+                    if target is None or target == rel_path:
                         continue
                     resolved_imports.append(target)
                     edges.append([rel_path, target])
@@ -1220,7 +1238,7 @@ def build_module_graph(
                 target_path = _resolve_ruby_require(repo_path, path, kind, spec)
                 if target_path is not None:
                     target = _rel(repo_path, target_path)
-                    if target != rel_path:
+                    if target is not None and target != rel_path:
                         resolved_imports.append(target)
                         edges.append([rel_path, target])
                         imported_by_map.setdefault(target, []).append(rel_path)
@@ -1235,7 +1253,7 @@ def build_module_graph(
                 )
                 if target_path is not None:
                     target = _rel(repo_path, target_path)
-                    if target != rel_path:
+                    if target is not None and target != rel_path:
                         resolved_imports.append(target)
                         edges.append([rel_path, target])
                         imported_by_map.setdefault(target, []).append(rel_path)
@@ -1246,7 +1264,7 @@ def build_module_graph(
                 target_path = _resolve_c_include(path, spec)
                 if target_path is not None:
                     target = _rel(repo_path, target_path)
-                    if target != rel_path:
+                    if target is not None and target != rel_path:
                         resolved_imports.append(target)
                         edges.append([rel_path, target])
                         imported_by_map.setdefault(target, []).append(rel_path)
@@ -1256,7 +1274,7 @@ def build_module_graph(
             for dotted in raw_imports:
                 for target_path in _resolve_csharp_using(csharp_prefix_map, dotted):
                     target = _rel(repo_path, target_path)
-                    if target == rel_path:
+                    if target is None or target == rel_path:
                         continue
                     resolved_imports.append(target)
                     edges.append([rel_path, target])
