@@ -78,6 +78,7 @@ def test_verify_citations_handles_report_with_no_citations():
         "verified": [],
         "unverified": [],
         "all_verified": True,
+        "line_bounds_checked": 0,
     }
 
 

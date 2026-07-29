@@ -1,3 +1,32 @@
+"""Checks that generated prose points at places that really exist.
+
+There are three levels of grounding in this codebase, in increasing
+strength. Everything that reports a "verified" claim to a customer should
+be explicit about which one it actually applied - reporting a level you
+didn't reach is the same defect as not checking at all.
+
+1. FILE EXISTS - the cited path is in the scan's file inventory. Always
+   available, since AIR always lists the files it parsed. On its own this
+   catches invented filenames and nothing else: a citation naming a real
+   file at a completely fabricated line passes.
+2. LINE IN BOUNDS - additionally, the cited line is within that file's
+   real length. Needs a `fetch_line_count`, because AIR does not record
+   per-file line counts. Callers that hold a real checkout (the managed
+   audit) get this for free; callers that would have to re-fetch file
+   contents over the network (AIRview) may not always have it. This
+   result reports `line_bounds_checked` so a caller can state honestly
+   how many citations actually reached this level.
+3. CONTENT MATCHES - additionally, text the claim quotes verbatim appears
+   near the cited line. Strongest, but only meaningful where the claim is
+   structured enough to attach quotes to a single location, so it lives
+   in flash_review.py's _line_citation_content_matches (per-finding,
+   against a diff) rather than here (whole-document prose).
+
+Level 3 is not a stricter version of this function that someone forgot to
+write: it needs a different input shape. What matters is that each
+surface says which level it reached.
+"""
+
 import re
 from collections.abc import Callable
 
@@ -54,15 +83,22 @@ def verify_citations(
 
     verified = []
     unverified = []
+    line_bounds_checked = 0
     for citation in citations:
         if citation["file"] not in known_paths:
             unverified.append(citation)
             continue
         if fetch_line_count is not None:
             line_count = fetch_line_count(citation["file"])
-            if line_count is not None and citation["line"] > line_count:
-                unverified.append(citation)
-                continue
+            if line_count is not None:
+                # Counted only when a real length came back: passing a
+                # fetcher does not mean every file could be read, and a
+                # caller that assumed it did would overstate how much of
+                # its report was actually bounds-checked.
+                line_bounds_checked += 1
+                if citation["line"] > line_count:
+                    unverified.append(citation)
+                    continue
         verified.append(citation)
 
     return {
@@ -70,4 +106,5 @@ def verify_citations(
         "verified": verified,
         "unverified": unverified,
         "all_verified": len(unverified) == 0,
+        "line_bounds_checked": line_bounds_checked,
     }

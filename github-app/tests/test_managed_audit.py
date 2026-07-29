@@ -212,6 +212,22 @@ def test_citation_verification_section_is_unavailable_without_a_file_inventory(t
     assert "could not be verified" not in section
 
 
+def test_citation_verification_section_does_not_claim_bounds_checking_it_could_not_do(tmp_path):
+    # The API job writes evidence but no source files, so no line count is
+    # ever readable. Claiming lines were bounds-checked there would be the
+    # exact overclaim this section exists to prevent.
+    repo_path = tmp_path / "repo"
+    (repo_path / ".aletheore").mkdir(parents=True)
+    evidence = {"repository": {"modules": [{"path": "app.py"}]}}
+    (repo_path / ".aletheore" / "air.json").write_text(json.dumps(evidence))
+
+    section = _citation_verification_section("The bug is at `app.py:900`.", repo_path)
+
+    assert "1 of 1" in section
+    assert "could not be bounds-checked" in section
+    assert "within that file's real length" not in section
+
+
 def test_citation_verification_section_handles_a_report_with_no_citations(tmp_path):
     repo_path = _repo_with_evidence(tmp_path, {"app.py": "one\n"})
 

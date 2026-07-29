@@ -149,11 +149,33 @@ def _citation_verification_section(report_text: str, repo_path: Path) -> str:
             "_This report contains no `file:line` citations to verify._\n"
         )
 
+    # State only the level actually reached. run_managed_audit_api_job's
+    # dict-evidence path writes the evidence but no source files, so every
+    # fetch_line_count call returns None there and nothing is bounds-checked
+    # - claiming otherwise would be the same overclaim this whole section
+    # exists to prevent.
+    bounds_checked = result["line_bounds_checked"]
+    if bounds_checked == total:
+        checked_how = (
+            "the file exists in the scanned repository, and the cited line is within that "
+            "file's real length"
+        )
+    elif bounds_checked:
+        checked_how = (
+            "the file exists in the scanned repository; "
+            f"{bounds_checked} of them could also be checked against the file's real length"
+        )
+    else:
+        checked_how = (
+            "the file exists in the scanned repository. Line numbers could not be "
+            "bounds-checked in this run, so a citation naming a real file at a wrong line "
+            "still counts as verified here"
+        )
+
     lines = [
         "\n\n---\n\n## Citation Verification\n",
         f"_{verified} of {total} `file:line` citations in this report were checked against "
-        "the deterministic evidence it was generated from: the file exists in the scanned "
-        "repository, and the cited line is within that file's real length._\n",
+        f"the deterministic evidence it was generated from: {checked_how}._\n",
     ]
     if unverified:
         lines.append(
