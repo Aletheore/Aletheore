@@ -1,4 +1,8 @@
-from aletheore.signature_diff import find_changed_signatures, find_regression_fence_violations
+from aletheore.signature_diff import (
+    find_changed_signatures,
+    find_regression_fence_violations,
+    is_backward_compatible_change,
+)
 
 
 def _evidence(modules: list[dict]) -> dict:
@@ -192,10 +196,12 @@ def test_regression_fence_end_to_end_against_the_real_scanner(tmp_path):
         (root / "admin.py").write_text(
             "from billing import get_billing\n\ndef admin_view(uid):\n    return get_billing(uid)\n"
         )
+    # A genuinely breaking change: the new argument is required, so every
+    # existing call site really does need updating. (An additive
+    # `include_history=False` would be backward compatible and correctly
+    # produces nothing - see the additive tests above.)
     (base / "billing.py").write_text("def get_billing(user_id):\n    return {}\n")
-    (head / "billing.py").write_text(
-        "def get_billing(user_id, include_history=False):\n    return {}\n"
-    )
+    (head / "billing.py").write_text("def get_billing(user_id, tenant):\n    return {}\n")
 
     old, new = _scan(base), _scan(head)
 
@@ -204,7 +210,7 @@ def test_regression_fence_end_to_end_against_the_real_scanner(tmp_path):
             "file": "billing.py",
             "function": "get_billing",
             "old_params": "(user_id)",
-            "new_params": "(user_id, include_history=False)",
+            "new_params": "(user_id, tenant)",
         }
     ]
 
@@ -216,7 +222,7 @@ def test_regression_fence_end_to_end_against_the_real_scanner(tmp_path):
             "file": "billing.py",
             "function": "get_billing",
             "old_params": "(user_id)",
-            "new_params": "(user_id, include_history=False)",
+            "new_params": "(user_id, tenant)",
             "untouched_callers": ["admin.py"],
         }
     ]
@@ -242,3 +248,74 @@ def test_regression_fence_stays_silent_when_only_a_body_changes(tmp_path):
 
     assert find_changed_signatures(old, new) == []
     assert find_regression_fence_violations(old, new, ["billing.py"]) == []
+
+
+def test_is_backward_compatible_change_accepts_the_real_pr_97_signature():
+    # The first real PR Regression Fencing ran on flagged this: a
+    # keyword-only argument with a default was added, no caller could
+    # break, and it still posted a Check Run naming a file that merely
+    # imports the module.
+    old = "( parsed: dict | None, evidence: dict, fetch_line_count: Callable[[str], int | None] | None = None, )"
+    new = (
+        "( parsed: dict | None, evidence: dict, "
+        'fetch_line_count: Callable[[str], int | None] | None = None, *, context: str = "output", )'
+    )
+
+    assert is_backward_compatible_change(old, new) is True
+
+
+def test_is_backward_compatible_change_accepts_added_defaults_and_variadics():
+    assert is_backward_compatible_change("(a)", "(a, b=1)") is True
+    assert is_backward_compatible_change("(a)", "(a, *args)") is True
+    assert is_backward_compatible_change("(a)", "(a, **kwargs)") is True
+    assert is_backward_compatible_change("(a)", "(a, b?: number)") is True
+    # A default value containing a comma must not be split into two params.
+    assert is_backward_compatible_change("(a)", "(a, b=(1, 2))") is True
+
+
+def test_is_backward_compatible_change_rejects_anything_a_caller_can_trip_on():
+    assert is_backward_compatible_change("(a)", "(a, b)") is False        # new required arg
+    assert is_backward_compatible_change("(a, b)", "(a)") is False        # removed arg
+    assert is_backward_compatible_change("(a)", "(b)") is False           # renamed
+    assert is_backward_compatible_change("(a, b)", "(b, a)") is False     # reordered
+    # Go has no default arguments, so an addition really does break callers
+    # and must stay flagged.
+    assert is_backward_compatible_change("(a int)", "(a int, b string)") is False
+
+
+def test_is_backward_compatible_change_is_false_when_params_are_unknown():
+    assert is_backward_compatible_change(None, "(a)") is False
+    assert is_backward_compatible_change("(a)", None) is False
+
+
+def test_find_changed_signatures_ignores_a_purely_additive_change():
+    old = _evidence(
+        [{"path": "billing.py", "symbols": {"functions": [{"name": "get_billing", "params": "(user_id)"}]}}]
+    )
+    new = _evidence(
+        [
+            {
+                "path": "billing.py",
+                "symbols": {"functions": [{"name": "get_billing", "params": "(user_id, verbose=False)"}]},
+            }
+        ]
+    )
+
+    assert find_changed_signatures(old, new) == []
+
+
+def test_find_regression_fence_violations_stays_silent_for_an_additive_change():
+    old = _evidence(
+        [{"path": "billing.py", "symbols": {"functions": [{"name": "get_billing", "params": "(user_id)"}]}}]
+    )
+    new = _evidence(
+        [
+            {
+                "path": "billing.py",
+                "symbols": {"functions": [{"name": "get_billing", "params": "(user_id, verbose=False)"}]},
+                "imported_by": ["reports/export.py"],
+            }
+        ]
+    )
+
+    assert find_regression_fence_violations(old, new, changed_files=["billing.py"]) == []
