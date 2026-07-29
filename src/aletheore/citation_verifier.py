@@ -44,11 +44,54 @@ def _known_file_paths(evidence: dict) -> set[str]:
     return paths
 
 
-def extract_citations(report_text: str) -> list[dict]:
+def _extensionless_citation_pattern(known_paths: set[str]) -> re.Pattern | None:
+    """Matches citations of real files that have no extension.
+
+    _CITATION_PATTERN requires a dot-extension, so `Dockerfile:12`,
+    `Makefile:8` and `Procfile:3` were never extracted at all - claims
+    about them were not verified *and* not flagged, they simply did not
+    exist as far as this module was concerned. Those files are genuinely
+    scanned and genuinely discussed in audit reports, so that is a real
+    blind spot rather than a theoretical one.
+
+    Built from the scan's own inventory rather than from a guessed list of
+    well-known filenames, so it can only ever match a path that really
+    exists. That keeps the extraction as conservative as the original
+    pattern: it will not start matching `http://host:8080` or prose like
+    "step 3:12".
+    """
+    targets = [p for p in known_paths if "." not in p.rsplit("/", 1)[-1]]
+    if not targets:
+        return None
+    # Longest first so a nested path wins over a bare filename suffix of it.
+    alternation = "|".join(re.escape(p) for p in sorted(targets, key=len, reverse=True))
+    return re.compile(rf"`?({alternation}):(\d+)`?")
+
+
+def extract_citations(report_text: str, known_paths: set[str] | None = None) -> list[dict]:
+    """Pulls `file:line` citations out of report prose.
+
+    `known_paths` is optional so this stays usable on its own, but without
+    it, citations of extensionless files are invisible - pass the scan's
+    file inventory to catch those too.
+    """
     citations = []
-    for match in _CITATION_PATTERN.finditer(report_text):
-        file_path, line_str = match.groups()
-        citations.append({"file": file_path, "line": int(line_str)})
+    seen: set[tuple[str, int]] = set()
+
+    patterns = [_CITATION_PATTERN]
+    if known_paths:
+        extensionless = _extensionless_citation_pattern(known_paths)
+        if extensionless is not None:
+            patterns.append(extensionless)
+
+    for pattern in patterns:
+        for match in pattern.finditer(report_text):
+            file_path, line_str = match.groups()
+            key = (file_path, int(line_str))
+            if key in seen:
+                continue
+            seen.add(key)
+            citations.append({"file": file_path, "line": int(line_str)})
     return citations
 
 
@@ -79,13 +122,19 @@ def verify_citations(
     line is a real failure mode, not a hypothetical one.
     """
     known_paths = _known_file_paths(evidence)
-    citations = extract_citations(report_text)
+    citations = extract_citations(report_text, known_paths)
 
     verified = []
     unverified = []
     line_bounds_checked = 0
     for citation in citations:
         if citation["file"] not in known_paths:
+            unverified.append(citation)
+            continue
+        if citation["line"] < 1:
+            # Only the upper bound was guarded before, so `app.py:0` passed
+            # as verified. No file has a line 0; a citation naming one is
+            # pointing at nothing whether or not the file is real.
             unverified.append(citation)
             continue
         if fetch_line_count is not None:
