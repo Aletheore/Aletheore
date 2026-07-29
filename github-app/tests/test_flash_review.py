@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from scan_worker.flash_review import (
     FLASH_REVIEW_SYSTEM_PROMPT,
+    files_missing_from_review_context,
     _diff_valid_lines,
     _line_citation_content_matches,
     _names_referenced_in_diff,
@@ -117,6 +118,17 @@ def test_line_citation_content_matches_false_when_line_out_of_bounds():
     file_contents = {"a.py": "one\ntwo"}
 
     assert _line_citation_content_matches(finding, file_contents) is False
+
+
+def test_files_missing_from_review_context_lists_unread_changed_files():
+    changed = ["a.py", "big.py", "c.py"]
+    contents = {"a.py": "x", "c.py": "y"}
+
+    assert files_missing_from_review_context(changed, contents) == ["big.py"]
+
+
+def test_files_missing_from_review_context_is_empty_when_everything_was_read():
+    assert files_missing_from_review_context(["a.py"], {"a.py": "x"}) == []
 
 
 def test_validate_findings_logs_every_dropped_finding_with_its_reason(caplog):
