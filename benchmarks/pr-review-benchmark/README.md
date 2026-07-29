@@ -113,8 +113,17 @@ For each case, run `scripts/run_case.py`. This orchestrates:
 2. Apply the case's `pr.diff`
 3. Invoke each adapter (Aletheore, PR-Agent, DeepSource)
 4. Normalize raw output to the common schema
-5. Run the automated grounding check (file/line verification)
+5. Run the automated grounding check, at both levels (see below)
 6. Store results in `results/raw/`, `results/grounding/`
+
+### The two grounding levels
+
+`scripts/check_citations.py` scores every tool at two levels, identically:
+
+- **Location grounding** (`grounding_rate`) — the cited file exists and the cited line is inside it. This is a low bar: a static analyser reporting its own AST positions clears it by construction, so a rate of 1.0 is close to uninformative.
+- **Content grounding** (`content_grounding_rate`) — text the finding quotes verbatim actually appears near the line it cites. This is the bar Aletheore's Flash Review enforces on *itself* in production (`_line_citation_content_matches` drops findings that fail it), and it's what the grounding claim is really about.
+
+Measuring only the first level made this benchmark structurally unable to show that difference, and actively unfair: competitors scored full grounding credit for clearing a bar Aletheore voluntarily exceeds, while Aletheore's stricter internal check removed findings and depressed its own recall. Findings that quote nothing verbatim can't be scored at the content level and are excluded from its denominator rather than counted either way.
 
 ### Collecting Tool Outputs
 
@@ -425,7 +434,7 @@ report_path.write_text(report_md)
 ### Final Report Output
 
 The report includes:
-- A summary table: recall (hit/partial/miss), false-positive count, avg actionability, grounding rate per tool
+- A summary table: recall (hit/partial/miss), false-positive count, avg actionability, and **two** grounding rates per tool
 - Human/LLM judge agreement rates (per rubric dimension)
 - Known limitations (reproduced from the design spec)
 - Methodology (dates, model versions, provider info — to be filled into `METHODOLOGY.md` at execution time)
