@@ -1,8 +1,10 @@
 import json
+import logging
 from unittest.mock import MagicMock, patch
 
 from scan_worker.flash_review import (
     FLASH_REVIEW_SYSTEM_PROMPT,
+    files_missing_from_review_context,
     _diff_valid_lines,
     _line_citation_content_matches,
     _names_referenced_in_diff,
@@ -116,6 +118,52 @@ def test_line_citation_content_matches_false_when_line_out_of_bounds():
     file_contents = {"a.py": "one\ntwo"}
 
     assert _line_citation_content_matches(finding, file_contents) is False
+
+
+def test_files_missing_from_review_context_lists_unread_changed_files():
+    changed = ["a.py", "big.py", "c.py"]
+    contents = {"a.py": "x", "c.py": "y"}
+
+    assert files_missing_from_review_context(changed, contents) == ["big.py"]
+
+
+def test_files_missing_from_review_context_is_empty_when_everything_was_read():
+    assert files_missing_from_review_context(["a.py"], {"a.py": "x"}) == []
+
+
+def test_validate_findings_logs_every_dropped_finding_with_its_reason(caplog):
+    # A grounding check that fails closed and silent is indistinguishable
+    # from a model that found nothing - that is exactly how the
+    # suggestion-text bug went unnoticed. Every drop must be diagnosable
+    # from logs alone.
+    diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
+    diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"
+    lines = ["filler"] * 20
+    lines[1] = "a specific buggy string here"
+    findings = [
+        {"file": "a.py", "line": 2, "issue": "real: 'a specific buggy string here'"},
+        {"file": "a.py", "line": 999, "issue": "outside the diff entirely"},
+        {"file": "a.py", "line": 18, "issue": "wrong place: 'a specific buggy string here'"},
+    ]
+
+    with caplog.at_level(logging.INFO, logger="scan_worker.flash_review"):
+        kept = _validate_findings(findings, diff_text, {"a.py": "\n".join(lines)})
+
+    assert kept == [findings[0]]
+    message = caplog.text
+    assert "kept 1/3" in message
+    assert "a.py:999" in message
+    assert "a.py:18" in message
+
+
+def test_validate_findings_stays_quiet_when_nothing_is_dropped(caplog):
+    diff_text = "--- a.py ---\n@@ -1,1 +1,1 @@\n+only line"
+    findings = [{"file": "a.py", "line": 1, "issue": "valid"}]
+
+    with caplog.at_level(logging.INFO, logger="scan_worker.flash_review"):
+        assert _validate_findings(findings, diff_text) == findings
+
+    assert "grounding" not in caplog.text
 
 
 def test_line_citation_content_matches_tolerates_a_few_lines_of_miscount():

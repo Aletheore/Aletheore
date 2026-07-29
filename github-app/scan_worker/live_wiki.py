@@ -29,6 +29,18 @@ from aletheore.wiki_mapping import build_cluster_briefs
 FLASH_MODEL = "deepseek-v4-flash"
 UPDATE_MODEL = "deepseek-v4-flash"
 
+# One retry when generated prose cites something unverifiable. Sampling is
+# non-deterministic, so a second draft usually cites cleanly; the extra call
+# only ever happens on a citation failure, which is rare, so this does not
+# meaningfully move per-push AIRview cost.
+SUBSYSTEM_WRITE_ATTEMPTS = 2
+
+SUBSYSTEM_DESCRIPTION_UNAVAILABLE = (
+    "_Description withheld: the generated summary for this subsystem cited code that "
+    "could not be verified against the scan. The file list and diagram below come "
+    "directly from the scan and are unaffected._"
+)
+
 logger = logging.getLogger(__name__)
 
 NAMING_SYSTEM_PROMPT = """You name subsystems of a codebase for a generated wiki. You are given a
@@ -113,12 +125,27 @@ def _validate_written_output(
     parsed: dict | None,
     evidence: dict,
     fetch_line_count: Callable[[str], int | None] | None = None,
+    *,
+    context: str = "output",
 ) -> tuple[dict, str] | None:
+    """Rejects written prose whose citations don't check out - and records
+    which ones, so a rejection is diagnosable instead of just producing a
+    missing subsystem nobody can explain. `context` names what was being
+    written (a subsystem name, or "overview") purely for that log line."""
     if parsed is None or not isinstance(parsed.get("description"), str) or not parsed["description"].strip():
+        logger.info("AIRview %s rejected: model returned no usable description", context)
         return None
 
     description = parsed["description"].strip()
-    if not verify_citations(description, evidence, fetch_line_count=fetch_line_count)["all_verified"]:
+    result = verify_citations(description, evidence, fetch_line_count=fetch_line_count)
+    if not result["all_verified"]:
+        logger.info(
+            "AIRview %s rejected: %d/%d citation(s) unverified (%s)",
+            context,
+            len(result["unverified"]),
+            result["total_citations"],
+            ", ".join(f"{c['file']}:{c['line']}" for c in result["unverified"]),
+        )
         return None
     return parsed, description
 
@@ -149,19 +176,47 @@ def build_subsystem_record(
             cached = None
         if cached is not None:
             cached_output, _cached_model_used = cached
-            candidate = _validate_written_output(cached_output, evidence, fetch_line_count)
+            candidate = _validate_written_output(
+                cached_output, evidence, fetch_line_count, context=f"cached subsystem {name!r}"
+            )
             if candidate is not None:
                 parsed, description = candidate
 
     if parsed is None:
         user_prompt = json.dumps({"name": name, "brief": brief})
-        raw = writing_adapter.simple_completion(SUBSYSTEM_WRITING_SYSTEM_PROMPT, user_prompt, cwd=".")
-        raw_parsed = _parse_json_object(raw)
-        candidate = _validate_written_output(raw_parsed, evidence, fetch_line_count)
-        if candidate is None:
-            return None
-        parsed, description = candidate
-        if cache_write is not None:
+        raw_parsed = None
+        for attempt in range(1, SUBSYSTEM_WRITE_ATTEMPTS + 1):
+            raw = writing_adapter.simple_completion(
+                SUBSYSTEM_WRITING_SYSTEM_PROMPT, user_prompt, cwd="."
+            )
+            raw_parsed = _parse_json_object(raw)
+            candidate = _validate_written_output(
+                raw_parsed,
+                evidence,
+                fetch_line_count,
+                context=f"subsystem {name!r} (attempt {attempt}/{SUBSYSTEM_WRITE_ATTEMPTS})",
+            )
+            if candidate is not None:
+                parsed, description = candidate
+                break
+        if parsed is None:
+            # Previously this returned None, and generate_subsystems then
+            # skipped the record - so one unverifiable citation in the
+            # generated *prose* silently deleted the whole subsystem from
+            # the customer's wiki, including its file list and diagram.
+            # Those two are built deterministically from the scan (see
+            # _sanitize_written_files and build_subsystem_diagram) and are
+            # never affected by what the model wrote, so throwing them away
+            # destroyed correct, verifiable content to punish an unverified
+            # sentence. Keep the subsystem, withhold only the prose.
+            logger.warning(
+                "AIRview keeping subsystem %r without a description: no attempt produced "
+                "fully-verifiable prose",
+                name,
+            )
+            parsed = raw_parsed if isinstance(raw_parsed, dict) else {}
+            description = SUBSYSTEM_DESCRIPTION_UNAVAILABLE
+        elif cache_write is not None:
             try:
                 cache_write(packet, raw_parsed, model_used)
             except Exception as exc:
@@ -254,8 +309,17 @@ def generate_overview(
     parsed = _parse_json_object(raw)
     description = parsed.get("description") if parsed else None
     if not isinstance(description, str) or not description.strip():
+        logger.info("AIRview overview rejected: model returned no usable description")
         description = "Overview description unavailable."
-    elif not verify_citations(description, evidence, fetch_line_count=fetch_line_count)["all_verified"]:
-        description = "Overview description unavailable."
+    else:
+        result = verify_citations(description, evidence, fetch_line_count=fetch_line_count)
+        if not result["all_verified"]:
+            logger.warning(
+                "AIRview overview replaced with a placeholder: %d/%d citation(s) unverified (%s)",
+                len(result["unverified"]),
+                result["total_citations"],
+                ", ".join(f"{c['file']}:{c['line']}" for c in result["unverified"]),
+            )
+            description = "Overview description unavailable."
 
     return {"description": description, "diagram_mermaid": diagram}

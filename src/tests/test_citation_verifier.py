@@ -78,6 +78,7 @@ def test_verify_citations_handles_report_with_no_citations():
         "verified": [],
         "unverified": [],
         "all_verified": True,
+        "line_bounds_checked": 0,
     }
 
 
@@ -120,3 +121,62 @@ def test_verify_citations_with_fetch_line_count_returning_none_skips_bounds_chec
     result = verify_citations(text, make_evidence(), fetch_line_count=lambda path: None)
 
     assert result["all_verified"] is True
+
+
+def test_extract_citations_finds_extensionless_files_from_the_scan_inventory():
+    # Dockerfile:12 was previously invisible: _CITATION_PATTERN requires a
+    # dot-extension, so such a claim was neither verified nor flagged.
+    text = "The base image is pinned at `Dockerfile:12` and the target at `ops/Makefile:8`."
+
+    citations = extract_citations(text, {"Dockerfile", "ops/Makefile"})
+
+    assert {"file": "Dockerfile", "line": 12} in citations
+    assert {"file": "ops/Makefile", "line": 8} in citations
+
+
+def test_extract_citations_without_inventory_still_ignores_extensionless_files():
+    assert extract_citations("see `Dockerfile:12`") == []
+
+
+def test_extract_citations_does_not_match_prose_or_urls_as_extensionless_files():
+    # The extensionless pattern is built only from real scanned paths, so
+    # it must not start matching host:port or "step 3:12"-style text.
+    text = "Deployed to http://internal-host:8080 at step 3:12 yesterday."
+
+    assert extract_citations(text, {"Dockerfile"}) == []
+
+
+def test_extract_citations_does_not_duplicate_a_path_matched_by_both_patterns():
+    text = "See `app.py:5`."
+
+    assert extract_citations(text, {"app.py"}) == [{"file": "app.py", "line": 5}]
+
+
+def test_verify_citations_rejects_line_zero_in_a_real_file():
+    # Only the upper bound was guarded, so a citation at line 0 - which
+    # points at nothing in any file - counted as verified. Uses a path that
+    # really is in the inventory, so the rejection can only come from the
+    # line number itself.
+    result = verify_citations("See `app/auth.py:0`.", make_evidence())
+
+    assert result["all_verified"] is False
+    assert result["unverified"] == [{"file": "app/auth.py", "line": 0}]
+
+
+def test_verify_citations_verifies_a_real_extensionless_file():
+    evidence = {"repository": {"modules": [{"path": "Dockerfile"}]}}
+
+    result = verify_citations("Pinned at `Dockerfile:3`.", evidence)
+
+    assert result["all_verified"] is True
+    assert result["total_citations"] == 1
+
+
+def test_verify_citations_flags_an_unknown_extensionless_file_is_not_extracted():
+    # A path that isn't in the inventory can't be matched by the
+    # inventory-built pattern at all, so it stays out of the count rather
+    # than being reported as a failure - the honest outcome is "we saw no
+    # citation here", not "we checked and it failed".
+    result = verify_citations("See `Jenkinsfile:4`.", make_evidence())
+
+    assert result["total_citations"] == 0

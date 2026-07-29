@@ -71,6 +71,7 @@ from scan_worker.flash_review import (
     build_code_evidence_context,
     build_referenced_symbol_context,
     fetch_changed_file_contents,
+    files_missing_from_review_context,
     gather_file_context,
     is_non_substantive_diff,
     review_diff,
@@ -80,6 +81,8 @@ from scan_worker.flash_review_cache import (
     store_result as store_flash_review_result,
 )
 from scan_worker.github_api import (
+    MAX_CONTEXT_FILE_BYTES,
+    MAX_CONTEXT_FILES,
     create_check_run,
     fetch_default_branch_head_sha,
     fetch_file_content,
@@ -912,7 +915,13 @@ def _maybe_create_audit_certificate_check_run(
             "success",
             "A cryptographically signed (Ed25519) record of this audit is available for "
             f"independent verification: {verify_url}\n\n"
-            "Require this check in branch protection to block merges without a valid, "
+            "This attests provenance and integrity only - that Aletheore produced this "
+            "exact report and it has not been altered since. It is deliberately not a "
+            "pass/fail quality gate, and is green whenever an audit ran: what the audit "
+            "actually found, and how many of its citations checked out against the "
+            "scanned code, are stated in the report's own findings and its Citation "
+            "Verification section.\n\n"
+            "Require this check in branch protection to block merges that carry no valid, "
             "freshly-signed Aletheore audit certificate.",
             name="Aletheore Audit Certificate",
         )
@@ -1130,11 +1139,23 @@ def _run_flash_review(
 
     spend_accumulator = {"total": 0.0}
 
+    skipped_files: list[str] = []
+
     if is_non_substantive_diff(changed_files):
         findings: list[dict] = []
     else:
         file_context = gather_file_context(client, token, repo_full_name, changed_files, head_sha)
         file_contents = fetch_changed_file_contents(client, token, repo_full_name, changed_files, head_sha)
+        skipped_files = files_missing_from_review_context(changed_files, file_contents)
+        if skipped_files:
+            logging.getLogger("scan_worker.jobs").info(
+                "flash review context incomplete for %s#%s: %d/%d changed file(s) not read (%s)",
+                repo_full_name,
+                pr_number,
+                len(skipped_files),
+                len(changed_files),
+                ", ".join(skipped_files[:10]),
+            )
         evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
         code_evidence_context = build_code_evidence_context(evidence, changed_files)
 
@@ -1197,6 +1218,21 @@ def _run_flash_review(
     else:
         body = (
             f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\nNo issues found in this diff."
+        )
+
+    # Say so when the review didn't actually cover the whole PR. This
+    # matters most on the "No issues found" path above, where silence would
+    # otherwise read as an all-clear over files that were never looked at.
+    if skipped_files:
+        body += (
+            f"\n\n_Note: {len(skipped_files)} of {len(changed_files)} changed file(s) were not "
+            f"included in this review (the review reads at most {MAX_CONTEXT_FILES} files, and "
+            f"skips any file over {MAX_CONTEXT_FILE_BYTES // 1000}KB). Issues in them would not "
+            "be found, and citations pointing into them could not be checked against the real "
+            "file: "
+            + ", ".join(f"`{path}`" for path in skipped_files[:10])
+            + ("…" if len(skipped_files) > 10 else "")
+            + "._"
         )
 
     upsert_pr_comment(client, token, repo_full_name, pr_number, body, marker=FLASH_REVIEW_MARKER)

@@ -1,8 +1,10 @@
 import json
+import logging
 from unittest.mock import MagicMock
 
 from scan_worker.live_wiki import (
     FLASH_MODEL,
+    SUBSYSTEM_DESCRIPTION_UNAVAILABLE,
     UPDATE_MODEL,
     build_subsystem_record,
     generate_overview,
@@ -121,6 +123,70 @@ def test_build_subsystem_record_happy_path():
     assert "flowchart TD" in record["diagram_mermaid"]
 
 
+def test_build_subsystem_record_logs_which_citation_was_rejected(caplog):
+    # A rejection with no record of which citation caused it makes a
+    # degraded wiki section unexplainable after the fact.
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    adapter = _adapter(
+        json.dumps(
+            {
+                "description": "Handles login, see `totally/made/up.py:12` for the token path.",
+                "files": [],
+            }
+        )
+    )
+
+    with caplog.at_level(logging.INFO, logger="scan_worker.live_wiki"):
+        build_subsystem_record(evidence, cluster, brief, "Authentication", adapter)
+
+    assert "totally/made/up.py:12" in caplog.text
+    assert "Authentication" in caplog.text
+
+
+def test_build_subsystem_record_keeps_deterministic_content_when_prose_fails():
+    # The file list and diagram are derived from the scan, not from the
+    # model - an unverifiable sentence must not delete them. Previously the
+    # whole subsystem vanished from the wiki.
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    adapter = _adapter(
+        json.dumps(
+            {
+                "description": "See `totally/made/up.py:12`.",
+                "files": [{"path": "auth/login.py", "role": "Entry point.", "key_symbols": []}],
+            }
+        )
+    )
+
+    record = build_subsystem_record(evidence, cluster, brief, "Authentication", adapter)
+
+    assert record is not None
+    assert record["name"] == "Authentication"
+    assert record["description"] == SUBSYSTEM_DESCRIPTION_UNAVAILABLE
+    assert "totally/made/up.py" not in record["description"]
+    assert [f["path"] for f in record["files"]] == ["auth/login.py"]
+    assert "flowchart TD" in record["diagram_mermaid"]
+
+
+def test_build_subsystem_record_retries_once_and_accepts_a_clean_second_draft():
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    adapter = MagicMock()
+    adapter.simple_completion.side_effect = [
+        json.dumps({"description": "Bad cite `nope/fake.py:9`.", "files": []}),
+        json.dumps({"description": "Handles user login and token issuance.", "files": []}),
+    ]
+
+    record = build_subsystem_record(evidence, cluster, brief, "Authentication", adapter)
+
+    assert adapter.simple_completion.call_count == 2
+    assert record["description"] == "Handles user login and token issuance."
+
+
 def test_build_subsystem_record_drops_hallucinated_file():
     evidence = make_evidence()
     cluster = evidence["architecture"]["clusters"][0]
@@ -171,16 +237,22 @@ def test_build_subsystem_record_drops_hallucinated_symbol():
     assert names == {"do_login"}
 
 
-def test_build_subsystem_record_returns_none_for_malformed_json():
+def test_build_subsystem_record_keeps_the_subsystem_for_malformed_json():
+    # Even when the model returns nothing usable at all, the scan-derived
+    # diagram and file list are still correct and still belong in the wiki.
     evidence = make_evidence()
     cluster = evidence["architecture"]["clusters"][0]
     brief = _brief_for(evidence)
     adapter = _adapter("not valid json")
 
-    assert build_subsystem_record(evidence, cluster, brief, "Authentication", adapter) is None
+    record = build_subsystem_record(evidence, cluster, brief, "Authentication", adapter)
+
+    assert record is not None
+    assert record["description"] == SUBSYSTEM_DESCRIPTION_UNAVAILABLE
+    assert "flowchart TD" in record["diagram_mermaid"]
 
 
-def test_build_subsystem_record_rejects_description_with_hallucinated_citation():
+def test_build_subsystem_record_withholds_a_description_with_a_hallucinated_citation():
     evidence = make_evidence()
     cluster = evidence["architecture"]["clusters"][0]
     brief = _brief_for(evidence)
@@ -188,7 +260,11 @@ def test_build_subsystem_record_rejects_description_with_hallucinated_citation()
         json.dumps({"description": "See `totally/fake/path.py:42` for details.", "files": []})
     )
 
-    assert build_subsystem_record(evidence, cluster, brief, "Authentication", adapter) is None
+    record = build_subsystem_record(evidence, cluster, brief, "Authentication", adapter)
+
+    # The unverifiable claim itself must never reach the customer.
+    assert "totally/fake/path.py" not in record["description"]
+    assert record["description"] == SUBSYSTEM_DESCRIPTION_UNAVAILABLE
 
 
 def test_build_subsystem_record_rejects_description_citation_beyond_real_line_count():
@@ -208,7 +284,7 @@ def test_build_subsystem_record_rejects_description_citation_beyond_real_line_co
         evidence, cluster, brief, "Authentication", adapter, fetch_line_count=lambda path: 20
     )
 
-    assert record is None
+    assert record["description"] == SUBSYSTEM_DESCRIPTION_UNAVAILABLE
 
 
 def test_build_subsystem_record_keeps_description_citation_within_real_line_count():
