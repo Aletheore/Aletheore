@@ -912,7 +912,13 @@ def _maybe_create_audit_certificate_check_run(
             "success",
             "A cryptographically signed (Ed25519) record of this audit is available for "
             f"independent verification: {verify_url}\n\n"
-            "Require this check in branch protection to block merges without a valid, "
+            "This attests provenance and integrity only - that Aletheore produced this "
+            "exact report and it has not been altered since. It is deliberately not a "
+            "pass/fail quality gate, and is green whenever an audit ran: what the audit "
+            "actually found, and how many of its citations checked out against the "
+            "scanned code, are stated in the report's own findings and its Citation "
+            "Verification section.\n\n"
+            "Require this check in branch protection to block merges that carry no valid, "
             "freshly-signed Aletheore audit certificate.",
             name="Aletheore Audit Certificate",
         )

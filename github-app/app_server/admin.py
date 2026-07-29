@@ -87,7 +87,10 @@ BRANCH_PROTECTION_DISCLOSURE = (
     "required status check in this repository's branch protection settings. Managed audits "
     "(paid plans) also post an \"Aletheore Audit Certificate\" check with a cryptographically "
     "signed (Ed25519), independently verifiable record of the audit - mark that as required "
-    "too to block merges lacking a valid, freshly-signed audit."
+    "too to block merges lacking a valid, freshly-signed audit. That check attests provenance "
+    "and integrity, not quality: it is green whenever an audit ran, and the audit's own "
+    "findings and Citation Verification section are what report whether anything needs "
+    "attention."
 )
 
 
