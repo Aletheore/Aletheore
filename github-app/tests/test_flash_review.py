@@ -118,6 +118,43 @@ def test_line_citation_content_matches_false_when_line_out_of_bounds():
     assert _line_citation_content_matches(finding, file_contents) is False
 
 
+def test_line_citation_content_matches_tolerates_a_few_lines_of_miscount():
+    # Reproduces a real live re-run of pr-review-benchmark case
+    # 001-flask-cli-key-quote through deepseek-v4-pro: it correctly quoted
+    # the exact buggy string verbatim but cited line 795 in a file where
+    # that string actually sits at line 798 - a 3-line miscount, nothing
+    # like the 237-line hallucination this check exists to catch. The old
+    # +/-2 window rejected this correct finding; the widened window must
+    # tolerate it.
+    lines = ["filler"] * 20
+    lines[16] = "line 798-equivalent: a specific buggy string here"  # 0-indexed 16 -> line 17
+    finding = {"file": "a.py", "line": 14, "issue": "missing quote: 'a specific buggy string here'"}
+    file_contents = {"a.py": "\n".join(lines)}
+
+    assert _line_citation_content_matches(finding, file_contents) is True
+
+
+def test_line_citation_content_matches_ignores_suggestion_quoted_text():
+    # Reproduces the other half of the same live re-run, case
+    # 016-flask-sql-injection-user-lookup: the finding correctly described
+    # a SQL-injection vulnerability with no literal quote in `issue` (an
+    # appropriately abstract description), and its `suggestion` proposed a
+    # parameterized-query replacement - text that, by definition, was never
+    # part of the original vulnerable code being cited. Checking
+    # `suggestion`'s quoted text against the current file content produces
+    # a false rejection of exactly the findings with the most concrete,
+    # actionable fixes attached.
+    finding = {
+        "file": "a.py",
+        "line": 1,
+        "issue": "SQL injection: username is concatenated into the query without sanitization.",
+        "suggestion": "return 'SELECT id, username FROM users WHERE username = ?;'",
+    }
+    file_contents = {"a.py": "return \"SELECT id, username FROM users WHERE username = '\" + username + \"'\""}
+
+    assert _line_citation_content_matches(finding, file_contents) is True
+
+
 def test_validate_findings_drops_finding_whose_quoted_content_is_at_the_wrong_line():
     diff_lines = "\n".join(f" line{i}" for i in range(1, 21))
     diff_text = f"--- a.py ---\n@@ -1,20 +1,20 @@\n{diff_lines}"

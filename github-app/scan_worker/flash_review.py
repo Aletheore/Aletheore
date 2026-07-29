@@ -227,7 +227,7 @@ def build_referenced_symbol_context(
 
 
 _QUOTED_STRING_RE = re.compile(r"'([^'\n]{8,})'|\"([^\"\n]{8,})\"")
-LINE_CITATION_CONTEXT_WINDOW = 2
+LINE_CITATION_CONTEXT_WINDOW = 8
 
 
 def _quoted_strings(text: str) -> list[str]:
@@ -258,6 +258,29 @@ def _line_citation_content_matches(finding: dict, file_contents: dict[str, str])
     the model invented passed that check. This proves the claimed
     content is actually near the claimed line, independent of diff shape.
 
+    The window is wider than the minimum needed to fix that one incident
+    (which was off by 237 lines) because a live re-run of the same case
+    through deepseek-v4-pro showed the model citing the correct line +/-1
+    to +/-3 across separate calls (797, 795, 800 for a bug actually at
+    798) - real, small line-counting variance distinct from the
+    237-line hallucination this check exists to catch, and worth
+    tolerating rather than dropping a correct finding over.
+
+    Only checks against `issue`'s quoted strings, not `suggestion`'s: a
+    suggestion is a proposed REPLACEMENT for the current code, so its
+    quoted text is what the code should become, not what it currently is
+    - checking it against the existing file content produces a false
+    negative whenever a finding's `issue` text is (correctly) abstract
+    with no literal quote of its own. Confirmed as a real, deterministic
+    drop via a live re-run of pr-review-benchmark case
+    016-flask-sql-injection-user-lookup through deepseek-v4-pro: the
+    model correctly found the real SQL-injection bug, described it in
+    `issue` with no quoted string (there's no single buggy literal to
+    quote - the bug is the concatenation pattern itself), and offered a
+    parameterized-query rewrite in `suggestion` - text that, by
+    definition, was never part of the original vulnerable code it was
+    replacing, so checking it against that code can never pass.
+
     Returns True (pass) when there's nothing to check: no real content
     was fetched for this file (e.g. it was skipped for size, or the fetch
     failed - this check only ever adds scrutiny, never rejects for a
@@ -271,7 +294,7 @@ def _line_citation_content_matches(finding: dict, file_contents: dict[str, str])
     line = finding["line"]
     if line < 1 or line > len(lines):
         return False
-    quoted = _quoted_strings(finding.get("issue") or "") + _quoted_strings(finding.get("suggestion") or "")
+    quoted = _quoted_strings(finding.get("issue") or "")
     if not quoted:
         return True
     window_start = max(0, line - 1 - LINE_CITATION_CONTEXT_WINDOW)
