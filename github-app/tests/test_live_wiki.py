@@ -1,4 +1,5 @@
 import json
+import logging
 from unittest.mock import MagicMock
 
 from scan_worker.live_wiki import (
@@ -119,6 +120,30 @@ def test_build_subsystem_record_happy_path():
     assert record["files"][0]["path"] == "auth/login.py"
     assert record["files"][0]["key_symbols"][0]["name"] == "do_login"
     assert "flowchart TD" in record["diagram_mermaid"]
+
+
+def test_build_subsystem_record_logs_which_citation_cost_the_whole_subsystem(caplog):
+    # Losing an entire subsystem from the customer's wiki because of one bad
+    # line number is bad enough; doing it with no record of which citation
+    # caused it makes the wiki's missing sections unexplainable.
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    adapter = _adapter(
+        json.dumps(
+            {
+                "description": "Handles login, see `totally/made/up.py:12` for the token path.",
+                "files": [],
+            }
+        )
+    )
+
+    with caplog.at_level(logging.INFO, logger="scan_worker.live_wiki"):
+        record = build_subsystem_record(evidence, cluster, brief, "Authentication", adapter)
+
+    assert record is None
+    assert "totally/made/up.py:12" in caplog.text
+    assert "Authentication" in caplog.text
 
 
 def test_build_subsystem_record_drops_hallucinated_file():

@@ -113,12 +113,27 @@ def _validate_written_output(
     parsed: dict | None,
     evidence: dict,
     fetch_line_count: Callable[[str], int | None] | None = None,
+    *,
+    context: str = "output",
 ) -> tuple[dict, str] | None:
+    """Rejects written prose whose citations don't check out - and records
+    which ones, so a rejection is diagnosable instead of just producing a
+    missing subsystem nobody can explain. `context` names what was being
+    written (a subsystem name, or "overview") purely for that log line."""
     if parsed is None or not isinstance(parsed.get("description"), str) or not parsed["description"].strip():
+        logger.info("AIRview %s rejected: model returned no usable description", context)
         return None
 
     description = parsed["description"].strip()
-    if not verify_citations(description, evidence, fetch_line_count=fetch_line_count)["all_verified"]:
+    result = verify_citations(description, evidence, fetch_line_count=fetch_line_count)
+    if not result["all_verified"]:
+        logger.info(
+            "AIRview %s rejected: %d/%d citation(s) unverified (%s)",
+            context,
+            len(result["unverified"]),
+            result["total_citations"],
+            ", ".join(f"{c['file']}:{c['line']}" for c in result["unverified"]),
+        )
         return None
     return parsed, description
 
@@ -149,7 +164,9 @@ def build_subsystem_record(
             cached = None
         if cached is not None:
             cached_output, _cached_model_used = cached
-            candidate = _validate_written_output(cached_output, evidence, fetch_line_count)
+            candidate = _validate_written_output(
+                cached_output, evidence, fetch_line_count, context=f"cached subsystem {name!r}"
+            )
             if candidate is not None:
                 parsed, description = candidate
 
@@ -157,8 +174,13 @@ def build_subsystem_record(
         user_prompt = json.dumps({"name": name, "brief": brief})
         raw = writing_adapter.simple_completion(SUBSYSTEM_WRITING_SYSTEM_PROMPT, user_prompt, cwd=".")
         raw_parsed = _parse_json_object(raw)
-        candidate = _validate_written_output(raw_parsed, evidence, fetch_line_count)
+        candidate = _validate_written_output(
+            raw_parsed, evidence, fetch_line_count, context=f"subsystem {name!r}"
+        )
         if candidate is None:
+            logger.warning(
+                "AIRview dropping subsystem %r entirely - it will be missing from the wiki", name
+            )
             return None
         parsed, description = candidate
         if cache_write is not None:
@@ -254,8 +276,17 @@ def generate_overview(
     parsed = _parse_json_object(raw)
     description = parsed.get("description") if parsed else None
     if not isinstance(description, str) or not description.strip():
+        logger.info("AIRview overview rejected: model returned no usable description")
         description = "Overview description unavailable."
-    elif not verify_citations(description, evidence, fetch_line_count=fetch_line_count)["all_verified"]:
-        description = "Overview description unavailable."
+    else:
+        result = verify_citations(description, evidence, fetch_line_count=fetch_line_count)
+        if not result["all_verified"]:
+            logger.warning(
+                "AIRview overview replaced with a placeholder: %d/%d citation(s) unverified (%s)",
+                len(result["unverified"]),
+                result["total_citations"],
+                ", ".join(f"{c['file']}:{c['line']}" for c in result["unverified"]),
+            )
+            description = "Overview description unavailable."
 
     return {"description": description, "diagram_mermaid": diagram}

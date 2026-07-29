@@ -337,11 +337,50 @@ def _diff_valid_lines(diff_text: str) -> dict[str, set[int]]:
 def _validate_findings(
     findings: list[dict], diff_text: str, file_contents: dict[str, str] | None = None
 ) -> list[dict]:
+    """Drops findings whose cited location doesn't hold up, and says so.
+
+    Every rejection here is logged with its file, line and reason. Before
+    that existed, this function could silently discard correct findings and
+    nothing anywhere recorded it: a real bug where a finding's `suggestion`
+    text was checked against the code it proposed to *replace* deleted
+    every such finding for an unknown length of time, and was only caught
+    by manually diffing a benchmark run against the model's raw output.
+    Grounding that fails closed and silent is indistinguishable from a
+    model that found nothing, which makes it unfixable and unmeasurable.
+    """
     valid_lines = _diff_valid_lines(diff_text)
-    in_diff = [f for f in findings if f["line"] in valid_lines.get(f["file"], set())]
-    if not file_contents:
-        return in_diff
-    return [f for f in in_diff if _line_citation_content_matches(f, file_contents)]
+
+    in_diff = []
+    out_of_diff = []
+    for finding in findings:
+        if finding["line"] in valid_lines.get(finding["file"], set()):
+            in_diff.append(finding)
+        else:
+            out_of_diff.append(finding)
+
+    kept = []
+    content_mismatch = []
+    for finding in in_diff:
+        # Classified in one pass rather than by comparing against the kept
+        # list - two findings on the same line can be equal dicts, and an
+        # `in`-based split would then mis-attribute one of them.
+        if not file_contents or _line_citation_content_matches(finding, file_contents):
+            kept.append(finding)
+        else:
+            content_mismatch.append(finding)
+
+    if out_of_diff or content_mismatch:
+        logger.info(
+            "flash review grounding: kept %d/%d finding(s); dropped %d outside the diff (%s), "
+            "%d whose quoted content wasn't near the cited line (%s)",
+            len(kept),
+            len(findings),
+            len(out_of_diff),
+            ", ".join(f"{f['file']}:{f['line']}" for f in out_of_diff) or "-",
+            len(content_mismatch),
+            ", ".join(f"{f['file']}:{f['line']}" for f in content_mismatch) or "-",
+        )
+    return kept
 
 
 _NON_SUBSTANTIVE_FILENAMES = {
