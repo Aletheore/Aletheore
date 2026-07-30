@@ -50,6 +50,18 @@ For each case in the corpus:
    git apply <path-to-benchmarks/pr-review-benchmark/cases/<case-id>/pr.diff>
    ```
 
+   Then expand corpus fixture placeholders in the resulting tree — some cases (e.g. `020-express-hardcoded-webhook-secret`) deliberately store a placeholder instead of a real-looking credential, because storing one made this branch unpushable under GitHub's secret-scanning push protection. `scripts/build_case_repo.py` does this automatically for the grounding-check checkout, but this manual step needs it too, or the tools will review a literal `__BENCHMARK_FAKE_STRIPE_KEY__` and the case will test nothing:
+
+   ```bash
+   python3 -c "
+   import sys; sys.path.insert(0, '<path-to>/benchmarks/pr-review-benchmark')
+   from scripts.fixtures import expand_placeholders_in_tree
+   print(expand_placeholders_in_tree('/tmp/case-source'))
+   "
+   ```
+
+   See `scripts/fixtures.py` for why the corpus stores placeholders rather than the values themselves.
+
 2. Copy the resulting tree into the scratch repo under `benchmark-sandbox/<case-id>/`:
    ```bash
    git clone https://github.com/ArihantK15/proctor-browser /tmp/proctor-browser
