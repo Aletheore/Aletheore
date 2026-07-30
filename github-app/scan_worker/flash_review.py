@@ -326,7 +326,24 @@ _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
 def _diff_valid_lines(diff_text: str) -> dict[str, set[int]]:
-    """Maps each file to new-file line numbers present in its diff hunks."""
+    """Maps each file to new-file line numbers its diff hunks touch.
+
+    A removed line has no new-file line of its own, but the position it was
+    removed *from* is still a real, reviewable location - "you deleted the
+    guard here" is a legitimate comment. So a deletion records the new-file
+    line it collapsed onto, without advancing the counter.
+
+    Without that, a deletion-only hunk shrank to just its context lines and
+    the natural place to comment on the removal fell outside the diff
+    entirely. Confirmed on a real PR: a pure-deletion hunk removing
+    `__reduce__` from a JSONDecodeError subclass produced valid lines
+    41-46, Flash Review correctly found the resulting unpicklable-exception
+    bug and cited line 47, and the finding was dropped as "outside the
+    diff" - reported to the customer as "No issues found in this diff".
+    Deleting a null check, a guard, or an override is an extremely common
+    real-world regression, so this silently suppressed a whole class of
+    true positives.
+    """
     valid_lines: dict[str, set[int]] = {}
     current_file: str | None = None
     current_line: int | None = None
@@ -345,11 +362,23 @@ def _diff_valid_lines(diff_text: str) -> dict[str, set[int]]:
             continue
         if current_file is None or current_line is None:
             continue
-        if line.startswith("-"):
-            continue
         valid_lines[current_file].add(current_line)
-        current_line += 1
+        if not line.startswith("-"):
+            current_line += 1
     return valid_lines
+
+
+# Findings are allowed to land near a hunk rather than exactly inside it.
+# This filter exists to catch a citation pointing at an unrelated part of
+# the file, not to police off-by-a-few line counting - that is what
+# _line_citation_content_matches does, with real file content, and it can
+# never run on a finding this filter has already discarded. Matches
+# LINE_CITATION_CONTEXT_WINDOW deliberately: one tolerance, one rationale.
+DIFF_LINE_TOLERANCE = LINE_CITATION_CONTEXT_WINDOW
+
+
+def _line_is_near_diff(line: int, valid: set[int]) -> bool:
+    return any(abs(line - candidate) <= DIFF_LINE_TOLERANCE for candidate in valid)
 
 
 def _validate_findings(
@@ -371,7 +400,7 @@ def _validate_findings(
     in_diff = []
     out_of_diff = []
     for finding in findings:
-        if finding["line"] in valid_lines.get(finding["file"], set()):
+        if _line_is_near_diff(finding["line"], valid_lines.get(finding["file"], set())):
             in_diff.append(finding)
         else:
             out_of_diff.append(finding)

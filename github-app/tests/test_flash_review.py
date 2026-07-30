@@ -23,10 +23,21 @@ def test_diff_valid_lines_maps_added_and_context_lines_by_file():
     assert _diff_valid_lines(diff_text) == {"a.py": {1, 2, 3}}
 
 
-def test_diff_valid_lines_excludes_removed_lines():
+def test_diff_valid_lines_does_not_let_a_removed_line_consume_a_new_file_number():
+    # The removal's *position* is recorded (it's a reviewable location), but
+    # it must not advance the new-file counter, or every line after a
+    # deletion would be numbered wrongly.
     diff_text = "--- a.py ---\n@@ -1,2 +1,1 @@\n-removed\n context"
 
     assert _diff_valid_lines(diff_text) == {"a.py": {1}}
+
+
+def test_diff_valid_lines_records_the_position_of_a_leading_deletion():
+    # A hunk that opens with deletions has no preceding context line, so
+    # without this the removal point would not be in the set at all.
+    diff_text = "--- a.py ---\n@@ -5,3 +5,1 @@\n-gone one\n-gone two\n kept"
+
+    assert _diff_valid_lines(diff_text) == {"a.py": {5}}
 
 
 def test_diff_valid_lines_tracks_multiple_files_separately():
@@ -778,3 +789,31 @@ def test_fetch_changed_file_contents_stops_at_max_files(monkeypatch):
     flash_review.fetch_changed_file_contents(None, "tok", "o/r", ["a.py", "b.py", "c.py", "d.py"], "sha")
 
     assert fetched == ["a.py", "b.py"]
+
+
+def test_validate_findings_keeps_a_finding_just_past_a_deletion_only_hunk():
+    # The real PR #223 case, reduced. A pure-deletion hunk collapses to its
+    # context lines (41-46 there); Flash Review correctly found the bug the
+    # deletion introduced and cited line 47, one past the boundary, and the
+    # finding was discarded and reported as "No issues found in this diff".
+    # Deleting a guard or an override is a very common real regression, so
+    # this suppressed an entire class of true positives.
+    diff_text = (
+        "--- a.py ---\n@@ -41,16 +41,6 @@\n"
+        " ctx one\n ctx two\n ctx three\n"
+        "-    def __reduce__(self):\n"
+        "-        return CompatJSONDecodeError.__reduce__(self)\n"
+        " ctx four\n ctx five\n ctx six\n"
+    )
+    finding = {"file": "a.py", "line": 47, "issue": "removal makes this unpicklable"}
+
+    assert _validate_findings([finding], diff_text) == [finding]
+
+
+def test_validate_findings_still_rejects_a_citation_far_from_any_hunk():
+    # The tolerance must not turn the range filter into a no-op: a citation
+    # pointing at an unrelated part of the file is exactly what it's for.
+    diff_text = "--- a.py ---\n@@ -41,3 +41,3 @@\n ctx\n+added\n ctx2"
+    finding = {"file": "a.py", "line": 900, "issue": "unrelated claim"}
+
+    assert _validate_findings([finding], diff_text) == []
