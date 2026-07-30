@@ -1,0 +1,13 @@
+diff --git a/test/merge.js b/test/merge.js
+index 097bfb49..2ecd7c78 100644
+--- a/test/merge.js
++++ b/test/merge.js
+@@ -325,7 +325,7 @@ describe('merge', function() {
+     assert.deepStrictEqual(actual, { 'a': [] });
+   });
+ 
+-  it('should not convert strings to arrays when merging arrays of `source`', function() {
++  it('should convert strings to arrays when merging arrays of `source`', function() {
+     var object = { 'a': 'abcde' },
+         actual = merge(object, { 'a': ['x', 'y', 'z'] });
+ 

@@ -1,0 +1,1 @@
+This PR renames a misspelled test function name in Cobra's test suite (`...Deperecated` to `...Deprecated`). The test's logic and assertions are untouched - it is purely a spelling correction to an identifier. Included as a deliberately clean control case: a code review tool should raise no concerns about it.

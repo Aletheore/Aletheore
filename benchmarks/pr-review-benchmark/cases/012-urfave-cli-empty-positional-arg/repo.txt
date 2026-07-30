@@ -1,0 +1,2 @@
+repo_url=https://github.com/urfave/cli.git
+base_commit=b4f42d397e229039b5ffffe996daccc3fb3ae358

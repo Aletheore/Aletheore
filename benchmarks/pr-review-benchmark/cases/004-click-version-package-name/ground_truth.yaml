@@ -1,0 +1,13 @@
+case_id: 004-click-version-package-name
+language: python
+category: real_bug_fix
+bug_type: incomplete-resolution-logic
+expected_file: src/click/decorators.py
+expected_line: 501
+fix_reference: https://github.com/pallets/click/commit/bec59289d8cf9b9b4010642b2fee483e5f8eeefc
+description: 'click.version_option() raised RuntimeError whenever the detected or given `package_name`
+  did not exactly match an installed distribution name, even when the name was a valid top-level import
+  name that maps to a differently-named distribution (e.g. `PIL` is provided by the `Pillow` distribution,
+  `jwt` by `PyJWT`). This made `--version` fail for any CLI built on top of such packages. Fixed by resolving
+  the name via `importlib.metadata.packages_distributions()` before giving up. References issues #1884,
+  #2331, #3125.'

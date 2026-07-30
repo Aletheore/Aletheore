@@ -1,0 +1,13 @@
+case_id: 025-gson-javadoc-getaschar-fix
+language: java
+category: clean
+bug_type: null
+expected_file: null
+expected_line: null
+fix_reference: https://github.com/google/gson/commit/8260eddffe413c132b3a38e68446da6bd083220d
+description: 'Real, merged, single-line fix (PR #3021): corrects a copy-pasted `@return` Javadoc tag on
+  `JsonArray.getAsCharacter()` that incorrectly claimed the method returns ''this element as a primitive
+  short'' (copied from a neighboring `getAsShort` method); the corrected text says ''this element as a
+  character'', matching the method''s actual behavior and signature. Only a comment changes - no code,
+  tests, or behavior are touched. A correct review of this diff should produce zero findings; any finding
+  here is a false positive.'

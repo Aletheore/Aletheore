@@ -1,0 +1,140 @@
+diff --git a/src/main/java/org/junit/internal/AssumptionViolatedException.java b/src/main/java/org/junit/internal/AssumptionViolatedException.java
+index 0e79b562..15c27af1 100644
+--- a/src/main/java/org/junit/internal/AssumptionViolatedException.java
++++ b/src/main/java/org/junit/internal/AssumptionViolatedException.java
+@@ -1,8 +1,5 @@
+ package org.junit.internal;
+ 
+-import java.io.IOException;
+-import java.io.ObjectOutputStream;
+-
+ import org.hamcrest.Description;
+ import org.hamcrest.Matcher;
+ import org.hamcrest.SelfDescribing;
+@@ -111,29 +108,4 @@ public class AssumptionViolatedException extends RuntimeException implements Sel
+             }
+         }
+     }
+-
+-    /**
+-     * Override default Java object serialization to correctly deal with potentially unserializable matchers or values.
+-     * By not implementing readObject, we assure ourselves of backwards compatibility and compatibility with the
+-     * standard way of Java serialization.
+-     *
+-     * @param objectOutputStream The outputStream to write our representation to
+-     * @throws IOException When serialization fails
+-     */
+-    private void writeObject(ObjectOutputStream objectOutputStream) throws IOException {
+-        ObjectOutputStream.PutField putField = objectOutputStream.putFields();
+-        putField.put("fAssumption", fAssumption);
+-        putField.put("fValueMatcher", fValueMatcher);
+-
+-        // We have to wrap the matcher into a serializable form.
+-        putField.put("fMatcher", SerializableMatcherDescription.asSerializableMatcher(fMatcher));
+-
+-        // We have to wrap the value inside a non-String class (instead of serializing the String value directly) as
+-        // A Description will handle a String and non-String object differently (1st is surrounded by '"' while the
+-        // latter will be surrounded by '<' '>'. Wrapping it makes sure that the description of a serialized and
+-        // non-serialized instance produce the exact same description
+-        putField.put("fValue", SerializableValueDescription.asSerializableValue(fValue));
+-
+-        objectOutputStream.writeFields();
+-    }
+ }
+diff --git a/src/main/java/org/junit/internal/SerializableMatcherDescription.java b/src/main/java/org/junit/internal/SerializableMatcherDescription.java
+deleted file mode 100644
+index e0365572..00000000
+--- a/src/main/java/org/junit/internal/SerializableMatcherDescription.java
++++ /dev/null
+@@ -1,47 +0,0 @@
+-package org.junit.internal;
+-
+-import java.io.Serializable;
+-
+-import org.hamcrest.BaseMatcher;
+-import org.hamcrest.Description;
+-import org.hamcrest.Matcher;
+-import org.hamcrest.StringDescription;
+-
+-/**
+- * This class exists solely to provide a serializable description of a matcher to be serialized as a field in
+- * {@link AssumptionViolatedException}. Being a {@link Throwable}, it is required to be {@link Serializable}, but most
+- * implementations of {@link Matcher} are not. This class works around that limitation as
+- * {@link AssumptionViolatedException} only every uses the description of the {@link Matcher}, while still retaining
+- * backwards compatibility with classes compiled against its class signature before 4.14 and/or deserialization of
+- * previously serialized instances.
+- */
+-class SerializableMatcherDescription<T> extends BaseMatcher<T> implements Serializable {
+-
+-    private final String matcherDescription;
+-
+-    private SerializableMatcherDescription(Matcher<T> matcher) {
+-        matcherDescription = StringDescription.asString(matcher);
+-    }
+-
+-    public boolean matches(Object o) {
+-        throw new UnsupportedOperationException("This Matcher implementation only captures the description");
+-    }
+-
+-    public void describeTo(Description description) {
+-        description.appendText(matcherDescription);
+-    }
+-
+-    /**
+-     * Factory method that checks to see if the matcher is already serializable.
+-     * @param matcher the matcher to make serializable
+-     * @return The provided matcher if it is null or already serializable,
+-     * the SerializableMatcherDescription representation of it if it is not.
+-     */
+-    static <T> Matcher<T> asSerializableMatcher(Matcher<T> matcher) {
+-        if (matcher == null || matcher instanceof Serializable) {
+-            return matcher;
+-        } else {
+-            return new SerializableMatcherDescription<T>(matcher);
+-        }
+-    }
+-}
+diff --git a/src/main/java/org/junit/internal/SerializableValueDescription.java b/src/main/java/org/junit/internal/SerializableValueDescription.java
+deleted file mode 100644
+index 4d055d7a..00000000
+--- a/src/main/java/org/junit/internal/SerializableValueDescription.java
++++ /dev/null
+@@ -1,38 +0,0 @@
+-package org.junit.internal;
+-
+-import java.io.Serializable;
+-
+-/**
+- * This class exists solely to provide a serializable description of a value to be serialized as a field in
+- * {@link AssumptionViolatedException}. Being a {@link Throwable}, it is required to be {@link Serializable}, but a
+- * value of type Object provides no guarantee to be serializable. This class works around that limitation as
+- * {@link AssumptionViolatedException} only every uses the string representation of the value, while still retaining
+- * backwards compatibility with classes compiled against its class signature before 4.14 and/or deserialization of
+- * previously serialized instances.
+- */
+-class SerializableValueDescription implements Serializable {
+-    private final String value;
+-
+-    private SerializableValueDescription(Object value) {
+-        this.value = String.valueOf(value);
+-    }
+-
+-    /**
+-     * Factory method that checks to see if the value is already serializable.
+-     * @param value the value to make serializable
+-     * @return The provided value if it is null or already serializable,
+-     * the SerializableValueDescription representation of it if it is not.
+-     */
+-    static Object asSerializableValue(Object value) {
+-        if (value == null || value instanceof Serializable) {
+-            return value;
+-        } else {
+-            return new SerializableValueDescription(value);
+-        }
+-    }
+-
+-    @Override
+-    public String toString() {
+-        return value;
+-    }
+-}

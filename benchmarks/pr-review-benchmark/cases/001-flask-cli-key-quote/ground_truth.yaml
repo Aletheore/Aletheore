@@ -1,0 +1,11 @@
+case_id: 001-flask-cli-key-quote
+language: python
+category: real_bug_fix
+bug_type: incorrect-error-message
+expected_file: src/flask/cli.py
+expected_line: 798
+fix_reference: https://github.com/pallets/flask/commit/1d5abfadd7132c9a78e14e5ba6c07aed47115280
+description: 'The error message raised by Flask CLI''s `_validate_key` when `--cert` is an SSLContext
+  object was missing the closing double quote around `--key` (`''... "--key is not used.''` instead of
+  `''... "--key" is not used.''`), producing malformed, confusing CLI error text. Fixed in Flask referencing
+  issue #5342 / PR #5344.'

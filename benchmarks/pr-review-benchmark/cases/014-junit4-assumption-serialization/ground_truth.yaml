@@ -1,0 +1,13 @@
+case_id: 014-junit4-assumption-serialization
+language: java
+category: real_bug_fix
+bug_type: missing-serialization-override
+expected_file: src/main/java/org/junit/internal/AssumptionViolatedException.java
+expected_line: 111
+fix_reference: https://github.com/junit-team/junit4/commit/f8ee412316b1a94d3dc35498359cc2f0ca273216
+description: 'AssumptionViolatedException held a Hamcrest Matcher and an arbitrary Object value as instance
+  fields but relied on default Java serialization. Since most Matcher implementations (and many arbitrary
+  test values) are not themselves Serializable, calling default serialization on an instance threw NotSerializableException,
+  breaking any test infrastructure that serializes test results/exceptions across a process boundary (e.g.
+  forked test JVMs). Fixed by adding a custom writeObject() that wraps the matcher/value in serializable
+  description wrappers before writing. References issue #1192.'

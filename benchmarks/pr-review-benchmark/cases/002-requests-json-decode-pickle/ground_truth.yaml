@@ -1,0 +1,13 @@
+case_id: 002-requests-json-decode-pickle
+language: python
+category: real_bug_fix
+bug_type: unpicklable-exception
+expected_file: src/requests/exceptions.py
+expected_line: 42
+fix_reference: https://github.com/psf/requests/commit/3ff3ff21dd45957c9e143cd500291959bb15f690
+description: 'requests.exceptions.JSONDecodeError could not be pickled/unpickled: due to the class''s
+  MRO, Python''s default `__reduce__` resolved to the IOError parent''s implementation, which drops required
+  constructor arguments, so `pickle.loads(pickle.dumps(err))` raised an error. This is especially damaging
+  inside a multiprocessing process pool, where an unpicklable exception crashes the whole pool. Fixed
+  by explicitly delegating `__reduce__` to the JSON library''s own error class. References GitHub issue
+  #6628.'

@@ -1,0 +1,1 @@
+A `requests.exceptions.JSONDecodeError` raised while parsing invalid JSON could not be safely pickled - for example, when propagated across a multiprocessing worker pool. Attempting to pickle and unpickle the exception raised a separate error, which could crash an entire process pool rather than surfacing the original JSON error. The fix makes the exception properly picklable.

@@ -1,0 +1,12 @@
+case_id: 016-flask-sql-injection-user-lookup
+language: python
+category: injected_bug
+bug_type: sql-injection
+expected_file: src/flask/helpers.py
+expected_line: 651
+fix_reference: null
+description: 'Hand-authored (injected) bug: `build_user_lookup_query` builds a SQL query by directly concatenating
+  an untrusted `username` string into the query text (`"... WHERE username = ''" + username + "''"`) instead
+  of using a parameterized query. A username such as `'' OR ''1''=''1` would let an attacker read arbitrary
+  rows, and one containing `''; DROP TABLE users;--` could delete data outright. This is a textbook SQL
+  injection via string concatenation.'

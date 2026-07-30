@@ -1,0 +1,1 @@
+This PR fixes a one-word typo in a Flask documentation example (a code sample referred to a `Movies` class where the rest of the example uses `Movie`). It touches only a `.rst` documentation file - no application code, logic, or behavior changes at all. It is included as a deliberately clean control case: a code review tool should raise no concerns about it.

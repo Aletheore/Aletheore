@@ -1,0 +1,2 @@
+repo_url=https://github.com/gorilla/mux.git
+base_commit=2b030fc311d07b8c5950807800b03b2d32a7142c

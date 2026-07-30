@@ -1,0 +1,12 @@
+diff --git a/gin.go b/gin.go
+index 38361a4..1965a42 100644
+--- a/gin.go
++++ b/gin.go
+@@ -593,7 +593,6 @@ func (engine *Engine) RunFd(fd int) (err error) {
+ 	}
+ 
+ 	f := os.NewFile(uintptr(fd), fmt.Sprintf("fd@%d", fd))
+-	defer f.Close()
+ 	listener, err := net.FileListener(f)
+ 	if err != nil {
+ 		return

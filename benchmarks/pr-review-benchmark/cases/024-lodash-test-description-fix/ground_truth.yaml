@@ -1,0 +1,12 @@
+case_id: 024-lodash-test-description-fix
+language: javascript
+category: clean
+bug_type: null
+expected_file: null
+expected_line: null
+fix_reference: https://github.com/lodash/lodash/commit/abde9319fdd39e8d2f3ab70663fc41a323a22ef0
+description: 'Real, merged, single-line fix (PR #4334): corrects the English description string of a Mocha
+  `it(...)` test case in test/merge.js from ''should not convert strings to arrays...'' to ''should convert
+  strings to arrays...'', matching what the test body actually asserts. Only the string literal used as
+  the test''s human-readable label changes; the test''s assertions and behavior are unchanged. A correct
+  review of this diff should produce zero findings; any finding here is a false positive.'

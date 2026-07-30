@@ -1,0 +1,11 @@
+case_id: 017-commons-lang-arrayutils-off-by-one
+language: java
+category: injected_bug
+bug_type: off-by-one
+expected_file: src/main/java/org/apache/commons/lang3/ArrayUtils.java
+expected_line: 9691
+fix_reference: null
+description: 'Hand-authored (injected) bug: the new `getLast(T[] array)` method loops with `for (int i
+  = 0; i <= array.length; i++)`, using `<=` instead of `<`. On the final iteration `i` equals `array.length`,
+  which is one past the last valid index, so `array[i]` throws `ArrayIndexOutOfBoundsException` for every
+  non-empty array. Classic off-by-one loop bound.'

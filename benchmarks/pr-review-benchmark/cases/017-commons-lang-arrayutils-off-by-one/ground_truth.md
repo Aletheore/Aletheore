@@ -1,0 +1,1 @@
+This is a deliberately injected bug for the benchmark, not a real historical fix. A new `ArrayUtils.getLast()` helper loops one index past the end of the array (`i <= array.length` instead of `i < array.length`), so calling it on any non-empty array throws an `ArrayIndexOutOfBoundsException` instead of returning the last element.

@@ -1,0 +1,11 @@
+case_id: 008-axios-headers-set-cookie
+language: javascript
+category: real_bug_fix
+bug_type: inconsistent-return-type
+expected_file: lib/core/AxiosHeaders.js
+expected_line: 283
+fix_reference: https://github.com/axios/axios/commit/e566ea39a22e55a05073b035c51852b4863de012
+description: 'AxiosHeaders.getSetCookie() returned `this.get(''set-cookie'') || []`, which produced a
+  single string when only one Set-Cookie header was present, an array when multiple were present, or an
+  empty array when absent - an inconsistent return type across call sites that expect an array of cookie
+  strings. Fixed to always normalize the result to an array. References PR #11037.'

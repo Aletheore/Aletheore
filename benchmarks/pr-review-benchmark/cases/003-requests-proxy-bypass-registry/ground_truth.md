@@ -1,0 +1,1 @@
+On Windows, requests could incorrectly decide that a proxy should be bypassed for every host, because the registry-based bypass check treated an empty entry in the `ProxyOverride` list as a wildcard match. This silently broke proxy usage for any user whose registry override list contained an empty entry. The fix filters out empty entries before checking for a match.

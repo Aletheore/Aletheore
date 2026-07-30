@@ -1,0 +1,13 @@
+case_id: 020-express-hardcoded-webhook-secret
+language: javascript
+category: injected_bug
+bug_type: hardcoded-secret
+expected_file: lib/utils.js
+expected_line: 281
+fix_reference: null
+description: 'Hand-authored (injected) bug: `DEFAULT_WEBHOOK_SECRET` hardcodes a live-looking API secret
+  (`''__BENCHMARK_FAKE_STRIPE_KEY__''`) directly in source as the fallback HMAC key used by
+  `signWebhookPayload` whenever no secret is configured. Any application that forgets to configure its
+  own secret silently signs webhooks with this public, source-controlled key, and anyone who reads the
+  source (or a decompiled bundle) can forge valid webhook signatures. Hardcoded secret / credential in
+  source.'

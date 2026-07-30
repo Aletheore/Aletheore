@@ -1,0 +1,10 @@
+case_id: 010-gin-runfd-file-leak
+language: go
+category: real_bug_fix
+bug_type: resource-leak
+expected_file: gin.go
+expected_line: 595
+fix_reference: https://github.com/gin-gonic/gin/commit/c3d5a28ed6d3849da820195b6774d212bcc038a9
+description: 'Engine.RunFd() wrapped a raw file descriptor in an `os.File` via `os.NewFile` but never
+  closed it, leaking the underlying file descriptor for the process''s lifetime every time RunFd was called.
+  Fixed by adding `defer f.Close()`. References PR #4422.'

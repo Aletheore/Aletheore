@@ -1,0 +1,22 @@
+diff --git a/src/flask/helpers.py b/src/flask/helpers.py
+index fb7f6eba..ca91b841 100644
+--- a/src/flask/helpers.py
++++ b/src/flask/helpers.py
+@@ -641,6 +641,17 @@ def get_root_path(import_name: str) -> str:
+     return os.path.dirname(os.path.abspath(filepath))  # type: ignore[no-any-return]
+ 
+ 
++def build_user_lookup_query(username: str) -> str:
++    """Build a SQL query that looks up a user row by username.
++
++    Used by the ``flask shell`` ad-hoc user-lookup helper to fetch a user's
++    id and email for display.
++
++    :param username: The username to look up, as provided by the caller.
++    """
++    return "SELECT id, username, email FROM users WHERE username = '" + username + "'"
++
++
+ @cache
+ def _split_blueprint_path(name: str) -> list[str]:
+     out: list[str] = [name]

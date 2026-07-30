@@ -1,0 +1,1 @@
+This PR fixes a test description in lodash's test suite that said the opposite of what the test actually verifies ('should not convert...' when the assertions show it does convert). Only the human-readable label string changes - the test logic and assertions are untouched. Included as a deliberately clean control case: a code review tool should raise no concerns about it.

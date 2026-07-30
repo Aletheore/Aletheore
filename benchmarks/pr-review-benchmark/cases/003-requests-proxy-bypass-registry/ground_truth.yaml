@@ -1,0 +1,12 @@
+case_id: 003-requests-proxy-bypass-registry
+language: python
+category: real_bug_fix
+bug_type: regex-matches-empty-string
+expected_file: src/requests/utils.py
+expected_line: 99
+fix_reference: https://github.com/psf/requests/commit/1604e20fc87ce212cf3a02474a6d7509b640cbbb
+description: On Windows, the proxy-bypass check read the `ProxyOverride` registry value and split it on
+  `;` without filtering out empty entries (which occur naturally with trailing/duplicate semicolons).
+  An empty pattern always matches under `re.match`, so once an empty entry appeared in the list, `proxy_bypass_registry`
+  incorrectly reported that every host should bypass the proxy. Fixed by filtering out empty strings before
+  matching.

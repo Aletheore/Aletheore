@@ -1,0 +1,2 @@
+repo_url=https://github.com/spf13/cobra.git
+base_commit=746ef07158728502482cea9f880a6f4b21ef29a9

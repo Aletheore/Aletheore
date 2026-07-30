@@ -1,0 +1,2 @@
+repo_url=https://github.com/pallets/flask.git
+base_commit=165af0a090e229e94ccd93896efc15b9fe0488da

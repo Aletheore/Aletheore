@@ -58,3 +58,8 @@ github-app/repo-checkouts/
 
 # Brainstorming visual-companion mockups (local scratch, not part of the shipped site)
 .superpowers/
+
+# PR-review benchmark: results/ is working state (raw tool outputs, grounding checks,
+# anonymized findings, scored results, llm judge output) — only the published deliverables
+# (REPORT.md, METHODOLOGY.md, cases/) are committed. See README.md → Step 3 for details.
+benchmarks/pr-review-benchmark/results/

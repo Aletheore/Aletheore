@@ -1,0 +1,2 @@
+repo_url=https://github.com/apache/commons-lang.git
+base_commit=c4316d20a8f5a6520379feab11b052acf859700d

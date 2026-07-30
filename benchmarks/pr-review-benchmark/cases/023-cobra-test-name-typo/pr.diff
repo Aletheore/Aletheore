@@ -1,0 +1,13 @@
+diff --git a/doc/man_docs_test.go b/doc/man_docs_test.go
+index c111d45..a4435e6 100644
+--- a/doc/man_docs_test.go
++++ b/doc/man_docs_test.go
+@@ -150,7 +150,7 @@ func TestGenManSeeAlso(t *testing.T) {
+ 	}
+ }
+ 
+-func TestManPrintFlagsHidesShortDeperecated(t *testing.T) {
++func TestManPrintFlagsHidesShortDeprecated(t *testing.T) {
+ 	c := &cobra.Command{}
+ 	c.Flags().StringP("foo", "f", "default", "Foo flag")
+ 	assertNoErr(t, c.Flags().MarkShorthandDeprecated("foo", "don't use it no more"))

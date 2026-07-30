@@ -1,0 +1,1 @@
+Axios's `getSetCookie()` helper was supposed to always return an array of Set-Cookie header values, but returned a bare string instead of a one-element array whenever only a single Set-Cookie header was present - a type inconsistency that could break any caller that assumed an array (e.g. calling `.map()` on the result). The fix normalizes the return value to always be an array.

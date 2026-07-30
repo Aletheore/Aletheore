@@ -1,0 +1,1 @@
+Gorilla Mux's router could return the wrong HTTP status code when a request's query parameters didn't match a route's expected pattern: instead of correctly reporting 405 Method Not Allowed (or 404) it could silently clear that error state and let an unrelated route handle the request. The fix makes the error-clearing logic check the actual type of matcher that failed.

@@ -1,0 +1,14 @@
+diff --git a/lib/core/AxiosHeaders.js b/lib/core/AxiosHeaders.js
+index 195de06..376f87a 100644
+--- a/lib/core/AxiosHeaders.js
++++ b/lib/core/AxiosHeaders.js
+@@ -281,8 +281,7 @@ class AxiosHeaders {
+   }
+ 
+   getSetCookie() {
+-    const value = this.get('set-cookie');
+-    return utils.isArray(value) ? value : value == null || value === false ? [] : [value];
++    return this.get('set-cookie') || [];
+   }
+ 
+   get [Symbol.toStringTag]() {

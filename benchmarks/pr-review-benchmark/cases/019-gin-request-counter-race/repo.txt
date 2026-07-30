@@ -1,0 +1,2 @@
+repo_url=https://github.com/gin-gonic/gin.git
+base_commit=34dac209ffb6ef85cc78c5d217bbb7ad001d68fd

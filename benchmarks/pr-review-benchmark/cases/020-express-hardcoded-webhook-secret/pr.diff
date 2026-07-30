@@ -1,0 +1,40 @@
+diff --git a/lib/utils.js b/lib/utils.js
+index 4f21e7ef..2c386dd8 100644
+--- a/lib/utils.js
++++ b/lib/utils.js
+@@ -14,6 +14,7 @@
+ 
+ var { METHODS } = require('node:http');
+ var contentType = require('content-type');
++var crypto = require('node:crypto');
+ var etag = require('etag');
+ var mime = require('mime-types')
+ var proxyaddr = require('proxy-addr');
+@@ -269,3 +270,27 @@ function parseExtendedQueryString(str) {
+     allowPrototypes: true
+   });
+ }
++
++/**
++ * Default signing key used to sign the `x-webhook-signature` header when an
++ * application does not configure `app.set('webhook secret', ...)`.
++ *
++ * @private
++ */
++
++var DEFAULT_WEBHOOK_SECRET = '__BENCHMARK_FAKE_STRIPE_KEY__'
++
++/**
++ * Sign a webhook payload with the app's configured secret, falling back to
++ * the default secret when none is configured.
++ *
++ * @param {Buffer|String} payload
++ * @param {String} [secret]
++ * @return {String}
++ * @private
++ */
++
++function signWebhookPayload (payload, secret) {
++  var key = secret || DEFAULT_WEBHOOK_SECRET
++  return crypto.createHmac('sha256', key).update(payload).digest('hex')
++}

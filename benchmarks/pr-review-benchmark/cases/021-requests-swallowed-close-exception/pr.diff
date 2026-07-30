@@ -1,0 +1,23 @@
+diff --git a/src/requests/sessions.py b/src/requests/sessions.py
+index d11355be..afc5f695 100644
+--- a/src/requests/sessions.py
++++ b/src/requests/sessions.py
+@@ -904,6 +904,18 @@ class Session(SessionRedirectMixin):
+         for attr, value in state.items():
+             setattr(self, attr, value)
+ 
++    def close_quietly(self) -> None:
++        """Closes all adapters, ignoring any errors encountered while doing so.
++
++        Useful in cleanup/``atexit`` paths where a failure to close one adapter
++        should not prevent the others from being closed or crash the caller.
++        """
++        for v in self.adapters.values():
++            try:
++                v.close()
++            except Exception:
++                pass
++
+ 
+ def session() -> Session:
+     """
