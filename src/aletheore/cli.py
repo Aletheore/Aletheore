@@ -13,8 +13,9 @@ import httpx
 import tomli_w
 import typer
 import uvicorn
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 
 from aletheore.adapters.anthropic_native import AnthropicAdapter
@@ -118,15 +119,16 @@ def _sponsor_panel() -> Panel:
     return Panel(body, border_style="magenta", width=78)
 
 
-def _result_panel(title: str, lines: list[str], border_style: str = "green") -> Panel:
-    body = Text("\n".join(lines))
-    return Panel(
-        body,
-        title=f"[bold {border_style}]{title}[/bold {border_style}]",
-        title_align="left",
-        border_style=border_style,
-        width=78,
-    )
+def _print_result(title: str, lines: list[str], color: str = "green") -> None:
+    """No box: these lines are almost always absolute file paths of
+    unpredictable length, and a boxed panel's normal wrapping breaks a
+    too-long line by inserting a real newline wherever it runs out of box
+    width, including mid-filename - corrupting the path if the line is
+    ever copied. soft_wrap leaves wrapping to the terminal instead, which
+    never inserts a literal character into the copyable text."""
+    console.print(f"[bold {color}]✓ {title}[/bold {color}]")
+    for line in lines:
+        console.print(f"  {line}", soft_wrap=True)
 
 
 _COMMAND_SUMMARIES = [
@@ -146,21 +148,30 @@ _COMMAND_SUMMARIES = [
 
 
 def _banner_panel() -> Panel:
-    body = Text()
-    body.append(
+    intro = Text(
         "Evidence-grounded repository audit — a deterministic scanner (tree-sitter + "
         "git log, no LLM) reads a repo and writes .aletheore/air.json. Every "
-        "other command below reads from that same evidence, never re-scans blind.\n\n"
+        "other command below reads from that same evidence, never re-scans blind.\n"
     )
+
+    # A Table (not hand-joined Text) so a description that wraps to a second
+    # line lands in its own column instead of falling back to the panel's
+    # left edge - Rich only hanging-indents wrapped text inside a cell, not
+    # inside a flat Text blob built from literal "\n"s.
+    commands = Table.grid(padding=(0, 2, 0, 0))
+    commands.add_column(style="bold green", no_wrap=True)
+    commands.add_column()
     for name, desc in _COMMAND_SUMMARIES:
-        body.append(f"  {name:<12} ", style="bold green")
-        body.append(f"{desc}\n")
-    body.append("\nRun ")
-    body.append("aletheore <command> --help", style="bold cyan")
-    body.append(" for details on any command.\n")
-    body.append("https://github.com/Aletheore/Aletheore", style="dim underline")
+        commands.add_row(f"  {name}", desc)
+
+    footer = Text()
+    footer.append("Run ")
+    footer.append("aletheore <command> --help", style="bold cyan")
+    footer.append(" for details on any command.\n")
+    footer.append("https://github.com/Aletheore/Aletheore", style="dim underline")
+
     return Panel(
-        body,
+        Group(intro, commands, Text(""), footer),
         title="[bold cyan]ALETHEORE[/bold cyan]",
         title_align="left",
         border_style="cyan",
@@ -266,11 +277,9 @@ def _scan(
         return GIT_ANALYSIS_RESOURCE_EXIT_CODE, {}, repo
     evidence_path = write_evidence(evidence, repo)
     snapshot_path = save_snapshot(evidence, repo)
-    console.print(
-        _result_panel(
-            "Scan complete",
-            [f"Evidence written to {evidence_path}", f"Snapshot saved to {snapshot_path}"],
-        )
+    _print_result(
+        "Scan complete",
+        [f"Evidence written to {evidence_path}", f"Snapshot saved to {snapshot_path}"],
     )
     # Fire-and-forget, off the main thread: report_scan_event already has
     # its own short timeout and swallows every exception, but a background
@@ -323,7 +332,7 @@ def _audit(
         console.print(f"Evidence is still available at {evidence_path} for manual use.")
         return 1
 
-    console.print(_result_panel("Audit complete", [f"Report written to {report_path}"]))
+    _print_result("Audit complete", [f"Report written to {report_path}"])
     console.print()
     console.print(_sponsor_panel())
     return 0
@@ -365,7 +374,7 @@ def _managed_audit(
 
     report_path = repo / ".aletheore" / "audit-report.md"
     report_path.write_text(report_text)
-    console.print(_result_panel("Managed audit complete", [f"Report written to {report_path}"]))
+    _print_result("Managed audit complete", [f"Report written to {report_path}"])
     return 0
 
 
@@ -951,13 +960,23 @@ def init(path: str = typer.Argument(".", help="repository path")) -> None:
     }
     config_path.write_text(json.dumps(default_config, indent=2) + "\n")
     console.print(f"[bold green]Wrote {config_path}[/bold green]")
-    console.print(
-        "  layer_markers: folder-name -> layer-order int, for custom layer-violation "
-        "conventions (e.g. {\"domain\": 0, \"infrastructure\": 2})"
+    # A Table (not console.print per key) so a description that wraps to a
+    # second line lands under the key column instead of the terminal's left
+    # edge - plain console.print has no concept of a hanging indent.
+    keys = Table.grid(padding=(0, 2, 0, 0))
+    keys.add_column(style="bold", no_wrap=True)
+    keys.add_column()
+    keys.add_row(
+        "  layer_markers",
+        "folder-name -> layer-order int, for custom layer-violation conventions "
+        '(e.g. {"domain": 0, "infrastructure": 2})',
     )
-    console.print("  cluster_resolution: tunes architecture cluster detection (default 1.0)")
-    console.print("  dead_code_entry_points: extra file paths to treat as entry points")
-    console.print("  accepted_secrets: baseline of reviewed secret findings to suppress (leave empty for now)")
+    keys.add_row("  cluster_resolution", "tunes architecture cluster detection (default 1.0)")
+    keys.add_row("  dead_code_entry_points", "extra file paths to treat as entry points")
+    keys.add_row(
+        "  accepted_secrets", "baseline of reviewed secret findings to suppress (leave empty for now)"
+    )
+    console.print(keys)
 
 
 @app.command(
