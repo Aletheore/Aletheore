@@ -895,6 +895,10 @@ pre {
   color: var(--accent);
 }
 
+.proof-zone a.btn-primary {
+  color: #fff;
+}
+
 .showcase-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1365,6 +1369,128 @@ pre {
   color: var(--accent);
 }
 
+.dogfood-repo {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 44px 0;
+}
+
+.dogfood-repo-alt {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.dogfood-heading {
+  max-width: none;
+  margin: 0 0 28px;
+  text-align: left;
+}
+
+.dogfood-heading p:not(.eyebrow) {
+  max-width: none;
+  margin: 0;
+  text-align: left;
+}
+
+.dogfood-finding-title {
+  margin: 36px 0 8px;
+  font-size: 19px;
+}
+
+.dogfood-p {
+  margin-bottom: 14px;
+  color: var(--text-primary);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.dogfood-p a,
+.dogfood-close a:not(.btn) {
+  color: var(--accent);
+}
+
+.dogfood-table-wrap {
+  overflow-x: auto;
+  margin: 14px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+
+.dogfood-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.dogfood-table th,
+.dogfood-table td {
+  padding: 12px 16px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.dogfood-table th {
+  background: var(--bg-dark);
+  color: #efe7d8;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dogfood-table tbody tr:not(:last-child) {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dogfood-table tbody {
+  background: var(--card-bg);
+}
+
+.dogfood-callout {
+  margin: 18px 0;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  background: var(--accent-soft);
+  padding: 16px 20px;
+}
+
+.dogfood-callout p {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.dogfood-code {
+  margin: 14px 0;
+  border-radius: 10px;
+  background: var(--bg-dark);
+  color: #efe7d8;
+  padding: 20px 22px;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.dogfood-close h2 {
+  max-width: 700px;
+}
+
+.dogfood-close .section-intro {
+  max-width: 640px;
+  margin: 0 0 24px;
+  text-align: left;
+}
+
+.dogfood-meta {
+  margin-top: 18px;
+  color: #7d7568;
+  font-size: 13px;
+}
+
+.dogfood-meta code {
+  color: #b9b1a4;
+}
+
 footer {
   margin-top: 40px;
   padding: 48px 0;
@@ -1516,5 +1642,23 @@ footer a:hover {
   .toon-counters {
     flex-direction: column;
     gap: 24px;
+  }
+
+  .dogfood-repo {
+    padding: 32px 0;
+  }
+
+  .dogfood-table {
+    font-size: 13px;
+  }
+
+  .dogfood-table th,
+  .dogfood-table td {
+    padding: 10px 12px;
+  }
+
+  .dogfood-code {
+    padding: 16px 18px;
+    font-size: 12px;
   }
 }

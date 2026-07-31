@@ -19,6 +19,12 @@
     <priority>0.8</priority>
   </url>
   <url>
+    <loc>https://www.aletheore.com/dogfooding</loc>
+    <lastmod>2026-08-01</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
     <loc>https://www.aletheore.com/terms</loc>
     <lastmod>2026-07-18</lastmod>
     <changefreq>yearly</changefreq>

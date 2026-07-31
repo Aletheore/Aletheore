@@ -30,6 +30,7 @@
     "CODEOWNERS",
     "DeepSeek",
     "FastAPI",
+    "GHSA",
     "GitHub",
     "HMAC",
     "Kaul",
@@ -39,6 +40,7 @@
     "OpenTelemetry",
     "Ollama",
     "Packagist",
+    "PYSEC",
     "Pydantic",
     "Procta",
     "Squeezy",
@@ -51,6 +53,7 @@
     "canonicality",
     "confusables",
     "codex",
+    "cpwx",
     "datapath",
     "dubbo",
     "dogfooding",
@@ -60,6 +63,7 @@
     "healthcheck",
     "healthchecks",
     "hotspot",
+    "hmwv",
     "hotspots",
     "httpx",
     "inspectable",
@@ -98,7 +102,9 @@
     "unrecovered",
     "uvicorn",
     "vport",
+    "werkzeug",
     "worktree",
-    "worktrees"
+    "worktrees",
+    "xmlattr"
   ]
 }
