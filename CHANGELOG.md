@@ -3,6 +3,38 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.7.0 — 2026-07-31
+
+- Added **Regression Fencing**: flags a changed function signature when a real caller wasn't
+  updated in the same PR, distinguishing a genuinely breaking change from an additive,
+  backward-compatible one (e.g. a new required parameter vs. a new optional one with a default).
+  Posts a signed Check Run a repo can require in branch protection.
+- Systematic audit of the grounding system across Flash Review, AIRview, and the Managed Audit
+  report: citations in the Managed Audit report are now verified against real evidence before
+  signing (previously prompt-based only); every grounding rejection is now logged with its
+  file:line and reason instead of failing silently; AIRview no longer deletes an entire
+  subsystem over one unverified sentence (retries once, then keeps the deterministic diagram/file
+  list with just the prose withheld); Flash Review discloses when a PR was too large to fully
+  review instead of reporting "No issues found" identically either way; citations against files
+  with no extension (`Dockerfile`, `Makefile`) are now checked instead of silently ignored; a
+  citation at line 0 is now rejected.
+- Fixed Flash Review dropping correct findings about **deleted code**: a deletion-only diff hunk
+  collapses to just its context lines, so a finding about the removed code was rejected as
+  "outside the diff" before the content check could weigh in.
+- Fixed the AIRview diagram zoom overlay on genuinely large Mermaid graphs: it scaled via CSS
+  `transform: scale()`, which grows the painted appearance but not the scrollable layout size,
+  leaving large sections of a big diagram permanently unreachable by scroll.
+- Completed the AIR paid-tier feature set: real Microsoft Teams alert support (Slack's classic
+  webhook format was retired; now auto-detects and sends the current Adaptive Card format), a
+  "send test notification" button for the alert webhook, real per-seat Paddle billing, an
+  endpoint health history/trend view, and push-triggered incremental rescans.
+- Disabled forced `tool_choice` for the `deepseek` adapter — `deepseek-v4-pro` runs in thinking
+  mode by default, which rejects `tool_choice="required"`.
+- Fixed three CLI output bugs found dogfooding the actual install → first-run path: the no-args
+  banner and `init`'s config-key descriptions wrapped long text back to the terminal's left edge
+  instead of staying indented under their column; `scan`/`audit` completion messages could get a
+  real newline inserted mid-filename by the fixed-width result box, corrupting a copied path.
+
 ## 0.6.1 — 2026-07-28
 
 - Fixed `aletheore_search_codebase`/`aletheore_answer` telling an MCP-connected agent to run
