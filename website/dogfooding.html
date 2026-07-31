@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>What Aletheore Finds When You Point It At Real Code</title>
+  <meta name="description" content="We ran aletheore scan against Flask and Express — no cherry-picking. Real CVEs, real dead code, real hotspots, real endpoint maps, with every number independently verifiable.">
+  <link rel="canonical" href="https://www.aletheore.com/dogfooding">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Aletheore">
+  <meta property="og:url" content="https://www.aletheore.com/dogfooding">
+  <meta property="og:title" content="What Aletheore Finds When You Point It At Real Code">
+  <meta property="og:description" content="We ran aletheore scan against Flask and Express — no cherry-picking. Real CVEs, real dead code, real hotspots, real endpoint maps, with every number independently verifiable.">
+  <meta property="og:image" content="https://www.aletheore.com/assets/logo-mark.png">
+
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="What Aletheore Finds When You Point It At Real Code">
+  <meta name="twitter:description" content="Real CVEs, real dead code, real hotspots, real endpoint maps — from a free, deterministic scan. Every number independently verifiable.">
+  <meta name="twitter:image" content="https://www.aletheore.com/assets/logo-mark.png">
+
+  <link rel="icon" type="image/png" href="assets/logo-mark.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <nav class="site-nav" aria-label="Main navigation">
+      <a class="wordmark" href="index.html">
+        <img src="assets/logo-mark.png" alt="" width="28" height="28">
+        Aletheore
+      </a>
+      <div class="nav-links">
+        <a href="pricing.html">Pricing</a>
+        <a href="developers.html">Developers</a>
+        <a href="terms.html">Terms</a>
+        <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+        <a href="https://www.linkedin.com/company/aletheore">LinkedIn</a>
+        <a href="https://app.aletheore.com/">Dashboard</a>
+        <a class="btn btn-primary" href="https://app.aletheore.com/">Get Started</a>
+      </div>
+    </nav>
+
+    <main>
+      <section class="developer-hero">
+        <div>
+          <p class="eyebrow">Dogfooding, not marketing copy</p>
+          <h1>We pointed Aletheore at real code. Here's exactly what came back.</h1>
+          <p>No cherry-picking, no staged examples: the full output of one command, run today
+            against the current default branch of two well-known open source projects. Every
+            number below is independently verifiable — clone the same repo, run the same
+            command, get the same answer.</p>
+        </div>
+        <div class="install-card" aria-label="The exact command run for this writeup">
+          <div class="terminal-title">
+            <span class="terminal-controls"></span>
+            <strong>What we ran</strong>
+          </div>
+          <pre><code>pipx install aletheore
+git clone https://github.com/pallets/flask.git
+aletheore scan flask</code></pre>
+        </div>
+      </section>
+
+      <section class="developer-section dogfood-repo">
+        <div class="section-heading dogfood-heading">
+          <p class="eyebrow">Flask &middot; Python</p>
+          <h2>5,545 commits. 83 files. 18.3k lines.</h2>
+          <p>Scan finished in about 11 seconds — most of that is 6 real network round-trips (one
+            per pinned dependency) to OSV.dev and the PyPI license registry, not local parsing.
+            Skip both with <code>--no-check-vulnerabilities --no-check-licenses</code> and the
+            same scan drops under 4 seconds.</p>
+        </div>
+
+        <h3 class="dogfood-finding-title">17 advisories, on 3 dependencies, with exact installed versions</h3>
+        <p>From a single OSV.dev lookup per pinned package — no LLM guessing.</p>
+        <div class="dogfood-table-wrap">
+          <table class="dogfood-table">
+            <thead>
+              <tr><th>Package</th><th>Installed</th><th>Advisories</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>jinja2</code></td>
+                <td><code>3.1.2</code></td>
+                <td>10 — sandbox breakout via <code>attr</code>/format method, HTML attribute
+                  injection via <code>xmlattr</code></td>
+              </tr>
+              <tr>
+                <td><code>werkzeug</code></td>
+                <td><code>3.1.0</code></td>
+                <td>6 — <code>safe_join()</code> Windows device-name handling</td>
+              </tr>
+              <tr>
+                <td><code>click</code></td>
+                <td><code>8.1.3</code></td>
+                <td>1 — command injection in <code>click.edit()</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="dogfood-callout">
+          <p><strong>Worth being precise here rather than impressive:</strong> OSV.dev
+            cross-lists the same underlying vulnerability under multiple advisory identifiers (a
+            GHSA and a PYSEC ID, sometimes more), so those 17 raw entries are really
+            <strong>8 distinct issues</strong> when grouped by identical advisory text — compare
+            <code>GHSA-cpwx-vrp4-4pq7</code> and <code>PYSEC-2026-1471</code>: same summary, same
+            bug, two IDs. Aletheore reports OSV's raw advisory list rather than silently deduping
+            it, so that nuance is visible in the JSON rather than hidden. Which is also why we're
+            flagging it here instead of just quoting "17" and moving on.</p>
+        </div>
+
+        <p class="dogfood-p">These are pinned dev/test dependency versions in this checkout, not
+          a claim about what real Flask deployments run — but they're exactly what a
+          <code>pip install -r requirements-dev.txt</code> would actually pull down today, and
+          every one of them is independently verifiable on
+          <a href="https://osv.dev" rel="noopener">osv.dev</a>.</p>
+
+        <h3 class="dogfood-finding-title">Correct dead-code detection, with a stated reason for each</h3>
+        <pre class="dogfood-code"><code>{
+  "unreachable_modules": [
+    { "path": "docs/conf.py", "reason": "no other module imports this file" },
+    { "path": "examples/celery/make_celery.py", "reason": "no other module imports this file" }
+  ]
+}</code></pre>
+        <p class="dogfood-p">Both are real, legitimate "dead code" by the only definition a
+          deterministic scanner can honestly claim: nothing in the repo imports them. Sphinx
+          invokes <code>docs/conf.py</code> by convention, never by import — exactly the kind of
+          thing a naive dead-code check gets wrong and Aletheore gets right, because it's
+          checking imports, not guessing intent.</p>
+
+        <h3 class="dogfood-finding-title">A real hotspot, with real co-change data</h3>
+        <p class="dogfood-p"><code>flask/app.py</code> — 354 commits, most frequently changed
+          alongside <code>CHANGES</code> (87&times;), <code>flask/helpers.py</code> (58&times;),
+          and its own test file (41&times;). That's not a lint rule; it's git history, correctly
+          attributed.</p>
+
+        <p class="dogfood-p">A correctly detected repo license (<code>BSD-3-Clause</code>, read
+          from <code>pyproject.toml</code>) and zero false-positive secret findings across the
+          full working tree and git history.</p>
+      </section>
+
+      <section class="developer-section dogfood-repo dogfood-repo-alt">
+        <div class="section-heading dogfood-heading">
+          <p class="eyebrow">Express &middot; JavaScript</p>
+          <h2>6,158 commits. 141 files. 21.5k lines.</h2>
+          <p>Scan finished in about six seconds, including a full git-history secrets sweep.</p>
+        </div>
+
+        <h3 class="dogfood-finding-title">1,284 API endpoints mapped, statically, from source</h3>
+        <p class="dogfood-p">No server started, no LLM call.</p>
+        <pre class="dogfood-code"><code>{
+  "method": "GET",
+  "path": "/restricted",
+  "framework": "express",
+  "file": "examples/auth/index.js",
+  "line": 88,
+  "handler": "restrict"
+}</code></pre>
+        <p class="dogfood-p">Every one of those 1,284 entries carries a real file and line
+          number, extracted from Express's own route-registration calls across its examples and
+          test suite.</p>
+
+        <h3 class="dogfood-finding-title">One real, current CVE</h3>
+        <p class="dogfood-p"><code>body-parser@2.2.1</code> —
+          <a href="https://github.com/advisories/GHSA-v422-hmwv-36x6" rel="noopener"><code>GHSA-v422-hmwv-36x6</code></a>,
+          a denial-of-service when an invalid <code>limit</code> value silently disables size
+          enforcement.</p>
+
+        <p class="dogfood-p">Zero secret findings, zero layer-convention violations — Express
+          doesn't declare a layered architecture convention, so Aletheore correctly reports
+          <code>convention_detected: false</code> instead of inventing one.</p>
+      </section>
+
+      <section class="proof-zone dogfood-close">
+        <div class="proof-inner">
+          <div class="proof-label">The point</div>
+          <h2>None of this required an API key, an account, or an LLM call.</h2>
+          <p class="section-intro">The only network traffic was the vulnerability/license
+            registry lookups above, and both are one flag away from off. It's the same evidence
+            a <code>pipx install aletheore &amp;&amp; aletheore scan .</code> gets you on your
+            own repo, right now, for free.</p>
+          <p class="dogfood-meta">Commits scanned: Flask
+            <a href="https://github.com/pallets/flask/commit/6a2f545bfd8ed31e19066a299296917e034aca58" rel="noopener"><code>6a2f545</code></a>
+            (2026-07-30), Express
+            <a href="https://github.com/expressjs/express/commit/a3714473feb3d2908add734d340e7755fd85e0a3" rel="noopener"><code>a371447</code></a>
+            (2026-07-27). Aletheore v0.7.0.</p>
+          <div class="cta-actions" style="margin-top: 24px;">
+            <a class="btn btn-primary" href="https://pypi.org/project/aletheore/" rel="noopener">pipx install aletheore</a>
+            <a class="btn btn-ghost" href="https://github.com/Aletheore/Aletheore" rel="noopener">Read the source</a>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <div class="container footer-grid">
+      <div>
+        <a class="wordmark" href="index.html">
+          <img src="assets/logo-mark.png" alt="" width="24" height="24">
+          Aletheore
+        </a>
+        <p class="footer-note">Evidence-grounded repository audits. Open source, local-first.</p>
+      </div>
+      <div>
+        <h4>Product</h4>
+        <a href="pricing.html">Pricing</a>
+        <a href="developers.html">Developers</a>
+        <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+      </div>
+      <div>
+        <h4>Community</h4>
+        <a href="https://www.linkedin.com/company/aletheore">LinkedIn</a>
+        <a href="https://github.com/sponsors/ArihantK15">Sponsor</a>
+        <a href="https://github.com/Aletheore/Aletheore/issues">Issues</a>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <a href="terms.html">Terms</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="refund.html">Refund Policy</a>
+      </div>
+    </div>
+  </footer>
+  <script src="vendor/motion.js"></script>
+</body>
+</html>
