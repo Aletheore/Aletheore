@@ -4,17 +4,19 @@
 
 # Aletheore
 
-The real, working Aletheore CLI package - published on PyPI, with a real test suite, and in
-production use by the hosted GitHub App (see `../github-app/`).
+Evidence-grounded repository intelligence: a deterministic scanner (tree-sitter + git log, no
+LLM, fully unit-tested) reads a repository and writes `.aletheore/air.json` — languages, module
+dependency graph, modularity-based clusters, git ownership and commit cadence, secrets,
+dependency vulnerabilities, layer-convention violations, dependency licenses, and static API
+endpoint maps. Every other feature below (the AI-written audit report, the GitHub Action's PR
+comments, the MCP server, the dashboard) is built on top of that same evidence and never states
+anything it can't cite back to a specific field in it.
+
+This is the real, working CLI package — the same code that runs in CI (a real test suite,
+1,600+ tests across this package and the hosted service) and in production behind the hosted
+GitHub App (see `../github-app/`). Full project overview: [`../README.md`](../README.md).
 
 ## What this is
-
-A deterministic scanner (tree-sitter + git log, no LLM, fully unit-tested) reads a repository
-and writes `.aletheore/air.json`: languages, module dependency graph, modularity-based
-clusters, git ownership and commit cadence, secrets, dependency vulnerabilities, layer-
-convention violations, dependency licenses, and static API endpoint maps. Every other feature
-below is built on top of that same evidence and
-never states anything it can't cite back to a specific field in it.
 
 ## Quickstart
 
