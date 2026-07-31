@@ -94,6 +94,13 @@ KNOWN_ADAPTERS = [
         base_url="https://api.deepseek.com",
         api_key_env_var="DEEPSEEK_API_KEY",
         model="deepseek-v4-pro",
+        # deepseek-v4-pro runs in "thinking mode" by default, which rejects
+        # tool_choice="required" (BadRequestError: "Thinking mode does not
+        # support this tool_choice"), confirmed against the real API during
+        # the 2026-07-26 PR-review-benchmark dry run. Falling back to the
+        # default tool_choice ("auto") works, so disable forced tool_choice
+        # for this adapter, mirroring the ollama entry above.
+        supports_tool_choice=False,
     ),
 ]
 
