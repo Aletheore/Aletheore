@@ -619,6 +619,59 @@ def test_audit_warns_in_output_when_a_citation_cannot_be_verified(tmp_path):
     assert "`ghost.py:1`" in report_text
 
 
+def test_verify_reports_verified_citations_and_exits_zero(tmp_path):
+    repo = tmp_path
+    (repo / "app.py").write_text("one\ntwo\nthree\n")
+    (repo / ".aletheore").mkdir()
+    evidence = {"repository": {"modules": [{"path": "app.py"}]}}
+    (repo / ".aletheore" / "air.json").write_text(json.dumps(evidence))
+    report = repo / "report.md"
+    report.write_text("The bug is at `app.py:2`.")
+
+    result = runner.invoke(app, ["verify", str(report), "--path", str(repo)])
+
+    assert result.exit_code == 0
+    assert "1 of 1" in result.output
+    assert "All citations verified" in result.output
+
+
+def test_verify_exits_nonzero_and_lists_unverified_citations(tmp_path):
+    repo = tmp_path
+    (repo / "app.py").write_text("one\n")
+    (repo / ".aletheore").mkdir()
+    evidence = {"repository": {"modules": [{"path": "app.py"}]}}
+    (repo / ".aletheore" / "air.json").write_text(json.dumps(evidence))
+    report = repo / "report.md"
+    report.write_text("See `ghost.py:1` for details.")
+
+    result = runner.invoke(app, ["verify", str(report), "--path", str(repo)])
+
+    assert result.exit_code == 1
+    assert "0 of 1" in result.output
+    assert "ghost.py:1" in result.output
+
+
+def test_verify_errors_cleanly_when_report_file_is_missing(tmp_path):
+    repo = tmp_path
+
+    result = runner.invoke(app, ["verify", str(repo / "nope.md"), "--path", str(repo)])
+
+    assert result.exit_code == 1
+    assert "not found" in result.output
+
+
+def test_verify_errors_cleanly_when_no_evidence_exists(tmp_path):
+    repo = tmp_path
+    report = repo / "report.md"
+    report.write_text("See `app.py:1`.")
+
+    result = runner.invoke(app, ["verify", str(report), "--path", str(repo)])
+
+    assert result.exit_code == 1
+    collapsed_output = result.output.replace("\n", "")
+    assert "aletheore scan" in collapsed_output
+
+
 def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
@@ -719,6 +772,7 @@ def test_every_subcommand_help_runs_cleanly():
         "scan",
         "query",
         "diff",
+        "verify",
         "mcp",
         "dashboard",
         "healthcheck",

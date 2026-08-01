@@ -26,7 +26,12 @@ from aletheore.adapters.grok_build import GrokBuildAdapter
 from aletheore.adapters.mistral_vibe import MistralVibeAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.adapters.opencode import OpenCodeAdapter
-from aletheore.citation_verifier import citation_verification_section
+from aletheore.citation_verifier import (
+    citation_verification_section,
+    load_verifiable_evidence,
+    local_line_count_fetcher,
+    verify_citations,
+)
 from aletheore.credentials import get_api_key
 from aletheore.device_auth import infer_repo_full_name_from_cwd_git_remote
 from aletheore.evidence import scan_repository, write_evidence
@@ -144,6 +149,7 @@ _COMMAND_SUMMARIES = [
     ("audit", "scan, then have a coding agent write a grounded report"),
     ("query", "answer a targeted question from existing evidence"),
     ("diff", "compare two evidence snapshots"),
+    ("verify", "check a report's file:line citations against a repo's evidence"),
     ("mcp", "run an MCP server so an agent can query a repo directly"),
     ("mcp-install", "write MCP client config for Claude Code, Cursor, VS Code, Kiro, Opencode, or Codex CLI"),
     ("dashboard", "a live local web UI over the same evidence"),
@@ -634,6 +640,43 @@ def _diff(
     return 0
 
 
+def _verify(report_path: str, repo_path: str) -> int:
+    report_file = Path(report_path)
+    if not report_file.exists():
+        console.print(f"[bold red]error:[/bold red] report file not found: {report_file}")
+        return 1
+
+    repo = Path(repo_path).resolve()
+    evidence = load_verifiable_evidence(repo)
+    if evidence is None:
+        evidence_path = repo / ".aletheore" / "air.json"
+        console.print(
+            f"[bold red]error:[/bold red] no usable evidence at {evidence_path} - "
+            f"run 'aletheore scan {repo}' first"
+        )
+        return 1
+
+    report_text = report_file.read_text()
+    result = verify_citations(report_text, evidence, fetch_line_count=local_line_count_fetcher(repo))
+    total = result["total_citations"]
+    verified = len(result["verified"])
+    unverified = result["unverified"]
+
+    if total == 0:
+        console.print(f"No `file:line` citations found in {report_file}.")
+        return 0
+
+    console.print(f"{verified} of {total} citations in {report_file} verified against {repo}.")
+    if unverified:
+        console.print("[bold red]Unverified citations:[/bold red]")
+        for citation in unverified:
+            console.print(f"  - {citation['file']}:{citation['line']}")
+        return 1
+
+    console.print("[bold green]All citations verified.[/bold green]")
+    return 0
+
+
 def _healthcheck(repo_path: str, base_url: str) -> int:
     repo = Path(repo_path).resolve()
     evidence_path = repo / ".aletheore" / "air.json"
@@ -1053,6 +1096,18 @@ def diff(
             old, new, full, fail_on_new_secrets, fail_on_new_vulnerabilities, fail_on_new_layer_violations
         )
     )
+
+
+@app.command(help="check a report's file:line citations against a repository's evidence")
+def verify(
+    report: str = typer.Argument(..., help="path to a markdown report to check"),
+    repo_path: str = typer.Option(".", "--path", help="repository the report's citations refer to"),
+) -> None:
+    """Works on a report from any tool, not just aletheore's own audit -
+    it only reads the report's text and the repo's own air.json, both of
+    which are just files. Exits 1 if any citation can't be verified, for
+    use as a CI gate on hand-written or third-party reports too."""
+    raise typer.Exit(code=_verify(report, repo_path))
 
 
 @app.command(help="run an MCP server scoped to a repository")
