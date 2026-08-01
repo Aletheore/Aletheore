@@ -2,7 +2,7 @@
 
 **Purpose:** Define the baseline hosted data-handling posture for Aletheore.
 **Status:** Active baseline
-**Owner:** TODO
+**Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../SECURITY.md](../../SECURITY.md)
 **Last Updated:** 2026-07-23
 

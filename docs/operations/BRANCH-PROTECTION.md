@@ -2,7 +2,7 @@
 
 **Purpose:** Define the minimum repository protection policy for launch hardening.
 **Status:** Active baseline
-**Owner:** TODO
+**Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [DEPLOYMENT-VERIFICATION.md](DEPLOYMENT-VERIFICATION.md), [../../SECURITY.md](../../SECURITY.md)
 **Last Updated:** 2026-07-23
 

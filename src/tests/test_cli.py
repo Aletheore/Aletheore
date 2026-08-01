@@ -117,7 +117,12 @@ def test_run_reasoning_phase_writes_report(tmp_path):
 
     written = Path(report_path)
     assert written == repo / ".aletheore" / "audit-report.md"
-    assert written.read_text() == "# Audit Report\n\nfindings here\n"
+    # The agent never wrote the file itself (only mtime-checked, and this
+    # MagicMock's invoke() has no side effect), so the fallback path applies
+    # and prepends a provenance notice ahead of the agent's raw output.
+    content = written.read_text()
+    assert content.startswith("> **Note:**")
+    assert content.endswith("# Audit Report\n\nfindings here\n")
     adapter.invoke.assert_called_once()
 
 
@@ -578,6 +583,95 @@ def test_audit_skips_consent_prompt_for_cli_based_adapter(tmp_path):
     fake_adapter.invoke.assert_called_once()
 
 
+def test_audit_appends_citation_verification_section_to_report(tmp_path):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    fake_adapter = MagicMock()
+    fake_adapter.name = "claude"
+    fake_adapter.requires_consent = False
+    fake_adapter.invoke.return_value = "The bug is at `main.py:1`."
+
+    with patch("aletheore.cli.select_adapter", return_value=fake_adapter):
+        result = runner.invoke(app, ["audit", str(repo)])
+
+    assert result.exit_code == 0
+    report_text = (repo / ".aletheore" / "audit-report.md").read_text()
+    assert "Citation Verification" in report_text
+    assert "1 of 1" in report_text
+
+
+def test_audit_warns_in_output_when_a_citation_cannot_be_verified(tmp_path):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    fake_adapter = MagicMock()
+    fake_adapter.name = "claude"
+    fake_adapter.requires_consent = False
+    fake_adapter.invoke.return_value = "See `ghost.py:1` for details."
+
+    with patch("aletheore.cli.select_adapter", return_value=fake_adapter):
+        result = runner.invoke(app, ["audit", str(repo)])
+
+    assert result.exit_code == 0
+    assert "could not be verified" in result.output
+    report_text = (repo / ".aletheore" / "audit-report.md").read_text()
+    assert "`ghost.py:1`" in report_text
+
+
+def test_verify_reports_verified_citations_and_exits_zero(tmp_path):
+    repo = tmp_path
+    (repo / "app.py").write_text("one\ntwo\nthree\n")
+    (repo / ".aletheore").mkdir()
+    evidence = {"repository": {"modules": [{"path": "app.py"}]}}
+    (repo / ".aletheore" / "air.json").write_text(json.dumps(evidence))
+    report = repo / "report.md"
+    report.write_text("The bug is at `app.py:2`.")
+
+    result = runner.invoke(app, ["verify", str(report), "--path", str(repo)])
+
+    assert result.exit_code == 0
+    assert "1 of 1" in result.output
+    assert "All citations verified" in result.output
+
+
+def test_verify_exits_nonzero_and_lists_unverified_citations(tmp_path):
+    repo = tmp_path
+    (repo / "app.py").write_text("one\n")
+    (repo / ".aletheore").mkdir()
+    evidence = {"repository": {"modules": [{"path": "app.py"}]}}
+    (repo / ".aletheore" / "air.json").write_text(json.dumps(evidence))
+    report = repo / "report.md"
+    report.write_text("See `ghost.py:1` for details.")
+
+    result = runner.invoke(app, ["verify", str(report), "--path", str(repo)])
+
+    assert result.exit_code == 1
+    assert "0 of 1" in result.output
+    assert "ghost.py:1" in result.output
+
+
+def test_verify_errors_cleanly_when_report_file_is_missing(tmp_path):
+    repo = tmp_path
+
+    result = runner.invoke(app, ["verify", str(repo / "nope.md"), "--path", str(repo)])
+
+    assert result.exit_code == 1
+    assert "not found" in result.output
+
+
+def test_verify_errors_cleanly_when_no_evidence_exists(tmp_path):
+    repo = tmp_path
+    report = repo / "report.md"
+    report.write_text("See `app.py:1`.")
+
+    result = runner.invoke(app, ["verify", str(report), "--path", str(repo)])
+
+    assert result.exit_code == 1
+    collapsed_output = result.output.replace("\n", "")
+    assert "aletheore scan" in collapsed_output
+
+
 def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
@@ -678,6 +772,7 @@ def test_every_subcommand_help_runs_cleanly():
         "scan",
         "query",
         "diff",
+        "verify",
         "mcp",
         "dashboard",
         "healthcheck",
@@ -1243,6 +1338,51 @@ def test_main_diff_shows_curated_diff_between_two_files(tmp_path):
     assert result.exit_code == 0
     parsed = json.loads(result.output)
     assert len(parsed["secrets"]["new"]) == 1
+
+
+def test_main_diff_sarif_format_renders_a_valid_sarif_log(tmp_path):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(
+        tmp_path / "new.json",
+        findings=[
+            {
+                "path": "a.py",
+                "line": 1,
+                "pattern": "aws_access_key_id",
+                "match_preview": "AKIA...MNOP",
+                "likely_placeholder": False,
+            }
+        ],
+    )
+
+    result = runner.invoke(app, ["diff", str(old_path), str(new_path), "--format", "sarif"])
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["version"] == "2.1.0"
+    results = parsed["runs"][0]["results"]
+    assert len(results) == 1
+    assert results[0]["ruleId"] == "aletheore/secret"
+
+
+def test_main_diff_sarif_format_rejects_full_flag(tmp_path):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(tmp_path / "new.json")
+
+    result = runner.invoke(app, ["diff", str(old_path), str(new_path), "--format", "sarif", "--full"])
+
+    assert result.exit_code == 1
+    assert "incompatible with --full" in result.output
+
+
+def test_main_diff_rejects_unknown_format(tmp_path):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(tmp_path / "new.json")
+
+    result = runner.invoke(app, ["diff", str(old_path), str(new_path), "--format", "xml"])
+
+    assert result.exit_code == 1
+    assert "unknown --format" in result.output
 
 
 def test_main_diff_full_flag_returns_raw_diff(tmp_path):

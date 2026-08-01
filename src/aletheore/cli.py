@@ -26,12 +26,18 @@ from aletheore.adapters.grok_build import GrokBuildAdapter
 from aletheore.adapters.mistral_vibe import MistralVibeAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.adapters.opencode import OpenCodeAdapter
+from aletheore.citation_verifier import (
+    citation_verification_section,
+    load_verifiable_evidence,
+    local_line_count_fetcher,
+    verify_citations,
+)
 from aletheore.credentials import get_api_key
 from aletheore.device_auth import infer_repo_full_name_from_cwd_git_remote
 from aletheore.evidence import scan_repository, write_evidence
 from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
-from aletheore.history import compute_diff, list_snapshots, save_snapshot
+from aletheore.history import compute_diff, list_snapshots, save_snapshot, to_sarif
 from aletheore.telemetry import report_scan_event
 from aletheore.managed_audit_client import ManagedAuditError, run_managed_audit_request
 from aletheore.query import (
@@ -143,6 +149,7 @@ _COMMAND_SUMMARIES = [
     ("audit", "scan, then have a coding agent write a grounded report"),
     ("query", "answer a targeted question from existing evidence"),
     ("diff", "compare two evidence snapshots"),
+    ("verify", "check a report's file:line citations against a repo's evidence"),
     ("mcp", "run an MCP server so an agent can query a repo directly"),
     ("mcp-install", "write MCP client config for Claude Code, Cursor, VS Code, Kiro, Opencode, or Codex CLI"),
     ("dashboard", "a live local web UI over the same evidence"),
@@ -284,10 +291,12 @@ def _scan(
         return GIT_ANALYSIS_RESOURCE_EXIT_CODE, {}, repo
     evidence_path = write_evidence(evidence, repo)
     snapshot_path = save_snapshot(evidence, repo)
-    _print_result(
-        "Scan complete",
-        [f"Evidence written to {evidence_path}", f"Snapshot saved to {snapshot_path}"],
-    )
+    result_lines = [f"Evidence written to {evidence_path}", f"Snapshot saved to {snapshot_path}"]
+    if evidence.get("security", {}).get("secrets", {}).get("history_scan_timed_out"):
+        result_lines.append(
+            "[yellow]Warning: secrets history scan timed out - findings reflect a partial scan[/yellow]"
+        )
+    _print_result("Scan complete", result_lines)
     # Fire-and-forget, off the main thread: report_scan_event already has
     # its own short timeout and swallows every exception, but a background
     # thread means even a slow/hanging network path can never add latency
@@ -339,7 +348,18 @@ def _audit(
         console.print(f"Evidence is still available at {evidence_path} for manual use.")
         return 1
 
-    _print_result("Audit complete", [f"Report written to {report_path}"])
+    report_file = Path(report_path)
+    report_text = report_file.read_text()
+    verification_section = citation_verification_section(report_text, repo)
+    report_file.write_text(report_text + verification_section)
+
+    result_lines = [f"Report written to {report_path}"]
+    if "could not be verified" in verification_section:
+        result_lines.append(
+            "[yellow]Some citations in this report could not be verified - see the "
+            "Citation Verification section[/yellow]"
+        )
+    _print_result("Audit complete", result_lines)
     console.print()
     console.print(_sponsor_panel())
     return 0
@@ -566,7 +586,15 @@ def _diff(
     fail_on_new_secrets: bool,
     fail_on_new_vulnerabilities: bool = False,
     fail_on_new_layer_violations: bool = False,
+    output_format: str = "json",
 ) -> int:
+    if output_format not in ("json", "sarif"):
+        print(f"error: unknown --format {output_format!r} (expected 'json' or 'sarif')")
+        return 1
+    if output_format == "sarif" and full:
+        print("error: --format sarif is incompatible with --full (SARIF needs the curated diff)")
+        return 1
+
     old_file = Path(old_path)
     new_file = Path(new_path)
 
@@ -589,7 +617,7 @@ def _diff(
         return 1
 
     diff = compute_diff(old, new, full=full)
-    print(json.dumps(diff, indent=2))
+    print(json.dumps(to_sarif(diff) if output_format == "sarif" else diff, indent=2))
 
     if fail_on_new_secrets or fail_on_new_vulnerabilities or fail_on_new_layer_violations:
         curated = diff if not full else compute_diff(old, new, full=False)
@@ -617,6 +645,43 @@ def _diff(
         if should_fail:
             return 1
 
+    return 0
+
+
+def _verify(report_path: str, repo_path: str) -> int:
+    report_file = Path(report_path)
+    if not report_file.exists():
+        console.print(f"[bold red]error:[/bold red] report file not found: {report_file}")
+        return 1
+
+    repo = Path(repo_path).resolve()
+    evidence = load_verifiable_evidence(repo)
+    if evidence is None:
+        evidence_path = repo / ".aletheore" / "air.json"
+        console.print(
+            f"[bold red]error:[/bold red] no usable evidence at {evidence_path} - "
+            f"run 'aletheore scan {repo}' first"
+        )
+        return 1
+
+    report_text = report_file.read_text()
+    result = verify_citations(report_text, evidence, fetch_line_count=local_line_count_fetcher(repo))
+    total = result["total_citations"]
+    verified = len(result["verified"])
+    unverified = result["unverified"]
+
+    if total == 0:
+        console.print(f"No `file:line` citations found in {report_file}.")
+        return 0
+
+    console.print(f"{verified} of {total} citations in {report_file} verified against {repo}.")
+    if unverified:
+        console.print("[bold red]Unverified citations:[/bold red]")
+        for citation in unverified:
+            console.print(f"  - {citation['file']}:{citation['line']}")
+        return 1
+
+    console.print("[bold green]All citations verified.[/bold green]")
     return 0
 
 
@@ -1018,6 +1083,9 @@ def diff(
     old: str = typer.Argument(..., help="path to the baseline air.json"),
     new: str = typer.Argument(..., help="path to the comparison air.json"),
     full: bool = typer.Option(False, "--full", help="show the full raw diff instead of the curated summary"),
+    output_format: str = typer.Option(
+        "json", "--format", help="output format: 'json' (default) or 'sarif' for code-scanning tools"
+    ),
     fail_on_new_secrets: bool = typer.Option(
         False,
         "--fail-on-new-secrets",
@@ -1036,9 +1104,27 @@ def diff(
 ) -> None:
     raise typer.Exit(
         code=_diff(
-            old, new, full, fail_on_new_secrets, fail_on_new_vulnerabilities, fail_on_new_layer_violations
+            old,
+            new,
+            full,
+            fail_on_new_secrets,
+            fail_on_new_vulnerabilities,
+            fail_on_new_layer_violations,
+            output_format,
         )
     )
+
+
+@app.command(help="check a report's file:line citations against a repository's evidence")
+def verify(
+    report: str = typer.Argument(..., help="path to a markdown report to check"),
+    repo_path: str = typer.Option(".", "--path", help="repository the report's citations refer to"),
+) -> None:
+    """Works on a report from any tool, not just aletheore's own audit -
+    it only reads the report's text and the repo's own air.json, both of
+    which are just files. Exits 1 if any citation can't be verified, for
+    use as a CI gate on hand-written or third-party reports too."""
+    raise typer.Exit(code=_verify(report, repo_path))
 
 
 @app.command(help="run an MCP server scoped to a repository")

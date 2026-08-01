@@ -2,7 +2,7 @@
 
 **Purpose:** Define the baseline incident response process for hosted Aletheore.
 **Status:** Active baseline
-**Owner:** TODO
+**Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [SLOS.md](SLOS.md), [DATA-HANDLING.md](DATA-HANDLING.md)
 **Last Updated:** 2026-07-23
 

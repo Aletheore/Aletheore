@@ -471,6 +471,7 @@ def review_diff(
     cache_write: Callable[[str, list[dict], str], None] | None = None,
     model_used: str = "deepseek-v4-flash",
     file_contents: dict[str, str] | None = None,
+    on_grounding_result: Callable[[dict], None] | None = None,
 ) -> list[dict]:
     if not diff_text.strip():
         return []
@@ -482,7 +483,10 @@ def review_diff(
             logger.warning("flash review cache lookup failed (%s); treating as miss", type(exc).__name__)
             cached = None
         if cached is not None:
-            return _validate_findings(cached, diff_text, file_contents)
+            kept = _validate_findings(cached, diff_text, file_contents)
+            if on_grounding_result is not None:
+                on_grounding_result({"proposed": len(cached), "kept": len(kept)})
+            return kept
 
     adapter = OpenAICompatibleAdapter(
         name="DeepSeek",
@@ -539,4 +543,7 @@ def review_diff(
         except Exception as exc:
             logger.warning("flash review cache write failed (%s); continuing without cache", type(exc).__name__)
 
-    return _validate_findings(valid, diff_text, file_contents)
+    kept = _validate_findings(valid, diff_text, file_contents)
+    if on_grounding_result is not None:
+        on_grounding_result({"proposed": len(valid), "kept": len(kept)})
+    return kept

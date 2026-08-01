@@ -404,6 +404,25 @@ aletheore diff old/air.json new/air.json --fail-on-new-layer-violations
 All three `--fail-on-new-*` flags can be combined; the command exits 1 if any of them find
 something new.
 
+`--format sarif` renders new secrets, dependency vulnerabilities, and layer violations as a
+SARIF 2.1.0 log instead of the default JSON, for tools that ingest SARIF directly (e.g. GitHub
+code scanning). Incompatible with `--full`, since SARIF needs the curated diff shape.
+
+```bash
+aletheore diff old/air.json new/air.json --format sarif
+```
+
+### `aletheore verify <report.md> [--path <repo>]`
+
+Checks a report's `file:line` citations against a repository's evidence - works on any
+markdown report, not just one `aletheore audit` produced, since it only reads the report's
+text and `<repo>/.aletheore/air.json`. Exits 1 if any citation can't be verified, so it also
+works as a CI gate on hand-written or third-party reports.
+
+```bash
+aletheore verify audit-report.md --path .
+```
+
 ### `aletheore healthcheck [path] --base-url <url>`
 
 Runs a GET-only live check of mapped API endpoints against a running app instance. This reads

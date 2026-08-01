@@ -1,11 +1,11 @@
 import json
 from pathlib import Path
 
+from aletheore.citation_verifier import load_verifiable_evidence as _load_verifiable_evidence
+from aletheore.citation_verifier import local_line_count_fetcher as _local_line_count_fetcher
 from scan_worker.managed_audit import (
     _citation_verification_section,
     _llm_based_suggestion_section,
-    _load_verifiable_evidence,
-    _local_line_count_fetcher,
     run_managed_audit,
 )
 

@@ -1,0 +1,31 @@
+# Test-only infra for `python -m pytest tests/ -v` (see README.md's Local
+# development section) - matches .github/workflows/github-app-tests.yml's
+# services block exactly (same images, same host ports), so a passing local
+# run and a passing CI run mean the same thing. Not part of docker-compose.yml
+# (the deployed stack) on purpose: that file's postgres/redis have no
+# published host ports and persist real data in named volumes, neither of
+# which a disposable test database should do.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=test
+      - POSTGRES_DB=aletheore_test
+    ports:
+      - "55433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d aletheore_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 15

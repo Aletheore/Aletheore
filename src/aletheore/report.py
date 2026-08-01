@@ -58,6 +58,15 @@ def build_instruction(manual_dir: str) -> str:
     )
 
 
+RAW_OUTPUT_FALLBACK_NOTICE = (
+    "> **Note:** this report is the agent's raw output, not a report it wrote "
+    "to disk itself. It either has no file-write tool available or ignored "
+    "the instruction to write `.aletheore/audit-report.md` - the manual's "
+    "output contract (structure, required sections) was not necessarily "
+    "followed.\n\n---\n\n"
+)
+
+
 def run_reasoning_phase(adapter: AgentAdapter, repo_path: str, manual_dir: str) -> str:
     instruction = build_instruction(manual_dir)
     report_path = Path(repo_path) / ".aletheore" / "audit-report.md"
@@ -73,7 +82,10 @@ def run_reasoning_phase(adapter: AgentAdapter, repo_path: str, manual_dir: str) 
     if not agent_wrote_report:
         # The agent didn't write the file itself during this invocation (no
         # file-write tools, or it ignored the instruction) - fall back to
-        # whatever text it returned instead of leaving no report at all.
-        report_path.write_text(output)
+        # whatever text it returned instead of leaving no report at all, but
+        # visibly mark it: silently presenting raw stdout as if it were a
+        # contract-compliant report hid exactly the kind of bypass this
+        # project's evidence-grounding premise exists to catch.
+        report_path.write_text(RAW_OUTPUT_FALLBACK_NOTICE + output)
 
     return str(report_path)

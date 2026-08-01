@@ -1,7 +1,10 @@
 import json
+import math
 import os
 import re
 import subprocess
+import threading
+from collections import Counter
 from pathlib import Path
 
 from aletheore.scanner.detect import IGNORED_DIRS
@@ -31,6 +34,20 @@ BINARY_EXTENSIONS = {
 }
 
 PLACEHOLDER_PATH_MARKERS = ("example", "test", "fixture", "mock")
+
+# Substrings that show up in hand-written placeholder values themselves
+# (AWS's own documentation uses a well-known placeholder access key ending
+# in "EXAMPLE", for instance), independent of where the file lives. Not
+# spelled out literally here - this file's own aws_access_key_id pattern
+# below would match it, and this path doesn't carry a PLACEHOLDER_PATH_MARKERS
+# term, so it wouldn't get the placeholder benefit of the doubt.
+PLACEHOLDER_VALUE_MARKERS = ("example", "xxxx", "changeme", "dummy", "placeholder", "sample", "fake", "yourkey")
+
+# Below this, Shannon entropy indicates a short or narrow-alphabet value
+# (repeated/sequential characters, e.g. "aaaaaaaa" or "12345678") rather
+# than the effectively-random output of a real credential generator - real
+# secrets measured well above this bar.
+_LOW_ENTROPY_THRESHOLD = 3.0
 
 # Each entry's third element is the regex group index holding the actual secret value to
 # redact. Most patterns match the credential directly, so group 0 (the whole match) IS the
@@ -72,9 +89,32 @@ def iter_all_files(repo_path: Path):
             yield path
 
 
-def _is_likely_placeholder(rel_path: str) -> bool:
-    lower = rel_path.lower()
-    return any(marker in lower for marker in PLACEHOLDER_PATH_MARKERS)
+def _shannon_entropy(value: str) -> float:
+    if not value:
+        return 0.0
+    counts = Counter(value)
+    length = len(value)
+    return -sum((count / length) * math.log2(count / length) for count in counts.values())
+
+
+def _value_looks_like_a_placeholder(value: str) -> bool:
+    lower = value.lower()
+    if any(marker in lower for marker in PLACEHOLDER_VALUE_MARKERS):
+        return True
+    return _shannon_entropy(value) < _LOW_ENTROPY_THRESHOLD
+
+
+def _is_likely_placeholder(rel_path: str, value: str) -> bool:
+    # Path alone used to be sufficient - a real secret living at a path
+    # containing "test"/"fixture"/"mock"/"example" (a plausible place to
+    # accidentally commit one) was silently downgraded regardless of
+    # whether the value itself looked remotely like a placeholder. Now the
+    # path only qualifies a finding for a second, value-shape check rather
+    # than deciding it outright.
+    path_suggests_placeholder = any(marker in rel_path.lower() for marker in PLACEHOLDER_PATH_MARKERS)
+    if not path_suggests_placeholder:
+        return False
+    return _value_looks_like_a_placeholder(value)
 
 
 def _redact(value: str) -> str:
@@ -125,14 +165,15 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
             for pattern_name, pattern, value_group in SECRET_PATTERNS:
                 match = pattern.search(line)
                 if match:
-                    match_preview = _redact(match.group(value_group))
+                    value = match.group(value_group)
+                    match_preview = _redact(value)
                     findings.append(
                         {
                             "path": rel_path,
                             "line": line_no,
                             "pattern": pattern_name,
                             "match_preview": match_preview,
-                            "likely_placeholder": _is_likely_placeholder(rel_path),
+                            "likely_placeholder": _is_likely_placeholder(rel_path, value),
                             "accepted": (rel_path, pattern_name, match_preview) in accepted_keys,
                         }
                     )
@@ -140,8 +181,15 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
     return {"scanned_files": scanned_files, "findings": findings}
 
 
+DEFAULT_SECRETS_HISTORY_TIMEOUT_SECONDS = 300.0
+
+
 def find_secrets_in_history(
-    repo_path: Path, baseline: list[dict] | None = None, *, max_commits: int | None = None
+    repo_path: Path,
+    baseline: list[dict] | None = None,
+    *,
+    max_commits: int | None = None,
+    timeout_seconds: float | None = DEFAULT_SECRETS_HISTORY_TIMEOUT_SECONDS,
 ) -> dict:
     # `git log -p` generates a full unified diff for every commit in range -
     # for a repo at torvalds/linux's scale (1.46M commits) that's over 2GB
@@ -151,6 +199,17 @@ def find_secrets_in_history(
     # spend 50 minutes walking a repo's entire history on every run
     # regardless - max_commits bounds it to the most recent N commits,
     # same pattern as git_intel's depth_cap.
+    #
+    # max_commits is an explicit, known-cost bound. timeout_seconds guards
+    # the other failure mode: git blocked on a slow read (e.g. blob reads
+    # stalling on a network-backed filesystem) rather than genuinely
+    # working through a large history - reproduced directly (a `git log -p`
+    # that measured ~2s/1000 commits elsewhere took 7+ minutes at ~0% CPU
+    # on a stalled checkout). Without a timeout that hangs this call, and
+    # the CLI, forever with no feedback. A `threading.Timer` watchdog kills
+    # the process on expiry; the read loop below then hits EOF naturally
+    # and returns whatever was gathered before the stall, flagged as
+    # incomplete rather than presented as a full scan.
     accepted_keys = _baseline_keys(baseline)
     args = ["git", "log", "-p", "--format=COMMIT_START\x1f%H\x1f%ad", "--date=iso-strict"]
     if max_commits is not None:
@@ -164,49 +223,72 @@ def find_secrets_in_history(
         errors="ignore",
     )
 
+    timed_out = threading.Event()
+    watchdog: threading.Timer | None = None
+    if timeout_seconds is not None:
+        def _kill_on_timeout() -> None:
+            timed_out.set()
+            process.kill()
+
+        watchdog = threading.Timer(timeout_seconds, _kill_on_timeout)
+        watchdog.daemon = True
+        watchdog.start()
+
     findings: list[dict] = []
     scanned_commits: set[str] = set()
     current_commit: str | None = None
     current_commit_date: str | None = None
     current_file: str | None = None
 
-    assert process.stdout is not None
-    for raw_line in process.stdout:
-        line = raw_line.rstrip("\n")
-        if line.startswith("COMMIT_START\x1f"):
-            parts = line.split("\x1f")
-            current_commit = parts[1] if len(parts) > 1 else None
-            current_commit_date = parts[2] if len(parts) > 2 else None
-            if current_commit:
-                scanned_commits.add(current_commit)
-            continue
-        if line.startswith("+++ b/"):
-            current_file = line[len("+++ b/"):]
-            continue
-        if line.startswith("+++"):
-            continue
-        if not line.startswith("+"):
-            continue
+    try:
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.rstrip("\n")
+            if line.startswith("COMMIT_START\x1f"):
+                parts = line.split("\x1f")
+                current_commit = parts[1] if len(parts) > 1 else None
+                current_commit_date = parts[2] if len(parts) > 2 else None
+                if current_commit:
+                    scanned_commits.add(current_commit)
+                continue
+            if line.startswith("+++ b/"):
+                current_file = line[len("+++ b/"):]
+                continue
+            if line.startswith("+++"):
+                continue
+            if not line.startswith("+"):
+                continue
 
-        content = line[1:]
-        for pattern_name, pattern, value_group in SECRET_PATTERNS:
-            match = pattern.search(content)
-            if match:
-                match_preview = _redact(match.group(value_group))
-                findings.append(
-                    {
-                        "commit": current_commit,
-                        "commit_date": current_commit_date,
-                        "path": current_file,
-                        "pattern": pattern_name,
-                        "match_preview": match_preview,
-                        "likely_placeholder": _is_likely_placeholder(current_file or ""),
-                        "accepted": (current_file, pattern_name, match_preview) in accepted_keys,
-                    }
-                )
+            content = line[1:]
+            for pattern_name, pattern, value_group in SECRET_PATTERNS:
+                match = pattern.search(content)
+                if match:
+                    value = match.group(value_group)
+                    match_preview = _redact(value)
+                    findings.append(
+                        {
+                            "commit": current_commit,
+                            "commit_date": current_commit_date,
+                            "path": current_file,
+                            "pattern": pattern_name,
+                            "match_preview": match_preview,
+                            "likely_placeholder": _is_likely_placeholder(current_file or "", value),
+                            "accepted": (current_file, pattern_name, match_preview) in accepted_keys,
+                        }
+                    )
+    finally:
+        if watchdog is not None:
+            watchdog.cancel()
 
     process.stdout.close()
     process.wait()
+
+    if timed_out.is_set():
+        return {
+            "history_scanned_commits": len(scanned_commits),
+            "history_findings": findings,
+            "history_scan_timed_out": True,
+        }
 
     if process.returncode != 0:
         return {"history_scanned_commits": 0, "history_findings": []}

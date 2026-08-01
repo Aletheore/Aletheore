@@ -27,8 +27,13 @@ write: it needs a different input shape. What matters is that each
 surface says which level it reached.
 """
 
+import json
+import logging
 import re
 from collections.abc import Callable
+from pathlib import Path
+
+logger = logging.getLogger("aletheore.citation_verifier")
 
 # Matches file:line citations in report text, e.g. "server/routes/billing.ts:142"
 # or "`app.py:12`". Deliberately narrow (word chars, dots, slashes, hyphens in the
@@ -157,3 +162,126 @@ def verify_citations(
         "all_verified": len(unverified) == 0,
         "line_bounds_checked": line_bounds_checked,
     }
+
+
+def local_line_count_fetcher(repo_path: Path) -> Callable[[str], int | None]:
+    """Real per-file line counts read straight off a checkout on disk.
+
+    Works for any caller holding a real checkout (managed audit's clone,
+    the local CLI's own repo, AIRview does not qualify - it has to fetch
+    file contents back out of the GitHub API instead). Returns None for
+    anything it can't read (missing file, path escape, unreadable bytes),
+    which verify_citations treats as "skip the bounds check for this
+    citation" rather than as a failure, so a read problem never
+    manufactures a false "unverified".
+    """
+    root = repo_path.resolve()
+
+    def _fetch(path: str) -> int | None:
+        try:
+            candidate = (root / path).resolve()
+            if not candidate.is_relative_to(root) or not candidate.is_file():
+                return None
+            with candidate.open("rb") as handle:
+                return sum(1 for _ in handle)
+        except OSError:
+            return None
+
+    return _fetch
+
+
+def load_verifiable_evidence(repo_path: Path) -> dict | None:
+    """The repo's own air.json, but only when it actually carries the file
+    inventory citation verification needs.
+
+    A caller can hand this a placeholder evidence file with no
+    `repository.modules` (e.g. run_managed_audit_api_job's caller-supplied
+    TOON blob path) - verifying against that would mark every citation
+    "unverified" and print an alarming, entirely wrong summary. Returning
+    None here means "we cannot check this", reported honestly as
+    unavailable rather than as failure.
+    """
+    try:
+        evidence = json.loads((repo_path / ".aletheore" / "air.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(evidence, dict):
+        return None
+    if not evidence.get("repository", {}).get("modules"):
+        return None
+    return evidence
+
+
+def citation_verification_section(report_text: str, repo_path: Path) -> str:
+    """Reports how many of the report's own file:line citations actually
+    check out against the deterministic evidence it was generated from.
+
+    Deliberately annotates rather than deletes: silently dropping prose
+    the user is relying on, on a citation heuristic, is the same
+    all-or-nothing failure mode that made unverified findings invisible
+    elsewhere in this codebase. The reader gets the full report and an
+    honest statement of what held up.
+    """
+    evidence = load_verifiable_evidence(repo_path)
+    if evidence is None:
+        logger.info("citation verification unavailable (no file inventory in evidence)")
+        return (
+            "\n\n---\n\n## Citation Verification\n\n"
+            "_Not available for this run: the evidence supplied for this audit doesn't "
+            "include the file inventory needed to check citations against._\n"
+        )
+
+    result = verify_citations(report_text, evidence, fetch_line_count=local_line_count_fetcher(repo_path))
+    total = result["total_citations"]
+    verified = len(result["verified"])
+    unverified = result["unverified"]
+
+    logger.info(
+        "citation verification: %d/%d verified, %d unverified",
+        verified,
+        total,
+        len(unverified),
+    )
+
+    if total == 0:
+        return (
+            "\n\n---\n\n## Citation Verification\n\n"
+            "_This report contains no `file:line` citations to verify._\n"
+        )
+
+    # State only the level actually reached. run_managed_audit_api_job's
+    # dict-evidence path writes the evidence but no source files, so every
+    # fetch_line_count call returns None there and nothing is bounds-checked
+    # - claiming otherwise would be the same overclaim this whole section
+    # exists to prevent.
+    bounds_checked = result["line_bounds_checked"]
+    if bounds_checked == total:
+        checked_how = (
+            "the file exists in the scanned repository, and the cited line is within that "
+            "file's real length"
+        )
+    elif bounds_checked:
+        checked_how = (
+            "the file exists in the scanned repository; "
+            f"{bounds_checked} of them could also be checked against the file's real length"
+        )
+    else:
+        checked_how = (
+            "the file exists in the scanned repository. Line numbers could not be "
+            "bounds-checked in this run, so a citation naming a real file at a wrong line "
+            "still counts as verified here"
+        )
+
+    lines = [
+        "\n\n---\n\n## Citation Verification\n",
+        f"_{verified} of {total} `file:line` citations in this report were checked against "
+        f"the deterministic evidence it was generated from: {checked_how}._\n",
+    ]
+    if unverified:
+        lines.append(
+            f"\n**{len(unverified)} citation(s) could not be verified** — treat the "
+            "claims attached to these as unconfirmed:\n"
+        )
+        lines.extend(f"- `{c['file']}:{c['line']}`" for c in unverified)
+        lines.append("")
+    return "\n".join(lines)

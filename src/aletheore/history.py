@@ -188,3 +188,93 @@ def compute_diff(old: dict, new: dict, full: bool = False) -> dict:
     if full:
         return _compute_full_diff(old, new)
     return _compute_curated_diff(old, new)
+
+
+def _aletheore_version() -> str:
+    import importlib.metadata
+
+    try:
+        return importlib.metadata.version("aletheore")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0"
+
+
+def _sarif_result(
+    rule_id: str, level: str, message: str, *, file_path: str | None = None, line: int | None = None
+) -> dict:
+    result: dict = {"ruleId": rule_id, "level": level, "message": {"text": message}}
+    if file_path is not None:
+        location: dict = {"physicalLocation": {"artifactLocation": {"uri": file_path}}}
+        if line is not None and line >= 1:
+            location["physicalLocation"]["region"] = {"startLine": line}
+        result["locations"] = [location]
+    return result
+
+
+def to_sarif(curated_diff: dict) -> dict:
+    """Renders a curated (non-full) `compute_diff` result as a SARIF 2.1.0
+    log, covering the same three categories `--fail-on-new-*` already
+    treats as CI-worthy (secrets, dependency vulnerabilities, layer
+    violations) - GitHub code scanning and other SARIF consumers can then
+    ingest `aletheore diff`'s findings the same way they ingest any other
+    static analysis tool's, instead of only via this project's own JSON
+    shape and PR-comment upsert.
+
+    Only "new" findings become results - "resolved" ones aren't a defect
+    to report, they're the absence of one.
+    """
+    results = []
+
+    for finding in curated_diff.get("secrets", {}).get("new", []):
+        level = "note" if finding.get("likely_placeholder") else "error"
+        message = f"Possible {finding['pattern']} secret ({finding['match_preview']})"
+        if finding.get("accepted"):
+            message += " - accepted in .aletheore.json baseline"
+        results.append(
+            _sarif_result("aletheore/secret", level, message, file_path=finding.get("path"), line=finding.get("line"))
+        )
+
+    for finding in curated_diff.get("history_secrets", {}).get("new", []):
+        level = "note" if finding.get("likely_placeholder") else "error"
+        commit = (finding.get("commit") or "")[:12]
+        message = f"Possible {finding['pattern']} secret in git history at commit {commit} ({finding['match_preview']})"
+        if finding.get("accepted"):
+            message += " - accepted in .aletheore.json baseline"
+        # No line number: a history finding is a hunk in a commit's diff, not
+        # a location in the current working tree - see secrets.py's
+        # find_secrets_in_history, which never records one.
+        results.append(_sarif_result("aletheore/secret-history", level, message, file_path=finding.get("path")))
+
+    for finding in curated_diff.get("vulnerabilities", {}).get("new", []):
+        message = (
+            f"{finding.get('ecosystem')}/{finding.get('package')}: {finding.get('advisory_id')} - "
+            f"{finding.get('summary') or 'no summary available'}"
+        )
+        results.append(_sarif_result("aletheore/dependency-vulnerability", "warning", message))
+
+    for finding in curated_diff.get("layer_violations", {}).get("new", []):
+        message = finding.get("reason") or f"layer violation: {finding.get('from')} -> {finding.get('to')}"
+        results.append(_sarif_result("aletheore/layer-violation", "warning", message, file_path=finding.get("from")))
+
+    return {
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "aletheore",
+                        "informationUri": "https://aletheore.com",
+                        "version": _aletheore_version(),
+                        "rules": [
+                            {"id": "aletheore/secret", "name": "Secret detected in working tree"},
+                            {"id": "aletheore/secret-history", "name": "Secret detected in git history"},
+                            {"id": "aletheore/dependency-vulnerability", "name": "Dependency vulnerability"},
+                            {"id": "aletheore/layer-violation", "name": "Architecture layer violation"},
+                        ],
+                    }
+                },
+                "results": results,
+            }
+        ],
+    }

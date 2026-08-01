@@ -11,14 +11,14 @@ cd src
 pip install -e .
 
 cd ../github-app
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
-docker run -d --name aletheore-test-pg -e POSTGRES_PASSWORD=test \
-  -e POSTGRES_DB=aletheore_test -p 55433:5432 postgres:16
-
-# Optional - only needed for tests that exercise a real RQ queue
-# (test_pr_scan_e2e.py); everything else skips cleanly without it.
-docker run -d --name aletheore-test-redis -p 6379:6379 redis:7-alpine
+# Same images and host ports as .github/workflows/github-app-tests.yml's
+# services block - a passing run here means a passing run in CI. Without
+# this, most of the suite still runs, but everything that needs a real
+# database or queue (roughly 40% of it) skips instead of failing, which
+# looks like a clean green run and isn't.
+docker compose -f docker-compose.test.yml up -d
 
 export TEST_DATABASE_URL=postgresql://postgres:test@localhost:55433/aletheore_test
 export DATABASE_URL=$TEST_DATABASE_URL
@@ -28,6 +28,9 @@ python -m pytest tests/ -v
 The test suite applies every file in `migrations/` itself (see the `pool`
 fixture in `tests/conftest.py`) - every migration is idempotent, so this
 works against a brand-new container with no manual migration step needed.
+`requirements-dev.txt` adds pytest on top of `requirements.txt` - the
+production images (`Dockerfile.app-server`, `Dockerfile.scan-worker`)
+install `requirements.txt` alone, so test tooling never ships to prod.
 
 ## Deploying on KVM4
 

@@ -15,6 +15,11 @@ class CodexCliAdapter(AgentAdapter):
 
     def invoke(self, instruction: str, cwd: str) -> str:
         try:
+            # workspace-write (not full/unrestricted) scopes codex's write
+            # access to cwd - it's how codex writes .aletheore/audit-report.md
+            # itself per the manual's instruction, not a gap: see
+            # AgentAdapter.requires_consent's docstring for why this is
+            # unrelated to that flag.
             result = subprocess.run(
                 ["codex", "exec", "--sandbox", "workspace-write", "-C", cwd, instruction],
                 cwd=cwd,

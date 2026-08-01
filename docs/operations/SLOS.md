@@ -2,7 +2,7 @@
 
 **Purpose:** Define initial reliability targets for hosted Aletheore.
 **Status:** Active baseline
-**Owner:** TODO
+**Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [DEPLOYMENT-VERIFICATION.md](DEPLOYMENT-VERIFICATION.md)
 **Last Updated:** 2026-07-23
 
