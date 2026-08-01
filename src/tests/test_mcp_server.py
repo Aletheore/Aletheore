@@ -149,6 +149,34 @@ def test_read_evidence_caches_parsed_result_until_the_file_changes(tmp_path, mon
     assert third["scanned_at"].startswith("2026-07-16")
 
 
+def test_read_evidence_rejects_an_incompatible_schema_version(tmp_path, monkeypatch):
+    from aletheore.mcp_server import IncompatibleEvidenceVersionError, read_evidence
+
+    monkeypatch.setattr("aletheore.mcp_server._evidence_cache", {})
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["aletheore_version"] = "0.2.0"
+    evidence_path.write_text(json.dumps(evidence))
+
+    with pytest.raises(IncompatibleEvidenceVersionError):
+        read_evidence(repo)
+
+
+def test_read_evidence_rejects_evidence_with_no_version_field(tmp_path, monkeypatch):
+    from aletheore.mcp_server import IncompatibleEvidenceVersionError, read_evidence
+
+    monkeypatch.setattr("aletheore.mcp_server._evidence_cache", {})
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(evidence_path.read_text())
+    del evidence["aletheore_version"]
+    evidence_path.write_text(json.dumps(evidence))
+
+    with pytest.raises(IncompatibleEvidenceVersionError):
+        read_evidence(repo)
+
+
 @pytest.mark.asyncio
 async def test_build_server_registers_expected_tools(tmp_path):
     repo = make_repo_with_evidence(tmp_path)

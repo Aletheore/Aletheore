@@ -9,10 +9,12 @@ from aletheore.dashboard import (
     build_graph_summary,
     build_history_summary,
 )
+from aletheore.evidence import EVIDENCE_VERSION
 
 
 def make_evidence(scanned_at: str, module_count: int = 2, secrets_count: int = 0) -> dict:
     return {
+        "aletheore_version": EVIDENCE_VERSION,
         "scanned_at": scanned_at,
         "repository": {
             "languages": [{"name": "python", "file_count": module_count}],

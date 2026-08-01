@@ -33,6 +33,43 @@ from aletheore.vulnerabilities import check_vulnerabilities as check_dependency_
 
 EVIDENCE_VERSION = "0.1.0"
 
+
+def _version_compatibility_key(version: str) -> tuple[int, int] | None:
+    """(major, minor) of a version string, or None if it can't be parsed.
+
+    Pre-1.0 (major == 0), semver's own convention treats a MINOR bump as
+    the potential breaking change, not just MAJOR - 0.1.0 and 0.1.7 are
+    the same schema, 0.1.0 and 0.2.0 are not assumed to be. Once this
+    project ships EVIDENCE_VERSION >= 1.0.0, this should move to
+    comparing MAJOR alone; not needed yet since nothing written has ever
+    been >= 1.0.
+    """
+    parts = version.split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except ValueError:
+        return None
+
+
+def is_evidence_version_compatible(version: object) -> bool:
+    """Whether an air.json's recorded aletheore_version matches this
+    build's schema closely enough to read safely.
+
+    EVIDENCE_VERSION is written into every scan (see scan_repository below)
+    but, until this check, nothing ever read it back - a schema change
+    between the version that wrote an air.json and the version reading it
+    could silently misread or KeyError deep in a consumer instead of
+    failing with a clear "re-scan" message at the one place that already
+    knows both versions.
+    """
+    if not isinstance(version, str):
+        return False
+    current = _version_compatibility_key(EVIDENCE_VERSION)
+    given = _version_compatibility_key(version)
+    return current is not None and current == given
+
 # Unset by default - a developer scanning their own repo locally wants full
 # history, and isn't running inside a memory-constrained container. The
 # hosted scan-worker sets this (see scan_worker/jobs.py's

@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
-from aletheore.evidence import scan_repository, write_evidence
+from aletheore.evidence import EVIDENCE_VERSION, is_evidence_version_compatible, scan_repository, write_evidence
 
 
 def run(repo: Path, *args: str):
@@ -21,6 +21,27 @@ def make_repo(tmp_path: Path) -> Path:
     run(repo, "add", ".")
     run(repo, "commit", "-m", "init")
     return repo
+
+
+def test_is_evidence_version_compatible_accepts_the_current_version():
+    assert is_evidence_version_compatible(EVIDENCE_VERSION) is True
+
+
+def test_is_evidence_version_compatible_accepts_a_patch_difference():
+    major, minor, _patch = EVIDENCE_VERSION.split(".")
+    assert is_evidence_version_compatible(f"{major}.{minor}.99") is True
+
+
+def test_is_evidence_version_compatible_rejects_a_minor_difference():
+    major, minor, _patch = EVIDENCE_VERSION.split(".")
+    assert is_evidence_version_compatible(f"{major}.{int(minor) + 1}.0") is False
+
+
+def test_is_evidence_version_compatible_rejects_missing_or_malformed_versions():
+    assert is_evidence_version_compatible(None) is False
+    assert is_evidence_version_compatible("") is False
+    assert is_evidence_version_compatible("not-a-version") is False
+    assert is_evidence_version_compatible(1) is False
 
 
 def test_scan_repository_produces_full_schema(tmp_path):
