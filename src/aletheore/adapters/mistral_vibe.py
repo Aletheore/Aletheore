@@ -15,6 +15,10 @@ class MistralVibeAdapter(AgentAdapter):
 
     def invoke(self, instruction: str, cwd: str) -> str:
         try:
+            # --auto-approve, like codex's --sandbox workspace-write, lets
+            # this write .aletheore/audit-report.md itself per the manual's
+            # instruction - see AgentAdapter.requires_consent's docstring
+            # for why that's unrelated to this adapter's requires_consent=False.
             result = subprocess.run(
                 ["mistral-vibe", "--prompt", instruction, "--auto-approve", "--output", "text"],
                 cwd=cwd,
