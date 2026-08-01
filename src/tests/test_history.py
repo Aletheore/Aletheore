@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from aletheore.history import compute_diff, list_snapshots, save_snapshot
+from aletheore.history import compute_diff, list_snapshots, save_snapshot, to_sarif
 
 
 def make_evidence(scanned_at: str) -> dict:
@@ -311,3 +311,134 @@ def test_compute_diff_is_deterministic():
 
     assert first == second
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+
+
+def test_to_sarif_has_valid_top_level_shape_with_no_findings():
+    sarif = to_sarif({})
+
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["tool"]["driver"]["name"] == "aletheore"
+    assert sarif["runs"][0]["results"] == []
+
+
+def test_to_sarif_renders_a_real_secret_with_error_level_and_location():
+    curated = {
+        "secrets": {
+            "new": [
+                {
+                    "path": "config.py",
+                    "line": 3,
+                    "pattern": "aws_access_key_id",
+                    "match_preview": "AKIA...MNOP",
+                    "likely_placeholder": False,
+                    "accepted": False,
+                }
+            ]
+        }
+    }
+
+    results = to_sarif(curated)["runs"][0]["results"]
+
+    assert len(results) == 1
+    result = results[0]
+    assert result["ruleId"] == "aletheore/secret"
+    assert result["level"] == "error"
+    assert "aws_access_key_id" in result["message"]["text"]
+    assert result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == "config.py"
+    assert result["locations"][0]["physicalLocation"]["region"]["startLine"] == 3
+
+
+def test_to_sarif_renders_a_placeholder_secret_at_note_level():
+    curated = {
+        "secrets": {
+            "new": [
+                {
+                    "path": "tests/fixture.py",
+                    "line": 1,
+                    "pattern": "aws_access_key_id",
+                    "match_preview": "AKIA...MPLE",
+                    "likely_placeholder": True,
+                    "accepted": False,
+                }
+            ]
+        }
+    }
+
+    result = to_sarif(curated)["runs"][0]["results"][0]
+
+    assert result["level"] == "note"
+
+
+def test_to_sarif_history_secret_has_no_line_region():
+    curated = {
+        "history_secrets": {
+            "new": [
+                {
+                    "commit": "abcdef1234567890",
+                    "path": "old.py",
+                    "pattern": "github_token",
+                    "match_preview": "ghp_****...7890",
+                    "likely_placeholder": False,
+                    "accepted": False,
+                }
+            ]
+        }
+    }
+
+    result = to_sarif(curated)["runs"][0]["results"][0]
+
+    assert result["ruleId"] == "aletheore/secret-history"
+    assert "abcdef123456" in result["message"]["text"]
+    assert result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == "old.py"
+    assert "region" not in result["locations"][0]["physicalLocation"]
+
+
+def test_to_sarif_renders_a_vulnerability_with_no_location():
+    curated = {
+        "vulnerabilities": {
+            "new": [
+                {
+                    "ecosystem": "pip",
+                    "package": "requests",
+                    "advisory_id": "GHSA-xxxx",
+                    "summary": "Improper certificate validation",
+                }
+            ]
+        }
+    }
+
+    result = to_sarif(curated)["runs"][0]["results"][0]
+
+    assert result["ruleId"] == "aletheore/dependency-vulnerability"
+    assert "pip/requests" in result["message"]["text"]
+    assert "GHSA-xxxx" in result["message"]["text"]
+    assert "locations" not in result
+
+
+def test_to_sarif_renders_a_layer_violation():
+    curated = {
+        "layer_violations": {
+            "new": [
+                {"from": "app/db.py", "to": "app/routes/billing.py", "reason": "inner layer imports outer layer"}
+            ]
+        }
+    }
+
+    result = to_sarif(curated)["runs"][0]["results"][0]
+
+    assert result["ruleId"] == "aletheore/layer-violation"
+    assert result["message"]["text"] == "inner layer imports outer layer"
+    assert result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == "app/db.py"
+
+
+def test_to_sarif_ignores_resolved_findings():
+    curated = {
+        "secrets": {
+            "new": [],
+            "resolved": [
+                {"path": "config.py", "line": 3, "pattern": "aws_access_key_id", "match_preview": "AKIA...MNOP"}
+            ],
+        }
+    }
+
+    assert to_sarif(curated)["runs"][0]["results"] == []

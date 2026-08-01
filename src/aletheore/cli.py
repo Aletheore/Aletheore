@@ -37,7 +37,7 @@ from aletheore.device_auth import infer_repo_full_name_from_cwd_git_remote
 from aletheore.evidence import scan_repository, write_evidence
 from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
-from aletheore.history import compute_diff, list_snapshots, save_snapshot
+from aletheore.history import compute_diff, list_snapshots, save_snapshot, to_sarif
 from aletheore.telemetry import report_scan_event
 from aletheore.managed_audit_client import ManagedAuditError, run_managed_audit_request
 from aletheore.query import (
@@ -586,7 +586,15 @@ def _diff(
     fail_on_new_secrets: bool,
     fail_on_new_vulnerabilities: bool = False,
     fail_on_new_layer_violations: bool = False,
+    output_format: str = "json",
 ) -> int:
+    if output_format not in ("json", "sarif"):
+        print(f"error: unknown --format {output_format!r} (expected 'json' or 'sarif')")
+        return 1
+    if output_format == "sarif" and full:
+        print("error: --format sarif is incompatible with --full (SARIF needs the curated diff)")
+        return 1
+
     old_file = Path(old_path)
     new_file = Path(new_path)
 
@@ -609,7 +617,7 @@ def _diff(
         return 1
 
     diff = compute_diff(old, new, full=full)
-    print(json.dumps(diff, indent=2))
+    print(json.dumps(to_sarif(diff) if output_format == "sarif" else diff, indent=2))
 
     if fail_on_new_secrets or fail_on_new_vulnerabilities or fail_on_new_layer_violations:
         curated = diff if not full else compute_diff(old, new, full=False)
@@ -1075,6 +1083,9 @@ def diff(
     old: str = typer.Argument(..., help="path to the baseline air.json"),
     new: str = typer.Argument(..., help="path to the comparison air.json"),
     full: bool = typer.Option(False, "--full", help="show the full raw diff instead of the curated summary"),
+    output_format: str = typer.Option(
+        "json", "--format", help="output format: 'json' (default) or 'sarif' for code-scanning tools"
+    ),
     fail_on_new_secrets: bool = typer.Option(
         False,
         "--fail-on-new-secrets",
@@ -1093,7 +1104,13 @@ def diff(
 ) -> None:
     raise typer.Exit(
         code=_diff(
-            old, new, full, fail_on_new_secrets, fail_on_new_vulnerabilities, fail_on_new_layer_violations
+            old,
+            new,
+            full,
+            fail_on_new_secrets,
+            fail_on_new_vulnerabilities,
+            fail_on_new_layer_violations,
+            output_format,
         )
     )
 

@@ -1340,6 +1340,51 @@ def test_main_diff_shows_curated_diff_between_two_files(tmp_path):
     assert len(parsed["secrets"]["new"]) == 1
 
 
+def test_main_diff_sarif_format_renders_a_valid_sarif_log(tmp_path):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(
+        tmp_path / "new.json",
+        findings=[
+            {
+                "path": "a.py",
+                "line": 1,
+                "pattern": "aws_access_key_id",
+                "match_preview": "AKIA...MNOP",
+                "likely_placeholder": False,
+            }
+        ],
+    )
+
+    result = runner.invoke(app, ["diff", str(old_path), str(new_path), "--format", "sarif"])
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed["version"] == "2.1.0"
+    results = parsed["runs"][0]["results"]
+    assert len(results) == 1
+    assert results[0]["ruleId"] == "aletheore/secret"
+
+
+def test_main_diff_sarif_format_rejects_full_flag(tmp_path):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(tmp_path / "new.json")
+
+    result = runner.invoke(app, ["diff", str(old_path), str(new_path), "--format", "sarif", "--full"])
+
+    assert result.exit_code == 1
+    assert "incompatible with --full" in result.output
+
+
+def test_main_diff_rejects_unknown_format(tmp_path):
+    old_path = make_evidence_file(tmp_path / "old.json")
+    new_path = make_evidence_file(tmp_path / "new.json")
+
+    result = runner.invoke(app, ["diff", str(old_path), str(new_path), "--format", "xml"])
+
+    assert result.exit_code == 1
+    assert "unknown --format" in result.output
+
+
 def test_main_diff_full_flag_returns_raw_diff(tmp_path):
     old_path = make_evidence_file(tmp_path / "old.json")
     new_path = make_evidence_file(tmp_path / "new.json")
