@@ -14,7 +14,7 @@ jobs:
     permissions:
       id-token: write # trusted publishing (OIDC) - no PyPI token stored anywhere
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
