@@ -1138,6 +1138,7 @@ def _run_flash_review(
     changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
 
     spend_accumulator = {"total": 0.0}
+    grounding_result: dict = {}
 
     skipped_files: list[str] = []
 
@@ -1181,6 +1182,9 @@ def _run_flash_review(
         def _cache_write(diff: str, found: list[dict], used: str) -> None:
             store_flash_review_result(dsn, installation_id, repo_full_name, diff, found, used)
 
+        def _on_grounding_result(stats: dict) -> None:
+            grounding_result.update(stats)
+
         if code_evidence_context:
             findings = review_diff(
                 diff_text,
@@ -1192,6 +1196,7 @@ def _run_flash_review(
                 cache_write=_cache_write,
                 model_used="deepseek-v4-flash",
                 file_contents=file_contents,
+                on_grounding_result=_on_grounding_result,
             )
         else:
             findings = review_diff(
@@ -1203,9 +1208,13 @@ def _run_flash_review(
                 cache_write=_cache_write,
                 model_used="deepseek-v4-flash",
                 file_contents=file_contents,
+                on_grounding_result=_on_grounding_result,
             )
     record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
     increment_flash_review_count(settings.database_url, installation_id)
+
+    proposed = grounding_result.get("proposed", 0)
+    kept = grounding_result.get("kept", 0)
 
     if findings:
         lines = [f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n"]
@@ -1215,6 +1224,15 @@ def _run_flash_review(
             if suggestion:
                 lines.append(f"  ```\n  {suggestion}\n  ```")
         body = "\n".join(lines)
+    elif proposed:
+        # The model proposed something but none of it held up against the
+        # diff (see flash_review.py's _validate_findings) - distinct from
+        # "no issues found", which would otherwise look identical to a
+        # genuinely clean diff.
+        body = (
+            f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
+            f"No issues held up under verification ({proposed} proposed, 0 grounded in this diff)."
+        )
     else:
         body = (
             f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\nNo issues found in this diff."
@@ -1234,6 +1252,14 @@ def _run_flash_review(
             + ("…" if len(skipped_files) > 10 else "")
             + "._"
         )
+
+    # Surfaces the same verified-vs-proposed count that was previously only
+    # ever logged (see flash_review.py's _validate_findings docstring on why
+    # a silent drop is otherwise indistinguishable from "found nothing") -
+    # visible on every review with proposed findings, not just when
+    # something got dropped.
+    if proposed:
+        body += f"\n\n_Grounding: {kept} of {proposed} proposed finding(s) held up against this diff._"
 
     upsert_pr_comment(client, token, repo_full_name, pr_number, body, marker=FLASH_REVIEW_MARKER)
     set_last_reviewed_sha(
