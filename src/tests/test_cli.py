@@ -117,7 +117,12 @@ def test_run_reasoning_phase_writes_report(tmp_path):
 
     written = Path(report_path)
     assert written == repo / ".aletheore" / "audit-report.md"
-    assert written.read_text() == "# Audit Report\n\nfindings here\n"
+    # The agent never wrote the file itself (only mtime-checked, and this
+    # MagicMock's invoke() has no side effect), so the fallback path applies
+    # and prepends a provenance notice ahead of the agent's raw output.
+    content = written.read_text()
+    assert content.startswith("> **Note:**")
+    assert content.endswith("# Audit Report\n\nfindings here\n")
     adapter.invoke.assert_called_once()
 
 
