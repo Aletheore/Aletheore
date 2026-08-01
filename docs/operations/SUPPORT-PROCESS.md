@@ -2,7 +2,7 @@
 
 **Purpose:** Define the baseline support process for Aletheore users.
 **Status:** Active baseline
-**Owner:** TODO
+**Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [DATA-HANDLING.md](DATA-HANDLING.md), [../../SECURITY.md](../../SECURITY.md)
 **Last Updated:** 2026-07-23
 

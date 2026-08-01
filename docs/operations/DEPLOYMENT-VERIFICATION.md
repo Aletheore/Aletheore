@@ -2,7 +2,7 @@
 
 **Purpose:** Define the minimum verification required before treating hosted deployment as current.
 **Status:** Active baseline
-**Owner:** TODO
+**Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
 **Last Updated:** 2026-07-23
 

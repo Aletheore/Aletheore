@@ -2,7 +2,7 @@
 
 **Purpose:** Define operational expectations for the hosted Aletheore service.
 **Status:** Active baseline
-**Owner:** TODO
+**Owner:** Arihant Kaul
 **Related Documents:** [../../STARTUP_AUDIT_REPORT.md](../../STARTUP_AUDIT_REPORT.md), [../../github-app/README.md](../../github-app/README.md), [../../SECURITY.md](../../SECURITY.md)
 **Last Updated:** 2026-07-23
 
