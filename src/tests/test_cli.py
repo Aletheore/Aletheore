@@ -578,6 +578,42 @@ def test_audit_skips_consent_prompt_for_cli_based_adapter(tmp_path):
     fake_adapter.invoke.assert_called_once()
 
 
+def test_audit_appends_citation_verification_section_to_report(tmp_path):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    fake_adapter = MagicMock()
+    fake_adapter.name = "claude"
+    fake_adapter.requires_consent = False
+    fake_adapter.invoke.return_value = "The bug is at `main.py:1`."
+
+    with patch("aletheore.cli.select_adapter", return_value=fake_adapter):
+        result = runner.invoke(app, ["audit", str(repo)])
+
+    assert result.exit_code == 0
+    report_text = (repo / ".aletheore" / "audit-report.md").read_text()
+    assert "Citation Verification" in report_text
+    assert "1 of 1" in report_text
+
+
+def test_audit_warns_in_output_when_a_citation_cannot_be_verified(tmp_path):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    fake_adapter = MagicMock()
+    fake_adapter.name = "claude"
+    fake_adapter.requires_consent = False
+    fake_adapter.invoke.return_value = "See `ghost.py:1` for details."
+
+    with patch("aletheore.cli.select_adapter", return_value=fake_adapter):
+        result = runner.invoke(app, ["audit", str(repo)])
+
+    assert result.exit_code == 0
+    assert "could not be verified" in result.output
+    report_text = (repo / ".aletheore" / "audit-report.md").read_text()
+    assert "`ghost.py:1`" in report_text
+
+
 def test_main_audit_threads_no_check_vulnerabilities_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")

@@ -26,6 +26,7 @@ from aletheore.adapters.grok_build import GrokBuildAdapter
 from aletheore.adapters.mistral_vibe import MistralVibeAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.adapters.opencode import OpenCodeAdapter
+from aletheore.citation_verifier import citation_verification_section
 from aletheore.credentials import get_api_key
 from aletheore.device_auth import infer_repo_full_name_from_cwd_git_remote
 from aletheore.evidence import scan_repository, write_evidence
@@ -341,7 +342,18 @@ def _audit(
         console.print(f"Evidence is still available at {evidence_path} for manual use.")
         return 1
 
-    _print_result("Audit complete", [f"Report written to {report_path}"])
+    report_file = Path(report_path)
+    report_text = report_file.read_text()
+    verification_section = citation_verification_section(report_text, repo)
+    report_file.write_text(report_text + verification_section)
+
+    result_lines = [f"Report written to {report_path}"]
+    if "could not be verified" in verification_section:
+        result_lines.append(
+            "[yellow]Some citations in this report could not be verified - see the "
+            "Citation Verification section[/yellow]"
+        )
+    _print_result("Audit complete", result_lines)
     console.print()
     console.print(_sponsor_panel())
     return 0

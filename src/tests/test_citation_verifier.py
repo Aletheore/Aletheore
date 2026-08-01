@@ -1,4 +1,12 @@
-from aletheore.citation_verifier import extract_citations, verify_citations
+import json
+
+from aletheore.citation_verifier import (
+    citation_verification_section,
+    extract_citations,
+    load_verifiable_evidence,
+    local_line_count_fetcher,
+    verify_citations,
+)
 
 
 def make_evidence() -> dict:
@@ -180,3 +188,56 @@ def test_verify_citations_flags_an_unknown_extensionless_file_is_not_extracted()
     result = verify_citations("See `Jenkinsfile:4`.", make_evidence())
 
     assert result["total_citations"] == 0
+
+
+def _repo_with_evidence(tmp_path, files: dict[str, str]):
+    repo_path = tmp_path / "repo"
+    (repo_path / ".aletheore").mkdir(parents=True)
+    for name, content in files.items():
+        (repo_path / name).write_text(content)
+    evidence = {"repository": {"modules": [{"path": p} for p in files]}}
+    (repo_path / ".aletheore" / "air.json").write_text(json.dumps(evidence))
+    return repo_path
+
+
+def test_local_line_count_fetcher_counts_real_lines_and_rejects_escapes(tmp_path):
+    repo_path = _repo_with_evidence(tmp_path, {"app.py": "one\ntwo\nthree\n"})
+    fetch = local_line_count_fetcher(repo_path)
+
+    assert fetch("app.py") == 3
+    assert fetch("nope.py") is None
+    # A path escape must never be read, and must degrade to "skip the bounds
+    # check" rather than to a false "unverified".
+    assert fetch("../../../../etc/passwd") is None
+
+
+def test_load_verifiable_evidence_rejects_evidence_with_no_file_inventory(tmp_path):
+    repo_path = tmp_path / "repo"
+    (repo_path / ".aletheore").mkdir(parents=True)
+    (repo_path / ".aletheore" / "air.json").write_text(json.dumps({"managed_evidence": True}))
+
+    assert load_verifiable_evidence(repo_path) is None
+
+
+def test_citation_verification_section_reports_verified_and_unverified(tmp_path):
+    repo_path = _repo_with_evidence(tmp_path, {"app.py": "one\ntwo\nthree\n"})
+
+    section = citation_verification_section(
+        "The bug is at `app.py:2`, also see `ghost.py:1`.", repo_path
+    )
+
+    assert "Citation Verification" in section
+    assert "1 of 2" in section
+    assert "1 citation(s) could not be verified" in section
+    assert "`ghost.py:1`" in section
+
+
+def test_citation_verification_section_unavailable_without_file_inventory(tmp_path):
+    repo_path = tmp_path / "repo"
+    (repo_path / ".aletheore").mkdir(parents=True)
+    (repo_path / ".aletheore" / "air.json").write_text(json.dumps({"managed_evidence": True}))
+
+    section = citation_verification_section("See `app.py:2`.", repo_path)
+
+    assert "Not available for this run" in section
+    assert "could not be verified" not in section
