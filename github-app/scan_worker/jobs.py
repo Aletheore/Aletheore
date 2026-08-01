@@ -1256,9 +1256,10 @@ def _run_flash_review(
     # Surfaces the same verified-vs-proposed count that was previously only
     # ever logged (see flash_review.py's _validate_findings docstring on why
     # a silent drop is otherwise indistinguishable from "found nothing") -
-    # visible on every review with proposed findings, not just when
-    # something got dropped.
-    if proposed:
+    # only when there are findings to attach it to, since the elif proposed
+    # branch above already states the kept=0 case inline and a second line
+    # repeating the exact same ratio would just be noise.
+    if findings:
         body += f"\n\n_Grounding: {kept} of {proposed} proposed finding(s) held up against this diff._"
 
     upsert_pr_comment(client, token, repo_full_name, pr_number, body, marker=FLASH_REVIEW_MARKER)
