@@ -1355,6 +1355,9 @@ def test_flash_review_job_reports_zero_grounded_distinctly_from_no_issues_found(
 
     assert "No issues held up under verification (3 proposed, 0 grounded" in posted["body"]
     assert "No issues found in this diff." not in posted["body"]
+    # The line above already states the 0-grounded fact - a second
+    # "Grounding: 0 of 3..." footer would just repeat it.
+    assert "Grounding:" not in posted["body"]
 
 
 def test_flash_review_job_discloses_files_it_never_reviewed(monkeypatch):
