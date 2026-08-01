@@ -1,6 +1,9 @@
 import os
 import subprocess
+import threading
+import time
 from pathlib import Path
+from unittest.mock import patch
 
 from aletheore.secrets import find_secrets_in_history
 
@@ -131,6 +134,48 @@ def test_find_secrets_in_history_marks_a_baselined_finding_as_accepted(tmp_path)
     result = find_secrets_in_history(repo, baseline=baseline)
 
     assert result["history_findings"][0]["accepted"] is True
+
+
+def test_find_secrets_in_history_survives_a_stalled_git_process(tmp_path):
+    # Simulates git blocking mid-read (e.g. a network-backed filesystem
+    # stalling on blob reads) rather than exiting - reproduced directly as
+    # a 7+ minute hang at ~0% CPU. A real `git log -p` stuck like this
+    # produces no further output until killed, so the fake stdout iterator
+    # below models that: it yields a couple of real lines, then blocks
+    # until the watchdog's kill() call unblocks it, standing in for the
+    # pipe going to EOF once the process is actually killed.
+    repo = init_repo(tmp_path)
+
+    class _FakeProcess:
+        def __init__(self):
+            self.stdout = self
+            self.returncode = None
+            self._killed = threading.Event()
+
+        def __iter__(self):
+            yield "COMMIT_START\x1fabc123\x1f2026-06-01T00:00:00+00:00\n"
+            yield "+++ b/main.py\n"
+            while not self._killed.wait(timeout=0.01):
+                pass
+
+        def kill(self):
+            self._killed.set()
+
+        def close(self):
+            pass
+
+        def wait(self):
+            self.returncode = -9
+            return self.returncode
+
+    with patch("aletheore.secrets.subprocess.Popen", return_value=_FakeProcess()):
+        start = time.monotonic()
+        result = find_secrets_in_history(repo, timeout_seconds=0.1)
+        elapsed = time.monotonic() - start
+
+    assert result["history_scan_timed_out"] is True
+    assert result["history_scanned_commits"] == 1
+    assert elapsed < 5, "watchdog should have killed the stalled process well within 5s"
 
 
 def test_find_secrets_in_history_always_includes_accepted_key_defaulting_false(tmp_path):

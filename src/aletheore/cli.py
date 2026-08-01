@@ -284,10 +284,12 @@ def _scan(
         return GIT_ANALYSIS_RESOURCE_EXIT_CODE, {}, repo
     evidence_path = write_evidence(evidence, repo)
     snapshot_path = save_snapshot(evidence, repo)
-    _print_result(
-        "Scan complete",
-        [f"Evidence written to {evidence_path}", f"Snapshot saved to {snapshot_path}"],
-    )
+    result_lines = [f"Evidence written to {evidence_path}", f"Snapshot saved to {snapshot_path}"]
+    if evidence.get("security", {}).get("secrets", {}).get("history_scan_timed_out"):
+        result_lines.append(
+            "[yellow]Warning: secrets history scan timed out - findings reflect a partial scan[/yellow]"
+        )
+    _print_result("Scan complete", result_lines)
     # Fire-and-forget, off the main thread: report_scan_event already has
     # its own short timeout and swallows every exception, but a background
     # thread means even a slow/hanging network path can never add latency

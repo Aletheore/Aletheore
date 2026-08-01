@@ -2,6 +2,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 from pathlib import Path
 
 from aletheore.scanner.detect import IGNORED_DIRS
@@ -140,8 +141,15 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
     return {"scanned_files": scanned_files, "findings": findings}
 
 
+DEFAULT_SECRETS_HISTORY_TIMEOUT_SECONDS = 300.0
+
+
 def find_secrets_in_history(
-    repo_path: Path, baseline: list[dict] | None = None, *, max_commits: int | None = None
+    repo_path: Path,
+    baseline: list[dict] | None = None,
+    *,
+    max_commits: int | None = None,
+    timeout_seconds: float | None = DEFAULT_SECRETS_HISTORY_TIMEOUT_SECONDS,
 ) -> dict:
     # `git log -p` generates a full unified diff for every commit in range -
     # for a repo at torvalds/linux's scale (1.46M commits) that's over 2GB
@@ -151,6 +159,17 @@ def find_secrets_in_history(
     # spend 50 minutes walking a repo's entire history on every run
     # regardless - max_commits bounds it to the most recent N commits,
     # same pattern as git_intel's depth_cap.
+    #
+    # max_commits is an explicit, known-cost bound. timeout_seconds guards
+    # the other failure mode: git blocked on a slow read (e.g. blob reads
+    # stalling on a network-backed filesystem) rather than genuinely
+    # working through a large history - reproduced directly (a `git log -p`
+    # that measured ~2s/1000 commits elsewhere took 7+ minutes at ~0% CPU
+    # on a stalled checkout). Without a timeout that hangs this call, and
+    # the CLI, forever with no feedback. A `threading.Timer` watchdog kills
+    # the process on expiry; the read loop below then hits EOF naturally
+    # and returns whatever was gathered before the stall, flagged as
+    # incomplete rather than presented as a full scan.
     accepted_keys = _baseline_keys(baseline)
     args = ["git", "log", "-p", "--format=COMMIT_START\x1f%H\x1f%ad", "--date=iso-strict"]
     if max_commits is not None:
@@ -164,49 +183,71 @@ def find_secrets_in_history(
         errors="ignore",
     )
 
+    timed_out = threading.Event()
+    watchdog: threading.Timer | None = None
+    if timeout_seconds is not None:
+        def _kill_on_timeout() -> None:
+            timed_out.set()
+            process.kill()
+
+        watchdog = threading.Timer(timeout_seconds, _kill_on_timeout)
+        watchdog.daemon = True
+        watchdog.start()
+
     findings: list[dict] = []
     scanned_commits: set[str] = set()
     current_commit: str | None = None
     current_commit_date: str | None = None
     current_file: str | None = None
 
-    assert process.stdout is not None
-    for raw_line in process.stdout:
-        line = raw_line.rstrip("\n")
-        if line.startswith("COMMIT_START\x1f"):
-            parts = line.split("\x1f")
-            current_commit = parts[1] if len(parts) > 1 else None
-            current_commit_date = parts[2] if len(parts) > 2 else None
-            if current_commit:
-                scanned_commits.add(current_commit)
-            continue
-        if line.startswith("+++ b/"):
-            current_file = line[len("+++ b/"):]
-            continue
-        if line.startswith("+++"):
-            continue
-        if not line.startswith("+"):
-            continue
+    try:
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.rstrip("\n")
+            if line.startswith("COMMIT_START\x1f"):
+                parts = line.split("\x1f")
+                current_commit = parts[1] if len(parts) > 1 else None
+                current_commit_date = parts[2] if len(parts) > 2 else None
+                if current_commit:
+                    scanned_commits.add(current_commit)
+                continue
+            if line.startswith("+++ b/"):
+                current_file = line[len("+++ b/"):]
+                continue
+            if line.startswith("+++"):
+                continue
+            if not line.startswith("+"):
+                continue
 
-        content = line[1:]
-        for pattern_name, pattern, value_group in SECRET_PATTERNS:
-            match = pattern.search(content)
-            if match:
-                match_preview = _redact(match.group(value_group))
-                findings.append(
-                    {
-                        "commit": current_commit,
-                        "commit_date": current_commit_date,
-                        "path": current_file,
-                        "pattern": pattern_name,
-                        "match_preview": match_preview,
-                        "likely_placeholder": _is_likely_placeholder(current_file or ""),
-                        "accepted": (current_file, pattern_name, match_preview) in accepted_keys,
-                    }
-                )
+            content = line[1:]
+            for pattern_name, pattern, value_group in SECRET_PATTERNS:
+                match = pattern.search(content)
+                if match:
+                    match_preview = _redact(match.group(value_group))
+                    findings.append(
+                        {
+                            "commit": current_commit,
+                            "commit_date": current_commit_date,
+                            "path": current_file,
+                            "pattern": pattern_name,
+                            "match_preview": match_preview,
+                            "likely_placeholder": _is_likely_placeholder(current_file or ""),
+                            "accepted": (current_file, pattern_name, match_preview) in accepted_keys,
+                        }
+                    )
+    finally:
+        if watchdog is not None:
+            watchdog.cancel()
 
     process.stdout.close()
     process.wait()
+
+    if timed_out.is_set():
+        return {
+            "history_scanned_commits": len(scanned_commits),
+            "history_findings": findings,
+            "history_scan_timed_out": True,
+        }
 
     if process.returncode != 0:
         return {"history_scanned_commits": 0, "history_findings": []}

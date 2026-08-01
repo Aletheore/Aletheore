@@ -22,7 +22,12 @@ from aletheore.scanner.detect import (
     detect_policy_docs,
 )
 from aletheore.scanner.graph import build_module_graph
-from aletheore.secrets import find_secrets, find_secrets_in_history, load_secrets_baseline
+from aletheore.secrets import (
+    DEFAULT_SECRETS_HISTORY_TIMEOUT_SECONDS,
+    find_secrets,
+    find_secrets_in_history,
+    load_secrets_baseline,
+)
 from aletheore.toon_encoding import to_toon
 from aletheore.vulnerabilities import check_vulnerabilities as check_dependency_vulnerabilities
 
@@ -58,6 +63,26 @@ def _git_history_depth_cap() -> int | None:
 # gets its own, independently tunable cap rather than reusing the graph
 # engine's value.
 _SECRETS_HISTORY_DEPTH_CAP_ENV = "ALETHEORE_SECRETS_HISTORY_DEPTH_CAP"
+
+# Independent of the depth cap above: this is a wall-clock safety valve for
+# when git itself stalls mid-read (e.g. blob reads blocking on a slow or
+# network-backed filesystem) rather than a way to bound expected cost -
+# reproduced directly (see secrets.py's find_secrets_in_history) as a scan
+# that hung for 7+ minutes at ~0% CPU with no user-visible feedback. Always
+# on, even for an uncapped local scan, since "no timeout at all" turns a
+# slow environment into an indefinite hang rather than a slow-but-bounded
+# wait.
+_SECRETS_HISTORY_TIMEOUT_SECONDS_ENV = "ALETHEORE_SECRETS_HISTORY_TIMEOUT_SECONDS"
+
+
+def _secrets_history_timeout_seconds() -> float:
+    raw = os.environ.get(_SECRETS_HISTORY_TIMEOUT_SECONDS_ENV)
+    if not raw:
+        return DEFAULT_SECRETS_HISTORY_TIMEOUT_SECONDS
+    try:
+        return float(raw)
+    except ValueError:
+        return DEFAULT_SECRETS_HISTORY_TIMEOUT_SECONDS
 
 # Unset by default - true incremental scanning needs a persistent, kept-up-
 # to-date local checkout to diff against (a fresh clone has no "last time"
@@ -234,8 +259,16 @@ def scan_repository(
     if scan_git_history:
         report("Scanning git history for secrets (can be slow on large histories)")
         history_data = find_secrets_in_history(
-            repo_path, baseline=secrets_baseline, max_commits=_secrets_history_depth_cap()
+            repo_path,
+            baseline=secrets_baseline,
+            max_commits=_secrets_history_depth_cap(),
+            timeout_seconds=_secrets_history_timeout_seconds(),
         )
+        if history_data.get("history_scan_timed_out"):
+            report(
+                "Secrets history scan timed out before finishing - findings above "
+                "reflect only the commits reached before the timeout"
+            )
     else:
         history_data = {"history_scanned_commits": 0, "history_findings": []}
     secrets_data = {**secrets_data, **history_data}
