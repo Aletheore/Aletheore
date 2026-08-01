@@ -36,8 +36,11 @@ BINARY_EXTENSIONS = {
 PLACEHOLDER_PATH_MARKERS = ("example", "test", "fixture", "mock")
 
 # Substrings that show up in hand-written placeholder values themselves
-# (AWS's own docs use AKIAIOSFODNN7EXAMPLE, for instance), independent of
-# where the file lives.
+# (AWS's own documentation uses a well-known placeholder access key ending
+# in "EXAMPLE", for instance), independent of where the file lives. Not
+# spelled out literally here - this file's own aws_access_key_id pattern
+# below would match it, and this path doesn't carry a PLACEHOLDER_PATH_MARKERS
+# term, so it wouldn't get the placeholder benefit of the doubt.
 PLACEHOLDER_VALUE_MARKERS = ("example", "xxxx", "changeme", "dummy", "placeholder", "sample", "fake", "yourkey")
 
 # Below this, Shannon entropy indicates a short or narrow-alphabet value
