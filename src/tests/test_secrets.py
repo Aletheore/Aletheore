@@ -45,6 +45,36 @@ def test_find_secrets_flags_test_fixture_paths_as_likely_placeholder(tmp_path):
     assert result["findings"][0]["likely_placeholder"] is True
 
 
+def test_find_secrets_does_not_downgrade_a_real_looking_secret_under_a_test_path(tmp_path):
+    # A path substring used to be sufficient on its own - a genuine, random
+    # high-entropy key committed under tests/fixtures/ (a plausible place to
+    # accidentally leak a real one) was silently marked likely_placeholder
+    # regardless of what the value actually looked like.
+    repo = tmp_path / "repo"
+    (repo / "tests" / "fixtures").mkdir(parents=True)
+    (repo / "tests" / "fixtures" / "sample.py").write_text(
+        'AWS_KEY = "AKIAQZRJTMXPLDVWKNBS"\n'
+    )
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["likely_placeholder"] is False
+
+
+def test_find_secrets_flags_a_documented_example_value_under_a_test_path(tmp_path):
+    # AWS's own docs use AKIAIOSFODNN7EXAMPLE - a value-shape marker should
+    # still catch this even though it isn't a low-entropy repeated string.
+    repo = tmp_path / "repo"
+    (repo / "tests" / "fixtures").mkdir(parents=True)
+    (repo / "tests" / "fixtures" / "sample.py").write_text(
+        'AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n'
+    )
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["likely_placeholder"] is True
+
+
 def test_find_secrets_detects_github_token_and_private_key_header(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

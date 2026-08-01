@@ -713,7 +713,11 @@ async def test_aletheore_scan_writes_a_history_snapshot(tmp_path):
 async def test_aletheore_scan_real_findings_excludes_placeholders(tmp_path):
     repo = make_git_repo_with_source(tmp_path)
     (repo / "tests").mkdir()
-    (repo / "tests" / "fixture.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+    # AWS's own docs use this exact value as their example key - a value
+    # that actually looks like a placeholder, not just a path that does
+    # (a random-looking key under tests/ is a real finding, see
+    # test_find_secrets_does_not_downgrade_a_real_looking_secret_under_a_test_path).
+    (repo / "tests" / "fixture.py").write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n')
     server = build_server(repo)
 
     result = await server.call_tool("aletheore_scan", {})

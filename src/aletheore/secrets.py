@@ -1,8 +1,10 @@
 import json
+import math
 import os
 import re
 import subprocess
 import threading
+from collections import Counter
 from pathlib import Path
 
 from aletheore.scanner.detect import IGNORED_DIRS
@@ -32,6 +34,17 @@ BINARY_EXTENSIONS = {
 }
 
 PLACEHOLDER_PATH_MARKERS = ("example", "test", "fixture", "mock")
+
+# Substrings that show up in hand-written placeholder values themselves
+# (AWS's own docs use AKIAIOSFODNN7EXAMPLE, for instance), independent of
+# where the file lives.
+PLACEHOLDER_VALUE_MARKERS = ("example", "xxxx", "changeme", "dummy", "placeholder", "sample", "fake", "yourkey")
+
+# Below this, Shannon entropy indicates a short or narrow-alphabet value
+# (repeated/sequential characters, e.g. "aaaaaaaa" or "12345678") rather
+# than the effectively-random output of a real credential generator - real
+# secrets measured well above this bar.
+_LOW_ENTROPY_THRESHOLD = 3.0
 
 # Each entry's third element is the regex group index holding the actual secret value to
 # redact. Most patterns match the credential directly, so group 0 (the whole match) IS the
@@ -73,9 +86,32 @@ def iter_all_files(repo_path: Path):
             yield path
 
 
-def _is_likely_placeholder(rel_path: str) -> bool:
-    lower = rel_path.lower()
-    return any(marker in lower for marker in PLACEHOLDER_PATH_MARKERS)
+def _shannon_entropy(value: str) -> float:
+    if not value:
+        return 0.0
+    counts = Counter(value)
+    length = len(value)
+    return -sum((count / length) * math.log2(count / length) for count in counts.values())
+
+
+def _value_looks_like_a_placeholder(value: str) -> bool:
+    lower = value.lower()
+    if any(marker in lower for marker in PLACEHOLDER_VALUE_MARKERS):
+        return True
+    return _shannon_entropy(value) < _LOW_ENTROPY_THRESHOLD
+
+
+def _is_likely_placeholder(rel_path: str, value: str) -> bool:
+    # Path alone used to be sufficient - a real secret living at a path
+    # containing "test"/"fixture"/"mock"/"example" (a plausible place to
+    # accidentally commit one) was silently downgraded regardless of
+    # whether the value itself looked remotely like a placeholder. Now the
+    # path only qualifies a finding for a second, value-shape check rather
+    # than deciding it outright.
+    path_suggests_placeholder = any(marker in rel_path.lower() for marker in PLACEHOLDER_PATH_MARKERS)
+    if not path_suggests_placeholder:
+        return False
+    return _value_looks_like_a_placeholder(value)
 
 
 def _redact(value: str) -> str:
@@ -126,14 +162,15 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
             for pattern_name, pattern, value_group in SECRET_PATTERNS:
                 match = pattern.search(line)
                 if match:
-                    match_preview = _redact(match.group(value_group))
+                    value = match.group(value_group)
+                    match_preview = _redact(value)
                     findings.append(
                         {
                             "path": rel_path,
                             "line": line_no,
                             "pattern": pattern_name,
                             "match_preview": match_preview,
-                            "likely_placeholder": _is_likely_placeholder(rel_path),
+                            "likely_placeholder": _is_likely_placeholder(rel_path, value),
                             "accepted": (rel_path, pattern_name, match_preview) in accepted_keys,
                         }
                     )
@@ -223,7 +260,8 @@ def find_secrets_in_history(
             for pattern_name, pattern, value_group in SECRET_PATTERNS:
                 match = pattern.search(content)
                 if match:
-                    match_preview = _redact(match.group(value_group))
+                    value = match.group(value_group)
+                    match_preview = _redact(value)
                     findings.append(
                         {
                             "commit": current_commit,
@@ -231,7 +269,7 @@ def find_secrets_in_history(
                             "path": current_file,
                             "pattern": pattern_name,
                             "match_preview": match_preview,
-                            "likely_placeholder": _is_likely_placeholder(current_file or ""),
+                            "likely_placeholder": _is_likely_placeholder(current_file or "", value),
                             "accepted": (current_file, pattern_name, match_preview) in accepted_keys,
                         }
                     )
