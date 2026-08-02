@@ -4,15 +4,15 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir "redis>=5.0.0" "rq>=1.16.0"
 
-# Docker CLI only (talks to the host daemon via the mounted socket at
-# runtime) - no daemon, no docker-in-docker. This is the one service in
-# the whole stack with that socket mounted, so it deliberately carries
-# nothing else: no DB credentials, no GitHub App key, no LLM keys, and
-# none of the heavier scan_worker dependency tree (tree-sitter, lancedb,
-# model SDKs) that the trusted customer-scan path needs but this doesn't.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends docker-cli \
-    && rm -rf /var/lib/apt/lists/*
+# No Docker CLI, no socket mount - the actual `docker run` invocation
+# happens in the separate demo-sandbox-runner service (see
+# Dockerfile.demo-sandbox-runner), reached over the internal compose
+# network. This worker never touches the host Docker socket, so a bug in
+# its public-facing code path can never translate into Docker API access.
+# Still deliberately carries nothing else: no DB credentials, no GitHub
+# App key, no LLM keys, and none of the heavier scan_worker dependency
+# tree (tree-sitter, lancedb, model SDKs) that the trusted customer-scan
+# path needs but this doesn't.
 
 COPY github-app/app_server/__init__.py app_server/__init__.py
 COPY github-app/app_server/logging_config.py app_server/logging_config.py
@@ -20,7 +20,9 @@ COPY github-app/scan_worker/__init__.py scan_worker/__init__.py
 COPY github-app/scan_worker/demo_scan.py scan_worker/demo_scan.py
 COPY github-app/scan_worker/demo_scan_worker.py scan_worker/demo_scan_worker.py
 
-# Runs as root deliberately - needs group access to the mounted
-# /var/run/docker.sock, whose group ownership is host-specific and not
-# knowable at image-build time.
+# No longer needs root - that was only ever for the (now removed) docker
+# socket's host-specific group ownership.
+RUN groupadd --system worker && useradd --system --gid worker worker
+USER worker
+
 CMD ["python", "-m", "scan_worker.demo_scan_worker"]

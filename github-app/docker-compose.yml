@@ -74,17 +74,41 @@ services:
     env_file:
       - path: .env
         required: false
-    # The only service with the host's Docker socket - deliberately gets
-    # no DB credentials, no GitHub App key, no LLM keys (see
-    # Dockerfile.demo-scan-worker). Only consumes the demo_scan queue,
-    # completely separate from paying customers' real scan/audit jobs.
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DEMO_SANDBOX_RUNNER_URL=http://demo-sandbox-runner:8090
+    # No Docker socket here - see Dockerfile.demo-scan-worker and
+    # scan_worker/demo_scan.py. Deliberately gets no DB credentials, no
+    # GitHub App key, no LLM keys either. Only consumes the demo_scan
+    # queue, completely separate from paying customers' real scan/audit
+    # jobs.
     depends_on:
       redis:
         condition: service_started
+      demo-sandbox-runner:
+        condition: service_started
     cpus: "1.0"
     mem_limit: 512m
+
+  demo-sandbox-runner:
+    build:
+      context: ..
+      dockerfile: github-app/Dockerfile.demo-sandbox-runner
+    restart: unless-stopped
+    # The only service with the host's Docker socket. Exposes exactly one
+    # internal-only operation (see scan_worker/demo_sandbox_runner.py) -
+    # "run this repo_url through the fixed sandbox command" - built
+    # entirely server-side from a validated repo_url, not a proxied
+    # Docker API. A tecnativa/docker-socket-proxy-style method/path
+    # allowlist was tested directly against this same daemon and does
+    # NOT close this: with only CONTAINERS+POST enabled, `docker run -v
+    # /:/hostfs alpine ls /hostfs` still succeeded, since POST=1
+    # (required for `docker run` to work at all) already allows an
+    # arbitrary bind mount in the request body. No host port published -
+    # only reachable from other containers on this compose network.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    cpus: "1.0"
+    mem_limit: 256m
 
   postgres:
     image: postgres:16
