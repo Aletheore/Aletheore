@@ -177,6 +177,75 @@ def test_build_unchanged_scan_cache_returns_none_without_a_previous_sync(tmp_pat
     assert result is None
 
 
+def test_url_without_credentials_strips_embedded_token():
+    from scan_worker.jobs import _url_without_credentials
+
+    assert (
+        _url_without_credentials("https://x-access-token:sometoken@github.com/org/repo.git")
+        == "https://github.com/org/repo.git"
+    )
+
+
+def test_url_without_credentials_leaves_a_plain_local_path_unchanged():
+    from scan_worker.jobs import _url_without_credentials
+
+    assert _url_without_credentials("/tmp/some/bare-repo") == "/tmp/some/bare-repo"
+
+
+def test_ensure_persistent_checkout_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
+    # This checkout directory is a mounted, reused-across-scans volume in
+    # production (see _persistent_checkout_dir) - unlike the ephemeral
+    # per-job clones that get deleted within minutes, a token embedded in
+    # its .git/config would sit at rest on disk for as long as the
+    # checkout exists. _ensure_persistent_checkout must reset the remote
+    # back to a credential-free URL before returning, on both the
+    # fresh-clone and reused-checkout paths.
+    from scan_worker.jobs import _ensure_persistent_checkout
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            dest = args[-1]
+            os.makedirs(os.path.join(dest, ".git"), exist_ok=True)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    checkout_dir = tmp_path / "fresh"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    _ensure_persistent_checkout(credentialed_url, "somesha", checkout_dir)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls, "expected at least one 'git remote set-url' call"
+    # The LAST set-url call is what .git/config is left holding when this
+    # function returns - it must never be the credentialed URL.
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+    assert "livetoken" not in set_url_calls[-1][-1]
+
+
+def test_ensure_persistent_checkout_strips_credentials_on_reuse_path_too(tmp_path, monkeypatch):
+    from scan_worker.jobs import _ensure_persistent_checkout
+
+    checkout_dir = tmp_path / "existing"
+    (checkout_dir / ".git").mkdir(parents=True)
+
+    calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.subprocess.run",
+        lambda args, cwd=None, check=None: calls.append(args) or subprocess.CompletedProcess(args, 0),
+    )
+
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    _ensure_persistent_checkout(credentialed_url, "somesha", checkout_dir)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert len(set_url_calls) == 2  # once with the live token to fetch, once to strip it
+    assert set_url_calls[0][-1] == credentialed_url
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+
+
 def test_run_pr_scan_job_uses_persistent_checkout_and_unchanged_cache_for_head(
     bare_repo_with_two_commits, monkeypatch
 ):

@@ -1,0 +1,24 @@
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+
+WORKDIR /app
+
+# Docker CLI only (talks to the host daemon via the mounted socket at
+# runtime) - no daemon, no docker-in-docker, no redis/rq (this is a
+# stateless HTTP executor, not a queue consumer). This is the one service
+# in the whole stack with the socket mounted, so it deliberately carries
+# nothing else: no DB credentials, no GitHub App key, no LLM keys, and
+# none of the heavier scan_worker dependency tree (tree-sitter, lancedb,
+# model SDKs) that the trusted customer-scan path needs but this doesn't.
+# stdlib http.server covers the one internal endpoint this exposes, so
+# there is no web framework dependency to install either.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends docker-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY github-app/scan_worker/__init__.py scan_worker/__init__.py
+COPY github-app/scan_worker/demo_sandbox_runner.py scan_worker/demo_sandbox_runner.py
+
+# Runs as root deliberately - needs group access to the mounted
+# /var/run/docker.sock, whose group ownership is host-specific and not
+# knowable at image-build time.
+CMD ["python", "-m", "scan_worker.demo_sandbox_runner"]

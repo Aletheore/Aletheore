@@ -1,33 +1,56 @@
 """RQ job for the public, unauthenticated "paste a repo" website demo.
 
 Runs on the dedicated `demo_scan` queue, consumed only by the
-demo-scan-worker compose service - the one component with access to the
-host's Docker socket, deliberately kept separate from the trusted
+demo-scan-worker compose service, kept separate from the trusted
 scan_worker.jobs path, which only ever touches repos from installed
 GitHub Apps. Every run is a single ephemeral gVisor-sandboxed container:
 the clone and the deterministic scan happen entirely inside it, and only
 a curated, public-safe summary of the results ever leaves - never the
 cloned source, never raw secret matches, never the full evidence.
+
+The actual `docker run` invocation happens in a separate process this
+one talks to over HTTP (see scan_worker.demo_sandbox_runner) - this
+worker itself never touches the host Docker socket, so a bug in the
+public-facing code path here can never translate into Docker API access.
 """
 
 import json
 import logging
-import subprocess
-import uuid
+import os
+import urllib.error
+import urllib.request
 
 logger = logging.getLogger(__name__)
 
-DEMO_SANDBOX_IMAGE = "aletheore-demo-sandbox:latest"
-CONTAINER_TIMEOUT_SECONDS = 90
 MAX_LISTED_ITEMS = 5
 
-# Mirrors aletheore.git_intel.analyzer.GIT_ANALYSIS_RESOURCE_EXIT_CODE.
-# Inlined rather than imported: this container deliberately excludes the
-# aletheore package and its dependency tree (see Dockerfile.demo-scan-worker)
-# - importing it here would crash this worker on startup with no aletheore
-# installed. The scan runs inside aletheore-demo-sandbox, which does have the
-# real package; only its exit code crosses the container boundary.
-GIT_ANALYSIS_RESOURCE_EXIT_CODE = 2
+DEMO_SANDBOX_RUNNER_URL = os.environ.get("DEMO_SANDBOX_RUNNER_URL", "http://demo-sandbox-runner:8090")
+# A little past the runner's own 90s container timeout, so a slow
+# container is what times this out, not this request racing it.
+REQUEST_TIMEOUT_SECONDS = 100
+
+_MEMORY_LIMITED_MESSAGE = (
+    "this repo needs more memory to scan than the live demo allows - install the "
+    "free CLI (`pip install aletheore`) and run `aletheore scan` locally, or "
+    "connect via MCP, with no size limit"
+)
+_GENERIC_FAILURE_MESSAGE = "scan failed - the repo may be invalid, private, or unparseable"
+
+# Maps scan_worker.demo_sandbox_runner.SandboxRunError's stable `reason`
+# codes to this module's own DemoScanError messages, so callers see
+# exactly the same user-facing text regardless of which process actually
+# ran the container.
+_REASON_MESSAGES = {
+    "timeout": "scan timed out",
+    # Confirmed directly: a full scan of the Linux kernel got OOM-killed
+    # under the runner's 1GB container limit. The demo's own 400MB
+    # repo-size cap makes this rare, but a pathologically dense repo
+    # could still hit it - when it does, say so plainly.
+    "memory_limited": _MEMORY_LIMITED_MESSAGE,
+    "nonzero_exit": _GENERIC_FAILURE_MESSAGE,
+    "non_json_output": "scan failed",
+    "invalid_repo_url": _GENERIC_FAILURE_MESSAGE,
+}
 
 
 class DemoScanError(RuntimeError):
@@ -35,65 +58,26 @@ class DemoScanError(RuntimeError):
 
 
 def _run_sandboxed_scan(repo_url: str) -> dict:
-    container_name = f"demo-scan-{uuid.uuid4().hex}"
-    cmd = [
-        "docker",
-        "run",
-        "--name",
-        container_name,
-        "--rm",
-        "--runtime=runsc",
-        "--cpus=1",
-        "--memory=1g",
-        "--pids-limit=256",
-        "--cap-drop=ALL",
-        "--security-opt=no-new-privileges",
-        DEMO_SANDBOX_IMAGE,
-        repo_url,
-    ]
+    request = urllib.request.Request(
+        f"{DEMO_SANDBOX_RUNNER_URL}/run",
+        data=json.dumps({"repo_url": repo_url}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=CONTAINER_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as exc:
-        # Killing the `docker run` CLI process (what subprocess's own
-        # timeout does) does not guarantee the container it started stops -
-        # the container is managed by the daemon, not the CLI. Force it
-        # explicitly so a slow/stuck clone can never linger past the
-        # timeout using resources or holding the untrusted repo on disk.
-        subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
-        raise DemoScanError("scan timed out") from exc
-
-    if result.returncode == GIT_ANALYSIS_RESOURCE_EXIT_CODE:
-        # Confirmed directly: a full scan of the Linux kernel got OOM-killed
-        # under this same 1GB container limit. The demo's own 400MB repo-size
-        # cap makes this rare (400MB needs a small fraction of the memory
-        # Linux's 8.2GB needed), but a pathologically dense repo could still
-        # hit it - when it does, say so plainly instead of a generic failure.
-        logger.info("demo scan hit the memory limit for %s", repo_url)
-        raise DemoScanError(
-            "this repo needs more memory to scan than the live demo allows - install the "
-            "free CLI (`pip install aletheore`) and run `aletheore scan` locally, or "
-            "connect via MCP, with no size limit"
-        )
-
-    if result.returncode != 0:
-        logger.warning(
-            "demo scan container exited %s for %s: %s",
-            result.returncode,
-            repo_url,
-            result.stderr[-2000:],
-        )
-        raise DemoScanError("scan failed - the repo may be invalid, private, or unparseable")
-
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        logger.warning("demo scan produced non-JSON stdout for %s", repo_url)
-        raise DemoScanError("scan failed") from exc
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        try:
+            reason = json.loads(exc.read() or b"{}").get("error", "")
+        except json.JSONDecodeError:
+            reason = ""
+        raise DemoScanError(_REASON_MESSAGES.get(reason, _GENERIC_FAILURE_MESSAGE)) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        # The runner process/network hop itself failed - distinct from
+        # any of the repo-shaped failures above, which all come back as a
+        # clean HTTP response from a runner that's up and running fine.
+        raise DemoScanError("demo scan is temporarily unavailable - please try again shortly") from exc
 
 
 def _summarize_for_public_display(evidence: dict) -> dict:

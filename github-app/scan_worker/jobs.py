@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from rq import get_current_job
@@ -166,6 +167,11 @@ def _clone_url(repo_full_name: str, token: str) -> str:
     return f"https://x-access-token:{token}@github.com/{repo_full_name}.git"
 
 
+def _url_without_credentials(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit(parts._replace(netloc=parts.hostname))
+
+
 def _clone_ref(url: str, ref: str, dest: Path) -> None:
     subprocess.run(["git", "clone", "-q", "--no-checkout", url, str(dest)], check=True)
     subprocess.run(["git", "checkout", "-q", ref], cwd=dest, check=True)
@@ -205,16 +211,40 @@ def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path)
     (see _clone_url - `url` always carries a fresh one) doesn't leave
     this checkout stuck fetching against a stale URL baked in at clone
     time.
+
+    That same `git remote set-url`/`git clone` call, though, is what
+    writes the token into checkout_dir/.git/config - and unlike the
+    ephemeral clones this function is an alternative to (deleted with
+    the whole job_dir within minutes), this checkout lives on a mounted,
+    reused-across-scans volume. Left as-is, a still-live installation
+    token would sit at rest on disk for as long as this checkout exists,
+    not just for the few seconds the fetch/clone needs it. Reset back to
+    a credential-less URL immediately after: this checkout's next reuse
+    calls `git remote set-url` again with a fresh token before it fetches.
     """
+    credential_free_url = _url_without_credentials(url)
     if (checkout_dir / ".git").exists():
         subprocess.run(["git", "remote", "set-url", "origin", url], cwd=checkout_dir, check=True)
-        subprocess.run(["git", "fetch", "-q", "origin"], cwd=checkout_dir, check=True)
-        subprocess.run(["git", "checkout", "-q", "-f", checkout_sha], cwd=checkout_dir, check=True)
-        subprocess.run(["git", "clean", "-q", "-fdx"], cwd=checkout_dir, check=True)
+        try:
+            subprocess.run(["git", "fetch", "-q", "origin"], cwd=checkout_dir, check=True)
+            subprocess.run(["git", "checkout", "-q", "-f", checkout_sha], cwd=checkout_dir, check=True)
+            subprocess.run(["git", "clean", "-q", "-fdx"], cwd=checkout_dir, check=True)
+        finally:
+            subprocess.run(
+                ["git", "remote", "set-url", "origin", credential_free_url], cwd=checkout_dir, check=True
+            )
     else:
         checkout_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "clone", "-q", "--no-checkout", url, str(checkout_dir)], check=True)
-        subprocess.run(["git", "checkout", "-q", checkout_sha], cwd=checkout_dir, check=True)
+        try:
+            subprocess.run(["git", "clone", "-q", "--no-checkout", url, str(checkout_dir)], check=True)
+            subprocess.run(["git", "checkout", "-q", checkout_sha], cwd=checkout_dir, check=True)
+        finally:
+            if (checkout_dir / ".git").exists():
+                subprocess.run(
+                    ["git", "remote", "set-url", "origin", credential_free_url],
+                    cwd=checkout_dir,
+                    check=True,
+                )
 
 
 def _prepare_head_checkout(
