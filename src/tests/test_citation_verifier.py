@@ -7,6 +7,7 @@ from aletheore.citation_verifier import (
     local_line_count_fetcher,
     verify_citations,
 )
+from aletheore.evidence import EVIDENCE_VERSION
 
 
 def make_evidence() -> dict:
@@ -195,7 +196,10 @@ def _repo_with_evidence(tmp_path, files: dict[str, str]):
     (repo_path / ".aletheore").mkdir(parents=True)
     for name, content in files.items():
         (repo_path / name).write_text(content)
-    evidence = {"repository": {"modules": [{"path": p} for p in files]}}
+    evidence = {
+        "aletheore_version": EVIDENCE_VERSION,
+        "repository": {"modules": [{"path": p} for p in files]},
+    }
     (repo_path / ".aletheore" / "air.json").write_text(json.dumps(evidence))
     return repo_path
 
@@ -215,6 +219,18 @@ def test_load_verifiable_evidence_rejects_evidence_with_no_file_inventory(tmp_pa
     repo_path = tmp_path / "repo"
     (repo_path / ".aletheore").mkdir(parents=True)
     (repo_path / ".aletheore" / "air.json").write_text(json.dumps({"managed_evidence": True}))
+
+    assert load_verifiable_evidence(repo_path) is None
+
+
+def test_load_verifiable_evidence_rejects_an_incompatible_schema_version(tmp_path):
+    repo_path = tmp_path / "repo"
+    (repo_path / ".aletheore").mkdir(parents=True)
+    evidence = {
+        "aletheore_version": "9.9.9",
+        "repository": {"modules": [{"path": "app.py"}]},
+    }
+    (repo_path / ".aletheore" / "air.json").write_text(json.dumps(evidence))
 
     assert load_verifiable_evidence(repo_path) is None
 
