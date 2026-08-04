@@ -21,6 +21,7 @@ from aletheore.cli import (
     app,
 )
 from aletheore.device_auth import DeviceFlowError
+from aletheore.evidence import EVIDENCE_VERSION
 from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
 from aletheore.report import (
     AmbiguousAdapterError,
@@ -623,7 +624,7 @@ def test_verify_reports_verified_citations_and_exits_zero(tmp_path):
     repo = tmp_path
     (repo / "app.py").write_text("one\ntwo\nthree\n")
     (repo / ".aletheore").mkdir()
-    evidence = {"repository": {"modules": [{"path": "app.py"}]}}
+    evidence = {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": [{"path": "app.py"}]}}
     (repo / ".aletheore" / "air.json").write_text(json.dumps(evidence))
     report = repo / "report.md"
     report.write_text("The bug is at `app.py:2`.")
@@ -639,7 +640,7 @@ def test_verify_exits_nonzero_and_lists_unverified_citations(tmp_path):
     repo = tmp_path
     (repo / "app.py").write_text("one\n")
     (repo / ".aletheore").mkdir()
-    evidence = {"repository": {"modules": [{"path": "app.py"}]}}
+    evidence = {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": [{"path": "app.py"}]}}
     (repo / ".aletheore" / "air.json").write_text(json.dumps(evidence))
     report = repo / "report.md"
     report.write_text("See `ghost.py:1` for details.")
@@ -849,6 +850,18 @@ def test_index_command_fails_clearly_without_prior_scan(tmp_path):
     assert "scan" in result.output.lower()
 
 
+def test_index_command_rejects_evidence_from_an_incompatible_schema_version(tmp_path):
+    repo = tmp_path
+    (repo / ".aletheore").mkdir()
+    evidence = {"aletheore_version": "9.9.9", "repository": {"modules": []}}
+    (repo / ".aletheore" / "air.json").write_text(json.dumps(evidence))
+
+    result = runner.invoke(app, ["index", str(repo)])
+
+    assert result.exit_code == 1
+    assert "re-run" in result.output.lower() or "re-scan" in result.output.lower()
+
+
 def test_query_search_codebase_prints_toon_results(tmp_path):
     with patch(
         "aletheore.search_index.search_index",
@@ -982,6 +995,20 @@ def test_main_healthcheck_without_evidence_errors_clearly(tmp_path):
 
     assert result.exit_code == 1
     assert "aletheore scan" in result.output
+
+
+def test_main_healthcheck_rejects_evidence_from_an_incompatible_schema_version(tmp_path):
+    repo = tmp_path
+    (repo / ".aletheore").mkdir()
+    evidence = {"aletheore_version": "9.9.9", "repository": {}}
+    (repo / ".aletheore" / "air.json").write_text(json.dumps(evidence))
+
+    result = runner.invoke(
+        app, ["healthcheck", str(repo), "--base-url", "http://localhost:5000"]
+    )
+
+    assert result.exit_code == 1
+    assert "re-run" in result.output.lower()
 
 
 def test_login_saves_token_when_installation_auto_resolved(tmp_path, monkeypatch):
@@ -1272,6 +1299,18 @@ def test_main_query_without_evidence_errors_clearly(tmp_path):
     assert "aletheore scan" in result.output
 
 
+def test_main_query_rejects_evidence_from_an_incompatible_schema_version(tmp_path):
+    repo = tmp_path
+    (repo / ".aletheore").mkdir()
+    evidence = {"aletheore_version": "9.9.9", "repository": {"modules": []}}
+    (repo / ".aletheore" / "air.json").write_text(json.dumps(evidence))
+
+    result = runner.invoke(app, ["query", "ownership", "--path", str(repo)])
+
+    assert result.exit_code == 1
+    assert "re-run" in result.output.lower()
+
+
 def test_main_query_unknown_module_errors_clearly(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
@@ -1299,6 +1338,7 @@ def make_evidence_file(
     layer_violations: list[dict] | None = None,
 ) -> Path:
     evidence = {
+        "aletheore_version": EVIDENCE_VERSION,
         "repository": {"modules": [], "dependency_graph": {"nodes": [], "edges": []}},
         "git": {"total_commits": 0},
         "security": {
@@ -1383,6 +1423,17 @@ def test_main_diff_rejects_unknown_format(tmp_path):
 
     assert result.exit_code == 1
     assert "unknown --format" in result.output
+
+
+def test_main_diff_rejects_an_evidence_file_from_an_incompatible_schema_version(tmp_path):
+    old_path = tmp_path / "old.json"
+    old_path.write_text(json.dumps({"aletheore_version": "9.9.9", "repository": {}}))
+    new_path = make_evidence_file(tmp_path / "new.json")
+
+    result = runner.invoke(app, ["diff", str(old_path), str(new_path)])
+
+    assert result.exit_code == 1
+    assert "re-run" in result.output.lower()
 
 
 def test_main_diff_full_flag_returns_raw_diff(tmp_path):
@@ -1621,6 +1672,24 @@ def test_main_query_changes_reports_corrupt_snapshot(tmp_path):
 
     assert result.exit_code == 1
     assert "unreadable" in result.output
+
+
+def test_main_query_changes_rejects_a_snapshot_from_an_incompatible_schema_version(tmp_path):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    runner.invoke(app, ["scan", str(repo), "--no-check-vulnerabilities"])
+    runner.invoke(app, ["scan", str(repo), "--no-check-vulnerabilities"])
+
+    history_dir = repo / ".aletheore" / "history"
+    oldest = sorted(history_dir.glob("*.json"))[0]
+    stale = json.loads(oldest.read_text())
+    stale["aletheore_version"] = "9.9.9"
+    oldest.write_text(json.dumps(stale))
+
+    result = runner.invoke(app, ["query", "changes", "--path", str(repo)])
+
+    assert result.exit_code == 1
+    assert "re-run" in result.output.lower()
 
 
 def test_main_query_changes_shows_a_real_diff_between_two_scans(tmp_path):

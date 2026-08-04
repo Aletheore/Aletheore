@@ -3,7 +3,15 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
-from aletheore.evidence import EVIDENCE_VERSION, is_evidence_version_compatible, scan_repository, write_evidence
+from aletheore.evidence import (
+    EVIDENCE_VERSION,
+    IncompatibleEvidenceVersionError,
+    is_evidence_version_compatible,
+    load_evidence,
+    load_evidence_file,
+    scan_repository,
+    write_evidence,
+)
 
 
 def run(repo: Path, *args: str):
@@ -42,6 +50,53 @@ def test_is_evidence_version_compatible_rejects_missing_or_malformed_versions():
     assert is_evidence_version_compatible("") is False
     assert is_evidence_version_compatible("not-a-version") is False
     assert is_evidence_version_compatible(1) is False
+
+
+def test_load_evidence_file_returns_a_compatible_evidence_dict(tmp_path):
+    evidence_path = tmp_path / "air.json"
+    evidence_path.write_text(json.dumps({"aletheore_version": EVIDENCE_VERSION, "repository": {}}))
+
+    assert load_evidence_file(evidence_path)["repository"] == {}
+
+
+def test_load_evidence_file_rejects_an_incompatible_version(tmp_path):
+    evidence_path = tmp_path / "air.json"
+    evidence_path.write_text(json.dumps({"aletheore_version": "9.9.9", "repository": {}}))
+
+    try:
+        load_evidence_file(evidence_path)
+        assert False, "expected IncompatibleEvidenceVersionError"
+    except IncompatibleEvidenceVersionError as exc:
+        assert "9.9.9" in str(exc)
+        assert "re-run" in str(exc)
+
+
+def test_load_evidence_file_rejects_a_missing_version(tmp_path):
+    evidence_path = tmp_path / "air.json"
+    evidence_path.write_text(json.dumps({"repository": {}}))
+
+    try:
+        load_evidence_file(evidence_path)
+        assert False, "expected IncompatibleEvidenceVersionError"
+    except IncompatibleEvidenceVersionError:
+        pass
+
+
+def test_load_evidence_raises_file_not_found_when_repo_never_scanned(tmp_path):
+    try:
+        load_evidence(tmp_path)
+        assert False, "expected FileNotFoundError"
+    except FileNotFoundError as exc:
+        assert "aletheore scan" in str(exc)
+
+
+def test_load_evidence_reads_the_repos_own_air_json(tmp_path):
+    (tmp_path / ".aletheore").mkdir()
+    (tmp_path / ".aletheore" / "air.json").write_text(
+        json.dumps({"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}})
+    )
+
+    assert load_evidence(tmp_path)["repository"]["modules"] == []
 
 
 def test_scan_repository_produces_full_schema(tmp_path):
