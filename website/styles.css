@@ -733,6 +733,17 @@ pre {
   padding: 18px;
 }
 
+.mcp-tool-list span.optional {
+  border-style: dashed;
+  opacity: 0.85;
+}
+
+.mcp-tool-note {
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .evidence-contract {
   display: grid;
   grid-template-columns: minmax(0, 0.7fr) minmax(0, 1fr);

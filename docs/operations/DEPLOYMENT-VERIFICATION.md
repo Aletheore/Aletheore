@@ -5,6 +5,7 @@
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
 **Last Updated:** 2026-07-23
+**Snapshot Freshness:** STALE as of 2026-08-04 - the recorded commit is 39 merged PRs behind `master` (verified via `git log ad4f3cdf..HEAD`). Do not treat the snapshot section as current; re-run the Required Checks below before citing any of it as live state.
 
 ## Purpose
 
