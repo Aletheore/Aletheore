@@ -171,7 +171,7 @@ a { color: var(--accent); }
 .nav-group-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--slate-400); padding: 0 8px; margin-bottom: 6px; }
 .nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
 .nav-item { display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 8px; font-size: 13.5px; color: var(--ink-700); text-decoration: none; }
-.nav-item i { font-size: 16px; color: var(--slate-400); }
+.nav-item i { font-size: 16px; color: color-mix(in srgb, var(--ink-700) 78%, var(--accent) 22%); opacity: 0.95; }
 .nav-item:hover { background: var(--paper); }
 .nav-item.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 500; }
 .nav-item.active i { color: var(--accent-strong); }
