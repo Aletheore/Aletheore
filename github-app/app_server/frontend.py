@@ -190,6 +190,20 @@ a { color: var(--accent); }
 .h1 { font-size: 26px; font-weight: 720; margin: 3px 0 0; }
 .topbar-right { font-size: 12px; color: var(--slate-600); }
 
+.dashboard-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center;
+  margin-bottom: 1.15rem; border: 1px solid var(--border); border-radius: 16px;
+  background:
+    radial-gradient(circle at 92% 0%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 36%),
+    linear-gradient(180deg, var(--paper), color-mix(in srgb, var(--paper) 84%, var(--slate-50)));
+  padding: 18px; box-shadow: var(--shadow-lift); }
+.dashboard-summary-kicker { font-size: 11px; font-weight: 720; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-strong); }
+.dashboard-summary h2 { margin: 5px 0 6px; font-size: 22px; line-height: 1.2; }
+.dashboard-summary p { margin: 0; color: var(--slate-600); font-size: 13px; line-height: 1.55; max-width: 72ch; }
+.summary-chip-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.summary-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: 999px;
+  background: color-mix(in srgb, var(--paper) 72%, var(--slate-50)); padding: 7px 10px; color: var(--ink-700); font-size: 12px; white-space: nowrap; }
+.summary-chip i { color: var(--accent-strong); font-size: 14px; }
+
 .stat-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 1.7rem; }
 .stat-card { background: linear-gradient(180deg, var(--paper), var(--slate-50)); border: 1px solid var(--border); border-radius: 12px; padding: 15px; text-decoration: none; color: inherit; display: block; transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease; box-shadow: var(--shadow-card); }
 a.stat-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-card-hover); transform: translateY(-1px); }
@@ -241,15 +255,23 @@ table.findings tr:last-child td { border-bottom: none; }
 .wiki-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; background: linear-gradient(90deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 62%, var(--paper))); border: 1px solid rgba(224, 134, 58, 0.22); border-radius: 12px; padding: 13px 15px; margin: 10px 0 14px; flex-wrap: wrap; }
 .wiki-banner-text { font-size: 12.5px; color: var(--accent-strong); line-height: 1.5; max-width: 46ch; }
 .wiki-banner-text b { font-weight: 500; }
-.diagram-wrap { overflow-x: auto; padding: 6px 0 2px; }
-.diagram-wrap .mermaid { display: flex; justify-content: center; }
+.diagram-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background:
+  radial-gradient(circle at 50% 20%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 36%),
+  var(--slate-50); padding: 14px; }
+.diagram-wrap .mermaid { display: flex; justify-content: center; min-width: max-content; }
 .diagram-wrap.diagram-zoomable { cursor: zoom-in; }
-.diagram-zoom-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(10, 8, 4, 0.82);
-  overflow: auto; padding: 100px 40px; cursor: zoom-out; }
-.diagram-zoom-content { cursor: default; display: inline-block; }
-.diagram-zoom-content svg { max-width: none; display: block; }
-.diagram-zoom-hint { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 1001;
-  font-size: 12px; color: #F5F0E6; background: rgba(0, 0, 0, 0.45); padding: 6px 13px; border-radius: 99px; pointer-events: none; }
+.diagram-wrap.diagram-zoomable::after { content: "Click to open full diagram"; display: block; margin-top: 8px; color: var(--slate-400); font-size: 11px; text-align: center; }
+.diagram-zoom-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(10, 8, 4, 0.94);
+  overflow: auto; padding: 84px 28px 36px; cursor: zoom-out; }
+.diagram-zoom-content { cursor: grab; display: block; }
+.diagram-zoom-content svg { max-width: none; display: block; border-radius: 12px; background: rgba(255, 255, 255, 0.04); box-shadow: 0 30px 90px rgba(0, 0, 0, 0.45); }
+.diagram-zoom-toolbar { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); z-index: 1001;
+  display: flex; align-items: center; gap: 8px; max-width: calc(100vw - 28px); border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 99px; background: rgba(12, 10, 7, 0.84); padding: 7px; color: #F5F0E6; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.32); }
+.diagram-zoom-toolbar button { border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 99px; background: rgba(255, 255, 255, 0.08);
+  color: #F5F0E6; cursor: pointer; font-family: var(--font-sans); font-size: 12px; font-weight: 650; padding: 6px 10px; }
+.diagram-zoom-toolbar button:hover { background: rgba(255, 255, 255, 0.14); }
+.diagram-zoom-hint { padding: 0 8px; color: #D8D2C5; font-size: 12px; white-space: nowrap; }
 .subsystem-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .subsystem-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px; text-align: left; background: var(--paper); cursor: pointer; font-family: var(--font-sans); box-shadow: var(--shadow-card); }
 .subsystem-card:hover { border-color: var(--border-strong); }
@@ -257,7 +279,7 @@ table.findings tr:last-child td { border-bottom: none; }
 .subsystem-desc { font-size: 12px; color: var(--slate-600); line-height: 1.55; }
 .subsystem-files { font-family: var(--font-mono); font-size: 10.5px; color: var(--slate-400); margin-top: 8px; }
 .subsystem-detail { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }
-.subsystem-detail-file { margin-bottom: 12px; }
+.subsystem-detail-file { margin-bottom: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--slate-50); padding: 11px; }
 .subsystem-detail-path { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; overflow-wrap: anywhere; }
 .subsystem-detail-role { font-size: 12.5px; color: var(--slate-600); margin: 3px 0 6px; }
 .subsystem-detail-symbol { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-700); padding: 2px 0 2px 14px; }
@@ -288,9 +310,13 @@ table.findings tr:last-child td { border-bottom: none; }
   .nav-list { flex-direction: row; flex-wrap: wrap; }
   .nav-item { white-space: nowrap; }
   .main { padding: 1.2rem 1rem 2.5rem; }
+  .dashboard-summary { grid-template-columns: 1fr; }
+  .summary-chip-row { justify-content: flex-start; }
   .stat-strip { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .health-grid, .subsystem-grid, .settings-grid { grid-template-columns: 1fr; }
   .picker-head { align-items: flex-start; gap: 1rem; flex-direction: column; }
+  .diagram-zoom-toolbar { left: 14px; right: 14px; transform: none; justify-content: center; flex-wrap: wrap; border-radius: 14px; }
+  .diagram-zoom-hint { order: 2; width: 100%; text-align: center; }
 }
 </style>
 """
@@ -564,6 +590,18 @@ OVERVIEW_HTML = _page_head("Overview — {repo} — Aletheore") + _shell(
     _topbar("Overview", "last-scanned")
     + """
     <div id="top-error"></div>
+    <div class="dashboard-summary">
+      <div>
+        <div class="dashboard-summary-kicker">Repository watch</div>
+        <h2 id="summary-title">Evidence is loading</h2>
+        <p id="summary-copy">Aletheore is reading the latest AIR packet for this repository. Findings, code ownership, endpoint health, and AIRview all resolve back to scanner evidence.</p>
+      </div>
+      <div class="summary-chip-row">
+        <span class="summary-chip"><i class="ti ti-shield-check" aria-hidden="true"></i><span id="summary-risk">Risk loading</span></span>
+        <span class="summary-chip"><i class="ti ti-git-branch" aria-hidden="true"></i><span id="summary-scans">Scans loading</span></span>
+        <span class="summary-chip"><i class="ti ti-book-2" aria-hidden="true"></i>AIRview</span>
+      </div>
+    </div>
     <div class="stat-strip" id="stat-strip">
       <a class="stat-card" data-href="/security"><div class="stat-label">Open findings</div><div class="stat-value" id="stat-findings">&ndash;</div><div class="stat-delta" id="stat-findings-sub"></div></a>
       <a class="stat-card" data-href="/dead-code"><div class="stat-label">Dead code</div><div class="stat-value" id="stat-deadcode">&ndash;</div><div class="stat-delta" id="stat-deadcode-sub"></div></a>
@@ -601,6 +639,10 @@ async function loadOverview() {{
   const history = data.history || [];
   if (history.length === 0) {{
     document.getElementById('last-scanned').textContent = 'No scans yet';
+    document.getElementById('summary-title').textContent = repo + ' is waiting for its first scan';
+    document.getElementById('summary-copy').textContent = 'Open a pull request or trigger a managed scan to populate evidence, health, and AIRview.';
+    document.getElementById('summary-risk').textContent = 'No evidence yet';
+    document.getElementById('summary-scans').textContent = '0 scans';
     document.getElementById('recent-security-body').innerHTML = '<div class="empty-state">No scans yet - findings will appear after the first pull request is scanned.</div>';
     return;
   }}
@@ -612,6 +654,12 @@ async function loadOverview() {{
   const secretFindings = ((security.secrets || {{}}).findings || []).filter(function (f) {{ return !f.likely_placeholder && !f.accepted; }});
   const vulnFindings = (security.dependency_vulnerabilities || {{}}).findings || [];
   const totalFindings = secretFindings.length + vulnFindings.length;
+  document.getElementById('summary-title').textContent =
+    totalFindings === 0 ? repo + ' is clean in the latest scan' : repo + ' has ' + totalFindings + ' open finding' + (totalFindings === 1 ? '' : 's');
+  document.getElementById('summary-copy').textContent =
+    'Latest evidence covers ' + (((evidence.repository || {{}}).modules || []).length) + ' modules, source-mapped findings, dependency signals, and repository history. Use the left rail to drill into the exact file, line, owner, dependency, and risk.';
+  document.getElementById('summary-risk').textContent = totalFindings === 0 ? 'No open findings' : totalFindings + ' open findings';
+  document.getElementById('summary-scans').textContent = history.length + ' scan' + (history.length === 1 ? '' : 's');
 
   document.getElementById('stat-findings').textContent = totalFindings;
   document.getElementById('stat-findings').className = 'stat-value' + (totalFindings > 0 ? ' critical' : ' success');
@@ -1065,7 +1113,6 @@ async function renderDiagram(container, text) {{
 
 function openDiagramZoom(svgHtml) {{
   closeDiagramZoom();
-  let scale = 1;
   const overlay = document.createElement('div');
   overlay.className = 'diagram-zoom-overlay';
   const content = document.createElement('div');
@@ -1081,51 +1128,108 @@ function openDiagramZoom(svgHtml) {{
     svg.style.maxWidth = 'none';
     svg.style.display = 'block';
   }}
-  // CSS transform: scale() was the previous approach here, but a
-  // transformed element's LAYOUT size (and so its ancestor's scrollable
-  // overflow area) never changes to match - only its painted appearance
-  // does. On a genuinely large diagram, zooming in painted content well
-  // past the unscaled scroll boundary, making that region permanently
-  // unreachable by scroll (the exact "shows only small section" bug).
-  // Resizing the SVG's real width/height instead makes the browser's own
-  // scrollWidth/scrollHeight grow with it, so every part stays reachable.
-  function applyScale() {{
+
+  let scale = Math.min(
+    1,
+    Math.max(0.18, (window.innerWidth - 96) / naturalWidth),
+    Math.max(0.18, (window.innerHeight - 150) / naturalHeight)
+  );
+  let initialScale = scale;
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'diagram-zoom-toolbar';
+  toolbar.innerHTML =
+    '<button type="button" data-zoom="out">-</button>' +
+    '<button type="button" data-zoom="fit">Fit</button>' +
+    '<button type="button" data-zoom="in">+</button>' +
+    '<span class="diagram-zoom-hint">Scroll to zoom - drag/scroll to pan - Esc closes</span>' +
+    '<button type="button" data-zoom="close">Close</button>';
+
+  function updateContentInset() {{
+    const scaledWidth = naturalWidth * scale;
+    const scaledHeight = naturalHeight * scale;
+    content.style.marginLeft = Math.max(0, (overlay.clientWidth - scaledWidth) / 2) + 'px';
+    content.style.marginTop = Math.max(0, (overlay.clientHeight - scaledHeight - 120) / 2) + 'px';
+  }}
+
+  // Resize the SVG's actual layout dimensions instead of using CSS
+  // transform. That keeps the browser scroll area honest, so zoomed-in
+  // diagrams remain reachable instead of painting beyond the scroll range.
+  function applyScale(anchor) {{
     if (!svg) return;
     svg.style.width = (naturalWidth * scale) + 'px';
     svg.style.height = (naturalHeight * scale) + 'px';
+    updateContentInset();
+    if (anchor) {{
+      overlay.scrollLeft = anchor.x * scale - overlay.clientWidth / 2;
+      overlay.scrollTop = anchor.y * scale - overlay.clientHeight / 2;
+    }} else {{
+      overlay.scrollLeft = Math.max(0, (overlay.scrollWidth - overlay.clientWidth) / 2);
+      overlay.scrollTop = Math.max(0, (overlay.scrollHeight - overlay.clientHeight) / 2);
+    }}
   }}
-  applyScale();
-  const hint = document.createElement('div');
-  hint.className = 'diagram-zoom-hint';
-  hint.textContent = 'Scroll to zoom · click to close';
+
   overlay.appendChild(content);
-  overlay.appendChild(hint);
-  overlay.addEventListener('click', closeDiagramZoom);
+  overlay.appendChild(toolbar);
+  overlay.addEventListener('click', function (event) {{
+    if (event.target === overlay) closeDiagramZoom();
+  }});
+  content.addEventListener('click', function (event) {{ event.stopPropagation(); }});
+  toolbar.addEventListener('click', function (event) {{
+    event.stopPropagation();
+    const action = event.target && event.target.dataset ? event.target.dataset.zoom : null;
+    if (!action) return;
+    if (action === 'close') {{ closeDiagramZoom(); return; }}
+    if (action === 'fit') {{
+      scale = initialScale;
+      applyScale();
+      return;
+    }}
+    const center = {{
+      x: (overlay.scrollLeft + overlay.clientWidth / 2) / scale,
+      y: (overlay.scrollTop + overlay.clientHeight / 2) / scale,
+    }};
+    scale = Math.min(4, Math.max(initialScale, scale + (action === 'in' ? 0.18 : -0.18)));
+    applyScale(center);
+  }});
   overlay.addEventListener('wheel', function (e) {{
-    e.preventDefault();
-    const prevScale = scale;
-    scale = Math.min(4, Math.max(0.5, scale + (e.deltaY < 0 ? 0.15 : -0.15)));
-    const ratio = scale / prevScale;
-    // Keep the viewport's current center point anchored across zoom
-    // steps, rather than letting the view drift toward the top-left as
-    // the content grows underneath a fixed scroll offset.
-    const centerX = overlay.scrollLeft + overlay.clientWidth / 2;
-    const centerY = overlay.scrollTop + overlay.clientHeight / 2;
-    applyScale();
-    overlay.scrollLeft = centerX * ratio - overlay.clientWidth / 2;
-    overlay.scrollTop = centerY * ratio - overlay.clientHeight / 2;
+    if (e.ctrlKey || e.metaKey || Math.abs(e.deltaY) > Math.abs(e.deltaX)) {{
+      const center = {{
+        x: (overlay.scrollLeft + overlay.clientWidth / 2) / scale,
+        y: (overlay.scrollTop + overlay.clientHeight / 2) / scale,
+      }};
+      e.preventDefault();
+      scale = Math.min(4, Math.max(initialScale, scale + (e.deltaY < 0 ? 0.14 : -0.14)));
+      applyScale(center);
+    }}
   }}, {{ passive: false }});
+
+  let dragStart = null;
+  content.addEventListener('pointerdown', function (event) {{
+    dragStart = {{ x: event.clientX, y: event.clientY, left: overlay.scrollLeft, top: overlay.scrollTop }};
+    content.setPointerCapture(event.pointerId);
+    content.style.cursor = 'grabbing';
+  }});
+  content.addEventListener('pointermove', function (event) {{
+    if (!dragStart) return;
+    event.preventDefault();
+    overlay.scrollLeft = dragStart.left - (event.clientX - dragStart.x);
+    overlay.scrollTop = dragStart.top - (event.clientY - dragStart.y);
+  }});
+  content.addEventListener('pointerup', function (event) {{
+    dragStart = null;
+    content.releasePointerCapture(event.pointerId);
+    content.style.cursor = 'grab';
+  }});
+  content.addEventListener('pointercancel', function () {{
+    dragStart = null;
+    content.style.cursor = 'grab';
+  }});
+
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
   document.addEventListener('keydown', onDiagramZoomKeydown);
-  // Centering via margin:auto (an even earlier approach) leaves half of a
-  // diagram wider than the viewport permanently unreachable by scroll in
-  // most browsers - overflow past a centered element's near edge doesn't
-  // register as scrollable range. Centering the scroll position instead,
-  // on an unadorned top-left-anchored content box, keeps every part of
-  // the diagram reachable in both directions regardless of its size.
-  overlay.scrollLeft = (content.scrollWidth - overlay.clientWidth) / 2;
-  overlay.scrollTop = (content.scrollHeight - overlay.clientHeight) / 2;
+  applyScale();
 }}
 
 function onDiagramZoomKeydown(e) {{
