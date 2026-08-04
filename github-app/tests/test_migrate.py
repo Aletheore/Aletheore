@@ -31,7 +31,7 @@ def fresh_database():
             with conn.cursor() as cur:
                 cur.execute(f"DROP DATABASE IF EXISTS {db_name}")
                 cur.execute(f"CREATE DATABASE {db_name}")
-    except OSError as exc:
+    except (OSError, psycopg.OperationalError) as exc:
         pytest.skip(f"test Postgres unavailable: {exc}")
 
     yield _dsn_for(db_name)
