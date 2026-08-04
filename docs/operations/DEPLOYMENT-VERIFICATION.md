@@ -4,8 +4,8 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-07-23
-**Snapshot Freshness:** STALE as of 2026-08-04 - the recorded commit is 39 merged PRs behind `master` (verified via `git log ad4f3cdf..HEAD`). Do not treat the snapshot section as current; re-run the Required Checks below before citing any of it as live state.
+**Last Updated:** 2026-08-04
+**Snapshot Freshness:** CURRENT as of 2026-08-04 - production was redeployed to `master` (commit `447d7e9`) and re-verified live via SSH the same day.
 
 ## Purpose
 
@@ -30,19 +30,25 @@ Before claiming a hardening change is live, verify:
 
 ## Current Server Snapshot
 
-As of 2026-07-23, read-only inspection found:
+As of 2026-08-04, following a redeploy to `master` (`git pull --ff-only` + `docker compose build` + `docker compose up -d`), live inspection found:
 
 - Host: `srv1675832`.
 - Deployment path: `/root/aletheore`.
 - Remote: `https://github.com/Aletheore/Aletheore.git`.
 - Branch: `master`.
-- Commit: `ad4f3cdf3b4b3683c81afc0ce3a4151423fc1da4`.
-- Services running: `app-server`, `scan-worker`, `scheduler`, `postgres`, `redis`, `caddy`.
-- App-native scheduler is running.
-- No Ofelia container was observed.
-- App server still starts directly with Uvicorn on that commit; PR #15 migration-startup behavior is not yet deployed.
-- App/worker images are non-root on that commit, but Python base images are still tag-pinned rather than digest-pinned.
-- Compose resource limits from PR #15 are not yet deployed.
+- Commit: `447d7e940430be07d14f6c84bdf8ea4bc49144c0`.
+- Working tree: clean, no local diffs or stashes.
+- Services running: `app-server`, `scan-worker`, `scheduler`, `demo-scan-worker`, `demo-sandbox-runner`, `postgres`, `redis`, `caddy`, `ollama` - all `Up`, `postgres` reporting `healthy`.
+- App server starts via `python scripts/migrate.py && exec uvicorn ...`; startup logs show `no pending migrations` (schema already current, no errors).
+- `demo-scan-worker` has **no** Docker socket mount (`docker inspect` confirms empty `Mounts`); `demo-sandbox-runner` is the sole holder of `/var/run/docker.sock`, publishes no host ports (internal-only on the Compose network), and is reachable from `demo-scan-worker` at `http://demo-sandbox-runner:8090` (verified with a live TCP connect from inside the `demo-scan-worker` container).
+- `app-server` and `scan-worker` run as the non-root `aletheore` user; `demo-sandbox-runner` runs as `root` (required to reach the Docker socket - the one service designed to need it).
+- CPU/mem limits present: `app-server` 768MiB, `scan-worker` 1GiB, `demo-scan-worker` 512MiB, `demo-sandbox-runner` 256MiB.
+- `scripts/backup-postgres.sh` present at the expected path.
+- `app-server`/`scan-worker` base images (`Dockerfile.app-server`, `Dockerfile.scan-worker`) are digest-pinned (`python:3.12-slim@sha256:...`), not just tag-pinned.
+- Restore drill target database availability was **not** re-verified this pass - out of scope for a routine redeploy; still needs an explicit check per its own runbook item.
+- Health checks: internal `http://127.0.0.1:8000/healthz` and public `https://app.aletheore.com/healthz` both return `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`. (The bare `aletheore.com` domain resolves to the marketing site's Vercel deployment, not this host - expected, not a routing bug.)
+- No errors, tracebacks, or exceptions in `app-server`, `scan-worker`, `scheduler`, `demo-scan-worker`, `demo-sandbox-runner`, or `caddy` logs since restart.
+- Disk: 144G available of 193G (26% used).
 
 ## Recovery Rule
 
