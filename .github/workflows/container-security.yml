@@ -26,7 +26,7 @@ jobs:
             tag: aletheore-scan-worker:ci
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build image
         run: docker build -f "${{ matrix.dockerfile }}" -t "${{ matrix.tag }}" .
@@ -72,7 +72,7 @@ jobs:
             tag: aletheore-scan-worker:ci
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build image
         run: docker build -f "${{ matrix.dockerfile }}" -t "${{ matrix.tag }}" .

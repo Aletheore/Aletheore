@@ -45,13 +45,13 @@ runs:
   using: "composite"
   steps:
     - name: Checkout base
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         ref: ${{ inputs.base-ref }}
         path: aletheore-base
 
     - name: Checkout head
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
       with:
         ref: ${{ inputs.head-ref }}
         path: aletheore-head
