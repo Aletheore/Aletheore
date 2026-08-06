@@ -1,6 +1,6 @@
+import io
 import json
-import subprocess
-from unittest.mock import MagicMock
+import urllib.error
 
 import pytest
 
@@ -10,6 +10,36 @@ from scan_worker.demo_scan import (
     _summarize_for_public_display,
     run_demo_scan_job,
 )
+
+
+class _FakeHTTPResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+def _fake_urlopen_returning(payload: dict):
+    def _fake(request, timeout):
+        return _FakeHTTPResponse(json.dumps(payload).encode())
+
+    return _fake
+
+
+def _fake_urlopen_raising_http_error(status: int, reason: str):
+    def _fake(request, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url, status, reason, {}, io.BytesIO(json.dumps({"error": reason}).encode())
+        )
+
+    return _fake
 
 
 def _fake_evidence(**overrides) -> dict:
@@ -66,88 +96,76 @@ def test_summarize_notes_osv_is_held_back():
     assert "OSV" in summary["held_back"]["vulnerabilities"]
 
 
-def test_run_sandboxed_scan_invokes_docker_with_gvisor_runtime(monkeypatch):
+def test_run_sandboxed_scan_posts_repo_url_to_the_runner_and_returns_its_json(monkeypatch):
     captured = {}
 
-    def fake_run(cmd, capture_output, text, timeout):
-        captured["cmd"] = cmd
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data)
         captured["timeout"] = timeout
-        return subprocess.CompletedProcess(cmd, returncode=0, stdout=json.dumps({"ok": True}), stderr="")
+        return _FakeHTTPResponse(json.dumps({"ok": True}).encode())
 
-    monkeypatch.setattr("scan_worker.demo_scan.subprocess.run", fake_run)
+    monkeypatch.setattr("scan_worker.demo_scan.urllib.request.urlopen", fake_urlopen)
     result = _run_sandboxed_scan("https://github.com/octocat/Hello-World.git")
 
     assert result == {"ok": True}
-    cmd = captured["cmd"]
-    assert cmd[0:2] == ["docker", "run"]
-    assert "--runtime=runsc" in cmd
-    assert "--rm" in cmd
-    assert cmd[-2] == "aletheore-demo-sandbox:latest"
-    assert cmd[-1] == "https://github.com/octocat/Hello-World.git"
-    assert captured["timeout"] == 90
+    assert captured["url"].endswith("/run")
+    assert captured["body"] == {"repo_url": "https://github.com/octocat/Hello-World.git"}
+    assert captured["timeout"] > 90  # past the runner's own container timeout
 
 
-def test_run_sandboxed_scan_raises_on_nonzero_exit(monkeypatch):
-    def fake_run(cmd, capture_output, text, timeout):
-        return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="clone failed")
-
-    monkeypatch.setattr("scan_worker.demo_scan.subprocess.run", fake_run)
+def test_run_sandboxed_scan_raises_on_nonzero_exit_reason(monkeypatch):
+    monkeypatch.setattr(
+        "scan_worker.demo_scan.urllib.request.urlopen", _fake_urlopen_raising_http_error(422, "nonzero_exit")
+    )
     with pytest.raises(DemoScanError):
         _run_sandboxed_scan("https://github.com/octocat/Hello-World.git")
 
 
 def test_run_sandboxed_scan_gives_a_specific_message_when_memory_limited(monkeypatch):
     # Confirmed directly: a full scan of the Linux kernel got OOM-killed
-    # under this same 1GB container limit, and the CLI (via GitAnalysisError)
-    # exits with GIT_ANALYSIS_RESOURCE_EXIT_CODE for exactly this case -
-    # the demo should say so plainly rather than a generic failure message.
-    from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE
-
-    def fake_run(cmd, capture_output, text, timeout):
-        return subprocess.CompletedProcess(cmd, returncode=GIT_ANALYSIS_RESOURCE_EXIT_CODE, stdout="", stderr="")
-
-    monkeypatch.setattr("scan_worker.demo_scan.subprocess.run", fake_run)
+    # under the runner's 1GB container limit, and the CLI (via
+    # GitAnalysisError) exits with GIT_ANALYSIS_RESOURCE_EXIT_CODE for
+    # exactly this case - the demo should say so plainly rather than a
+    # generic failure message.
+    monkeypatch.setattr(
+        "scan_worker.demo_scan.urllib.request.urlopen", _fake_urlopen_raising_http_error(422, "memory_limited")
+    )
     with pytest.raises(DemoScanError, match="pip install aletheore"):
         _run_sandboxed_scan("https://github.com/octocat/Hello-World.git")
 
 
-def test_run_sandboxed_scan_raises_on_non_json_stdout(monkeypatch):
-    def fake_run(cmd, capture_output, text, timeout):
-        return subprocess.CompletedProcess(cmd, returncode=0, stdout="not json", stderr="")
-
-    monkeypatch.setattr("scan_worker.demo_scan.subprocess.run", fake_run)
+def test_run_sandboxed_scan_raises_on_non_json_output_reason(monkeypatch):
+    monkeypatch.setattr(
+        "scan_worker.demo_scan.urllib.request.urlopen", _fake_urlopen_raising_http_error(422, "non_json_output")
+    )
     with pytest.raises(DemoScanError):
         _run_sandboxed_scan("https://github.com/octocat/Hello-World.git")
 
 
-def test_run_sandboxed_scan_force_removes_container_on_timeout(monkeypatch):
-    calls = []
-
-    def fake_run(*args, **kwargs):
-        calls.append((args, kwargs))
-        if args and args[0][0:2] == ["docker", "run"]:
-            raise subprocess.TimeoutExpired(cmd=args[0], timeout=90)
-        return MagicMock(returncode=0)
-
-    monkeypatch.setattr("scan_worker.demo_scan.subprocess.run", fake_run)
+def test_run_sandboxed_scan_raises_a_timed_out_message_on_timeout_reason(monkeypatch):
+    monkeypatch.setattr(
+        "scan_worker.demo_scan.urllib.request.urlopen", _fake_urlopen_raising_http_error(422, "timeout")
+    )
     with pytest.raises(DemoScanError, match="timed out"):
         _run_sandboxed_scan("https://github.com/octocat/Hello-World.git")
 
-    # First call was the (timed-out) docker run, second must be the forced
-    # cleanup - the container name from the failed call is what gets removed.
-    assert len(calls) == 2
-    run_cmd = calls[0][0][0]
-    cleanup_cmd = calls[1][0][0]
-    assert cleanup_cmd[:3] == ["docker", "rm", "-f"]
-    container_name_index = run_cmd.index("--name") + 1
-    assert cleanup_cmd[3] == run_cmd[container_name_index]
+
+def test_run_sandboxed_scan_reports_the_runner_being_unreachable_distinctly(monkeypatch):
+    # A network/connectivity failure to the runner itself is not a
+    # repo-shaped problem - the message should say so, not blame the repo.
+    def fake_urlopen(request, timeout):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr("scan_worker.demo_scan.urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(DemoScanError, match="temporarily unavailable"):
+        _run_sandboxed_scan("https://github.com/octocat/Hello-World.git")
 
 
 def test_run_demo_scan_job_returns_summarized_result(monkeypatch):
-    def fake_run(cmd, capture_output, text, timeout):
-        return subprocess.CompletedProcess(cmd, returncode=0, stdout=json.dumps(_fake_evidence()), stderr="")
-
-    monkeypatch.setattr("scan_worker.demo_scan.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "scan_worker.demo_scan.urllib.request.urlopen", _fake_urlopen_returning(_fake_evidence())
+    )
     result = run_demo_scan_job("https://github.com/octocat/Hello-World.git")
 
     assert result["secrets"]["finding_count"] == 1

@@ -34,7 +34,13 @@ from aletheore.citation_verifier import (
 )
 from aletheore.credentials import get_api_key
 from aletheore.device_auth import infer_repo_full_name_from_cwd_git_remote
-from aletheore.evidence import scan_repository, write_evidence
+from aletheore.evidence import (
+    IncompatibleEvidenceVersionError,
+    load_evidence,
+    load_evidence_file,
+    scan_repository,
+    write_evidence,
+)
 from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot, to_sarif
@@ -443,12 +449,23 @@ def _query_changes(repo_path: str, full: bool) -> int:
         return 0
 
     try:
-        old = json.loads(snapshots[-2].read_text())
+        old = load_evidence_file(snapshots[-2])
     except json.JSONDecodeError:
         print(f"error: most recent snapshot is unreadable ({snapshots[-2]})")
         return 1
+    except IncompatibleEvidenceVersionError as exc:
+        print(f"error: {exc}")
+        return 1
 
-    new = json.loads(snapshots[-1].read_text())
+    try:
+        new = load_evidence_file(snapshots[-1])
+    except json.JSONDecodeError:
+        print(f"error: most recent snapshot is unreadable ({snapshots[-1]})")
+        return 1
+    except IncompatibleEvidenceVersionError as exc:
+        print(f"error: {exc}")
+        return 1
+
     diff = compute_diff(old, new, full=full)
     print(json.dumps(diff, indent=2))
     return 0
@@ -456,12 +473,14 @@ def _query_changes(repo_path: str, full: bool) -> int:
 
 def _index(repo_path: str) -> int:
     repo = Path(repo_path).resolve()
-    evidence_path = repo / ".aletheore" / "air.json"
-    if not evidence_path.exists():
-        console.print(f"[bold red]error:[/bold red] no evidence found at {evidence_path}")
-        console.print(f"Run 'aletheore scan {repo}' first.")
+    try:
+        evidence = load_evidence(repo)
+    except FileNotFoundError as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
         return 1
-    evidence = json.loads(evidence_path.read_text())
+    except IncompatibleEvidenceVersionError as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
+        return 1
     console.print(
         "Building semantic search index (embedding via local Ollama, "
         "falling back to OpenAI if unavailable)..."
@@ -541,17 +560,16 @@ def _query(
         return 0
 
     repo = Path(repo_path).resolve()
-    evidence_path = repo / ".aletheore" / "air.json"
-    if not evidence_path.exists():
-        print(f"error: no evidence found at {evidence_path}")
-        print(f"Run 'aletheore scan {repo}' first.")
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError) as exc:
+        print(f"error: {exc}")
         return 1
 
     if kind == "symbol-source":
         if target is None or symbol is None:
             print("error: query type 'symbol-source' requires module and symbol arguments")
             return 1
-        evidence = json.loads(evidence_path.read_text())
         try:
             result = find_symbol_source(evidence, repo, target, symbol)
         except (ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError) as exc:
@@ -565,7 +583,6 @@ def _query(
         print(f"error: query type '{kind}' requires a target argument")
         return 1
 
-    evidence = json.loads(evidence_path.read_text())
     try:
         if kind in ("evidence-for-endpoint", "evidence-for-symbol", "evidence-for-dependency"):
             result = func(evidence, target, repo)
@@ -606,14 +623,20 @@ def _diff(
         return 1
 
     try:
-        old = json.loads(old_file.read_text())
+        old = load_evidence_file(old_file)
     except json.JSONDecodeError:
         print(f"error: {old_file} is not valid JSON")
         return 1
+    except IncompatibleEvidenceVersionError as exc:
+        print(f"error: {exc}")
+        return 1
     try:
-        new = json.loads(new_file.read_text())
+        new = load_evidence_file(new_file)
     except json.JSONDecodeError:
         print(f"error: {new_file} is not valid JSON")
+        return 1
+    except IncompatibleEvidenceVersionError as exc:
+        print(f"error: {exc}")
         return 1
 
     diff = compute_diff(old, new, full=full)
@@ -687,13 +710,12 @@ def _verify(report_path: str, repo_path: str) -> int:
 
 def _healthcheck(repo_path: str, base_url: str) -> int:
     repo = Path(repo_path).resolve()
-    evidence_path = repo / ".aletheore" / "air.json"
-    if not evidence_path.exists():
-        print(f"error: no evidence found at {evidence_path}")
-        print(f"Run 'aletheore scan {repo}' first.")
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError) as exc:
+        print(f"error: {exc}")
         return 1
 
-    evidence = json.loads(evidence_path.read_text())
     endpoints = evidence["repository"].get("api_endpoints", {}).get("endpoints", [])
     result = run_healthcheck(endpoints, base_url)
     save_healthcheck(result, repo)

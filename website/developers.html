@@ -70,6 +70,7 @@ aletheore dashboard</code></pre>
           <h2>Scan once. Query the evidence many ways.</h2>
           <p>The deterministic scan writes AIR, Aletheore's Intermediate Representation. Downstream commands read AIR instead of scanning blindly again.</p>
         </div>
+        <div class="developer-surface">
         <div class="command-grid">
           <article>
             <h3>Install and scan</h3>
@@ -91,6 +92,7 @@ aletheore dashboard .</code></pre>
             <p>Build a local semantic index, ask targeted questions, and inspect evidence visually.</p>
           </article>
         </div>
+        </div>
       </section>
 
       <section class="developer-section">
@@ -98,6 +100,7 @@ aletheore dashboard .</code></pre>
           <p class="eyebrow">Query subcommands</p>
           <h2>Ask precise questions without sending the whole repo.</h2>
         </div>
+        <div class="developer-surface compact">
         <div class="query-board">
           <div>
             <h3>Repository structure</h3>
@@ -134,6 +137,7 @@ aletheore dashboard .</code></pre>
             <code>evidence-for-dependency</code>
             <code>ownership</code>
           </div>
+        </div>
         </div>
       </section>
 
@@ -172,9 +176,10 @@ aletheore dashboard .</code></pre>
           <span>aletheore_healthcheck</span>
           <span>aletheore_index</span>
           <span>aletheore_search_codebase</span>
-          <span>aletheore_answer</span>
+          <span class="optional" title="Only registered when the MCP server is started with --agent">aletheore_answer*</span>
           <span>aletheore_managed_audit</span>
         </div>
+        <p class="mcp-tool-note">28 tools are always available. <code>aletheore_answer</code>* is registered only when the server is started with <code>--agent</code>.</p>
       </section>
 
       <section class="developer-section evidence-contract">

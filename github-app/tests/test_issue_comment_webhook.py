@@ -1,25 +1,46 @@
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app_server.webhooks.issue_comment import handle_issue_comment_event
 
 
-def _payload(comment_body: str, has_pr: bool = True):
+def _payload(comment_body: str, has_pr: bool = True, commenter: str = "someuser"):
     payload = {
         "action": "created",
         "installation": {"id": 111},
         "repository": {"full_name": "octocat/hello-world"},
         "issue": {"number": 42},
-        "comment": {"body": comment_body},
+        "comment": {"body": comment_body, "user": {"login": commenter}},
     }
     if has_pr:
         payload["issue"]["pull_request"] = {"url": "https://api.github.com/..."}
     return payload
 
 
+def _mock_permission_check(monkeypatch, permission: str | None, raises: bool = False):
+    monkeypatch.setattr(
+        "app_server.webhooks.issue_comment.generate_app_jwt", lambda *a, **k: "fake-jwt"
+    )
+    monkeypatch.setattr(
+        "app_server.webhooks.issue_comment.get_installation_token", AsyncMock(return_value="fake-token")
+    )
+    if raises:
+
+        def _raise(*a, **k):
+            raise RuntimeError("GitHub API unavailable")
+
+        monkeypatch.setattr("app_server.webhooks.issue_comment.get_repo_permission_for_user", _raise)
+    else:
+        monkeypatch.setattr(
+            "app_server.webhooks.issue_comment.get_repo_permission_for_user",
+            lambda *a, **k: permission,
+        )
+
+
 @pytest.mark.asyncio
-async def test_audit_command_enqueues_managed_audit_job():
+async def test_audit_command_enqueues_managed_audit_job_for_a_write_collaborator(monkeypatch):
+    _mock_permission_check(monkeypatch, "write")
     fake_queue = MagicMock()
     await handle_issue_comment_event(_payload("/aletheore audit"), "redis://unused", queue=fake_queue)
     fake_queue.enqueue.assert_called_once()
@@ -34,14 +55,50 @@ async def test_audit_command_enqueues_managed_audit_job():
 
 
 @pytest.mark.asyncio
-async def test_non_audit_comment_does_not_enqueue():
+async def test_audit_command_enqueues_for_an_admin_too(monkeypatch):
+    _mock_permission_check(monkeypatch, "admin")
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(_payload("/aletheore audit"), "redis://unused", queue=fake_queue)
+    fake_queue.enqueue.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_audit_command_from_a_read_only_commenter_does_not_enqueue(monkeypatch):
+    _mock_permission_check(monkeypatch, "read")
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(_payload("/aletheore audit"), "redis://unused", queue=fake_queue)
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_audit_command_from_a_non_collaborator_does_not_enqueue(monkeypatch):
+    _mock_permission_check(monkeypatch, "none")
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(_payload("/aletheore audit"), "redis://unused", queue=fake_queue)
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_audit_command_does_not_enqueue_when_permission_check_itself_fails(monkeypatch):
+    # Fails closed: an API error while verifying the commenter's permission
+    # must not be treated as authorization to proceed.
+    _mock_permission_check(monkeypatch, None, raises=True)
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(_payload("/aletheore audit"), "redis://unused", queue=fake_queue)
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_non_audit_comment_does_not_enqueue(monkeypatch):
+    _mock_permission_check(monkeypatch, "write")
     fake_queue = MagicMock()
     await handle_issue_comment_event(_payload("regular comment"), "redis://unused", queue=fake_queue)
     fake_queue.enqueue.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_comment_on_plain_issue_not_pr_does_not_enqueue():
+async def test_comment_on_plain_issue_not_pr_does_not_enqueue(monkeypatch):
+    _mock_permission_check(monkeypatch, "write")
     fake_queue = MagicMock()
     await handle_issue_comment_event(
         _payload("/aletheore audit", has_pr=False),

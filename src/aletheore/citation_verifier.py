@@ -33,6 +33,8 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
+from aletheore.evidence import is_evidence_version_compatible
+
 logger = logging.getLogger("aletheore.citation_verifier")
 
 # Matches file:line citations in report text, e.g. "server/routes/billing.ts:142"
@@ -206,6 +208,8 @@ def load_verifiable_evidence(repo_path: Path) -> dict | None:
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(evidence, dict):
+        return None
+    if not is_evidence_version_compatible(evidence.get("aletheore_version")):
         return None
     if not evidence.get("repository", {}).get("modules"):
         return None

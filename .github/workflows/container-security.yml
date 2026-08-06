@@ -26,7 +26,7 @@ jobs:
             tag: aletheore-scan-worker:ci
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build image
         run: docker build -f "${{ matrix.dockerfile }}" -t "${{ matrix.tag }}" .
@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-${{ matrix.image }}.sarif
 
@@ -72,7 +72,7 @@ jobs:
             tag: aletheore-scan-worker:ci
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build image
         run: docker build -f "${{ matrix.dockerfile }}" -t "${{ matrix.tag }}" .

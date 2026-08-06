@@ -70,6 +70,42 @@ def is_evidence_version_compatible(version: object) -> bool:
     given = _version_compatibility_key(version)
     return current is not None and current == given
 
+
+class IncompatibleEvidenceVersionError(Exception):
+    pass
+
+
+def load_evidence_file(evidence_path: Path) -> dict:
+    """Reads and validates a raw air.json or snapshot file, refusing evidence
+    written by an incompatible schema version.
+
+    Every direct reader of an evidence file (CLI query/index/diff/healthcheck,
+    the MCP server) should route through this or load_evidence rather than a
+    bare json.loads - see is_evidence_version_compatible for why.
+    """
+    evidence = json.loads(evidence_path.read_text())
+    written_version = evidence.get("aletheore_version") if isinstance(evidence, dict) else None
+    if not is_evidence_version_compatible(written_version):
+        raise IncompatibleEvidenceVersionError(
+            f"{evidence_path} was written by aletheore_version={written_version!r}, which "
+            f"isn't compatible with this build's evidence schema ({EVIDENCE_VERSION}) - "
+            "re-run 'aletheore scan' to refresh it"
+        )
+    return evidence
+
+
+def load_evidence(repo_path: Path) -> dict:
+    """The repo's own .aletheore/air.json, validated for schema compatibility.
+
+    Raises FileNotFoundError if no evidence has been written yet.
+    """
+    evidence_path = repo_path / ".aletheore" / "air.json"
+    if not evidence_path.exists():
+        raise FileNotFoundError(
+            f"no evidence found at {evidence_path} - run 'aletheore scan {repo_path}' first"
+        )
+    return load_evidence_file(evidence_path)
+
 # Unset by default - a developer scanning their own repo locally wants full
 # history, and isn't running inside a memory-constrained container. The
 # hosted scan-worker sets this (see scan_worker/jobs.py's

@@ -46,3 +46,29 @@ def get_installation_details(
     )
     response.raise_for_status()
     return response.json()
+
+
+def get_repo_permission_for_user(
+    repo_full_name: str,
+    username: str,
+    installation_token: str,
+    http_client: httpx.Client | None = None,
+) -> str:
+    """The caller's permission level on repo_full_name - "admin", "write",
+    "read", or "none". Gates any webhook-triggered action that should only
+    be available to someone who could already push to the repo: an issue
+    comment fires for anyone who can comment (on a public repo, anyone
+    with a GitHub account), which is a much wider set than anyone who
+    should be able to spend an installation's paid LLM budget or occupy
+    its managed-audit cooldown slot.
+    """
+    client = http_client or httpx.Client(base_url="https://api.github.com")
+    response = client.get(
+        f"/repos/{repo_full_name}/collaborators/{username}/permission",
+        headers={
+            "Authorization": f"token {installation_token}",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    response.raise_for_status()
+    return response.json()["permission"]

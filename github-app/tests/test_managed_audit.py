@@ -3,6 +3,7 @@ from pathlib import Path
 
 from aletheore.citation_verifier import load_verifiable_evidence as _load_verifiable_evidence
 from aletheore.citation_verifier import local_line_count_fetcher as _local_line_count_fetcher
+from aletheore.evidence import EVIDENCE_VERSION
 from scan_worker.managed_audit import (
     _citation_verification_section,
     _llm_based_suggestion_section,
@@ -138,7 +139,10 @@ def _repo_with_evidence(tmp_path, files: dict[str, str]) -> Path:
         full = repo_path / path
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(content)
-    evidence = {"repository": {"modules": [{"path": p} for p in files]}}
+    evidence = {
+        "aletheore_version": EVIDENCE_VERSION,
+        "repository": {"modules": [{"path": p} for p in files]},
+    }
     (repo_path / ".aletheore" / "air.json").write_text(json.dumps(evidence))
     return repo_path
 
@@ -218,7 +222,10 @@ def test_citation_verification_section_does_not_claim_bounds_checking_it_could_n
     # exact overclaim this section exists to prevent.
     repo_path = tmp_path / "repo"
     (repo_path / ".aletheore").mkdir(parents=True)
-    evidence = {"repository": {"modules": [{"path": "app.py"}]}}
+    evidence = {
+        "aletheore_version": EVIDENCE_VERSION,
+        "repository": {"modules": [{"path": "app.py"}]},
+    }
     (repo_path / ".aletheore" / "air.json").write_text(json.dumps(evidence))
 
     section = _citation_verification_section("The bug is at `app.py:900`.", repo_path)
