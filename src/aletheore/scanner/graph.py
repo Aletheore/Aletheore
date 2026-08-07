@@ -158,6 +158,40 @@ def _is_public_symbol(name: str, language: str) -> bool:
     return True
 
 
+_FUNCTION_LIKE_NODE_TYPES = frozenset({
+    "function_definition", "function_declaration", "method_declaration",
+    "function_item", "function_signature_item", "constructor_declaration", "method",
+})
+
+
+def _is_nested_in_function(node: Node) -> bool:
+    """Whether `node` (a function/class/type node about to become a
+    symbol) sits inside another function/method's BODY - a closure, not
+    a real top-level or class-level symbol.
+
+    Caught via dogfooding `aletheore docs` against this repo's own
+    scanner code: the `walk`/`text` helper functions defined inside
+    every `_extract_*` function were being extracted as top-level
+    public symbols, since nothing previously distinguished "top-level
+    function" from "closure defined inside another function." A method
+    inside a class correctly does NOT count as nested here - only
+    class/namespace-shaped ancestors sit between a method and the module
+    root, none of which are in _FUNCTION_LIKE_NODE_TYPES, so the walk
+    passes straight through them to the root without matching.
+
+    One shared node-type set works across every language rather than a
+    set per language: each grammar's function/method node type strings
+    don't collide with another grammar's differently-shaped node of the
+    same name, since a given file is only ever parsed with one grammar.
+    """
+    ancestor = node.parent
+    while ancestor is not None:
+        if ancestor.type in _FUNCTION_LIKE_NODE_TYPES:
+            return True
+        ancestor = ancestor.parent
+    return False
+
+
 def _symbol_entry(
     source: bytes,
     name_node: Node,
@@ -275,7 +309,7 @@ def _extract_python(
                         source, name_node, n,
                         docstring=_python_docstring(source, n),
                         return_type=_python_return_type(source, n),
-                        is_public=_is_public_symbol(name, "python"),
+                        is_public=_is_public_symbol(name, "python") and not _is_nested_in_function(n),
                     ))
             elif n.type == "class_definition":
                 name_node = n.child_by_field_name("name")
@@ -284,7 +318,7 @@ def _extract_python(
                     classes.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_python_docstring(source, n),
-                        is_public=_is_public_symbol(name, "python"),
+                        is_public=_is_public_symbol(name, "python") and not _is_nested_in_function(n),
                     ))
             stack.extend(reversed(n.children))
 
@@ -379,6 +413,7 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
                         source, name_node, n,
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
                         return_type=_ts_return_type(source, n),
+                        is_public=not _is_nested_in_function(n),
                     ))
             elif n.type == "class_declaration":
                 name_node = n.child_by_field_name("name")
@@ -387,6 +422,7 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
                     classes.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        is_public=not _is_nested_in_function(n),
                     ))
             stack.extend(reversed(n.children))
 
@@ -474,7 +510,7 @@ def _extract_go(node: Node, source: bytes) -> tuple[list[str], list[dict], list[
                     functions.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_leading_go_doc_comment(source, n),
-                        is_public=_is_public_symbol(name, "go"),
+                        is_public=_is_public_symbol(name, "go") and not _is_nested_in_function(n),
                     ))
             elif n.type == "type_spec":
                 name_node = n.child_by_field_name("name")
@@ -483,7 +519,7 @@ def _extract_go(node: Node, source: bytes) -> tuple[list[str], list[dict], list[
                     types.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_leading_go_doc_comment(source, n),
-                        is_public=_is_public_symbol(name, "go"),
+                        is_public=_is_public_symbol(name, "go") and not _is_nested_in_function(n),
                     ))
             stack.extend(reversed(n.children))
 
@@ -627,7 +663,10 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
                             source[return_type_node.start_byte:return_type_node.end_byte].decode().strip()
                             if return_type_node is not None else None
                         ),
-                        is_public=any(c.type == "visibility_modifier" for c in n.children),
+                        is_public=(
+                            any(c.type == "visibility_modifier" for c in n.children)
+                            and not _is_nested_in_function(n)
+                        ),
                     ))
             elif n.type in ("struct_item", "enum_item", "trait_item"):
                 name_node = n.child_by_field_name("name")
@@ -635,7 +674,10 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
                     types.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_leading_rust_doc_comment(source, n),
-                        is_public=any(c.type == "visibility_modifier" for c in n.children),
+                        is_public=(
+                            any(c.type == "visibility_modifier" for c in n.children)
+                            and not _is_nested_in_function(n)
+                        ),
                     ))
             stack.extend(reversed(n.children))
 
@@ -783,6 +825,7 @@ def _extract_java(
                         source, name_node, n,
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
                         return_type=_java_return_type(source, n),
+                        is_public=not _is_nested_in_function(n),
                     ))
             elif n.type in (
                 "class_declaration", "interface_declaration", "enum_declaration", "record_declaration",
@@ -793,6 +836,7 @@ def _extract_java(
                     types.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        is_public=not _is_nested_in_function(n),
                     ))
             stack.extend(reversed(n.children))
 
@@ -942,6 +986,7 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
                     functions.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_leading_ruby_doc_comment(source, n),
+                        is_public=not _is_nested_in_function(n),
                     ))
             elif n.type in ("class", "module"):
                 name_node = n.child_by_field_name("name")
@@ -949,6 +994,7 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
                     types.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_leading_ruby_doc_comment(source, n),
+                        is_public=not _is_nested_in_function(n),
                     ))
             stack.extend(reversed(n.children))
 
@@ -1056,6 +1102,7 @@ def _extract_php(node: Node, source: bytes) -> tuple[list[tuple[str, str]], list
                         source, name_node, n,
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
                         return_type=_php_return_type(source, n),
+                        is_public=not _is_nested_in_function(n),
                     ))
             elif n.type in (
                 "class_declaration", "interface_declaration", "trait_declaration", "enum_declaration",
@@ -1066,6 +1113,7 @@ def _extract_php(node: Node, source: bytes) -> tuple[list[tuple[str, str]], list
                     types.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        is_public=not _is_nested_in_function(n),
                     ))
             stack.extend(reversed(n.children))
 
@@ -1205,7 +1253,7 @@ def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[dict],
                                 "return_type": (
                                     text(type_node) if type_node is not None else None
                                 ),
-                                "is_public": True,
+                                "is_public": not _is_nested_in_function(n),
                             }
                         )
             elif n.type in ("struct_specifier", "class_specifier", "union_specifier", "enum_specifier"):
@@ -1224,6 +1272,7 @@ def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[dict],
                     types.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        is_public=not _is_nested_in_function(n),
                     ))
             stack.extend(reversed(n.children))
 
@@ -1336,6 +1385,7 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
                     types.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_leading_csharp_xmldoc(source, n),
+                        is_public=not _is_nested_in_function(n),
                     ))
             elif n.type in ("method_declaration", "constructor_declaration"):
                 name_node = n.child_by_field_name("name")
@@ -1344,6 +1394,7 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
                         source, name_node, n,
                         docstring=_leading_csharp_xmldoc(source, n),
                         return_type=_csharp_return_type(source, n),
+                        is_public=not _is_nested_in_function(n),
                     ))
             stack.extend(reversed(n.children))
 

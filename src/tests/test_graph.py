@@ -125,6 +125,27 @@ def test_python_underscore_prefixed_function_is_marked_private(tmp_path):
     assert by_name["public_fn"]["is_public"] is True
 
 
+def test_python_closure_defined_inside_a_function_is_not_marked_public(tmp_path):
+    # Caught via dogfooding `aletheore docs` against this repo's own scanner code:
+    # nested helper functions like graph.py's own `walk`/`text` closures were being
+    # extracted as if they were top-level public symbols.
+    (tmp_path / "a.py").write_text(
+        "def outer():\n    def inner():\n        pass\n    return inner\n\ndef top_level():\n    pass\n"
+    )
+    modules, _, _ = build_module_graph(tmp_path)
+    by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert by_name["inner"]["is_public"] is False
+    assert by_name["outer"]["is_public"] is True
+    assert by_name["top_level"]["is_public"] is True
+
+
+def test_python_method_inside_a_class_is_not_treated_as_nested_in_a_function(tmp_path):
+    (tmp_path / "a.py").write_text("class Widget:\n    def render(self):\n        pass\n")
+    modules, _, _ = build_module_graph(tmp_path)
+    method = modules[0]["symbols"]["functions"][0]
+    assert method["is_public"] is True
+
+
 def test_build_module_graph_normalizes_multiline_function_signatures(tmp_path):
     # A signature reformatted across multiple lines (wrapped for length,
     # extra indentation) must diff identically to its single-line
