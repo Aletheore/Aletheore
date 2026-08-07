@@ -231,6 +231,20 @@ ollama pull nomic-embed-text
 aletheore index .
 ```
 
+### `aletheore docs [path] [--out .aletheore/docs]`
+
+Generates a grounded markdown API reference from an existing scan - one file per module,
+covering public functions and classes only. Each entry is a signature (with return type,
+where the language annotates one), the extracted docstring/doc-comment, and a `path:line`
+citation. A symbol with no docstring is rendered as explicitly undocumented, never a guessed
+description - same evidence-only contract as everything else here. No LLM call, no account
+needed.
+
+```bash
+aletheore scan .
+aletheore docs . --out docs/api
+```
+
 ### `aletheore audit [path]`
 
 Runs a scan, then uses a selected reasoning provider to write a full grounded report to
@@ -375,6 +389,7 @@ aletheore query hotspots --path .                     # files with the most git 
 aletheore query database --path .                     # detected ORMs, connection strings, migrations
 aletheore query infrastructure --path .                # detected Docker/CI/IaC config
 aletheore query environment-variables --path .
+aletheore query api-reference app/routes.py --path .  # grounded markdown reference for one module
 aletheore query evidence-for-endpoint "GET /users/:id" --path .
 aletheore query evidence-for-symbol handle_login --path .
 aletheore query evidence-for-dependency requests --path .
