@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 
 import tree_sitter_c as tsc
@@ -1089,6 +1090,55 @@ def _extract_csharp_namespace(node: Node, source: bytes) -> str | None:
     return None
 
 
+_CSHARP_SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.DOTALL)
+
+
+def _leading_csharp_xmldoc(source: bytes, enclosing_node: Node) -> str | None:
+    """C#'s XML doc comment convention: one or more contiguous "///" line
+    comments immediately above the declaration (confirmed empirically -
+    tree-sitter-c-sharp emits each line as its own separate "comment"
+    sibling, same shape as Go's "//" doc comments, no wrapper-node issue
+    like Java/JS have for exported/modified declarations).
+
+    Returns the <summary>...</summary> text when the comment uses XML doc
+    tags (the idiomatic C# convention); falls back to the raw concatenated
+    "///" lines when it doesn't (a plain "/// One-line description.").
+    """
+    lines: list[str] = []
+    node = enclosing_node.prev_sibling
+    expected_end_row = enclosing_node.start_point[0] - 1
+    while node is not None and node.type == "comment" and node.end_point[0] == expected_end_row:
+        raw = source[node.start_byte:node.end_byte].decode().strip()
+        if not raw.startswith("///"):
+            break
+        lines.append(raw[3:].strip())
+        expected_end_row = node.start_point[0] - 1
+        node = node.prev_sibling
+
+    if not lines:
+        return None
+    lines.reverse()
+    joined = "\n".join(lines)
+
+    match = _CSHARP_SUMMARY_RE.search(joined)
+    if match:
+        summary_lines = [line.strip() for line in match.group(1).strip().splitlines()]
+        return "\n".join(line for line in summary_lines if line) or None
+    return joined or None
+
+
+def _csharp_return_type(source: bytes, enclosing_node: Node) -> str | None:
+    """method_declaration's own "returns" field (confirmed empirically -
+    NOT "type", unlike Java's equivalent field). constructor_declaration
+    has no such field (constructors have no return type) and correctly
+    gets None.
+    """
+    node = enclosing_node.child_by_field_name("returns")
+    if node is None:
+        return None
+    return source[node.start_byte:node.end_byte].decode().strip()
+
+
 def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
     imports: list[str] = []
     functions: list[dict] = []
@@ -1123,11 +1173,18 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
             ):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    types.append(_symbol_entry(source, name_node, n))
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_csharp_xmldoc(source, n),
+                    ))
             elif n.type in ("method_declaration", "constructor_declaration"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_csharp_xmldoc(source, n),
+                        return_type=_csharp_return_type(source, n),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)

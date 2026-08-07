@@ -184,3 +184,42 @@ def test_build_module_graph_reads_each_csharp_file_only_once(tmp_path):
 
     assert read_counts
     assert all(count == 1 for count in read_counts.values())
+
+
+def test_csharp_extracts_summary_from_xmldoc(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "A.cs").write_text(
+        "public class A {\n"
+        "  /// <summary>\n  /// Adds two numbers.\n  /// </summary>\n"
+        "  public int Add(int a, int b) {\n    return a + b;\n  }\n"
+        "}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers."
+    assert func["return_type"] == "int"
+
+
+def test_csharp_falls_back_to_raw_text_for_non_xml_triple_slash_comment(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "A.cs").write_text(
+        "public class A {\n"
+        "  /// Adds two numbers.\n"
+        "  public int Add(int a, int b) {\n    return a + b;\n  }\n"
+        "}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers."
+
+
+def test_csharp_method_with_no_doc_comment_gets_none(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "A.cs").write_text("public class A {\n  public void F() {}\n}\n")
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] is None
+    assert func["return_type"] == "void"
