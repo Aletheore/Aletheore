@@ -166,3 +166,41 @@ def test_build_module_graph_ruby_method_call_with_receiver_is_not_mistaken_for_r
     _, dependency_graph, _ = build_module_graph(repo)
 
     assert dependency_graph["edges"] == []
+
+
+def test_ruby_extracts_top_level_doc_comment(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.rb").write_text("# Adds two numbers.\ndef add(a, b)\n  a + b\nend\n")
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers."
+
+
+def test_ruby_extracts_doc_comment_for_method_nested_in_class(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.rb").write_text(
+        "class Greeter\n  # Greets someone.\n  def greet(name)\n    name\n  end\nend\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Greets someone."
+
+
+def test_ruby_class_doc_comment_is_extracted(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.rb").write_text("# A greeter.\nclass Greeter\nend\n")
+    modules, _, _ = build_module_graph(repo)
+    cls = modules[0]["symbols"]["classes"][0]
+    assert cls["docstring"] == "A greeter."
+
+
+def test_ruby_method_with_blank_line_before_comment_gets_no_docstring(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.rb").write_text("# Unrelated.\n\ndef add(a, b)\n  a + b\nend\n")
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] is None

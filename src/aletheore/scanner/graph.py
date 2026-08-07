@@ -826,6 +826,44 @@ def _resolve_java_import(
     return []
 
 
+def _leading_ruby_doc_comment(source: bytes, enclosing_node: Node) -> str | None:
+    """Ruby has no compiler-enforced doc-comment syntax (RDoc/YARD are
+    tooling conventions, not grammar) - the de facto convention this
+    supports is one or more contiguous "#" line comments immediately
+    above the def/class/module, same adjacency rule as Go.
+
+    Confirmed empirically via spike a real tree-sitter-ruby surprise: a
+    method's doc comment, when the method is nested inside a class body,
+    is NOT a sibling of the method at all - it's a child of the
+    surrounding class/module node, sitting before that node's
+    body_statement. So method.prev_sibling is None even with a comment
+    directly above it in the source; the comment only turns up at
+    method.parent.prev_sibling (parent being body_statement). A top-level
+    method with no enclosing class has no such wrapper and the comment
+    is directly method.prev_sibling, same as Go.
+    """
+    anchor = enclosing_node
+    node = anchor.prev_sibling
+    if (node is None or node.type != "comment") and anchor.parent is not None:
+        anchor = anchor.parent
+        node = anchor.prev_sibling
+
+    lines: list[str] = []
+    expected_end_row = anchor.start_point[0] - 1
+    while node is not None and node.type == "comment" and node.end_point[0] == expected_end_row:
+        raw = source[node.start_byte:node.end_byte].decode().strip()
+        if raw.startswith("#"):
+            raw = raw[1:].strip()
+        lines.append(raw)
+        expected_end_row = node.start_point[0] - 1
+        node = node.prev_sibling
+
+    if not lines:
+        return None
+    lines.reverse()
+    return "\n".join(lines) or None
+
+
 def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], list[dict], list[dict]]:
     """Return (require/require_relative, path) tuples, method names, and type names."""
     imports: list[tuple[str, str]] = []
@@ -859,11 +897,17 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
             elif n.type == "method":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_ruby_doc_comment(source, n),
+                    ))
             elif n.type in ("class", "module"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    types.append(_symbol_entry(source, name_node, n))
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_ruby_doc_comment(source, n),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
