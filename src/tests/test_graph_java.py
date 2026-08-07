@@ -245,3 +245,41 @@ def test_build_module_graph_reads_each_java_file_only_once(tmp_path):
 
     assert read_counts
     assert all(count == 1 for count in read_counts.values())
+
+
+def test_java_extracts_javadoc_and_return_type(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src" / "main" / "java").mkdir(parents=True)
+    (repo / "src" / "main" / "java" / "A.java").write_text(
+        "public class A {\n"
+        "  /**\n   * Adds two numbers.\n   */\n"
+        "  public int add(int a, int b) {\n    return a + b;\n  }\n"
+        "}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers."
+    assert func["return_type"] == "int"
+
+
+def test_java_class_javadoc_is_extracted(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src" / "main" / "java").mkdir(parents=True)
+    (repo / "src" / "main" / "java" / "Widget.java").write_text(
+        "/**\n * A widget.\n */\npublic class Widget {\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    cls = modules[0]["symbols"]["classes"][0]
+    assert cls["docstring"] == "A widget."
+
+
+def test_java_method_with_no_javadoc_gets_none(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src" / "main" / "java").mkdir(parents=True)
+    (repo / "src" / "main" / "java" / "A.java").write_text(
+        "public class A {\n  public void f() {}\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] is None
+    assert func["return_type"] == "void"

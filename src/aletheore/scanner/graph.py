@@ -255,7 +255,9 @@ def _extract_python(
     return plain_imports, from_imports, functions, classes
 
 
-def _leading_block_comment(enclosing_node: Node, source: bytes, marker: str = "/**") -> str | None:
+def _leading_block_comment(
+    enclosing_node: Node, source: bytes, marker: str = "/**", comment_type: str = "comment"
+) -> str | None:
     """Text of a "/** ... */"-style comment node immediately preceding
     enclosing_node - checking the node's own previous sibling first, then
     (for a declaration wrapped in an export/modifier statement, whose own
@@ -263,17 +265,25 @@ def _leading_block_comment(enclosing_node: Node, source: bytes, marker: str = "/
     previous sibling. Confirmed empirically for JS/TS via spike: an
     "export function f() {}" nests function_declaration inside
     export_statement, and the comment sits before export_statement, not
-    before the nested function_declaration.
+    before the nested function_declaration. Java has no such wrapper (a
+    method_declaration's own prev_sibling is the block_comment directly,
+    also confirmed empirically) but checking the parent too is harmless
+    there since it simply won't match.
 
-    Any comment node is accepted whose raw text starts with `marker`, so a
-    plain "// line comment" (no leading "/**") is correctly treated as not
-    a doc comment.
+    `comment_type` differs per grammar - JS/TS calls every comment
+    "comment" and distinguishes "/** */" from "//" only by text; Java's
+    grammar gives block comments their own node type, "block_comment",
+    entirely separate from line comments.
+
+    Any matching-type comment node is accepted whose raw text starts with
+    `marker`, so a plain "// line comment" is correctly treated as not a
+    doc comment.
     """
     candidates = [enclosing_node.prev_sibling]
     if enclosing_node.parent is not None:
         candidates.append(enclosing_node.parent.prev_sibling)
     for candidate in candidates:
-        if candidate is not None and candidate.type == "comment":
+        if candidate is not None and candidate.type == comment_type:
             raw = source[candidate.start_byte:candidate.end_byte].decode()
             if raw.startswith(marker):
                 return raw
@@ -645,6 +655,17 @@ def _extract_java_package(node: Node, source: bytes) -> str | None:
     return None
 
 
+def _java_return_type(source: bytes, enclosing_node: Node) -> str | None:
+    """method_declaration's own "type" field (confirmed empirically - e.g.
+    node type "integral_type" for "int", "void_type" for "void"). No such
+    field on a class/interface/enum/record declaration.
+    """
+    node = enclosing_node.child_by_field_name("type")
+    if node is None:
+        return None
+    return source[node.start_byte:node.end_byte].decode().strip()
+
+
 def _extract_java(
     node: Node, source: bytes
 ) -> tuple[list[tuple[str, bool, bool]], list[dict], list[dict]]:
@@ -671,13 +692,22 @@ def _extract_java(
             elif n.type == "method_declaration":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source, comment_type="block_comment")
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        return_type=_java_return_type(source, n),
+                    ))
             elif n.type in (
                 "class_declaration", "interface_declaration", "enum_declaration", "record_declaration",
             ):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    types.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source, comment_type="block_comment")
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
