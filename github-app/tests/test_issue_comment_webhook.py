@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -23,7 +23,7 @@ def _mock_permission_check(monkeypatch, permission: str | None, raises: bool = F
         "app_server.webhooks.issue_comment.generate_app_jwt", lambda *a, **k: "fake-jwt"
     )
     monkeypatch.setattr(
-        "app_server.webhooks.issue_comment.get_installation_token", AsyncMock(return_value="fake-token")
+        "app_server.webhooks.issue_comment.get_installation_token", MagicMock(return_value="fake-token")
     )
     if raises:
 

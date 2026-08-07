@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from app_server.config import get_settings
@@ -12,6 +13,13 @@ AUDIT_COMMAND = "/aletheore audit"
 # exactly the set of people an outside PR commenter represents, which is
 # who this check exists to stop.
 AUTHORIZED_PERMISSIONS = ("admin", "write")
+
+
+def _verify_commenter_permission_sync(
+    installation_id: int, app_jwt: str, repo_full_name: str, commenter: str
+) -> str:
+    token = get_installation_token(installation_id, app_jwt)
+    return get_repo_permission_for_user(repo_full_name, commenter, token)
 
 
 async def handle_issue_comment_event(payload: dict, redis_url: str, queue=None) -> None:
@@ -29,8 +37,9 @@ async def handle_issue_comment_event(payload: dict, redis_url: str, queue=None) 
     settings = get_settings()
     try:
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
-        token = await get_installation_token(installation_id, app_jwt)
-        permission = get_repo_permission_for_user(repo_full_name, commenter, token)
+        permission = await asyncio.to_thread(
+            _verify_commenter_permission_sync, installation_id, app_jwt, repo_full_name, commenter
+        )
     except Exception:
         # Fail closed: an API hiccup here should silently drop a legitimate
         # trigger (the maintainer can just comment again), not let an

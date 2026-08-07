@@ -129,7 +129,7 @@ async def _repo_installation_id(pool, org: str, repo: str) -> int:
     return row["installation_id"]
 
 
-async def _administered_installation_ids(github_token: str) -> set[int]:
+def _fetch_administered_installation_ids(github_token: str) -> set[int]:
     response = _github_http_client().get(
         "/user/installations",
         headers={
@@ -139,6 +139,14 @@ async def _administered_installation_ids(github_token: str) -> set[int]:
     )
     response.raise_for_status()
     return {item["id"] for item in response.json().get("installations", [])}
+
+
+async def _administered_installation_ids(github_token: str) -> set[int]:
+    # This gates nearly every admin/dashboard route via
+    # _require_admin_installation - run off the event loop via
+    # asyncio.to_thread so one slow GitHub API round-trip can't stall
+    # every other in-flight request on this single-worker server.
+    return await asyncio.to_thread(_fetch_administered_installation_ids, github_token)
 
 
 async def _administered_installation_ids_or_401(github_token: str) -> set[int]:
