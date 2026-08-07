@@ -73,7 +73,7 @@ PHP, C, C++, and C#**.
   `audit`.
 
 ```yaml
-- uses: Aletheore/Aletheore@v0.7.0
+- uses: Aletheore/Aletheore@v0.7.1
   with:
     fail-on-new-secrets: true
 ```

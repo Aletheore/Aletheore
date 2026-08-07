@@ -11,6 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 from aletheore.cli import (
+    _aletheore_command,
     _ElapsedTicker,
     _MCP_CLIENT_CONFIGS,
     _make_progress_printer,
@@ -176,7 +177,45 @@ def test_mcp_client_configs_cover_the_five_json_targets():
     assert set(_MCP_CLIENT_CONFIGS.keys()) == {"claude-code", "cursor", "vscode", "kiro", "opencode"}
 
 
-def test_stdio_entry_includes_type_only_when_asked():
+def _no_command_resolvable(monkeypatch, tmp_path):
+    # Point sys.executable at a directory with no "aletheore" sibling, and
+    # make a PATH search fail too, so _aletheore_command() genuinely falls
+    # through both resolution strategies to the bare-name fallback -
+    # otherwise this venv's own real, installed aletheore (sitting right
+    # next to the real sys.executable running these tests) would resolve
+    # first and shadow whatever a test is trying to isolate.
+    monkeypatch.setattr("aletheore.cli.sys.executable", str(tmp_path / "python3"))
+    monkeypatch.setattr("aletheore.cli.shutil.which", lambda cmd: None)
+
+
+def test_aletheore_command_prefers_the_sibling_of_the_running_interpreter(monkeypatch, tmp_path):
+    interpreter_dir = tmp_path / "venv" / "bin"
+    interpreter_dir.mkdir(parents=True)
+    (interpreter_dir / "aletheore").write_text("#!/bin/sh\n")
+    monkeypatch.setattr("aletheore.cli.sys.executable", str(interpreter_dir / "python3"))
+    # A which() hit that disagrees with the interpreter sibling must lose -
+    # this is exactly the scenario the sibling-first order exists to avoid.
+    monkeypatch.setattr("aletheore.cli.shutil.which", lambda cmd: "/some/other/aletheore")
+
+    assert _aletheore_command() == str(interpreter_dir / "aletheore")
+
+
+def test_aletheore_command_falls_back_to_path_search_when_no_sibling(monkeypatch, tmp_path):
+    monkeypatch.setattr("aletheore.cli.sys.executable", str(tmp_path / "python3"))
+    monkeypatch.setattr("aletheore.cli.shutil.which", lambda cmd: "/usr/local/bin/aletheore")
+
+    assert _aletheore_command() == "/usr/local/bin/aletheore"
+
+
+def test_aletheore_command_falls_back_to_bare_name_when_not_resolvable(monkeypatch, tmp_path):
+    _no_command_resolvable(monkeypatch, tmp_path)
+
+    assert _aletheore_command() == "aletheore"
+
+
+def test_stdio_entry_includes_type_only_when_asked(monkeypatch, tmp_path):
+    _no_command_resolvable(monkeypatch, tmp_path)
+
     entry_with_type = _stdio_entry(Path("/repo"), include_type=True)
     entry_without_type = _stdio_entry(Path("/repo"), include_type=False)
 
@@ -184,7 +223,18 @@ def test_stdio_entry_includes_type_only_when_asked():
     assert entry_without_type == {"command": "aletheore", "args": ["mcp", "/repo"]}
 
 
-def test_opencode_entry_uses_single_command_array_not_command_plus_args():
+def test_stdio_entry_writes_resolved_absolute_path_when_found(monkeypatch, tmp_path):
+    monkeypatch.setattr("aletheore.cli.sys.executable", str(tmp_path / "python3"))
+    monkeypatch.setattr("aletheore.cli.shutil.which", lambda cmd: "/usr/local/bin/aletheore")
+
+    entry = _stdio_entry(Path("/repo"), include_type=False)
+
+    assert entry == {"command": "/usr/local/bin/aletheore", "args": ["mcp", "/repo"]}
+
+
+def test_opencode_entry_uses_single_command_array_not_command_plus_args(monkeypatch, tmp_path):
+    _no_command_resolvable(monkeypatch, tmp_path)
+
     entry = _opencode_entry(Path("/repo"))
 
     assert entry == {"type": "local", "command": ["aletheore", "mcp", "/repo"], "enabled": True}
@@ -363,22 +413,41 @@ def test_mcp_install_written_entry_points_at_the_resolved_repo_path(tmp_path):
     assert entry["args"] == ["mcp", str(tmp_path.resolve())]
 
 
-def test_mcp_install_opencode_entry_uses_command_array(tmp_path):
-    runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "opencode"])
+def test_mcp_install_opencode_entry_uses_command_array(tmp_path, monkeypatch):
+    install_target = tmp_path / "install-target"
+    install_target.mkdir()
+    _no_command_resolvable(monkeypatch, tmp_path)
+    runner.invoke(app, ["mcp-install", str(install_target), "--target", "opencode"])
 
-    entry = json.loads((tmp_path / "opencode.json").read_text())["mcp"]["aletheore"]
-    assert entry["command"] == ["aletheore", "mcp", str(tmp_path.resolve())]
+    entry = json.loads((install_target / "opencode.json").read_text())["mcp"]["aletheore"]
+    assert entry["command"] == ["aletheore", "mcp", str(install_target.resolve())]
     assert "args" not in entry
 
 
-def test_mcp_install_writes_codex_cli_target(tmp_path):
-    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "codex-cli"])
+def test_mcp_install_writes_codex_cli_target(tmp_path, monkeypatch):
+    install_target = tmp_path / "install-target"
+    install_target.mkdir()
+    _no_command_resolvable(monkeypatch, tmp_path)
+    result = runner.invoke(app, ["mcp-install", str(install_target), "--target", "codex-cli"])
 
     assert result.exit_code == 0
-    config_path = tmp_path / ".codex" / "config.toml"
+    config_path = install_target / ".codex" / "config.toml"
     assert config_path.exists()
     entry = tomllib.loads(config_path.read_text())["mcp_servers"]["aletheore"]
-    assert entry == {"command": "aletheore", "args": ["mcp", str(tmp_path.resolve())]}
+    assert entry == {"command": "aletheore", "args": ["mcp", str(install_target.resolve())]}
+
+
+def test_mcp_install_writes_resolved_absolute_path_when_aletheore_is_on_path(tmp_path, monkeypatch):
+    install_target = tmp_path / "install-target"
+    install_target.mkdir()
+    monkeypatch.setattr("aletheore.cli.sys.executable", str(tmp_path / "python3"))
+    monkeypatch.setattr("aletheore.cli.shutil.which", lambda cmd: "/opt/venv/bin/aletheore")
+
+    result = runner.invoke(app, ["mcp-install", str(install_target), "--target", "claude-code"])
+
+    assert result.exit_code == 0
+    entry = json.loads((install_target / ".mcp.json").read_text())["mcpServers"]["aletheore"]
+    assert entry["command"] == "/opt/venv/bin/aletheore"
 
 
 def test_mcp_install_is_idempotent_and_does_not_duplicate_entries(tmp_path):
