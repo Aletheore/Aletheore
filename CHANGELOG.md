@@ -22,6 +22,11 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
   a deletion-only hunk's collapsed boundary was rejected before its content could be checked,
   silently turning a true positive into "No issues found."
 - Fixed Flash Review repeating the same zero-grounded-findings message twice in one comment.
+- Fixed `mcp-install` writing the bare command name `"aletheore"` into every coding-tool config
+  instead of an absolute path — silently broken whenever the launching tool's subprocess PATH
+  doesn't include wherever `aletheore` was actually installed (the common case for a
+  pip-installed-in-a-venv install launched by a GUI coding tool). Now resolves to the exact
+  install that ran `mcp-install`.
 - Three hosted-audit hardening fixes: a fail-closed collaborator permission check before running a
   triggered audit, credential stripping on reused checkouts, and Docker socket isolation via a
   narrow-purpose sidecar (verified live against production).
