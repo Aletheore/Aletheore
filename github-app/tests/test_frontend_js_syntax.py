@@ -15,7 +15,7 @@ from app_server import frontend
 # Python happily accepts it - the bug only shows up as broken JavaScript in
 # a real browser. Real bug, caught this way once already: see the commit
 # that added this test.
-_SCRIPT_BLOCK = re.compile(r"<script>(.*?)</script>", re.DOTALL)
+_SCRIPT_BLOCK = re.compile(r"<script>(.*?)</script>", re.DOTALL | re.IGNORECASE)
 
 _PAGE_CONSTANTS = [
     name
