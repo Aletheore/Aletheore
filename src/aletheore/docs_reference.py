@@ -3,11 +3,21 @@ no LLM call, no invented prose. A symbol with no extracted docstring is
 rendered as explicitly undocumented rather than given a guessed
 description, matching the same grounding contract citation_verifier and
 the audit report already enforce elsewhere in this codebase.
+
+An optional `ai_descriptions` argument lets a caller (the hosted, paid-tier
+Docs feature - see scan_worker/live_docs.py) supply already-generated,
+already-verified text for symbols with no docstring, or a polished rewrite
+of an existing one. This module stays LLM-free either way: it only ever
+renders text handed to it, and always marks AI-touched text distinctly from
+the developer's own verbatim words - never silently presented as source
+comments that were never written.
 """
 
 import inspect
 
 UNDOCUMENTED = "*Undocumented - no docstring found.*"
+AI_GENERATED_MARKER = "*(AI-generated - no docstring found in source)*"
+AI_POLISHED_MARKER = "*(AI-polished from the original docstring)*"
 
 
 def _render_signature(symbol: dict) -> str:
@@ -32,21 +42,36 @@ def _render_docstring(docstring: str | None) -> str:
     return inspect.cleandoc(docstring)
 
 
-def _render_symbol(symbol: dict, module_path: str) -> str:
+def _render_symbol(symbol: dict, module_path: str, ai_descriptions: dict[str, dict] | None) -> str:
+    ai_entry = (ai_descriptions or {}).get(symbol["name"])
+    if ai_entry is not None:
+        marker = AI_POLISHED_MARKER if ai_entry.get("mode") == "polished" else AI_GENERATED_MARKER
+        body = f"{ai_entry['description']}\n\n{marker}"
+    else:
+        body = _render_docstring(symbol.get("docstring"))
+
     lines = [
         f"### `{_render_signature(symbol)}`",
         "",
-        _render_docstring(symbol.get("docstring")),
+        body,
         "",
         f"`{module_path}:{symbol['start_line']}`",
     ]
     return "\n".join(lines)
 
 
-def build_module_reference(evidence: dict, module_path: str) -> str:
+def build_module_reference(
+    evidence: dict, module_path: str, ai_descriptions: dict[str, dict] | None = None
+) -> str:
     """Markdown API reference for one module's public symbols. Raises
     ValueError for a module path not present in evidence, matching the
     error style of query.py's other target-requiring lookups.
+
+    `ai_descriptions`, when given, is keyed by symbol name with
+    {"description": str, "mode": "generated" | "polished"} values (the
+    exact shape scan_worker.live_docs.generate_file_descriptions returns) -
+    a symbol name absent from it renders exactly as it would with no
+    `ai_descriptions` argument at all.
     """
     module = next(
         (m for m in evidence["repository"]["modules"] if m["path"] == module_path), None
@@ -62,13 +87,13 @@ def build_module_reference(evidence: dict, module_path: str) -> str:
         sections.append("## Classes")
         sections.append("")
         for cls in classes:
-            sections.append(_render_symbol(cls, module_path))
+            sections.append(_render_symbol(cls, module_path, ai_descriptions))
             sections.append("")
     if functions:
         sections.append("## Functions")
         sections.append("")
         for func in functions:
-            sections.append(_render_symbol(func, module_path))
+            sections.append(_render_symbol(func, module_path, ai_descriptions))
             sections.append("")
     if not classes and not functions:
         sections.append("*No public symbols found.*")
@@ -77,7 +102,9 @@ def build_module_reference(evidence: dict, module_path: str) -> str:
     return "\n".join(sections).rstrip() + "\n"
 
 
-def build_api_reference(evidence: dict) -> dict[str, str]:
+def build_api_reference(
+    evidence: dict, ai_descriptions_by_module: dict[str, dict[str, dict]] | None = None
+) -> dict[str, str]:
     """Module path -> rendered markdown, for every module with at least
     one public function or class. Modules with no public surface (empty
     files, purely-private helpers) are omitted rather than rendered as
@@ -90,5 +117,8 @@ def build_api_reference(evidence: dict) -> dict[str, str]:
             for symbol in module["symbols"]["classes"] + module["symbols"]["functions"]
         )
         if has_public_symbol:
-            reference[module["path"]] = build_module_reference(evidence, module["path"])
+            ai_descriptions = (ai_descriptions_by_module or {}).get(module["path"])
+            reference[module["path"]] = build_module_reference(
+                evidence, module["path"], ai_descriptions
+            )
     return reference

@@ -91,3 +91,52 @@ def test_build_api_reference_returns_one_entry_per_module_with_at_least_one_publ
     refs = build_api_reference(evidence)
     assert set(refs) == {"src/a.py"}
     assert "f" in refs["src/a.py"]
+
+
+def test_build_module_reference_renders_ai_generated_description_with_marker():
+    evidence = {"repository": {"modules": [_module("src/a.py", [_symbol("f", docstring=None)])]}}
+    md = build_module_reference(
+        evidence, "src/a.py",
+        ai_descriptions={"f": {"description": "Does the thing.", "mode": "generated"}},
+    )
+    assert "Does the thing." in md
+    assert "AI-generated" in md
+    assert UNDOCUMENTED not in md
+
+
+def test_build_module_reference_renders_polished_description_with_marker():
+    evidence = {"repository": {"modules": [_module(
+        "src/a.py", [_symbol("f", docstring="does thing ok")]
+    )]}}
+    md = build_module_reference(
+        evidence, "src/a.py",
+        ai_descriptions={"f": {"description": "Does the thing correctly.", "mode": "polished"}},
+    )
+    assert "Does the thing correctly." in md
+    assert "AI-polished" in md
+    assert "does thing ok" not in md
+
+
+def test_build_module_reference_ignores_ai_descriptions_for_symbols_not_in_it():
+    evidence = {"repository": {"modules": [_module(
+        "src/a.py", [_symbol("f", docstring="Real docstring.")]
+    )]}}
+    md = build_module_reference(
+        evidence, "src/a.py",
+        ai_descriptions={"other_symbol": {"description": "x", "mode": "generated"}},
+    )
+    assert "Real docstring." in md
+    assert "AI-generated" not in md
+    assert "AI-polished" not in md
+
+
+def test_build_api_reference_threads_ai_descriptions_by_module():
+    evidence = {"repository": {"modules": [
+        _module("src/a.py", [_symbol("f", docstring=None)]),
+        _module("src/b.py", [_symbol("g", docstring=None)]),
+    ]}}
+    refs = build_api_reference(evidence, ai_descriptions_by_module={
+        "src/a.py": {"f": {"description": "Generated for f.", "mode": "generated"}},
+    })
+    assert "Generated for f." in refs["src/a.py"]
+    assert UNDOCUMENTED in refs["src/b.py"]
