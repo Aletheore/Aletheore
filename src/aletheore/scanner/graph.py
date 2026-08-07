@@ -255,6 +255,60 @@ def _extract_python(
     return plain_imports, from_imports, functions, classes
 
 
+def _leading_block_comment(enclosing_node: Node, source: bytes, marker: str = "/**") -> str | None:
+    """Text of a "/** ... */"-style comment node immediately preceding
+    enclosing_node - checking the node's own previous sibling first, then
+    (for a declaration wrapped in an export/modifier statement, whose own
+    prev_sibling is the "export" keyword, not the comment) the parent's
+    previous sibling. Confirmed empirically for JS/TS via spike: an
+    "export function f() {}" nests function_declaration inside
+    export_statement, and the comment sits before export_statement, not
+    before the nested function_declaration.
+
+    Any comment node is accepted whose raw text starts with `marker`, so a
+    plain "// line comment" (no leading "/**") is correctly treated as not
+    a doc comment.
+    """
+    candidates = [enclosing_node.prev_sibling]
+    if enclosing_node.parent is not None:
+        candidates.append(enclosing_node.parent.prev_sibling)
+    for candidate in candidates:
+        if candidate is not None and candidate.type == "comment":
+            raw = source[candidate.start_byte:candidate.end_byte].decode()
+            if raw.startswith(marker):
+                return raw
+    return None
+
+
+def _strip_jsdoc_stars(raw: str) -> str | None:
+    """"/** ... */" -> its text, with the comment delimiters and each
+    line's leading "* " stripped.
+    """
+    text = raw.strip()
+    if text.startswith("/**"):
+        text = text[3:]
+    elif text.startswith("/*"):
+        text = text[2:]
+    if text.endswith("*/"):
+        text = text[:-2]
+    lines = [line.strip().lstrip("*").strip() for line in text.splitlines()]
+    cleaned = "\n".join(line for line in lines if line)
+    return cleaned or None
+
+
+def _ts_return_type(source: bytes, enclosing_node: Node) -> str | None:
+    """TypeScript's own "return_type" field (node type "type_annotation",
+    raw text including a leading ": " - confirmed empirically via spike).
+    Always None when parsed with the plain JS grammar, since the field
+    simply doesn't exist there - safe to call unconditionally for both.
+    """
+    node = enclosing_node.child_by_field_name("return_type")
+    if node is None:
+        return None
+    text = source[node.start_byte:node.end_byte].decode().strip()
+    return text[1:].strip() if text.startswith(":") else text
+
+
 def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
     imports: list[str] = []
     functions: list[dict] = []
@@ -273,11 +327,20 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
             elif n.type == "function_declaration":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source)
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        return_type=_ts_return_type(source, n),
+                    ))
             elif n.type == "class_declaration":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    classes.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source)
+                    classes.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)

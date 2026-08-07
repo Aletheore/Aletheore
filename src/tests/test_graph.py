@@ -154,6 +154,52 @@ def test_build_module_graph_extracts_javascript_imports(tmp_path):
     assert unparseable == []
 
 
+def test_javascript_extracts_jsdoc_comment(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.js").write_text(
+        "/**\n * Adds two numbers.\n */\nfunction add(a, b) {\n  return a + b;\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers."
+
+
+def test_javascript_extracts_jsdoc_comment_on_exported_function(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.js").write_text(
+        "/**\n * Adds two numbers.\n */\nexport function add(a, b) {\n  return a + b;\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers."
+
+
+def test_javascript_function_with_no_leading_comment_gets_none(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.js").write_text("function add(a, b) {\n  return a + b;\n}\n")
+    modules, _, _ = build_module_graph(repo)
+    assert modules[0]["symbols"]["functions"][0]["docstring"] is None
+
+
+def test_javascript_plain_line_comment_is_not_treated_as_jsdoc(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.js").write_text("// just a note\nfunction add(a, b) {\n  return a + b;\n}\n")
+    modules, _, _ = build_module_graph(repo)
+    assert modules[0]["symbols"]["functions"][0]["docstring"] is None
+
+
+def test_typescript_extracts_return_type(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.ts").write_text("function add(a: number, b: number): number {\n  return a + b;\n}\n")
+    modules, _, _ = build_module_graph(repo)
+    assert modules[0]["symbols"]["functions"][0]["return_type"] == "number"
+
+
 def test_build_module_graph_skips_non_source_files_silently(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
