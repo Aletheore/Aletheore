@@ -526,6 +526,38 @@ def _rust_use_paths(node: Node, source: bytes) -> list[str]:
     return [text(node)]
 
 
+def _leading_rust_doc_comment(source: bytes, enclosing_node: Node) -> str | None:
+    """Rust's dominant doc-comment convention: one or more contiguous "///"
+    line comments immediately above the item, with no blank line in
+    between (the same rule rustdoc itself follows for turning "///" into
+    documentation). "/** */" block doc comments and #[doc = "..."]
+    attributes are real but much rarer in practice - out of scope for
+    this pass, matching the plan's "confirmed empirically, not assumed"
+    approach: only what was actually verified gets implemented.
+
+    Confirmed empirically via spike that tree-sitter-rust's line_comment
+    node span INCLUDES the trailing newline - unlike Go, where a
+    comment's end_point row equals its own last content row, here it
+    equals the NEXT row (comment.end_point[0] == following_node.
+    start_point[0] for two truly adjacent lines, not off by one).
+    """
+    lines: list[str] = []
+    node = enclosing_node.prev_sibling
+    expected_end_row = enclosing_node.start_point[0]
+    while node is not None and node.type == "line_comment" and node.end_point[0] == expected_end_row:
+        raw = source[node.start_byte:node.end_byte].decode().strip()
+        if not raw.startswith("///"):
+            break
+        lines.append(raw[3:].strip())
+        expected_end_row = node.start_point[0]
+        node = node.prev_sibling
+
+    if not lines:
+        return None
+    lines.reverse()
+    return "\n".join(lines) or None
+
+
 def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
     """Return flattened use-path strings, function/method names, and type names."""
     imports: list[str] = []
@@ -547,11 +579,22 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
             elif n.type in ("function_item", "function_signature_item"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    return_type_node = n.child_by_field_name("return_type")
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_rust_doc_comment(source, n),
+                        return_type=(
+                            source[return_type_node.start_byte:return_type_node.end_byte].decode().strip()
+                            if return_type_node is not None else None
+                        ),
+                    ))
             elif n.type in ("struct_item", "enum_item", "trait_item"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    types.append(_symbol_entry(source, name_node, n))
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_rust_doc_comment(source, n),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
