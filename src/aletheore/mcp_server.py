@@ -2,7 +2,7 @@ import json
 import re
 from pathlib import Path, PurePath
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from aletheore.adapters.base import AgentAdapter
 from aletheore.answer import answer_question
@@ -71,7 +71,7 @@ def read_evidence(repo_path: Path) -> dict:
 
 def _toon_result(data: object) -> str:
     # Every tool result is TOON-encoded rather than returned as a plain dict
-    # (which FastMCP would otherwise auto-serialize to JSON) - this is the
+    # (which MCPServer would otherwise auto-serialize to JSON) - this is the
     # actual token-cost surface for whatever agent is calling these tools,
     # and evidence's own shape (uniform arrays of same-shaped objects almost
     # everywhere) is exactly TOON's best case.
@@ -125,7 +125,7 @@ _QUERY_TOOL_DESCRIPTIONS = {
 _SEARCH_MATCH_CAP = 200
 
 
-def _register_query_wrapper_tools(mcp_instance: FastMCP, repo_path: Path) -> None:
+def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     for tool_name, kind in _TOOL_NAME_TO_QUERY_KIND.items():
         func, requires_target = QUERY_FUNCTIONS[kind]
 
@@ -150,7 +150,7 @@ def _register_query_wrapper_tools(mcp_instance: FastMCP, repo_path: Path) -> Non
         mcp_instance.tool(name=tool_name)(tool_func)
 
 
-def _register_changes_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_changes")
     def aletheore_changes(full: bool = False) -> str:
         """What changed between the two most recent scans of this repo."""
@@ -165,7 +165,7 @@ def _register_changes_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
         return _toon_result(compute_diff(old, new, full=full))
 
 
-def _register_neighborhood_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_neighborhood")
     def aletheore_neighborhood(target: str) -> str:
         """A module's imports, dependents, and cluster in one call."""
@@ -186,7 +186,7 @@ def _register_neighborhood_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
         )
 
 
-def _register_search_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search")
     def aletheore_search(pattern: str, regex: bool = False, path_glob: str | None = None) -> str:
         """Deterministic literal or regex search over the repository's source files."""
@@ -216,7 +216,7 @@ def _register_search_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
         return _toon_result({"matches": matches, "truncated": truncated})
 
 
-def _register_symbol_source_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_symbol_source")
     def aletheore_symbol_source(module: str, symbol: str) -> str:
         """Exact source text for one named function/class, with resolved line bounds."""
@@ -224,7 +224,7 @@ def _register_symbol_source_tool(mcp_instance: FastMCP, repo_path: Path) -> None
         return _toon_result(find_symbol_source(evidence, repo_path, module, symbol))
 
 
-def _register_code_evidence_tools(mcp_instance: FastMCP, repo_path: Path) -> None:
+def _register_code_evidence_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_find_evidence_for_endpoint")
     def aletheore_find_evidence_for_endpoint(method: str, path: str) -> str:
         """Resolve an API endpoint to source evidence: file, line, symbol, owner, commit, dependency, and risk."""
@@ -275,7 +275,7 @@ def _scan_summary(evidence: dict) -> dict:
     }
 
 
-def _register_scan_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+def _register_scan_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_scan")
     def aletheore_scan(
         check_vulnerabilities: bool = True,
@@ -296,7 +296,7 @@ def _register_scan_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
         return _toon_result(_scan_summary(evidence))
 
 
-def _register_healthcheck_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+def _register_healthcheck_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_healthcheck")
     def aletheore_healthcheck(base_url: str) -> str:
         """GET-only live health check of mapped API endpoints against a running instance."""
@@ -307,7 +307,7 @@ def _register_healthcheck_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
         return _toon_result(result)
 
 
-def _register_index_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+def _register_index_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_index")
     def aletheore_index() -> str:
         """Build the semantic search index this repo's evidence, required
@@ -329,7 +329,7 @@ _NO_INDEX_ERROR = {
 }
 
 
-def _register_search_codebase_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+def _register_search_codebase_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search_codebase")
     def aletheore_search_codebase(query: str, k: int = 10) -> str:
         """Semantic search over the repository's indexed code."""
@@ -340,7 +340,7 @@ def _register_search_codebase_tool(mcp_instance: FastMCP, repo_path: Path) -> No
 
 
 def _register_answer_tool(
-    mcp_instance: FastMCP, repo_path: Path, answer_adapter: AgentAdapter
+    mcp_instance: MCPServer, repo_path: Path, answer_adapter: AgentAdapter
 ) -> None:
     @mcp_instance.tool(name="aletheore_answer")
     def aletheore_answer(question: str, k: int = 5) -> str:
@@ -351,7 +351,7 @@ def _register_answer_tool(
             return _toon_result(_NO_INDEX_ERROR)
 
 
-def _register_managed_audit_tool(mcp_instance: FastMCP, repo_path: Path) -> None:
+def _register_managed_audit_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_managed_audit")
     def aletheore_managed_audit(token: str | None = None) -> str:
         """Run a full audit report using Aletheore's managed audit service."""
@@ -373,8 +373,8 @@ def _register_managed_audit_tool(mcp_instance: FastMCP, repo_path: Path) -> None
         return _toon_result({"report": run_managed_audit_request(evidence, resolved_token)})
 
 
-def build_server(repo_path: Path, answer_adapter: AgentAdapter | None = None) -> FastMCP:
-    mcp_instance = FastMCP("aletheore")
+def build_server(repo_path: Path, answer_adapter: AgentAdapter | None = None) -> MCPServer:
+    mcp_instance = MCPServer("aletheore")
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)
