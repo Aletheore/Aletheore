@@ -16,8 +16,6 @@ This is the real, working CLI package — the same code that runs in CI (a real 
 1,600+ tests across this package and the hosted service) and in production behind the hosted
 GitHub App (see `../github-app/`). Full project overview: [`../README.md`](../README.md).
 
-## What this is
-
 ## Quickstart
 
 ```bash
@@ -546,7 +544,7 @@ It only ever calls `aletheore scan` and `aletheore diff`, matching the reasoning
 something fast and deterministic, not a full agent-driven audit.
 
 ```yaml
-- uses: Aletheore/Aletheore@v0.6.0    # pin to a tagged release, not @master
+- uses: Aletheore/Aletheore@v0.7.1    # pin to a tagged release, not @master
   with:
     fail-on-new-secrets: true              # exit 1 if a new real (non-placeholder) secret appears
     fail-on-new-vulnerabilities: true      # exit 1 if a new dependency vulnerability appears
