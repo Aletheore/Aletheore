@@ -1151,12 +1151,19 @@ def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[dict],
                 if declarator_node is not None:
                     name = function_name(declarator_node)
                     if name is not None:
+                        raw_doc = _leading_block_comment(n, source)
+                        type_node = n.child_by_field_name("type")
                         functions.append(
                             {
                                 "name": name,
                                 "start_line": n.start_point[0] + 1,
                                 "end_line": n.end_point[0] + 1,
                                 "params": _params_text(source, n),
+                                "docstring": _strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                                "return_type": (
+                                    text(type_node) if type_node is not None else None
+                                ),
+                                "is_public": True,
                             }
                         )
             elif n.type in ("struct_specifier", "class_specifier", "union_specifier", "enum_specifier"):
@@ -1171,7 +1178,11 @@ def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[dict],
                 )
                 name_node = n.child_by_field_name("name")
                 if name_node is not None and has_body:
-                    types.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source)
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
