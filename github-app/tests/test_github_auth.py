@@ -1,6 +1,5 @@
 import httpx
 import jwt
-import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -32,8 +31,7 @@ def test_generated_jwt_is_verifiable_with_public_key():
     assert decoded["iss"] == "12345"
 
 
-@pytest.mark.asyncio
-async def test_get_installation_token_returns_token_from_response():
+def test_get_installation_token_returns_token_from_response():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/app/installations/999/access_tokens"
         assert request.headers["Authorization"] == "Bearer fake-jwt"
@@ -43,5 +41,5 @@ async def test_get_installation_token_returns_token_from_response():
         )
 
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
-    token = await get_installation_token(999, "fake-jwt", http_client=client)
+    token = get_installation_token(999, "fake-jwt", http_client=client)
     assert token == "ghs_faketoken123"

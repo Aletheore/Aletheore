@@ -217,7 +217,7 @@ async def test_list_my_repos_includes_uninitialized_repos_with_no_scan_yet(pool,
 
     monkeypatch.setattr("app_server.dashboard.generate_app_jwt", lambda *a, **k: "fake-jwt")
 
-    async def fake_get_installation_token(installation_id, app_jwt, http_client=None):
+    def fake_get_installation_token(installation_id, app_jwt, http_client=None):
         return "fake-installation-token"
 
     monkeypatch.setattr("app_server.dashboard.get_installation_token", fake_get_installation_token)
@@ -279,7 +279,7 @@ async def test_list_my_repos_flags_uninitialized_repos_when_monthly_scan_cap_rea
 
     monkeypatch.setattr("app_server.dashboard.generate_app_jwt", lambda *a, **k: "fake-jwt")
 
-    async def fake_get_installation_token(installation_id, app_jwt, http_client=None):
+    def fake_get_installation_token(installation_id, app_jwt, http_client=None):
         return "fake-installation-token"
 
     monkeypatch.setattr("app_server.dashboard.get_installation_token", fake_get_installation_token)
@@ -339,7 +339,7 @@ async def test_list_my_repos_does_not_duplicate_already_scanned_repos(pool, monk
 
     monkeypatch.setattr("app_server.dashboard.generate_app_jwt", lambda *a, **k: "fake-jwt")
 
-    async def fake_get_installation_token(installation_id, app_jwt, http_client=None):
+    def fake_get_installation_token(installation_id, app_jwt, http_client=None):
         return "fake-installation-token"
 
     monkeypatch.setattr("app_server.dashboard.get_installation_token", fake_get_installation_token)
@@ -396,7 +396,7 @@ async def test_list_my_repos_ignores_github_failure_when_fetching_uninitialized_
 
     monkeypatch.setattr("app_server.dashboard.generate_app_jwt", lambda *a, **k: "fake-jwt")
 
-    async def fake_get_installation_token(installation_id, app_jwt, http_client=None):
+    def fake_get_installation_token(installation_id, app_jwt, http_client=None):
         raise httpx.HTTPStatusError(
             "boom",
             request=httpx.Request("POST", "https://api.github.com/x"),

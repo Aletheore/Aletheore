@@ -14,7 +14,7 @@ def generate_app_jwt(app_id: str, private_key_pem: str) -> str:
     return jwt.encode(payload, private_key_pem, algorithm="RS256")
 
 
-async def get_installation_token(
+def get_installation_token(
     installation_id: int,
     app_jwt: str,
     http_client: httpx.Client | None = None,

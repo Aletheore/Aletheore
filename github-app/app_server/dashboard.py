@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -61,6 +62,19 @@ def find_stale_endpoints(
     return stale
 
 
+def _fetch_uninitialized_repos_sync(installation_id: int, app_jwt: str) -> list[dict]:
+    token = get_installation_token(installation_id, app_jwt)
+    response = _github_http_client().get(
+        "/installation/repositories",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    response.raise_for_status()
+    return response.json().get("repositories", [])
+
+
 async def _uninitialized_repos_for_installation(
     installation_id: int, plan: str, already_known: set[str], scan_limit_reached: bool = False
 ) -> list[dict]:
@@ -84,20 +98,14 @@ async def _uninitialized_repos_for_installation(
     try:
         settings = get_settings()
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
-        token = await get_installation_token(installation_id, app_jwt)
-        response = _github_http_client().get(
-            "/installation/repositories",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-            },
+        repositories = await asyncio.to_thread(
+            _fetch_uninitialized_repos_sync, installation_id, app_jwt
         )
-        response.raise_for_status()
     except Exception:
         return []
 
     result = []
-    for repo in response.json().get("repositories", []):
+    for repo in repositories:
         full_name = repo["full_name"]
         if full_name in already_known:
             continue

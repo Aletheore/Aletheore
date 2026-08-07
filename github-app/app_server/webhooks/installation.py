@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import httpx
@@ -9,10 +10,8 @@ from app_server.github_auth import generate_app_jwt, get_installation_token
 logger = logging.getLogger(__name__)
 
 
-async def _fetch_all_installation_repo_full_names(installation_id: int) -> list[str]:
-    settings = get_settings()
-    app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
-    token = await get_installation_token(installation_id, app_jwt)
+def _fetch_installation_repos_sync(installation_id: int, app_jwt: str) -> list[str]:
+    token = get_installation_token(installation_id, app_jwt)
     response = httpx.Client(base_url="https://api.github.com").get(
         "/installation/repositories",
         headers={
@@ -22,6 +21,12 @@ async def _fetch_all_installation_repo_full_names(installation_id: int) -> list[
     )
     response.raise_for_status()
     return [repo["full_name"] for repo in response.json().get("repositories", [])]
+
+
+async def _fetch_all_installation_repo_full_names(installation_id: int) -> list[str]:
+    settings = get_settings()
+    app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+    return await asyncio.to_thread(_fetch_installation_repos_sync, installation_id, app_jwt)
 
 
 async def handle_installation_event(
