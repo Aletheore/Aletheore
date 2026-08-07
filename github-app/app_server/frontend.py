@@ -1441,8 +1441,8 @@ async function addMember() {{
 async function generateToken() {{
   const input = document.getElementById('new-token-label');
   const label = input.value.trim();
-  if (!label) return;
   const out = document.getElementById('token-reveal');
+  if (!label) {{ out.innerHTML = '<div class="error-banner">Give the token a label first.</div>'; input.focus(); return; }}
   const res = await fetch(adminBase + '/tokens', {{
     method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ label: label }}),
   }});
@@ -1551,6 +1551,7 @@ async function loadSettings() {{
           '<div class="form-row"><input class="field" id="new-token-label" placeholder="Token label, e.g. CI pipeline">' +
           '<button class="btn" onclick="generateToken()">Generate</button></div>' +
           '<div id="token-reveal"></div>' +
+          '<div class="settings-block-hint">Used to authenticate the CLI (<code>aletheore login</code> or <code>ALETHEORE_API_TOKEN</code>) and the MCP server\\'s <code>aletheore_managed_audit</code> tool against this installation\\'s hosted managed audits, and to send runtime events from your app into Aletheore. Give each token a label so you can tell them apart later, and revoke one any time without affecting the others.</div>' +
         '</div>' +
       '</div>' +
       '<div>' +

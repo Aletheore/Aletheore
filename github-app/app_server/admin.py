@@ -350,7 +350,20 @@ async def buy_extra_seat(org: str, repo: str, request: Request):
         items = _build_updated_seat_items(subscription.get("items", []), delta=1)
         update_paddle_subscription_items(settings.paddle_api_key, subscription_id, items, "prorated_immediately")
     except PaddleAPIError as exc:
-        raise HTTPException(status_code=502, detail=f"could not update billing: {exc}") from exc
+        # exc's message includes the raw Paddle response (URL, status code,
+        # docs link) - useful in a log, not something to hand an end user
+        # verbatim. Logged with the installation for whoever's debugging;
+        # the customer gets a message that tells them what to do next.
+        logger.error(
+            "seat purchase failed for installation %s (subscription %s): %s",
+            installation["installation_id"],
+            subscription_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Could not update billing right now - please try again, or contact support if this keeps happening.",
+        ) from exc
 
     # extra_seats itself is reconciled from the resulting subscription.updated
     # webhook, not set optimistically here - same pattern installations.plan
@@ -373,7 +386,16 @@ async def remove_extra_seat(org: str, repo: str, request: Request):
             raise HTTPException(status_code=409, detail="no extra seats to remove")
         update_paddle_subscription_items(settings.paddle_api_key, subscription_id, items, "prorated_immediately")
     except PaddleAPIError as exc:
-        raise HTTPException(status_code=502, detail=f"could not update billing: {exc}") from exc
+        logger.error(
+            "seat removal failed for installation %s (subscription %s): %s",
+            installation["installation_id"],
+            subscription_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Could not update billing right now - please try again, or contact support if this keeps happening.",
+        ) from exc
 
     return {"ok": True}
 
