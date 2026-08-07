@@ -347,6 +347,46 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
     return imports, functions, classes
 
 
+def _leading_go_doc_comment(source: bytes, enclosing_node: Node) -> str | None:
+    """Go's doc-comment convention: one or more contiguous "//" line
+    comments immediately above the declaration, with no blank line in
+    between (a blank line makes it "just a comment", not documentation -
+    the same rule `go doc` itself follows). tree-sitter-go emits each line
+    as its own separate "comment" sibling node (confirmed empirically),
+    so this walks backward collecting contiguous ones rather than
+    expecting one merged node.
+
+    A type_spec ("type Foo struct {...}") nests inside a wrapping
+    type_declaration the same way Python's export_statement wraps a
+    function_declaration - the comment sits before the wrapper, not
+    before type_spec itself (also confirmed empirically) - so the walk
+    starts from the parent when the node's own prev_sibling isn't a
+    comment.
+    """
+    anchor = enclosing_node
+    node = anchor.prev_sibling
+    if (node is None or node.type != "comment") and anchor.parent is not None:
+        anchor = anchor.parent
+        node = anchor.prev_sibling
+
+    lines: list[str] = []
+    expected_end_row = anchor.start_point[0] - 1
+    while node is not None and node.type == "comment" and node.end_point[0] == expected_end_row:
+        raw = source[node.start_byte:node.end_byte].decode().strip()
+        if raw.startswith("//"):
+            raw = raw[2:].strip()
+        elif raw.startswith("/*") and raw.endswith("*/"):
+            raw = raw[2:-2].strip()
+        lines.append(raw)
+        expected_end_row = node.start_point[0] - 1
+        node = node.prev_sibling
+
+    if not lines:
+        return None
+    lines.reverse()
+    return "\n".join(lines) or None
+
+
 def _extract_go(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
     """Return raw import path strings, function/method names, and type names."""
     imports: list[str] = []
@@ -383,11 +423,17 @@ def _extract_go(node: Node, source: bytes) -> tuple[list[str], list[dict], list[
                             name_node = child
                             break
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_go_doc_comment(source, n),
+                    ))
             elif n.type == "type_spec":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    types.append(_symbol_entry(source, name_node, n))
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_go_doc_comment(source, n),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
