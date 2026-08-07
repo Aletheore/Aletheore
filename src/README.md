@@ -16,8 +16,6 @@ This is the real, working CLI package — the same code that runs in CI (a real 
 1,600+ tests across this package and the hosted service) and in production behind the hosted
 GitHub App (see `../github-app/`). Full project overview: [`../README.md`](../README.md).
 
-## What this is
-
 ## Quickstart
 
 ```bash

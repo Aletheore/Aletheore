@@ -1,4 +1,5 @@
 import json
+import shutil
 import socket
 import sys
 import threading
@@ -758,15 +759,40 @@ def _mcp(repo_path: str, forced_agent: str | None = None) -> int:
     return 0
 
 
+def _aletheore_command() -> str:
+    # A bare "aletheore" only resolves if the launching process inherits the
+    # same PATH the install happened under - true for a terminal-launched
+    # coding tool, false for most GUI-launched ones (they don't source
+    # .zshrc/.bashrc, so a pip-installed-in-a-venv or pipx-installed
+    # aletheore silently isn't on PATH from the tool's point of view, and
+    # the MCP server fails to start with no explanation). Writing the
+    # already-resolved absolute path removes that dependency entirely.
+    #
+    # Prefer the console script sitting next to *this exact* interpreter
+    # (sys.executable) over a bare shutil.which() PATH search: which()
+    # returns whatever "aletheore" resolves to on the current PATH, which
+    # can be a different install than the one actually running this
+    # command right now (e.g. this venv's binary invoked by absolute path
+    # without activating the venv first, while some other aletheore sits
+    # earlier on PATH) - sys.executable is never ambiguous like that.
+    # Falls back to a PATH search, then the bare name, only if neither
+    # resolves - preserving today's behavior rather than writing something
+    # obviously broken.
+    sibling = Path(sys.executable).parent / "aletheore"
+    if sibling.exists():
+        return str(sibling)
+    return shutil.which("aletheore") or "aletheore"
+
+
 def _stdio_entry(repo_path: Path, include_type: bool) -> dict:
-    entry: dict = {"command": "aletheore", "args": ["mcp", str(repo_path)]}
+    entry: dict = {"command": _aletheore_command(), "args": ["mcp", str(repo_path)]}
     if include_type:
         entry = {"type": "stdio", **entry}
     return entry
 
 
 def _opencode_entry(repo_path: Path) -> dict:
-    return {"type": "local", "command": ["aletheore", "mcp", str(repo_path)], "enabled": True}
+    return {"type": "local", "command": [_aletheore_command(), "mcp", str(repo_path)], "enabled": True}
 
 
 _MCP_CLIENT_CONFIGS: dict[str, tuple[str, str, Callable[[Path], dict]]] = {
@@ -841,7 +867,7 @@ def _mcp_install(path: str, targets: list[str]) -> int:
     for target in selected:
         if target == "codex-cli":
             config_path = repo_path / ".codex" / "config.toml"
-            entry = {"command": "aletheore", "args": ["mcp", str(repo_path)]}
+            entry = {"command": _aletheore_command(), "args": ["mcp", str(repo_path)]}
             message = _write_toml_mcp_client_config(config_path, "mcp_servers", entry)
         else:
             relative_path, top_level_key, entry_builder = _MCP_CLIENT_CONFIGS[target]
