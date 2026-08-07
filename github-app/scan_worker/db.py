@@ -682,6 +682,111 @@ def set_wiki_build_status(
         conn.commit()
 
 
+def upsert_docs_symbol(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    module_path: str,
+    symbol_name: str,
+    description: str,
+    mode: str,
+    source_commit: str | None = None,
+) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO docs_symbols
+                    (installation_id, repo_full_name, module_path, symbol_name, description,
+                     mode, source_commit, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, now())
+                ON CONFLICT (installation_id, repo_full_name, module_path, symbol_name) DO UPDATE
+                SET description = EXCLUDED.description,
+                    mode = EXCLUDED.mode,
+                    source_commit = EXCLUDED.source_commit,
+                    updated_at = now()
+                """,
+                (
+                    installation_id,
+                    repo_full_name,
+                    module_path,
+                    symbol_name,
+                    description,
+                    mode,
+                    source_commit,
+                ),
+            )
+        conn.commit()
+
+
+def list_docs_symbols(dsn: str, installation_id: int, repo_full_name: str) -> list[dict]:
+    import psycopg.rows
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                """
+                SELECT module_path, symbol_name, description, mode, source_commit, updated_at
+                FROM docs_symbols
+                WHERE installation_id = %s AND repo_full_name = %s
+                ORDER BY module_path ASC, symbol_name ASC
+                """,
+                (installation_id, repo_full_name),
+            )
+            return cur.fetchall()
+
+
+def delete_docs_symbols_not_in(
+    dsn: str, installation_id: int, repo_full_name: str, module_path: str, keep_symbol_names: list[str]
+) -> None:
+    """Removes stale symbol descriptions for one module - a symbol that was
+    renamed, deleted, or gained a real docstring (so it no longer needs an
+    AI-generated one) shouldn't leave its old generated text behind.
+    Passing an empty keep list removes every description for that module.
+    """
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM docs_symbols
+                WHERE installation_id = %s AND repo_full_name = %s AND module_path = %s
+                  AND NOT (symbol_name = ANY(%s::text[]))
+                """,
+                (installation_id, repo_full_name, module_path, keep_symbol_names),
+            )
+        conn.commit()
+
+
+def set_docs_build_status(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    status: str,
+    error_message: str | None = None,
+) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO docs_build_status
+                    (installation_id, repo_full_name, status, error_message, updated_at)
+                VALUES (%s, %s, %s, %s, now())
+                ON CONFLICT (installation_id, repo_full_name) DO UPDATE
+                SET status = EXCLUDED.status,
+                    error_message = EXCLUDED.error_message,
+                    updated_at = now()
+                """,
+                (installation_id, repo_full_name, status, error_message),
+            )
+        conn.commit()
+
+
 def insert_evidence_packet_cache_row(
     dsn: str,
     installation_id: int,

@@ -10,6 +10,7 @@ from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     check_and_reserve_monthly_repo_scan_slot,
+    delete_docs_symbols_not_in,
     delete_expired_sessions,
     delete_wiki_subsystems_not_in,
     get_extra_seats,
@@ -22,10 +23,12 @@ from scan_worker.db import (
     insert_repo_history,
     installation_spend_lock,
     list_health_check_targets_all,
+    list_docs_symbols,
     list_repos_for_installation,
     list_wiki_subsystems,
     record_llm_spend,
     set_last_reviewed_sha,
+    upsert_docs_symbol,
     upsert_wiki_overview,
     upsert_wiki_subsystem,
 )
@@ -674,3 +677,43 @@ async def test_wiki_subsystems_are_scoped_per_repo(pool):
     repo1_subsystems = list_wiki_subsystems(TEST_DATABASE_URL, 301, "a/repo1")
     assert len(repo1_subsystems) == 1
     assert repo1_subsystems[0]["name"] == "Auth"
+
+
+@pytest.mark.asyncio
+async def test_upsert_docs_symbol_overwrites_on_conflict(pool):
+    await _insert_installation(pool, 301, "a")
+
+    upsert_docs_symbol(TEST_DATABASE_URL, 301, "a/repo1", "a.py", "add", "First draft.", "generated", "sha1")
+    upsert_docs_symbol(TEST_DATABASE_URL, 301, "a/repo1", "a.py", "add", "Second draft.", "generated", "sha2")
+
+    symbols = list_docs_symbols(TEST_DATABASE_URL, 301, "a/repo1")
+    assert len(symbols) == 1
+    assert symbols[0]["description"] == "Second draft."
+    assert symbols[0]["source_commit"] == "sha2"
+
+
+@pytest.mark.asyncio
+async def test_delete_docs_symbols_not_in_removes_stale_symbols_for_that_module(pool):
+    await _insert_installation(pool, 301, "a")
+
+    upsert_docs_symbol(TEST_DATABASE_URL, 301, "a/repo1", "a.py", "add", "d", "generated", "sha1")
+    upsert_docs_symbol(TEST_DATABASE_URL, 301, "a/repo1", "a.py", "subtract", "d", "generated", "sha1")
+    upsert_docs_symbol(TEST_DATABASE_URL, 301, "a/repo1", "b.py", "unrelated", "d", "generated", "sha1")
+
+    delete_docs_symbols_not_in(TEST_DATABASE_URL, 301, "a/repo1", "a.py", ["add"])
+
+    symbols = list_docs_symbols(TEST_DATABASE_URL, 301, "a/repo1")
+    names = {(s["module_path"], s["symbol_name"]) for s in symbols}
+    assert names == {("a.py", "add"), ("b.py", "unrelated")}
+
+
+@pytest.mark.asyncio
+async def test_docs_symbols_are_scoped_per_repo(pool):
+    await _insert_installation(pool, 301, "a")
+
+    upsert_docs_symbol(TEST_DATABASE_URL, 301, "a/repo1", "a.py", "add", "d1", "generated", "sha1")
+    upsert_docs_symbol(TEST_DATABASE_URL, 301, "a/repo2", "a.py", "add", "d2", "generated", "sha1")
+
+    repo1_symbols = list_docs_symbols(TEST_DATABASE_URL, 301, "a/repo1")
+    assert len(repo1_symbols) == 1
+    assert repo1_symbols[0]["description"] == "d1"

@@ -820,6 +820,33 @@ async def get_wiki_subsystem(
     return entry
 
 
+async def get_docs_build_status(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT status, error_message, updated_at
+        FROM docs_build_status
+        WHERE installation_id = $1 AND repo_full_name = $2
+        """,
+        installation_id,
+        repo_full_name,
+    )
+    return dict(row) if row else None
+
+
+async def list_docs_symbols(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT module_path, symbol_name, description, mode, source_commit, updated_at
+        FROM docs_symbols
+        WHERE installation_id = $1 AND repo_full_name = $2
+        ORDER BY module_path ASC, symbol_name ASC
+        """,
+        installation_id,
+        repo_full_name,
+    )
+    return [dict(row) for row in rows]
+
+
 async def record_telemetry_event(pool: asyncpg.Pool, event_type: str, anonymous_id: str) -> None:
     await pool.execute(
         "INSERT INTO cli_telemetry_events (event_type, anonymous_id) VALUES ($1, $2)",
