@@ -18,6 +18,10 @@ def run(repo: Path, *args: str):
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
 
+def test_evidence_version_is_0_2_0():
+    assert EVIDENCE_VERSION == "0.2.0"
+
+
 def make_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -105,7 +109,7 @@ def test_scan_repository_produces_full_schema(tmp_path):
         mock_check.return_value = {"checked": True, "reason": None, "findings": []}
         evidence = scan_repository(repo, check_licenses=False)
 
-    assert evidence["aletheore_version"] == "0.1.0"
+    assert evidence["aletheore_version"] == EVIDENCE_VERSION
     assert "scanned_at" in evidence
     assert evidence["repo_path"] == str(repo)
 
@@ -354,7 +358,7 @@ def test_write_evidence_creates_aletheore_dir(tmp_path):
     assert written_path == repo / ".aletheore" / "air.json"
     assert written_path.exists()
     loaded = json.loads(written_path.read_text())
-    assert loaded["aletheore_version"] == "0.1.0"
+    assert loaded["aletheore_version"] == EVIDENCE_VERSION
 
 
 def test_write_evidence_also_writes_a_toon_copy(tmp_path):

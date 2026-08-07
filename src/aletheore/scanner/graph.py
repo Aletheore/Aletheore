@@ -125,12 +125,22 @@ def _params_text(source: bytes, enclosing_node: Node) -> str | None:
     return " ".join(raw.split())
 
 
-def _symbol_entry(source: bytes, name_node: Node, enclosing_node: Node) -> dict:
+def _symbol_entry(
+    source: bytes,
+    name_node: Node,
+    enclosing_node: Node,
+    docstring: str | None = None,
+    return_type: str | None = None,
+    is_public: bool = True,
+) -> dict:
     return {
         "name": source[name_node.start_byte:name_node.end_byte].decode(),
         "start_line": enclosing_node.start_point[0] + 1,
         "end_line": enclosing_node.end_point[0] + 1,
         "params": _params_text(source, enclosing_node),
+        "docstring": docstring,
+        "return_type": return_type,
+        "is_public": is_public,
     }
 
 

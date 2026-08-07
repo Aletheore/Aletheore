@@ -53,6 +53,18 @@ def test_build_module_graph_records_symbol_line_bounds(tmp_path):
     assert auth_error_cls["params"] is None
 
 
+def test_symbol_entry_always_includes_docstring_return_type_and_is_public_keys(tmp_path):
+    (tmp_path / "a.py").write_text("def f():\n    pass\n")
+    modules, _, _ = build_module_graph(tmp_path)
+    func = modules[0]["symbols"]["functions"][0]
+    assert set(func) == {
+        "name", "start_line", "end_line", "params", "docstring", "return_type", "is_public",
+    }
+    assert func["docstring"] is None
+    assert func["return_type"] is None
+    assert func["is_public"] is True
+
+
 def test_build_module_graph_normalizes_multiline_function_signatures(tmp_path):
     # A signature reformatted across multiple lines (wrapped for length,
     # extra indentation) must diff identically to its single-line
