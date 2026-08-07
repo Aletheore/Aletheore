@@ -5,22 +5,38 @@ description, matching the same grounding contract citation_verifier and
 the audit report already enforce elsewhere in this codebase.
 """
 
+import inspect
+
 UNDOCUMENTED = "*Undocumented - no docstring found.*"
 
 
 def _render_signature(symbol: dict) -> str:
-    params = symbol["params"] if symbol["params"] is not None else ""
-    signature = f"{symbol['name']}{params}"
+    signature = f"{symbol['name']}{symbol.get('params') or ''}"
     if symbol.get("return_type"):
         signature += f" -> {symbol['return_type']}"
     return signature
+
+
+def _render_docstring(docstring: str | None) -> str:
+    if not docstring:
+        return UNDOCUMENTED
+    # Evidence stores the raw extracted text, indentation and all (grounding
+    # fidelity - it's a faithful capture of the source, not a display
+    # string) - a multi-line docstring's continuation lines carry the
+    # source's own indentation (e.g. a Python docstring indented to match
+    # its function body). Left as-is, that indentation reads as a Markdown
+    # code block (4+ leading spaces) instead of flowing prose. inspect.
+    # cleandoc is the standard-library tool built for exactly this
+    # docstring shape - strips it for display, here at the rendering layer,
+    # without touching what's actually stored in evidence.
+    return inspect.cleandoc(docstring)
 
 
 def _render_symbol(symbol: dict, module_path: str) -> str:
     lines = [
         f"### `{_render_signature(symbol)}`",
         "",
-        symbol["docstring"] if symbol.get("docstring") else UNDOCUMENTED,
+        _render_docstring(symbol.get("docstring")),
         "",
         f"`{module_path}:{symbol['start_line']}`",
     ]

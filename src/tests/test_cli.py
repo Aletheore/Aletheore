@@ -931,6 +931,53 @@ def test_index_command_rejects_evidence_from_an_incompatible_schema_version(tmp_
     assert "re-run" in result.output.lower() or "re-scan" in result.output.lower()
 
 
+def test_docs_command_writes_one_markdown_file_per_documented_module(tmp_path):
+    repo = tmp_path
+    (repo / "greet.py").write_text('def greet(name):\n    """Return a greeting."""\n    return name\n')
+    result = runner.invoke(app, ["scan", str(repo)])
+    assert result.exit_code == 0
+
+    out_dir = repo / "docs-out"
+    result = runner.invoke(app, ["docs", str(repo), "--out", str(out_dir)])
+
+    assert result.exit_code == 0
+    written = out_dir / "greet.md"
+    assert written.exists()
+    assert "Return a greeting." in written.read_text()
+
+
+def test_docs_command_omits_modules_with_no_public_symbols(tmp_path):
+    repo = tmp_path
+    (repo / "internal.py").write_text("def _helper():\n    pass\n")
+    result = runner.invoke(app, ["scan", str(repo)])
+    assert result.exit_code == 0
+
+    out_dir = repo / "docs-out"
+    result = runner.invoke(app, ["docs", str(repo), "--out", str(out_dir)])
+
+    assert result.exit_code == 0
+    assert not (out_dir / "internal.md").exists()
+    assert "No public symbols" in result.output
+
+
+def test_docs_command_fails_clearly_without_prior_scan(tmp_path):
+    result = runner.invoke(app, ["docs", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "scan" in result.output.lower()
+
+
+def test_docs_command_rejects_evidence_from_an_incompatible_schema_version(tmp_path):
+    repo = tmp_path
+    (repo / ".aletheore").mkdir()
+    evidence = {"aletheore_version": "9.9.9", "repository": {"modules": []}}
+    (repo / ".aletheore" / "air.json").write_text(json.dumps(evidence))
+
+    result = runner.invoke(app, ["docs", str(repo)])
+
+    assert result.exit_code == 1
+    assert "re-run" in result.output.lower() or "re-scan" in result.output.lower()
+
+
 def test_query_search_codebase_prints_toon_results(tmp_path):
     with patch(
         "aletheore.search_index.search_index",

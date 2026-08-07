@@ -472,6 +472,34 @@ def _query_changes(repo_path: str, full: bool) -> int:
     return 0
 
 
+def _docs(repo_path: str, out_dir: str) -> int:
+    repo = Path(repo_path).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except FileNotFoundError as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
+        return 1
+    except IncompatibleEvidenceVersionError as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
+        return 1
+
+    from aletheore.docs_reference import build_api_reference
+
+    reference = build_api_reference(evidence)
+    if not reference:
+        console.print("[yellow]No public symbols found - nothing to write.[/yellow]")
+        return 0
+
+    out_path = Path(out_dir).resolve()
+    for module_path, markdown in reference.items():
+        target_path = (out_path / module_path).with_suffix(".md")
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(markdown)
+
+    console.print(f"[green]Wrote {len(reference)} module reference file(s) to {out_path}.[/green]")
+    return 0
+
+
 def _index(repo_path: str) -> int:
     repo = Path(repo_path).resolve()
     try:
@@ -1109,6 +1137,20 @@ def init(path: str = typer.Argument(".", help="repository path")) -> None:
 )
 def index(path: str = typer.Argument(".", help="repository path")) -> None:
     raise typer.Exit(code=_index(path))
+
+
+@app.command(
+    help=(
+        "generate a grounded markdown API reference (docstrings, signatures, "
+        "file:line citations for public functions/classes) from an existing air.json - "
+        "one file per module, written under --out"
+    )
+)
+def docs(
+    path: str = typer.Argument(".", help="repository path"),
+    out: str = typer.Option(".aletheore/docs", "--out", help="output directory for the generated reference"),
+) -> None:
+    raise typer.Exit(code=_docs(path, out))
 
 
 @app.command(help="query an existing air.json")

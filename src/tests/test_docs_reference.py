@@ -44,6 +44,20 @@ def test_build_module_reference_marks_missing_docstring_as_undocumented_not_inve
     assert UNDOCUMENTED in md
 
 
+def test_build_module_reference_dedents_a_multiline_docstring():
+    # A real Python docstring's continuation lines carry the source's own
+    # indentation - left as raw text, 4+ leading spaces read as a Markdown
+    # code block instead of flowing prose (caught via a real dogfooding run
+    # of `aletheore docs` against this repo's own src/aletheore/).
+    docstring = "First line.\n    Second line, indented to match source.\n    Third line."
+    evidence = {"repository": {"modules": [_module(
+        "src/a.py", [_symbol("f", docstring=docstring)]
+    )]}}
+    md = build_module_reference(evidence, "src/a.py")
+    assert "    Second line" not in md
+    assert "Second line, indented to match source." in md
+
+
 def test_build_module_reference_excludes_private_symbols():
     evidence = {"repository": {"modules": [_module(
         "src/a.py", [_symbol("_helper", is_public=False)]
