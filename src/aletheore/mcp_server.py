@@ -95,7 +95,6 @@ _TOOL_NAME_TO_QUERY_KIND = {
     "aletheore_database": "database",
     "aletheore_infrastructure": "infrastructure",
     "aletheore_environment_variables": "environment-variables",
-    "aletheore_api_reference": "api-reference",
 }
 
 # One real description per query kind, naming exactly what `target` expects
@@ -121,7 +120,6 @@ _QUERY_TOOL_DESCRIPTIONS = {
     "database": "Detected database usage - ORMs, connection strings, migrations. Takes no target.",
     "infrastructure": "Detected infrastructure config - Docker, CI, IaC files. Takes no target.",
     "environment-variables": "Environment variables referenced in the codebase. Takes no target.",
-    "api-reference": "Grounded markdown API reference for one module's public functions/classes - docstring, signature, and file:line citation per symbol, or 'Undocumented' when no docstring was found (never an invented description). target: file path exactly as it appears in evidence.",
 }
 
 _SEARCH_MATCH_CAP = 200

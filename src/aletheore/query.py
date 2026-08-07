@@ -2,7 +2,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from aletheore.docs_reference import build_module_reference
 from aletheore.evidence_resolution import resolve_code_evidence
 
 
@@ -149,16 +148,6 @@ def find_hotspots(evidence: dict, target: str | None) -> list[dict]:
     return evidence["git"].get("hotspots", [])
 
 
-def find_api_reference(evidence: dict, target: str | None) -> str:
-    # _find_module's own ModuleNotFoundInEvidenceError, raised here first,
-    # is what gives this the same clear error style as every other query
-    # kind - build_module_reference has its own bare ValueError for
-    # standalone/non-query.py callers (the aletheore docs bulk-export
-    # command), which don't go through this consistent-error-type layer.
-    _find_module(evidence, target)
-    return build_module_reference(evidence, target)
-
-
 QUERY_FUNCTIONS: dict[str, tuple[Callable[[dict, str | None], Any], bool]] = {
     "imports": (find_imports, True),
     "imported-by": (find_imported_by, True),
@@ -179,5 +168,4 @@ QUERY_FUNCTIONS: dict[str, tuple[Callable[[dict, str | None], Any], bool]] = {
     "evidence-for-endpoint": (find_code_evidence_for_endpoint, True),
     "evidence-for-symbol": (find_code_evidence_for_symbol, True),
     "evidence-for-dependency": (find_code_evidence_for_dependency, True),
-    "api-reference": (find_api_reference, True),
 }
