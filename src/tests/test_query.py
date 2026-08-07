@@ -10,6 +10,7 @@ from aletheore.query import (
     find_code_evidence_for_dependency,
     find_code_evidence_for_endpoint,
     find_code_evidence_for_symbol,
+    find_api_reference,
     find_database,
     find_dead_code_evidence,
     find_endpoints,
@@ -319,6 +320,17 @@ def test_find_hotspots_returns_git_hotspots_ignoring_target():
     assert find_hotspots(make_evidence(), None) == make_evidence()["git"]["hotspots"]
 
 
+def test_find_api_reference_renders_the_named_module():
+    result = find_api_reference(make_evidence(), "app/auth.py")
+    assert "login" in result
+    assert "app/auth.py:4" in result
+
+
+def test_find_api_reference_raises_clearly_for_unknown_module():
+    with pytest.raises(ModuleNotFoundInEvidenceError):
+        find_api_reference(make_evidence(), "app/missing.py")
+
+
 def test_query_functions_registry_has_all_kinds_with_correct_requires_target():
     expected = {
         "imports": True,
@@ -340,6 +352,7 @@ def test_query_functions_registry_has_all_kinds_with_correct_requires_target():
         "evidence-for-endpoint": True,
         "evidence-for-symbol": True,
         "evidence-for-dependency": True,
+        "api-reference": True,
     }
     assert set(QUERY_FUNCTIONS.keys()) == set(expected.keys())
     for kind, requires_target in expected.items():

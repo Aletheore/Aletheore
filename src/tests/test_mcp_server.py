@@ -219,9 +219,10 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_endpoint",
         "aletheore_find_evidence_for_symbol",
         "aletheore_find_evidence_for_dependency",
+        "aletheore_api_reference",
     }
     assert expected.issubset(names)
-    assert len(names) == 28
+    assert len(names) == 29
     assert "aletheore_answer" not in names
 
 
@@ -531,6 +532,18 @@ async def test_aletheore_imports_tool_raises_for_unknown_module(tmp_path):
 
     with pytest.raises(ToolError):
         await server.call_tool("aletheore_imports", {"target": "does/not/exist.py"})
+
+
+@pytest.mark.asyncio
+async def test_aletheore_api_reference_tool_returns_rendered_markdown(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_api_reference", {"target": "a.py"})
+
+    body = tool_result_body(result)["result"]
+    assert "foo" in body
+    assert "a.py:1" in body
 
 
 @pytest.mark.asyncio
