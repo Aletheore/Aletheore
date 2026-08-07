@@ -39,5 +39,12 @@ async def handle_marketplace_event(payload: dict, pool, redis_url: str, queue=No
                 job_timeout=60,
                 installation_id=installation_id,
             )
+            # One-time Docs build, same trigger and tier-independence as the
+            # Live Wiki build immediately above.
+            queue.enqueue(
+                "scan_worker.jobs.run_live_docs_full_build_for_installation_job",
+                job_timeout=60,
+                installation_id=installation_id,
+            )
     elif action == "cancelled":
         await set_installation_plan(pool, installation_id, "free")

@@ -39,11 +39,12 @@ from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_f
 from app_server.logging_config import log_job
 from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
-from scan_worker import live_wiki
+from scan_worker import live_docs, live_wiki
 from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     check_and_reserve_monthly_repo_scan_slot,
+    delete_docs_symbols_not_in,
     delete_expired_sessions,
     delete_wiki_subsystems_not_in,
     get_extra_seats,
@@ -58,13 +59,16 @@ from scan_worker.db import (
     insert_endpoint_health,
     insert_repo_history,
     installation_spend_lock,
+    list_docs_symbols,
     list_health_check_targets_all,
     list_recent_endpoint_incidents,
     list_repos_for_installation,
     list_wiki_subsystems,
     record_llm_spend,
+    set_docs_build_status,
     set_last_reviewed_sha,
     set_wiki_build_status,
+    upsert_docs_symbol,
     upsert_wiki_overview,
     upsert_wiki_subsystem,
 )
@@ -729,6 +733,16 @@ def run_pr_scan_job(
                     installation_id, repo_full_name, exc,
                 )
             try:
+                _maybe_update_live_docs(installation_id, repo_full_name, new, changed_files, head_sha)
+            except Exception as exc:  # noqa: BLE001
+                # _maybe_update_live_docs already records failures to
+                # docs_build_status itself; this only catches something
+                # failing before that handling could run (e.g. get_settings).
+                logging.getLogger("scan_worker.jobs").warning(
+                    "live docs incremental update failed for installation=%s repo=%s (%s)",
+                    installation_id, repo_full_name, exc,
+                )
+            try:
                 _maybe_create_regression_risk_check_run(
                     client,
                     token,
@@ -813,6 +827,10 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
                 run_live_wiki_full_build_job(installation_id, repo_full_name)
             except Exception:  # noqa: BLE001
                 pass
+            try:
+                run_live_docs_full_build_job(installation_id, repo_full_name)
+            except Exception:  # noqa: BLE001
+                pass
     except Exception:  # noqa: BLE001
         pass
     finally:
@@ -864,6 +882,13 @@ def run_push_scan_job(
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger("scan_worker.jobs").warning(
                     "live wiki reconciliation after push failed for installation=%s repo=%s (%s)",
+                    installation_id, repo_full_name, exc,
+                )
+            try:
+                _maybe_update_live_docs(installation_id, repo_full_name, evidence, changed_files, head_sha)
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("scan_worker.jobs").warning(
+                    "live docs reconciliation after push failed for installation=%s repo=%s (%s)",
                     installation_id, repo_full_name, exc,
                 )
     except Exception as exc:  # noqa: BLE001
@@ -2036,3 +2061,172 @@ def _maybe_update_live_wiki(
         set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
         return
     set_wiki_build_status(dsn, installation_id, repo_full_name, "ready")
+
+
+# Every module gets an LLM call in a full build (one per file with anything
+# to generate, not one per symbol - see live_docs.py's per-file batching),
+# unlike AIRview's cluster-count-bounded cost. Capped here rather than left
+# unbounded for a repo's very first build, mirroring MAX_CONTEXT_FILES'
+# existing role bounding flash_review.py's own per-push file fetch. A
+# proper spend-aware cap (matching managed audits' llm_cost.py machinery)
+# is real follow-up work, not designed blind here - see the "Explicitly out
+# of scope" note in this feature's plan doc.
+MAX_DOCS_FULL_BUILD_FILES = 50
+
+
+def _live_docs_full_build_writing_adapter(plan: str) -> OpenAICompatibleAdapter:
+    return writing_adapter_for_plan(plan)
+
+
+def _live_docs_update_writing_adapter() -> OpenAICompatibleAdapter:
+    return OpenAICompatibleAdapter(
+        name="DeepSeek",
+        base_url="https://api.deepseek.com",
+        api_key_env_var="DEEPSEEK_API_KEY",
+        model=live_docs.FLASH_MODEL,
+    )
+
+
+def _github_client_and_token(installation_id: int) -> tuple[httpx.Client, str] | None:
+    try:
+        settings = get_settings()
+        app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+        token = _token_sync(installation_id, app_jwt)
+        return httpx.Client(base_url="https://api.github.com"), token
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "live docs: could not set up GitHub client for installation=%s (%s)",
+            installation_id, type(exc).__name__,
+        )
+        return None
+
+
+def _store_docs_generation_for_module(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    module: dict,
+    writing_adapter,
+    source_lines: list[str],
+    source_commit: str | None,
+) -> None:
+    """Generates and stores descriptions for one module's symbols - fills
+    gaps first, then polishes whatever (if anything) already had a real
+    docstring, storing both under the same table (mode distinguishes them).
+    A module with nothing to generate and nothing to polish makes no LLM
+    call at all (generate_file_descriptions returns {} immediately - see
+    live_docs.py's own no-symbols-needing-work short-circuit).
+    """
+    generated = live_docs.generate_file_descriptions(module, source_lines, writing_adapter)
+    polished = live_docs.generate_file_descriptions(
+        module, source_lines, writing_adapter, polish_existing=True
+    )
+    combined = {**generated, **polished}
+    for symbol_name, entry in combined.items():
+        upsert_docs_symbol(
+            dsn, installation_id, repo_full_name, module["path"], symbol_name,
+            entry["description"], entry["mode"], source_commit,
+        )
+    delete_docs_symbols_not_in(
+        dsn, installation_id, repo_full_name, module["path"], list(combined.keys())
+    )
+
+
+@log_job
+def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> None:
+    dsn = get_settings().database_url
+    evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
+    if evidence is None:
+        return  # nothing scanned for this repo yet - nothing to build from
+
+    installation = get_installation_row(dsn, installation_id)
+    plan = installation["plan"] if installation is not None else "air"
+
+    client_and_token = _github_client_and_token(installation_id)
+    if client_and_token is None:
+        set_docs_build_status(dsn, installation_id, repo_full_name, "failed", "could not authenticate with GitHub")
+        return
+    client, token = client_and_token
+
+    modules_with_public_symbols = [
+        m for m in evidence["repository"]["modules"]
+        if any(s.get("is_public", True) for s in m["symbols"]["functions"] + m["symbols"]["classes"])
+    ][:MAX_DOCS_FULL_BUILD_FILES]
+
+    try:
+        writing_adapter = _live_docs_full_build_writing_adapter(plan)
+        for module in modules_with_public_symbols:
+            content = fetch_file_content(client, token, repo_full_name, module["path"], None)
+            if content is None:
+                continue
+            _store_docs_generation_for_module(
+                dsn, installation_id, repo_full_name, module, writing_adapter,
+                content.splitlines(), None,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "live docs full build failed for installation=%s repo=%s (%s)",
+            installation_id, repo_full_name, exc,
+        )
+        set_docs_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+        return
+    set_docs_build_status(dsn, installation_id, repo_full_name, "ready")
+
+
+def run_live_docs_full_build_for_installation_job(installation_id: int) -> None:
+    """Fans out one full-build job per repo, mirroring
+    run_live_wiki_full_build_for_installation_job exactly - one slow or
+    failing repo can't consume the whole installation's build budget or
+    block the others.
+    """
+    settings = get_settings()
+    queue = _scans_queue(settings.redis_url)
+    for repo_full_name in list_repos_for_installation(settings.database_url, installation_id):
+        queue.enqueue(
+            "scan_worker.jobs.run_live_docs_full_build_job",
+            job_timeout=LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS,
+            installation_id=installation_id,
+            repo_full_name=repo_full_name,
+        )
+
+
+def _maybe_update_live_docs(
+    installation_id: int, repo_full_name: str, evidence: dict, changed_files: list[str], head_sha: str
+) -> None:
+    settings = get_settings()
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is None or installation["plan"] == "free":
+        return
+
+    modules_by_path = {m["path"]: m for m in evidence["repository"]["modules"]}
+    changed_modules = [modules_by_path[p] for p in changed_files if p in modules_by_path]
+    if not changed_modules:
+        return
+
+    client_and_token = _github_client_and_token(installation_id)
+    if client_and_token is None:
+        return
+    client, token = client_and_token
+
+    dsn = settings.database_url
+    try:
+        writing_adapter = _live_docs_update_writing_adapter()
+        for module in changed_modules:
+            content = fetch_file_content(client, token, repo_full_name, module["path"], head_sha)
+            if content is None:
+                continue
+            _store_docs_generation_for_module(
+                dsn, installation_id, repo_full_name, module, writing_adapter,
+                content.splitlines(), head_sha,
+            )
+    except Exception as exc:  # noqa: BLE001
+        # Mirrors _maybe_update_live_wiki's own failure handling exactly -
+        # without this, a failed incremental update leaves stale content in
+        # place with zero signal to tell "stale" apart from "current".
+        logging.getLogger("scan_worker.jobs").warning(
+            "live docs incremental update failed for installation=%s repo=%s (%s)",
+            installation_id, repo_full_name, exc,
+        )
+        set_docs_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+        return
+    set_docs_build_status(dsn, installation_id, repo_full_name, "ready")
