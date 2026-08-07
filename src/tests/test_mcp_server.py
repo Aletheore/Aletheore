@@ -5,14 +5,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import toon
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from aletheore.mcp_server import build_server
 from aletheore.search_index import IndexNotFoundError
 
 
 def tool_result_body(result):
-    return toon.decode(result[0][0].text)
+    # mcp 2.x's call_tool() returns a CallToolResult object (with a .content
+    # list of content blocks) instead of the raw (content_list, ...) tuple
+    # FastMCP 1.x returned - this helper is the one place that shape leaks
+    # into these tests, so it's the only place that needs to know about it.
+    return toon.decode(result.content[0].text)
 
 
 def make_repo_with_evidence(tmp_path: Path) -> Path:
@@ -289,7 +293,7 @@ async def test_aletheore_search_codebase_returns_toon_results(tmp_path):
 
 @pytest.mark.asyncio
 async def test_aletheore_search_codebase_returns_friendly_error_when_index_not_built(tmp_path):
-    # Before this fix, this raised IndexNotFoundError straight through FastMCP's
+    # Before this fix, this raised IndexNotFoundError straight through MCPServer's
     # own exception wrapping, which reused the CLI's own message ("run
     # 'aletheore index <path>' first") - correct advice for a human at a
     # terminal, useless for an agent that only has MCP tools and can't run
