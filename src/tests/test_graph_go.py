@@ -216,3 +216,15 @@ def test_go_type_declaration_doc_comment_is_extracted_through_the_wrapper(tmp_pa
     modules, _, _ = build_module_graph(repo)
     cls = modules[0]["symbols"]["classes"][0]
     assert cls["docstring"] == "Server handles requests."
+
+
+def test_go_exported_and_unexported_functions_are_classified_correctly(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.go").write_text(
+        "package main\n\nfunc Exported() {}\n\nfunc unexported() {}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert by_name["Exported"]["is_public"] is True
+    assert by_name["unexported"]["is_public"] is False

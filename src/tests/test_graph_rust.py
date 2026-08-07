@@ -254,3 +254,16 @@ def test_rust_struct_doc_comment_is_extracted(tmp_path):
     by_path = {m["path"]: m for m in modules}
     cls = by_path["src/main.rs"]["symbols"]["classes"][0]
     assert cls["docstring"] == "A widget."
+
+
+def test_rust_pub_and_private_functions_are_classified_correctly(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "main.rs").write_text(
+        "pub fn public_fn() {}\n\nfn private_fn() {}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+    by_name = {f["name"]: f for f in by_path["src/main.rs"]["symbols"]["functions"]}
+    assert by_name["public_fn"]["is_public"] is True
+    assert by_name["private_fn"]["is_public"] is False

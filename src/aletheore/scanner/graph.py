@@ -126,6 +126,38 @@ def _params_text(source: bytes, enclosing_node: Node) -> str | None:
     return " ".join(raw.split())
 
 
+def _is_public_symbol(name: str, language: str) -> bool:
+    """Best-effort public/private classification from naming convention
+    alone - only for languages where visibility genuinely IS a naming
+    convention, not a keyword or a separate statement.
+
+    Deliberately conservative: languages whose visibility is a modifier
+    keyword (private/public in Java, C#, C++) rather than a naming
+    convention are NOT classified from the name here - _symbol_entry has
+    no modifier text to inspect without a second, per-call-site AST
+    lookup, out of scope for this pass. Those languages default every
+    symbol to public; a later pass could read the modifier node
+    directly, the way Rust's visibility_modifier check already does
+    (Rust is NOT naming-convention-based either - "pub" is a keyword -
+    but its check is cheap enough, one child-node scan, that it's done
+    directly at _extract_rust's call sites instead of being deferred
+    like Java/C#/C++).
+
+    Ruby is deliberately excluded too, for a different reason: real Ruby
+    visibility is set by a `private`/`protected` *statement* earlier in
+    the class body, not by how a method is named - a leading-underscore
+    check would misclassify idiomatically-named-but-actually-private
+    methods as public far more often than it would help, which is worse
+    than the honest "unknown, default public" every keyword-based
+    language already gets.
+    """
+    if language == "go":
+        return name[:1].isupper()
+    if language == "python":
+        return not name.startswith("_")
+    return True
+
+
 def _symbol_entry(
     source: bytes,
     name_node: Node,
@@ -238,17 +270,21 @@ def _extract_python(
             elif n.type == "function_definition":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
+                    name = source[name_node.start_byte:name_node.end_byte].decode()
                     functions.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_python_docstring(source, n),
                         return_type=_python_return_type(source, n),
+                        is_public=_is_public_symbol(name, "python"),
                     ))
             elif n.type == "class_definition":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
+                    name = source[name_node.start_byte:name_node.end_byte].decode()
                     classes.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_python_docstring(source, n),
+                        is_public=_is_public_symbol(name, "python"),
                     ))
             stack.extend(reversed(n.children))
 
@@ -434,16 +470,20 @@ def _extract_go(node: Node, source: bytes) -> tuple[list[str], list[dict], list[
                             name_node = child
                             break
                 if name_node is not None:
+                    name = source[name_node.start_byte:name_node.end_byte].decode()
                     functions.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_leading_go_doc_comment(source, n),
+                        is_public=_is_public_symbol(name, "go"),
                     ))
             elif n.type == "type_spec":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
+                    name = source[name_node.start_byte:name_node.end_byte].decode()
                     types.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_leading_go_doc_comment(source, n),
+                        is_public=_is_public_symbol(name, "go"),
                     ))
             stack.extend(reversed(n.children))
 
@@ -587,6 +627,7 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
                             source[return_type_node.start_byte:return_type_node.end_byte].decode().strip()
                             if return_type_node is not None else None
                         ),
+                        is_public=any(c.type == "visibility_modifier" for c in n.children),
                     ))
             elif n.type in ("struct_item", "enum_item", "trait_item"):
                 name_node = n.child_by_field_name("name")
@@ -594,6 +635,7 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
                     types.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_leading_rust_doc_comment(source, n),
+                        is_public=any(c.type == "visibility_modifier" for c in n.children),
                     ))
             stack.extend(reversed(n.children))
 

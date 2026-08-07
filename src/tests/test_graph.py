@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from aletheore.scanner.graph import build_module_graph
+import pytest
+
+from aletheore.scanner.graph import _is_public_symbol, build_module_graph
 from conftest import symbol_names
 
 
@@ -97,6 +99,30 @@ def test_python_first_statement_not_a_string_is_not_treated_as_docstring(tmp_pat
     modules, _, _ = build_module_graph(tmp_path)
     func = modules[0]["symbols"]["functions"][0]
     assert func["docstring"] is None
+
+
+@pytest.mark.parametrize("name,language,expected", [
+    ("get_user", "python", True),
+    ("_internal_helper", "python", False),
+    ("__dunder__", "python", False),
+    ("GetUser", "go", True),
+    ("getUser", "go", False),
+    ("getUser", "javascript", True),
+    ("PublicMethod", "csharp", True),
+    ("privateMethod", "csharp", True),
+    ("save", "ruby", True),
+    ("_looks_private_but_ruby_has_no_naming_convention", "ruby", True),
+])
+def test_is_public_symbol(name, language, expected):
+    assert _is_public_symbol(name, language) is expected
+
+
+def test_python_underscore_prefixed_function_is_marked_private(tmp_path):
+    (tmp_path / "a.py").write_text("def _helper():\n    pass\n\ndef public_fn():\n    pass\n")
+    modules, _, _ = build_module_graph(tmp_path)
+    by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert by_name["_helper"]["is_public"] is False
+    assert by_name["public_fn"]["is_public"] is True
 
 
 def test_build_module_graph_normalizes_multiline_function_signatures(tmp_path):
