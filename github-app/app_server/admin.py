@@ -99,6 +99,22 @@ def _github_http_client() -> httpx.Client:
 
 
 async def _repo_installation_id(pool, org: str, repo: str) -> int:
+    # A GitHub App installation covers exactly one account (org or user) -
+    # a repo's owner in the URL is always that same account - so this
+    # resolves without ever touching repo_history, which used to be the
+    # only lookup here and only has a row once a repo has been scanned at
+    # least once. That made every route built on this 404 for a repo
+    # that's connected but genuinely never scanned yet (a real gap: the
+    # Docs page's own "nothing scanned yet" empty-state response could
+    # never be reached, since this raised first). repo_history stays as
+    # a fallback for account_login drift (e.g. a GitHub account rename
+    # landing after this row was written), not the primary path anymore.
+    row = await pool.fetchrow(
+        "SELECT installation_id FROM installations WHERE account_login = $1",
+        org,
+    )
+    if row is not None:
+        return row["installation_id"]
     row = await pool.fetchrow(
         """
         SELECT DISTINCT installation_id

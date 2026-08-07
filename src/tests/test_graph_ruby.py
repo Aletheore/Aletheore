@@ -166,3 +166,83 @@ def test_build_module_graph_ruby_method_call_with_receiver_is_not_mistaken_for_r
     _, dependency_graph, _ = build_module_graph(repo)
 
     assert dependency_graph["edges"] == []
+
+
+def test_ruby_extracts_top_level_doc_comment(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.rb").write_text("# Adds two numbers.\ndef add(a, b)\n  a + b\nend\n")
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers."
+
+
+def test_ruby_extracts_doc_comment_for_method_nested_in_class(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.rb").write_text(
+        "class Greeter\n  # Greets someone.\n  def greet(name)\n    name\n  end\nend\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Greets someone."
+
+
+def test_ruby_class_doc_comment_is_extracted(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.rb").write_text("# A greeter.\nclass Greeter\nend\n")
+    modules, _, _ = build_module_graph(repo)
+    cls = modules[0]["symbols"]["classes"][0]
+    assert cls["docstring"] == "A greeter."
+
+
+def test_ruby_method_with_blank_line_before_comment_gets_no_docstring(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.rb").write_text("# Unrelated.\n\ndef add(a, b)\n  a + b\nend\n")
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] is None
+
+
+def test_ruby_def_nested_only_in_a_do_block_is_not_public(tmp_path):
+    # A def whose only enclosing container is a do...end block (no named
+    # method ancestor between it and the block) had no matching ancestor
+    # before do_block was added to the shared node-type set.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.rb").write_text(
+        "[1, 2].each do |x|\n  def inner\n  end\nend\n\ndef top_level\nend\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert by_name["inner"]["is_public"] is False
+    assert by_name["top_level"]["is_public"] is True
+
+
+def test_ruby_def_nested_only_in_a_brace_block_is_a_known_uncovered_gap(tmp_path):
+    # Documents a real, deliberate limitation rather than hiding it: Ruby's
+    # plain `{...}` block shares its tree-sitter node type ("block") with
+    # Python's class-body wrapper, so adding it to the shared cross-language
+    # node-type set broke "a method inside a class is not nested" for every
+    # Python file - see _FUNCTION_LIKE_NODE_TYPES's comment. do_block
+    # (`do...end`) and lambda (`->{...}`) are both covered; only this one
+    # specific brace-block spelling of the same concept isn't. If this ever
+    # gets fixed, it needs a Ruby-specific check (e.g. threading the
+    # language into _is_nested_in_function), not another shared-set entry.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.rb").write_text("[1, 2].each { |x|\n  def inner\n  end\n}\n")
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["is_public"] is True  # known gap, not the desired behavior
+
+
+def test_ruby_def_nested_only_in_a_lambda_literal_is_not_public(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.rb").write_text("f = -> {\n  def inner\n  end\n}\n")
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["is_public"] is False

@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from aletheore.scanner.graph import build_module_graph
+import pytest
+
+from aletheore.scanner.graph import _is_public_symbol, build_module_graph
 from conftest import symbol_names
 
 
@@ -51,6 +53,122 @@ def test_build_module_graph_records_symbol_line_bounds(tmp_path):
     # Classes have no parameter list - unlike functions, params is always
     # None for them, not an empty string.
     assert auth_error_cls["params"] is None
+
+
+def test_symbol_entry_always_includes_docstring_return_type_and_is_public_keys(tmp_path):
+    (tmp_path / "a.py").write_text("def f():\n    pass\n")
+    modules, _, _ = build_module_graph(tmp_path)
+    func = modules[0]["symbols"]["functions"][0]
+    assert set(func) == {
+        "name", "start_line", "end_line", "params", "docstring", "return_type", "is_public",
+    }
+    assert func["docstring"] is None
+    assert func["return_type"] is None
+    assert func["is_public"] is True
+
+
+def test_python_extracts_docstring_and_return_type(tmp_path):
+    (tmp_path / "a.py").write_text(
+        'def greet(name: str) -> str:\n    """Return a greeting."""\n    return f"hi {name}"\n'
+    )
+    modules, _, _ = build_module_graph(tmp_path)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Return a greeting."
+    assert func["return_type"] == "str"
+
+
+def test_python_function_with_no_docstring_or_annotation_gets_none(tmp_path):
+    (tmp_path / "a.py").write_text("def f(x):\n    return x\n")
+    modules, _, _ = build_module_graph(tmp_path)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] is None
+    assert func["return_type"] is None
+
+
+def test_python_class_docstring_is_extracted(tmp_path):
+    (tmp_path / "a.py").write_text(
+        'class Greeter:\n    """Greets people."""\n\n    def greet(self):\n        pass\n'
+    )
+    modules, _, _ = build_module_graph(tmp_path)
+    cls = modules[0]["symbols"]["classes"][0]
+    assert cls["docstring"] == "Greets people."
+
+
+def test_python_first_statement_not_a_string_is_not_treated_as_docstring(tmp_path):
+    (tmp_path / "a.py").write_text("def f():\n    x = 1\n    return x\n")
+    modules, _, _ = build_module_graph(tmp_path)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] is None
+
+
+@pytest.mark.parametrize("name,language,expected", [
+    ("get_user", "python", True),
+    ("_internal_helper", "python", False),
+    ("__dunder__", "python", False),
+    ("GetUser", "go", True),
+    ("getUser", "go", False),
+    ("getUser", "javascript", True),
+    ("PublicMethod", "csharp", True),
+    ("privateMethod", "csharp", True),
+    ("save", "ruby", True),
+    ("_looks_private_but_ruby_has_no_naming_convention", "ruby", True),
+])
+def test_is_public_symbol(name, language, expected):
+    assert _is_public_symbol(name, language) is expected
+
+
+def test_python_underscore_prefixed_function_is_marked_private(tmp_path):
+    (tmp_path / "a.py").write_text("def _helper():\n    pass\n\ndef public_fn():\n    pass\n")
+    modules, _, _ = build_module_graph(tmp_path)
+    by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert by_name["_helper"]["is_public"] is False
+    assert by_name["public_fn"]["is_public"] is True
+
+
+def test_python_closure_defined_inside_a_function_is_not_marked_public(tmp_path):
+    # Caught via dogfooding `aletheore docs` against this repo's own scanner code:
+    # nested helper functions like graph.py's own `walk`/`text` closures were being
+    # extracted as if they were top-level public symbols.
+    (tmp_path / "a.py").write_text(
+        "def outer():\n    def inner():\n        pass\n    return inner\n\ndef top_level():\n    pass\n"
+    )
+    modules, _, _ = build_module_graph(tmp_path)
+    by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert by_name["inner"]["is_public"] is False
+    assert by_name["outer"]["is_public"] is True
+    assert by_name["top_level"]["is_public"] is True
+
+
+def test_python_method_inside_a_class_is_not_treated_as_nested_in_a_function(tmp_path):
+    (tmp_path / "a.py").write_text("class Widget:\n    def render(self):\n        pass\n")
+    modules, _, _ = build_module_graph(tmp_path)
+    method = modules[0]["symbols"]["functions"][0]
+    assert method["is_public"] is True
+
+
+def test_javascript_named_function_nested_in_an_arrow_function_is_not_public(tmp_path):
+    # The gap the original nesting fix missed: _is_nested_in_function only
+    # recognized named function/method ancestors. A named function whose
+    # ONLY enclosing container is an anonymous arrow function (no named
+    # function anywhere further up - e.g. `const outer = () => { ... }`,
+    # or the extremely common `useEffect(() => { function handler(){} })`
+    # pattern) had no matching ancestor at all and was still marked public.
+    (tmp_path / "a.js").write_text(
+        "const outer = () => {\n  function inner() { return 1; }\n};\n\nfunction topLevel() {}\n"
+    )
+    modules, _, _ = build_module_graph(tmp_path)
+    by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert by_name["inner"]["is_public"] is False
+    assert by_name["topLevel"]["is_public"] is True
+
+
+def test_javascript_class_nested_in_a_function_expression_is_not_public(tmp_path):
+    (tmp_path / "a.js").write_text(
+        "const factory = function() {\n  class Local {}\n  return Local;\n};\n"
+    )
+    modules, _, _ = build_module_graph(tmp_path)
+    cls = modules[0]["symbols"]["classes"][0]
+    assert cls["is_public"] is False
 
 
 def test_build_module_graph_normalizes_multiline_function_signatures(tmp_path):
@@ -106,6 +224,52 @@ def test_build_module_graph_extracts_javascript_imports(tmp_path):
     add_fn = next(f for f in by_path["utils.js"]["symbols"]["functions"] if f["name"] == "add")
     assert add_fn["params"] == "(a, b)"
     assert unparseable == []
+
+
+def test_javascript_extracts_jsdoc_comment(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.js").write_text(
+        "/**\n * Adds two numbers.\n */\nfunction add(a, b) {\n  return a + b;\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers."
+
+
+def test_javascript_extracts_jsdoc_comment_on_exported_function(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.js").write_text(
+        "/**\n * Adds two numbers.\n */\nexport function add(a, b) {\n  return a + b;\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers."
+
+
+def test_javascript_function_with_no_leading_comment_gets_none(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.js").write_text("function add(a, b) {\n  return a + b;\n}\n")
+    modules, _, _ = build_module_graph(repo)
+    assert modules[0]["symbols"]["functions"][0]["docstring"] is None
+
+
+def test_javascript_plain_line_comment_is_not_treated_as_jsdoc(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.js").write_text("// just a note\nfunction add(a, b) {\n  return a + b;\n}\n")
+    modules, _, _ = build_module_graph(repo)
+    assert modules[0]["symbols"]["functions"][0]["docstring"] is None
+
+
+def test_typescript_extracts_return_type(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.ts").write_text("function add(a: number, b: number): number {\n  return a + b;\n}\n")
+    modules, _, _ = build_module_graph(repo)
+    assert modules[0]["symbols"]["functions"][0]["return_type"] == "number"
 
 
 def test_build_module_graph_skips_non_source_files_silently(tmp_path):

@@ -4,19 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Aletheore — Evidence-Grounded Code Audits &amp; GitHub Automation</title>
-  <meta name="description" content="Evidence-grounded GitHub audits: secrets, vulnerabilities, dead code, live endpoint monitoring, AIRview architecture maps, and automated PR reviews.">
+  <meta name="description" content="Evidence-grounded GitHub audits: secrets, vulnerabilities, dead code, live endpoint monitoring, AIRview architecture maps, AI-generated Docs, and automated PR reviews.">
   <link rel="canonical" href="https://www.aletheore.com/">
 
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Aletheore">
   <meta property="og:url" content="https://www.aletheore.com/">
   <meta property="og:title" content="Aletheore — Evidence-Grounded Code Audits &amp; GitHub Automation">
-  <meta property="og:description" content="Aletheore is more than a scanner. Free deterministic CLI audits (secrets, vulnerabilities, licenses, dead code, git hotspots) plus a hosted GitHub App: automated PR reviews, live endpoint health monitoring, AIRview (an AI-generated, always-current map of your repo's architecture), Slack/Teams alerts, and team seat management on Aletheore AIR.">
+  <meta property="og:description" content="Aletheore is more than a scanner. Free deterministic CLI audits (secrets, vulnerabilities, licenses, dead code, git hotspots) plus a hosted GitHub App: automated PR reviews, live endpoint health monitoring, AIRview (an AI-generated, always-current map of your repo's architecture), AI-generated per-symbol Docs, Slack/Teams alerts, and team seat management on Aletheore AIR.">
   <meta property="og:image" content="https://www.aletheore.com/assets/logo-mark.png">
 
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Aletheore — Evidence-Grounded Code Audits &amp; GitHub Automation">
-  <meta name="twitter:description" content="Free deterministic CLI scanning (Aletheore Community) plus a hosted GitHub App on Aletheore AIR: dead code detection, live endpoint monitoring, AIRview architecture maps, automated PR reviews, and Slack/Teams alerts.">
+  <meta name="twitter:description" content="Free deterministic CLI scanning (Aletheore Community) plus a hosted GitHub App on Aletheore AIR: dead code detection, live endpoint monitoring, AIRview architecture maps, AI-generated Docs, automated PR reviews, and Slack/Teams alerts.">
   <meta name="twitter:image" content="https://www.aletheore.com/assets/logo-mark.png">
 
   <link rel="icon" type="image/png" href="assets/logo-mark.png">
@@ -59,6 +59,7 @@
       "Slack/Teams alerts on new findings",
       "Live API endpoint health monitoring across multiple targets, with a public status API",
       "AIRview: an AI-generated, always-current map of your repo's architecture with dependency diagrams",
+      "AI-generated Docs: grounded, per-symbol descriptions written and kept current automatically, marked AI-generated or AI-polished",
       "Team seat management, up to 5 seats included on Aletheore AIR"
     ]
   }
@@ -206,6 +207,44 @@
             <li>Slack and Teams alerts</li>
             <li>Status data grounded in source</li>
           </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="proof-panel" id="docs-feature">
+      <div>
+        <p class="eyebrow">Docs</p>
+        <h2>Nobody wants to write the docs. So nobody has to.</h2>
+      </div>
+      <p>Every team says "we'll document it later," and later never comes - the code always outruns the wiki. Aletheore AIR writes the docs instead: grounded, per-symbol descriptions generated straight from your real source, kept current automatically, with zero engineer hours spent typing a docstring nobody wanted to write.</p>
+    </section>
+
+    <section class="workflow-section">
+      <div class="section-heading">
+        <p class="eyebrow">How Docs stays honest</p>
+        <h2>Generated from your code. Never invented.</h2>
+        <p>Same evidence-grounded discipline as every other Aletheore surface - AI only describes what the scanner can prove exists.</p>
+      </div>
+      <div class="pillar-grid">
+        <article class="pillar-card">
+          <span class="pillar-index">01</span>
+          <h3>Written as you push</h3>
+          <p>Every push to an open pull request, Flash drafts a description for any public symbol that's still missing one - batched per changed file, so docs never fall behind the code.</p>
+        </article>
+        <article class="pillar-card">
+          <span class="pillar-index">02</span>
+          <h3>Fully documented on day one</h3>
+          <p>The moment you connect a repo, Pro runs a full first pass across everything already public, so you're not starting from a blank docs page.</p>
+        </article>
+        <article class="pillar-card">
+          <span class="pillar-index">03</span>
+          <h3>Marked, never mistaken for yours</h3>
+          <p>Every AI-touched description is grounded in the real source snippet and carries an explicit AI-generated or AI-polished marker - never silently presented as something a developer wrote.</p>
+        </article>
+        <article class="pillar-card">
+          <span class="pillar-index">04</span>
+          <h3>Self-healing by design</h3>
+          <p>Progress is saved symbol by symbol, so one failing file never costs the ones that already succeeded. A 48-hour sweep automatically finishes any repo with real commit activity since its last pass.</p>
         </article>
       </div>
     </section>

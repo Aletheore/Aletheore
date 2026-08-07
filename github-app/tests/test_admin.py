@@ -6,7 +6,11 @@ import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
-from app_server.admin import _administered_installation_ids_for_session_or_401, _build_updated_seat_items
+from app_server.admin import (
+    _administered_installation_ids_for_session_or_401,
+    _build_updated_seat_items,
+    _repo_installation_id,
+)
 from app_server.auth import decrypt_access_token, encrypt_access_token, sign_session_id
 from app_server.db import (
     add_paddle_ids_to_installation,
@@ -893,3 +897,39 @@ async def test_add_member_rejects_invalid_github_login(pool, monkeypatch):
     async with client:
         response = await client.post("/admin/octocat/hello-world/members", json={"github_login": "-bad-login-"})
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_repo_installation_id_resolves_without_any_scan_history(pool):
+    # The exact gap this closes: a repo connected to a paid installation
+    # but never scanned yet used to 404 here (repo_history was the only
+    # lookup), which meant no route built on this could ever reach its
+    # own "nothing scanned yet" handling - see get_dashboard_docs.
+    await upsert_installation(pool, 900, "octocat")
+
+    installation_id = await _repo_installation_id(pool, "octocat", "never-scanned-repo")
+
+    assert installation_id == 900
+
+
+@pytest.mark.asyncio
+async def test_repo_installation_id_falls_back_to_repo_history(pool):
+    # account_login drift (e.g. a GitHub account rename after this
+    # installation row was written) shouldn't break resolution for a repo
+    # that already has real scan history recorded under the old name.
+    await upsert_installation(pool, 901, "renamed-account")
+    await insert_repo_history(
+        pool, 901, "old-account-name/some-repo", datetime.now(timezone.utc), {"scanned_at": "x"}
+    )
+
+    installation_id = await _repo_installation_id(pool, "old-account-name", "some-repo")
+
+    assert installation_id == 901
+
+
+@pytest.mark.asyncio
+async def test_repo_installation_id_raises_404_when_truly_unresolvable(pool):
+    with pytest.raises(HTTPException) as exc_info:
+        await _repo_installation_id(pool, "no-such-account", "no-such-repo")
+
+    assert exc_info.value.status_code == 404

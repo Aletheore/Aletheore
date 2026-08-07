@@ -39,11 +39,12 @@ from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_f
 from app_server.logging_config import log_job
 from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
-from scan_worker import live_wiki
+from scan_worker import live_docs, live_wiki
 from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     check_and_reserve_monthly_repo_scan_slot,
+    delete_docs_symbols_not_in,
     delete_expired_sessions,
     delete_wiki_subsystems_not_in,
     get_extra_seats,
@@ -58,13 +59,18 @@ from scan_worker.db import (
     insert_endpoint_health,
     insert_repo_history,
     installation_spend_lock,
+    list_docs_symbols,
     list_health_check_targets_all,
+    list_paid_repos_due_for_docs_catchup,
     list_recent_endpoint_incidents,
     list_repos_for_installation,
     list_wiki_subsystems,
+    record_docs_catchup_swept,
     record_llm_spend,
+    set_docs_build_status,
     set_last_reviewed_sha,
     set_wiki_build_status,
+    upsert_docs_symbol,
     upsert_wiki_overview,
     upsert_wiki_subsystem,
 )
@@ -729,6 +735,16 @@ def run_pr_scan_job(
                     installation_id, repo_full_name, exc,
                 )
             try:
+                _maybe_update_live_docs(installation_id, repo_full_name, new, changed_files, head_sha)
+            except Exception as exc:  # noqa: BLE001
+                # _maybe_update_live_docs already records failures to
+                # docs_build_status itself; this only catches something
+                # failing before that handling could run (e.g. get_settings).
+                logging.getLogger("scan_worker.jobs").warning(
+                    "live docs incremental update failed for installation=%s repo=%s (%s)",
+                    installation_id, repo_full_name, exc,
+                )
+            try:
                 _maybe_create_regression_risk_check_run(
                     client,
                     token,
@@ -813,6 +829,10 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
                 run_live_wiki_full_build_job(installation_id, repo_full_name)
             except Exception:  # noqa: BLE001
                 pass
+            try:
+                run_live_docs_full_build_job(installation_id, repo_full_name)
+            except Exception:  # noqa: BLE001
+                pass
     except Exception:  # noqa: BLE001
         pass
     finally:
@@ -864,6 +884,13 @@ def run_push_scan_job(
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger("scan_worker.jobs").warning(
                     "live wiki reconciliation after push failed for installation=%s repo=%s (%s)",
+                    installation_id, repo_full_name, exc,
+                )
+            try:
+                _maybe_update_live_docs(installation_id, repo_full_name, evidence, changed_files, head_sha)
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("scan_worker.jobs").warning(
+                    "live docs reconciliation after push failed for installation=%s repo=%s (%s)",
                     installation_id, repo_full_name, exc,
                 )
     except Exception as exc:  # noqa: BLE001
@@ -2036,3 +2063,320 @@ def _maybe_update_live_wiki(
         set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
         return
     set_wiki_build_status(dsn, installation_id, repo_full_name, "ready")
+
+
+# Every module gets an LLM call in a full build (one per file with anything
+# to generate, not one per symbol - see live_docs.py's per-file batching),
+# unlike AIRview's cluster-count-bounded cost. Capped here rather than left
+# unbounded for a repo's very first build, mirroring MAX_CONTEXT_FILES'
+# existing role bounding flash_review.py's own per-push file fetch. A
+# proper spend-aware cap (matching managed audits' llm_cost.py machinery)
+# is real follow-up work, not designed blind here - see the "Explicitly out
+# of scope" note in this feature's plan doc.
+MAX_DOCS_FULL_BUILD_FILES = 50
+
+
+def _live_docs_full_build_writing_adapter(plan: str) -> OpenAICompatibleAdapter:
+    return writing_adapter_for_plan(plan)
+
+
+def _live_docs_update_writing_adapter() -> OpenAICompatibleAdapter:
+    return OpenAICompatibleAdapter(
+        name="DeepSeek",
+        base_url="https://api.deepseek.com",
+        api_key_env_var="DEEPSEEK_API_KEY",
+        model=live_docs.FLASH_MODEL,
+    )
+
+
+def _github_client_and_token(installation_id: int) -> tuple[httpx.Client, str] | None:
+    try:
+        settings = get_settings()
+        app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+        token = _token_sync(installation_id, app_jwt)
+        return httpx.Client(base_url="https://api.github.com"), token
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "live docs: could not set up GitHub client for installation=%s (%s)",
+            installation_id, type(exc).__name__,
+        )
+        return None
+
+
+def _store_docs_generation_for_module(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    module: dict,
+    writing_adapter,
+    source_lines: list[str],
+    source_commit: str | None,
+) -> None:
+    """Generates and stores descriptions for one module's symbols - fills
+    gaps first, then polishes whatever (if anything) already had a real
+    docstring, storing both under the same table (mode distinguishes them).
+    A module with nothing to generate and nothing to polish makes no LLM
+    call at all (generate_file_descriptions returns {} immediately - see
+    live_docs.py's own no-symbols-needing-work short-circuit).
+    """
+    generated = live_docs.generate_file_descriptions(module, source_lines, writing_adapter)
+    polished = live_docs.generate_file_descriptions(
+        module, source_lines, writing_adapter, polish_existing=True
+    )
+    combined = {**generated, **polished}
+    for symbol_name, entry in combined.items():
+        upsert_docs_symbol(
+            dsn, installation_id, repo_full_name, module["path"], symbol_name,
+            entry["description"], entry["mode"], source_commit,
+        )
+    delete_docs_symbols_not_in(
+        dsn, installation_id, repo_full_name, module["path"], list(combined.keys())
+    )
+
+
+def _module_has_uncovered_docs_work(module: dict, already_covered_names: set[str]) -> bool:
+    """Whether this module has at least one symbol that would actually get
+    asked about (live_docs._symbols_needing_work, in either generate or
+    polish mode) and doesn't already have a stored docs_symbols row.
+
+    The evidence's own docstring field can never reflect an AI-generated
+    description (that's stored separately, in docs_symbols) - so without
+    this check, re-running a full build (a retry after a partial failure,
+    or the 48h catch-up sweep) would ask the model about every already-
+    covered symbol all over again on every run, paying for the same
+    descriptions repeatedly instead of only spending on what's actually
+    new or still missing.
+    """
+    needing = live_docs._symbols_needing_work(module, polish_existing=False)
+    needing += live_docs._symbols_needing_work(module, polish_existing=True)
+    return any(s["name"] not in already_covered_names for s in needing)
+
+
+def _modules_with_uncovered_docs_work(
+    modules: list[dict], covered_by_module: dict[str, set[str]], limit: int
+) -> list[dict]:
+    """Filters to modules with real new work, prioritizing ones with zero
+    existing coverage first - so a capped run always makes forward
+    progress on genuinely untouched files rather than potentially
+    re-spending its whole budget re-checking files that are already
+    mostly done (which would still show up here if even one new symbol
+    appeared, but shouldn't crowd out files with nothing done yet).
+    """
+    uncovered = [
+        m for m in modules
+        if _module_has_uncovered_docs_work(m, covered_by_module.get(m["path"], set()))
+    ]
+    uncovered.sort(key=lambda m: len(covered_by_module.get(m["path"], set())))
+    return uncovered[:limit]
+
+
+def _run_docs_build_for_modules(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    modules: list[dict],
+    writing_adapter,
+    client: httpx.Client,
+    token: str,
+    ref: str | None,
+) -> tuple[int, str | None]:
+    """Processes each module independently - one module's failure (a
+    transient API error, a malformed response) is logged and skipped, not
+    allowed to abort every module after it in the same run. Whatever
+    already succeeded (each upsert_docs_symbol call commits immediately)
+    stays persisted regardless of what happens to the rest; the next run
+    (a retry, or the 48h catch-up sweep) picks up wherever this one left
+    off via _modules_with_uncovered_docs_work, rather than starting over.
+
+    Returns (count of modules that succeeded, the last error message seen
+    or None) - the caller uses this to decide the overall build_status.
+    """
+    logger = logging.getLogger("scan_worker.jobs")
+    succeeded = 0
+    last_error: str | None = None
+    for module in modules:
+        try:
+            content = fetch_file_content(client, token, repo_full_name, module["path"], ref)
+            if content is None:
+                continue
+            _store_docs_generation_for_module(
+                dsn, installation_id, repo_full_name, module, writing_adapter,
+                content.splitlines(), ref,
+            )
+            succeeded += 1
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            logger.warning(
+                "live docs: module %s failed for installation=%s repo=%s (%s) - "
+                "continuing with the remaining modules",
+                module["path"], installation_id, repo_full_name, type(exc).__name__,
+            )
+    return succeeded, last_error
+
+
+@log_job
+def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> None:
+    dsn = get_settings().database_url
+    evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
+    if evidence is None:
+        return  # nothing scanned for this repo yet - nothing to build from
+
+    installation = get_installation_row(dsn, installation_id)
+    plan = installation["plan"] if installation is not None else "air"
+
+    candidate_modules = [
+        m for m in evidence["repository"]["modules"]
+        if any(s.get("is_public", True) for s in m["symbols"]["functions"] + m["symbols"]["classes"])
+    ]
+    covered_by_module: dict[str, set[str]] = {}
+    for row in list_docs_symbols(dsn, installation_id, repo_full_name):
+        covered_by_module.setdefault(row["module_path"], set()).add(row["symbol_name"])
+    modules = _modules_with_uncovered_docs_work(candidate_modules, covered_by_module, MAX_DOCS_FULL_BUILD_FILES)
+    if not modules:
+        # Nothing new to do - a prior run (or the 48h catch-up sweep)
+        # already covers everything current evidence calls for. Still a
+        # real "ready" outcome, not a no-op to be silent about.
+        set_docs_build_status(dsn, installation_id, repo_full_name, "ready")
+        return
+
+    client_and_token = _github_client_and_token(installation_id)
+    if client_and_token is None:
+        set_docs_build_status(dsn, installation_id, repo_full_name, "failed", "could not authenticate with GitHub")
+        return
+    client, token = client_and_token
+
+    try:
+        writing_adapter = _live_docs_full_build_writing_adapter(plan)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "live docs full build could not start for installation=%s repo=%s (%s)",
+            installation_id, repo_full_name, exc,
+        )
+        set_docs_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+        return
+
+    succeeded, last_error = _run_docs_build_for_modules(
+        dsn, installation_id, repo_full_name, modules, writing_adapter, client, token, None
+    )
+    if succeeded == 0 and last_error is not None:
+        # Every module in this run failed - genuinely nothing new landed,
+        # unlike a partial run where some succeeded and persisted already.
+        set_docs_build_status(dsn, installation_id, repo_full_name, "failed", last_error)
+        return
+    set_docs_build_status(
+        dsn, installation_id, repo_full_name, "ready",
+        f"{succeeded}/{len(modules)} files processed this run - most recent failure: {last_error}"
+        if last_error is not None else None,
+    )
+
+
+def run_live_docs_full_build_for_installation_job(installation_id: int) -> None:
+    """Fans out one full-build job per repo, mirroring
+    run_live_wiki_full_build_for_installation_job exactly - one slow or
+    failing repo can't consume the whole installation's build budget or
+    block the others.
+    """
+    settings = get_settings()
+    queue = _scans_queue(settings.redis_url)
+    for repo_full_name in list_repos_for_installation(settings.database_url, installation_id):
+        queue.enqueue(
+            "scan_worker.jobs.run_live_docs_full_build_job",
+            job_timeout=LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS,
+            installation_id=installation_id,
+            repo_full_name=repo_full_name,
+        )
+
+
+# How often the recurring catch-up sweep is willing to re-touch the same
+# repo - not how often it runs (it's enqueued on every scheduler tick like
+# the health/session sweeps already are; the interval is enforced inside
+# the job itself via docs_catchup_sweeps, the same "cooldown tracked in the
+# DB, checked by the job" pattern managed_audit_rate_limits already uses,
+# rather than adding a second differently-paced loop to scheduler.py).
+DOCS_CATCHUP_SWEEP_INTERVAL_SECONDS = 48 * 60 * 60
+
+
+@log_job
+def run_live_docs_catchup_sweep_job() -> None:
+    """Recurring, per-repo-throttled pass that gives a repo whose first
+    full build never finished every file (MAX_DOCS_FULL_BUILD_FILES caps a
+    single build at 50) further chances to catch up over time, and picks
+    up newly-undocumented public symbols introduced by commits landing
+    outside the incremental push path's own reach (e.g. a file that
+    wasn't part of any single push's changed-files list a scan happened
+    to see).
+
+    Deliberately reuses run_live_docs_full_build_job as-is rather than
+    duplicating its logic: that function already only spends on modules
+    with real uncovered work (see _modules_with_uncovered_docs_work), so
+    a repeat call here is naturally cheap and a no-op once nothing is
+    actually missing - list_paid_repos_due_for_docs_catchup's own
+    activity check (a real scan since the last sweep) is what keeps a
+    dormant repo from being retried every interval for zero reason, this
+    module-level skip is what keeps an *active* repo's sweep from
+    re-spending on symbols it already covered.
+    """
+    dsn = get_settings().database_url
+    due = list_paid_repos_due_for_docs_catchup(dsn, DOCS_CATCHUP_SWEEP_INTERVAL_SECONDS)
+    for installation_id, repo_full_name in due:
+        try:
+            run_live_docs_full_build_job(installation_id, repo_full_name)
+        except Exception as exc:  # noqa: BLE001
+            # A single repo's failure (or its own internal build-status
+            # bookkeeping) shouldn't stop the sweep from touching the rest
+            # of the due list, or from recording that this repo was tried.
+            logging.getLogger("scan_worker.jobs").warning(
+                "live docs catch-up sweep failed for installation=%s repo=%s (%s)",
+                installation_id, repo_full_name, exc,
+            )
+        finally:
+            record_docs_catchup_swept(dsn, installation_id, repo_full_name)
+
+
+def _maybe_update_live_docs(
+    installation_id: int, repo_full_name: str, evidence: dict, changed_files: list[str], head_sha: str
+) -> None:
+    settings = get_settings()
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is None or installation["plan"] == "free":
+        return
+
+    modules_by_path = {m["path"]: m for m in evidence["repository"]["modules"]}
+    changed_modules = [modules_by_path[p] for p in changed_files if p in modules_by_path]
+    if not changed_modules:
+        return
+
+    client_and_token = _github_client_and_token(installation_id)
+    if client_and_token is None:
+        return
+    client, token = client_and_token
+
+    dsn = settings.database_url
+    try:
+        writing_adapter = _live_docs_update_writing_adapter()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "live docs incremental update could not start for installation=%s repo=%s (%s)",
+            installation_id, repo_full_name, exc,
+        )
+        set_docs_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+        return
+
+    # Per-module resilience matters here too, even for a typically-small
+    # changed-file list: one file's transient API failure shouldn't
+    # discard descriptions already generated for the others in the same
+    # push. Deliberately doesn't skip already-covered symbols the way the
+    # full build does - these files just changed, so an existing stored
+    # description may no longer match the new source and needs a fresh
+    # look regardless of whether a docs_symbols row already exists.
+    succeeded, last_error = _run_docs_build_for_modules(
+        dsn, installation_id, repo_full_name, changed_modules, writing_adapter, client, token, head_sha
+    )
+    if succeeded == 0 and last_error is not None:
+        set_docs_build_status(dsn, installation_id, repo_full_name, "failed", last_error)
+        return
+    set_docs_build_status(
+        dsn, installation_id, repo_full_name, "ready",
+        f"{succeeded}/{len(changed_modules)} files processed this run - most recent failure: {last_error}"
+        if last_error is not None else None,
+    )

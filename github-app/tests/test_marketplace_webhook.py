@@ -72,10 +72,14 @@ async def test_free_to_paid_transition_triggers_live_wiki_full_build(pool):
 
     await handle_marketplace_event(_payload("purchased", 777, "octocat", "indie"), pool, "redis://unused", queue=fake_queue)
 
-    fake_queue.enqueue.assert_called_once()
-    args, kwargs = fake_queue.enqueue.call_args
-    assert args[0] == "scan_worker.jobs.run_live_wiki_full_build_for_installation_job"
-    assert kwargs["installation_id"] == 777
+    assert fake_queue.enqueue.call_count == 2
+    job_names = {call.args[0] for call in fake_queue.enqueue.call_args_list}
+    assert job_names == {
+        "scan_worker.jobs.run_live_wiki_full_build_for_installation_job",
+        "scan_worker.jobs.run_live_docs_full_build_for_installation_job",
+    }
+    for call in fake_queue.enqueue.call_args_list:
+        assert call.kwargs["installation_id"] == 777
 
 
 @pytest.mark.asyncio
@@ -94,7 +98,7 @@ async def test_new_installation_purchasing_paid_plan_triggers_live_wiki_build(po
     fake_queue = MagicMock()
     await handle_marketplace_event(_payload("purchased", 999, "neworg", "indie"), pool, "redis://unused", queue=fake_queue)
 
-    fake_queue.enqueue.assert_called_once()
+    assert fake_queue.enqueue.call_count == 2
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 
 import tree_sitter_c as tsc
@@ -125,13 +126,167 @@ def _params_text(source: bytes, enclosing_node: Node) -> str | None:
     return " ".join(raw.split())
 
 
-def _symbol_entry(source: bytes, name_node: Node, enclosing_node: Node) -> dict:
+def _is_public_symbol(name: str, language: str) -> bool:
+    """Best-effort public/private classification from naming convention
+    alone - only for languages where visibility genuinely IS a naming
+    convention, not a keyword or a separate statement.
+
+    Deliberately conservative: languages whose visibility is a modifier
+    keyword (private/public in Java, C#, C++) rather than a naming
+    convention are NOT classified from the name here - _symbol_entry has
+    no modifier text to inspect without a second, per-call-site AST
+    lookup, out of scope for this pass. Those languages default every
+    symbol to public; a later pass could read the modifier node
+    directly, the way Rust's visibility_modifier check already does
+    (Rust is NOT naming-convention-based either - "pub" is a keyword -
+    but its check is cheap enough, one child-node scan, that it's done
+    directly at _extract_rust's call sites instead of being deferred
+    like Java/C#/C++).
+
+    Ruby is deliberately excluded too, for a different reason: real Ruby
+    visibility is set by a `private`/`protected` *statement* earlier in
+    the class body, not by how a method is named - a leading-underscore
+    check would misclassify idiomatically-named-but-actually-private
+    methods as public far more often than it would help, which is worse
+    than the honest "unknown, default public" every keyword-based
+    language already gets.
+    """
+    if language == "go":
+        return name[:1].isupper()
+    if language == "python":
+        return not name.startswith("_")
+    return True
+
+
+_FUNCTION_LIKE_NODE_TYPES = frozenset({
+    # Named functions/methods - a real declaration with its own name.
+    "function_definition", "function_declaration", "method_declaration",
+    "function_item", "function_signature_item", "constructor_declaration", "method",
+    # Anonymous closures - just as much a "nested, not top-level" boundary
+    # as a named function, but easy to miss: a symbol nested only inside
+    # one of these (no named function anywhere further up) still needs
+    # catching. Confirmed empirically against each grammar rather than
+    # assumed - e.g. `const outer = () => { function inner() {} }` in
+    # JS/TS has no function_declaration/method ancestor for `inner` at
+    # all, only arrow_function, so this class of gap is real and was
+    # initially missed entirely for every language that has anonymous
+    # closures (every one of these ten except Go, where a named function
+    # declaration nested in another function's body is a parse error -
+    # only func_literal, always anonymous, can nest at all - and Python,
+    # where a lambda's body is a single expression and can never contain
+    # a def in the first place).
+    "arrow_function", "function_expression", "generator_function",  # JS/TS
+    "closure_expression",  # Rust
+    "lambda_expression",  # Java, C++, C#
+    "anonymous_method_expression",  # C# (older `delegate(){}` form)
+    "do_block", "lambda",  # Ruby: `do...end`, `->{...}`
+    "anonymous_function",  # PHP: `function(){}` (PHP's `fn() =>` is the
+    # same "arrow_function" type name already listed above for JS/TS -
+    # no separate entry needed, one shared set, no cross-grammar collision)
+    #
+    # Deliberately NOT here: Ruby's plain `{...}` block, node type
+    # "block" - confirmed empirically to be the exact same type name
+    # Python's own grammar uses for a class's body wrapper
+    # (class_definition -> block -> function_definition), so adding it
+    # broke "a method inside a class is not nested" for every Python
+    # file. One shared set only works because these strings don't
+    # collide across grammars (see the docstring below) - "block" is the
+    # one real exception, so Ruby's `{...}` form (as opposed to
+    # `do...end`, which already works via do_block) stays uncovered
+    # rather than fixing one gap by opening a worse one.
+})
+
+
+def _is_nested_in_function(node: Node) -> bool:
+    """Whether `node` (a function/class/type node about to become a
+    symbol) sits inside another function/method's BODY, named or
+    anonymous - a closure, not a real top-level or class-level symbol.
+
+    Caught via dogfooding `aletheore docs` against this repo's own
+    scanner code: the `walk`/`text` helper functions defined inside
+    every `_extract_*` function were being extracted as top-level
+    public symbols, since nothing previously distinguished "top-level
+    function" from "closure defined inside another function." A method
+    inside a class correctly does NOT count as nested here - only
+    class/namespace-shaped ancestors sit between a method and the module
+    root, none of which are in _FUNCTION_LIKE_NODE_TYPES, so the walk
+    passes straight through them to the root without matching.
+
+    One shared node-type set works across every language rather than a
+    set per language: each grammar's function/method node type strings
+    don't collide with another grammar's differently-shaped node of the
+    same name, since a given file is only ever parsed with one grammar.
+    """
+    ancestor = node.parent
+    while ancestor is not None:
+        if ancestor.type in _FUNCTION_LIKE_NODE_TYPES:
+            return True
+        ancestor = ancestor.parent
+    return False
+
+
+def _symbol_entry(
+    source: bytes,
+    name_node: Node,
+    enclosing_node: Node,
+    docstring: str | None = None,
+    return_type: str | None = None,
+    is_public: bool = True,
+) -> dict:
     return {
         "name": source[name_node.start_byte:name_node.end_byte].decode(),
         "start_line": enclosing_node.start_point[0] + 1,
         "end_line": enclosing_node.end_point[0] + 1,
         "params": _params_text(source, enclosing_node),
+        "docstring": docstring,
+        "return_type": return_type,
+        "is_public": is_public,
     }
+
+
+_DOCSTRING_QUOTE_PREFIXES = ('"""', "'''", '"', "'")
+
+
+def _strip_docstring_quotes(raw: str) -> str:
+    text = raw.strip()
+    # Strip a leading string-prefix letter (r/u/b/f, case-insensitive) tree-sitter
+    # includes as part of the "string" node's own text, before the quote itself.
+    if text[:1].isalpha():
+        text = text[1:]
+    for quote in _DOCSTRING_QUOTE_PREFIXES:
+        if text.startswith(quote) and text.endswith(quote) and len(text) >= 2 * len(quote):
+            text = text[len(quote):-len(quote)]
+            break
+    return text.strip()
+
+
+def _python_docstring(source: bytes, enclosing_node: Node) -> str | None:
+    """The docstring-as-first-statement convention: a function/class body
+    whose first statement is a bare string expression. Confirmed empirically
+    (not assumed) that tree-sitter-python exposes this as body.children[0]
+    being an expression_statement wrapping a string node.
+    """
+    body = enclosing_node.child_by_field_name("body")
+    if body is None or not body.children:
+        return None
+    first = body.children[0]
+    if first.type != "expression_statement" or not first.children:
+        return None
+    string_node = first.children[0]
+    if string_node.type != "string":
+        return None
+    raw = source[string_node.start_byte:string_node.end_byte].decode()
+    return _strip_docstring_quotes(raw) or None
+
+
+def _python_return_type(source: bytes, enclosing_node: Node) -> str | None:
+    """function_definition's own "return_type" field (confirmed empirically -
+    node type "type", text with no leading "->"). Classes have no such field.
+    """
+    return_type_node = enclosing_node.child_by_field_name("return_type")
+    if return_type_node is None:
+        return None
+    return source[return_type_node.start_byte:return_type_node.end_byte].decode().strip()
 
 
 def _extract_python(
@@ -182,15 +337,90 @@ def _extract_python(
             elif n.type == "function_definition":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    name = source[name_node.start_byte:name_node.end_byte].decode()
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_python_docstring(source, n),
+                        return_type=_python_return_type(source, n),
+                        is_public=_is_public_symbol(name, "python") and not _is_nested_in_function(n),
+                    ))
             elif n.type == "class_definition":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    classes.append(_symbol_entry(source, name_node, n))
+                    name = source[name_node.start_byte:name_node.end_byte].decode()
+                    classes.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_python_docstring(source, n),
+                        is_public=_is_public_symbol(name, "python") and not _is_nested_in_function(n),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
     return plain_imports, from_imports, functions, classes
+
+
+def _leading_block_comment(
+    enclosing_node: Node, source: bytes, marker: str = "/**", comment_type: str = "comment"
+) -> str | None:
+    """Text of a "/** ... */"-style comment node immediately preceding
+    enclosing_node - checking the node's own previous sibling first, then
+    (for a declaration wrapped in an export/modifier statement, whose own
+    prev_sibling is the "export" keyword, not the comment) the parent's
+    previous sibling. Confirmed empirically for JS/TS via spike: an
+    "export function f() {}" nests function_declaration inside
+    export_statement, and the comment sits before export_statement, not
+    before the nested function_declaration. Java has no such wrapper (a
+    method_declaration's own prev_sibling is the block_comment directly,
+    also confirmed empirically) but checking the parent too is harmless
+    there since it simply won't match.
+
+    `comment_type` differs per grammar - JS/TS calls every comment
+    "comment" and distinguishes "/** */" from "//" only by text; Java's
+    grammar gives block comments their own node type, "block_comment",
+    entirely separate from line comments.
+
+    Any matching-type comment node is accepted whose raw text starts with
+    `marker`, so a plain "// line comment" is correctly treated as not a
+    doc comment.
+    """
+    candidates = [enclosing_node.prev_sibling]
+    if enclosing_node.parent is not None:
+        candidates.append(enclosing_node.parent.prev_sibling)
+    for candidate in candidates:
+        if candidate is not None and candidate.type == comment_type:
+            raw = source[candidate.start_byte:candidate.end_byte].decode()
+            if raw.startswith(marker):
+                return raw
+    return None
+
+
+def _strip_jsdoc_stars(raw: str) -> str | None:
+    """"/** ... */" -> its text, with the comment delimiters and each
+    line's leading "* " stripped.
+    """
+    text = raw.strip()
+    if text.startswith("/**"):
+        text = text[3:]
+    elif text.startswith("/*"):
+        text = text[2:]
+    if text.endswith("*/"):
+        text = text[:-2]
+    lines = [line.strip().lstrip("*").strip() for line in text.splitlines()]
+    cleaned = "\n".join(line for line in lines if line)
+    return cleaned or None
+
+
+def _ts_return_type(source: bytes, enclosing_node: Node) -> str | None:
+    """TypeScript's own "return_type" field (node type "type_annotation",
+    raw text including a leading ": " - confirmed empirically via spike).
+    Always None when parsed with the plain JS grammar, since the field
+    simply doesn't exist there - safe to call unconditionally for both.
+    """
+    node = enclosing_node.child_by_field_name("return_type")
+    if node is None:
+        return None
+    text = source[node.start_byte:node.end_byte].decode().strip()
+    return text[1:].strip() if text.startswith(":") else text
 
 
 def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
@@ -211,15 +441,66 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
             elif n.type == "function_declaration":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source)
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        return_type=_ts_return_type(source, n),
+                        is_public=not _is_nested_in_function(n),
+                    ))
             elif n.type == "class_declaration":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    classes.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source)
+                    classes.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        is_public=not _is_nested_in_function(n),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
     return imports, functions, classes
+
+
+def _leading_go_doc_comment(source: bytes, enclosing_node: Node) -> str | None:
+    """Go's doc-comment convention: one or more contiguous "//" line
+    comments immediately above the declaration, with no blank line in
+    between (a blank line makes it "just a comment", not documentation -
+    the same rule `go doc` itself follows). tree-sitter-go emits each line
+    as its own separate "comment" sibling node (confirmed empirically),
+    so this walks backward collecting contiguous ones rather than
+    expecting one merged node.
+
+    A type_spec ("type Foo struct {...}") nests inside a wrapping
+    type_declaration the same way Python's export_statement wraps a
+    function_declaration - the comment sits before the wrapper, not
+    before type_spec itself (also confirmed empirically) - so the walk
+    starts from the parent when the node's own prev_sibling isn't a
+    comment.
+    """
+    anchor = enclosing_node
+    node = anchor.prev_sibling
+    if (node is None or node.type != "comment") and anchor.parent is not None:
+        anchor = anchor.parent
+        node = anchor.prev_sibling
+
+    lines: list[str] = []
+    expected_end_row = anchor.start_point[0] - 1
+    while node is not None and node.type == "comment" and node.end_point[0] == expected_end_row:
+        raw = source[node.start_byte:node.end_byte].decode().strip()
+        if raw.startswith("//"):
+            raw = raw[2:].strip()
+        elif raw.startswith("/*") and raw.endswith("*/"):
+            raw = raw[2:-2].strip()
+        lines.append(raw)
+        expected_end_row = node.start_point[0] - 1
+        node = node.prev_sibling
+
+    if not lines:
+        return None
+    lines.reverse()
+    return "\n".join(lines) or None
 
 
 def _extract_go(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
@@ -258,11 +539,21 @@ def _extract_go(node: Node, source: bytes) -> tuple[list[str], list[dict], list[
                             name_node = child
                             break
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    name = source[name_node.start_byte:name_node.end_byte].decode()
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_go_doc_comment(source, n),
+                        is_public=_is_public_symbol(name, "go") and not _is_nested_in_function(n),
+                    ))
             elif n.type == "type_spec":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    types.append(_symbol_entry(source, name_node, n))
+                    name = source[name_node.start_byte:name_node.end_byte].decode()
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_go_doc_comment(source, n),
+                        is_public=_is_public_symbol(name, "go") and not _is_nested_in_function(n),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
@@ -344,6 +635,38 @@ def _rust_use_paths(node: Node, source: bytes) -> list[str]:
     return [text(node)]
 
 
+def _leading_rust_doc_comment(source: bytes, enclosing_node: Node) -> str | None:
+    """Rust's dominant doc-comment convention: one or more contiguous "///"
+    line comments immediately above the item, with no blank line in
+    between (the same rule rustdoc itself follows for turning "///" into
+    documentation). "/** */" block doc comments and #[doc = "..."]
+    attributes are real but much rarer in practice - out of scope for
+    this pass, matching the plan's "confirmed empirically, not assumed"
+    approach: only what was actually verified gets implemented.
+
+    Confirmed empirically via spike that tree-sitter-rust's line_comment
+    node span INCLUDES the trailing newline - unlike Go, where a
+    comment's end_point row equals its own last content row, here it
+    equals the NEXT row (comment.end_point[0] == following_node.
+    start_point[0] for two truly adjacent lines, not off by one).
+    """
+    lines: list[str] = []
+    node = enclosing_node.prev_sibling
+    expected_end_row = enclosing_node.start_point[0]
+    while node is not None and node.type == "line_comment" and node.end_point[0] == expected_end_row:
+        raw = source[node.start_byte:node.end_byte].decode().strip()
+        if not raw.startswith("///"):
+            break
+        lines.append(raw[3:].strip())
+        expected_end_row = node.start_point[0]
+        node = node.prev_sibling
+
+    if not lines:
+        return None
+    lines.reverse()
+    return "\n".join(lines) or None
+
+
 def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
     """Return flattened use-path strings, function/method names, and type names."""
     imports: list[str] = []
@@ -365,11 +688,30 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
             elif n.type in ("function_item", "function_signature_item"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    return_type_node = n.child_by_field_name("return_type")
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_rust_doc_comment(source, n),
+                        return_type=(
+                            source[return_type_node.start_byte:return_type_node.end_byte].decode().strip()
+                            if return_type_node is not None else None
+                        ),
+                        is_public=(
+                            any(c.type == "visibility_modifier" for c in n.children)
+                            and not _is_nested_in_function(n)
+                        ),
+                    ))
             elif n.type in ("struct_item", "enum_item", "trait_item"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    types.append(_symbol_entry(source, name_node, n))
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_rust_doc_comment(source, n),
+                        is_public=(
+                            any(c.type == "visibility_modifier" for c in n.children)
+                            and not _is_nested_in_function(n)
+                        ),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
@@ -474,6 +816,17 @@ def _extract_java_package(node: Node, source: bytes) -> str | None:
     return None
 
 
+def _java_return_type(source: bytes, enclosing_node: Node) -> str | None:
+    """method_declaration's own "type" field (confirmed empirically - e.g.
+    node type "integral_type" for "int", "void_type" for "void"). No such
+    field on a class/interface/enum/record declaration.
+    """
+    node = enclosing_node.child_by_field_name("type")
+    if node is None:
+        return None
+    return source[node.start_byte:node.end_byte].decode().strip()
+
+
 def _extract_java(
     node: Node, source: bytes
 ) -> tuple[list[tuple[str, bool, bool]], list[dict], list[dict]]:
@@ -500,13 +853,24 @@ def _extract_java(
             elif n.type == "method_declaration":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source, comment_type="block_comment")
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        return_type=_java_return_type(source, n),
+                        is_public=not _is_nested_in_function(n),
+                    ))
             elif n.type in (
                 "class_declaration", "interface_declaration", "enum_declaration", "record_declaration",
             ):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    types.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source, comment_type="block_comment")
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        is_public=not _is_nested_in_function(n),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
@@ -581,6 +945,44 @@ def _resolve_java_import(
     return []
 
 
+def _leading_ruby_doc_comment(source: bytes, enclosing_node: Node) -> str | None:
+    """Ruby has no compiler-enforced doc-comment syntax (RDoc/YARD are
+    tooling conventions, not grammar) - the de facto convention this
+    supports is one or more contiguous "#" line comments immediately
+    above the def/class/module, same adjacency rule as Go.
+
+    Confirmed empirically via spike a real tree-sitter-ruby surprise: a
+    method's doc comment, when the method is nested inside a class body,
+    is NOT a sibling of the method at all - it's a child of the
+    surrounding class/module node, sitting before that node's
+    body_statement. So method.prev_sibling is None even with a comment
+    directly above it in the source; the comment only turns up at
+    method.parent.prev_sibling (parent being body_statement). A top-level
+    method with no enclosing class has no such wrapper and the comment
+    is directly method.prev_sibling, same as Go.
+    """
+    anchor = enclosing_node
+    node = anchor.prev_sibling
+    if (node is None or node.type != "comment") and anchor.parent is not None:
+        anchor = anchor.parent
+        node = anchor.prev_sibling
+
+    lines: list[str] = []
+    expected_end_row = anchor.start_point[0] - 1
+    while node is not None and node.type == "comment" and node.end_point[0] == expected_end_row:
+        raw = source[node.start_byte:node.end_byte].decode().strip()
+        if raw.startswith("#"):
+            raw = raw[1:].strip()
+        lines.append(raw)
+        expected_end_row = node.start_point[0] - 1
+        node = node.prev_sibling
+
+    if not lines:
+        return None
+    lines.reverse()
+    return "\n".join(lines) or None
+
+
 def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], list[dict], list[dict]]:
     """Return (require/require_relative, path) tuples, method names, and type names."""
     imports: list[tuple[str, str]] = []
@@ -614,11 +1016,19 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
             elif n.type == "method":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_ruby_doc_comment(source, n),
+                        is_public=not _is_nested_in_function(n),
+                    ))
             elif n.type in ("class", "module"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    types.append(_symbol_entry(source, name_node, n))
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_ruby_doc_comment(source, n),
+                        is_public=not _is_nested_in_function(n),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
@@ -674,6 +1084,17 @@ def _php_require_path(n: Node, source: bytes) -> str | None:
     return None
 
 
+def _php_return_type(source: bytes, enclosing_node: Node) -> str | None:
+    """function_definition/method_declaration's own "return_type" field
+    (confirmed empirically - raw text has no leading ":", unlike TS's
+    equivalent field).
+    """
+    node = enclosing_node.child_by_field_name("return_type")
+    if node is None:
+        return None
+    return source[node.start_byte:node.end_byte].decode().strip()
+
+
 def _extract_php(node: Node, source: bytes) -> tuple[list[tuple[str, str]], list[dict], list[dict]]:
     """Return (kind, path) tuples ("use" or "include"), function/method names, and type names."""
     imports: list[tuple[str, str]] = []
@@ -709,13 +1130,24 @@ def _extract_php(node: Node, source: bytes) -> tuple[list[tuple[str, str]], list
             elif n.type in ("function_definition", "method_declaration"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source)
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        return_type=_php_return_type(source, n),
+                        is_public=not _is_nested_in_function(n),
+                    ))
             elif n.type in (
                 "class_declaration", "interface_declaration", "trait_declaration", "enum_declaration",
             ):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    types.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source)
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        is_public=not _is_nested_in_function(n),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
@@ -842,12 +1274,19 @@ def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[dict],
                 if declarator_node is not None:
                     name = function_name(declarator_node)
                     if name is not None:
+                        raw_doc = _leading_block_comment(n, source)
+                        type_node = n.child_by_field_name("type")
                         functions.append(
                             {
                                 "name": name,
                                 "start_line": n.start_point[0] + 1,
                                 "end_line": n.end_point[0] + 1,
                                 "params": _params_text(source, n),
+                                "docstring": _strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                                "return_type": (
+                                    text(type_node) if type_node is not None else None
+                                ),
+                                "is_public": not _is_nested_in_function(n),
                             }
                         )
             elif n.type in ("struct_specifier", "class_specifier", "union_specifier", "enum_specifier"):
@@ -862,7 +1301,12 @@ def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[dict],
                 )
                 name_node = n.child_by_field_name("name")
                 if name_node is not None and has_body:
-                    types.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source)
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        is_public=not _is_nested_in_function(n),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
@@ -886,6 +1330,55 @@ def _extract_csharp_namespace(node: Node, source: bytes) -> str | None:
                     return source[grandchild.start_byte:grandchild.end_byte].decode()
             return None
     return None
+
+
+_CSHARP_SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.DOTALL)
+
+
+def _leading_csharp_xmldoc(source: bytes, enclosing_node: Node) -> str | None:
+    """C#'s XML doc comment convention: one or more contiguous "///" line
+    comments immediately above the declaration (confirmed empirically -
+    tree-sitter-c-sharp emits each line as its own separate "comment"
+    sibling, same shape as Go's "//" doc comments, no wrapper-node issue
+    like Java/JS have for exported/modified declarations).
+
+    Returns the <summary>...</summary> text when the comment uses XML doc
+    tags (the idiomatic C# convention); falls back to the raw concatenated
+    "///" lines when it doesn't (a plain "/// One-line description.").
+    """
+    lines: list[str] = []
+    node = enclosing_node.prev_sibling
+    expected_end_row = enclosing_node.start_point[0] - 1
+    while node is not None and node.type == "comment" and node.end_point[0] == expected_end_row:
+        raw = source[node.start_byte:node.end_byte].decode().strip()
+        if not raw.startswith("///"):
+            break
+        lines.append(raw[3:].strip())
+        expected_end_row = node.start_point[0] - 1
+        node = node.prev_sibling
+
+    if not lines:
+        return None
+    lines.reverse()
+    joined = "\n".join(lines)
+
+    match = _CSHARP_SUMMARY_RE.search(joined)
+    if match:
+        summary_lines = [line.strip() for line in match.group(1).strip().splitlines()]
+        return "\n".join(line for line in summary_lines if line) or None
+    return joined or None
+
+
+def _csharp_return_type(source: bytes, enclosing_node: Node) -> str | None:
+    """method_declaration's own "returns" field (confirmed empirically -
+    NOT "type", unlike Java's equivalent field). constructor_declaration
+    has no such field (constructors have no return type) and correctly
+    gets None.
+    """
+    node = enclosing_node.child_by_field_name("returns")
+    if node is None:
+        return None
+    return source[node.start_byte:node.end_byte].decode().strip()
 
 
 def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
@@ -922,11 +1415,20 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
             ):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    types.append(_symbol_entry(source, name_node, n))
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_csharp_xmldoc(source, n),
+                        is_public=not _is_nested_in_function(n),
+                    ))
             elif n.type in ("method_declaration", "constructor_declaration"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_csharp_xmldoc(source, n),
+                        return_type=_csharp_return_type(source, n),
+                        is_public=not _is_nested_in_function(n),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)

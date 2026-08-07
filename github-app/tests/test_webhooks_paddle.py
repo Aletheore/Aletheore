@@ -219,10 +219,14 @@ async def test_free_to_paid_transition_triggers_live_wiki_full_build(pool):
 
     installation = await get_installation(pool, 200)
     assert installation["plan"] == "air"
-    fake_queue.enqueue.assert_called_once()
-    args, kwargs = fake_queue.enqueue.call_args
-    assert args[0] == "scan_worker.jobs.run_live_wiki_full_build_for_installation_job"
-    assert kwargs["installation_id"] == 200
+    assert fake_queue.enqueue.call_count == 2
+    job_names = {call.args[0] for call in fake_queue.enqueue.call_args_list}
+    assert job_names == {
+        "scan_worker.jobs.run_live_wiki_full_build_for_installation_job",
+        "scan_worker.jobs.run_live_docs_full_build_for_installation_job",
+    }
+    for call in fake_queue.enqueue.call_args_list:
+        assert call.kwargs["installation_id"] == 200
 
 
 @pytest.mark.asyncio
@@ -249,7 +253,7 @@ async def test_replaying_subscription_created_only_triggers_wiki_build_once(pool
     await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
     await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
 
-    fake_queue.enqueue.assert_called_once()
+    assert fake_queue.enqueue.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -391,8 +395,8 @@ async def test_subscription_resumed_restores_paid_access(pool):
     installation = await get_installation(pool, 304)
     assert installation["plan"] == "air"
     # Resuming after a cancellation is a free -> paid transition again,
-    # so the one-time wiki build fires once more.
-    fake_queue.enqueue.assert_called_once()
+    # so the one-time wiki and docs builds fire once more.
+    assert fake_queue.enqueue.call_count == 2
 
 
 @pytest.mark.asyncio

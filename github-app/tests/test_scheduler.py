@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
 from scan_worker.scheduler import (
+    DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS,
     HEALTH_SWEEP_JOB_TIMEOUT_SECONDS,
     SESSION_CLEANUP_JOB_TIMEOUT_SECONDS,
     run_forever,
@@ -16,7 +17,7 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
 
     run_forever(interval_seconds=42, max_iterations=3)
 
-    assert fake_queue.enqueue.call_count == 6
+    assert fake_queue.enqueue.call_count == 9
     health_sweep_calls = [
         c for c in fake_queue.enqueue.call_args_list
         if c.args == ("scan_worker.jobs.run_health_check_sweep_job",)
@@ -25,11 +26,18 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         c for c in fake_queue.enqueue.call_args_list
         if c.args == ("scan_worker.jobs.run_session_cleanup_job",)
     ]
+    docs_catchup_calls = [
+        c for c in fake_queue.enqueue.call_args_list
+        if c.args == ("scan_worker.jobs.run_live_docs_catchup_sweep_job",)
+    ]
     assert len(health_sweep_calls) == 3
     assert len(session_cleanup_calls) == 3
+    assert len(docs_catchup_calls) == 3
     for call in health_sweep_calls:
         assert call.kwargs == {"job_timeout": HEALTH_SWEEP_JOB_TIMEOUT_SECONDS}
     for call in session_cleanup_calls:
         assert call.kwargs == {"job_timeout": SESSION_CLEANUP_JOB_TIMEOUT_SECONDS}
+    for call in docs_catchup_calls:
+        assert call.kwargs == {"job_timeout": DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS}
     # Sleeps between iterations, not after the last one.
     assert sleeps == [42, 42]

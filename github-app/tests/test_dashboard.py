@@ -55,6 +55,64 @@ async def _seed_wiki_build_status(pool, installation_id, repo_full_name, status,
     )
 
 
+async def _seed_docs_symbol(
+    pool, installation_id, repo_full_name, module_path, symbol_name, description, mode="generated"
+):
+    await pool.execute(
+        """
+        INSERT INTO docs_symbols
+            (installation_id, repo_full_name, module_path, symbol_name, description, mode, source_commit)
+        VALUES ($1, $2, $3, $4, $5, $6, 'abc123')
+        ON CONFLICT (installation_id, repo_full_name, module_path, symbol_name) DO UPDATE
+        SET description = EXCLUDED.description, mode = EXCLUDED.mode
+        """,
+        installation_id,
+        repo_full_name,
+        module_path,
+        symbol_name,
+        description,
+        mode,
+    )
+
+
+async def _seed_docs_build_status(pool, installation_id, repo_full_name, status, error_message=None):
+    await pool.execute(
+        """
+        INSERT INTO docs_build_status (installation_id, repo_full_name, status, error_message)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (installation_id, repo_full_name) DO UPDATE
+        SET status = EXCLUDED.status, error_message = EXCLUDED.error_message
+        """,
+        installation_id,
+        repo_full_name,
+        status,
+        error_message,
+    )
+
+
+def _evidence_with_module(module_path: str, function_name: str, docstring: str | None) -> dict:
+    return {
+        "repository": {
+            "modules": [
+                {
+                    "path": module_path,
+                    "language": "python",
+                    "imports": [],
+                    "imported_by": [],
+                    "symbols": {
+                        "functions": [{
+                            "name": function_name, "start_line": 1, "end_line": 2,
+                            "params": "()", "docstring": docstring, "return_type": None,
+                            "is_public": True,
+                        }],
+                        "classes": [],
+                    },
+                }
+            ]
+        }
+    }
+
+
 async def _logged_in_client(pool, monkeypatch, administered_ids):
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     await create_session(
@@ -1184,3 +1242,99 @@ async def test_dashboard_wiki_subsystem_404s_for_unknown_id(pool, monkeypatch):
     async with client:
         response = await client.get("/app/octocat/hello-world/wiki/nonexistent")
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/app/octocat/hello-world/docs")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_requires_paid_plan(pool, monkeypatch):
+    await upsert_installation(pool, 701, "octocat")  # defaults to plan='free'
+    await insert_repo_history(
+        pool, 701, "octocat/hello-world", datetime.now(timezone.utc),
+        _evidence_with_module("a.py", "add", None),
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[701])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs")
+    assert response.status_code == 402
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_renders_verbatim_docstring_with_no_ai_marker(pool, monkeypatch):
+    await upsert_installation(pool, 702, "octocat")
+    await set_installation_plan(pool, 702, "indie")
+    await insert_repo_history(
+        pool, 702, "octocat/hello-world", datetime.now(timezone.utc),
+        _evidence_with_module("a.py", "add", "Adds two numbers."),
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[702])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["repo_full_name"] == "octocat/hello-world"
+    assert "Adds two numbers." in body["modules"]["a.py"]
+    assert "AI-generated" not in body["modules"]["a.py"]
+    assert "AI-polished" not in body["modules"]["a.py"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_merges_ai_generated_description_for_undocumented_symbol(pool, monkeypatch):
+    await upsert_installation(pool, 703, "octocat")
+    await set_installation_plan(pool, 703, "indie")
+    await insert_repo_history(
+        pool, 703, "octocat/hello-world", datetime.now(timezone.utc),
+        _evidence_with_module("a.py", "add", None),
+    )
+    await _seed_docs_symbol(pool, 703, "octocat/hello-world", "a.py", "add", "Adds two numbers and returns the sum.", "generated")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[703])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "Adds two numbers and returns the sum." in body["modules"]["a.py"]
+    assert "AI-generated" in body["modules"]["a.py"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_returns_empty_modules_when_nothing_scanned_yet(pool, monkeypatch):
+    await upsert_installation(pool, 704, "octocat")
+    await set_installation_plan(pool, 704, "indie")
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[704])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["modules"] == {}
+    assert body["build_status"] is None
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_surfaces_failed_build_status(pool, monkeypatch):
+    await upsert_installation(pool, 705, "octocat")
+    await set_installation_plan(pool, 705, "indie")
+    await insert_repo_history(
+        pool, 705, "octocat/hello-world", datetime.now(timezone.utc),
+        _evidence_with_module("a.py", "add", None),
+    )
+    await _seed_docs_build_status(pool, 705, "octocat/hello-world", "failed", "model provider unavailable")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[705])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["build_status"] == "failed"
+    assert body["build_error"] == "model provider unavailable"

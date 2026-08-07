@@ -7,6 +7,7 @@ import pytest
 import toon
 from mcp.server.mcpserver.exceptions import ToolError
 
+from aletheore.evidence import EVIDENCE_VERSION
 from aletheore.mcp_server import build_server
 from aletheore.search_index import IndexNotFoundError
 
@@ -24,7 +25,7 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
     aletheore_dir = repo / ".aletheore"
     aletheore_dir.mkdir(parents=True)
     evidence = {
-        "aletheore_version": "0.1.0",
+        "aletheore_version": EVIDENCE_VERSION,
         "scanned_at": "2026-07-15T10:00:00+00:00",
         "repo_path": str(repo),
         "repository": {
@@ -160,7 +161,7 @@ def test_read_evidence_rejects_an_incompatible_schema_version(tmp_path, monkeypa
     repo = make_repo_with_evidence(tmp_path)
     evidence_path = repo / ".aletheore" / "air.json"
     evidence = json.loads(evidence_path.read_text())
-    evidence["aletheore_version"] = "0.2.0"
+    evidence["aletheore_version"] = "999.999.999"
     evidence_path.write_text(json.dumps(evidence))
 
     with pytest.raises(IncompatibleEvidenceVersionError):

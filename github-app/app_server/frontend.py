@@ -255,6 +255,7 @@ table.findings tr:last-child td { border-bottom: none; }
 .wiki-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; background: linear-gradient(90deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 62%, var(--paper))); border: 1px solid rgba(224, 134, 58, 0.22); border-radius: 12px; padding: 13px 15px; margin: 10px 0 14px; flex-wrap: wrap; }
 .wiki-banner-text { font-size: 12.5px; color: var(--accent-strong); line-height: 1.5; max-width: 46ch; }
 .wiki-banner-text b { font-weight: 500; }
+.docs-module-body { white-space: pre-wrap; font-size: 12px; line-height: 1.55; padding: 10px 2px 2px; margin: 0; font-family: inherit; }
 .diagram-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background:
   radial-gradient(circle at 50% 20%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 36%),
   var(--slate-50); padding: 14px; }
@@ -442,6 +443,7 @@ _NAV_ITEMS = [
     ("deadcode", "/dead-code", "ti-trash", "Dead code"),
     ("health", "/health", "ti-activity", "Endpoint health"),
     ("wiki", "/wiki", "ti-book-2", "AIRview"),
+    ("docs", "/docs", "ti-file-text", "Docs"),
 ]
 
 
@@ -1342,6 +1344,104 @@ loadPlanBadge();
 
 
 # ---------------------------------------------------------------------------
+# Docs page - grounded API reference, AI-filled/polished where the source
+# had no docstring, always marked distinct from a verbatim source comment.
+# ---------------------------------------------------------------------------
+DOCS_LOCKED_PREVIEW = (
+    '<div class="subsystem-grid">'
+    '<div class="subsystem-card"><div class="subsystem-name">checkout/session.py</div>'
+    '<div class="subsystem-desc">create_session(cart_id) - Validates a cart and opens a new payment session.</div></div>'
+    "</div>"
+)
+
+DOCS_HTML = _page_head("Docs — {repo} — Aletheore") + _shell(
+    "docs",
+    _topbar("Docs")
+    + """
+    <section class="section">
+      <div class="section-head">
+        <div class="section-title"><i class="ti ti-file-text" aria-hidden="true"></i>Docs</div>
+        <span class="section-sub">Regenerated automatically on every push</span>
+      </div>
+      <div class="section-body" id="docs-body"><div class="empty-state">Loading&hellip;</div></div>
+    </section>
+"""
+) + f"""
+<script>
+{FETCH_HELPERS}
+{PAGE_HEAD_JS}
+{CONFIRM_UPGRADE_JS}
+
+function renderDocsModule(modulePath, markdown) {{
+  const details = document.createElement('details');
+  details.className = 'subsystem-card';
+  const summary = document.createElement('summary');
+  summary.textContent = modulePath;
+  const pre = document.createElement('pre');
+  pre.className = 'docs-module-body';
+  pre.textContent = markdown;
+  details.appendChild(summary);
+  details.appendChild(pre);
+  return details;
+}}
+
+async function loadDocs() {{
+  const body = document.getElementById('docs-body');
+  const planRes = await apiGet(adminBase);
+  if (!planRes) return;
+  if (planRes.status === 402) {{
+    body.innerHTML = lockedFeature(
+      'Docs is a paid feature',
+      'A grounded API reference for every public function and class - signatures, docstrings, and file:line citations, with an AI-drafted description (clearly marked) filling gaps the source left undocumented.',
+      {DOCS_LOCKED_PREVIEW!r}
+    );
+    return;
+  }}
+  const res = await apiGet(base + '/docs');
+  if (!res) return;
+  if (res.status === 402) {{
+    body.innerHTML = lockedFeature(
+      'Docs is a paid feature',
+      'A grounded API reference for every public function and class - signatures, docstrings, and file:line citations, with an AI-drafted description (clearly marked) filling gaps the source left undocumented.',
+      {DOCS_LOCKED_PREVIEW!r}
+    );
+    return;
+  }}
+  if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Docs unavailable.</div>'; return; }}
+  const data = await res.json();
+  const modulePaths = Object.keys(data.modules || {{}});
+  if (modulePaths.length === 0) {{
+    if (data.build_status === 'failed') {{
+      body.innerHTML = '<div class="empty-state">Docs build failed' +
+        (data.build_error ? ': ' + escapeHtml(data.build_error) : '.') +
+        ' Contact support if this persists.</div>';
+    }} else {{
+      body.innerHTML = '<div class="empty-state">No public functions or classes found yet - Docs generates automatically shortly after a scan.</div>';
+    }}
+    return;
+  }}
+  let staleBanner = '';
+  if (data.build_status === 'failed') {{
+    staleBanner = '<div class="empty-state" style="color:var(--critical);margin-bottom:12px;">' +
+      'The latest Docs update failed' + (data.build_error ? ': ' + escapeHtml(data.build_error) : '.') +
+      ' Showing the last successful build below - it may be stale.</div>';
+  }}
+  body.innerHTML = staleBanner;
+  const list = document.createElement('div');
+  list.className = 'subsystem-grid';
+  modulePaths.sort().forEach(function (path) {{
+    list.appendChild(renderDocsModule(path, data.modules[path]));
+  }});
+  body.appendChild(list);
+}}
+
+loadDocs();
+loadPlanBadge();
+</script>
+"""
+
+
+# ---------------------------------------------------------------------------
 # Settings page - team/seats, API tokens, alert webhook.
 # ---------------------------------------------------------------------------
 SETTINGS_LOCKED_PREVIEW = (
@@ -1774,6 +1874,14 @@ async def dashboard_wiki_page(org: str, repo: str, request: Request):
     if redirect is not None:
         return redirect
     return _no_store_html(WIKI_HTML)
+
+
+@frontend_router.get("/dashboard/{org}/{repo}/docs", response_class=HTMLResponse)
+async def dashboard_docs_page(org: str, repo: str, request: Request):
+    redirect = await _require_session_or_redirect(request)
+    if redirect is not None:
+        return redirect
+    return _no_store_html(DOCS_HTML)
 
 
 @frontend_router.get("/dashboard/{org}/{repo}/settings", response_class=HTMLResponse)

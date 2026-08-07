@@ -165,3 +165,66 @@ def test_build_module_graph_go_method_declarations_are_not_lost(tmp_path):
 
     assert "Server" in symbol_names(server["symbols"]["classes"])
     assert "Greet" in symbol_names(server["symbols"]["functions"])
+
+
+def test_go_extracts_leading_doc_comment(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.go").write_text(
+        "package main\n\n"
+        "// Add returns the sum of two integers.\n"
+        "func Add(a, b int) int {\n\treturn a + b\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Add returns the sum of two integers."
+
+
+def test_go_extracts_multiline_leading_doc_comment(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.go").write_text(
+        "package main\n\n"
+        "// Add returns the sum.\n"
+        "// It is exported.\n"
+        "func Add(a, b int) int {\n\treturn a + b\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Add returns the sum.\nIt is exported."
+
+
+def test_go_function_with_blank_line_before_comment_gets_no_docstring(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.go").write_text(
+        "package main\n\n"
+        "// Unrelated comment.\n\n"
+        "func Add(a, b int) int {\n\treturn a + b\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] is None
+
+
+def test_go_type_declaration_doc_comment_is_extracted_through_the_wrapper(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.go").write_text(
+        "package main\n\n// Server handles requests.\ntype Server struct {\n\tName string\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    cls = modules[0]["symbols"]["classes"][0]
+    assert cls["docstring"] == "Server handles requests."
+
+
+def test_go_exported_and_unexported_functions_are_classified_correctly(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.go").write_text(
+        "package main\n\nfunc Exported() {}\n\nfunc unexported() {}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert by_name["Exported"]["is_public"] is True
+    assert by_name["unexported"]["is_public"] is False

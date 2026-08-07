@@ -200,3 +200,62 @@ def test_build_module_graph_c_include_escaping_repo_root_does_not_crash(tmp_path
 
     assert dependency_graph["edges"] == []
     assert unparseable == []
+
+
+def test_c_extracts_doxygen_comment_and_return_type(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.c").write_text(
+        "/**\n * Adds two numbers.\n */\nint add(int a, int b) {\n  return a + b;\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers."
+    assert func["return_type"] == "int"
+
+
+def test_c_function_with_no_doc_comment_gets_none(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.c").write_text("int add(int a, int b) {\n  return a + b;\n}\n")
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] is None
+    assert func["is_public"] is True
+
+
+def test_c_struct_doc_comment_is_extracted(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.c").write_text(
+        "/**\n * A point.\n */\nstruct Point {\n  int x;\n  int y;\n};\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    cls = modules[0]["symbols"]["classes"][0]
+    assert cls["docstring"] == "A point."
+
+
+def test_cpp_extracts_doxygen_comment(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.cpp").write_text(
+        "/**\n * Adds two numbers.\n */\nint add(int a, int b) {\n  return a + b;\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers."
+
+
+def test_cpp_struct_nested_only_in_a_lambda_is_not_public(tmp_path):
+    # A struct whose only enclosing container is a lambda body (no named
+    # function ancestor between it and the lambda) had no matching
+    # ancestor before lambda_expression was added to the shared node-type
+    # set, so it was still marked public.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.cpp").write_text(
+        "void outer() {\n  auto f = []() {\n    struct Inner {};\n  };\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    cls = modules[0]["symbols"]["classes"][0]
+    assert cls["is_public"] is False

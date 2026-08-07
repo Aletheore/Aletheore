@@ -205,3 +205,81 @@ def test_build_module_graph_rust_imports_do_not_resolve_without_a_crate_root(tmp
     _, dependency_graph, _ = build_module_graph(repo)
 
     assert dependency_graph["edges"] == []
+
+
+def test_rust_extracts_doc_comment_and_return_type(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "main.rs").write_text(
+        "/// Adds two numbers.\npub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+    func = by_path["src/main.rs"]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers."
+    assert func["return_type"] == "i32"
+
+
+def test_rust_extracts_multiline_doc_comment(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "main.rs").write_text(
+        "/// Adds two numbers.\n/// Returns their sum.\npub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+    func = by_path["src/main.rs"]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers.\nReturns their sum."
+
+
+def test_rust_function_with_blank_line_before_comment_gets_no_docstring(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "main.rs").write_text(
+        "/// Unrelated.\n\npub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+    func = by_path["src/main.rs"]["symbols"]["functions"][0]
+    assert func["docstring"] is None
+
+
+def test_rust_struct_doc_comment_is_extracted(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "main.rs").write_text(
+        "/// A widget.\npub struct Widget {\n    pub name: String,\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+    cls = by_path["src/main.rs"]["symbols"]["classes"][0]
+    assert cls["docstring"] == "A widget."
+
+
+def test_rust_pub_and_private_functions_are_classified_correctly(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "main.rs").write_text(
+        "pub fn public_fn() {}\n\nfn private_fn() {}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+    by_name = {f["name"]: f for f in by_path["src/main.rs"]["symbols"]["functions"]}
+    assert by_name["public_fn"]["is_public"] is True
+    assert by_name["private_fn"]["is_public"] is False
+
+
+def test_rust_fn_nested_only_in_a_closure_is_not_public(tmp_path):
+    # A named fn whose only enclosing container is an anonymous closure
+    # (no named fn anywhere further up, e.g. a top-level `static` holding
+    # a closure) had no matching ancestor before closure_expression was
+    # added to the shared node-type set, so it was still marked public.
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "main.rs").write_text(
+        "static CLOSURE: fn() = || {\n    fn inner() {}\n};\n\npub fn top_level() {}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert by_name["inner"]["is_public"] is False
+    assert by_name["top_level"]["is_public"] is True

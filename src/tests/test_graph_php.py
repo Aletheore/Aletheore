@@ -160,3 +160,61 @@ def test_build_module_graph_php_use_of_unmapped_namespace_does_not_resolve(tmp_p
     _, dependency_graph, _ = build_module_graph(repo)
 
     assert dependency_graph["edges"] == []
+
+
+def test_php_extracts_phpdoc_and_return_type(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.php").write_text(
+        "<?php\n"
+        "/**\n * Adds two numbers.\n */\n"
+        "function add(int $a, int $b): int {\n  return $a + $b;\n}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Adds two numbers."
+    assert func["return_type"] == "int"
+
+
+def test_php_class_and_method_phpdoc_is_extracted(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.php").write_text(
+        "<?php\n"
+        "/**\n * A widget.\n */\n"
+        "class Widget {\n"
+        "  /**\n   * Renders it.\n   */\n"
+        "  public function render() {}\n"
+        "}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    cls = modules[0]["symbols"]["classes"][0]
+    method = modules[0]["symbols"]["functions"][0]
+    assert cls["docstring"] == "A widget."
+    assert method["docstring"] == "Renders it."
+
+
+def test_php_function_with_no_docblock_gets_none(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.php").write_text("<?php\nfunction f() {}\n")
+    modules, _, _ = build_module_graph(repo)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] is None
+    assert func["return_type"] is None
+
+
+def test_php_function_nested_only_in_an_anonymous_function_is_not_public(tmp_path):
+    # A function whose only enclosing container is an anonymous function
+    # expression (no named function ancestor between it and that closure)
+    # had no matching ancestor before anonymous_function was added to the
+    # shared node-type set.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.php").write_text(
+        "<?php\n$f = function() {\n  function inner() {}\n};\n\nfunction top_level() {}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert by_name["inner"]["is_public"] is False
+    assert by_name["top_level"]["is_public"] is True
