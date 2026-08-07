@@ -65,6 +65,40 @@ def test_symbol_entry_always_includes_docstring_return_type_and_is_public_keys(t
     assert func["is_public"] is True
 
 
+def test_python_extracts_docstring_and_return_type(tmp_path):
+    (tmp_path / "a.py").write_text(
+        'def greet(name: str) -> str:\n    """Return a greeting."""\n    return f"hi {name}"\n'
+    )
+    modules, _, _ = build_module_graph(tmp_path)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] == "Return a greeting."
+    assert func["return_type"] == "str"
+
+
+def test_python_function_with_no_docstring_or_annotation_gets_none(tmp_path):
+    (tmp_path / "a.py").write_text("def f(x):\n    return x\n")
+    modules, _, _ = build_module_graph(tmp_path)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] is None
+    assert func["return_type"] is None
+
+
+def test_python_class_docstring_is_extracted(tmp_path):
+    (tmp_path / "a.py").write_text(
+        'class Greeter:\n    """Greets people."""\n\n    def greet(self):\n        pass\n'
+    )
+    modules, _, _ = build_module_graph(tmp_path)
+    cls = modules[0]["symbols"]["classes"][0]
+    assert cls["docstring"] == "Greets people."
+
+
+def test_python_first_statement_not_a_string_is_not_treated_as_docstring(tmp_path):
+    (tmp_path / "a.py").write_text("def f():\n    x = 1\n    return x\n")
+    modules, _, _ = build_module_graph(tmp_path)
+    func = modules[0]["symbols"]["functions"][0]
+    assert func["docstring"] is None
+
+
 def test_build_module_graph_normalizes_multiline_function_signatures(tmp_path):
     # A signature reformatted across multiple lines (wrapped for length,
     # extra indentation) must diff identically to its single-line

@@ -144,6 +144,51 @@ def _symbol_entry(
     }
 
 
+_DOCSTRING_QUOTE_PREFIXES = ('"""', "'''", '"', "'")
+
+
+def _strip_docstring_quotes(raw: str) -> str:
+    text = raw.strip()
+    # Strip a leading string-prefix letter (r/u/b/f, case-insensitive) tree-sitter
+    # includes as part of the "string" node's own text, before the quote itself.
+    if text[:1].isalpha():
+        text = text[1:]
+    for quote in _DOCSTRING_QUOTE_PREFIXES:
+        if text.startswith(quote) and text.endswith(quote) and len(text) >= 2 * len(quote):
+            text = text[len(quote):-len(quote)]
+            break
+    return text.strip()
+
+
+def _python_docstring(source: bytes, enclosing_node: Node) -> str | None:
+    """The docstring-as-first-statement convention: a function/class body
+    whose first statement is a bare string expression. Confirmed empirically
+    (not assumed) that tree-sitter-python exposes this as body.children[0]
+    being an expression_statement wrapping a string node.
+    """
+    body = enclosing_node.child_by_field_name("body")
+    if body is None or not body.children:
+        return None
+    first = body.children[0]
+    if first.type != "expression_statement" or not first.children:
+        return None
+    string_node = first.children[0]
+    if string_node.type != "string":
+        return None
+    raw = source[string_node.start_byte:string_node.end_byte].decode()
+    return _strip_docstring_quotes(raw) or None
+
+
+def _python_return_type(source: bytes, enclosing_node: Node) -> str | None:
+    """function_definition's own "return_type" field (confirmed empirically -
+    node type "type", text with no leading "->"). Classes have no such field.
+    """
+    return_type_node = enclosing_node.child_by_field_name("return_type")
+    if return_type_node is None:
+        return None
+    return source[return_type_node.start_byte:return_type_node.end_byte].decode().strip()
+
+
 def _extract_python(
     node: Node, source: bytes
 ) -> tuple[list[str], list[tuple[str, list[str]]], list[dict], list[dict]]:
@@ -192,11 +237,18 @@ def _extract_python(
             elif n.type == "function_definition":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_python_docstring(source, n),
+                        return_type=_python_return_type(source, n),
+                    ))
             elif n.type == "class_definition":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    classes.append(_symbol_entry(source, name_node, n))
+                    classes.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_python_docstring(source, n),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
