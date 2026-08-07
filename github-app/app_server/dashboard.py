@@ -16,6 +16,7 @@ from app_server.config import get_settings
 from app_server.db import (
     MAX_SCANNED_REPOS_PER_MONTH,
     count_monthly_scanned_repos,
+    get_docs_build_status,
     get_endpoint_health_history,
     get_endpoint_health_summary_since,
     get_endpoint_uptime_pct_since,
@@ -26,6 +27,7 @@ from app_server.db import (
     get_wiki_build_status,
     get_wiki_overview,
     get_wiki_subsystem,
+    list_docs_symbols,
     list_repos_for_installations,
     list_wiki_subsystems,
 )
@@ -326,6 +328,49 @@ async def get_dashboard_wiki_subsystem(org: str, repo: str, subsystem_id: str, r
 
     subsystem["updated_at"] = subsystem["updated_at"].isoformat()
     return {"repo_full_name": repo_full_name, "subsystem": subsystem}
+
+
+@dashboard_router.get("/app/{org}/{repo}/docs")
+async def get_dashboard_docs(org: str, repo: str, request: Request):
+    """Grounded API reference (docs_reference.py) merged with whatever
+    AI-generated/polished descriptions live_docs.py has stored, exactly
+    the same way the pure-evidence CLI/query path renders it - this route
+    is the only place that gets to use ai_descriptions_by_module, since
+    it's the paid-plan-gated one (_require_admin_installation's own
+    "plan == free" -> 402 already covers this, same as /wiki).
+    """
+    from aletheore.docs_reference import build_api_reference
+
+    installation = await _require_admin_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    installation_id = installation["installation_id"]
+    repo_full_name = f"{org}/{repo}"
+
+    evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
+    build_status = await get_docs_build_status(pool, installation_id, repo_full_name)
+    if evidence is None:
+        return {
+            "repo_full_name": repo_full_name,
+            "modules": {},
+            "build_status": build_status["status"] if build_status is not None else None,
+            "build_error": build_status["error_message"] if build_status is not None else None,
+        }
+
+    symbols = await list_docs_symbols(pool, installation_id, repo_full_name)
+    ai_descriptions_by_module: dict[str, dict[str, dict]] = {}
+    for row in symbols:
+        ai_descriptions_by_module.setdefault(row["module_path"], {})[row["symbol_name"]] = {
+            "description": row["description"],
+            "mode": row["mode"],
+        }
+
+    modules = build_api_reference(evidence, ai_descriptions_by_module)
+    return {
+        "repo_full_name": repo_full_name,
+        "modules": modules,
+        "build_status": build_status["status"] if build_status is not None else None,
+        "build_error": build_status["error_message"] if build_status is not None else None,
+    }
 
 
 PUBLIC_HEALTH_RATE_LIMIT = 60
