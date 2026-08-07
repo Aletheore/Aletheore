@@ -963,6 +963,17 @@ def _php_require_path(n: Node, source: bytes) -> str | None:
     return None
 
 
+def _php_return_type(source: bytes, enclosing_node: Node) -> str | None:
+    """function_definition/method_declaration's own "return_type" field
+    (confirmed empirically - raw text has no leading ":", unlike TS's
+    equivalent field).
+    """
+    node = enclosing_node.child_by_field_name("return_type")
+    if node is None:
+        return None
+    return source[node.start_byte:node.end_byte].decode().strip()
+
+
 def _extract_php(node: Node, source: bytes) -> tuple[list[tuple[str, str]], list[dict], list[dict]]:
     """Return (kind, path) tuples ("use" or "include"), function/method names, and type names."""
     imports: list[tuple[str, str]] = []
@@ -998,13 +1009,22 @@ def _extract_php(node: Node, source: bytes) -> tuple[list[tuple[str, str]], list
             elif n.type in ("function_definition", "method_declaration"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    functions.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source)
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        return_type=_php_return_type(source, n),
+                    ))
             elif n.type in (
                 "class_declaration", "interface_declaration", "trait_declaration", "enum_declaration",
             ):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    types.append(_symbol_entry(source, name_node, n))
+                    raw_doc = _leading_block_comment(n, source)
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
