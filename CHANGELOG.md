@@ -3,6 +3,33 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.7.1 — 2026-08-07
+
+- Closed 3 known vulnerabilities (PYSEC-2026-3552/3553/3554) by bumping the `cryptography`
+  dependency.
+- Round-1 hardening from the internal audit report: local `aletheore audit` now runs the same
+  citation-verification path as the hosted managed audit (previously duplicated, now shared via
+  `aletheore.citation_verifier`); the git-history secret scan is now watchdog-bounded against
+  multi-minute hangs on large histories; a report is now clearly marked when it falls back to raw
+  agent output instead of silently presenting it as contract-compliant; a secret finding now
+  requires real value-shape evidence (entropy + placeholder markers), not just file path, before
+  being downgraded to a likely placeholder; production dependencies now have pinned upper bounds
+  and are split from test-only deps.
+- Enforced evidence schema-version compatibility on every CLI read path
+  (query/index/diff/healthcheck/verify), not just the MCP server — closing the gap left by the
+  same fix landing MCP-only in 0.7.0.
+- Fixed Flash Review discarding real findings about **deleted code**: a citation landing just past
+  a deletion-only hunk's collapsed boundary was rejected before its content could be checked,
+  silently turning a true positive into "No issues found."
+- Fixed Flash Review repeating the same zero-grounded-findings message twice in one comment.
+- Three hosted-audit hardening fixes: a fail-closed collaborator permission check before running a
+  triggered audit, credential stripping on reused checkouts, and Docker socket isolation via a
+  narrow-purpose sidecar (verified live against production).
+- Reworked the AIRview diagram zoom into a real pan/zoom toolbar, and polished the hosted
+  dashboard, pricing, and developers pages.
+- Routine dependency updates: GitHub Actions runners, `rq`, `psycopg`, `tree-sitter`, `typer`,
+  `pytest`, `pytest-asyncio`, `cspell`, `prettier`, `markdownlint-cli2`.
+
 ## 0.7.0 — 2026-07-31
 
 - Added **Regression Fencing**: flags a changed function signature when a real caller wasn't
