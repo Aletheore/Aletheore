@@ -202,3 +202,19 @@ def test_php_function_with_no_docblock_gets_none(tmp_path):
     func = modules[0]["symbols"]["functions"][0]
     assert func["docstring"] is None
     assert func["return_type"] is None
+
+
+def test_php_function_nested_only_in_an_anonymous_function_is_not_public(tmp_path):
+    # A function whose only enclosing container is an anonymous function
+    # expression (no named function ancestor between it and that closure)
+    # had no matching ancestor before anonymous_function was added to the
+    # shared node-type set.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.php").write_text(
+        "<?php\n$f = function() {\n  function inner() {}\n};\n\nfunction top_level() {}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert by_name["inner"]["is_public"] is False
+    assert by_name["top_level"]["is_public"] is True

@@ -15,6 +15,13 @@ HEALTH_SWEEP_INTERVAL_SECONDS = 180
 HEALTH_SWEEP_JOB_TIMEOUT_SECONDS = 600
 # A single indexed DELETE against a small table - generous but bounded.
 SESSION_CLEANUP_JOB_TIMEOUT_SECONDS = 60
+# The sweep itself only calls run_live_docs_full_build_job for repos that
+# list_paid_repos_due_for_docs_catchup already filtered to "genuinely due"
+# (48h+ since last sweep, real activity since then) - most ticks this
+# enqueues, checks the due list, and finds nothing to do. Bounded well
+# above normal runtime for the rare tick where several repos are due at
+# once, same reasoning as HEALTH_SWEEP_JOB_TIMEOUT_SECONDS.
+DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS = 600
 
 
 def run_forever(
@@ -32,6 +39,10 @@ def run_forever(
         queue.enqueue(
             "scan_worker.jobs.run_session_cleanup_job",
             job_timeout=SESSION_CLEANUP_JOB_TIMEOUT_SECONDS,
+        )
+        queue.enqueue(
+            "scan_worker.jobs.run_live_docs_catchup_sweep_job",
+            job_timeout=DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS,
         )
         iterations += 1
         if max_iterations is not None and iterations >= max_iterations:

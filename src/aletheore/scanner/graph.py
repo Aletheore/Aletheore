@@ -159,15 +159,48 @@ def _is_public_symbol(name: str, language: str) -> bool:
 
 
 _FUNCTION_LIKE_NODE_TYPES = frozenset({
+    # Named functions/methods - a real declaration with its own name.
     "function_definition", "function_declaration", "method_declaration",
     "function_item", "function_signature_item", "constructor_declaration", "method",
+    # Anonymous closures - just as much a "nested, not top-level" boundary
+    # as a named function, but easy to miss: a symbol nested only inside
+    # one of these (no named function anywhere further up) still needs
+    # catching. Confirmed empirically against each grammar rather than
+    # assumed - e.g. `const outer = () => { function inner() {} }` in
+    # JS/TS has no function_declaration/method ancestor for `inner` at
+    # all, only arrow_function, so this class of gap is real and was
+    # initially missed entirely for every language that has anonymous
+    # closures (every one of these ten except Go, where a named function
+    # declaration nested in another function's body is a parse error -
+    # only func_literal, always anonymous, can nest at all - and Python,
+    # where a lambda's body is a single expression and can never contain
+    # a def in the first place).
+    "arrow_function", "function_expression", "generator_function",  # JS/TS
+    "closure_expression",  # Rust
+    "lambda_expression",  # Java, C++, C#
+    "anonymous_method_expression",  # C# (older `delegate(){}` form)
+    "do_block", "lambda",  # Ruby: `do...end`, `->{...}`
+    "anonymous_function",  # PHP: `function(){}` (PHP's `fn() =>` is the
+    # same "arrow_function" type name already listed above for JS/TS -
+    # no separate entry needed, one shared set, no cross-grammar collision)
+    #
+    # Deliberately NOT here: Ruby's plain `{...}` block, node type
+    # "block" - confirmed empirically to be the exact same type name
+    # Python's own grammar uses for a class's body wrapper
+    # (class_definition -> block -> function_definition), so adding it
+    # broke "a method inside a class is not nested" for every Python
+    # file. One shared set only works because these strings don't
+    # collide across grammars (see the docstring below) - "block" is the
+    # one real exception, so Ruby's `{...}` form (as opposed to
+    # `do...end`, which already works via do_block) stays uncovered
+    # rather than fixing one gap by opening a worse one.
 })
 
 
 def _is_nested_in_function(node: Node) -> bool:
     """Whether `node` (a function/class/type node about to become a
-    symbol) sits inside another function/method's BODY - a closure, not
-    a real top-level or class-level symbol.
+    symbol) sits inside another function/method's BODY, named or
+    anonymous - a closure, not a real top-level or class-level symbol.
 
     Caught via dogfooding `aletheore docs` against this repo's own
     scanner code: the `walk`/`text` helper functions defined inside

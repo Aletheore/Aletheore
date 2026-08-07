@@ -223,3 +223,16 @@ def test_csharp_method_with_no_doc_comment_gets_none(tmp_path):
     func = modules[0]["symbols"]["functions"][0]
     assert func["docstring"] is None
     assert func["return_type"] == "void"
+
+
+# No C# equivalent of the JS/Java/Rust/PHP/C++ "named thing nested only in
+# an anonymous closure" test: confirmed empirically that _extract_csharp
+# only ever tracks method_declaration/constructor_declaration (functions)
+# and class/interface/struct/record/enum_declaration (types) as symbols,
+# and C# doesn't support declaring any of those inside a lambda body at
+# all (unlike Java's local classes) - `void Inner() {}` inside a lambda is
+# a local_function_statement, a node type this scanner never extracts as
+# a symbol in the first place, nested or not. lambda_expression and
+# anonymous_method_expression stay in the shared node-type set anyway
+# (real, reachable fix for Java/C++, which do allow this), they're just
+# inert for C# - there's no valid C# code that would ever need them here.

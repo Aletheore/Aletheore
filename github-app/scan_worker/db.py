@@ -787,6 +787,58 @@ def set_docs_build_status(
         conn.commit()
 
 
+def list_paid_repos_due_for_docs_catchup(dsn: str, interval_seconds: int) -> list[tuple[int, str]]:
+    """Paid-plan repos due for the recurring Docs catch-up sweep - never
+    swept before, or swept more than interval_seconds ago AND scanned at
+    least once since that last sweep. The activity requirement (a real
+    scan since the last sweep, not just "installation is still paid") is
+    what keeps a dormant repo with no new commits from repeatedly costing
+    real LLM spend every 48h for zero new information - nothing changed,
+    so there's nothing new to describe.
+    """
+    import psycopg
+    import psycopg.rows
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT rh.installation_id, rh.repo_full_name
+                FROM repo_history rh
+                JOIN installations i ON i.installation_id = rh.installation_id
+                LEFT JOIN docs_catchup_sweeps s
+                    ON s.installation_id = rh.installation_id
+                   AND s.repo_full_name = rh.repo_full_name
+                WHERE i.plan != 'free'
+                  AND (
+                        s.last_swept_at IS NULL
+                        OR (
+                            rh.scanned_at > s.last_swept_at
+                            AND s.last_swept_at <= now() - make_interval(secs => %s)
+                        )
+                  )
+                """,
+                (interval_seconds,),
+            )
+            return [(row[0], row[1]) for row in cur.fetchall()]
+
+
+def record_docs_catchup_swept(dsn: str, installation_id: int, repo_full_name: str) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO docs_catchup_sweeps (installation_id, repo_full_name, last_swept_at)
+                VALUES (%s, %s, now())
+                ON CONFLICT (installation_id, repo_full_name) DO UPDATE SET last_swept_at = now()
+                """,
+                (installation_id, repo_full_name),
+            )
+        conn.commit()
+
+
 def insert_evidence_packet_cache_row(
     dsn: str,
     installation_id: int,

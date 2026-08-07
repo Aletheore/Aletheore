@@ -267,3 +267,19 @@ def test_rust_pub_and_private_functions_are_classified_correctly(tmp_path):
     by_name = {f["name"]: f for f in by_path["src/main.rs"]["symbols"]["functions"]}
     assert by_name["public_fn"]["is_public"] is True
     assert by_name["private_fn"]["is_public"] is False
+
+
+def test_rust_fn_nested_only_in_a_closure_is_not_public(tmp_path):
+    # A named fn whose only enclosing container is an anonymous closure
+    # (no named fn anywhere further up, e.g. a top-level `static` holding
+    # a closure) had no matching ancestor before closure_expression was
+    # added to the shared node-type set, so it was still marked public.
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "main.rs").write_text(
+        "static CLOSURE: fn() = || {\n    fn inner() {}\n};\n\npub fn top_level() {}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert by_name["inner"]["is_public"] is False
+    assert by_name["top_level"]["is_public"] is True

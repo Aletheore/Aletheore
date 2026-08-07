@@ -146,6 +146,31 @@ def test_python_method_inside_a_class_is_not_treated_as_nested_in_a_function(tmp
     assert method["is_public"] is True
 
 
+def test_javascript_named_function_nested_in_an_arrow_function_is_not_public(tmp_path):
+    # The gap the original nesting fix missed: _is_nested_in_function only
+    # recognized named function/method ancestors. A named function whose
+    # ONLY enclosing container is an anonymous arrow function (no named
+    # function anywhere further up - e.g. `const outer = () => { ... }`,
+    # or the extremely common `useEffect(() => { function handler(){} })`
+    # pattern) had no matching ancestor at all and was still marked public.
+    (tmp_path / "a.js").write_text(
+        "const outer = () => {\n  function inner() { return 1; }\n};\n\nfunction topLevel() {}\n"
+    )
+    modules, _, _ = build_module_graph(tmp_path)
+    by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert by_name["inner"]["is_public"] is False
+    assert by_name["topLevel"]["is_public"] is True
+
+
+def test_javascript_class_nested_in_a_function_expression_is_not_public(tmp_path):
+    (tmp_path / "a.js").write_text(
+        "const factory = function() {\n  class Local {}\n  return Local;\n};\n"
+    )
+    modules, _, _ = build_module_graph(tmp_path)
+    cls = modules[0]["symbols"]["classes"][0]
+    assert cls["is_public"] is False
+
+
 def test_build_module_graph_normalizes_multiline_function_signatures(tmp_path):
     # A signature reformatted across multiple lines (wrapped for length,
     # extra indentation) must diff identically to its single-line

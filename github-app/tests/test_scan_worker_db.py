@@ -24,8 +24,10 @@ from scan_worker.db import (
     installation_spend_lock,
     list_health_check_targets_all,
     list_docs_symbols,
+    list_paid_repos_due_for_docs_catchup,
     list_repos_for_installation,
     list_wiki_subsystems,
+    record_docs_catchup_swept,
     record_llm_spend,
     set_last_reviewed_sha,
     upsert_docs_symbol,
@@ -717,3 +719,103 @@ async def test_docs_symbols_are_scoped_per_repo(pool):
     repo1_symbols = list_docs_symbols(TEST_DATABASE_URL, 301, "a/repo1")
     assert len(repo1_symbols) == 1
     assert repo1_symbols[0]["description"] == "d1"
+
+
+@pytest.mark.asyncio
+async def test_docs_catchup_due_list_excludes_free_plan_repos(pool):
+    await _insert_installation(pool, 501, "free-org", plan="free")
+    insert_repo_history(TEST_DATABASE_URL, 501, "free-org/repo", datetime.now(timezone.utc), {"v": 1})
+
+    due = list_paid_repos_due_for_docs_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (501, "free-org/repo") not in due
+
+
+@pytest.mark.asyncio
+async def test_docs_catchup_due_list_includes_paid_repo_never_swept(pool):
+    await _insert_installation(pool, 502, "paid-org", plan="indie")
+    insert_repo_history(TEST_DATABASE_URL, 502, "paid-org/repo", datetime.now(timezone.utc), {"v": 1})
+
+    due = list_paid_repos_due_for_docs_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (502, "paid-org/repo") in due
+
+
+@pytest.mark.asyncio
+async def test_docs_catchup_due_list_excludes_paid_repo_with_no_scan_history(pool):
+    await _insert_installation(pool, 503, "unscanned-org", plan="indie")
+
+    due = list_paid_repos_due_for_docs_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert all(installation_id != 503 for installation_id, _ in due)
+
+
+@pytest.mark.asyncio
+async def test_docs_catchup_due_list_excludes_repo_swept_within_cooldown(pool):
+    await _insert_installation(pool, 504, "recent-org", plan="indie")
+    insert_repo_history(TEST_DATABASE_URL, 504, "recent-org/repo", datetime.now(timezone.utc), {"v": 1})
+    record_docs_catchup_swept(TEST_DATABASE_URL, 504, "recent-org/repo")
+
+    due = list_paid_repos_due_for_docs_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (504, "recent-org/repo") not in due
+
+
+@pytest.mark.asyncio
+async def test_docs_catchup_due_list_excludes_repo_swept_long_ago_with_no_new_activity(pool):
+    await _insert_installation(pool, 505, "stale-org", plan="indie")
+    old_scan = datetime.now(timezone.utc) - timedelta(days=10)
+    insert_repo_history(TEST_DATABASE_URL, 505, "stale-org/repo", old_scan, {"v": 1})
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO docs_catchup_sweeps (installation_id, repo_full_name, last_swept_at)
+            VALUES ($1, $2, now() - interval '5 days')
+            """,
+            505,
+            "stale-org/repo",
+        )
+
+    due = list_paid_repos_due_for_docs_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (505, "stale-org/repo") not in due
+
+
+@pytest.mark.asyncio
+async def test_docs_catchup_due_list_includes_repo_swept_long_ago_with_new_activity_since(pool):
+    await _insert_installation(pool, 506, "active-org", plan="indie")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO docs_catchup_sweeps (installation_id, repo_full_name, last_swept_at)
+            VALUES ($1, $2, now() - interval '5 days')
+            """,
+            506,
+            "active-org/repo",
+        )
+    insert_repo_history(TEST_DATABASE_URL, 506, "active-org/repo", datetime.now(timezone.utc), {"v": 1})
+
+    due = list_paid_repos_due_for_docs_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (506, "active-org/repo") in due
+
+
+@pytest.mark.asyncio
+async def test_record_docs_catchup_swept_upserts_on_conflict(pool):
+    await _insert_installation(pool, 507, "upsert-org", plan="indie")
+    insert_repo_history(TEST_DATABASE_URL, 507, "upsert-org/repo", datetime.now(timezone.utc), {"v": 1})
+
+    record_docs_catchup_swept(TEST_DATABASE_URL, 507, "upsert-org/repo")
+    first = await pool.fetchval(
+        "SELECT last_swept_at FROM docs_catchup_sweeps WHERE installation_id = $1", 507
+    )
+    record_docs_catchup_swept(TEST_DATABASE_URL, 507, "upsert-org/repo")
+    second = await pool.fetchval(
+        "SELECT last_swept_at FROM docs_catchup_sweeps WHERE installation_id = $1", 507
+    )
+
+    count = await pool.fetchval(
+        "SELECT count(*) FROM docs_catchup_sweeps WHERE installation_id = $1", 507
+    )
+    assert count == 1
+    assert second >= first

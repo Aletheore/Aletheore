@@ -3092,3 +3092,232 @@ def test_full_build_writing_adapter_indie_stays_on_deepseek(monkeypatch):
 
     adapter = _live_wiki_full_build_writing_adapter("indie")
     assert adapter.name == "DeepSeek"
+
+
+def _docs_module(path="a.py", functions=None, classes=None) -> dict:
+    return {
+        "path": path,
+        "language": "python",
+        "symbols": {"functions": functions or [], "classes": classes or []},
+    }
+
+
+def _docs_evidence(modules: list[dict]) -> dict:
+    return {"repository": {"modules": modules}}
+
+
+def test_module_has_uncovered_docs_work_true_when_symbol_never_covered():
+    from scan_worker.jobs import _module_has_uncovered_docs_work
+
+    module = _docs_module(functions=[{"name": "foo", "is_public": True, "docstring": None}])
+
+    assert _module_has_uncovered_docs_work(module, already_covered_names=set()) is True
+
+
+def test_module_has_uncovered_docs_work_false_when_every_symbol_already_covered():
+    from scan_worker.jobs import _module_has_uncovered_docs_work
+
+    module = _docs_module(functions=[{"name": "foo", "is_public": True, "docstring": None}])
+
+    assert _module_has_uncovered_docs_work(module, already_covered_names={"foo"}) is False
+
+
+def test_module_has_uncovered_docs_work_false_when_nothing_needs_work_at_all():
+    from scan_worker.jobs import _module_has_uncovered_docs_work
+
+    # Private, or already has a real developer-written docstring - neither
+    # generate nor polish mode would ever ask about this one.
+    module = _docs_module(functions=[{"name": "_private", "is_public": False, "docstring": None}])
+
+    assert _module_has_uncovered_docs_work(module, already_covered_names=set()) is False
+
+
+def test_modules_with_uncovered_docs_work_filters_and_caps():
+    from scan_worker.jobs import _modules_with_uncovered_docs_work
+
+    done = _docs_module("done.py", functions=[{"name": "f", "is_public": True, "docstring": None}])
+    partial = _docs_module(
+        "partial.py",
+        functions=[
+            {"name": "covered", "is_public": True, "docstring": None},
+            {"name": "new", "is_public": True, "docstring": None},
+        ],
+    )
+    untouched = _docs_module("untouched.py", functions=[{"name": "g", "is_public": True, "docstring": None}])
+    covered_by_module = {"done.py": {"f"}, "partial.py": {"covered"}}
+
+    result = _modules_with_uncovered_docs_work(
+        [done, partial, untouched], covered_by_module, limit=10
+    )
+
+    paths = [m["path"] for m in result]
+    assert "done.py" not in paths
+    assert set(paths) == {"partial.py", "untouched.py"}
+    # untouched.py has zero existing coverage, partial.py has some -
+    # fully-untouched files come first so a capped run can't get crowded
+    # out by files that are already mostly done.
+    assert paths[0] == "untouched.py"
+
+
+def test_modules_with_uncovered_docs_work_respects_limit():
+    from scan_worker.jobs import _modules_with_uncovered_docs_work
+
+    modules = [
+        _docs_module(f"m{i}.py", functions=[{"name": "f", "is_public": True, "docstring": None}])
+        for i in range(5)
+    ]
+
+    result = _modules_with_uncovered_docs_work(modules, covered_by_module={}, limit=2)
+
+    assert len(result) == 2
+
+
+def test_run_live_docs_full_build_job_skips_without_evidence(monkeypatch):
+    from scan_worker.jobs import run_live_docs_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: None)
+    called = []
+    monkeypatch.setattr("scan_worker.jobs._github_client_and_token", lambda *a, **k: called.append(1))
+
+    run_live_docs_full_build_job(1, "octocat/hello-world")
+
+    assert called == []
+
+
+def test_run_live_docs_full_build_job_skips_llm_setup_when_nothing_new(monkeypatch):
+    from scan_worker.jobs import run_live_docs_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    module = _docs_module(functions=[{"name": "f", "is_public": True, "docstring": None}])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([module]))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_docs_symbols",
+        lambda *a, **k: [{"module_path": "a.py", "symbol_name": "f"}],
+    )
+    client_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: client_calls.append(1)
+    )
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+
+    run_live_docs_full_build_job(1, "octocat/hello-world")
+
+    assert client_calls == []  # no GitHub/LLM setup for zero real work
+    assert status_calls == [("ready", None)]
+
+
+def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
+    from scan_worker.jobs import run_live_docs_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    good = _docs_module("good.py", functions=[{"name": "f", "is_public": True, "docstring": None}])
+    bad = _docs_module("bad.py", functions=[{"name": "g", "is_public": True, "docstring": None}])
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([bad, good])
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan: object()
+    )
+
+    def fake_fetch(client, token, repo, path, ref):
+        return "source" if path == "good.py" else "source"
+
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", fake_fetch)
+
+    stored_for = []
+
+    def fake_store(dsn, iid, repo, module, adapter, source_lines, commit):
+        if module["path"] == "bad.py":
+            raise RuntimeError("model provider unavailable")
+        stored_for.append(module["path"])
+
+    monkeypatch.setattr("scan_worker.jobs._store_docs_generation_for_module", fake_store)
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+
+    run_live_docs_full_build_job(1, "octocat/hello-world")
+
+    # good.py's progress survives bad.py's failure - not discarded because
+    # a later (or earlier, depending on iteration order) module failed.
+    assert stored_for == ["good.py"]
+    assert status_calls[0][0] == "ready"
+    assert "1/2 files processed" in status_calls[0][1]
+    assert "model provider unavailable" in status_calls[0][1]
+
+
+def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(monkeypatch):
+    from scan_worker.jobs import run_live_docs_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    module = _docs_module(functions=[{"name": "f", "is_public": True, "docstring": None}])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([module]))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan: object()
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
+
+    def _raise(*a, **k):
+        raise RuntimeError("model provider unavailable")
+
+    monkeypatch.setattr("scan_worker.jobs._store_docs_generation_for_module", _raise)
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+
+    run_live_docs_full_build_job(1, "octocat/hello-world")
+
+    assert status_calls == [("failed", "model provider unavailable")]
+
+
+def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
+    from scan_worker.jobs import _maybe_update_live_docs
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
+    )
+    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda: object())
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
+
+    def fake_store(dsn, iid, repo, module, adapter, source_lines, commit):
+        if module["path"] == "bad.py":
+            raise RuntimeError("rate limited")
+
+    monkeypatch.setattr("scan_worker.jobs._store_docs_generation_for_module", fake_store)
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+
+    good = _docs_module("good.py")
+    bad = _docs_module("bad.py")
+    evidence = _docs_evidence([good, bad])
+
+    _maybe_update_live_docs(1, "octocat/hello-world", evidence, ["good.py", "bad.py"], "sha1")
+
+    assert status_calls[0][0] == "ready"
+    assert "1/2 files processed" in status_calls[0][1]
+    assert "rate limited" in status_calls[0][1]

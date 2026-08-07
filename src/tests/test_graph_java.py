@@ -283,3 +283,25 @@ def test_java_method_with_no_javadoc_gets_none(tmp_path):
     func = modules[0]["symbols"]["functions"][0]
     assert func["docstring"] is None
     assert func["return_type"] == "void"
+
+
+def test_java_local_class_nested_only_in_a_lambda_is_not_public(tmp_path):
+    # A local class whose only enclosing container is a lambda body (no
+    # named method/constructor ancestor between it and the lambda) had no
+    # matching ancestor before lambda_expression was added to the shared
+    # node-type set, so it was still marked public.
+    repo = tmp_path / "repo"
+    (repo / "src" / "main" / "java").mkdir(parents=True)
+    (repo / "src" / "main" / "java" / "Outer.java").write_text(
+        "public class Outer {\n"
+        "  void method() {\n"
+        "    Runnable r = () -> {\n"
+        "      class LocalHelper {}\n"
+        "    };\n"
+        "  }\n"
+        "}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    by_name = {c["name"]: c for c in modules[0]["symbols"]["classes"]}
+    assert by_name["LocalHelper"]["is_public"] is False
+    assert by_name["Outer"]["is_public"] is True
