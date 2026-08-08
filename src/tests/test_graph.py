@@ -316,6 +316,43 @@ def test_build_module_graph_ignores_nested_git_worktree(tmp_path):
     assert {m["path"] for m in modules} == {"main.py"}
 
 
+def test_build_module_graph_import_resolution_ignores_nested_git_worktree(tmp_path):
+    # A different layer of the same real bug as
+    # test_build_module_graph_ignores_nested_git_worktree above: that test
+    # covers _iter_source_files (which files get scanned as modules at all);
+    # this one covers _python_source_roots, a separate function that used a
+    # raw, unfiltered rglob("__init__.py") to find valid absolute-import
+    # roots. A worktree's own __init__.py chain got added as a second, bogus
+    # root even though _iter_source_files never scanned the worktree's files
+    # as modules - and since roots is an unordered set, resolving an
+    # absolute import could nondeterministically pick the bogus worktree
+    # root over the real one. A real file's own import then resolved to the
+    # worktree's (never-scanned, nonexistent-as-a-module) duplicate path
+    # instead of the real target, so the real target's imported_by stayed
+    # empty and it was wrongly flagged as dead code - confirmed via a real
+    # self-scan (github-app/app_server/main.py's own imports of its sibling
+    # webhook handlers and API routers all resolved this way).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    pkg = repo / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "real.py").write_text("def f():\n    pass\n")
+    (repo / "main.py").write_text("from pkg.real import f\n")
+
+    worktree = repo / "some-worktree"
+    worktree.mkdir()
+    (worktree / ".git").write_text("gitdir: /elsewhere/.git/worktrees/some-worktree\n")
+    worktree_pkg = worktree / "pkg"
+    worktree_pkg.mkdir()
+    (worktree_pkg / "__init__.py").write_text("")
+    (worktree_pkg / "real.py").write_text("def f():\n    pass\n")
+
+    modules, _, _ = build_module_graph(repo)
+    real_module = next(m for m in modules if m["path"] == "pkg/real.py")
+    assert real_module["imported_by"] == ["main.py"]
+
+
 def test_build_module_graph_does_not_follow_a_symlinked_file_outside_the_repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

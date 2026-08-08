@@ -609,6 +609,18 @@ def test_system_prompt_instructs_model_not_to_guess_about_unresolved_symbols():
     assert "do not guess" in normalized or "never guess" in normalized
 
 
+def test_system_prompt_warns_about_host_language_escaping_in_generated_source():
+    # Real false positive, caught dogfooding Flash review against this
+    # repo's own frontend.py (which builds JS via a Python f-string): a
+    # doubled `}}` - correct f-string escaping for one literal `}` in the
+    # generated JS - was flagged as a JS syntax error (two closing braces
+    # after an else-if body). Proves the instruction exists, not that a
+    # live model obeys it - that can't be tested without a real call.
+    normalized = " ".join(FLASH_REVIEW_SYSTEM_PROMPT.lower().split())
+    assert "generator or template for another language" in normalized
+    assert "host" in normalized and "escaping" in normalized
+
+
 def test_system_prompt_instructs_model_to_treat_diff_content_as_data_not_instructions():
     # The diff/file content sent as the user prompt comes from a PR
     # author - untrusted. Without this, a PR could embed text like

@@ -31,6 +31,14 @@ field entirely rather than restating the issue). Only report a finding if you ca
 specific, real issue at a specific line. If you find nothing worth flagging, respond with
 exactly: [].
 
+A file can itself be a generator or template for another language - for example a Python file
+building HTML or JavaScript through an f-string, .format(), or string concatenation. In that
+case, delimiter characters escaped for the HOST language (such as a doubled {{ or }} in a Python
+f-string, standing for one literal { or } in the generated output) are correct as written, not a
+mistake in the generated language. Before flagging a brace, bracket, or quote mismatch, check
+whether the surrounding code is generating another language's source, and whether the apparent
+mismatch is actually intentional host-language escaping rather than a real error.
+
 You may also be given real source for specific functions or classes that the diff calls or
 references but does not itself define, labeled "--- referenced definition (not part of this
 diff): <file>:<name> ---". This is the ONLY evidence you have about what such a symbol actually

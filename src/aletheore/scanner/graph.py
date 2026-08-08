@@ -1507,9 +1507,31 @@ def _python_source_roots(repo_path: Path) -> list[Path]:
     # that isn't itself a package, and use its parent as a resolution root. repo_path is
     # always included too, so single-project repos (top-level package directly under
     # repo_path) keep resolving exactly as before.
+    #
+    # Walked the same way _iter_source_files walks (IGNORED_DIRS + nested git
+    # roots excluded), not a raw rglob - an unfiltered rglob("__init__.py")
+    # previously found a stale worktree's own copy of, say, github-app/, added
+    # its path as a second, bogus root, and since roots is an unordered set,
+    # resolution could nondeterministically pick that bogus root over the
+    # real one - a real file's own imports would then resolve to the
+    # worktree's duplicate path instead of the real target, so the real file
+    # never showed up in anything's imported_by and got misreported as dead
+    # code. Confirmed via a real self-scan with an active worktree at
+    # .claude/worktrees/<name>/ - every app_server module main.py imports
+    # (webhook handlers, API routers) was wrongly flagged unreachable this
+    # way, even though _iter_source_files' own nested-git-root exclusion
+    # already kept the worktree's files out of the module list itself.
     roots: set[Path] = {repo_path}
-    for init_file in repo_path.rglob("__init__.py"):
-        directory = init_file.parent
+    nested_git_roots = _nested_git_roots(repo_path)
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        current_dir = Path(dirpath)
+        if any(root in current_dir.parents or root == current_dir for root in nested_git_roots):
+            dirnames[:] = []
+            continue
+        if "__init__.py" not in filenames:
+            continue
+        directory = current_dir
         while directory != repo_path and (directory.parent / "__init__.py").exists():
             directory = directory.parent
         roots.add(directory.parent)
