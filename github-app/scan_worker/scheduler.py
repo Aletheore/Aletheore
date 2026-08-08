@@ -23,24 +23,38 @@ SESSION_CLEANUP_JOB_TIMEOUT_SECONDS = 60
 # once, same reasoning as HEALTH_SWEEP_JOB_TIMEOUT_SECONDS.
 DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS = 600
 
+SCANS_QUEUE_NAME = "scans"
+# The health sweep gets its own queue, consumed by a dedicated worker (see
+# health_worker.py), instead of sharing "scans" with push-triggered Flash
+# reviews, AIRview builds, and managed audits. Those are real LLM calls
+# that can run for minutes; on a single shared queue, one long job delays
+# every health sweep enqueued behind it - observed live in prod, where one
+# Flash review run backed up three consecutive sweep ticks. Endpoint
+# monitoring needs to keep running on its own ~3-minute cadence regardless
+# of what the AI job queue is doing, especially now that the public status
+# API drops any endpoint not checked in the last 15 minutes.
+HEALTH_QUEUE_NAME = "health"
+
 
 def run_forever(
     interval_seconds: int = HEALTH_SWEEP_INTERVAL_SECONDS,
     max_iterations: int | None = None,
 ) -> None:
     settings = get_settings()
-    queue = Queue("scans", connection=Redis.from_url(settings.redis_url))
+    redis_conn = Redis.from_url(settings.redis_url)
+    scans_queue = Queue(SCANS_QUEUE_NAME, connection=redis_conn)
+    health_queue = Queue(HEALTH_QUEUE_NAME, connection=redis_conn)
     iterations = 0
     while max_iterations is None or iterations < max_iterations:
-        queue.enqueue(
+        health_queue.enqueue(
             "scan_worker.jobs.run_health_check_sweep_job",
             job_timeout=HEALTH_SWEEP_JOB_TIMEOUT_SECONDS,
         )
-        queue.enqueue(
+        scans_queue.enqueue(
             "scan_worker.jobs.run_session_cleanup_job",
             job_timeout=SESSION_CLEANUP_JOB_TIMEOUT_SECONDS,
         )
-        queue.enqueue(
+        scans_queue.enqueue(
             "scan_worker.jobs.run_live_docs_catchup_sweep_job",
             job_timeout=DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS,
         )

@@ -112,8 +112,8 @@ checking out a previous commit and rebuilding from it.
    ```
 4. **Verify the rollback actually took**:
    - `docker compose ps` - all services `Up`, no restart loops.
-   - `docker compose logs --tail 50 app-server scan-worker scheduler` - clean
-     JSON startup lines, no tracebacks.
+   - `docker compose logs --tail 50 app-server scan-worker health-worker scheduler` -
+     clean JSON startup lines, no tracebacks.
    - `GET /v1/health/{org}/{repo}` for a known-good repo returns the expected
      endpoint statuses.
    - If `INTERNAL_METRICS_TOKEN` is set, `GET /v1/internal/queue-stats` shows

@@ -27,7 +27,7 @@ def test_run_healthcheck_reports_reachable_get_endpoint():
         }
     ]
 
-    with patch("aletheore.healthcheck.urllib.request.urlopen", return_value=_mock_response(200)):
+    with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", return_value=_mock_response(200)):
         result = run_healthcheck(endpoints, "http://localhost:5000")
 
     assert result["base_url"] == "http://localhost:5000"
@@ -52,7 +52,7 @@ def test_run_healthcheck_substitutes_path_params_and_notes_it():
     ]
 
     with patch(
-        "aletheore.healthcheck.urllib.request.urlopen", return_value=_mock_response(404)
+        "aletheore.healthcheck._NO_REDIRECT_OPENER.open", return_value=_mock_response(404)
     ) as mock_urlopen:
         result = run_healthcheck(endpoints, "http://localhost:5000")
 
@@ -77,7 +77,7 @@ def test_run_healthcheck_probes_non_get_methods_via_get_for_reachability_only():
     ]
 
     with patch(
-        "aletheore.healthcheck.urllib.request.urlopen",
+        "aletheore.healthcheck._NO_REDIRECT_OPENER.open",
         side_effect=urllib.error.HTTPError("url", 405, "method not allowed", {}, None),
     ) as mock_urlopen:
         result = run_healthcheck(endpoints, "http://localhost:5000")
@@ -107,7 +107,7 @@ def test_run_healthcheck_reports_non_get_endpoint_unreachable_on_connection_erro
     ]
 
     with patch(
-        "aletheore.healthcheck.urllib.request.urlopen",
+        "aletheore.healthcheck._NO_REDIRECT_OPENER.open",
         side_effect=urllib.error.URLError("connection refused"),
     ):
         result = run_healthcheck(endpoints, "http://localhost:5000")
@@ -130,7 +130,7 @@ def test_run_healthcheck_get_endpoint_is_not_marked_reachability_only():
         }
     ]
 
-    with patch("aletheore.healthcheck.urllib.request.urlopen", return_value=_mock_response(200)):
+    with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", return_value=_mock_response(200)):
         result = run_healthcheck(endpoints, "http://localhost:5000")
 
     assert result["results"][0]["reachability_only"] is False
@@ -149,7 +149,7 @@ def test_run_healthcheck_treats_any_method_as_get_checkable():
         }
     ]
 
-    with patch("aletheore.healthcheck.urllib.request.urlopen", return_value=_mock_response(200)):
+    with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", return_value=_mock_response(200)):
         result = run_healthcheck(endpoints, "http://localhost:8000")
 
     assert result["results"][0].get("skipped") is not True
@@ -169,7 +169,7 @@ def test_run_healthcheck_skips_unresolved_indirection_entries():
         }
     ]
 
-    with patch("aletheore.healthcheck.urllib.request.urlopen") as mock_urlopen:
+    with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open") as mock_urlopen:
         result = run_healthcheck(endpoints, "http://localhost:8000")
 
     mock_urlopen.assert_not_called()
@@ -191,13 +191,56 @@ def test_run_healthcheck_reports_http_error_status_as_reachable():
     ]
 
     with patch(
-        "aletheore.healthcheck.urllib.request.urlopen",
+        "aletheore.healthcheck._NO_REDIRECT_OPENER.open",
         side_effect=urllib.error.HTTPError("url", 404, "not found", {}, None),
     ):
         result = run_healthcheck(endpoints, "http://localhost:5000")
 
     assert result["results"][0]["status_code"] == 404
     assert result["results"][0]["reachable"] is True
+
+
+def test_no_redirect_handler_refuses_to_build_a_redirect_request():
+    from aletheore.healthcheck import _NoRedirectHandler
+
+    handler = _NoRedirectHandler()
+    # Returning None tells urllib's opener not to follow the redirect - it
+    # raises HTTPError for the 3xx instead. This is a direct check on that
+    # contract, independent of how the opener surfaces it.
+    assert (
+        handler.redirect_request(
+            MagicMock(), MagicMock(), 307, "temporary redirect", {}, "https://internal.example/secret"
+        )
+        is None
+    )
+
+
+def test_run_healthcheck_reports_redirect_as_reachable_without_following_it():
+    endpoints = [
+        {
+            "method": "GET",
+            "path": "/auth/login",
+            "framework": "fastapi",
+            "file": "auth.py",
+            "line": 1,
+            "handler": "login",
+            "unresolved": False,
+        }
+    ]
+
+    # A no-redirect opener raises HTTPError for a 3xx rather than chasing
+    # it - this is what stands between a monitored endpoint's redirect and
+    # this checker being made to probe wherever that redirect points.
+    with patch(
+        "aletheore.healthcheck._NO_REDIRECT_OPENER.open",
+        side_effect=urllib.error.HTTPError("url", 307, "temporary redirect", {}, None),
+    ) as mock_open:
+        result = run_healthcheck(endpoints, "http://localhost:5000")
+
+    mock_open.assert_called_once()
+    entry = result["results"][0]
+    assert entry["status_code"] == 307
+    assert entry["reachable"] is True
 
 
 def test_run_healthcheck_reports_unreachable_on_connection_error():
@@ -214,7 +257,7 @@ def test_run_healthcheck_reports_unreachable_on_connection_error():
     ]
 
     with patch(
-        "aletheore.healthcheck.urllib.request.urlopen",
+        "aletheore.healthcheck._NO_REDIRECT_OPENER.open",
         side_effect=urllib.error.URLError("connection refused"),
     ):
         result = run_healthcheck(endpoints, "http://localhost:9999")
@@ -242,7 +285,7 @@ def test_run_healthcheck_captures_response_shape_for_json_object():
         body=b'{"id": 1, "name": "Ada", "email": "ada@example.com"}',
     )
 
-    with patch("aletheore.healthcheck.urllib.request.urlopen", return_value=response):
+    with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", return_value=response):
         result = run_healthcheck(endpoints, "http://localhost:5000")
 
     assert result["results"][0]["response_shape"] == ["email", "id", "name"]
@@ -267,7 +310,7 @@ def test_run_healthcheck_captures_response_shape_for_json_list_of_objects():
         body=b'[{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bea"}]',
     )
 
-    with patch("aletheore.healthcheck.urllib.request.urlopen", return_value=response):
+    with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", return_value=response):
         result = run_healthcheck(endpoints, "http://localhost:5000")
 
     assert result["results"][0]["response_shape"] == ["id", "name"]
@@ -288,7 +331,7 @@ def test_run_healthcheck_response_shape_is_none_for_non_json_content_type():
 
     response = _mock_response(200, headers={"Content-Type": "text/plain"}, body=b"OK")
 
-    with patch("aletheore.healthcheck.urllib.request.urlopen", return_value=response):
+    with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", return_value=response):
         result = run_healthcheck(endpoints, "http://localhost:5000")
 
     assert result["results"][0]["response_shape"] is None
@@ -313,7 +356,7 @@ def test_run_healthcheck_response_shape_is_none_for_malformed_json():
         body=b"not actually json",
     )
 
-    with patch("aletheore.healthcheck.urllib.request.urlopen", return_value=response):
+    with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", return_value=response):
         result = run_healthcheck(endpoints, "http://localhost:5000")
 
     assert result["results"][0]["response_shape"] is None
@@ -333,7 +376,7 @@ def test_run_healthcheck_response_shape_is_none_on_unreachable():
     ]
 
     with patch(
-        "aletheore.healthcheck.urllib.request.urlopen",
+        "aletheore.healthcheck._NO_REDIRECT_OPENER.open",
         side_effect=urllib.error.URLError("connection refused"),
     ):
         result = run_healthcheck(endpoints, "http://localhost:9999")

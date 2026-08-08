@@ -1861,6 +1861,14 @@ footer a:hover {
 
 /* Status page */
 
+.status-hero {
+  padding-bottom: 8px;
+}
+
+.status-section {
+  padding-top: 0;
+}
+
 .status-banner {
   display: flex;
   align-items: center;
