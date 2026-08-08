@@ -17,6 +17,15 @@ IGNORED_DIRS = {
     # executable scripts), so excluding it globally risks hiding real source
     # more than the noise it would remove here.
     "obj",
+    # Claude Code's own config/scratch directory - can hold a full git
+    # worktree checkout under .claude/worktrees/<name>/ (a real duplicate of
+    # this repo's own source tree, at a possibly-older commit). Confirmed via
+    # a real self-scan of this repo: an active worktree there duplicated
+    # every module path under github-app/ and src/, which corrupted import
+    # resolution enough that real, actively-imported files (webhook
+    # handlers, API routers) were misreported as dead code. Always
+    # gitignored by convention, never project source.
+    ".claude",
 }
 
 FRAMEWORK_MARKERS_PY = {
