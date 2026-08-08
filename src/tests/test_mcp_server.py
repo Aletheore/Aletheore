@@ -759,7 +759,7 @@ async def test_aletheore_healthcheck_tool_returns_results(tmp_path):
     response.__enter__.return_value = response
     response.__exit__.return_value = False
 
-    with patch("aletheore.healthcheck.urllib.request.urlopen", return_value=response):
+    with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", return_value=response):
         result = await server.call_tool(
             "aletheore_healthcheck", {"base_url": "http://localhost:5000"}
         )

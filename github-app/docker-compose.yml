@@ -54,6 +54,35 @@ services:
     cpus: "1.0"
     mem_limit: 1g
 
+  # Consumes only the "health" queue (see scan_worker/scheduler.py and
+  # health_worker.py) - a dedicated worker so a long-running AI job on
+  # scan-worker's "scans" queue (Flash review, AIRview, managed audit) can
+  # never delay the ~3-minute endpoint health sweep behind it. Same image
+  # as scan-worker since run_health_check_sweep_job's failure-alert
+  # enrichment needs the same GitHub App credentials and LLM keys; no
+  # Ollama or persistent repo-checkout volume since health checks never do
+  # embeddings or local git work.
+  health-worker:
+    build:
+      context: ..
+      dockerfile: github-app/Dockerfile.scan-worker
+    restart: unless-stopped
+    command: ["python", "-m", "scan_worker.health_worker"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem
+    volumes:
+      - ./app-private-key.pem:/run/secrets/github-app-key.pem:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    cpus: "0.5"
+    mem_limit: 512m
+
   # Never started via `up` - this service exists purely so `docker compose
   # build demo-sandbox` produces the aletheore-demo-sandbox:latest image on
   # the host daemon for demo-scan-worker (which has docker socket access)

@@ -13,6 +13,28 @@ from aletheore.history import _save_json_with_rotation
 
 _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    # Health checks must never follow a redirect: the destination hasn't
+    # gone through validate_external_https_url the way base_url has, so
+    # chasing it would let a monitored endpoint redirect this checker at an
+    # address it has no business reaching (scan_worker shares a network
+    # with postgres/redis/ollama). Returning None here makes the opener
+    # raise HTTPError for the 3xx instead of following it - the redirect
+    # response itself still proves the endpoint is up, which is all
+    # reachability monitoring claims to answer.
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# A module-local opener, not the process-wide default - installing this
+# globally via urllib.request.install_opener() would also block the
+# legitimate redirect-following that other callers (licenses.py querying
+# PyPI, vulnerabilities.py querying OSV.dev) rely on.
+_NO_REDIRECT_OPENER = urllib.request.build_opener(
+    _NoRedirectHandler, urllib.request.HTTPSHandler(context=_SSL_CONTEXT)
+)
+
 _PATH_PARAM_PATTERNS = (
     re.compile(r"<[^>]+>"),
     re.compile(r"\{[^}]+\}"),
@@ -92,9 +114,7 @@ def run_healthcheck(endpoints: list[dict], base_url: str, timeout: float = 5.0) 
         start = time.monotonic()
         try:
             request = urllib.request.Request(url)
-            with urllib.request.urlopen(
-                request, timeout=timeout, context=_SSL_CONTEXT
-            ) as response:
+            with _NO_REDIRECT_OPENER.open(request, timeout=timeout) as response:
                 entry["status_code"] = response.status
                 entry["reachable"] = True
                 entry["response_shape"] = None if reachability_only else _response_shape(response)

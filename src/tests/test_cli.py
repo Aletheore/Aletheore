@@ -1047,7 +1047,7 @@ def test_main_healthcheck_reports_results(tmp_path):
     response.__enter__.return_value = response
     response.__exit__.return_value = False
 
-    with patch("aletheore.healthcheck.urllib.request.urlopen", return_value=response):
+    with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", return_value=response):
         result = runner.invoke(
             app, ["healthcheck", str(repo), "--base-url", "http://localhost:5000"]
         )
