@@ -62,6 +62,22 @@ def redis_conn():
 
 
 @pytest.fixture(autouse=True)
+def _clear_settings_cache():
+    # get_settings() is @lru_cache'd for production (56 call sites, was
+    # re-reading the private-key file from disk on every single call) - but
+    # the test suite monkeypatches env vars per-test expecting get_settings()
+    # to reflect them fresh each time. Without this, whichever test happens
+    # to call get_settings() first in the whole pytest session would
+    # permanently pin every later test's settings to its own monkeypatched
+    # values for the rest of the run.
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_paddle_ip_fetch(monkeypatch):
     # Without this, every full-route webhook test would make a real network
     # call to Paddle's /ips endpoint on the first request (module-level
