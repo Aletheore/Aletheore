@@ -63,7 +63,7 @@ def test_run_healthcheck_substitutes_path_params_and_notes_it():
     )
 
 
-def test_run_healthcheck_never_sends_non_get_methods():
+def test_run_healthcheck_probes_non_get_methods_via_get_for_reachability_only():
     endpoints = [
         {
             "method": "POST",
@@ -76,12 +76,64 @@ def test_run_healthcheck_never_sends_non_get_methods():
         }
     ]
 
-    with patch("aletheore.healthcheck.urllib.request.urlopen") as mock_urlopen:
+    with patch(
+        "aletheore.healthcheck.urllib.request.urlopen",
+        side_effect=urllib.error.HTTPError("url", 405, "method not allowed", {}, None),
+    ) as mock_urlopen:
         result = run_healthcheck(endpoints, "http://localhost:5000")
 
-    mock_urlopen.assert_not_called()
-    assert result["results"][0]["skipped"] is True
-    assert result["results"][0]["reason"] == "only GET is health-checked"
+    mock_urlopen.assert_called_once()
+    entry = result["results"][0]
+    assert entry.get("skipped") is not True
+    assert entry["method"] == "POST"
+    assert entry["reachable"] is True
+    assert entry["status_code"] == 405
+    assert entry["reachability_only"] is True
+    assert entry["response_shape"] is None
+    assert "probed via GET for reachability only" in entry["note"]
+
+
+def test_run_healthcheck_reports_non_get_endpoint_unreachable_on_connection_error():
+    endpoints = [
+        {
+            "method": "POST",
+            "path": "/webhook",
+            "framework": "flask",
+            "file": "app.py",
+            "line": 1,
+            "handler": "webhook",
+            "unresolved": False,
+        }
+    ]
+
+    with patch(
+        "aletheore.healthcheck.urllib.request.urlopen",
+        side_effect=urllib.error.URLError("connection refused"),
+    ):
+        result = run_healthcheck(endpoints, "http://localhost:5000")
+
+    entry = result["results"][0]
+    assert entry["reachable"] is False
+    assert entry["reachability_only"] is True
+
+
+def test_run_healthcheck_get_endpoint_is_not_marked_reachability_only():
+    endpoints = [
+        {
+            "method": "GET",
+            "path": "/health",
+            "framework": "flask",
+            "file": "app.py",
+            "line": 1,
+            "handler": "health",
+            "unresolved": False,
+        }
+    ]
+
+    with patch("aletheore.healthcheck.urllib.request.urlopen", return_value=_mock_response(200)):
+        result = run_healthcheck(endpoints, "http://localhost:5000")
+
+    assert result["results"][0]["reachability_only"] is False
 
 
 def test_run_healthcheck_treats_any_method_as_get_checkable():

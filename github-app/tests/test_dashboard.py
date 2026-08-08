@@ -635,6 +635,36 @@ async def test_public_health_uptime_pct_excludes_checks_older_than_7_days(pool):
 
 
 @pytest.mark.asyncio
+async def test_public_health_excludes_endpoints_not_checked_recently(pool):
+    # An endpoint whose most recent check is older than the staleness
+    # window has either been removed from the route set or was never a
+    # real endpoint (e.g. a fixed scanner false positive) - either way the
+    # sweep has stopped checking it, and this public API shouldn't keep
+    # reporting it as "up" forever off one ancient row.
+    await upsert_installation(pool, 508, "octocat")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path,
+                 reachable, status_code, latency_ms, checked_at)
+            VALUES
+                (508, 'octocat/hello-world', 'GET', '/api/users', true, 200, 88.0, now()),
+                (508, 'octocat/hello-world', 'GET', '/removed-route', true, 404, 5.0, now() - interval '1 day')
+            """
+        )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/health/octocat/hello-world")
+
+    assert response.status_code == 200
+    endpoints = {(e["method"], e["path"]) for e in response.json()["endpoints"]}
+    assert endpoints == {("GET", "/api/users")}
+
+
+@pytest.mark.asyncio
 async def test_public_health_rate_limits_after_threshold(pool, monkeypatch, redis_conn):
     from app_server import dashboard
 
