@@ -93,6 +93,20 @@ def test_build_api_reference_returns_one_entry_per_module_with_at_least_one_publ
     assert "f" in refs["src/a.py"]
 
 
+def test_build_api_reference_excludes_test_files_even_with_public_symbols():
+    # Test functions are module-level and unprefixed, so is_public sees them
+    # as ordinary public API - but a Docs page documenting an app's public
+    # surface shouldn't include its own test suite, dogfooding-confirmed
+    # (test_dashboard.py functions showed up as "generated" API entries).
+    evidence = {"repository": {"modules": [
+        _module("src/a.py", [_symbol("f")]),
+        _module("tests/test_a.py", [_symbol("test_f_does_the_thing")]),
+        _module("src/a_test.py", [_symbol("test_g")]),
+    ]}}
+    refs = build_api_reference(evidence)
+    assert set(refs) == {"src/a.py"}
+
+
 def test_build_module_reference_renders_ai_generated_description_with_marker():
     evidence = {"repository": {"modules": [_module("src/a.py", [_symbol("f", docstring=None)])]}}
     md = build_module_reference(

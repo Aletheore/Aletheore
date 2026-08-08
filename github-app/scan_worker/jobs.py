@@ -20,6 +20,7 @@ from app_server.audit_signing import content_hash, sign_report
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.code_graph_diff import diff_endpoints, diff_modules
+from aletheore.dead_code import is_test_file
 from aletheore.evidence import write_evidence
 from aletheore.git_intel.analyzer import analyze_git, compute_hotspots
 from aletheore.evidence_resolution import (
@@ -2226,7 +2227,8 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
 
     candidate_modules = [
         m for m in evidence["repository"]["modules"]
-        if any(s.get("is_public", True) for s in m["symbols"]["functions"] + m["symbols"]["classes"])
+        if not is_test_file(m["path"])
+        and any(s.get("is_public", True) for s in m["symbols"]["functions"] + m["symbols"]["classes"])
     ]
     covered_by_module: dict[str, set[str]] = {}
     for row in list_docs_symbols(dsn, installation_id, repo_full_name):
@@ -2342,7 +2344,9 @@ def _maybe_update_live_docs(
         return
 
     modules_by_path = {m["path"]: m for m in evidence["repository"]["modules"]}
-    changed_modules = [modules_by_path[p] for p in changed_files if p in modules_by_path]
+    changed_modules = [
+        modules_by_path[p] for p in changed_files if p in modules_by_path and not is_test_file(p)
+    ]
     if not changed_modules:
         return
 
