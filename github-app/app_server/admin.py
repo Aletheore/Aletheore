@@ -361,6 +361,22 @@ def _build_updated_seat_items(subscription_items: list[dict], delta: int) -> lis
     return items
 
 
+def _adjust_extra_seat_sync(api_key: str | None, subscription_id: str, delta: int) -> list[dict] | None:
+    """Fetches the current subscription, computes its item list with the
+    extra-seat quantity adjusted by delta, and (if that's still a valid
+    quantity) pushes the update to Paddle. Two real network calls - run off
+    the event loop via asyncio.to_thread by the caller, same reasoning as
+    _administered_installation_ids: this gates a billing action behind a
+    single-worker server, and a slow Paddle round-trip would otherwise
+    freeze every other in-flight request too.
+    """
+    subscription = get_paddle_subscription(api_key, subscription_id)
+    items = _build_updated_seat_items(subscription.get("items", []), delta=delta)
+    if items is not None:
+        update_paddle_subscription_items(api_key, subscription_id, items, "prorated_immediately")
+    return items
+
+
 @admin_router.post("/admin/{org}/{repo}/seats/buy")
 async def buy_extra_seat(org: str, repo: str, request: Request):
     installation = await _require_admin_installation(request, org, repo)
@@ -370,9 +386,9 @@ async def buy_extra_seat(org: str, repo: str, request: Request):
 
     settings = get_settings()
     try:
-        subscription = get_paddle_subscription(settings.paddle_api_key, subscription_id)
-        items = _build_updated_seat_items(subscription.get("items", []), delta=1)
-        update_paddle_subscription_items(settings.paddle_api_key, subscription_id, items, "prorated_immediately")
+        await asyncio.to_thread(
+            _adjust_extra_seat_sync, settings.paddle_api_key, subscription_id, 1
+        )
     except PaddleAPIError as exc:
         # exc's message includes the raw Paddle response (URL, status code,
         # docs link) - useful in a log, not something to hand an end user
@@ -404,11 +420,11 @@ async def remove_extra_seat(org: str, repo: str, request: Request):
 
     settings = get_settings()
     try:
-        subscription = get_paddle_subscription(settings.paddle_api_key, subscription_id)
-        items = _build_updated_seat_items(subscription.get("items", []), delta=-1)
+        items = await asyncio.to_thread(
+            _adjust_extra_seat_sync, settings.paddle_api_key, subscription_id, -1
+        )
         if items is None:
             raise HTTPException(status_code=409, detail="no extra seats to remove")
-        update_paddle_subscription_items(settings.paddle_api_key, subscription_id, items, "prorated_immediately")
     except PaddleAPIError as exc:
         logger.error(
             "seat removal failed for installation %s (subscription %s): %s",
