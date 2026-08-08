@@ -1425,6 +1425,13 @@ async function loadDocs() {{
     staleBanner = '<div class="empty-state" style="color:var(--critical);margin-bottom:12px;">' +
       'The latest Docs update failed' + (data.build_error ? ': ' + escapeHtml(data.build_error) : '.') +
       ' Showing the last successful build below - it may be stale.</div>';
+  }} else if (data.build_error) {{
+    // A "ready" status with a build_error means a partial run: some files
+    // got documented, others didn't (a transient API error, mid-run). The
+    // ones below are real and current - this just says the rest is coming.
+    staleBanner = '<div class="empty-state" style="color:var(--warning);margin-bottom:12px;">' +
+      'The latest Docs update didn\\'t finish everything: ' + escapeHtml(data.build_error) +
+      ' It will pick up automatically on the next run.</div>';
   }}
   body.innerHTML = staleBanner;
   const list = document.createElement('div');
