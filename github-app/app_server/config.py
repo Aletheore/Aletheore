@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,17 @@ def _paddle_client_token(environment: str) -> str:
     return token
 
 
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    # Called at the top of nearly every route and job (56 call sites) -
+    # without caching, every single one re-reads the mounted private-key
+    # file from disk and re-parses/re-validates every env var from scratch,
+    # every time. Safe to cache for a process's whole lifetime: env vars and
+    # mounted secret files are fixed at container start and don't change
+    # until the next deploy restarts the process anyway. Tests that rely on
+    # get_settings() reflecting their own monkeypatched env vars need
+    # get_settings.cache_clear() between tests - see conftest.py's autouse
+    # fixture for that.
     paddle_environment = _paddle_environment()
     return Settings(
         database_url=os.environ["DATABASE_URL"],
