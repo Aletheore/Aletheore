@@ -89,7 +89,7 @@ def _html_script_entry_points(repo_path: Path) -> set[str]:
     return entry_points
 
 
-def _is_test_file(path: str) -> bool:
+def is_test_file(path: str) -> bool:
     return any(pattern.search(path) for pattern in TEST_PATH_PATTERNS)
 
 
@@ -126,7 +126,7 @@ def find_dead_code(repo_path: Path, modules: list[dict], config: dict | None) ->
         if _is_entry_point(path, custom_entry_points):
             entry_points_detected.append(path)
             continue
-        if _is_test_file(path):
+        if is_test_file(path):
             continue
         if not module.get("imported_by", []):
             if path in html_script_entry_points or _has_main_guard(repo_path, path):

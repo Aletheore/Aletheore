@@ -3212,6 +3212,36 @@ def test_run_live_docs_full_build_job_skips_llm_setup_when_nothing_new(monkeypat
     assert status_calls == [("ready", None)]
 
 
+def test_run_live_docs_full_build_job_excludes_test_files_from_candidate_modules(monkeypatch):
+    from scan_worker.jobs import run_live_docs_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    # A test function is module-level and unprefixed, so is_public sees it
+    # as ordinary public API - dogfooding-confirmed real symptom: test_*.py
+    # functions were showing up as "generated" Docs entries. Only a test
+    # module exists here, so if it isn't excluded there's real work to do.
+    module = _docs_module(
+        "tests/test_a.py", functions=[{"name": "test_f_does_the_thing", "is_public": True, "docstring": None}]
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([module]))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
+    client_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: client_calls.append(1)
+    )
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+
+    run_live_docs_full_build_job(1, "octocat/hello-world")
+
+    assert client_calls == []  # no GitHub/LLM setup - a test file is not real work
+    assert status_calls == [("ready", None)]
+
+
 def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
     from scan_worker.jobs import run_live_docs_full_build_job
 
@@ -3321,3 +3351,37 @@ def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
     assert status_calls[0][0] == "ready"
     assert "1/2 files processed" in status_calls[0][1]
     assert "rate limited" in status_calls[0][1]
+
+
+def test_maybe_update_live_docs_excludes_test_files_from_changed_modules(monkeypatch):
+    from scan_worker.jobs import _maybe_update_live_docs
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
+    )
+    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda: object())
+
+    fetched_for = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_file_content",
+        lambda client, token, repo, path, ref: fetched_for.append(path) or "source",
+    )
+    monkeypatch.setattr("scan_worker.jobs._store_docs_generation_for_module", lambda *a, **k: None)
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+
+    good = _docs_module("good.py")
+    test_module = _docs_module("tests/test_a.py")
+    evidence = _docs_evidence([good, test_module])
+
+    _maybe_update_live_docs(1, "octocat/hello-world", evidence, ["good.py", "tests/test_a.py"], "sha1")
+
+    # Only the real source file was ever fetched - the changed test file
+    # never reached the LLM at all, same as a full build's candidate filter.
+    assert fetched_for == ["good.py"]
+    assert status_calls == [("ready", None)]

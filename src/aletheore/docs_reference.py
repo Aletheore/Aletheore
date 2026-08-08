@@ -15,6 +15,8 @@ comments that were never written.
 
 import inspect
 
+from aletheore.dead_code import is_test_file
+
 UNDOCUMENTED = "*Undocumented - no docstring found.*"
 AI_GENERATED_MARKER = "*(AI-generated - no docstring found in source)*"
 AI_POLISHED_MARKER = "*(AI-polished from the original docstring)*"
@@ -112,6 +114,8 @@ def build_api_reference(
     """
     reference: dict[str, str] = {}
     for module in evidence["repository"]["modules"]:
+        if is_test_file(module["path"]):
+            continue
         has_public_symbol = any(
             symbol.get("is_public", True)
             for symbol in module["symbols"]["classes"] + module["symbols"]["functions"]
