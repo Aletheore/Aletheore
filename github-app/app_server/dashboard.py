@@ -384,6 +384,17 @@ async def get_dashboard_docs(org: str, repo: str, request: Request):
 PUBLIC_HEALTH_RATE_LIMIT = 60
 PUBLIC_HEALTH_RATE_LIMIT_WINDOW_SECONDS = 60
 
+# The sweep re-checks every endpoint still present in the latest scan every
+# ~3 minutes (scan_worker.scheduler.HEALTH_SWEEP_INTERVAL_SECONDS). An
+# endpoint that stops being checked - because the route was removed, or
+# because it was never a real route to begin with (a scanner false
+# positive that later got fixed) - simply stops getting new rows, but its
+# last-ever row would otherwise live in this DISTINCT ON query forever.
+# Filtering to recently-checked rows lets stale/removed endpoints age out
+# of this public, unauthenticated API on their own instead of being
+# reported as "up" indefinitely after they stop existing.
+PUBLIC_HEALTH_STALE_AFTER = timedelta(minutes=15)
+
 
 @dashboard_router.get("/v1/health/{org}/{repo}")
 async def get_public_health(org: str, repo: str, request: Request, response: Response):
@@ -430,10 +441,11 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
         SELECT DISTINCT ON (endpoint_method, endpoint_path)
             endpoint_method, endpoint_path, reachable, status_code, latency_ms, checked_at
         FROM endpoint_health
-        WHERE repo_full_name = $1
+        WHERE repo_full_name = $1 AND checked_at >= $2
         ORDER BY endpoint_method, endpoint_path, checked_at DESC, id DESC
         """,
         repo_full_name,
+        datetime.now(timezone.utc) - PUBLIC_HEALTH_STALE_AFTER,
     )
     if not rows:
         raise HTTPException(

@@ -63,27 +63,30 @@ def run_healthcheck(endpoints: list[dict], base_url: str, timeout: float = 5.0) 
             continue
 
         method = endpoint.get("method")
-        if method not in ("GET", "ANY"):
-            results.append(
-                {
-                    "method": method,
-                    "path": endpoint["path"],
-                    "skipped": True,
-                    "reason": "only GET is health-checked",
-                }
-            )
-            continue
+        # A non-GET endpoint (most commonly a webhook receiver) still gets
+        # probed with a GET request - any HTTP response, even a 405, proves
+        # the process behind it is up, which is the only thing reachability
+        # monitoring claims to answer. Only a connection failure/timeout
+        # means "down". The response body isn't meaningful for a method the
+        # endpoint doesn't actually implement, so response_shape is skipped
+        # for these rather than risking a misleading shape-change alert.
+        reachability_only = method not in ("GET", "ANY")
 
         resolved_path, had_params = _substitute_path_params(endpoint["path"])
         url = base_url.rstrip("/") + "/" + resolved_path.lstrip("/")
+        notes = []
+        if had_params:
+            notes.append("path contains parameters, tested with placeholder value(s)")
+        if reachability_only:
+            notes.append(
+                f"endpoint's declared method is {method}; probed via GET for "
+                "reachability only, not a full functional check"
+            )
         entry = {
-            "method": "GET",
+            "method": method if reachability_only else "GET",
             "path": endpoint["path"],
-            "note": (
-                "path contains parameters, tested with placeholder value(s)"
-                if had_params
-                else None
-            ),
+            "note": "; ".join(notes) if notes else None,
+            "reachability_only": reachability_only,
         }
 
         start = time.monotonic()
@@ -94,7 +97,7 @@ def run_healthcheck(endpoints: list[dict], base_url: str, timeout: float = 5.0) 
             ) as response:
                 entry["status_code"] = response.status
                 entry["reachable"] = True
-                entry["response_shape"] = _response_shape(response)
+                entry["response_shape"] = None if reachability_only else _response_shape(response)
         except urllib.error.HTTPError as exc:
             entry["status_code"] = exc.code
             entry["reachable"] = True
