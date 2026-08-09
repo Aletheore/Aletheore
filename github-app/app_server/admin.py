@@ -23,7 +23,9 @@ from app_server.db import (
     delete_session,
     get_docs_repo_commit_settings,
     get_extra_seats,
+    get_flash_review_count_this_month,
     get_installation,
+    get_llm_spend_this_month,
     get_max_tokens,
     is_installation_member,
     list_api_tokens,
@@ -36,6 +38,7 @@ from app_server.db import (
     set_webhook_url,
     update_session_tokens,
 )
+from app_server.llm_cost import base_cap_for_plan, monthly_cap_for_installation
 from app_server.paddle_client import PaddleAPIError
 from app_server.paddle_client import create_portal_session
 from app_server.paddle_client import get_subscription as get_paddle_subscription
@@ -323,6 +326,9 @@ async def admin_page(org: str, repo: str, request: Request):
     seat_limit = included_seats + extra_seats
     health_targets = await list_health_check_targets(pool, installation_id, repo_full_name)
     health_target_limit = INCLUDED_HEALTH_CHECK_TARGETS.get(installation["plan"], DEFAULT_HEALTH_CHECK_TARGET_LIMIT)
+    llm_spend_month_to_date = await get_llm_spend_this_month(pool, installation_id)
+    flash_reviews_month_to_date = await get_flash_review_count_this_month(pool, installation_id)
+    llm_spend_cap = monthly_cap_for_installation(base_cap_for_plan(installation["plan"]), extra_seats)
     return {
         "installation": installation,
         "tokens": tokens,
@@ -333,6 +339,13 @@ async def admin_page(org: str, repo: str, request: Request):
         "health_target_limit": health_target_limit,
         "public_status_url": f"/v1/health/{org}/{repo}",
         "branch_protection_disclosure": BRANCH_PROTECTION_DISCLOSURE,
+        # llm_spend and flash_review_monthly_count are already tracked
+        # internally for the hard spend cap (scan_worker/jobs.py) - this is
+        # the first place a customer actually sees what their AI review
+        # usage is costing/producing, previously invisible to them.
+        "llm_spend_month_to_date": llm_spend_month_to_date,
+        "llm_spend_cap": llm_spend_cap,
+        "flash_reviews_month_to_date": flash_reviews_month_to_date,
     }
 
 

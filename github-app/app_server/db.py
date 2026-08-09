@@ -271,6 +271,17 @@ async def record_llm_spend(pool: asyncpg.Pool, installation_id: int, cost_usd: f
     )
 
 
+async def get_flash_review_count_this_month(pool: asyncpg.Pool, installation_id: int) -> int:
+    row = await pool.fetchrow(
+        """
+        SELECT review_count FROM flash_review_monthly_count
+        WHERE installation_id = $1 AND month = date_trunc('month', now())::date
+        """,
+        installation_id,
+    )
+    return row["review_count"] if row else 0
+
+
 async def get_extra_seats(pool: asyncpg.Pool, installation_id: int) -> int:
     row = await pool.fetchrow(
         "SELECT extra_seats FROM installations WHERE installation_id = $1",
