@@ -17,6 +17,7 @@ from app_server.db import (
     upsert_installation,
 )
 from app_server.main import app
+from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
 from app_server.webhooks.paddle import handle_paddle_webhook_event
 
 WEBHOOK_SECRET = "pdl_ntfset_test_secret"
@@ -342,7 +343,7 @@ async def test_subscription_updated_reconciles_extra_seats_from_items(pool):
             "custom_data": {"installation_id": "305"},
             "items": [
                 {"price": {"id": "pri_01kyhevc8bkcghfpwjymz16y2h"}, "quantity": 1},
-                {"price": {"id": "pri_01kym2q99kevmdg7h71nwpm4ej"}, "quantity": 3},
+                {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": 3},
             ],
         },
     }

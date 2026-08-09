@@ -38,7 +38,7 @@ from app_server.db import (
     set_webhook_url,
     update_session_tokens,
 )
-from app_server.llm_cost import base_cap_for_plan, monthly_cap_for_installation
+from app_server.llm_cost import EXTRA_SEAT_PRICE_USD, base_cap_for_plan, monthly_cap_for_installation
 from app_server.paddle_client import PaddleAPIError
 from app_server.paddle_client import create_portal_session
 from app_server.paddle_client import get_subscription as get_paddle_subscription
@@ -364,7 +364,7 @@ async def add_member(org: str, repo: str, request: Request, body: AddMemberReque
                 status_code=409,
                 detail=(
                     f"seat limit reached ({seat_limit}) - buy an extra seat in Settings "
-                    "($3.99/mo) or remove someone first."
+                    f"(${EXTRA_SEAT_PRICE_USD}/mo) or remove someone first."
                 ),
             )
         await add_installation_member(pool, installation_id, body.github_login, session["github_login"])
