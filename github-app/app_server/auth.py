@@ -23,6 +23,8 @@ from app_server.db import (
 )
 from app_server.email_queue import enqueue_transactional_email
 from app_server.github_auth import generate_app_jwt, get_installation_details
+from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for
+from app_server.rate_limit import is_rate_limited
 
 SESSION_COOKIE_NAME = "session"
 SESSION_TTL = timedelta(days=30)
@@ -30,8 +32,48 @@ OAUTH_STATE_COOKIE_NAME = "oauth_state"
 OAUTH_STATE_TTL = timedelta(minutes=10)
 NEXT_COOKIE_NAME = "aletheore_oauth_next"
 
+# GitHub's own OAuth flow already gates against credential brute-forcing
+# (there's no password here to guess), but neither /auth/login nor
+# /auth/callback had any rate limiting at all - the latter makes two real
+# GitHub API calls per hit (_exchange_code_and_fetch_user). Shared budget
+# across both endpoints, not a separate one each, since they're the same
+# logical flow and a per-endpoint split would just double an attacker's
+# effective allowance.
+AUTH_RATE_LIMIT = 20
+AUTH_RATE_LIMIT_WINDOW_SECONDS = 300
+
 auth_router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _enforce_auth_rate_limit(request: Request) -> None:
+    from redis import Redis
+
+    settings = get_settings()
+    client_ip = client_ip_from_forwarded_for(
+        request.headers.get("x-forwarded-for"),
+        request.client.host if request.client else "",
+    )
+    try:
+        rate_limited = is_rate_limited(
+            Redis.from_url(settings.redis_url),
+            f"ratelimit:auth:{client_ip}",
+            AUTH_RATE_LIMIT,
+            AUTH_RATE_LIMIT_WINDOW_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # A Redis outage should degrade this endpoint's abuse protection,
+        # not take down sign-in itself - fail open, same as the public
+        # health rate limit and the Paddle IP allowlist do.
+        logger.warning("auth rate limit check failed (%s); allowing request", exc)
+        rate_limited = False
+
+    if rate_limited:
+        raise HTTPException(
+            status_code=429,
+            detail="too many requests",
+            headers={"Retry-After": str(AUTH_RATE_LIMIT_WINDOW_SECONDS)},
+        )
 
 
 def _derive_key(session_secret: str, purpose: bytes, length: int = 32) -> bytes:
@@ -217,7 +259,8 @@ def _is_safe_next_path(next_path: str | None) -> str:
 
 
 @auth_router.get("/auth/login")
-async def login(next: str | None = None):
+async def login(request: Request, next: str | None = None):
+    _enforce_auth_rate_limit(request)
     settings = get_settings()
     state = secrets.token_urlsafe(32)
     safe_next = _is_safe_next_path(next)
@@ -249,6 +292,7 @@ async def login(next: str | None = None):
 
 @auth_router.get("/auth/callback")
 async def callback(code: str, request: Request, state: str | None = None, installation_id: int | None = None):
+    _enforce_auth_rate_limit(request)
     settings = get_settings()
 
     # GitHub redirects here from two different entry points: our own
