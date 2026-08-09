@@ -25,6 +25,7 @@ from app_server.db import (
     is_installation_member,
     list_api_tokens,
     list_health_check_targets,
+    list_installation_member_emails,
     list_installation_members,
     remove_health_check_target,
     remove_installation_member,
@@ -33,6 +34,7 @@ from app_server.db import (
     set_installation_plan,
     set_webhook_url,
     touch_api_token,
+    upsert_github_user_email,
     upsert_installation,
 )
 
@@ -300,3 +302,37 @@ async def test_remove_health_check_target_is_scoped_to_installation_and_repo(poo
     # A different installation cannot delete someone else's target by id.
     await remove_health_check_target(pool, 701, "octocat/repo1", target_id)
     assert await count_health_check_targets(pool, 700, "octocat/repo1") == 1
+
+
+@pytest.mark.asyncio
+async def test_upsert_github_user_email_returns_true_only_on_first_capture(pool):
+    is_new_first = await upsert_github_user_email(pool, "octocat", "octocat@example.com")
+    is_new_second = await upsert_github_user_email(pool, "octocat", "octocat@example.com")
+
+    assert is_new_first is True
+    assert is_new_second is False
+
+
+@pytest.mark.asyncio
+async def test_upsert_github_user_email_self_heals_on_email_change(pool):
+    await upsert_github_user_email(pool, "octocat", "old@example.com")
+    await upsert_github_user_email(pool, "octocat", "new@example.com")
+
+    row = await pool.fetchrow(
+        "SELECT email FROM github_user_emails WHERE github_login = $1", "octocat"
+    )
+    assert row["email"] == "new@example.com"
+
+
+@pytest.mark.asyncio
+async def test_list_installation_member_emails_only_includes_members_who_have_logged_in(pool):
+    await upsert_installation(pool, 700, "acme")
+    await add_installation_member(pool, 700, "alice", "alice")
+    await add_installation_member(pool, 700, "bob", "alice")
+    # bob was added by username but has never logged in, so has no
+    # captured email - this is deliberate v1 scope, not a bug.
+    await upsert_github_user_email(pool, "alice", "alice@example.com")
+
+    emails = await list_installation_member_emails(pool, 700)
+
+    assert emails == ["alice@example.com"]

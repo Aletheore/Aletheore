@@ -9,7 +9,13 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app_server import paddle_ip_allowlist
-from app_server.db import get_extra_seats, get_installation, upsert_installation
+from app_server.db import (
+    add_installation_member,
+    get_extra_seats,
+    get_installation,
+    upsert_github_user_email,
+    upsert_installation,
+)
 from app_server.main import app
 from app_server.webhooks.paddle import handle_paddle_webhook_event
 
@@ -410,3 +416,126 @@ async def test_unhandled_event_type_is_ignored(pool):
 
     installation = await get_installation(pool, 305)
     assert installation["plan"] == "air"
+
+
+@pytest.mark.asyncio
+async def test_past_due_from_paid_enqueues_payment_failed_email_to_members(pool, monkeypatch):
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (700, 'acme', 'air')"
+    )
+    await add_installation_member(pool, 700, "alice", "alice")
+    await upsert_github_user_email(pool, "alice", "alice@example.com")
+
+    enqueue_calls = []
+    monkeypatch.setattr(
+        "app_server.webhooks.paddle.enqueue_transactional_email",
+        lambda redis_url, **kwargs: enqueue_calls.append(kwargs),
+    )
+
+    payload = _subscription_event_payload("subscription.updated", "past_due", 700)
+    payload["event_id"] = "evt_past_due_1"
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert len(enqueue_calls) == 1
+    call = enqueue_calls[0]
+    assert call["template_name"] == "payment_failed"
+    assert call["template_arg"] == "acme"
+    assert call["to_email"] == "alice@example.com"
+    assert call["dedupe_key"] == "payment_failed:evt_past_due_1:alice@example.com"
+    assert call["installation_id"] == 700
+
+
+@pytest.mark.asyncio
+async def test_canceled_from_paid_enqueues_win_back_email(pool, monkeypatch):
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (701, 'acme', 'air')"
+    )
+    await add_installation_member(pool, 701, "alice", "alice")
+    await upsert_github_user_email(pool, "alice", "alice@example.com")
+
+    enqueue_calls = []
+    monkeypatch.setattr(
+        "app_server.webhooks.paddle.enqueue_transactional_email",
+        lambda redis_url, **kwargs: enqueue_calls.append(kwargs),
+    )
+
+    payload = _subscription_event_payload("subscription.canceled", "canceled", 701)
+    payload["event_id"] = "evt_canceled_1"
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert len(enqueue_calls) == 1
+    assert enqueue_calls[0]["template_name"] == "subscription_canceled"
+    assert enqueue_calls[0]["dedupe_key"] == "subscription_canceled:evt_canceled_1:alice@example.com"
+
+
+@pytest.mark.asyncio
+async def test_no_email_enqueued_when_installation_was_already_free(pool, monkeypatch):
+    fake_queue = MagicMock()
+    await upsert_installation(pool, 702, "acme")  # defaults to plan='free'
+    await add_installation_member(pool, 702, "alice", "alice")
+    await upsert_github_user_email(pool, "alice", "alice@example.com")
+
+    enqueue_calls = []
+    monkeypatch.setattr(
+        "app_server.webhooks.paddle.enqueue_transactional_email",
+        lambda redis_url, **kwargs: enqueue_calls.append(kwargs),
+    )
+
+    payload = _subscription_event_payload("subscription.updated", "past_due", 702)
+    payload["event_id"] = "evt_already_free"
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert enqueue_calls == []
+
+
+@pytest.mark.asyncio
+async def test_no_email_enqueued_for_members_who_have_never_logged_in(pool, monkeypatch):
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (703, 'acme', 'air')"
+    )
+    # bob was added by username but has never logged in - no captured
+    # email, so no row to send to. Deliberate v1 scope, not a bug.
+    await add_installation_member(pool, 703, "bob", "bob")
+
+    enqueue_calls = []
+    monkeypatch.setattr(
+        "app_server.webhooks.paddle.enqueue_transactional_email",
+        lambda redis_url, **kwargs: enqueue_calls.append(kwargs),
+    )
+
+    payload = _subscription_event_payload("subscription.canceled", "canceled", 703)
+    payload["event_id"] = "evt_no_email_on_file"
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert enqueue_calls == []
+
+
+@pytest.mark.asyncio
+async def test_no_email_enqueued_without_event_id(pool, monkeypatch):
+    # No event_id means no safe dedupe_key - skip rather than risk a
+    # duplicate send on a retried webhook that somehow lacks one.
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (704, 'acme', 'air')"
+    )
+    await add_installation_member(pool, 704, "alice", "alice")
+    await upsert_github_user_email(pool, "alice", "alice@example.com")
+
+    enqueue_calls = []
+    monkeypatch.setattr(
+        "app_server.webhooks.paddle.enqueue_transactional_email",
+        lambda redis_url, **kwargs: enqueue_calls.append(kwargs),
+    )
+
+    payload = _subscription_event_payload("subscription.updated", "past_due", 704)
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert enqueue_calls == []

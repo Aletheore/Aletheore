@@ -13,6 +13,7 @@ from scan_worker.db import (
     delete_docs_symbols_not_in,
     delete_expired_sessions,
     delete_wiki_subsystems_not_in,
+    email_already_sent,
     get_extra_seats,
     get_last_endpoint_health,
     get_last_reviewed_sha,
@@ -29,6 +30,7 @@ from scan_worker.db import (
     list_wiki_subsystems,
     record_docs_catchup_swept,
     record_llm_spend,
+    record_sent_email,
     set_last_reviewed_sha,
     upsert_docs_symbol,
     upsert_wiki_overview,
@@ -819,3 +821,29 @@ async def test_record_docs_catchup_swept_upserts_on_conflict(pool):
     )
     assert count == 1
     assert second >= first
+
+
+@pytest.mark.asyncio
+async def test_email_already_sent_is_false_until_recorded(pool):
+    await _insert_installation(pool, 601, "f")
+
+    assert email_already_sent(TEST_DATABASE_URL, "welcome:octocat") is False
+
+    record_sent_email(TEST_DATABASE_URL, "welcome:octocat", "welcome", "o@example.com", 601, "msg_1")
+
+    assert email_already_sent(TEST_DATABASE_URL, "welcome:octocat") is True
+
+
+@pytest.mark.asyncio
+async def test_record_sent_email_ignores_duplicate_dedupe_key(pool):
+    await _insert_installation(pool, 602, "g")
+
+    record_sent_email(TEST_DATABASE_URL, "payment_failed:evt_1:a@x.com", "payment_failed", "a@x.com", 602, "msg_1")
+    # Same dedupe_key again - must not raise (ON CONFLICT DO NOTHING), and
+    # must not create a second row.
+    record_sent_email(TEST_DATABASE_URL, "payment_failed:evt_1:a@x.com", "payment_failed", "a@x.com", 602, "msg_2")
+
+    count = await pool.fetchval(
+        "SELECT count(*) FROM sent_emails WHERE dedupe_key = $1", "payment_failed:evt_1:a@x.com"
+    )
+    assert count == 1

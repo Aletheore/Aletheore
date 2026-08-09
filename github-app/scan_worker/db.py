@@ -977,3 +977,40 @@ def record_flash_review_cache_hit(dsn: str, row_id: int) -> None:
                 (row_id,),
             )
         conn.commit()
+
+
+def email_already_sent(dsn: str, dedupe_key: str) -> bool:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM sent_emails WHERE dedupe_key = %s", (dedupe_key,))
+            return cur.fetchone() is not None
+
+
+def record_sent_email(
+    dsn: str,
+    dedupe_key: str,
+    template_name: str,
+    recipient: str,
+    installation_id: int | None,
+    resend_message_id: str | None,
+) -> None:
+    # Only ever called after a successful Resend call (see
+    # send_transactional_email_job) - inserting this as a "claim" before
+    # sending would let a transient send failure permanently block a
+    # legitimate future retry, since dedupe_key is UNIQUE.
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO sent_emails
+                    (dedupe_key, template_name, recipient, installation_id, resend_message_id)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (dedupe_key) DO NOTHING
+                """,
+                (dedupe_key, template_name, recipient, installation_id, resend_message_id),
+            )
+        conn.commit()
