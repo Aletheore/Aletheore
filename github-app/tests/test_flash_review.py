@@ -696,7 +696,11 @@ def test_review_diff_ignores_unexpected_fields_on_a_finding(mock_adapter_class):
     assert findings == [{"file": "a.py", "line": 3, "issue": "real issue"}]
 
 
-def test_gather_file_context_stops_at_max_files(monkeypatch):
+def test_fetch_review_file_context_stops_at_max_files(monkeypatch):
+    # fetch_review_file_context fetches concurrently (see its docstring -
+    # this replaced two functions that each looped over the same file list
+    # and fetched every file twice), so which of the eligible paths starts
+    # first is not deterministic - only the eligible *set* is.
     from scan_worker import flash_review
 
     monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILES", 2)
@@ -708,12 +712,14 @@ def test_gather_file_context_stops_at_max_files(monkeypatch):
 
     monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
 
-    flash_review.gather_file_context(None, "tok", "o/r", ["a.py", "b.py", "c.py", "d.py"], "sha")
+    flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["a.py", "b.py", "c.py", "d.py"], "sha"
+    )
 
-    assert fetched == ["a.py", "b.py"]
+    assert set(fetched) == {"a.py", "b.py"}
 
 
-def test_gather_file_context_skips_oversized_files(monkeypatch):
+def test_fetch_review_file_context_skips_oversized_files_from_both_outputs(monkeypatch):
     from scan_worker import flash_review
 
     monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILE_BYTES", 5)
@@ -723,12 +729,21 @@ def test_gather_file_context_skips_oversized_files(monkeypatch):
 
     monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
 
-    result = flash_review.gather_file_context(None, "tok", "o/r", ["a.py"], "sha")
+    file_context, file_contents = flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["a.py"], "sha"
+    )
 
-    assert "a.py" not in result
+    assert "a.py" not in file_context
+    assert file_contents == {}
 
 
-def test_gather_file_context_stops_at_total_byte_budget(monkeypatch):
+def test_fetch_review_file_context_stops_context_at_total_byte_budget(monkeypatch):
+    # The total-byte cap only bounds the prompt blob (file_context) - the
+    # citation-check dict (file_contents) still gets every file that was
+    # actually fetched, since a citation check needs the real content of
+    # anything the model was shown, and truncating that too would make
+    # _line_citation_content_matches unable to verify files it has every
+    # right to check.
     from scan_worker import flash_review
 
     monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILES", 10)
@@ -740,12 +755,15 @@ def test_gather_file_context_stops_at_total_byte_budget(monkeypatch):
 
     monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
 
-    result = flash_review.gather_file_context(None, "tok", "o/r", ["a.py", "b.py", "c.py"], "sha")
+    file_context, file_contents = flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["a.py", "b.py", "c.py"], "sha"
+    )
 
-    assert result.count("0123456789") == 1
+    assert file_context.count("0123456789") == 1
+    assert file_contents == {"a.py": "0123456789", "b.py": "0123456789", "c.py": "0123456789"}
 
 
-def test_fetch_changed_file_contents_returns_path_to_content_mapping(monkeypatch):
+def test_fetch_review_file_context_returns_path_to_content_mapping(monkeypatch):
     from scan_worker import flash_review
 
     def fake_fetch(client, token, repo, path, ref):
@@ -753,12 +771,14 @@ def test_fetch_changed_file_contents_returns_path_to_content_mapping(monkeypatch
 
     monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
 
-    result = flash_review.fetch_changed_file_contents(None, "tok", "o/r", ["a.py", "b.py"], "sha")
+    _, file_contents = flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["a.py", "b.py"], "sha"
+    )
 
-    assert result == {"a.py": "content of a.py", "b.py": "content of b.py"}
+    assert file_contents == {"a.py": "content of a.py", "b.py": "content of b.py"}
 
 
-def test_fetch_changed_file_contents_skips_files_where_fetch_returns_none(monkeypatch):
+def test_fetch_review_file_context_skips_files_where_fetch_returns_none(monkeypatch):
     from scan_worker import flash_review
 
     def fake_fetch(client, token, repo, path, ref):
@@ -766,41 +786,36 @@ def test_fetch_changed_file_contents_skips_files_where_fetch_returns_none(monkey
 
     monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
 
-    result = flash_review.fetch_changed_file_contents(None, "tok", "o/r", ["a.py", "missing.py"], "sha")
+    _, file_contents = flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["a.py", "missing.py"], "sha"
+    )
 
-    assert result == {"a.py": "real content"}
+    assert file_contents == {"a.py": "real content"}
 
 
-def test_fetch_changed_file_contents_skips_oversized_files(monkeypatch):
+def test_fetch_review_file_context_preserves_diff_order_when_truncating(monkeypatch):
+    # The concurrent fetch can complete in any order, but the formatted
+    # context blob must still truncate based on the *original* changed-files
+    # order (matching diff order), not fetch-completion order - otherwise
+    # which file gets cut when the total budget is hit would be
+    # nondeterministic instead of "whichever file was last in the diff".
     from scan_worker import flash_review
 
-    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILE_BYTES", 5)
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILES", 10)
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILE_BYTES", 1000)
+    monkeypatch.setattr(flash_review, "MAX_CONTEXT_TOTAL_BYTES", 12)
 
     def fake_fetch(client, token, repo, path, ref):
-        return "way too long for the cap"
+        return "0123456789"
 
     monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
 
-    result = flash_review.fetch_changed_file_contents(None, "tok", "o/r", ["a.py"], "sha")
+    file_context, _ = flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["a.py", "b.py"], "sha"
+    )
 
-    assert result == {}
-
-
-def test_fetch_changed_file_contents_stops_at_max_files(monkeypatch):
-    from scan_worker import flash_review
-
-    monkeypatch.setattr(flash_review, "MAX_CONTEXT_FILES", 2)
-    fetched = []
-
-    def fake_fetch(client, token, repo, path, ref):
-        fetched.append(path)
-        return "x" * 10
-
-    monkeypatch.setattr(flash_review, "fetch_file_content", fake_fetch)
-
-    flash_review.fetch_changed_file_contents(None, "tok", "o/r", ["a.py", "b.py", "c.py", "d.py"], "sha")
-
-    assert fetched == ["a.py", "b.py"]
+    assert "a.py" in file_context
+    assert "b.py" not in file_context
 
 
 def test_validate_findings_keeps_a_finding_just_past_a_deletion_only_hunk():
