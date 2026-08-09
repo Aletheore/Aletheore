@@ -255,7 +255,45 @@ table.findings tr:last-child td { border-bottom: none; }
 .wiki-banner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; background: linear-gradient(90deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 62%, var(--paper))); border: 1px solid rgba(224, 134, 58, 0.22); border-radius: 12px; padding: 13px 15px; margin: 10px 0 14px; flex-wrap: wrap; }
 .wiki-banner-text { font-size: 12.5px; color: var(--accent-strong); line-height: 1.5; max-width: 46ch; }
 .wiki-banner-text b { font-weight: 500; }
-.docs-module-body { white-space: pre-wrap; font-size: 12px; line-height: 1.55; padding: 10px 2px 2px; margin: 0; font-family: inherit; }
+.docs-overview { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; border: 1px solid rgba(224, 134, 58, 0.22);
+  border-radius: 14px; padding: 16px; margin: 10px 0 16px; background:
+    radial-gradient(circle at 92% 12%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 36%),
+    linear-gradient(135deg, color-mix(in srgb, var(--accent-soft) 46%, var(--paper)), color-mix(in srgb, var(--paper) 86%, var(--slate-50))); }
+.docs-overview-kicker { font-size: 11px; font-weight: 720; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent-strong); }
+.docs-overview h2 { margin: 5px 0 5px; font-size: 20px; line-height: 1.2; }
+.docs-overview p { margin: 0; color: var(--slate-600); font-size: 13px; line-height: 1.55; max-width: 72ch; }
+.docs-overview-stats { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.docs-stat-pill { min-width: 104px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--paper) 78%, var(--slate-50));
+  padding: 10px 12px; box-shadow: var(--shadow-card); }
+.docs-stat-value { font-family: var(--font-mono); font-size: 18px; font-weight: 720; color: var(--ink-900); }
+.docs-stat-label { margin-top: 2px; font-size: 11px; color: var(--slate-600); }
+.docs-status-banner { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin: 0 0 14px; font-size: 12.5px; line-height: 1.55; }
+.docs-status-banner.failed { border-color: color-mix(in srgb, var(--critical) 34%, transparent); background: var(--critical-soft); color: var(--critical); }
+.docs-status-banner.partial { border-color: color-mix(in srgb, var(--warning) 34%, transparent); background: var(--warning-soft); color: var(--warning); }
+.docs-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.docs-module-card { border: 1px solid var(--border); border-radius: 13px; background: linear-gradient(180deg, var(--paper), color-mix(in srgb, var(--paper) 88%, var(--slate-50)));
+  box-shadow: var(--shadow-card); overflow: hidden; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+.docs-module-card[open] { grid-column: 1 / -1; border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); box-shadow: var(--shadow-card-hover); }
+.docs-module-summary { list-style: none; cursor: pointer; padding: 14px 15px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; }
+.docs-module-summary::-webkit-details-marker { display: none; }
+.docs-module-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.docs-module-title i { color: var(--accent-strong); font-size: 17px; flex-shrink: 0; }
+.docs-module-path { font-family: var(--font-mono); font-size: 12.5px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-module-sub { margin-top: 4px; font-size: 11.5px; color: var(--slate-600); }
+.docs-module-meta { display: flex; align-items: center; gap: 7px; justify-content: flex-end; flex-wrap: wrap; }
+.docs-chip { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 4px 8px; background: var(--slate-100); color: var(--slate-600); font-size: 11px; white-space: nowrap; }
+.docs-chip.ai { background: var(--accent-soft); color: var(--accent-strong); }
+.docs-module-chevron { color: var(--slate-400); font-size: 16px; transition: transform 0.15s ease; }
+.docs-module-card[open] .docs-module-chevron { transform: rotate(180deg); }
+.docs-module-content { border-top: 1px solid var(--border); background: color-mix(in srgb, var(--slate-50) 78%, var(--paper)); padding: 14px; }
+.docs-module-body { white-space: pre-wrap; font-size: 12px; line-height: 1.7; padding: 14px; margin: 0; font-family: var(--font-mono); color: var(--ink-700);
+  overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--paper) 84%, var(--slate-50)); }
+.docs-commit-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--border); border-radius: 12px; padding: 14px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--paper) 88%, var(--slate-50)), var(--paper)); }
+.docs-commit-copy { min-width: 0; }
+.docs-commit-title { font-size: 13.5px; font-weight: 650; margin-bottom: 4px; }
+.docs-commit-desc { font-size: 12.5px; color: var(--slate-600); line-height: 1.55; }
+.docs-commit-desc a { font-weight: 650; }
 .diagram-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background:
   radial-gradient(circle at 50% 20%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 36%),
   var(--slate-50); padding: 14px; }
@@ -314,7 +352,9 @@ table.findings tr:last-child td { border-bottom: none; }
   .dashboard-summary { grid-template-columns: 1fr; }
   .summary-chip-row { justify-content: flex-start; }
   .stat-strip { grid-template-columns: repeat(2, minmax(0,1fr)); }
-  .health-grid, .subsystem-grid, .settings-grid { grid-template-columns: 1fr; }
+  .health-grid, .subsystem-grid, .settings-grid, .docs-grid { grid-template-columns: 1fr; }
+  .docs-overview, .docs-module-summary, .docs-commit-card { grid-template-columns: 1fr; }
+  .docs-overview-stats, .docs-module-meta { justify-content: flex-start; }
   .picker-head { align-items: flex-start; gap: 1rem; flex-direction: column; }
   .diagram-zoom-toolbar { left: 14px; right: 14px; transform: none; justify-content: center; flex-wrap: wrap; border-radius: 14px; }
   .diagram-zoom-hint { order: 2; width: 100%; text-align: center; }
@@ -1348,9 +1388,14 @@ loadPlanBadge();
 # had no docstring, always marked distinct from a verbatim source comment.
 # ---------------------------------------------------------------------------
 DOCS_LOCKED_PREVIEW = (
-    '<div class="subsystem-grid">'
-    '<div class="subsystem-card"><div class="subsystem-name">checkout/session.py</div>'
-    '<div class="subsystem-desc">create_session(cart_id) - Validates a cart and opens a new payment session.</div></div>'
+    '<div class="docs-grid">'
+    '<details class="docs-module-card" open><summary class="docs-module-summary">'
+    '<div><div class="docs-module-title"><i class="ti ti-file-code"></i><span class="docs-module-path">checkout/session.py</span></div>'
+    '<div class="docs-module-sub">1 documented symbol</div></div>'
+    '<div class="docs-module-meta"><span class="docs-chip">1 symbol</span><i class="ti ti-chevron-down docs-module-chevron"></i></div>'
+    '</summary><div class="docs-module-content"><pre class="docs-module-body">'
+    '# checkout/session.py\n\n### `create_session(cart_id)`\n\nValidates a cart and opens a new payment session.\n\n`checkout/session.py:42`'
+    '</pre></div></details>'
     "</div>"
 )
 
@@ -1381,16 +1426,64 @@ DOCS_HTML = _page_head("Docs — {repo} — Aletheore") + _shell(
 {PAGE_HEAD_JS}
 {CONFIRM_UPGRADE_JS}
 
+function docsSymbolCount(markdown) {{
+  const matches = markdown.match(/^###\\s+/gm);
+  return matches ? matches.length : 0;
+}}
+
+function docsLineCount(markdown) {{
+  return markdown.split('\\n').filter(function (line) {{ return line.trim().length > 0; }}).length;
+}}
+
+function docsHasAiText(markdown) {{
+  return markdown.indexOf('AI-generated') !== -1 || markdown.indexOf('AI-polished') !== -1;
+}}
+
+function renderDocsOverview(modulePaths, modules) {{
+  const symbolCount = modulePaths.reduce(function (total, path) {{
+    return total + docsSymbolCount(modules[path] || '');
+  }}, 0);
+  const aiCount = modulePaths.filter(function (path) {{ return docsHasAiText(modules[path] || ''); }}).length;
+  return '<div class="docs-overview">' +
+    '<div>' +
+      '<div class="docs-overview-kicker">Aletheore Docs</div>' +
+      '<h2>Evidence-grounded API reference</h2>' +
+      '<p>Public functions and classes are grouped by source file with signatures, docstrings, generated descriptions, and file:line citations kept visibly grounded in repository evidence.</p>' +
+    '</div>' +
+    '<div class="docs-overview-stats">' +
+      '<div class="docs-stat-pill"><div class="docs-stat-value">' + modulePaths.length + '</div><div class="docs-stat-label">modules</div></div>' +
+      '<div class="docs-stat-pill"><div class="docs-stat-value">' + symbolCount + '</div><div class="docs-stat-label">symbols</div></div>' +
+      '<div class="docs-stat-pill"><div class="docs-stat-value">' + aiCount + '</div><div class="docs-stat-label">AI-assisted files</div></div>' +
+    '</div>' +
+  '</div>';
+}}
+
 function renderDocsModule(modulePath, markdown) {{
   const details = document.createElement('details');
-  details.className = 'subsystem-card';
+  details.className = 'docs-module-card';
   const summary = document.createElement('summary');
-  summary.textContent = modulePath;
+  summary.className = 'docs-module-summary';
+  const symbols = docsSymbolCount(markdown);
+  const lines = docsLineCount(markdown);
+  const hasAi = docsHasAiText(markdown);
+  summary.innerHTML =
+    '<div>' +
+      '<div class="docs-module-title"><i class="ti ti-file-code" aria-hidden="true"></i><span class="docs-module-path">' + escapeHtml(modulePath) + '</span></div>' +
+      '<div class="docs-module-sub">' + symbols + ' public symbol' + (symbols === 1 ? '' : 's') + ' documented from source evidence</div>' +
+    '</div>' +
+    '<div class="docs-module-meta">' +
+      '<span class="docs-chip">' + lines + ' lines</span>' +
+      (hasAi ? '<span class="docs-chip ai"><i class="ti ti-sparkles" aria-hidden="true"></i>AI marked</span>' : '') +
+      '<i class="ti ti-chevron-down docs-module-chevron" aria-hidden="true"></i>' +
+    '</div>';
+  const content = document.createElement('div');
+  content.className = 'docs-module-content';
   const pre = document.createElement('pre');
   pre.className = 'docs-module-body';
   pre.textContent = markdown;
   details.appendChild(summary);
-  details.appendChild(pre);
+  content.appendChild(pre);
+  details.appendChild(content);
   return details;
 }}
 
@@ -1436,20 +1529,20 @@ async function loadDocs() {{
   }}
   let staleBanner = '';
   if (data.build_status === 'failed') {{
-    staleBanner = '<div class="empty-state" style="color:var(--critical);margin-bottom:12px;">' +
+    staleBanner = '<div class="docs-status-banner failed">' +
       'The latest Docs update failed' + (data.build_error ? ': ' + escapeHtml(data.build_error) : '.') +
       ' Showing the last successful build below - it may be stale.</div>';
   }} else if (data.build_error) {{
     // A "ready" status with a build_error means a partial run: some files
     // got documented, others didn't (a transient API error, mid-run). The
     // ones below are real and current - this just says the rest is coming.
-    staleBanner = '<div class="empty-state" style="color:var(--warning);margin-bottom:12px;">' +
+    staleBanner = '<div class="docs-status-banner partial">' +
       'The latest Docs update didn\\'t finish everything: ' + escapeHtml(data.build_error) +
       ' It will pick up automatically on the next run.</div>';
   }}
-  body.innerHTML = staleBanner;
+  body.innerHTML = renderDocsOverview(modulePaths, data.modules || {{}}) + staleBanner;
   const list = document.createElement('div');
-  list.className = 'subsystem-grid';
+  list.className = 'docs-grid';
   modulePaths.sort().forEach(function (path) {{
     list.appendChild(renderDocsModule(path, data.modules[path]));
   }});
@@ -1468,12 +1561,12 @@ async function loadDocsRepoCommitSettings() {{
 
 function renderDocsRepoCommit(body, enabled, prNumber) {{
   let statusHtml = enabled
-    ? '<p>Enabled - .aletheore/docs/API.md is kept current on a single rolling pull request.'
+    ? '<div class="docs-commit-title">Repo commit is enabled</div><div class="docs-commit-desc">.aletheore/docs/API.md is kept current on a single rolling pull request.'
       + (prNumber ? ' <a href="https://github.com/' + org + '/' + repo + '/pull/' + prNumber + '" target="_blank" rel="noopener">View PR #' + prNumber + '</a>' : ' The first pull request opens the next time Docs regenerates.')
-      + '</p>'
-    : '<p>Disabled - this reference only lives in the Aletheore dashboard.</p>';
-  body.innerHTML = statusHtml +
-    '<button class="btn" id="docs-repo-commit-toggle">' + (enabled ? 'Disable' : 'Enable') + '</button>';
+      + '</div>'
+    : '<div class="docs-commit-title">Dashboard-only reference</div><div class="docs-commit-desc">Docs is available here, but Aletheore is not opening a docs update pull request in your repository.</div>';
+  body.innerHTML = '<div class="docs-commit-card"><div class="docs-commit-copy">' + statusHtml + '</div>' +
+    '<button class="btn" id="docs-repo-commit-toggle"><i class="ti ti-git-pull-request" aria-hidden="true"></i>' + (enabled ? 'Disable' : 'Enable') + '</button></div>';
   document.getElementById('docs-repo-commit-toggle').onclick = async function () {{
     const res = await fetch(adminBase + '/docs-repo-commit', {{
       method: 'PUT', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ enabled: !enabled }}),
