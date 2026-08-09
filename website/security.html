@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Security - Aletheore</title>
+  <meta name="description" content="How Aletheore handles your source code, what data it stores, and how to report a security issue.">
+  <link rel="canonical" href="https://www.aletheore.com/security">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Aletheore">
+  <meta property="og:url" content="https://www.aletheore.com/security">
+  <meta property="og:title" content="Security - Aletheore">
+  <meta property="og:description" content="How Aletheore handles your source code, what data it stores, and how to report a security issue.">
+  <meta property="og:image" content="https://www.aletheore.com/assets/logo-mark.png">
+  <link rel="icon" type="image/png" href="assets/logo-mark.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <nav class="site-nav" aria-label="Main navigation">
+      <a class="wordmark" href="index.html">
+        <img src="assets/logo-mark.png" alt="" width="28" height="28">
+        Aletheore
+      </a>
+      <div class="nav-links">
+        <a href="pricing.html">Pricing</a>
+        <a href="developers.html">Developers</a>
+        <a href="dogfooding.html">Proof</a>
+        <a href="status.html">Status</a>
+        <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+        <a href="https://www.linkedin.com/company/aletheore">LinkedIn</a>
+        <a href="https://app.aletheore.com/">Dashboard</a>
+      </div>
+    </nav>
+
+    <main class="legal-body">
+      <h1>Security</h1>
+      <p>Last updated: August 2026</p>
+
+      <p>Aletheore audits other people's code, so we hold ourselves to the same evidence-grounded
+        standard we ask of you. This page describes what we actually do, not what a template says
+        a security page should claim. Where we fall short of something you'd expect, we say so
+        directly rather than leave it unstated.</p>
+
+      <h2>Your source code</h2>
+      <p>When the GitHub App runs a scan, your repository is cloned into an ephemeral scan worker,
+        analyzed, and discarded. We do not keep a copy of your source code at rest. Only derived
+        evidence, findings like secrets matches, dependency graphs, and endpoint health rows, is
+        written to our database. If a scan uses managed AI review (Aletheore AIR), the evidence we
+        send to our LLM provider is the same derived evidence, not your raw source files. See our
+        <a href="privacy.html">Privacy Policy</a> for the full data-handling breakdown.</p>
+
+      <h2>GitHub App permissions</h2>
+      <p>The GitHub App requests the minimum scopes needed to clone a repo, read pull request and
+        push events, and post check results and PR comments: repository contents (read), pull
+        requests (read/write for comments and checks), and webhook delivery for the events we act
+        on. It does not request organization-wide admin scopes, and it cannot see or modify
+        repository settings, other installed apps, or billing on your GitHub account.</p>
+
+      <h2>Authentication and webhooks</h2>
+      <p>Dashboard sign-in uses GitHub OAuth; we never see or store a GitHub password. Both inbound
+        webhook sources we depend on, GitHub and Paddle, are verified against an HMAC signature
+        before we act on the payload, and unsigned or mismatched deliveries are rejected outright.
+        Authentication endpoints are rate-limited per source IP to slow credential-stuffing and
+        session-fixation attempts.</p>
+
+      <h2>Infrastructure</h2>
+      <p>Traffic to the app is served over TLS. Application data lives in a Postgres database that
+        is not exposed to the public internet; it's only reachable from our own backend services.
+        Payment details are never handled by our servers, checkout and card data are processed
+        entirely by our payment provider, Paddle, which is itself a Merchant of Record and PCI-DSS
+        compliant. We do not see or store card numbers.</p>
+
+      <h2>What we scan for, in ourselves</h2>
+      <p>Every pull request and every push to <code>master</code> runs through the same class of
+        checks we sell: <a href="https://github.com/Aletheore/Aletheore/actions/workflows/container-security.yml">container image scanning with Trivy</a>,
+        which blocks a merge outright on a HIGH or CRITICAL vulnerability with a known fix, CodeQL
+        static analysis, and an SPDX software bill of materials generated for every service image.
+        We also dogfood our own product: the <a href="dogfooding.html">Proof page</a> shows
+        Aletheore's own repo scanned by Aletheore's own CLI, and our <a href="status.html">status
+        page</a> is our own endpoint-health monitoring feature, pointed at ourselves.</p>
+
+      <h2>Where we're honest about gaps</h2>
+      <p>Aletheore is a small, early-stage team. We do not currently hold a SOC 2, ISO 27001, or
+        similar third-party compliance certification, and we don't claim to. If that's a hard
+        requirement for your organization, tell us, it's useful signal for what to prioritize next.</p>
+
+      <h2>Reporting a vulnerability</h2>
+      <p>If you find a security issue in Aletheore, the app, the CLI, or this site, email
+        <a href="mailto:support@aletheore.com">support@aletheore.com</a> with "security" in the
+        subject line. We'll acknowledge reports and won't take legal action against good-faith,
+        non-destructive testing aimed at reporting a vulnerability to us.</p>
+    </main>
+  </div>
+
+  <footer>
+    <div class="container footer-grid">
+      <div>
+        <a class="wordmark" href="index.html">
+          <img src="assets/logo-mark.png" alt="" width="24" height="24">
+          Aletheore
+        </a>
+        <p class="footer-note">Evidence-grounded repository audits. Open source, local-first.</p>
+      </div>
+      <div>
+        <h4>Product</h4>
+        <a href="pricing.html">Pricing</a>
+        <a href="developers.html">Developers</a>
+        <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+      </div>
+      <div>
+        <h4>Community</h4>
+        <a href="https://www.linkedin.com/company/aletheore">LinkedIn</a>
+        <a href="https://github.com/sponsors/ArihantK15">Sponsor</a>
+        <a href="https://github.com/Aletheore/Aletheore/issues">Issues</a>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <a href="terms.html">Terms</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="refund.html">Refund Policy</a>
+        <a href="security.html">Security</a>
+      </div>
+      <div>
+        <h4>Contact</h4>
+        <a href="mailto:support@aletheore.com">support@aletheore.com</a>
+      </div>
+    </div>
+  </footer>
+  <script src="vendor/motion.js"></script>
+</body>
+</html>
