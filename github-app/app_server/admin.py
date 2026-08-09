@@ -21,6 +21,7 @@ from app_server.db import (
     count_installation_members,
     create_api_token,
     delete_session,
+    get_docs_repo_commit_settings,
     get_extra_seats,
     get_installation,
     get_max_tokens,
@@ -31,6 +32,7 @@ from app_server.db import (
     remove_health_check_target,
     remove_installation_member,
     revoke_api_token,
+    set_docs_repo_commit_enabled,
     set_webhook_url,
     update_session_tokens,
 )
@@ -57,6 +59,10 @@ class GenerateTokenRequest(BaseModel):
 
 class SetWebhookURLRequest(BaseModel):
     webhook_url: str | None = None
+
+
+class SetDocsRepoCommitRequest(BaseModel):
+    enabled: bool
 
 
 class AddHealthCheckTargetRequest(BaseModel):
@@ -508,6 +514,30 @@ async def test_webhook_url_route(org: str, repo: str, request: Request):
         )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"could not reach webhook: {exc}") from exc
+    return {"ok": True}
+
+
+@admin_router.get("/admin/{org}/{repo}/docs-repo-commit")
+async def get_docs_repo_commit_route(org: str, repo: str, request: Request):
+    installation = await _require_admin_installation(request, org, repo)
+    settings = await get_docs_repo_commit_settings(
+        request.app.state.db_pool, installation["installation_id"], f"{org}/{repo}"
+    )
+    return {
+        "enabled": settings["enabled"] if settings is not None else False,
+        "pr_number": settings["pr_number"] if settings is not None else None,
+    }
+
+
+@admin_router.put("/admin/{org}/{repo}/docs-repo-commit")
+async def set_docs_repo_commit_route(org: str, repo: str, request: Request, body: SetDocsRepoCommitRequest):
+    # Writes into the customer's own repository (a branch + PR under
+    # .aletheore/docs/), unlike every other Docs surface which only reads
+    # evidence - opt-in and reversible at any time, never defaulted on.
+    installation = await _require_admin_installation(request, org, repo)
+    await set_docs_repo_commit_enabled(
+        request.app.state.db_pool, installation["installation_id"], f"{org}/{repo}", body.enabled
+    )
     return {"ok": True}
 
 

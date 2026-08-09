@@ -311,6 +311,37 @@ async def test_set_webhook_url(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_docs_repo_commit_defaults_to_disabled(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.get("/admin/octocat/hello-world/docs-repo-commit")
+    assert response.status_code == 200
+    assert response.json() == {"enabled": False, "pr_number": None}
+
+
+@pytest.mark.asyncio
+async def test_set_docs_repo_commit_enabled_persists(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        put_response = await client.put(
+            "/admin/octocat/hello-world/docs-repo-commit", json={"enabled": True}
+        )
+        assert put_response.status_code == 200
+        get_response = await client.get("/admin/octocat/hello-world/docs-repo-commit")
+    assert get_response.json()["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_set_docs_repo_commit_can_be_disabled_again(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        await client.put("/admin/octocat/hello-world/docs-repo-commit", json={"enabled": True})
+        await client.put("/admin/octocat/hello-world/docs-repo-commit", json={"enabled": False})
+        get_response = await client.get("/admin/octocat/hello-world/docs-repo-commit")
+    assert get_response.json()["enabled"] is False
+
+
+@pytest.mark.asyncio
 async def test_send_test_notification_requires_a_saved_webhook(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch)
     async with client:

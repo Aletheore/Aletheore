@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -338,6 +339,26 @@ async def get_dashboard_wiki_subsystem(org: str, repo: str, subsystem_id: str, r
     return {"repo_full_name": repo_full_name, "subsystem": subsystem}
 
 
+async def _build_docs_modules(pool, installation_id: int, repo_full_name: str) -> dict[str, str]:
+    """Shared by the JSON dashboard route and the markdown export route -
+    both render the same evidence + AI-description merge, just packaged
+    differently."""
+    from aletheore.docs_reference import build_api_reference
+
+    evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
+    if evidence is None:
+        return {}
+
+    symbols = await list_docs_symbols(pool, installation_id, repo_full_name)
+    ai_descriptions_by_module: dict[str, dict[str, dict]] = {}
+    for row in symbols:
+        ai_descriptions_by_module.setdefault(row["module_path"], {})[row["symbol_name"]] = {
+            "description": row["description"],
+            "mode": row["mode"],
+        }
+    return build_api_reference(evidence, ai_descriptions_by_module)
+
+
 @dashboard_router.get("/app/{org}/{repo}/docs")
 async def get_dashboard_docs(org: str, repo: str, request: Request):
     """Grounded API reference (docs_reference.py) merged with whatever
@@ -347,38 +368,60 @@ async def get_dashboard_docs(org: str, repo: str, request: Request):
     it's the paid-plan-gated one (_require_admin_installation's own
     "plan == free" -> 402 already covers this, same as /wiki).
     """
-    from aletheore.docs_reference import build_api_reference
-
     installation = await _require_admin_installation(request, org, repo)
     pool = request.app.state.db_pool
     installation_id = installation["installation_id"]
     repo_full_name = f"{org}/{repo}"
 
-    evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
     build_status = await get_docs_build_status(pool, installation_id, repo_full_name)
-    if evidence is None:
-        return {
-            "repo_full_name": repo_full_name,
-            "modules": {},
-            "build_status": build_status["status"] if build_status is not None else None,
-            "build_error": build_status["error_message"] if build_status is not None else None,
-        }
-
-    symbols = await list_docs_symbols(pool, installation_id, repo_full_name)
-    ai_descriptions_by_module: dict[str, dict[str, dict]] = {}
-    for row in symbols:
-        ai_descriptions_by_module.setdefault(row["module_path"], {})[row["symbol_name"]] = {
-            "description": row["description"],
-            "mode": row["mode"],
-        }
-
-    modules = build_api_reference(evidence, ai_descriptions_by_module)
+    modules = await _build_docs_modules(pool, installation_id, repo_full_name)
     return {
         "repo_full_name": repo_full_name,
         "modules": modules,
         "build_status": build_status["status"] if build_status is not None else None,
         "build_error": build_status["error_message"] if build_status is not None else None,
     }
+
+
+_UNSAFE_FILENAME_CHARS_RE = re.compile(r'[^A-Za-z0-9._-]')
+
+
+def _safe_download_filename(name: str) -> str:
+    """`repo` here is a raw URL path segment - _repo_installation_id only
+    ever matches it against the org's account_login, never validates it
+    against a real, existing repo name - so unlike every other route that
+    just uses org/repo for a DB lookup or JSON field, embedding it directly
+    into a response header (as this route's filename does) would carry
+    whatever characters an authenticated admin's browser happened to send,
+    including a stray '"' that breaks the Content-Disposition value's
+    quoting. Stripped down to a safe subset rather than rejected outright,
+    since a mangled-but-safe filename is a better failure mode here than a
+    500 on an otherwise-valid request."""
+    safe = _UNSAFE_FILENAME_CHARS_RE.sub("_", name)
+    return safe or "repo"
+
+
+@dashboard_router.get("/app/{org}/{repo}/docs/export")
+async def get_dashboard_docs_export(org: str, repo: str, request: Request):
+    """The same grounded API reference as get_dashboard_docs, combined into
+    one downloadable markdown document instead of per-module dashboard
+    cards - for anyone who wants the whole reference in one file to grep,
+    diff, or paste elsewhere instead of opening each module's accordion."""
+    from aletheore.docs_reference import build_combined_reference
+
+    installation = await _require_admin_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    installation_id = installation["installation_id"]
+    repo_full_name = f"{org}/{repo}"
+
+    modules = await _build_docs_modules(pool, installation_id, repo_full_name)
+    markdown = build_combined_reference(modules, repo_full_name)
+    filename = f"{_safe_download_filename(repo)}-api-reference.md"
+    return Response(
+        content=markdown,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 PUBLIC_HEALTH_RATE_LIMIT = 60
