@@ -22,6 +22,7 @@ from scan_worker.db import (
     get_last_reviewed_sha,
     get_latest_evidence,
     get_llm_spend_this_month,
+    get_seconds_since_last_health_check,
     get_wiki_overview,
     insert_endpoint_health,
     insert_repo_history,
@@ -1091,3 +1092,50 @@ async def test_get_dismissed_identity_keys_sync_returns_empty_sets_when_none_dis
     dismissed = get_dismissed_identity_keys(TEST_DATABASE_URL, 810, "co/repo")
 
     assert dismissed == {"secret": set(), "vulnerability": set()}
+
+
+@pytest.mark.asyncio
+async def test_get_seconds_since_last_health_check_returns_none_when_no_rows(pool):
+    result = get_seconds_since_last_health_check(TEST_DATABASE_URL)
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_seconds_since_last_health_check_reports_elapsed_time(pool):
+    await _insert_installation(pool, 811, "co")
+    checked_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO endpoint_health "
+            "(installation_id, repo_full_name, endpoint_method, endpoint_path, reachable, checked_at) "
+            "VALUES (811, 'co/repo', 'GET', '/healthz', true, $1)",
+            checked_at,
+        )
+
+    result = get_seconds_since_last_health_check(TEST_DATABASE_URL)
+
+    assert result is not None
+    # ~300s elapsed - generous bounds so this isn't flaky on a slow CI runner.
+    assert 290 <= result <= 320
+
+
+@pytest.mark.asyncio
+async def test_get_seconds_since_last_health_check_uses_the_most_recent_row(pool):
+    await _insert_installation(pool, 812, "co")
+    old_check = datetime.now(timezone.utc) - timedelta(hours=1)
+    recent_check = datetime.now(timezone.utc) - timedelta(seconds=5)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO endpoint_health "
+            "(installation_id, repo_full_name, endpoint_method, endpoint_path, reachable, checked_at) "
+            "VALUES (812, 'co/repo-a', 'GET', '/a', true, $1), "
+            "(812, 'co/repo-b', 'GET', '/b', true, $2)",
+            old_check,
+            recent_check,
+        )
+
+    result = get_seconds_since_last_health_check(TEST_DATABASE_URL)
+
+    assert result is not None
+    assert result < 60

@@ -4,6 +4,7 @@ from redis import Redis
 from rq import Queue
 
 from app_server.config import get_settings
+from app_server.heartbeat import touch_heartbeat
 from app_server.logging_config import configure_json_logging
 
 HEALTH_SWEEP_INTERVAL_SECONDS = 180
@@ -31,6 +32,9 @@ WIKI_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS = 600
 # the actual Resend calls happen there, not in this job, so this stays
 # bounded even if many installations are due the same tick.
 WEEKLY_DIGEST_SWEEP_JOB_TIMEOUT_SECONDS = 300
+# A single max(checked_at) query plus, on the rare stale tick, one email -
+# nothing here can run long.
+HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS = 60
 
 SCANS_QUEUE_NAME = "scans"
 # The health sweep gets its own queue, consumed by a dedicated worker (see
@@ -75,6 +79,18 @@ def run_forever(
             "scan_worker.jobs.run_weekly_digest_sweep_job",
             job_timeout=WEEKLY_DIGEST_SWEEP_JOB_TIMEOUT_SECONDS,
         )
+        # Deliberately on "scans" (scan-worker), not "health" (health-worker)
+        # - the whole point is that this keeps running, and alerting, even
+        # if the health queue/worker specifically is what's silently broken.
+        scans_queue.enqueue(
+            "scan_worker.jobs.run_health_sweep_staleness_check_job",
+            job_timeout=HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS,
+        )
+        # Touched only after every enqueue call above succeeds - a hang on
+        # any one of them (e.g. Redis unreachable) means this loop is stuck
+        # and the heartbeat correctly goes stale, which is what the Docker
+        # HEALTHCHECK on this container is watching for.
+        touch_heartbeat()
         iterations += 1
         if max_iterations is not None and iterations >= max_iterations:
             break

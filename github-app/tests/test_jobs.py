@@ -3784,3 +3784,43 @@ def test_live_docs_update_writing_adapter_falls_back_to_deepseek_flash(monkeypat
     adapter = _live_docs_update_writing_adapter()
     assert adapter.name == "DeepSeek"
     assert adapter._model == live_docs.FLASH_MODEL
+
+
+def test_run_health_sweep_staleness_check_job_alerts_when_stale(monkeypatch):
+    from scan_worker.jobs import HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS, run_health_sweep_staleness_check_job
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_seconds_since_last_health_check",
+        lambda dsn: HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS + 1,
+    )
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+
+    run_health_sweep_staleness_check_job()
+
+    assert len(alerts) == 1
+    assert alerts[0][0][0] == "health_sweep"
+
+
+def test_run_health_sweep_staleness_check_job_does_not_alert_when_fresh(monkeypatch):
+    from scan_worker.jobs import run_health_sweep_staleness_check_job
+
+    monkeypatch.setattr("scan_worker.jobs.get_seconds_since_last_health_check", lambda dsn: 30.0)
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+
+    run_health_sweep_staleness_check_job()
+
+    assert alerts == []
+
+
+def test_run_health_sweep_staleness_check_job_does_not_alert_when_no_data_yet(monkeypatch):
+    from scan_worker.jobs import run_health_sweep_staleness_check_job
+
+    monkeypatch.setattr("scan_worker.jobs.get_seconds_since_last_health_check", lambda dsn: None)
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+
+    run_health_sweep_staleness_check_job()
+
+    assert alerts == []

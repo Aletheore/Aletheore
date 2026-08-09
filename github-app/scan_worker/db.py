@@ -1,6 +1,6 @@
 import json
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app_server.evidence_limits import check_evidence_size
 
@@ -1207,6 +1207,26 @@ def get_endpoint_health_summary(dsn: str, installation_id: int, stale_after_seco
             )
             rows = cur.fetchall()
             return {"total": len(rows), "reachable": sum(1 for (reachable,) in rows if reachable)}
+
+
+def get_seconds_since_last_health_check(dsn: str) -> float | None:
+    """Seconds since the most recent row landed in endpoint_health, across
+    every installation and target - a global liveness signal for the
+    health-check sweep mechanism itself (scan_worker.jobs.
+    run_health_check_sweep_job), not any one customer's specific endpoint.
+    Returns None if the table has no rows at all (a fresh install, not a
+    failure - the caller should not alert on that).
+    """
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT max(checked_at) FROM endpoint_health")
+            row = cur.fetchone()
+            last_checked_at = row[0] if row else None
+            if last_checked_at is None:
+                return None
+            return (datetime.now(timezone.utc) - last_checked_at).total_seconds()
 
 
 def list_installation_member_emails(dsn: str, installation_id: int) -> list[str]:

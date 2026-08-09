@@ -36,6 +36,7 @@ from aletheore.signature_diff import find_regression_fence_violations
 from app_server.config import get_settings
 from app_server.db import MAX_SCANNED_REPOS_PER_MONTH
 from app_server.dismissed_findings import filter_dismissed
+from app_server.error_alerts import send_error_alert
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation
 from app_server.logging_config import log_job
@@ -62,6 +63,7 @@ from scan_worker.db import (
     get_last_reviewed_sha,
     get_latest_evidence,
     get_llm_spend_this_month,
+    get_seconds_since_last_health_check,
     increment_flash_review_count,
     insert_audit_report,
     insert_endpoint_health,
@@ -1880,6 +1882,46 @@ def run_session_cleanup_job() -> None:
     deleted = delete_expired_sessions(dsn)
     logging.getLogger("scan_worker.jobs").info(
         "session cleanup completed", extra={"deleted_count": deleted}
+    )
+
+
+# The health sweep runs every HEALTH_SWEEP_INTERVAL_SECONDS (180s, see
+# scheduler.py). A gap this wide - 10 minutes, ~3x that interval - is
+# already well outside normal jitter, so it's a meaningful signal rather
+# than noise on an occasional slow tick.
+HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS = 600
+
+
+class HealthSweepStaleError(RuntimeError):
+    pass
+
+
+@log_job
+def run_health_sweep_staleness_check_job() -> None:
+    """Runs on the "scans" queue (scan-worker), deliberately not "health"
+    (health-worker) - the entire point is to keep working, and alert, even
+    if the health queue/worker specifically is what's broken. This is what
+    would have caught the 11-day gap in ~10 minutes instead of it going
+    unnoticed - Docker's HEALTHCHECK on health-worker (see
+    app_server/heartbeat.py) only proves that container's process hasn't
+    fully deadlocked, not that its actual sweep is landing data.
+    """
+    dsn = get_settings().database_url
+    seconds_since_last_check = get_seconds_since_last_health_check(dsn)
+    if seconds_since_last_check is None:
+        # No endpoint_health rows exist at all yet - a fresh install with
+        # no monitored targets configured, not a failure to alert on.
+        return
+    if seconds_since_last_check < HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS:
+        return
+    send_error_alert(
+        "health_sweep",
+        HealthSweepStaleError(
+            f"no endpoint_health row in {seconds_since_last_check:.0f}s "
+            f"(threshold {HEALTH_SWEEP_STALENESS_THRESHOLD_SECONDS}s) - "
+            "the health-check sweep may have stopped running"
+        ),
+        "run_health_sweep_staleness_check_job",
     )
 
 
