@@ -9,15 +9,17 @@ from aletheore.evidence_resolution import (
     attach_risk_evidence,
     normalize_resolution,
 )
-from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from scan_worker.github_api import (
     MAX_CONTEXT_FILE_BYTES,
     MAX_CONTEXT_FILES,
     MAX_CONTEXT_TOTAL_BYTES,
     fetch_file_content,
 )
+from scan_worker.model_tiers import resolve_model, writing_adapter_for
 
 logger = logging.getLogger(__name__)
+
+FLASH_REVIEW_FALLBACK_MODEL = "deepseek-v4-flash"
 
 FLASH_REVIEW_SYSTEM_PROMPT = """You are reviewing a code diff for potential issues. You may also be
 given the full current content of the changed files for context. You must respond with ONLY a
@@ -496,12 +498,20 @@ def review_diff(
     referenced_symbol_context: str = "",
     cache_lookup: Callable[[str], list[dict] | None] | None = None,
     cache_write: Callable[[str, list[dict], str], None] | None = None,
-    model_used: str = "deepseek-v4-flash",
+    model_used: str | None = None,
     file_contents: dict[str, str] | None = None,
     on_grounding_result: Callable[[dict], None] | None = None,
 ) -> list[dict]:
     if not diff_text.strip():
         return []
+
+    # Resolved once, up front, and reused both for the cache-write label
+    # below and for the adapter actually constructed - so a cached
+    # finding's recorded model can never drift from the model that really
+    # produced it (they used to be two independent hardcoded literals that
+    # only matched by coincidence).
+    if model_used is None:
+        model_used = resolve_model(FLASH_REVIEW_FALLBACK_MODEL)
 
     if cache_lookup is not None:
         try:
@@ -515,13 +525,7 @@ def review_diff(
                 on_grounding_result({"proposed": len(cached), "kept": len(kept)})
             return kept
 
-    adapter = OpenAICompatibleAdapter(
-        name="DeepSeek",
-        base_url="https://api.deepseek.com",
-        api_key_env_var="DEEPSEEK_API_KEY",
-        model="deepseek-v4-flash",
-        on_usage=on_usage,
-    )
+    adapter = writing_adapter_for(FLASH_REVIEW_FALLBACK_MODEL, on_usage=on_usage)
     prompt_parts = [diff_text]
     if file_context:
         prompt_parts.append(file_context)

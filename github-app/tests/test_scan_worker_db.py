@@ -31,12 +31,14 @@ from scan_worker.db import (
     list_installation_member_emails,
     list_paid_installations_due_for_digest,
     list_paid_repos_due_for_docs_catchup,
+    list_paid_repos_due_for_wiki_catchup,
     list_repos_for_installation,
     list_wiki_subsystems,
     record_digest_sent,
     record_docs_catchup_swept,
     record_llm_spend,
     record_sent_email,
+    record_wiki_catchup_swept,
     set_last_reviewed_sha,
     upsert_docs_symbol,
     upsert_wiki_overview,
@@ -824,6 +826,106 @@ async def test_record_docs_catchup_swept_upserts_on_conflict(pool):
 
     count = await pool.fetchval(
         "SELECT count(*) FROM docs_catchup_sweeps WHERE installation_id = $1", 507
+    )
+    assert count == 1
+    assert second >= first
+
+
+@pytest.mark.asyncio
+async def test_wiki_catchup_due_list_excludes_free_plan_repos(pool):
+    await _insert_installation(pool, 518, "free-wiki-org", plan="free")
+    insert_repo_history(TEST_DATABASE_URL, 518, "free-wiki-org/repo", datetime.now(timezone.utc), {"v": 1})
+
+    due = list_paid_repos_due_for_wiki_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (518, "free-wiki-org/repo") not in due
+
+
+@pytest.mark.asyncio
+async def test_wiki_catchup_due_list_includes_paid_repo_never_swept(pool):
+    await _insert_installation(pool, 512, "paid-wiki-org", plan="indie")
+    insert_repo_history(TEST_DATABASE_URL, 512, "paid-wiki-org/repo", datetime.now(timezone.utc), {"v": 1})
+
+    due = list_paid_repos_due_for_wiki_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (512, "paid-wiki-org/repo") in due
+
+
+@pytest.mark.asyncio
+async def test_wiki_catchup_due_list_excludes_paid_repo_with_no_scan_history(pool):
+    await _insert_installation(pool, 513, "unscanned-wiki-org", plan="indie")
+
+    due = list_paid_repos_due_for_wiki_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert all(installation_id != 513 for installation_id, _ in due)
+
+
+@pytest.mark.asyncio
+async def test_wiki_catchup_due_list_excludes_repo_swept_within_cooldown(pool):
+    await _insert_installation(pool, 514, "recent-wiki-org", plan="indie")
+    insert_repo_history(TEST_DATABASE_URL, 514, "recent-wiki-org/repo", datetime.now(timezone.utc), {"v": 1})
+    record_wiki_catchup_swept(TEST_DATABASE_URL, 514, "recent-wiki-org/repo")
+
+    due = list_paid_repos_due_for_wiki_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (514, "recent-wiki-org/repo") not in due
+
+
+@pytest.mark.asyncio
+async def test_wiki_catchup_due_list_excludes_repo_swept_long_ago_with_no_new_activity(pool):
+    await _insert_installation(pool, 515, "stale-wiki-org", plan="indie")
+    old_scan = datetime.now(timezone.utc) - timedelta(days=10)
+    insert_repo_history(TEST_DATABASE_URL, 515, "stale-wiki-org/repo", old_scan, {"v": 1})
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO wiki_catchup_sweeps (installation_id, repo_full_name, last_swept_at)
+            VALUES ($1, $2, now() - interval '5 days')
+            """,
+            515,
+            "stale-wiki-org/repo",
+        )
+
+    due = list_paid_repos_due_for_wiki_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (515, "stale-wiki-org/repo") not in due
+
+
+@pytest.mark.asyncio
+async def test_wiki_catchup_due_list_includes_repo_swept_long_ago_with_new_activity_since(pool):
+    await _insert_installation(pool, 516, "active-wiki-org", plan="indie")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO wiki_catchup_sweeps (installation_id, repo_full_name, last_swept_at)
+            VALUES ($1, $2, now() - interval '5 days')
+            """,
+            516,
+            "active-wiki-org/repo",
+        )
+    insert_repo_history(TEST_DATABASE_URL, 516, "active-wiki-org/repo", datetime.now(timezone.utc), {"v": 1})
+
+    due = list_paid_repos_due_for_wiki_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (516, "active-wiki-org/repo") in due
+
+
+@pytest.mark.asyncio
+async def test_record_wiki_catchup_swept_upserts_on_conflict(pool):
+    await _insert_installation(pool, 517, "upsert-wiki-org", plan="indie")
+    insert_repo_history(TEST_DATABASE_URL, 517, "upsert-wiki-org/repo", datetime.now(timezone.utc), {"v": 1})
+
+    record_wiki_catchup_swept(TEST_DATABASE_URL, 517, "upsert-wiki-org/repo")
+    first = await pool.fetchval(
+        "SELECT last_swept_at FROM wiki_catchup_sweeps WHERE installation_id = $1", 517
+    )
+    record_wiki_catchup_swept(TEST_DATABASE_URL, 517, "upsert-wiki-org/repo")
+    second = await pool.fetchval(
+        "SELECT last_swept_at FROM wiki_catchup_sweeps WHERE installation_id = $1", 517
+    )
+
+    count = await pool.fetchval(
+        "SELECT count(*) FROM wiki_catchup_sweeps WHERE installation_id = $1", 517
     )
     assert count == 1
     assert second >= first

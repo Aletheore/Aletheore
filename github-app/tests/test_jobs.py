@@ -1824,6 +1824,7 @@ def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch)
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
     monkeypatch.setattr(
         "scan_worker.jobs.lookup_cached_result",
         lambda *a, **k: ({"description": "Cached, verified description.", "files": []}, "deepseek-v4-pro"),
@@ -2993,6 +2994,7 @@ def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
     )
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
 
     fake_record = {
         "subsystem_id": "0",
@@ -3031,6 +3033,7 @@ def test_run_live_wiki_full_build_job_records_failed_status_on_error(monkeypatch
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
 
     def _raise(*a, **k):
         raise RuntimeError("model provider unavailable")
@@ -3081,6 +3084,7 @@ def test_run_live_wiki_full_build_job_passes_fetch_line_count_through(monkeypatc
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
     sentinel = lambda path: 42  # noqa: E731
     monkeypatch.setattr("scan_worker.jobs._real_line_count_fetcher", lambda *a, **k: sentinel)
 
@@ -3100,6 +3104,163 @@ def test_run_live_wiki_full_build_job_passes_fetch_line_count_through(monkeypatc
 
     assert captured_subsystems["fetch_line_count"] is sentinel
     assert captured_store["fetch_line_count"] is sentinel
+
+
+def _multi_cluster_wiki_evidence(cluster_ids: list[int]) -> dict:
+    return {
+        "repository": {
+            "modules": [
+                {
+                    "path": f"pkg{cid}/mod.py",
+                    "language": "python",
+                    "imports": [],
+                    "symbols": {"functions": [], "classes": []},
+                }
+                for cid in cluster_ids
+            ],
+            "dependency_graph": {"nodes": [], "edges": []},
+        },
+        "architecture": {
+            "clusters": [
+                {"id": cid, "modules": [f"pkg{cid}/mod.py"], "internal_edges": 0}
+                for cid in cluster_ids
+            ]
+        },
+    }
+
+
+def test_clusters_with_uncovered_wiki_work_filters_covered_clusters():
+    from scan_worker.jobs import _clusters_with_uncovered_wiki_work
+
+    evidence = _multi_cluster_wiki_evidence([0, 1, 2])
+
+    result = _clusters_with_uncovered_wiki_work(evidence, covered_cluster_ids={"0"}, limit=10)
+
+    assert result == {1, 2}
+
+
+def test_clusters_with_uncovered_wiki_work_respects_limit():
+    from scan_worker.jobs import _clusters_with_uncovered_wiki_work
+
+    evidence = _multi_cluster_wiki_evidence([0, 1, 2, 3, 4])
+
+    result = _clusters_with_uncovered_wiki_work(evidence, covered_cluster_ids=set(), limit=2)
+
+    assert len(result) == 2
+
+
+def test_clusters_with_uncovered_wiki_work_empty_when_everything_covered():
+    from scan_worker.jobs import _clusters_with_uncovered_wiki_work
+
+    evidence = _multi_cluster_wiki_evidence([0, 1])
+
+    result = _clusters_with_uncovered_wiki_work(evidence, covered_cluster_ids={"0", "1"}, limit=10)
+
+    assert result == set()
+
+
+def test_run_live_wiki_full_build_job_only_requests_uncovered_clusters(monkeypatch):
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    evidence = _multi_cluster_wiki_evidence([0, 1, 2])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: evidence)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [{"subsystem_id": "0"}]
+    )
+
+    captured = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems",
+        lambda *a, **k: captured.update(k) or [],
+    )
+    monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert captured["cluster_ids"] == {1, 2}
+
+
+def test_run_live_wiki_full_build_job_is_noop_when_every_cluster_already_covered(monkeypatch):
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    evidence = _multi_cluster_wiki_evidence([0, 1])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: evidence)
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_wiki_subsystems",
+        lambda *a, **k: [{"subsystem_id": "0"}, {"subsystem_id": "1"}],
+    )
+    generate_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems",
+        lambda *a, **k: generate_calls.append(1),
+    )
+    build_status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error=None: build_status_calls.append((status, error)),
+    )
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert generate_calls == []
+    assert build_status_calls == [("ready", None)]
+
+
+def test_live_wiki_catchup_sweep_job_rebuilds_each_due_repo(monkeypatch):
+    from scan_worker.jobs import run_live_wiki_catchup_sweep_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_paid_repos_due_for_wiki_catchup",
+        lambda *a, **k: [(1, "octocat/hello-world"), (2, "octocat/other-repo")],
+    )
+    built = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.run_live_wiki_full_build_job",
+        lambda iid, repo: built.append((iid, repo)),
+    )
+    swept = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_wiki_catchup_swept",
+        lambda dsn, iid, repo: swept.append((iid, repo)),
+    )
+
+    run_live_wiki_catchup_sweep_job()
+
+    assert built == [(1, "octocat/hello-world"), (2, "octocat/other-repo")]
+    assert swept == built
+
+
+def test_live_wiki_catchup_sweep_job_survives_one_repo_failing(monkeypatch):
+    from scan_worker.jobs import run_live_wiki_catchup_sweep_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_paid_repos_due_for_wiki_catchup",
+        lambda *a, **k: [(1, "octocat/broken-repo"), (2, "octocat/fine-repo")],
+    )
+
+    def _maybe_raise(iid, repo):
+        if repo == "octocat/broken-repo":
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("scan_worker.jobs.run_live_wiki_full_build_job", _maybe_raise)
+    swept = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_wiki_catchup_swept",
+        lambda dsn, iid, repo: swept.append((iid, repo)),
+    )
+
+    run_live_wiki_catchup_sweep_job()
+
+    # Both repos recorded as swept - including the one that failed, so it
+    # isn't retried every tick for the same repeated failure - and the
+    # second repo's build still happened despite the first one raising.
+    assert swept == [(1, "octocat/broken-repo"), (2, "octocat/fine-repo")]
 
 
 def test_maybe_update_live_wiki_passes_fetch_line_count_through(monkeypatch):
@@ -3544,3 +3705,82 @@ def test_maybe_sync_docs_to_repo_swallows_github_api_errors(monkeypatch):
 
     # Should not raise - a repo-commit failure must not fail the Docs build job.
     _maybe_sync_docs_to_repo("dsn", 1, "octocat/hello-world")
+
+
+def test_health_fix_suggestion_adapter_uses_luna_when_openai_key_configured(monkeypatch):
+    from scan_worker.jobs import _health_fix_suggestion_adapter
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+
+    adapter = _health_fix_suggestion_adapter()
+
+    assert adapter.name == "OpenAI"
+    assert adapter._model == "gpt-5.6-luna"
+
+
+def test_health_fix_suggestion_adapter_falls_back_to_deepseek_pro(monkeypatch):
+    from scan_worker.jobs import _health_fix_suggestion_adapter
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+
+    adapter = _health_fix_suggestion_adapter()
+
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == "deepseek-v4-pro"
+
+
+def test_live_wiki_naming_adapter_uses_luna_when_openai_key_configured(monkeypatch):
+    from scan_worker.jobs import _live_wiki_naming_adapter
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+
+    assert _live_wiki_naming_adapter().name == "OpenAI"
+
+
+def test_live_wiki_naming_adapter_falls_back_to_deepseek_flash(monkeypatch):
+    from scan_worker.jobs import _live_wiki_naming_adapter
+    from scan_worker import live_wiki
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+
+    adapter = _live_wiki_naming_adapter()
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == live_wiki.FLASH_MODEL
+
+
+def test_live_wiki_update_writing_adapter_uses_luna_when_openai_key_configured(monkeypatch):
+    from scan_worker.jobs import _live_wiki_update_writing_adapter
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+
+    assert _live_wiki_update_writing_adapter().name == "OpenAI"
+
+
+def test_live_wiki_update_writing_adapter_falls_back_to_deepseek_flash(monkeypatch):
+    from scan_worker.jobs import _live_wiki_update_writing_adapter
+    from scan_worker import live_wiki
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+
+    adapter = _live_wiki_update_writing_adapter()
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == live_wiki.UPDATE_MODEL
+
+
+def test_live_docs_update_writing_adapter_uses_luna_when_openai_key_configured(monkeypatch):
+    from scan_worker.jobs import _live_docs_update_writing_adapter
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+
+    assert _live_docs_update_writing_adapter().name == "OpenAI"
+
+
+def test_live_docs_update_writing_adapter_falls_back_to_deepseek_flash(monkeypatch):
+    from scan_worker.jobs import _live_docs_update_writing_adapter
+    from scan_worker import live_docs
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+
+    adapter = _live_docs_update_writing_adapter()
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == live_docs.FLASH_MODEL

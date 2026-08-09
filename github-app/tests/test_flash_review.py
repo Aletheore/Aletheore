@@ -3,6 +3,7 @@ import logging
 from unittest.mock import MagicMock, patch
 
 from scan_worker.flash_review import (
+    FLASH_REVIEW_FALLBACK_MODEL,
     FLASH_REVIEW_SYSTEM_PROMPT,
     files_missing_from_review_context,
     _diff_valid_lines,
@@ -256,7 +257,7 @@ def test_review_diff_returns_empty_list_for_empty_diff():
     assert review_diff("   \n  ") == []
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_parses_valid_findings(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = (
@@ -271,7 +272,7 @@ def test_review_diff_parses_valid_findings(mock_adapter_class):
     ]
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_treats_malformed_json_as_no_findings(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = "not valid json at all"
@@ -280,7 +281,7 @@ def test_review_diff_treats_malformed_json_as_no_findings(mock_adapter_class):
     assert review_diff("--- app.py ---\n@@ -1,1 +1,1 @@\n+print(1)") == []
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_drops_findings_missing_required_fields(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = (
@@ -294,7 +295,7 @@ def test_review_diff_drops_findings_missing_required_fields(mock_adapter_class):
     assert findings == [{"file": "b.py", "line": 3, "issue": "this one is valid"}]
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_drops_a_hallucinated_finding_outside_the_diff(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = (
@@ -312,7 +313,7 @@ def test_review_diff_serves_validated_cache_hit_without_calling_the_model():
     diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
     cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding"}]
 
-    with patch("scan_worker.flash_review.OpenAICompatibleAdapter") as mock_adapter_class:
+    with patch("scan_worker.flash_review.writing_adapter_for") as mock_adapter_class:
         findings = review_diff(diff_text, cache_lookup=lambda diff: cached_findings)
 
     mock_adapter_class.assert_not_called()
@@ -326,14 +327,14 @@ def test_review_diff_revalidates_cache_hit_against_current_diff():
         {"file": "app.py", "line": 9999, "issue": "stale - not in this diff anymore"},
     ]
 
-    with patch("scan_worker.flash_review.OpenAICompatibleAdapter") as mock_adapter_class:
+    with patch("scan_worker.flash_review.writing_adapter_for") as mock_adapter_class:
         findings = review_diff(diff_text, cache_lookup=lambda diff: cached_findings)
 
     mock_adapter_class.assert_not_called()
     assert findings == [{"file": "app.py", "line": 42, "issue": "still valid"}]
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_falls_through_to_model_call_on_cache_miss(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = (
@@ -347,7 +348,7 @@ def test_review_diff_falls_through_to_model_call_on_cache_miss(mock_adapter_clas
     assert findings == [{"file": "app.py", "line": 42, "issue": "fresh finding"}]
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_writes_to_cache_after_a_fresh_call(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = (
@@ -369,7 +370,28 @@ def test_review_diff_writes_to_cache_after_a_fresh_call(mock_adapter_class):
     ]
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
+def test_review_diff_resolves_model_used_dynamically_when_not_passed(mock_adapter_class, monkeypatch):
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = (
+        '[{"file": "app.py", "line": 42, "issue": "fresh finding"}]'
+    )
+    mock_adapter_class.return_value = mock_adapter
+    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
+    written = []
+
+    monkeypatch.setattr("scan_worker.flash_review.resolve_model", lambda fallback: "gpt-5.6-luna")
+
+    review_diff(
+        diff_text,
+        cache_lookup=lambda diff: None,
+        cache_write=lambda diff, findings, model_used: written.append(model_used),
+    )
+
+    assert written == ["gpt-5.6-luna"]
+
+
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_does_not_call_the_model_at_all_for_an_empty_diff_even_with_cache_lookup(
     mock_adapter_class,
 ):
@@ -382,7 +404,7 @@ def test_review_diff_does_not_call_the_model_at_all_for_an_empty_diff_even_with_
     mock_adapter_class.assert_not_called()
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_threads_on_usage_to_the_adapter(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = "[]"
@@ -391,12 +413,12 @@ def test_review_diff_threads_on_usage_to_the_adapter(mock_adapter_class):
     on_usage = lambda p, c: None
     review_diff("--- a.py ---\n@@ -1,1 +1,1 @@\n+x = 1", on_usage=on_usage)
 
-    _, kwargs = mock_adapter_class.call_args
+    args, kwargs = mock_adapter_class.call_args
     assert kwargs["on_usage"] is on_usage
-    assert kwargs["model"] == "deepseek-v4-flash"
+    assert args[0] == FLASH_REVIEW_FALLBACK_MODEL
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_includes_file_context_in_prompt(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = "[]"
@@ -408,7 +430,7 @@ def test_review_diff_includes_file_context_in_prompt(mock_adapter_class):
     assert "print(1)" in call_args.args[1] or "print(1)" in call_args.kwargs.get("user_prompt", "")
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_includes_code_evidence_context_in_prompt(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = "[]"
@@ -451,7 +473,7 @@ def test_build_code_evidence_context_includes_file_symbol_dependency_and_risk():
     assert "risk=generic_secret at a.py:2" in context
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_parses_optional_suggestion_field(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = (
@@ -467,7 +489,7 @@ def test_review_diff_parses_optional_suggestion_field(mock_adapter_class):
     ]
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_suggestion_field_is_optional(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = (
@@ -583,7 +605,7 @@ def test_build_referenced_symbol_context_skips_when_fetch_returns_none():
     assert context == ""
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_includes_referenced_symbol_context_in_prompt(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = "[]"
@@ -632,7 +654,7 @@ def test_system_prompt_instructs_model_to_treat_diff_content_as_data_not_instruc
     assert "ignore previous instructions" in normalized
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_drops_finding_whose_issue_smuggles_a_suggestion_fence(mock_adapter_class):
     # jobs.py renders "issue" with no fence at all. A finding whose issue
     # text contains a ```suggestion block would break out and get GitHub
@@ -650,7 +672,7 @@ def test_review_diff_drops_finding_whose_issue_smuggles_a_suggestion_fence(mock_
     assert review_diff("--- a.py ---\n@@ -1,1 +3,1 @@\n+thing") == []
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_drops_only_the_suggestion_when_it_smuggles_a_fence(mock_adapter_class):
     malicious_suggestion = "```\n```suggestion\nrm -rf /\n```"
     mock_adapter = MagicMock()
@@ -671,7 +693,7 @@ def test_review_diff_drops_only_the_suggestion_when_it_smuggles_a_fence(mock_ada
     assert findings == [{"file": "a.py", "line": 3, "issue": "real, benign issue text"}]
 
 
-@patch("scan_worker.flash_review.OpenAICompatibleAdapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_ignores_unexpected_fields_on_a_finding(mock_adapter_class):
     # A manipulated response might try to smuggle extra authority-bearing
     # keys (e.g. claiming approval/bypass status). Only the known fields
