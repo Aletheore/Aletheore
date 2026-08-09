@@ -1014,3 +1014,102 @@ def record_sent_email(
                 (dedupe_key, template_name, recipient, installation_id, resend_message_id),
             )
         conn.commit()
+
+
+def list_paid_installations_due_for_digest(dsn: str, interval_seconds: int) -> list[int]:
+    """Paid installations due for the weekly usage digest - never sent
+    before, or sent more than interval_seconds ago. Unlike the docs
+    catch-up sweep, deliberately NOT gated on activity (see
+    digest_sends' migration comment) - a quiet installation still gets a
+    digest, just one that gently prompts re-engagement instead of listing
+    numbers.
+    """
+    import psycopg
+    import psycopg.rows
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
+            cur.execute(
+                """
+                SELECT i.installation_id
+                FROM installations i
+                LEFT JOIN digest_sends d ON d.installation_id = i.installation_id
+                WHERE i.plan != 'free'
+                  AND (d.last_sent_at IS NULL OR d.last_sent_at <= now() - make_interval(secs => %s))
+                """,
+                (interval_seconds,),
+            )
+            return [row[0] for row in cur.fetchall()]
+
+
+def record_digest_sent(dsn: str, installation_id: int) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO digest_sends (installation_id, last_sent_at)
+                VALUES (%s, now())
+                ON CONFLICT (installation_id) DO UPDATE SET last_sent_at = now()
+                """,
+                (installation_id,),
+            )
+        conn.commit()
+
+
+def count_repo_scans_since(dsn: str, installation_id: int, since: datetime) -> int:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM repo_history WHERE installation_id = %s AND scanned_at >= %s",
+                (installation_id, since),
+            )
+            return cur.fetchone()[0]
+
+
+def get_endpoint_health_summary(dsn: str, installation_id: int, stale_after_seconds: int = 900) -> dict:
+    """Current live status - most-recent row per (method, path) within the
+    same 15-minute staleness window as the public status API
+    (dashboard.py's PUBLIC_HEALTH_STALE_AFTER), so the digest and the
+    status page never disagree about what's currently "up".
+    """
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (endpoint_method, endpoint_path) reachable
+                FROM endpoint_health
+                WHERE installation_id = %s AND checked_at >= now() - make_interval(secs => %s)
+                ORDER BY endpoint_method, endpoint_path, checked_at DESC, id DESC
+                """,
+                (installation_id, stale_after_seconds),
+            )
+            rows = cur.fetchall()
+            return {"total": len(rows), "reachable": sum(1 for (reachable,) in rows if reachable)}
+
+
+def list_installation_member_emails(dsn: str, installation_id: int) -> list[str]:
+    """Sync (psycopg) counterpart to app_server.db.list_installation_member_emails
+    (asyncpg) - scan_worker jobs run outside the event loop, so they can't
+    share that pool. Same semantics: only members who've logged in at
+    least once (and so have a row in github_user_emails) get an email.
+    """
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT e.email
+                FROM installation_members m
+                JOIN github_user_emails e ON e.github_login = m.github_login
+                WHERE m.installation_id = %s
+                """,
+                (installation_id,),
+            )
+            return [row[0] for row in cur.fetchall()]

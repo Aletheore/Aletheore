@@ -72,6 +72,66 @@ def payment_failed_email(account_login: str) -> dict:
     return {"subject": subject, "html": html, "text": text}
 
 
+def weekly_digest_email(
+    account_login: str,
+    scans_this_week: int,
+    endpoints_reachable: int,
+    endpoints_total: int,
+    llm_spend_month_to_date: float,
+    flash_reviews_month_to_date: int,
+) -> dict:
+    # Sent unconditionally to every paid installation, including quiet
+    # ones (see digest_sends' migration comment - this is meant to
+    # re-engage installs that have gone quiet, not just report on active
+    # ones), so every line needs copy that reads naturally at zero too.
+    if scans_this_week > 0:
+        scan_line = f"{scans_this_week} scan{'s' if scans_this_week != 1 else ''} run this week."
+    else:
+        scan_line = (
+            "No scans run this week - push to a repo, or run "
+            "`aletheore audit . --managed`, and it'll show up here next week."
+        )
+
+    if endpoints_total > 0:
+        health_line = f"Endpoint monitoring: {endpoints_reachable}/{endpoints_total} reachable right now."
+    else:
+        health_line = (
+            "No endpoints being monitored yet - add one in Settings to catch "
+            "outages before your users do."
+        )
+
+    review_word = "review" if flash_reviews_month_to_date == 1 else "reviews"
+    spend_line = (
+        f"${llm_spend_month_to_date:.2f} in AI spend this month, across "
+        f"{flash_reviews_month_to_date} automated PR {review_word}."
+    )
+
+    subject = f"Aletheore weekly digest for {account_login}"
+    text = (
+        f"Hi,\n\n"
+        f"Here's what happened on {account_login}'s Aletheore AIR this week:\n\n"
+        f"- {scan_line}\n"
+        f"- {health_line}\n"
+        f"- {spend_line}\n\n"
+        "Full details: https://app.aletheore.com/dashboard\n\n"
+        "Don't want these? Reply and let us know."
+        f"{_FOOTER_TEXT}"
+    )
+    html = (
+        "<p>Hi,</p>"
+        f"<p>Here's what happened on <strong>{account_login}</strong>'s Aletheore AIR this week:</p>"
+        "<ul>"
+        f"<li>{scan_line}</li>"
+        f"<li>{health_line}</li>"
+        f"<li>{spend_line}</li>"
+        "</ul>"
+        '<p>Full details: <a href="https://app.aletheore.com/dashboard">your dashboard</a>.</p>'
+        "<p>Don't want these? Reply and let us know.</p>"
+        f"{_FOOTER_HTML}"
+    )
+    return {"subject": subject, "html": html, "text": text}
+
+
 def subscription_canceled_email(account_login: str) -> dict:
     subject = "Sorry to see you go"
     text = (

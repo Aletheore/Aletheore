@@ -67,6 +67,43 @@ def test_sends_with_rendered_template_and_records_on_success(monkeypatch):
     assert record_calls == [("welcome:octocat", "welcome", "o@example.com", 42, "msg_abc")]
 
 
+def test_dict_template_arg_is_expanded_as_keyword_args(monkeypatch):
+    # weekly_digest needs several values, unlike the single-string
+    # templates (welcome/payment_failed/subscription_canceled) - a dict
+    # template_arg is expanded as **kwargs into the render function
+    # rather than passed positionally.
+    monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+    monkeypatch.setattr("scan_worker.jobs.email_already_sent", lambda dsn, key: False)
+
+    send_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_transactional_email",
+        lambda api_key, from_addr, reply_to, to, subject, html, text: send_calls.append(
+            {"subject": subject, "text": text}
+        )
+        or {"id": "msg_digest"},
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_sent_email", lambda *a, **k: None)
+
+    send_transactional_email_job(
+        "weekly_digest:1:2026-W32:o@example.com",
+        "weekly_digest",
+        {
+            "account_login": "acme",
+            "scans_this_week": 2,
+            "endpoints_reachable": 1,
+            "endpoints_total": 1,
+            "llm_spend_month_to_date": 1.0,
+            "flash_reviews_month_to_date": 1,
+        },
+        "o@example.com",
+    )
+
+    assert len(send_calls) == 1
+    assert "acme" in send_calls[0]["text"]
+    assert "2 scans" in send_calls[0]["text"]
+
+
 def test_unknown_template_name_raises(monkeypatch):
     monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
     monkeypatch.setattr("scan_worker.jobs.email_already_sent", lambda dsn, key: False)
