@@ -1654,6 +1654,21 @@ async function removeSeat() {{
   }}
 }}
 
+async function openBillingPortal() {{
+  const status = document.getElementById('seat-billing-status');
+  if (status) {{ status.textContent = 'Opening billing portal...'; status.style.color = 'var(--slate-600)'; }}
+  const res = await fetch(adminBase + '/billing-portal');
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  if (res.ok && data.url) {{
+    window.location.href = data.url;
+    return;
+  }}
+  if (status) {{
+    status.textContent = data.detail || 'Could not open the billing portal.';
+    status.style.color = 'var(--critical)';
+  }}
+}}
+
 async function loadSettings() {{
   const body = document.getElementById('settings-body');
   const res = await apiGet(adminBase);
@@ -1663,7 +1678,14 @@ async function loadSettings() {{
       'API tokens, webhooks, and team seats are paid features',
       'Upgrade to configure them for this repository.',
       {SETTINGS_LOCKED_PREVIEW!r}
-    );
+    ) +
+      // A lapsed/failed-payment subscription lands here too (that's what
+      // "plan == free" means to this route) - the one person who needs to
+      // fix their card must not be locked out of doing so by the same gate
+      // that's blocking everything else on this page.
+      '<div class="settings-block-hint" style="text-align:center;margin-top:12px;">' +
+      'Already subscribed? <a href="#" onclick="openBillingPortal(); return false;">Manage billing</a>' +
+      '</div>';
     return;
   }}
   if (!res.ok) {{
@@ -1679,6 +1701,7 @@ async function loadSettings() {{
     ? '<div class="form-row">' +
       '<button class="btn" onclick="buySeat()">Buy extra seat ($3.99/mo)</button>' +
       (window._extraSeats > 0 ? '<button class="btn" onclick="removeSeat()" style="margin-left:6px;">Remove a seat</button>' : '') +
+      '<button class="btn" onclick="openBillingPortal()" style="margin-left:6px;">Manage billing</button>' +
       '</div><div id="seat-billing-status" class="settings-block-hint"></div>'
     : '<div class="settings-block-hint">Extra seats need an active subscription - subscribe first to buy one.</div>';
 
