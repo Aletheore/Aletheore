@@ -54,6 +54,7 @@ from aletheore.query import (
     SymbolNotFoundInEvidenceError,
     find_symbol_source,
 )
+from aletheore.repo_config import DISABLEABLE_CHECKS, load_repo_config
 from aletheore.report import (
     AmbiguousAdapterError,
     NoAdapterAvailableError,
@@ -275,22 +276,45 @@ class _ElapsedTicker:
             console.print(f"  [green]→[/green] {self._label}: done ({elapsed}s elapsed)")
 
 
+def _resolve_check_toggles(
+    repo: Path,
+    check_vulnerabilities: bool | None,
+    scan_git_history: bool | None,
+    check_licenses: bool | None,
+    map_endpoints: bool | None,
+) -> tuple[bool, bool, bool, bool]:
+    """Each toggle is bool|None from the CLI: None means "no explicit flag
+    passed", so the repo's .aletheore.json disabled_checks decides. An
+    explicit --check-x/--no-check-x flag always overrides the config,
+    regardless of which way it points."""
+    disabled = set(load_repo_config(repo)["disabled_checks"])
+    return (
+        check_vulnerabilities if check_vulnerabilities is not None else "vulnerabilities" not in disabled,
+        scan_git_history if scan_git_history is not None else "secrets_history" not in disabled,
+        check_licenses if check_licenses is not None else "licenses" not in disabled,
+        map_endpoints if map_endpoints is not None else "endpoints" not in disabled,
+    )
+
+
 def _scan(
     repo_path: str,
-    check_vulnerabilities: bool,
-    scan_git_history: bool,
-    check_licenses: bool = True,
-    map_endpoints: bool = True,
+    check_vulnerabilities: bool | None,
+    scan_git_history: bool | None,
+    check_licenses: bool | None = None,
+    map_endpoints: bool | None = None,
 ) -> tuple[int, dict, Path]:
     repo = Path(repo_path).resolve()
+    resolved_vulnerabilities, resolved_git_history, resolved_licenses, resolved_endpoints = (
+        _resolve_check_toggles(repo, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints)
+    )
     console.print(f"Scanning {repo}...")
     try:
         evidence = scan_repository(
             repo,
-            check_vulnerabilities=check_vulnerabilities,
-            scan_git_history=scan_git_history,
-            check_licenses=check_licenses,
-            map_endpoints=map_endpoints,
+            check_vulnerabilities=resolved_vulnerabilities,
+            scan_git_history=resolved_git_history,
+            check_licenses=resolved_licenses,
+            map_endpoints=resolved_endpoints,
             progress=_make_progress_printer(),
         )
     except GitAnalysisError as exc:
@@ -315,10 +339,10 @@ def _scan(
 def _audit(
     repo_path: str,
     forced_agent: str | None,
-    check_vulnerabilities: bool,
-    scan_git_history: bool,
-    check_licenses: bool = True,
-    map_endpoints: bool = True,
+    check_vulnerabilities: bool | None,
+    scan_git_history: bool | None,
+    check_licenses: bool | None = None,
+    map_endpoints: bool | None = None,
 ) -> int:
     scan_exit_code, _evidence, evidence_path = _scan(
         repo_path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints
@@ -375,10 +399,10 @@ def _audit(
 def _managed_audit(
     repo_path: str,
     token: str | None,
-    check_vulnerabilities: bool,
-    scan_git_history: bool,
-    check_licenses: bool = True,
-    map_endpoints: bool = True,
+    check_vulnerabilities: bool | None,
+    scan_git_history: bool | None,
+    check_licenses: bool | None = None,
+    map_endpoints: bool | None = None,
 ) -> int:
     resolved_token = token or get_api_key("ALETHEORE_API_TOKEN", "aletheore-managed-audit")
     if not resolved_token:
@@ -989,25 +1013,27 @@ def audit(
         "--token",
         help="managed-audit API token, or set ALETHEORE_API_TOKEN (only has effect with --managed)",
     ),
-    check_vulnerabilities: bool = typer.Option(
-        True,
+    check_vulnerabilities: Optional[bool] = typer.Option(
+        None,
         "--check-vulnerabilities/--no-check-vulnerabilities",
-        help="OSV.dev dependency-vulnerability check (on by default)",
+        help="OSV.dev dependency-vulnerability check (on by default, or set by "
+        ".aletheore.json's disabled_checks)",
     ),
-    scan_git_history: bool = typer.Option(
-        True,
+    scan_git_history: Optional[bool] = typer.Option(
+        None,
         "--scan-git-history/--no-scan-git-history",
-        help="walk git history for secrets (on by default)",
+        help="walk git history for secrets (on by default, or set by "
+        ".aletheore.json's disabled_checks)",
     ),
-    check_licenses: bool = typer.Option(
-        True,
+    check_licenses: Optional[bool] = typer.Option(
+        None,
         "--check-licenses/--no-check-licenses",
-        help="dependency-license check (on by default)",
+        help="dependency-license check (on by default, or set by .aletheore.json's disabled_checks)",
     ),
-    map_endpoints: bool = typer.Option(
-        True,
+    map_endpoints: Optional[bool] = typer.Option(
+        None,
         "--map-endpoints/--no-map-endpoints",
-        help="static API endpoint mapping (on by default)",
+        help="static API endpoint mapping (on by default, or set by .aletheore.json's disabled_checks)",
     ),
 ) -> None:
     if managed:
@@ -1038,25 +1064,27 @@ def audit(
 @app.command(help="run only the deterministic scan phase")
 def scan(
     path: str = typer.Argument(".", help="repository path"),
-    check_vulnerabilities: bool = typer.Option(
-        True,
+    check_vulnerabilities: Optional[bool] = typer.Option(
+        None,
         "--check-vulnerabilities/--no-check-vulnerabilities",
-        help="OSV.dev dependency-vulnerability check (on by default)",
+        help="OSV.dev dependency-vulnerability check (on by default, or set by "
+        ".aletheore.json's disabled_checks)",
     ),
-    scan_git_history: bool = typer.Option(
-        True,
+    scan_git_history: Optional[bool] = typer.Option(
+        None,
         "--scan-git-history/--no-scan-git-history",
-        help="walk git history for secrets (on by default)",
+        help="walk git history for secrets (on by default, or set by "
+        ".aletheore.json's disabled_checks)",
     ),
-    check_licenses: bool = typer.Option(
-        True,
+    check_licenses: Optional[bool] = typer.Option(
+        None,
         "--check-licenses/--no-check-licenses",
-        help="dependency-license check (on by default)",
+        help="dependency-license check (on by default, or set by .aletheore.json's disabled_checks)",
     ),
-    map_endpoints: bool = typer.Option(
-        True,
+    map_endpoints: Optional[bool] = typer.Option(
+        None,
         "--map-endpoints/--no-map-endpoints",
-        help="static API endpoint mapping (on by default)",
+        help="static API endpoint mapping (on by default, or set by .aletheore.json's disabled_checks)",
     ),
 ) -> None:
     exit_code, _evidence, _evidence_path = _scan(
@@ -1077,6 +1105,9 @@ def init(path: str = typer.Argument(".", help="repository path")) -> None:
         "cluster_resolution": 1.0,
         "dead_code_entry_points": [],
         "accepted_secrets": [],
+        "ignored_paths": [],
+        "disabled_checks": [],
+        "severity_threshold": None,
     }
     config_path.write_text(json.dumps(default_config, indent=2) + "\n")
     console.print(f"[bold green]Wrote {config_path}[/bold green]")
@@ -1095,6 +1126,19 @@ def init(path: str = typer.Argument(".", help="repository path")) -> None:
     keys.add_row("  dead_code_entry_points", "extra file paths to treat as entry points")
     keys.add_row(
         "  accepted_secrets", "baseline of reviewed secret findings to suppress (leave empty for now)"
+    )
+    keys.add_row(
+        "  ignored_paths",
+        'glob patterns excluded from every check (e.g. ["vendor/**", "*.gen.go"])',
+    )
+    keys.add_row(
+        "  disabled_checks",
+        f"checks to skip by default: {', '.join(sorted(DISABLEABLE_CHECKS))}",
+    )
+    keys.add_row(
+        "  severity_threshold",
+        "critical/high/medium/low - filters dependency-vulnerability findings in PR "
+        "comments only (evidence.json always keeps everything)",
     )
     console.print(keys)
 

@@ -4,8 +4,16 @@ from pathlib import Path
 import networkx as nx
 from networkx.algorithms.community import greedy_modularity_communities
 
+from aletheore.repo_config import load_repo_config
+
 
 def load_architecture_config(repo_path: Path) -> dict | None:
+    # None (not a config with empty defaults) means "no usable config" - no
+    # file, or a file that isn't valid JSON. load_repo_config itself is
+    # deliberately never-erroring (falls back to defaults on bad JSON, since
+    # its other callers need a config for every scan regardless), so the
+    # malformed-JSON case is checked here first to preserve this function's
+    # existing None-on-malformed contract.
     config_file = repo_path / ".aletheore.json"
     if not config_file.exists():
         return None
@@ -16,22 +24,13 @@ def load_architecture_config(repo_path: Path) -> dict | None:
     if not isinstance(data, dict):
         return None
 
-    layer_markers = data.get("layer_markers", {})
-    if not isinstance(layer_markers, dict):
-        layer_markers = {}
-
-    cluster_resolution = data.get("cluster_resolution", 1.0)
-    if not isinstance(cluster_resolution, (int, float)) or isinstance(cluster_resolution, bool):
-        cluster_resolution = 1.0
-
-    result = {"layer_markers": layer_markers, "cluster_resolution": float(cluster_resolution)}
-
-    dead_code_entry_points = data.get("dead_code_entry_points", [])
-    if isinstance(dead_code_entry_points, list):
-        valid_entry_points = [path for path in dead_code_entry_points if isinstance(path, str)]
-        if valid_entry_points:
-            result["dead_code_entry_points"] = valid_entry_points
-
+    config = load_repo_config(repo_path)
+    result = {
+        "layer_markers": config["layer_markers"],
+        "cluster_resolution": config["cluster_resolution"],
+    }
+    if config["dead_code_entry_points"]:
+        result["dead_code_entry_points"] = config["dead_code_entry_points"]
     return result
 
 

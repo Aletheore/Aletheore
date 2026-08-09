@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 
+from aletheore.repo_config import is_ignored
 from aletheore.scanner.detect import IGNORED_DIRS
 from aletheore.vulnerabilities import _parse_npm_direct_pins, _parse_pip_pins
 
@@ -62,15 +63,17 @@ def _has_main_guard(repo_path: Path, path: str) -> bool:
     return bool(_MAIN_GUARD_PATTERN.search(content))
 
 
-def _html_script_entry_points(repo_path: Path) -> set[str]:
+def _html_script_entry_points(repo_path: Path, ignored_paths: list[str] | None = None) -> set[str]:
     # Plain <script src="..."> tags (no bundler, no ES module imports) are
     # invisible to the JS import graph - confirmed on this repo's website/:
     # every JS file loaded that way looked unreachable despite being the
     # actual entry point a browser executes.
     entry_points = set()
+    patterns = ignored_paths or []
     for html_file in repo_path.rglob("*.html"):
+        rel_path = html_file.relative_to(repo_path).as_posix()
         rel_parts = html_file.relative_to(repo_path).parts
-        if any(part in IGNORED_DIRS for part in rel_parts):
+        if any(part in IGNORED_DIRS for part in rel_parts) or is_ignored(rel_path, patterns):
             continue
         try:
             content = html_file.read_text(encoding="utf-8", errors="ignore")
@@ -110,14 +113,19 @@ def _package_import_names(package: str) -> set[str]:
     return names
 
 
-def find_dead_code(repo_path: Path, modules: list[dict], config: dict | None) -> dict:
+def find_dead_code(
+    repo_path: Path,
+    modules: list[dict],
+    config: dict | None,
+    ignored_paths: list[str] | None = None,
+) -> dict:
     custom_entry_points = set()
     if isinstance(config, dict):
         raw_entry_points = config.get("dead_code_entry_points", [])
         if isinstance(raw_entry_points, list):
             custom_entry_points = {path for path in raw_entry_points if isinstance(path, str)}
 
-    html_script_entry_points = _html_script_entry_points(repo_path)
+    html_script_entry_points = _html_script_entry_points(repo_path, ignored_paths)
 
     unreachable_modules = []
     entry_points_detected = []

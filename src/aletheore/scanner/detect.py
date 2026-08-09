@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+from aletheore.repo_config import is_ignored
+
 IGNORED_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv", ".aletheore",
     ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".cache",
@@ -232,16 +234,23 @@ def _nested_git_roots(repo_path: Path) -> set[Path]:
     return roots
 
 
-def _iter_source_files(repo_path: Path):
+def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
     # os.walk(followlinks=False) rather than Path.rglob("*") - a symlinked
     # directory would otherwise have its contents walked and reported on as
     # if they were part of this repo. followlinks only stops descent into
     # symlinked *directories* - a symlinked file sitting directly in a real
     # directory still needs its own is_symlink() check below.
     nested_git_roots = _nested_git_roots(repo_path)
+    patterns = ignored_paths or []
     for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
-        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
         current_dir = Path(dirpath)
+        rel_dir = current_dir.relative_to(repo_path).as_posix()
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d not in IGNORED_DIRS
+            and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
+        ]
         if any(root in current_dir.parents or root == current_dir for root in nested_git_roots):
             dirnames[:] = []
             continue
@@ -249,10 +258,13 @@ def _iter_source_files(repo_path: Path):
             path = current_dir / filename
             if path.is_symlink() or not path.is_file():
                 continue
+            rel_path = path.relative_to(repo_path).as_posix()
+            if is_ignored(rel_path, patterns):
+                continue
             yield path
 
 
-def detect_languages(repo_path: Path) -> list[dict]:
+def detect_languages(repo_path: Path, ignored_paths: list[str] | None = None) -> list[dict]:
     # Local import: graph.py already imports IGNORED_DIRS from this module, so a
     # module-level import here would be circular. LANGUAGE_BY_EXTENSION is the
     # single source of truth for "which extensions we support" - this used to be
@@ -263,7 +275,7 @@ def detect_languages(repo_path: Path) -> list[dict]:
     from aletheore.scanner.graph import LANGUAGE_BY_EXTENSION
 
     counts: dict[str, dict] = {}
-    for path in _iter_source_files(repo_path):
+    for path in _iter_source_files(repo_path, ignored_paths):
         entry_spec = LANGUAGE_BY_EXTENSION.get(path.suffix)
         if entry_spec is None:
             continue

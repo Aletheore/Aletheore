@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import ssl
 import time
@@ -545,3 +546,96 @@ def check_vulnerabilities(
             )
 
     return {"checked": True, "reason": None, "findings": findings}
+
+
+# CVSS v3.1 base-score metric weights (NVD/FIRST spec) - see
+# https://www.first.org/cvss/v3-1/specification-document#7-1-Base-Metrics-Equations
+_CVSS3_AV = {"N": 0.85, "A": 0.62, "L": 0.55, "P": 0.2}
+_CVSS3_AC = {"L": 0.77, "H": 0.44}
+_CVSS3_PR_UNCHANGED = {"N": 0.85, "L": 0.62, "H": 0.27}
+_CVSS3_PR_CHANGED = {"N": 0.85, "L": 0.68, "H": 0.5}
+_CVSS3_UI = {"N": 0.85, "R": 0.62}
+_CVSS3_CIA = {"H": 0.56, "L": 0.22, "N": 0.0}
+
+_SEVERITY_ORDER = ("critical", "high", "medium", "low")
+
+
+def _cvss3_base_score(vector: str) -> float | None:
+    """Parses a CVSS v3.x vector string (e.g. "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/
+    S:U/C:N/I:N/A:H") and computes the base score per the official formula.
+    Returns None if the vector is missing any required metric or uses a
+    value this parser doesn't recognize - callers treat that the same as
+    "no severity data," never as a guess."""
+    metrics: dict[str, str] = {}
+    for segment in vector.split("/"):
+        if ":" in segment and not segment.startswith("CVSS"):
+            key, _, value = segment.partition(":")
+            metrics[key] = value
+
+    try:
+        av = _CVSS3_AV[metrics["AV"]]
+        ac = _CVSS3_AC[metrics["AC"]]
+        ui = _CVSS3_UI[metrics["UI"]]
+        scope_changed = metrics["S"] == "C"
+        pr = (_CVSS3_PR_CHANGED if scope_changed else _CVSS3_PR_UNCHANGED)[metrics["PR"]]
+        c = _CVSS3_CIA[metrics["C"]]
+        i = _CVSS3_CIA[metrics["I"]]
+        a = _CVSS3_CIA[metrics["A"]]
+    except KeyError:
+        return None
+
+    exploitability = 8.22 * av * ac * pr * ui
+    iss = 1 - ((1 - c) * (1 - i) * (1 - a))
+    if scope_changed:
+        impact = 7.52 * (iss - 0.029) - 3.25 * (iss - 0.02) ** 15
+    else:
+        impact = 6.42 * iss
+
+    if impact <= 0:
+        return 0.0
+
+    raw = 1.08 * (impact + exploitability) if scope_changed else impact + exploitability
+    # CVSS "roundup": round to one decimal, always rounding up (not
+    # to-nearest) - e.g. 4.02 becomes 4.1, not 4.0.
+    return min(math.ceil(min(raw, 10.0) * 10) / 10, 10.0)
+
+
+def normalize_severity(osv_severity: list[dict]) -> str | None:
+    """osv_severity is OSV's raw severity list: [{"type": "CVSS_V3", "score":
+    "<vector string>"}, ...] (possibly also CVSS_V4 or other types this
+    doesn't parse). Finds the first CVSS_V3 entry, computes its base score,
+    and buckets it using the standard NVD qualitative rating scale. Returns
+    None - not a guessed severity - when there's no parseable CVSS_V3 entry,
+    so callers never treat "we don't know" as "this is low severity."""
+    for entry in osv_severity or []:
+        if entry.get("type") != "CVSS_V3":
+            continue
+        score = _cvss3_base_score(entry.get("score", ""))
+        if score is None:
+            continue
+        if score >= 9.0:
+            return "critical"
+        if score >= 7.0:
+            return "high"
+        if score >= 4.0:
+            return "medium"
+        return "low"
+    return None
+
+
+def filter_by_severity(findings: list[dict], threshold: str | None) -> list[dict]:
+    """threshold=None (no severity_threshold configured) returns findings
+    unchanged. Otherwise keeps findings whose normalize_severity() is at or
+    above threshold in the critical > high > medium > low ordering. A
+    finding with no derivable severity is always kept - absence of CVSS
+    data is not the same as low severity, and dropping it would silently
+    hide a real finding rather than just declining to prioritize it."""
+    if threshold is None:
+        return findings
+    threshold_index = _SEVERITY_ORDER.index(threshold)
+    kept = []
+    for finding in findings:
+        severity = normalize_severity(finding.get("severity", []))
+        if severity is None or _SEVERITY_ORDER.index(severity) <= threshold_index:
+            kept.append(finding)
+    return kept

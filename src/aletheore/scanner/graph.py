@@ -16,6 +16,7 @@ import tree_sitter_rust as tsrust
 import tree_sitter_typescript as tstypescript
 from tree_sitter import Language, Node, Parser, Tree
 
+from aletheore.repo_config import is_ignored
 from aletheore.scanner.detect import IGNORED_DIRS, _nested_git_roots
 
 PY_LANGUAGE = Language(tspython.language())
@@ -65,23 +66,33 @@ KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR = {
 }
 
 
-def _iter_source_files(repo_path: Path):
+def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
     # os.walk(followlinks=False) rather than Path.rglob("*") - a symlinked
     # directory in the tree would otherwise have its contents walked and
     # parsed as if they were part of this repo. followlinks only stops
     # descent into symlinked *directories* - a symlinked file sitting
     # directly in a real directory still needs its own is_symlink() check.
     nested_git_roots = _nested_git_roots(repo_path)
+    patterns = ignored_paths or []
     paths = []
     for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
-        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
         current_dir = Path(dirpath)
+        rel_dir = current_dir.relative_to(repo_path).as_posix()
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d not in IGNORED_DIRS
+            and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
+        ]
         if any(root in current_dir.parents or root == current_dir for root in nested_git_roots):
             dirnames[:] = []
             continue
         for filename in filenames:
             path = current_dir / filename
             if path.is_symlink() or not path.is_file():
+                continue
+            rel_path = path.relative_to(repo_path).as_posix()
+            if is_ignored(rel_path, patterns):
                 continue
             paths.append(path)
     yield from sorted(paths)
@@ -1622,7 +1633,10 @@ def _resolve_js_import(repo_path: Path, from_file: Path, spec: str) -> str | Non
 
 
 def build_module_graph(
-    repo_path: Path, *, unchanged_modules: dict[str, dict] | None = None
+    repo_path: Path,
+    *,
+    unchanged_modules: dict[str, dict] | None = None,
+    ignored_paths: list[str] | None = None,
 ) -> tuple[list[dict], dict, list[dict]]:
     """unchanged_modules: path -> a previously-computed module dict (same
     shape this function itself produces) for files known not to have
@@ -1654,7 +1668,7 @@ def build_module_graph(
     java_pre_parsed: dict[Path, tuple[bytes, Tree]] = {}
     pre_parser = Parser()
     pre_parser.language = JAVA_LANGUAGE
-    for path in _iter_source_files(repo_path):
+    for path in _iter_source_files(repo_path, ignored_paths):
         if path.suffix != ".java":
             continue
         pre_source = path.read_bytes()
@@ -1676,7 +1690,7 @@ def build_module_graph(
     csharp_pre_parsed: dict[Path, tuple[bytes, Tree]] = {}
     cs_pre_parser = Parser()
     cs_pre_parser.language = CSHARP_LANGUAGE
-    for path in _iter_source_files(repo_path):
+    for path in _iter_source_files(repo_path, ignored_paths):
         if path.suffix != ".cs":
             continue
         pre_source = path.read_bytes()
@@ -1690,7 +1704,7 @@ def build_module_graph(
 
     parser = Parser()
 
-    for path in _iter_source_files(repo_path):
+    for path in _iter_source_files(repo_path, ignored_paths):
         rel_path = _rel(repo_path, path)
 
         if unchanged_modules is not None and rel_path in unchanged_modules:
