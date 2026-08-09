@@ -115,7 +115,7 @@ from app_server.email_templates import (
     welcome_email,
 )
 from app_server.email_queue import enqueue_transactional_email
-from scan_worker.email import send_transactional_email
+from app_server.email_client import send_transactional_email
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.model_tiers import PRO_MODEL, model_for_plan, writing_adapter_for_plan
 from scan_worker.packet_cache import lookup_cached_result, store_result
