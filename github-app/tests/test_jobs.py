@@ -3199,6 +3199,7 @@ def test_run_live_docs_full_build_job_skips_llm_setup_when_nothing_new(monkeypat
         "scan_worker.jobs.set_docs_build_status",
         lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
     )
+    monkeypatch.setattr("scan_worker.jobs.get_docs_repo_commit_settings", lambda *a, **k: None)
 
     run_live_docs_full_build_job(1, "octocat/hello-world")
 
@@ -3229,6 +3230,7 @@ def test_run_live_docs_full_build_job_excludes_test_files_from_candidate_modules
         "scan_worker.jobs.set_docs_build_status",
         lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
     )
+    monkeypatch.setattr("scan_worker.jobs.get_docs_repo_commit_settings", lambda *a, **k: None)
 
     run_live_docs_full_build_job(1, "octocat/hello-world")
 
@@ -3272,6 +3274,7 @@ def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
         "scan_worker.jobs.set_docs_build_status",
         lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
     )
+    monkeypatch.setattr("scan_worker.jobs.get_docs_repo_commit_settings", lambda *a, **k: None)
 
     run_live_docs_full_build_job(1, "octocat/hello-world")
 
@@ -3335,6 +3338,7 @@ def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
         "scan_worker.jobs.set_docs_build_status",
         lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
     )
+    monkeypatch.setattr("scan_worker.jobs.get_docs_repo_commit_settings", lambda *a, **k: None)
 
     good = _docs_module("good.py")
     bad = _docs_module("bad.py")
@@ -3368,6 +3372,7 @@ def test_maybe_update_live_docs_excludes_test_files_from_changed_modules(monkeyp
         "scan_worker.jobs.set_docs_build_status",
         lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
     )
+    monkeypatch.setattr("scan_worker.jobs.get_docs_repo_commit_settings", lambda *a, **k: None)
 
     good = _docs_module("good.py")
     test_module = _docs_module("tests/test_a.py")
@@ -3379,3 +3384,86 @@ def test_maybe_update_live_docs_excludes_test_files_from_changed_modules(monkeyp
     # never reached the LLM at all, same as a full build's candidate filter.
     assert fetched_for == ["good.py"]
     assert status_calls == [("ready", None)]
+
+
+def test_maybe_sync_docs_to_repo_noop_when_settings_missing(monkeypatch):
+    from scan_worker.jobs import _maybe_sync_docs_to_repo
+
+    monkeypatch.setattr("scan_worker.jobs.get_docs_repo_commit_settings", lambda *a, **k: None)
+    client_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: client_calls.append(1)
+    )
+
+    _maybe_sync_docs_to_repo("dsn", 1, "octocat/hello-world")
+
+    assert client_calls == []  # never even checks GitHub auth when not opted in
+
+
+def test_maybe_sync_docs_to_repo_noop_when_disabled(monkeypatch):
+    from scan_worker.jobs import _maybe_sync_docs_to_repo
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_docs_repo_commit_settings",
+        lambda *a, **k: {"enabled": False, "last_content_hash": None, "pr_number": None},
+    )
+    client_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: client_calls.append(1)
+    )
+
+    _maybe_sync_docs_to_repo("dsn", 1, "octocat/hello-world")
+
+    assert client_calls == []
+
+
+def test_maybe_sync_docs_to_repo_pushes_and_records_when_enabled(monkeypatch):
+    from scan_worker.jobs import _maybe_sync_docs_to_repo
+
+    settings = {"enabled": True, "last_content_hash": None, "pr_number": None}
+    monkeypatch.setattr("scan_worker.jobs.get_docs_repo_commit_settings", lambda *a, **k: settings)
+    monkeypatch.setattr("scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok"))
+    module = _docs_module(functions=[{
+        "name": "f", "is_public": True, "docstring": "Does a thing.", "start_line": 1, "end_line": 2,
+    }])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([module]))
+    monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
+
+    sync_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.sync_docs_to_repo",
+        lambda client, token, repo, modules, s: sync_calls.append((repo, modules, s)) or ("hash123", 7),
+    )
+    record_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_docs_repo_commit",
+        lambda dsn, iid, repo, content_hash, pr_number: record_calls.append((iid, repo, content_hash, pr_number)),
+    )
+
+    _maybe_sync_docs_to_repo("dsn", 1, "octocat/hello-world")
+
+    assert len(sync_calls) == 1
+    repo, modules, s = sync_calls[0]
+    assert repo == "octocat/hello-world"
+    assert "a.py" in modules
+    assert s is settings
+    assert record_calls == [(1, "octocat/hello-world", "hash123", 7)]
+
+
+def test_maybe_sync_docs_to_repo_swallows_github_api_errors(monkeypatch):
+    from scan_worker.jobs import _maybe_sync_docs_to_repo
+
+    settings = {"enabled": True, "last_content_hash": None, "pr_number": None}
+    monkeypatch.setattr("scan_worker.jobs.get_docs_repo_commit_settings", lambda *a, **k: settings)
+    monkeypatch.setattr("scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok"))
+    module = _docs_module(functions=[{"name": "f", "is_public": True, "docstring": "Does a thing."}])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([module]))
+    monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
+
+    def _raise(*a, **k):
+        raise RuntimeError("403 missing contents:write permission")
+
+    monkeypatch.setattr("scan_worker.jobs.sync_docs_to_repo", _raise)
+
+    # Should not raise - a repo-commit failure must not fail the Docs build job.
+    _maybe_sync_docs_to_repo("dsn", 1, "octocat/hello-world")

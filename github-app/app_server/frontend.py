@@ -1362,8 +1362,17 @@ DOCS_HTML = _page_head("Docs — {repo} — Aletheore") + _shell(
       <div class="section-head">
         <div class="section-title"><i class="ti ti-file-text" aria-hidden="true"></i>Docs</div>
         <span class="section-sub">Regenerated automatically on every push</span>
+        <a class="btn" id="docs-download-link" href="#" download style="display:none"><i class="ti ti-download" aria-hidden="true"></i>Download</a>
       </div>
       <div class="section-body" id="docs-body"><div class="empty-state">Loading&hellip;</div></div>
+    </section>
+
+    <section class="section" id="docs-repo-commit-section" style="display:none">
+      <div class="section-head">
+        <div class="section-title"><i class="ti ti-git-pull-request" aria-hidden="true"></i>Commit to repo</div>
+        <span class="section-sub">Also push this reference into your repo as .aletheore/docs/API.md</span>
+      </div>
+      <div class="section-body" id="docs-repo-commit-body"><div class="empty-state">Loading&hellip;</div></div>
     </section>
 """
 ) + f"""
@@ -1410,6 +1419,11 @@ async function loadDocs() {{
   if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Docs unavailable.</div>'; return; }}
   const data = await res.json();
   const modulePaths = Object.keys(data.modules || {{}});
+  const downloadLink = document.getElementById('docs-download-link');
+  if (modulePaths.length > 0) {{
+    downloadLink.href = base + '/docs/export';
+    downloadLink.style.display = '';
+  }}
   if (modulePaths.length === 0) {{
     if (data.build_status === 'failed') {{
       body.innerHTML = '<div class="empty-state">Docs build failed' +
@@ -1442,7 +1456,34 @@ async function loadDocs() {{
   body.appendChild(list);
 }}
 
+async function loadDocsRepoCommitSettings() {{
+  const section = document.getElementById('docs-repo-commit-section');
+  const body = document.getElementById('docs-repo-commit-body');
+  const res = await apiGet(adminBase + '/docs-repo-commit');
+  if (!res || !res.ok) return;  // paid-gate 402, or not yet an admin - main Docs section above already explains why
+  section.style.display = '';
+  const data = await res.json();
+  renderDocsRepoCommit(body, data.enabled, data.pr_number);
+}}
+
+function renderDocsRepoCommit(body, enabled, prNumber) {{
+  let statusHtml = enabled
+    ? '<p>Enabled - .aletheore/docs/API.md is kept current on a single rolling pull request.'
+      + (prNumber ? ' <a href="https://github.com/' + org + '/' + repo + '/pull/' + prNumber + '" target="_blank" rel="noopener">View PR #' + prNumber + '</a>' : ' The first pull request opens the next time Docs regenerates.')
+      + '</p>'
+    : '<p>Disabled - this reference only lives in the Aletheore dashboard.</p>';
+  body.innerHTML = statusHtml +
+    '<button class="btn" id="docs-repo-commit-toggle">' + (enabled ? 'Disable' : 'Enable') + '</button>';
+  document.getElementById('docs-repo-commit-toggle').onclick = async function () {{
+    const res = await fetch(adminBase + '/docs-repo-commit', {{
+      method: 'PUT', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ enabled: !enabled }}),
+    }});
+    if (res.ok) loadDocsRepoCommitSettings();
+  }};
+}}
+
 loadDocs();
+loadDocsRepoCommitSettings();
 loadPlanBadge();
 </script>
 """

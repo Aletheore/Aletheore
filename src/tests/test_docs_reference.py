@@ -1,6 +1,11 @@
 import pytest
 
-from aletheore.docs_reference import UNDOCUMENTED, build_api_reference, build_module_reference
+from aletheore.docs_reference import (
+    UNDOCUMENTED,
+    build_api_reference,
+    build_combined_reference,
+    build_module_reference,
+)
 
 
 def _module(path: str, functions: list[dict], classes: list[dict] | None = None) -> dict:
@@ -154,3 +159,30 @@ def test_build_api_reference_threads_ai_descriptions_by_module():
     })
     assert "Generated for f." in refs["src/a.py"]
     assert UNDOCUMENTED in refs["src/b.py"]
+
+
+def test_build_combined_reference_reports_no_modules():
+    md = build_combined_reference({}, "octocat/hello-world")
+    assert "octocat/hello-world" in md
+    assert "No public functions or classes found yet." in md
+
+
+def test_build_combined_reference_includes_toc_linking_to_each_module():
+    modules = {
+        "src/a.py": "# src/a.py\n\n## Functions\n\n### `f()`\n\nDoes a thing.\n",
+        "src/b.py": "# src/b.py\n\n## Functions\n\n### `g()`\n\nDoes another thing.\n",
+    }
+    md = build_combined_reference(modules, "octocat/hello-world")
+    assert "[src/a.py](#srcapy)" in md
+    assert "[src/b.py](#srcbpy)" in md
+    assert "Does a thing." in md
+    assert "Does another thing." in md
+
+
+def test_build_combined_reference_sorts_modules_by_path():
+    modules = {
+        "src/z.py": "# src/z.py\n\nZ content.\n",
+        "src/a.py": "# src/a.py\n\nA content.\n",
+    }
+    md = build_combined_reference(modules, "octocat/hello-world")
+    assert md.index("A content.") < md.index("Z content.")

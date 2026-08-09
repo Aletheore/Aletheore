@@ -875,6 +875,33 @@ async def get_docs_build_status(pool: asyncpg.Pool, installation_id: int, repo_f
     return dict(row) if row else None
 
 
+async def get_docs_repo_commit_settings(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> dict | None:
+    row = await pool.fetchrow(
+        """
+        SELECT enabled, pr_number, updated_at
+        FROM docs_repo_commit_settings
+        WHERE installation_id = $1 AND repo_full_name = $2
+        """,
+        installation_id,
+        repo_full_name,
+    )
+    return dict(row) if row else None
+
+
+async def set_docs_repo_commit_enabled(pool: asyncpg.Pool, installation_id: int, repo_full_name: str, enabled: bool) -> None:
+    await pool.execute(
+        """
+        INSERT INTO docs_repo_commit_settings (installation_id, repo_full_name, enabled, updated_at)
+        VALUES ($1, $2, $3, now())
+        ON CONFLICT (installation_id, repo_full_name) DO UPDATE
+        SET enabled = EXCLUDED.enabled, updated_at = now()
+        """,
+        installation_id,
+        repo_full_name,
+        enabled,
+    )
+
+
 async def list_docs_symbols(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> list[dict]:
     rows = await pool.fetch(
         """

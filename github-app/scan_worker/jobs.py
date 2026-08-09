@@ -40,6 +40,7 @@ from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_f
 from app_server.logging_config import log_job
 from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
+from aletheore.docs_reference import build_api_reference
 from scan_worker import live_docs, live_wiki
 from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
@@ -50,6 +51,7 @@ from scan_worker.db import (
     delete_expired_sessions,
     delete_wiki_subsystems_not_in,
     email_already_sent,
+    get_docs_repo_commit_settings,
     get_endpoint_health_summary,
     get_extra_seats,
     get_flash_review_count_this_month,
@@ -73,6 +75,7 @@ from scan_worker.db import (
     list_wiki_subsystems,
     record_digest_sent,
     record_docs_catchup_swept,
+    record_docs_repo_commit,
     record_llm_spend,
     record_sent_email,
     set_docs_build_status,
@@ -82,6 +85,7 @@ from scan_worker.db import (
     upsert_wiki_overview,
     upsert_wiki_subsystem,
 )
+from scan_worker.docs_repo_commit import sync_docs_to_repo
 from scan_worker.flash_review import (
     build_code_evidence_context,
     build_referenced_symbol_context,
@@ -2355,6 +2359,43 @@ def _run_docs_build_for_modules(
 
 
 @log_job
+def _maybe_sync_docs_to_repo(dsn: str, installation_id: int, repo_full_name: str) -> None:
+    """Best-effort and self-contained (fetches its own GitHub token) so
+    either call site below can call it as a one-liner regardless of where
+    they are in their own client/token lifecycle. A GitHub API failure here
+    (missing contents:write grant, archived repo, branch protection quirk)
+    shouldn't turn a successful Docs build into a failed job. Checks the
+    opt-in flag first so an installation that never enabled this does zero
+    extra API calls."""
+    settings = get_docs_repo_commit_settings(dsn, installation_id, repo_full_name)
+    if settings is None or not settings.get("enabled"):
+        return
+    try:
+        client_and_token = _github_client_and_token(installation_id)
+        if client_and_token is None:
+            return
+        client, token = client_and_token
+        evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
+        if evidence is None:
+            return
+        ai_descriptions_by_module: dict[str, dict[str, dict]] = {}
+        for row in list_docs_symbols(dsn, installation_id, repo_full_name):
+            ai_descriptions_by_module.setdefault(row["module_path"], {})[row["symbol_name"]] = {
+                "description": row["description"],
+                "mode": row["mode"],
+            }
+        modules = build_api_reference(evidence, ai_descriptions_by_module)
+        result = sync_docs_to_repo(client, token, repo_full_name, modules, settings)
+        if result is not None:
+            content_hash, pr_number = result
+            record_docs_repo_commit(dsn, installation_id, repo_full_name, content_hash, pr_number)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "docs repo-commit failed for installation=%s repo=%s (%s)",
+            installation_id, repo_full_name, exc,
+        )
+
+
 def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> None:
     dsn = get_settings().database_url
     evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
@@ -2378,6 +2419,7 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         # already covers everything current evidence calls for. Still a
         # real "ready" outcome, not a no-op to be silent about.
         set_docs_build_status(dsn, installation_id, repo_full_name, "ready")
+        _maybe_sync_docs_to_repo(dsn, installation_id, repo_full_name)
         return
 
     client_and_token = _github_client_and_token(installation_id)
@@ -2409,6 +2451,7 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         f"{succeeded}/{len(modules)} files processed this run - most recent failure: {last_error}"
         if last_error is not None else None,
     )
+    _maybe_sync_docs_to_repo(dsn, installation_id, repo_full_name)
 
 
 def run_live_docs_full_build_for_installation_job(installation_id: int) -> None:
@@ -2523,3 +2566,4 @@ def _maybe_update_live_docs(
         f"{succeeded}/{len(changed_modules)} files processed this run - most recent failure: {last_error}"
         if last_error is not None else None,
     )
+    _maybe_sync_docs_to_repo(dsn, installation_id, repo_full_name)

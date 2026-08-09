@@ -787,6 +787,49 @@ def set_docs_build_status(
         conn.commit()
 
 
+def get_docs_repo_commit_settings(dsn: str, installation_id: int, repo_full_name: str) -> dict | None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                """
+                SELECT enabled, last_content_hash, pr_number
+                FROM docs_repo_commit_settings
+                WHERE installation_id = %s AND repo_full_name = %s
+                """,
+                (installation_id, repo_full_name),
+            )
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def record_docs_repo_commit(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    content_hash: str,
+    pr_number: int,
+) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO docs_repo_commit_settings
+                    (installation_id, repo_full_name, enabled, last_content_hash, pr_number, updated_at)
+                VALUES (%s, %s, true, %s, %s, now())
+                ON CONFLICT (installation_id, repo_full_name) DO UPDATE
+                SET last_content_hash = EXCLUDED.last_content_hash,
+                    pr_number = EXCLUDED.pr_number,
+                    updated_at = now()
+                """,
+                (installation_id, repo_full_name, content_hash, pr_number),
+            )
+        conn.commit()
+
+
 def list_paid_repos_due_for_docs_catchup(dsn: str, interval_seconds: int) -> list[tuple[int, str]]:
     """Paid-plan repos due for the recurring Docs catch-up sweep - never
     swept before, or swept more than interval_seconds ago AND scanned at

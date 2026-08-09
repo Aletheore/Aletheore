@@ -14,6 +14,7 @@ comments that were never written.
 """
 
 import inspect
+import re
 
 from aletheore.dead_code import is_test_file
 
@@ -126,3 +127,27 @@ def build_api_reference(
                 evidence, module["path"], ai_descriptions
             )
     return reference
+
+
+def _github_heading_anchor(heading: str) -> str:
+    # Mirrors GitHub's own heading-to-anchor algorithm closely enough for a
+    # generated document: lowercase, drop anything that isn't a letter,
+    # digit, space, hyphen or underscore, then turn spaces into hyphens.
+    slug = re.sub(r"[^\w\s-]", "", heading.lower())
+    return re.sub(r"\s+", "-", slug.strip())
+
+
+def build_combined_reference(modules: dict[str, str], repo_full_name: str) -> str:
+    """Every module from build_api_reference concatenated into one markdown
+    document with a table of contents, instead of a dict the caller has to
+    render module-by-module - the single-file form for exporting or
+    committing the reference, as opposed to the dashboard's per-module view.
+    """
+    title = f"# API Reference — {repo_full_name}\n"
+    if not modules:
+        return title + "\nNo public functions or classes found yet.\n"
+
+    paths = sorted(modules)
+    toc = "\n".join(f"- [{path}](#{_github_heading_anchor(path)})" for path in paths)
+    sections = "\n\n---\n\n".join(modules[path].rstrip() for path in paths)
+    return f"{title}\n## Contents\n\n{toc}\n\n---\n\n{sections}\n"

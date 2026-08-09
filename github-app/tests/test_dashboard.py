@@ -1368,3 +1368,77 @@ async def test_dashboard_docs_surfaces_failed_build_status(pool, monkeypatch):
     body = response.json()
     assert body["build_status"] == "failed"
     assert body["build_error"] == "model provider unavailable"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_export_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/app/octocat/hello-world/docs/export")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_export_requires_paid_plan(pool, monkeypatch):
+    await upsert_installation(pool, 706, "octocat")  # defaults to plan='free'
+    await insert_repo_history(
+        pool, 706, "octocat/hello-world", datetime.now(timezone.utc),
+        _evidence_with_module("a.py", "add", None),
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[706])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs/export")
+    assert response.status_code == 402
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_export_returns_combined_markdown_with_toc(pool, monkeypatch):
+    await upsert_installation(pool, 707, "octocat")
+    await set_installation_plan(pool, 707, "indie")
+    await insert_repo_history(
+        pool, 707, "octocat/hello-world", datetime.now(timezone.utc),
+        _evidence_with_module("a.py", "add", "Adds two numbers."),
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[707])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs/export")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/markdown")
+    assert response.headers["content-disposition"] == 'attachment; filename="hello-world-api-reference.md"'
+    body = response.text
+    assert "# API Reference — octocat/hello-world" in body
+    assert "## Contents" in body
+    assert "[a.py](#apy)" in body
+    assert "Adds two numbers." in body
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_export_handles_no_modules_yet(pool, monkeypatch):
+    await upsert_installation(pool, 708, "octocat")
+    await set_installation_plan(pool, 708, "indie")
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[708])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs/export")
+
+    assert response.status_code == 200
+    assert "No public functions or classes found yet." in response.text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_export_sanitizes_unsafe_characters_in_filename(pool, monkeypatch):
+    # _repo_installation_id only ever matches `repo` against the org's
+    # account_login - it never validates that `repo` is a real, existing
+    # repository name - so this route can't assume `repo` is limited to
+    # GitHub's own repo-naming charset the way every other route implicitly
+    # can. A raw '"' here would otherwise break the Content-Disposition
+    # header's quoting.
+    await upsert_installation(pool, 709, "octocat")
+    await set_installation_plan(pool, 709, "indie")
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[709])
+    async with client:
+        response = await client.get('/app/octocat/weird%22repo/docs/export')
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == 'attachment; filename="weird_repo-api-reference.md"'

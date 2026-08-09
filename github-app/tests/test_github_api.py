@@ -5,11 +5,17 @@ import httpx
 from aletheore.pr_comment import COMMENT_MARKER
 from scan_worker.github_api import (
     create_check_run,
+    create_pull_request,
+    ensure_branch_at,
+    ensure_docs_pull_request,
+    fetch_default_branch_and_head_sha,
     fetch_file_content,
     fetch_pr_changed_files,
     fetch_pr_diff,
     fetch_recent_commits_for_path,
+    find_open_pull_request,
     upsert_pr_comment,
+    upsert_repo_file,
 )
 
 
@@ -279,3 +285,153 @@ def test_fetch_recent_commits_for_path_returns_empty_list_when_no_commits():
     commits = fetch_recent_commits_for_path(client, "token", "octocat/hello-world", "app.py")
 
     assert commits == []
+
+
+def test_fetch_default_branch_and_head_sha_returns_name_and_sha():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        if request.url.path.endswith("/repos/octocat/hello-world"):
+            return httpx.Response(200, json={"default_branch": "trunk"})
+        return httpx.Response(200, json={"sha": "abc123"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    assert fetch_default_branch_and_head_sha(client, "token", "octocat/hello-world") == ("trunk", "abc123")
+    # One /repos/{repo} call, not two - this replaced two separately-called
+    # functions that each fetched it for the same default_branch value.
+    assert len(calls) == 2
+    assert calls[0].endswith("/repos/octocat/hello-world")
+    assert calls[1].endswith("/repos/octocat/hello-world/commits/trunk")
+
+
+def test_ensure_branch_at_creates_ref_when_missing():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, str(request.url)))
+        if request.method == "GET":
+            return httpx.Response(404)
+        return httpx.Response(201, json={"ref": "refs/heads/aletheore/docs-update"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    ensure_branch_at(client, "token", "octocat/hello-world", "aletheore/docs-update", "abc123")
+    assert [method for method, _ in calls] == ["GET", "POST"]
+
+
+def test_ensure_branch_at_force_updates_existing_ref():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, str(request.url)))
+        if request.method == "GET":
+            return httpx.Response(200, json={"object": {"sha": "old-sha"}})
+        assert request.method == "PATCH"
+        import json as _json
+        assert _json.loads(request.content) == {"sha": "new-sha", "force": True}
+        return httpx.Response(200, json={})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    ensure_branch_at(client, "token", "octocat/hello-world", "aletheore/docs-update", "new-sha")
+    assert [method for method, _ in calls] == ["GET", "PATCH"]
+
+
+def test_upsert_repo_file_creates_when_no_existing_file():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, str(request.url)))
+        if request.method == "GET":
+            return httpx.Response(404)
+        import json as _json
+        body = _json.loads(request.content)
+        assert "sha" not in body
+        assert body["branch"] == "aletheore/docs-update"
+        return httpx.Response(201, json={"content": {"sha": "new"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    upsert_repo_file(
+        client, "token", "octocat/hello-world", ".aletheore/docs/API.md",
+        "aletheore/docs-update", "# Docs", "docs: update API reference",
+    )
+    assert [method for method, _ in calls] == ["GET", "PUT"]
+
+
+def test_upsert_repo_file_includes_sha_when_file_exists():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"sha": "existing-sha"})
+        import json as _json
+        assert _json.loads(request.content)["sha"] == "existing-sha"
+        return httpx.Response(200, json={"content": {"sha": "updated"}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    upsert_repo_file(
+        client, "token", "octocat/hello-world", ".aletheore/docs/API.md",
+        "aletheore/docs-update", "# Docs v2", "docs: update API reference",
+    )
+
+
+def test_find_open_pull_request_returns_number_when_one_exists():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["head"] == "octocat:aletheore/docs-update"
+        assert request.url.params["state"] == "open"
+        return httpx.Response(200, json=[{"number": 7}])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    assert find_open_pull_request(client, "token", "octocat/hello-world", "aletheore/docs-update") == 7
+
+
+def test_find_open_pull_request_returns_none_when_no_open_pr():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    assert find_open_pull_request(client, "token", "octocat/hello-world", "aletheore/docs-update") is None
+
+
+def test_create_pull_request_returns_new_pr_number():
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+        assert _json.loads(request.content) == {
+            "title": "docs: update API reference",
+            "head": "aletheore/docs-update",
+            "base": "main",
+            "body": "body",
+        }
+        return httpx.Response(201, json={"number": 42})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    number = create_pull_request(
+        client, "token", "octocat/hello-world", "aletheore/docs-update", "main",
+        "docs: update API reference", "body",
+    )
+    assert number == 42
+
+
+def test_ensure_docs_pull_request_reuses_existing_open_pr():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.method)
+        return httpx.Response(200, json=[{"number": 7}])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    number = ensure_docs_pull_request(
+        client, "token", "octocat/hello-world", "aletheore/docs-update", "main", "title", "body",
+    )
+    assert number == 7
+    assert calls == ["GET"]
+
+
+def test_ensure_docs_pull_request_creates_new_pr_when_none_open():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json=[])
+        return httpx.Response(201, json={"number": 9})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    number = ensure_docs_pull_request(
+        client, "token", "octocat/hello-world", "aletheore/docs-update", "main", "title", "body",
+    )
+    assert number == 9
