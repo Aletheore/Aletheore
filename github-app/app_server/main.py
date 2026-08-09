@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -14,6 +15,7 @@ from app_server.config import get_settings
 from app_server.dashboard import dashboard_router
 from app_server.db import create_pool
 from app_server.demo_scan_api import demo_scan_router
+from app_server.error_alerts import send_error_alert
 from app_server.frontend import frontend_router
 from app_server.logging_config import configure_json_logging
 from app_server.managed_audit_api import managed_audit_router
@@ -93,6 +95,23 @@ async def log_requests(request: Request, call_next):
     )
     response.headers["X-Request-ID"] = request_id
     return response
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONResponse:
+    # FastAPI's default HTTPException handler stays in effect for
+    # HTTPException specifically (a more specific handler is already
+    # registered for it) - this only ever catches something nobody
+    # deliberately raised, i.e. a real bug. Previously the only way to
+    # learn about one of these was reading logs after the fact.
+    logging.getLogger("app_server.errors").exception(
+        "unhandled exception in request",
+        extra={"method": request.method, "path": request.url.path},
+    )
+    await asyncio.to_thread(
+        send_error_alert, "app_server", exc, f"{request.method} {request.url.path}"
+    )
+    return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
 
 @app.get("/healthz")

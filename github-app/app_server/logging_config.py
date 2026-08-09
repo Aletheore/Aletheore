@@ -61,12 +61,21 @@ def log_job(func):
         start = time.monotonic()
         try:
             result = func(*args, **kwargs)
-        except Exception:
+        except Exception as exc:
             duration_ms = round((time.monotonic() - start) * 1000, 2)
             _job_logger.exception(
                 "job failed",
                 extra={"job_id": job_id, "job_name": func.__name__, "duration_ms": duration_ms},
             )
+            # An exception reaching here means whatever the job function
+            # itself does to handle expected failures (a dead GitHub token,
+            # a flaky external API) didn't catch it - by the time it's here,
+            # it's much more likely a real bug than routine external-API
+            # noise, worth a live alert rather than only a log line to find
+            # later.
+            from app_server.error_alerts import send_error_alert
+
+            send_error_alert(func.__name__, exc, f"job_id={job_id}")
             raise
         duration_ms = round((time.monotonic() - start) * 1000, 2)
         _job_logger.info(
