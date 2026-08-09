@@ -25,6 +25,7 @@ from app_server.auth import SESSION_COOKIE_NAME, get_current_session
 from app_server.config import get_settings
 from app_server.db import list_installations_for_ids
 from app_server.github_install import github_app_install_url
+from app_server.llm_cost import EXTRA_SEAT_PRICE_USD
 from app_server.paddle_pricing import resolve_price_id_for_plan
 
 frontend_router = APIRouter()
@@ -1913,7 +1914,7 @@ async function loadSettings() {{
 
   const seatBillingHtml = window._hasActiveSubscription
     ? '<div class="form-row">' +
-      '<button class="btn" onclick="buySeat()">Buy extra seat ($3.99/mo)</button>' +
+      '<button class="btn" onclick="buySeat()">Buy extra seat (${EXTRA_SEAT_PRICE_USD}/mo)</button>' +
       (window._extraSeats > 0 ? '<button class="btn" onclick="removeSeat()" style="margin-left:6px;">Remove a seat</button>' : '') +
       '<button class="btn" onclick="openBillingPortal()" style="margin-left:6px;">Manage billing</button>' +
       '</div><div id="seat-billing-status" class="settings-block-hint"></div>'

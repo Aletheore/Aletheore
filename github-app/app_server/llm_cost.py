@@ -19,7 +19,15 @@ MODEL_RATES_PER_MILLION_USD = {
 
 STALE_PRICE_MAX_AGE_DAYS = 90
 
-EXTRA_SEAT_MONTHLY_COST_USD = 3.99
+# What a seat actually bills at (paddle_pricing.EXTRA_SEAT_PRICE_ID,
+# pricing.html's "+$4.99/mo per additional team member").
+EXTRA_SEAT_PRICE_USD = 4.99
+
+# How much of that a seat is allowed to add to the LLM spend cap. Kept
+# deliberately below EXTRA_SEAT_PRICE_USD (not equal to it, as this used to
+# be) so a seat has guaranteed positive worst-case margin instead of being
+# a wash - at cap, a seat used to cost exactly what it earned.
+EXTRA_SEAT_LLM_CAP_USD = 3.00
 
 # Base monthly price per plan (github-app/../website/pricing.html) - the hard
 # LLM spend cap is set as a fraction of this, not a flat dollar figure, so it
@@ -75,4 +83,4 @@ def base_cap_for_plan(plan: str) -> float:
 
 
 def monthly_cap_for_installation(base_cap_usd: float, extra_seats: int) -> float:
-    return base_cap_usd + EXTRA_SEAT_MONTHLY_COST_USD * extra_seats
+    return base_cap_usd + EXTRA_SEAT_LLM_CAP_USD * extra_seats

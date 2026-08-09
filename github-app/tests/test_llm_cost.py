@@ -43,7 +43,7 @@ def test_monthly_cap_for_installation_base_only():
 
 
 def test_monthly_cap_for_installation_with_extra_seats():
-    assert monthly_cap_for_installation(7.00, 3) == pytest.approx(18.97)
+    assert monthly_cap_for_installation(7.00, 3) == pytest.approx(16.00)
 
 
 def test_stale_models_returns_empty_when_all_recently_verified():
