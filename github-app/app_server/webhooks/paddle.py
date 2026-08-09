@@ -3,7 +3,14 @@ import logging
 from fastapi import APIRouter, Request, Response
 
 from app_server.config import get_settings
-from app_server.db import add_paddle_ids_to_installation, get_installation, set_extra_seats, set_installation_plan
+from app_server.db import (
+    add_paddle_ids_to_installation,
+    get_installation,
+    list_installation_member_emails,
+    set_extra_seats,
+    set_installation_plan,
+)
+from app_server.email_queue import enqueue_transactional_email
 from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for, is_known_paddle_ip
 from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID, resolve_plan_for_price_id
 from app_server.paddle_webhook_verify import verify_paddle_signature
@@ -118,6 +125,35 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
             job_timeout=60,
             installation_id=installation_id,
         )
+
+    # payment_failed and subscription_canceled emails, gated on an actual
+    # paid -> free transition (not "was already free") so a webhook for an
+    # installation that was never paid, or one already downgraded by a
+    # prior event, doesn't send anything. Distinguished by event_type +
+    # status since both land here as plan == "free": a card decline
+    # (subscription.updated, status=past_due - no dunning-aware grace
+    # period exists, see _ACTIVE_SUBSCRIPTION_STATUSES above, so access is
+    # already fully revoked by the time this fires) gets different copy
+    # from an actual cancellation (subscription.canceled).
+    if previous_plan != "free" and plan == "free":
+        event_id = payload.get("event_id")
+        template_name = None
+        if event_type == "subscription.updated" and data.get("status") == "past_due":
+            template_name = "payment_failed"
+        elif event_type == "subscription.canceled":
+            template_name = "subscription_canceled"
+
+        if template_name and event_id:
+            account_login = previous["account_login"] if previous is not None else str(installation_id)
+            for member_email in await list_installation_member_emails(pool, installation_id):
+                enqueue_transactional_email(
+                    redis_url,
+                    dedupe_key=f"{template_name}:{event_id}:{member_email}",
+                    template_name=template_name,
+                    template_arg=account_login,
+                    to_email=member_email,
+                    installation_id=installation_id,
+                )
 
 
 @paddle_webhook_router.post("/webhooks/paddle")

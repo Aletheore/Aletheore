@@ -41,7 +41,8 @@ async def pool():
         for migration in sorted(migrations_dir.glob("*.sql")):
             await conn.execute(migration.read_text())
         await conn.execute(
-            "TRUNCATE installations, sessions, demo_scan_rate_limits, cli_telemetry_events CASCADE"
+            "TRUNCATE installations, sessions, demo_scan_rate_limits, cli_telemetry_events, "
+            "github_user_emails, sent_emails CASCADE"
         )
     yield p
     await p.close()

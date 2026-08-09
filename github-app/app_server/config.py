@@ -22,6 +22,9 @@ class Settings:
     paddle_api_key: str | None
     github_app_slug: str
     github_demo_readonly_token: str | None
+    resend_api_key: str | None
+    email_from_address: str
+    email_reply_to_address: str
 
 
 def _required_env(name: str) -> str:
@@ -110,4 +113,18 @@ def get_settings() -> Settings:
         # token) - a public_repo-scoped read-only PAT is enough, and the
         # demo works without one, just at a much lower shared ceiling.
         github_demo_readonly_token=os.environ.get("GITHUB_DEMO_READONLY_TOKEN", "").strip() or None,
+        # Optional, not required: transactional email is additive - a
+        # missing key means send_transactional_email_job logs and skips
+        # rather than the server refusing to start, since nothing else
+        # depends on outbound mail actually working.
+        resend_api_key=os.environ.get("RESEND_API_KEY", "").strip() or None,
+        # notify.aletheore.com is a dedicated sending-only subdomain (no
+        # receiving capability) so transactional volume never touches
+        # aletheore.com's own reputation or the Hostinger-hosted MX that
+        # support@aletheore.com actually receives on. Replies still need
+        # somewhere real to land, hence email_reply_to_address below.
+        email_from_address=os.environ.get(
+            "EMAIL_FROM_ADDRESS", "Aletheore <hello@notify.aletheore.com>"
+        ),
+        email_reply_to_address=os.environ.get("EMAIL_REPLY_TO_ADDRESS", "support@aletheore.com"),
     )

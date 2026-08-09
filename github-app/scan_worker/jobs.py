@@ -48,6 +48,7 @@ from scan_worker.db import (
     delete_docs_symbols_not_in,
     delete_expired_sessions,
     delete_wiki_subsystems_not_in,
+    email_already_sent,
     get_extra_seats,
     get_flash_review_count_this_month,
     get_installation as get_installation_row,
@@ -68,6 +69,7 @@ from scan_worker.db import (
     list_wiki_subsystems,
     record_docs_catchup_swept,
     record_llm_spend,
+    record_sent_email,
     set_docs_build_status,
     set_last_reviewed_sha,
     set_wiki_build_status,
@@ -98,6 +100,12 @@ from scan_worker.github_api import (
     fetch_pr_diff,
     upsert_pr_comment,
 )
+from app_server.email_templates import (
+    payment_failed_email,
+    subscription_canceled_email,
+    welcome_email,
+)
+from scan_worker.email import send_transactional_email
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.model_tiers import PRO_MODEL, model_for_plan, writing_adapter_for_plan
 from scan_worker.packet_cache import lookup_cached_result, store_result
@@ -1842,6 +1850,65 @@ def run_session_cleanup_job() -> None:
     deleted = delete_expired_sessions(dsn)
     logging.getLogger("scan_worker.jobs").info(
         "session cleanup completed", extra={"deleted_count": deleted}
+    )
+
+
+# Each template function takes exactly one positional string arg
+# (github_login for welcome, account_login for the Paddle-triggered ones)
+# and returns {"subject", "html", "text"} - see app_server/email_templates.py.
+_EMAIL_TEMPLATES = {
+    "welcome": welcome_email,
+    "payment_failed": payment_failed_email,
+    "subscription_canceled": subscription_canceled_email,
+}
+
+
+@log_job
+def send_transactional_email_job(
+    dedupe_key: str,
+    template_name: str,
+    template_arg: str,
+    to_email: str,
+    installation_id: int | None = None,
+) -> None:
+    """Runs on the "email" queue (see scheduler.py/health_worker.py), never
+    "scans" - same reasoning as the health sweep's own queue split: a slow
+    AI job must never delay a time-sensitive email like payment-failed.
+
+    dedupe_key must be globally unique per logical send (e.g.
+    "payment_failed:{paddle_event_id}", "welcome:{github_login}") - Paddle
+    webhooks are at-least-once delivery, so this is what stops a retried
+    webhook from double-sending.
+    """
+    dsn = get_settings().database_url
+    logger = logging.getLogger("scan_worker.jobs")
+
+    if email_already_sent(dsn, dedupe_key):
+        logger.info("email already sent, skipping", extra={"dedupe_key": dedupe_key})
+        return
+
+    settings = get_settings()
+    if not settings.resend_api_key:
+        logger.warning(
+            "RESEND_API_KEY not configured, skipping email", extra={"dedupe_key": dedupe_key}
+        )
+        return
+
+    render = _EMAIL_TEMPLATES[template_name]
+    message = render(template_arg)
+
+    result = send_transactional_email(
+        settings.resend_api_key,
+        settings.email_from_address,
+        settings.email_reply_to_address,
+        to_email,
+        message["subject"],
+        message["html"],
+        message["text"],
+    )
+
+    record_sent_email(
+        dsn, dedupe_key, template_name, to_email, installation_id, result.get("id")
     )
 
 

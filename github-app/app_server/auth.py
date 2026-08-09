@@ -14,7 +14,14 @@ from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from app_server.config import get_settings
-from app_server.db import create_session, delete_session, get_session, upsert_installation
+from app_server.db import (
+    create_session,
+    delete_session,
+    get_session,
+    upsert_github_user_email,
+    upsert_installation,
+)
+from app_server.email_queue import enqueue_transactional_email
 from app_server.github_auth import generate_app_jwt, get_installation_details
 
 SESSION_COOKIE_NAME = "session"
@@ -63,9 +70,29 @@ def _github_http_client() -> httpx.Client:
     return httpx.Client(base_url="https://api.github.com")
 
 
+def _fetch_primary_verified_email(access_token: str) -> str | None:
+    # /user's own "email" field only reflects a user's public-profile
+    # email setting (often unset) regardless of scope - the verified
+    # primary address needs user:email scope plus this separate call.
+    response = _github_http_client().get(
+        "/user/emails",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    response.raise_for_status()
+    emails = response.json()
+    primary = next((e for e in emails if e.get("primary") and e.get("verified")), None)
+    if primary:
+        return primary["email"]
+    verified = next((e for e in emails if e.get("verified")), None)
+    return verified["email"] if verified else None
+
+
 def _exchange_code_and_fetch_user(
     code: str, client_id: str, client_secret: str
-) -> tuple[str, str | None, dict]:
+) -> tuple[str, str | None, dict, str | None]:
     # Synchronous httpx.Client calls, run off the event loop via
     # asyncio.to_thread by the caller - this whole function otherwise blocks
     # every other request the server is handling for its duration.
@@ -89,7 +116,19 @@ def _exchange_code_and_fetch_user(
         },
     )
     user_response.raise_for_status()
-    return access_token, refresh_token, user_response.json()
+    user = user_response.json()
+
+    email = None
+    try:
+        email = _fetch_primary_verified_email(access_token)
+    except httpx.HTTPStatusError:
+        # A pre-existing session predating the user:email scope (until the
+        # user next consents to it) or a transient GitHub API failure -
+        # sign-in must not break because email capture did. Retried
+        # automatically on the user's next login.
+        pass
+
+    return access_token, refresh_token, user, email
 
 
 def refresh_github_access_token(
@@ -223,7 +262,7 @@ async def callback(code: str, request: Request, state: str | None = None, instal
         if not expected_state or not state or not hmac.compare_digest(expected_state, state):
             raise HTTPException(status_code=400, detail="invalid oauth state")
 
-    access_token, refresh_token, user = await asyncio.to_thread(
+    access_token, refresh_token, user, email = await asyncio.to_thread(
         _exchange_code_and_fetch_user, code, settings.github_client_id, settings.github_client_secret
     )
 
@@ -239,6 +278,23 @@ async def callback(code: str, request: Request, state: str | None = None, instal
         if refresh_token
         else None,
     )
+
+    if email:
+        # Best-effort, same discipline as the installation upsert below:
+        # a captured email (or the welcome email itself) failing to save
+        # must never break sign-in, the critical path here.
+        try:
+            is_new_email = await upsert_github_user_email(request.app.state.db_pool, user["login"], email)
+            if is_new_email:
+                enqueue_transactional_email(
+                    settings.redis_url,
+                    dedupe_key=f"welcome:{user['login']}",
+                    template_name="welcome",
+                    template_arg=user["login"],
+                    to_email=email,
+                )
+        except Exception:
+            logger.warning("failed to capture email / enqueue welcome email for %s", user["login"], exc_info=True)
 
     if installation_id is not None:
         # A direct "Install" click lands here with installation_id already in

@@ -348,6 +348,26 @@ async def is_installation_member(pool: asyncpg.Pool, installation_id: int, githu
     return row is not None
 
 
+async def list_installation_member_emails(pool: asyncpg.Pool, installation_id: int) -> list[str]:
+    """Emails for every member of this installation who has logged in at
+    least once (and so has a captured row in github_user_emails). Members
+    added by username alone (see add_installation_member) but who've
+    never signed in have no email on file yet, by design - inviting a
+    not-yet-logged-in seat by email is an explicit v2, not v1, for
+    transactional email.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT e.email
+        FROM installation_members m
+        JOIN github_user_emails e ON e.github_login = m.github_login
+        WHERE m.installation_id = $1
+        """,
+        installation_id,
+    )
+    return [row["email"] for row in rows]
+
+
 # Health check targets live behind the same paid-plan gate as the rest of
 # Settings (_require_admin_installation rejects free plans before any of
 # this is ever reached), so there is no meaningful "free" entry here.
@@ -595,6 +615,28 @@ async def create_session(
         expires_at,
         refresh_token,
     )
+
+
+async def upsert_github_user_email(pool: asyncpg.Pool, github_login: str, email: str) -> bool:
+    """Upserts the email captured via GitHub's user:email OAuth scope on
+    every login - self-heals if the user's GitHub email changes, and
+    deliberately kept separate from sessions (which expire and get pruned
+    by run_session_cleanup_job) since transactional email needs an
+    address that outlives any one session. Returns True only the first
+    time an email is ever recorded for this login, which auth.py's
+    callback uses to decide whether to enqueue the one-time welcome email.
+    """
+    row = await pool.fetchrow(
+        """
+        INSERT INTO github_user_emails (github_login, email, updated_at)
+        VALUES ($1, $2, now())
+        ON CONFLICT (github_login) DO UPDATE SET email = $2, updated_at = now()
+        RETURNING (xmax = 0) AS inserted
+        """,
+        github_login,
+        email,
+    )
+    return row["inserted"]
 
 
 async def get_session(pool: asyncpg.Pool, session_id: str) -> dict | None:

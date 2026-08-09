@@ -492,3 +492,123 @@ def test_refresh_github_access_token_raises_when_github_reports_an_error(monkeyp
 
     with pytest.raises(RuntimeError):
         refresh_github_access_token("ghr_deadrefresh", "client-id", "client-secret")
+
+
+def _mock_github_clients(monkeypatch, handler):
+    monkeypatch.setattr(
+        "app_server.auth._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+    monkeypatch.setattr(
+        "app_server.auth._github_oauth_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
+    )
+
+
+def _handler_with_emails(emails: list[dict]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gho_faketoken"})
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 42, "login": "octocat"})
+        if request.url.path == "/user/emails":
+            return httpx.Response(200, json=emails)
+        return httpx.Response(404)
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_callback_captures_email_and_enqueues_welcome_on_first_login(pool, monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    _mock_github_clients(
+        monkeypatch,
+        _handler_with_emails(
+            [
+                {"email": "old@example.com", "primary": False, "verified": True},
+                {"email": "octocat@example.com", "primary": True, "verified": True},
+            ]
+        ),
+    )
+
+    enqueue_calls = []
+    monkeypatch.setattr(
+        "app_server.auth.enqueue_transactional_email",
+        lambda redis_url, **kwargs: enqueue_calls.append(kwargs),
+    )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        login_response = await client.get("/auth/login", follow_redirects=False)
+        state = login_response.headers["location"].split("state=")[1]
+        response = await client.get(
+            f"/auth/callback?code=fake-code&state={state}", follow_redirects=False
+        )
+
+    assert response.status_code == 307
+    row = await pool.fetchrow("SELECT email FROM github_user_emails WHERE github_login = 'octocat'")
+    assert row["email"] == "octocat@example.com"
+
+    assert len(enqueue_calls) == 1
+    assert enqueue_calls[0]["dedupe_key"] == "welcome:octocat"
+    assert enqueue_calls[0]["template_name"] == "welcome"
+    assert enqueue_calls[0]["template_arg"] == "octocat"
+    assert enqueue_calls[0]["to_email"] == "octocat@example.com"
+
+
+@pytest.mark.asyncio
+async def test_callback_does_not_reenqueue_welcome_on_second_login(pool, monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    _mock_github_clients(
+        monkeypatch,
+        _handler_with_emails([{"email": "octocat@example.com", "primary": True, "verified": True}]),
+    )
+
+    enqueue_calls = []
+    monkeypatch.setattr(
+        "app_server.auth.enqueue_transactional_email",
+        lambda redis_url, **kwargs: enqueue_calls.append(kwargs),
+    )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        for _ in range(2):
+            login_response = await client.get("/auth/login", follow_redirects=False)
+            state = login_response.headers["location"].split("state=")[1]
+            await client.get(f"/auth/callback?code=fake-code&state={state}", follow_redirects=False)
+
+    assert len(enqueue_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_callback_degrades_gracefully_when_email_permission_not_granted(pool, monkeypatch):
+    # The GitHub App's "Email addresses" account permission (see auth.py's
+    # _fetch_primary_verified_email comment) not yet granted for this user
+    # surfaces as a 403 on /user/emails - sign-in must still succeed.
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login/oauth/access_token":
+            return httpx.Response(200, json={"access_token": "gho_faketoken"})
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 42, "login": "octocat"})
+        if request.url.path == "/user/emails":
+            return httpx.Response(403, json={"message": "missing permission"})
+        return httpx.Response(404)
+
+    _mock_github_clients(monkeypatch, handler)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        login_response = await client.get("/auth/login", follow_redirects=False)
+        state = login_response.headers["location"].split("state=")[1]
+        response = await client.get(
+            f"/auth/callback?code=fake-code&state={state}", follow_redirects=False
+        )
+
+    assert response.status_code == 307
+    row = await pool.fetchrow("SELECT 1 FROM github_user_emails WHERE github_login = 'octocat'")
+    assert row is None
