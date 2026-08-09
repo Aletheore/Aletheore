@@ -22,6 +22,11 @@ SESSION_CLEANUP_JOB_TIMEOUT_SECONDS = 60
 # above normal runtime for the rare tick where several repos are due at
 # once, same reasoning as HEALTH_SWEEP_JOB_TIMEOUT_SECONDS.
 DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS = 600
+# Reads the due list (a cheap join over installations/digest_sends), then
+# enqueues one send per recipient onto "email" rather than sending inline -
+# the actual Resend calls happen there, not in this job, so this stays
+# bounded even if many installations are due the same tick.
+WEEKLY_DIGEST_SWEEP_JOB_TIMEOUT_SECONDS = 300
 
 SCANS_QUEUE_NAME = "scans"
 # The health sweep gets its own queue, consumed by a dedicated worker (see
@@ -57,6 +62,10 @@ def run_forever(
         scans_queue.enqueue(
             "scan_worker.jobs.run_live_docs_catchup_sweep_job",
             job_timeout=DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS,
+        )
+        scans_queue.enqueue(
+            "scan_worker.jobs.run_weekly_digest_sweep_job",
+            job_timeout=WEEKLY_DIGEST_SWEEP_JOB_TIMEOUT_SECONDS,
         )
         iterations += 1
         if max_iterations is not None and iterations >= max_iterations:

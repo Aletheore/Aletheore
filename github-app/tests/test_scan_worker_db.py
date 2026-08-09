@@ -10,10 +10,12 @@ from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     check_and_reserve_monthly_repo_scan_slot,
+    count_repo_scans_since,
     delete_docs_symbols_not_in,
     delete_expired_sessions,
     delete_wiki_subsystems_not_in,
     email_already_sent,
+    get_endpoint_health_summary,
     get_extra_seats,
     get_last_endpoint_health,
     get_last_reviewed_sha,
@@ -25,9 +27,12 @@ from scan_worker.db import (
     installation_spend_lock,
     list_health_check_targets_all,
     list_docs_symbols,
+    list_installation_member_emails,
+    list_paid_installations_due_for_digest,
     list_paid_repos_due_for_docs_catchup,
     list_repos_for_installation,
     list_wiki_subsystems,
+    record_digest_sent,
     record_docs_catchup_swept,
     record_llm_spend,
     record_sent_email,
@@ -847,3 +852,116 @@ async def test_record_sent_email_ignores_duplicate_dedupe_key(pool):
         "SELECT count(*) FROM sent_emails WHERE dedupe_key = $1", "payment_failed:evt_1:a@x.com"
     )
     assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_list_paid_installations_due_for_digest_excludes_free_plan(pool):
+    await _insert_installation(pool, 800, "paid-co", plan="indie")
+    await _insert_installation(pool, 801, "free-co", plan="free")
+
+    due = list_paid_installations_due_for_digest(TEST_DATABASE_URL, interval_seconds=7 * 86400)
+
+    assert 800 in due
+    assert 801 not in due
+
+
+@pytest.mark.asyncio
+async def test_list_paid_installations_due_for_digest_excludes_recently_sent(pool):
+    await _insert_installation(pool, 802, "paid-co", plan="indie")
+    record_digest_sent(TEST_DATABASE_URL, 802)
+
+    due = list_paid_installations_due_for_digest(TEST_DATABASE_URL, interval_seconds=7 * 86400)
+
+    assert 802 not in due
+
+
+@pytest.mark.asyncio
+async def test_list_paid_installations_due_for_digest_includes_installation_never_sent_to(pool):
+    await _insert_installation(pool, 803, "paid-co", plan="indie")
+
+    due = list_paid_installations_due_for_digest(TEST_DATABASE_URL, interval_seconds=7 * 86400)
+
+    assert 803 in due
+
+
+@pytest.mark.asyncio
+async def test_list_paid_installations_due_for_digest_includes_after_cooldown_elapses(pool):
+    await _insert_installation(pool, 804, "paid-co", plan="indie")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO digest_sends (installation_id, last_sent_at) VALUES ($1, now() - interval '8 days')",
+            804,
+        )
+
+    due = list_paid_installations_due_for_digest(TEST_DATABASE_URL, interval_seconds=7 * 86400)
+
+    assert 804 in due
+
+
+@pytest.mark.asyncio
+async def test_count_repo_scans_since_only_counts_recent_scans(pool):
+    await _insert_installation(pool, 805, "co")
+    insert_repo_history(
+        TEST_DATABASE_URL, 805, "co/repo", datetime.now(timezone.utc) - timedelta(days=10), {}
+    )
+    insert_repo_history(TEST_DATABASE_URL, 805, "co/repo", datetime.now(timezone.utc), {})
+
+    count = count_repo_scans_since(TEST_DATABASE_URL, 805, datetime.now(timezone.utc) - timedelta(days=7))
+
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_endpoint_health_summary_counts_reachable_and_total(pool):
+    await _insert_installation(pool, 806, "co")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable, status_code, latency_ms)
+            VALUES
+                (806, 'co/repo', 'GET', '/a', true, 200, 5.0),
+                (806, 'co/repo', 'GET', '/b', false, NULL, NULL)
+            """
+        )
+
+    summary = get_endpoint_health_summary(TEST_DATABASE_URL, 806)
+
+    assert summary == {"total": 2, "reachable": 1}
+
+
+@pytest.mark.asyncio
+async def test_get_endpoint_health_summary_excludes_stale_rows(pool):
+    await _insert_installation(pool, 807, "co")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable, status_code, checked_at)
+            VALUES
+                (807, 'co/repo', 'GET', '/a', true, 200, now() - interval '1 hour')
+            """
+        )
+
+    summary = get_endpoint_health_summary(TEST_DATABASE_URL, 807, stale_after_seconds=900)
+
+    assert summary == {"total": 0, "reachable": 0}
+
+
+@pytest.mark.asyncio
+async def test_list_installation_member_emails_sync_matches_async_semantics(pool):
+    await _insert_installation(pool, 808, "co")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO installation_members (installation_id, github_login, added_by_github_login) "
+            "VALUES (808, 'alice', 'alice'), (808, 'bob', 'alice')"
+        )
+        await conn.execute(
+            "INSERT INTO github_user_emails (github_login, email) VALUES ('alice', 'alice@example.com')"
+        )
+        # bob was added by username but has never logged in - no email on
+        # file, deliberately excluded.
+
+    emails = list_installation_member_emails(TEST_DATABASE_URL, 808)
+
+    assert emails == ["alice@example.com"]

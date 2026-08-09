@@ -45,10 +45,12 @@ from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     check_and_reserve_monthly_repo_scan_slot,
+    count_repo_scans_since,
     delete_docs_symbols_not_in,
     delete_expired_sessions,
     delete_wiki_subsystems_not_in,
     email_already_sent,
+    get_endpoint_health_summary,
     get_extra_seats,
     get_flash_review_count_this_month,
     get_installation as get_installation_row,
@@ -63,10 +65,13 @@ from scan_worker.db import (
     installation_spend_lock,
     list_docs_symbols,
     list_health_check_targets_all,
+    list_installation_member_emails,
+    list_paid_installations_due_for_digest,
     list_paid_repos_due_for_docs_catchup,
     list_recent_endpoint_incidents,
     list_repos_for_installation,
     list_wiki_subsystems,
+    record_digest_sent,
     record_docs_catchup_swept,
     record_llm_spend,
     record_sent_email,
@@ -103,8 +108,10 @@ from scan_worker.github_api import (
 from app_server.email_templates import (
     payment_failed_email,
     subscription_canceled_email,
+    weekly_digest_email,
     welcome_email,
 )
+from app_server.email_queue import enqueue_transactional_email
 from scan_worker.email import send_transactional_email
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.model_tiers import PRO_MODEL, model_for_plan, writing_adapter_for_plan
@@ -1860,6 +1867,7 @@ _EMAIL_TEMPLATES = {
     "welcome": welcome_email,
     "payment_failed": payment_failed_email,
     "subscription_canceled": subscription_canceled_email,
+    "weekly_digest": weekly_digest_email,
 }
 
 
@@ -1867,7 +1875,7 @@ _EMAIL_TEMPLATES = {
 def send_transactional_email_job(
     dedupe_key: str,
     template_name: str,
-    template_arg: str,
+    template_arg: str | dict,
     to_email: str,
     installation_id: int | None = None,
 ) -> None:
@@ -1879,6 +1887,10 @@ def send_transactional_email_job(
     "payment_failed:{paddle_event_id}", "welcome:{github_login}") - Paddle
     webhooks are at-least-once delivery, so this is what stops a retried
     webhook from double-sending.
+
+    template_arg is a single positional string for the single-value
+    templates (welcome/payment_failed/subscription_canceled), or a dict of
+    keyword args for multi-value ones (weekly_digest).
     """
     dsn = get_settings().database_url
     logger = logging.getLogger("scan_worker.jobs")
@@ -1895,7 +1907,7 @@ def send_transactional_email_job(
         return
 
     render = _EMAIL_TEMPLATES[template_name]
-    message = render(template_arg)
+    message = render(**template_arg) if isinstance(template_arg, dict) else render(template_arg)
 
     result = send_transactional_email(
         settings.resend_api_key,
@@ -1910,6 +1922,66 @@ def send_transactional_email_job(
     record_sent_email(
         dsn, dedupe_key, template_name, to_email, installation_id, result.get("id")
     )
+
+
+WEEKLY_DIGEST_INTERVAL_SECONDS = 7 * 24 * 3600
+
+
+@log_job
+def run_weekly_digest_sweep_job() -> None:
+    """Runs on "scans" (see scheduler.py), same placement as the docs
+    catch-up sweep - a few hours of scheduling slop on a weekly cadence is
+    fine, this doesn't need "email" queue urgency. Gathers each due
+    installation's data here (cheap DB reads) and enqueues one send per
+    member onto "email" - not sent inline, so this sweep never blocks on
+    N sequential Resend calls.
+    """
+    dsn = get_settings().database_url
+    settings = get_settings()
+    logger = logging.getLogger("scan_worker.jobs")
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    week_key = datetime.now(timezone.utc).strftime("%G-W%V")
+
+    for installation_id in list_paid_installations_due_for_digest(dsn, WEEKLY_DIGEST_INTERVAL_SECONDS):
+        try:
+            installation = get_installation_row(dsn, installation_id)
+            if installation is None:
+                continue
+
+            context = {
+                "account_login": installation["account_login"],
+                "scans_this_week": count_repo_scans_since(dsn, installation_id, since),
+                "llm_spend_month_to_date": get_llm_spend_this_month(dsn, installation_id),
+                "flash_reviews_month_to_date": get_flash_review_count_this_month(dsn, installation_id),
+            }
+            endpoint_summary = get_endpoint_health_summary(dsn, installation_id)
+            context["endpoints_reachable"] = endpoint_summary["reachable"]
+            context["endpoints_total"] = endpoint_summary["total"]
+
+            for member_email in list_installation_member_emails(dsn, installation_id):
+                enqueue_transactional_email(
+                    settings.redis_url,
+                    dedupe_key=f"weekly_digest:{installation_id}:{week_key}:{member_email}",
+                    template_name="weekly_digest",
+                    template_arg=context,
+                    to_email=member_email,
+                    installation_id=installation_id,
+                )
+
+            # Recorded after enqueueing, not before: if this installation
+            # errors partway through, the next tick retries it from
+            # scratch - safe, since each individual send is separately
+            # deduped by sent_emails, so already-sent members are skipped
+            # rather than double-emailed.
+            record_digest_sent(dsn, installation_id)
+        except Exception:  # noqa: BLE001
+            # One installation's bad data (a missing row, a query hiccup)
+            # must not take down the digest for every other paying
+            # customer due this tick - matches the health sweep's own
+            # per-target isolation.
+            logger.warning(
+                "weekly digest sweep failed for installation=%s", installation_id, exc_info=True
+            )
 
 
 def _live_wiki_naming_adapter() -> OpenAICompatibleAdapter:
