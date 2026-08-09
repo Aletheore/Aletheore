@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from scan_worker.email import send_transactional_email
+from app_server.email_client import send_transactional_email
 
 
 def test_send_transactional_email_posts_expected_payload():

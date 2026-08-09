@@ -15,7 +15,7 @@ import logging
 import time
 
 from app_server.config import get_settings
-from scan_worker.email import send_transactional_email
+from app_server.email_client import send_transactional_email
 
 logger = logging.getLogger("app_server.error_alerts")
 
