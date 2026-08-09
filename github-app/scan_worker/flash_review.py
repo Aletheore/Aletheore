@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 from aletheore.evidence_resolution import (
     attach_dependency_evidence,
@@ -59,8 +60,8 @@ def files_missing_from_review_context(
 ) -> list[str]:
     """Changed files whose real content never reached the review.
 
-    gather_file_context and fetch_changed_file_contents both stop at
-    MAX_CONTEXT_FILES and skip anything over MAX_CONTEXT_FILE_BYTES, so on
+    fetch_review_file_context stops at MAX_CONTEXT_FILES and skips anything
+    over MAX_CONTEXT_FILE_BYTES, so on
     a PR touching more than 15 files - or any file over 40KB - the excess
     is invisible to the model *and* to the citation check, which passes any
     finding whose file content it doesn't have (see
@@ -72,49 +73,67 @@ def files_missing_from_review_context(
     return [path for path in changed_files if path not in file_contents]
 
 
-def gather_file_context(
+MAX_FILE_FETCH_WORKERS = 8
+
+
+def fetch_review_file_context(
     client,
     token: str,
     repo_full_name: str,
     changed_files: list[str],
     head_ref: str,
-) -> str:
+) -> tuple[str, dict[str, str]]:
+    """One fetch pass over changed_files[:MAX_CONTEXT_FILES], producing both
+    the formatted prompt blob (file_context, capped by
+    MAX_CONTEXT_TOTAL_BYTES and truncated in original diff order once that
+    budget is hit) and the structured path->content lookup used by
+    _line_citation_content_matches for verification (file_contents, capped
+    only per-file - no total budget, since a citation check needs the real
+    content of every file that was actually read regardless of whether it
+    made it into the prompt).
+
+    This used to be two separate functions (gather_file_context,
+    fetch_changed_file_contents) that each looped over the same file list
+    and issued their own GET per file - fetching every changed file's
+    content from GitHub twice for no reason. Fetched once here, concurrently
+    (httpx.Client is safe for concurrent use across threads), since on a
+    real PR this pair of loops was a measurable chunk of Flash review's
+    end-to-end latency (a single review was clocked at 5m50s in production,
+    well past the job's old 180s timeout - see FLASH_REVIEW_JOB_TIMEOUT_SECONDS
+    in app_server/webhooks/pull_request.py)."""
+    paths = changed_files[:MAX_CONTEXT_FILES]
+    raw_contents: dict[str, str] = {}
+    if paths:
+        with ThreadPoolExecutor(max_workers=min(MAX_FILE_FETCH_WORKERS, len(paths))) as pool:
+            futures = {
+                pool.submit(fetch_file_content, client, token, repo_full_name, path, head_ref): path
+                for path in paths
+            }
+            for future, path in futures.items():
+                content = future.result()
+                if content is not None:
+                    raw_contents[path] = content
+
+    file_contents = {
+        path: content
+        for path, content in raw_contents.items()
+        if len(content.encode("utf-8")) <= MAX_CONTEXT_FILE_BYTES
+    }
+
     parts = []
     total_bytes = 0
-    for path in changed_files[:MAX_CONTEXT_FILES]:
-        content = fetch_file_content(client, token, repo_full_name, path, head_ref)
+    for path in paths:
+        content = file_contents.get(path)
         if content is None:
             continue
         encoded_len = len(content.encode("utf-8"))
-        if encoded_len > MAX_CONTEXT_FILE_BYTES:
-            continue
         if total_bytes + encoded_len > MAX_CONTEXT_TOTAL_BYTES:
             break
         parts.append(f"--- full content: {path} ---\n{content}")
         total_bytes += encoded_len
-    return "\n\n".join(parts)
+    file_context = "\n\n".join(parts)
 
-
-def fetch_changed_file_contents(
-    client,
-    token: str,
-    repo_full_name: str,
-    changed_files: list[str],
-    head_ref: str,
-) -> dict[str, str]:
-    """Structured file->content lookup for _line_citation_content_matches -
-    a parallel fetch to gather_file_context's formatted prompt blob, since
-    that function's return type (one joined string) can't answer "what's
-    the real content of this specific file" for verification."""
-    contents = {}
-    for path in changed_files[:MAX_CONTEXT_FILES]:
-        content = fetch_file_content(client, token, repo_full_name, path, head_ref)
-        if content is None:
-            continue
-        if len(content.encode("utf-8")) > MAX_CONTEXT_FILE_BYTES:
-            continue
-        contents[path] = content
-    return contents
+    return file_context, file_contents
 
 
 def build_code_evidence_context(evidence: dict | None, changed_files: list[str]) -> str:

@@ -85,9 +85,8 @@ from scan_worker.db import (
 from scan_worker.flash_review import (
     build_code_evidence_context,
     build_referenced_symbol_context,
-    fetch_changed_file_contents,
+    fetch_review_file_context,
     files_missing_from_review_context,
-    gather_file_context,
     is_non_substantive_diff,
     review_diff,
 )
@@ -1218,8 +1217,9 @@ def _run_flash_review(
     if is_non_substantive_diff(changed_files):
         findings: list[dict] = []
     else:
-        file_context = gather_file_context(client, token, repo_full_name, changed_files, head_sha)
-        file_contents = fetch_changed_file_contents(client, token, repo_full_name, changed_files, head_sha)
+        file_context, file_contents = fetch_review_file_context(
+            client, token, repo_full_name, changed_files, head_sha
+        )
         skipped_files = files_missing_from_review_context(changed_files, file_contents)
         if skipped_files:
             logging.getLogger("scan_worker.jobs").info(
