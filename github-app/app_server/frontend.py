@@ -381,6 +381,31 @@ async function apiGet(url) {
   }
   return res;
 }
+async function apiPost(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    window.location.href = '/auth/logout';
+    return null;
+  }
+  if (!res.ok) {
+    console.error('apiPost failed: ' + url + ' -> ' + res.status);
+    return null;
+  }
+  return res;
+}
+function findingIdentityKey(findingType, f) {
+  // Mirrors app_server/dismissed_findings.py's finding_identity_key() -
+  // identity is always recomputed server-side on dismiss/undismiss (never
+  // trusted from the client); this is only used client-side to check
+  // membership against the dismissed_finding_keys set the read endpoint
+  // already returns.
+  if (findingType === 'secret') return f.path + '\x1f' + f.pattern + '\x1f' + f.match_preview;
+  return f.ecosystem + '\x1f' + f.package + '\x1f' + f.advisory_id;
+}
 function relativeTime(iso) {
   const diffMs = Date.now() - new Date(iso).getTime();
   const mins = Math.round(diffMs / 60000);
@@ -692,9 +717,14 @@ async function loadOverview() {{
   const evidence = latest.evidence || {{}};
   document.getElementById('last-scanned').textContent = 'Last scanned ' + relativeTime(latest.scanned_at);
 
+  const dismissedKeys = data.dismissed_finding_keys || {{ secret: [], vulnerability: [] }};
   const security = evidence.security || {{}};
-  const secretFindings = ((security.secrets || {{}}).findings || []).filter(function (f) {{ return !f.likely_placeholder && !f.accepted; }});
-  const vulnFindings = (security.dependency_vulnerabilities || {{}}).findings || [];
+  const secretFindings = ((security.secrets || {{}}).findings || []).filter(function (f) {{
+    return !f.likely_placeholder && !f.accepted && dismissedKeys.secret.indexOf(findingIdentityKey('secret', f)) === -1;
+  }});
+  const vulnFindings = ((security.dependency_vulnerabilities || {{}}).findings || []).filter(function (f) {{
+    return dismissedKeys.vulnerability.indexOf(findingIdentityKey('vulnerability', f)) === -1;
+  }});
   const totalFindings = secretFindings.length + vulnFindings.length;
   document.getElementById('summary-title').textContent =
     totalFindings === 0 ? repo + ' is clean in the latest scan' : repo + ' has ' + totalFindings + ' open finding' + (totalFindings === 1 ? '' : 's');
@@ -783,6 +813,61 @@ SECURITY_HTML = _page_head("Security findings — {repo} — Aletheore") + _shel
 {FETCH_HELPERS}
 {PAGE_HEAD_JS}
 
+function findingActionButtonHtml(findingType, f, label, handler) {{
+  if (findingType === 'secret') {{
+    return '<button class="btn" data-type="secret" data-path="' + escapeHtml(f.path) +
+      '" data-pattern="' + escapeHtml(f.pattern) + '" data-match-preview="' + escapeHtml(f.match_preview) +
+      '" onclick="' + handler + '(this)">' + label + '</button>';
+  }}
+  return '<button class="btn" data-type="vulnerability" data-ecosystem="' + escapeHtml(f.ecosystem) +
+    '" data-package="' + escapeHtml(f.package) + '" data-advisory-id="' + escapeHtml(f.advisory_id) +
+    '" onclick="' + handler + '(this)">' + label + '</button>';
+}}
+
+function findingPayloadFromButton(btn) {{
+  if (btn.dataset.type === 'secret') {{
+    return {{
+      finding_type: 'secret',
+      finding: {{ path: btn.dataset.path, pattern: btn.dataset.pattern, match_preview: btn.dataset.matchPreview }},
+    }};
+  }}
+  return {{
+    finding_type: 'vulnerability',
+    finding: {{ ecosystem: btn.dataset.ecosystem, package: btn.dataset.package, advisory_id: btn.dataset.advisoryId }},
+  }};
+}}
+
+async function dismissFinding(btn) {{
+  btn.disabled = true;
+  await apiPost(base + '/findings/dismiss', findingPayloadFromButton(btn));
+  loadSecurity();
+}}
+
+async function undismissFinding(btn) {{
+  btn.disabled = true;
+  await apiPost(base + '/findings/undismiss', findingPayloadFromButton(btn));
+  loadSecurity();
+}}
+
+function toggleDismissedFindings(event, dismissedSecretFindings, dismissedVulnFindings) {{
+  event.preventDefault();
+  const el = document.getElementById('dismissed-findings-body');
+  if (el.style.display !== 'none') {{ el.style.display = 'none'; return; }}
+  let rows = '';
+  dismissedSecretFindings.forEach(function (f) {{
+    rows += '<tr><td><span class="finding-title">Possible ' + escapeHtml(f.pattern) + ' secret</span></td>' +
+      '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
+      '<td>' + findingActionButtonHtml('secret', f, 'Undismiss', 'undismissFinding') + '</td></tr>';
+  }});
+  dismissedVulnFindings.forEach(function (f) {{
+    rows += '<tr><td><span class="finding-title">' + escapeHtml(f.advisory_id) + ': ' + escapeHtml(f.summary || 'known vulnerability') + '</span></td>' +
+      '<td class="finding-cite">' + escapeHtml(f.package) + '@' + escapeHtml(f.installed_version) + '</td>' +
+      '<td>' + findingActionButtonHtml('vulnerability', f, 'Undismiss', 'undismissFinding') + '</td></tr>';
+  }});
+  el.innerHTML = '<table class="findings" style="opacity:0.7"><thead><tr><th>Finding</th><th>Evidence</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+  el.style.display = 'block';
+}}
+
 async function loadSecurity() {{
   const res = await apiGet(base);
   const body = document.getElementById('security-body');
@@ -791,27 +876,48 @@ async function loadSecurity() {{
   const data = await res.json();
   const history = data.history || [];
   if (history.length === 0) {{ body.innerHTML = '<div class="empty-state">No scans yet.</div>'; return; }}
+  const dismissedKeys = data.dismissed_finding_keys || {{ secret: [], vulnerability: [] }};
   const evidence = history[0].evidence || {{}};
   const security = evidence.security || {{}};
-  const secretFindings = ((security.secrets || {{}}).findings || []).filter(function (f) {{ return !f.likely_placeholder && !f.accepted; }});
-  const vulnFindings = (security.dependency_vulnerabilities || {{}}).findings || [];
+  const allSecretFindings = ((security.secrets || {{}}).findings || []).filter(function (f) {{ return !f.likely_placeholder && !f.accepted; }});
+  const allVulnFindings = (security.dependency_vulnerabilities || {{}}).findings || [];
+
+  const secretFindings = allSecretFindings.filter(function (f) {{ return dismissedKeys.secret.indexOf(findingIdentityKey('secret', f)) === -1; }});
+  const vulnFindings = allVulnFindings.filter(function (f) {{ return dismissedKeys.vulnerability.indexOf(findingIdentityKey('vulnerability', f)) === -1; }});
+  const dismissedSecretFindings = allSecretFindings.filter(function (f) {{ return dismissedKeys.secret.indexOf(findingIdentityKey('secret', f)) !== -1; }});
+  const dismissedVulnFindings = allVulnFindings.filter(function (f) {{ return dismissedKeys.vulnerability.indexOf(findingIdentityKey('vulnerability', f)) !== -1; }});
+  const dismissedCount = dismissedSecretFindings.length + dismissedVulnFindings.length;
 
   if (secretFindings.length === 0 && vulnFindings.length === 0) {{
     body.innerHTML = '<div class="empty-state">No open findings.</div>';
+    if (dismissedCount > 0) {{
+      body.innerHTML += '<p class="section-sub" style="margin-top:16px"><a href="#" onclick="toggleDismissedFindings(event, window._dismissedSecretFindings, window._dismissedVulnFindings)">Show dismissed (' + dismissedCount + ')</a></p>' +
+        '<div id="dismissed-findings-body" style="display:none"></div>';
+    }}
+    window._dismissedSecretFindings = dismissedSecretFindings;
+    window._dismissedVulnFindings = dismissedVulnFindings;
     return;
   }}
   let rows = '';
   secretFindings.forEach(function (f) {{
     rows += '<tr><td><span class="sev-stripe critical"></span><span class="finding-title">Possible ' + escapeHtml(f.pattern) + ' secret</span></td>' +
       '<td class="finding-cite">' + escapeHtml(f.path) + ':' + f.line + '</td>' +
-      '<td><span class="chip critical">Critical</span></td></tr>';
+      '<td><span class="chip critical">Critical</span></td>' +
+      '<td>' + findingActionButtonHtml('secret', f, 'Dismiss', 'dismissFinding') + '</td></tr>';
   }});
   vulnFindings.forEach(function (f) {{
     rows += '<tr><td><span class="sev-stripe warning"></span><span class="finding-title">' + escapeHtml(f.advisory_id) + ': ' + escapeHtml(f.summary || 'known vulnerability') + '</span></td>' +
       '<td class="finding-cite">' + escapeHtml(f.package) + '@' + escapeHtml(f.installed_version) + '</td>' +
-      '<td><span class="chip warning">Warning</span></td></tr>';
+      '<td><span class="chip warning">Warning</span></td>' +
+      '<td>' + findingActionButtonHtml('vulnerability', f, 'Dismiss', 'dismissFinding') + '</td></tr>';
   }});
-  body.innerHTML = '<table class="findings"><thead><tr><th>Finding</th><th>Evidence</th><th>Severity</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  body.innerHTML = '<table class="findings"><thead><tr><th>Finding</th><th>Evidence</th><th>Severity</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>';
+  if (dismissedCount > 0) {{
+    body.innerHTML += '<p class="section-sub" style="margin-top:16px"><a href="#" onclick="toggleDismissedFindings(event, window._dismissedSecretFindings, window._dismissedVulnFindings)">Show dismissed (' + dismissedCount + ')</a></p>' +
+      '<div id="dismissed-findings-body" style="display:none"></div>';
+  }}
+  window._dismissedSecretFindings = dismissedSecretFindings;
+  window._dismissedVulnFindings = dismissedVulnFindings;
 }}
 
 loadSecurity();

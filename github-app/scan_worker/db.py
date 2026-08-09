@@ -347,6 +347,29 @@ def get_installation(dsn: str, installation_id: int) -> dict | None:
             return dict(zip(columns, row))
 
 
+def get_dismissed_identity_keys(dsn: str, installation_id: int, repo_full_name: str) -> dict[str, set[str]]:
+    """Sync counterpart to app_server/dismissed_findings.py's async version
+    of the same read, for use in RQ job code (which runs synchronously, not
+    on the app_server's asyncpg pool). Used by the PR-scan job to filter
+    already-dismissed findings out of a diff before posting a PR comment -
+    see app_server/dismissed_findings.py's filter_dismissed()."""
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT finding_type, identity_key FROM dismissed_findings
+                WHERE installation_id = %s AND repo_full_name = %s
+                """,
+                (installation_id, repo_full_name),
+            )
+            result: dict[str, set[str]] = {"secret": set(), "vulnerability": set()}
+            for finding_type, identity_key in cur.fetchall():
+                result[finding_type].add(identity_key)
+            return result
+
+
 def list_health_check_targets_all(dsn: str) -> list[dict]:
     """Every configured health check target across every paid installation -
     the health sweep job's worklist. One row per target, not per

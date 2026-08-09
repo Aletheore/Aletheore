@@ -35,6 +35,7 @@ from aletheore.healthcheck import run_healthcheck
 from aletheore.signature_diff import find_regression_fence_violations
 from app_server.config import get_settings
 from app_server.db import MAX_SCANNED_REPOS_PER_MONTH
+from app_server.dismissed_findings import filter_dismissed
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation
 from app_server.logging_config import log_job
@@ -51,6 +52,7 @@ from scan_worker.db import (
     delete_expired_sessions,
     delete_wiki_subsystems_not_in,
     email_already_sent,
+    get_dismissed_identity_keys,
     get_docs_repo_commit_settings,
     get_endpoint_health_summary,
     get_extra_seats,
@@ -716,6 +718,18 @@ def run_pr_scan_job(
         old = json.loads(base_evidence_path.read_text())
         new = json.loads(head_evidence_path.read_text())
         diff = compute_diff(old, new, full=False)
+        dismissed = get_dismissed_identity_keys(settings.database_url, installation_id, repo_full_name)
+        # history_secrets shares the same (path, pattern, match_preview) identity
+        # space as secrets - accepted_secrets (.aletheore.json) already treats them
+        # as one baseline (secrets.py's _baseline_keys is shared by find_secrets and
+        # find_secrets_in_history), so a "secret" dismissal filters both here too.
+        diff["secrets"]["new"] = filter_dismissed(diff["secrets"]["new"], "secret", dismissed["secret"])
+        diff["history_secrets"]["new"] = filter_dismissed(
+            diff["history_secrets"]["new"], "secret", dismissed["secret"]
+        )
+        diff["vulnerabilities"]["new"] = filter_dismissed(
+            diff["vulnerabilities"]["new"], "vulnerability", dismissed["vulnerability"]
+        )
 
         client = httpx.Client(base_url="https://api.github.com")
         upsert_pr_comment(client, token, repo_full_name, pr_number, format_diff_comment(diff))

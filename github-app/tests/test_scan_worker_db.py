@@ -15,6 +15,7 @@ from scan_worker.db import (
     delete_expired_sessions,
     delete_wiki_subsystems_not_in,
     email_already_sent,
+    get_dismissed_identity_keys,
     get_endpoint_health_summary,
     get_extra_seats,
     get_last_endpoint_health,
@@ -965,3 +966,26 @@ async def test_list_installation_member_emails_sync_matches_async_semantics(pool
     emails = list_installation_member_emails(TEST_DATABASE_URL, 808)
 
     assert emails == ["alice@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_get_dismissed_identity_keys_sync_matches_async_writer(pool):
+    from app_server.dismissed_findings import dismiss_finding, finding_identity_key
+
+    await _insert_installation(pool, 809, "co")
+    secret_finding = {"path": "config.py", "pattern": "aws_access_key_id", "match_preview": "AKIA****...MNOP"}
+    await dismiss_finding(pool, 809, "co/repo", "secret", secret_finding, "octocat")
+
+    dismissed = get_dismissed_identity_keys(TEST_DATABASE_URL, 809, "co/repo")
+
+    assert finding_identity_key("secret", secret_finding) in dismissed["secret"]
+    assert dismissed["vulnerability"] == set()
+
+
+@pytest.mark.asyncio
+async def test_get_dismissed_identity_keys_sync_returns_empty_sets_when_none_dismissed(pool):
+    await _insert_installation(pool, 810, "co")
+
+    dismissed = get_dismissed_identity_keys(TEST_DATABASE_URL, 810, "co/repo")
+
+    assert dismissed == {"secret": set(), "vulnerability": set()}

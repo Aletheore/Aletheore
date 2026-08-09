@@ -564,6 +564,105 @@ async def test_dashboard_returns_data_for_known_repo(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_returns_empty_dismissed_finding_keys_by_default(pool, monkeypatch):
+    await upsert_installation(pool, 1, "octocat")
+    await set_installation_plan(pool, 1, "indie")
+    await insert_repo_history(
+        pool, 1, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[1])
+    async with client:
+        response = await client.get("/app/octocat/hello-world")
+    body = response.json()
+    assert body["dismissed_finding_keys"] == {"secret": [], "vulnerability": []}
+
+
+@pytest.mark.asyncio
+async def test_dismiss_finding_route_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/app/octocat/hello-world/findings/dismiss",
+            json={"finding_type": "secret", "finding": {"path": "a.py", "pattern": "x", "match_preview": "y"}},
+        )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_dismiss_finding_route_rejects_unknown_finding_type(pool, monkeypatch):
+    await upsert_installation(pool, 1, "octocat")
+    await set_installation_plan(pool, 1, "indie")
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[1])
+    async with client:
+        response = await client.post(
+            "/app/octocat/hello-world/findings/dismiss",
+            json={"finding_type": "layer_violation", "finding": {}},
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_dismiss_finding_route_rejects_finding_missing_required_field(pool, monkeypatch):
+    await upsert_installation(pool, 1, "octocat")
+    await set_installation_plan(pool, 1, "indie")
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[1])
+    async with client:
+        response = await client.post(
+            "/app/octocat/hello-world/findings/dismiss",
+            json={"finding_type": "secret", "finding": {"path": "a.py"}},
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_dismiss_finding_route_then_get_dashboard_reflects_it(pool, monkeypatch):
+    await upsert_installation(pool, 1, "octocat")
+    await set_installation_plan(pool, 1, "indie")
+    await insert_repo_history(
+        pool, 1, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[1])
+    finding = {"path": "config.py", "pattern": "aws_access_key_id", "match_preview": "AKIA****...MNOP"}
+    async with client:
+        dismiss_response = await client.post(
+            "/app/octocat/hello-world/findings/dismiss",
+            json={"finding_type": "secret", "finding": finding, "reason": "false positive"},
+        )
+        get_response = await client.get("/app/octocat/hello-world")
+
+    assert dismiss_response.status_code == 200
+    body = get_response.json()
+    assert len(body["dismissed_finding_keys"]["secret"]) == 1
+
+    row = await pool.fetchrow("SELECT reason, dismissed_by FROM dismissed_findings WHERE installation_id = 1")
+    assert row["reason"] == "false positive"
+    assert row["dismissed_by"] == "octocat"
+
+
+@pytest.mark.asyncio
+async def test_undismiss_finding_route_removes_it(pool, monkeypatch):
+    await upsert_installation(pool, 1, "octocat")
+    await set_installation_plan(pool, 1, "indie")
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[1])
+    finding = {"ecosystem": "PyPI", "package": "requests", "advisory_id": "GHSA-1"}
+    async with client:
+        await client.post(
+            "/app/octocat/hello-world/findings/dismiss",
+            json={"finding_type": "vulnerability", "finding": finding},
+        )
+        undismiss_response = await client.post(
+            "/app/octocat/hello-world/findings/undismiss",
+            json={"finding_type": "vulnerability", "finding": finding},
+        )
+        get_response = await client.get("/app/octocat/hello-world")
+
+    assert undismiss_response.status_code == 200
+    body = get_response.json()
+    assert body["dismissed_finding_keys"]["vulnerability"] == []
+
+
+@pytest.mark.asyncio
 async def test_public_health_returns_latest_per_endpoint(pool):
     await upsert_installation(pool, 500, "octocat")
     async with pool.acquire() as conn:
