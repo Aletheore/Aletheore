@@ -4,6 +4,7 @@ import pytest
 from app_server.paddle_client import (
     PaddleAPIError,
     PaddleAPINotConfigured,
+    create_portal_session,
     get_subscription,
     update_subscription_items,
 )
@@ -12,6 +13,79 @@ from app_server.paddle_client import (
 def test_get_subscription_requires_api_key():
     with pytest.raises(PaddleAPINotConfigured):
         get_subscription(None, "sub_123")
+
+
+def test_create_portal_session_requires_api_key():
+    with pytest.raises(PaddleAPINotConfigured):
+        create_portal_session(None, "ctm_123")
+
+
+def test_create_portal_session_sends_post_with_subscription_ids(monkeypatch):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        import json
+
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            201,
+            json={"data": {"id": "cpls_123", "customer_id": "ctm_123", "urls": {"general": {}}}},
+        )
+
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda url, headers, json: httpx.Client(transport=httpx.MockTransport(handler)).post(
+            url, headers=headers, json=json
+        ),
+    )
+
+    result = create_portal_session("test_key", "ctm_123", ["sub_123"])
+
+    assert result == {"id": "cpls_123", "customer_id": "ctm_123", "urls": {"general": {}}}
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/customers/ctm_123/portal-sessions"
+    assert captured["body"] == {"subscription_ids": ["sub_123"]}
+
+
+def test_create_portal_session_omits_subscription_ids_when_none_given(monkeypatch):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(201, json={"data": {"id": "cpls_123", "urls": {"general": {}}}})
+
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda url, headers, json: httpx.Client(transport=httpx.MockTransport(handler)).post(
+            url, headers=headers, json=json
+        ),
+    )
+
+    create_portal_session("test_key", "ctm_123")
+
+    assert captured["body"] == {}
+
+
+def test_create_portal_session_wraps_http_errors(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "not found"})
+
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda url, headers, json: httpx.Client(transport=httpx.MockTransport(handler)).post(
+            url, headers=headers, json=json
+        ),
+    )
+
+    with pytest.raises(PaddleAPIError):
+        create_portal_session("test_key", "ctm_123")
 
 
 def test_update_subscription_items_requires_api_key():

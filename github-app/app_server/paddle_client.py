@@ -26,6 +26,32 @@ def get_subscription(api_key: str | None, subscription_id: str) -> dict:
     return response.json()["data"]
 
 
+def create_portal_session(
+    api_key: str | None,
+    customer_id: str,
+    subscription_ids: list[str] | None = None,
+) -> dict:
+    """Paddle-hosted, temporary, authenticated link where a customer can
+    update their payment method, view invoices, and manage or cancel a
+    subscription - the self-serve fix for exactly what a failed-payment
+    customer needs, without Aletheore building its own billing screens.
+    Session URLs shouldn't be cached (Paddle's own guidance) - callers must
+    request a fresh one per visit, not store the URL."""
+    if not api_key:
+        raise PaddleAPINotConfigured("PADDLE_API_KEY is not configured")
+    payload = {"subscription_ids": subscription_ids} if subscription_ids else {}
+    try:
+        response = httpx.post(
+            f"{_PADDLE_API_BASE}/customers/{customer_id}/portal-sessions",
+            headers=_headers(api_key),
+            json=payload,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise PaddleAPIError(f"could not create portal session for customer {customer_id}: {exc}") from exc
+    return response.json()["data"]
+
+
 def update_subscription_items(
     api_key: str | None,
     subscription_id: str,

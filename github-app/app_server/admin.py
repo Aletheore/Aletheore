@@ -37,6 +37,7 @@ from app_server.db import (
     update_session_tokens,
 )
 from app_server.paddle_client import PaddleAPIError
+from app_server.paddle_client import create_portal_session
 from app_server.paddle_client import get_subscription as get_paddle_subscription
 from app_server.paddle_client import update_subscription_items as update_paddle_subscription_items
 from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
@@ -274,7 +275,16 @@ async def _require_seat_if_paid(pool, installation: dict, github_login: str) -> 
         )
 
 
-async def _require_admin_installation(request: Request, org: str, repo: str) -> dict:
+async def _require_authorized_installation(request: Request, org: str, repo: str) -> tuple[dict, dict]:
+    """Session + "do you administer this installation" only - no plan or
+    seat gate. Returns (session, installation).
+
+    Split out of _require_admin_installation for the billing portal: a
+    customer whose card just failed is exactly the person who needs to
+    reach it, and by then Paddle's own webhook has already downgraded the
+    installation to free - gating the portal on "not free" would lock out
+    the one person who needs to fix it.
+    """
     session = await get_current_session(request)
     if session is None:
         raise HTTPException(status_code=401, detail="login required")
@@ -288,8 +298,14 @@ async def _require_admin_installation(request: Request, org: str, repo: str) -> 
     installation = await get_installation(pool, installation_id)
     if installation is None:
         raise HTTPException(status_code=404, detail="installation not found")
+    return session, installation
+
+
+async def _require_admin_installation(request: Request, org: str, repo: str) -> dict:
+    session, installation = await _require_authorized_installation(request, org, repo)
     if installation["plan"] == "free":
         raise HTTPException(status_code=402, detail="this feature requires a paid plan")
+    pool = request.app.state.db_pool
     await _require_seat_if_paid(pool, installation, session["github_login"])
     return installation
 
@@ -444,6 +460,54 @@ async def remove_extra_seat(org: str, repo: str, request: Request):
         ) from exc
 
     return {"ok": True}
+
+
+@admin_router.get("/admin/{org}/{repo}/billing-portal")
+async def get_billing_portal_url(org: str, repo: str, request: Request):
+    """Deliberately not behind _require_admin_installation's plan gate (see
+    _require_authorized_installation) - a payment failure has already
+    downgraded this installation to free by the time anyone would use this,
+    and that's exactly who needs to reach it."""
+    _, installation = await _require_authorized_installation(request, org, repo)
+    customer_id = installation.get("paddle_customer_id")
+    if not customer_id:
+        raise HTTPException(
+            status_code=400, detail="no billing account on file yet - subscribe first to set one up"
+        )
+    subscription_id = installation.get("paddle_subscription_id")
+    subscription_ids = [subscription_id] if subscription_id else None
+
+    settings = get_settings()
+    try:
+        session_data = await asyncio.to_thread(
+            create_portal_session, settings.paddle_api_key, customer_id, subscription_ids
+        )
+    except PaddleAPIError as exc:
+        logger.error(
+            "billing portal session failed for installation %s (customer %s): %s",
+            installation["installation_id"],
+            customer_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Could not open the billing portal right now - please try again, or contact support if this keeps happening.",
+        ) from exc
+
+    urls = session_data.get("urls", {})
+    # Prefer a subscription-scoped deep link (lets the customer update their
+    # payment method for this subscription directly) over the general
+    # account overview, when Paddle returned one - it only will if
+    # subscription_ids was non-empty above. Confirmed against a real portal
+    # session response: each entry has update_subscription_payment_method
+    # directly on it, not nested under a further "urls" key.
+    subscription_urls = urls.get("subscriptions") or []
+    url = subscription_urls[0]["update_subscription_payment_method"] if subscription_urls else None
+    if url is None:
+        url = urls.get("general", {}).get("overview")
+    if url is None:
+        raise HTTPException(status_code=502, detail="Paddle did not return a portal URL")
+    return {"url": url}
 
 
 @admin_router.delete("/admin/{org}/{repo}/members/{github_login}")

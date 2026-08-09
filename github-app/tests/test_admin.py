@@ -923,6 +923,113 @@ async def test_remove_extra_seat_updates_paddle_subscription(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_billing_portal_requires_billing_account_on_file(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.get("/admin/octocat/hello-world/billing-portal")
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_billing_portal_accessible_on_free_plan(pool, monkeypatch):
+    # A payment failure has already downgraded the installation to free by
+    # the time anyone would use this - it must NOT be behind the same
+    # plan=='free' -> 402 gate every other paid-plan feature uses, or the
+    # one person who needs to fix their card gets locked out of doing so.
+    await upsert_installation(pool, 100, "octocat")
+    await set_installation_plan(pool, 100, "free")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test", "ctm_test")
+    client = await _logged_in_client(pool, monkeypatch, plan="free")
+
+    monkeypatch.setattr(
+        "app_server.admin.create_portal_session",
+        lambda api_key, customer_id, subscription_ids: {
+            "urls": {"general": {"overview": "https://customer-portal.paddle.com/overview"}}
+        },
+    )
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world/billing-portal")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_billing_portal_returns_subscription_scoped_url(pool, monkeypatch):
+    # Response shape confirmed against a real Paddle portal session:
+    # each subscriptions[] entry has update_subscription_payment_method
+    # directly on it, not nested under a further "urls" key.
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test", "ctm_test")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    captured = {}
+
+    def fake_create_portal_session(api_key, customer_id, subscription_ids):
+        captured["customer_id"] = customer_id
+        captured["subscription_ids"] = subscription_ids
+        return {
+            "urls": {
+                "general": {"overview": "https://customer-portal.paddle.com/overview"},
+                "subscriptions": [
+                    {
+                        "id": "sub_test",
+                        "cancel_subscription": "https://customer-portal.paddle.com/cancel",
+                        "update_subscription_payment_method": "https://customer-portal.paddle.com/update-payment",
+                    }
+                ],
+            }
+        }
+
+    monkeypatch.setattr("app_server.admin.create_portal_session", fake_create_portal_session)
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world/billing-portal")
+
+    assert response.status_code == 200
+    assert response.json() == {"url": "https://customer-portal.paddle.com/update-payment"}
+    assert captured["customer_id"] == "ctm_test"
+    assert captured["subscription_ids"] == ["sub_test"]
+
+
+@pytest.mark.asyncio
+async def test_billing_portal_falls_back_to_general_url_without_subscription(pool, monkeypatch):
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, None, "ctm_test")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    monkeypatch.setattr(
+        "app_server.admin.create_portal_session",
+        lambda api_key, customer_id, subscription_ids: {
+            "urls": {"general": {"overview": "https://customer-portal.paddle.com/overview"}}
+        },
+    )
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world/billing-portal")
+
+    assert response.status_code == 200
+    assert response.json() == {"url": "https://customer-portal.paddle.com/overview"}
+
+
+@pytest.mark.asyncio
+async def test_billing_portal_reports_paddle_api_failure(pool, monkeypatch):
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test", "ctm_test")
+    client = await _logged_in_client(pool, monkeypatch)
+
+    def _boom(api_key, customer_id, subscription_ids):
+        raise PaddleAPIError("could not create portal session")
+
+    monkeypatch.setattr("app_server.admin.create_portal_session", _boom)
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world/billing-portal")
+
+    assert response.status_code == 502
+
+
+@pytest.mark.asyncio
 async def test_add_member_rejects_invalid_github_login(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch)
     async with client:
