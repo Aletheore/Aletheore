@@ -105,3 +105,41 @@ def test_log_job_logs_failure_and_reraises(caplog):
 
     record = next(r for r in caplog.records if r.message == "job failed")
     assert record.job_name == "failing_job"
+
+
+def test_log_job_alerts_on_failure(monkeypatch):
+    # A job function reaching log_job's except block means whatever it does
+    # to handle expected failures (a dead token, a flaky external API)
+    # didn't catch it - much more likely a real bug than routine noise, so
+    # this is the one place worth a live alert rather than only a log line.
+    from app_server import error_alerts
+
+    calls = []
+    monkeypatch.setattr(error_alerts, "send_error_alert", lambda *a, **k: calls.append((a, k)))
+
+    @log_job
+    def failing_job() -> None:
+        raise RuntimeError("kaboom")
+
+    with pytest.raises(RuntimeError):
+        failing_job()
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == "failing_job"
+    assert isinstance(args[1], RuntimeError)
+
+
+def test_log_job_does_not_alert_on_success(monkeypatch):
+    from app_server import error_alerts
+
+    calls = []
+    monkeypatch.setattr(error_alerts, "send_error_alert", lambda *a, **k: calls.append(1))
+
+    @log_job
+    def do_work() -> int:
+        return 1
+
+    do_work()
+
+    assert calls == []
