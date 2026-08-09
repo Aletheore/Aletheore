@@ -18,6 +18,12 @@ def test_cost_for_usage_deepseek_v4_flash():
     )
 
 
+def test_cost_for_usage_gpt_5_6_luna():
+    assert cost_for_usage("gpt-5.6-luna", 1_000_000, 1_000_000) == pytest.approx(
+        0.20 + 1.20
+    )
+
+
 def test_cost_for_usage_small_real_call():
     expected = (2_000 * 0.14 + 300 * 0.28) / 1_000_000
     assert cost_for_usage("deepseek-v4-flash", 2_000, 300) == pytest.approx(expected)

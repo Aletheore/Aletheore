@@ -72,6 +72,7 @@ from scan_worker.db import (
     list_installation_member_emails,
     list_paid_installations_due_for_digest,
     list_paid_repos_due_for_docs_catchup,
+    list_paid_repos_due_for_wiki_catchup,
     list_recent_endpoint_incidents,
     list_repos_for_installation,
     list_wiki_subsystems,
@@ -80,6 +81,7 @@ from scan_worker.db import (
     record_docs_repo_commit,
     record_llm_spend,
     record_sent_email,
+    record_wiki_catchup_swept,
     set_docs_build_status,
     set_last_reviewed_sha,
     set_wiki_build_status,
@@ -89,6 +91,7 @@ from scan_worker.db import (
 )
 from scan_worker.docs_repo_commit import sync_docs_to_repo
 from scan_worker.flash_review import (
+    FLASH_REVIEW_FALLBACK_MODEL,
     build_code_evidence_context,
     build_referenced_symbol_context,
     fetch_review_file_context,
@@ -119,7 +122,13 @@ from app_server.email_templates import (
 from app_server.email_queue import enqueue_transactional_email
 from app_server.email_client import send_transactional_email
 from scan_worker.managed_audit import run_managed_audit
-from scan_worker.model_tiers import PRO_MODEL, model_for_plan, writing_adapter_for_plan
+from scan_worker.model_tiers import (
+    PRO_MODEL,
+    model_for_plan,
+    resolve_model,
+    writing_adapter_for,
+    writing_adapter_for_plan,
+)
 from scan_worker.packet_cache import lookup_cached_result, store_result
 from scan_worker.code_graph_store import CodeGraphStore
 from scan_worker.postgres_graph_store import PostgresRepoGraphStore
@@ -175,12 +184,12 @@ GRAPH_COLD_SYNC_DEPTH_CAP = 50_000
 SECRETS_HISTORY_DEPTH_CAP = 20_000
 
 # The real, customer-facing promise for Pro ($34.99/mo): up to 300 PR
-# reviews/month. Worst-case cost at 300 reviews hitting the max context
-# caps each is well under $3 (deepseek-v4-flash, ~$0.14/M input +
-# $0.28/M output) - this is a usage ceiling for the promise itself, not a
+# reviews/month. This is a usage ceiling for the promise itself, not a
 # cost-protection measure; the existing dollar-based monthly_cap_for_installation
 # check stays in place as a separate defense against a pathological
-# per-review cost blowing past what 300 reviews should ever cost.
+# per-review cost blowing past what 300 reviews should ever cost - see
+# model_tiers.py/flash_review.py for which model that cost is actually
+# priced against (Luna, falling back to deepseek-v4-flash).
 MAX_FLASH_REVIEWS_PER_MONTH = 300
 
 
@@ -1261,10 +1270,11 @@ def _run_flash_review(
             evidence, changed_files, diff_text, _fetch_symbol_source
         )
         dsn = settings.database_url
+        flash_review_model = resolve_model(FLASH_REVIEW_FALLBACK_MODEL)
 
         def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
             spend_accumulator["total"] += cost_for_usage(
-                "deepseek-v4-flash", prompt_tokens, completion_tokens
+                flash_review_model, prompt_tokens, completion_tokens
             )
 
         def _cache_lookup(diff: str) -> list[dict] | None:
@@ -1285,7 +1295,7 @@ def _run_flash_review(
                 referenced_symbol_context=referenced_symbol_context,
                 cache_lookup=_cache_lookup,
                 cache_write=_cache_write,
-                model_used="deepseek-v4-flash",
+                model_used=flash_review_model,
                 file_contents=file_contents,
                 on_grounding_result=_on_grounding_result,
             )
@@ -1297,7 +1307,7 @@ def _run_flash_review(
                 referenced_symbol_context=referenced_symbol_context,
                 cache_lookup=_cache_lookup,
                 cache_write=_cache_write,
-                model_used="deepseek-v4-flash",
+                model_used=flash_review_model,
                 file_contents=file_contents,
                 on_grounding_result=_on_grounding_result,
             )
@@ -1508,16 +1518,11 @@ If you cannot identify a plausible concrete cause from what's given, respond wit
 
 
 def _health_fix_suggestion_adapter() -> OpenAICompatibleAdapter:
-    # Always Pro, never tier-routed through model_tiers.writing_adapter_for_plan -
-    # this feature is part of every Pro subscription at one fixed cost, not
-    # something that varies by a tier that no longer exists.
-    return OpenAICompatibleAdapter(
-        name="DeepSeek",
-        base_url="https://api.deepseek.com",
-        api_key_env_var="DEEPSEEK_API_KEY",
-        model=PRO_MODEL,
-        supports_tool_choice=False,
-    )
+    # Always Pro, at one fixed cost for every Pro subscription rather than
+    # varying by a tier that no longer exists - same Luna-with-DeepSeek-
+    # fallback resolution as every other Pro-tier writing surface, via
+    # model_tiers.writing_adapter_for.
+    return writing_adapter_for(PRO_MODEL)
 
 
 def _find_enclosing_symbol(evidence: dict | None, source_file: str, source_line: int | None) -> str | None:
@@ -2003,27 +2008,17 @@ def run_weekly_digest_sweep_job() -> None:
 
 
 def _live_wiki_naming_adapter() -> OpenAICompatibleAdapter:
-    return OpenAICompatibleAdapter(
-        name="DeepSeek",
-        base_url="https://api.deepseek.com",
-        api_key_env_var="DEEPSEEK_API_KEY",
-        model=live_wiki.FLASH_MODEL,
-    )
+    return writing_adapter_for(live_wiki.FLASH_MODEL)
 
 
 def _live_wiki_full_build_writing_adapter(plan: str) -> OpenAICompatibleAdapter | AnthropicAdapter:
     # The one-time full build uses the same model as managed audits (see
-    # model_tiers.py) - always DeepSeek Pro, for every plan.
+    # model_tiers.py) - Luna (falling back to DeepSeek Pro), for every plan.
     return writing_adapter_for_plan(plan)
 
 
 def _live_wiki_update_writing_adapter() -> OpenAICompatibleAdapter:
-    return OpenAICompatibleAdapter(
-        name="DeepSeek",
-        base_url="https://api.deepseek.com",
-        api_key_env_var="DEEPSEEK_API_KEY",
-        model=live_wiki.UPDATE_MODEL,
-    )
+    return writing_adapter_for(live_wiki.UPDATE_MODEL)
 
 
 def _real_line_count_fetcher(
@@ -2108,12 +2103,48 @@ def _store_wiki_generation(
     )
 
 
+# Every cluster gets an LLM call in a full build (naming + subsystem
+# generation), unlike an incremental update's affected-clusters-only cost.
+# Capped here rather than left unbounded for a repo's very first build,
+# mirroring MAX_DOCS_FULL_BUILD_FILES's exact role for Docs. A full build's
+# job is only ever to reach initial coverage - _maybe_update_live_wiki (the
+# push-triggered path) is what keeps an already-covered cluster fresh, and
+# run_live_wiki_catchup_sweep_job is what gives an oversized repo further
+# chances to cover the clusters this cap left out, over time.
+MAX_WIKI_FULL_BUILD_CLUSTERS = 50
+
+
+def _clusters_with_uncovered_wiki_work(
+    evidence: dict, covered_cluster_ids: set[str], limit: int
+) -> set[int]:
+    """Cluster ids from evidence that don't have a stored subsystem yet,
+    capped at `limit` - mirrors _modules_with_uncovered_docs_work's role for
+    Docs. Unlike a Docs module (which can be partially covered, symbol by
+    symbol), a wiki cluster is generated as a whole in one shot, so
+    "uncovered" is just "no subsystem row exists for this cluster id yet".
+    """
+    all_ids = [c["id"] for c in evidence.get("architecture", {}).get("clusters", [])]
+    uncovered = [cid for cid in all_ids if str(cid) not in covered_cluster_ids]
+    return set(uncovered[:limit])
+
+
 @log_job
 def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> None:
     dsn = get_settings().database_url
     evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
     if evidence is None:
         return  # nothing scanned for this repo yet - nothing to build from
+
+    covered_cluster_ids = {
+        r["subsystem_id"] for r in list_wiki_subsystems(dsn, installation_id, repo_full_name)
+    }
+    cluster_ids = _clusters_with_uncovered_wiki_work(evidence, covered_cluster_ids, MAX_WIKI_FULL_BUILD_CLUSTERS)
+    if not cluster_ids:
+        # Nothing new to do - a prior run (or the catch-up sweep) already
+        # covers every cluster current evidence calls for. Still a real
+        # "ready" outcome, not a no-op to be silent about.
+        set_wiki_build_status(dsn, installation_id, repo_full_name, "ready")
+        return
 
     installation = get_installation_row(dsn, installation_id)
     plan = installation["plan"] if installation is not None else "air"
@@ -2127,6 +2158,7 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
             evidence,
             naming_adapter,
             writing_adapter,
+            cluster_ids=cluster_ids,
             cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
             cache_write=lambda packet, output, used: store_result(
                 dsn, installation_id, repo_full_name, packet, output, used
@@ -2175,6 +2207,45 @@ def run_live_wiki_full_build_for_installation_job(installation_id: int) -> None:
         )
 
 
+# How often the recurring catch-up sweep is willing to re-touch the same
+# repo - not how often it runs (it's enqueued on every scheduler tick like
+# the Docs catch-up sweep already is; the interval is enforced inside the
+# job itself via wiki_catchup_sweeps). Same value as Docs' own sweep
+# interval - no reason for AIRview coverage to lag further behind than
+# Docs coverage does.
+WIKI_CATCHUP_SWEEP_INTERVAL_SECONDS = 48 * 60 * 60
+
+
+def run_live_wiki_catchup_sweep_job() -> None:
+    """Recurring, per-repo-throttled pass that gives a repo whose first
+    full build never finished every cluster (MAX_WIKI_FULL_BUILD_CLUSTERS
+    caps a single build at 50) further chances to catch up over time -
+    mirrors run_live_docs_catchup_sweep_job exactly, against
+    wiki_catchup_sweeps instead of docs_catchup_sweeps.
+
+    Deliberately reuses run_live_wiki_full_build_job as-is rather than
+    duplicating its logic: that function already only spends on clusters
+    without a stored subsystem yet (see _clusters_with_uncovered_wiki_work),
+    so a repeat call here is naturally cheap and a no-op once nothing is
+    actually missing.
+    """
+    dsn = get_settings().database_url
+    due = list_paid_repos_due_for_wiki_catchup(dsn, WIKI_CATCHUP_SWEEP_INTERVAL_SECONDS)
+    for installation_id, repo_full_name in due:
+        try:
+            run_live_wiki_full_build_job(installation_id, repo_full_name)
+        except Exception as exc:  # noqa: BLE001
+            # A single repo's failure (or its own internal build-status
+            # bookkeeping) shouldn't stop the sweep from touching the rest
+            # of the due list, or from recording that this repo was tried.
+            logging.getLogger("scan_worker.jobs").warning(
+                "live wiki catch-up sweep failed for installation=%s repo=%s (%s)",
+                installation_id, repo_full_name, exc,
+            )
+        finally:
+            record_wiki_catchup_swept(dsn, installation_id, repo_full_name)
+
+
 def _maybe_update_live_wiki(
     installation_id: int, repo_full_name: str, evidence: dict, changed_files: list[str], head_sha: str
 ) -> None:
@@ -2201,7 +2272,7 @@ def _maybe_update_live_wiki(
             cache_write=lambda packet, output, used: store_result(
                 dsn, installation_id, repo_full_name, packet, output, used
             ),
-            model_used=live_wiki.UPDATE_MODEL,
+            model_used=resolve_model(live_wiki.UPDATE_MODEL),
             fetch_line_count=fetch_line_count,
         )
         _store_wiki_generation(
@@ -2239,12 +2310,7 @@ def _live_docs_full_build_writing_adapter(plan: str) -> OpenAICompatibleAdapter:
 
 
 def _live_docs_update_writing_adapter() -> OpenAICompatibleAdapter:
-    return OpenAICompatibleAdapter(
-        name="DeepSeek",
-        base_url="https://api.deepseek.com",
-        api_key_env_var="DEEPSEEK_API_KEY",
-        model=live_docs.FLASH_MODEL,
-    )
+    return writing_adapter_for(live_docs.FLASH_MODEL)
 
 
 def _github_client_and_token(installation_id: int) -> tuple[httpx.Client, str] | None:

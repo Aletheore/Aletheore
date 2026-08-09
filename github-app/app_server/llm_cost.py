@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 MODEL_RATES_PER_MILLION_USD = {
     "deepseek-v4-pro": {"input": 0.435, "output": 0.87, "verified_at": "2026-07-23"},
     "deepseek-v4-flash": {"input": 0.14, "output": 0.28, "verified_at": "2026-07-23"},
+    "gpt-5.6-luna": {"input": 0.20, "output": 1.20, "verified_at": "2026-08-09"},
     "gpt-4o": {"input": 2.50, "output": 10.00, "verified_at": "2026-07-23"},
     "claude-opus-4-8": {"input": 15.00, "output": 75.00, "verified_at": "2026-07-23"},
 }

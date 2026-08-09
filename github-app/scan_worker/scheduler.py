@@ -22,6 +22,10 @@ SESSION_CLEANUP_JOB_TIMEOUT_SECONDS = 60
 # above normal runtime for the rare tick where several repos are due at
 # once, same reasoning as HEALTH_SWEEP_JOB_TIMEOUT_SECONDS.
 DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS = 600
+# Same reasoning as DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS - run_live_wiki_
+# catchup_sweep_job only calls run_live_wiki_full_build_job for repos
+# list_paid_repos_due_for_wiki_catchup already filtered to genuinely due.
+WIKI_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS = 600
 # Reads the due list (a cheap join over installations/digest_sends), then
 # enqueues one send per recipient onto "email" rather than sending inline -
 # the actual Resend calls happen there, not in this job, so this stays
@@ -62,6 +66,10 @@ def run_forever(
         scans_queue.enqueue(
             "scan_worker.jobs.run_live_docs_catchup_sweep_job",
             job_timeout=DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS,
+        )
+        scans_queue.enqueue(
+            "scan_worker.jobs.run_live_wiki_catchup_sweep_job",
+            job_timeout=WIKI_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS,
         )
         scans_queue.enqueue(
             "scan_worker.jobs.run_weekly_digest_sweep_job",
