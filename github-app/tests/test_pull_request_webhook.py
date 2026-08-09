@@ -36,6 +36,20 @@ async def test_opened_enqueues_both_jobs():
 
 
 @pytest.mark.asyncio
+async def test_flash_review_job_timeout_has_real_margin():
+    # A real flash review (LLM call + several sequential GitHub API
+    # fetches) measured at 5m50s in production against a ~10-file diff -
+    # the previous 180s value silently killed most non-trivial reviews
+    # via RQ's work-horse SIGKILL watchdog (a hard kill the job's own
+    # except block never sees), leaving no error and no comment. This
+    # guards against that regressing back to something too tight.
+    fake_queue = MagicMock()
+    await handle_pull_request_event(_payload("opened"), "redis://unused", queue=fake_queue)
+    calls_by_job = {call.args[0]: call.kwargs for call in fake_queue.enqueue.call_args_list}
+    assert calls_by_job["scan_worker.jobs.run_flash_review_job"]["job_timeout"] >= 600
+
+
+@pytest.mark.asyncio
 async def test_synchronize_enqueues_both_jobs():
     fake_queue = MagicMock()
     await handle_pull_request_event(_payload("synchronize"), "redis://unused", queue=fake_queue)
