@@ -18,6 +18,7 @@ from app_server.db import (
     get_max_tokens,
     get_session,
     insert_repo_history,
+    record_llm_spend,
     set_installation_plan,
     upsert_installation,
 )
@@ -268,6 +269,45 @@ async def test_admin_page_rejects_free_plan(pool, monkeypatch):
     async with client:
         response = await client.get("/admin/octocat/hello-world")
     assert response.status_code == 402
+
+
+@pytest.mark.asyncio
+async def test_admin_page_surfaces_llm_spend_and_flash_review_usage(pool, monkeypatch):
+    # llm_spend and flash_review_monthly_count were already tracked
+    # internally for the hard spend cap - this is the first place a
+    # customer actually sees what their AI review usage is costing them.
+    client = await _logged_in_client(pool, monkeypatch, plan="air")
+    await record_llm_spend(pool, 100, 4.20)
+    await pool.execute(
+        """
+        INSERT INTO flash_review_monthly_count (installation_id, month, review_count)
+        VALUES ($1, date_trunc('month', now())::date, $2)
+        """,
+        100,
+        7,
+    )
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["llm_spend_month_to_date"] == 4.20
+    assert body["flash_reviews_month_to_date"] == 7
+    assert body["llm_spend_cap"] > 0
+
+
+@pytest.mark.asyncio
+async def test_admin_page_reports_zero_usage_before_any_spend(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch, plan="air")
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["llm_spend_month_to_date"] == 0.0
+    assert body["flash_reviews_month_to_date"] == 0
 
 
 @pytest.mark.asyncio

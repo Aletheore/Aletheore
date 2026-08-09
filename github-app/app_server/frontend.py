@@ -1697,6 +1697,21 @@ async function loadSettings() {{
   window._hasActiveSubscription = !!installation.paddle_subscription_id;
   window._extraSeats = data.extra_seats || 0;
 
+  // llm_spend and flash_review_monthly_count were already tracked
+  // internally for the hard spend cap (see app_server/llm_cost.py) - this
+  // is the first place a customer actually sees what their AI review
+  // usage is costing/producing, previously invisible to them.
+  const llmSpend = data.llm_spend_month_to_date || 0;
+  const llmCap = data.llm_spend_cap || 0;
+  const flashReviews = data.flash_reviews_month_to_date || 0;
+  const spendPct = llmCap > 0 ? Math.min(100, Math.round((llmSpend / llmCap) * 100)) : 0;
+  const usageHtml =
+    '<div class="settings-block">' +
+      '<div class="settings-block-label">AI usage this month</div>' +
+      '<div class="settings-block-hint">' + flashReviews + ' automated PR review' + (flashReviews === 1 ? '' : 's') + '</div>' +
+      '<div class="settings-block-hint">$' + llmSpend.toFixed(2) + ' of $' + llmCap.toFixed(2) + ' spend cap used (' + spendPct + '%)</div>' +
+    '</div>';
+
   const seatBillingHtml = window._hasActiveSubscription
     ? '<div class="form-row">' +
       '<button class="btn" onclick="buySeat()">Buy extra seat ($3.99/mo)</button>' +
@@ -1716,6 +1731,7 @@ async function loadSettings() {{
           '<div id="member-status" class="settings-block-hint"></div>' +
           seatBillingHtml +
         '</div>' +
+        usageHtml +
         '<div class="settings-block">' +
           '<div class="settings-block-label">API tokens</div>' +
           '<div id="token-list">' + renderTokenRows(data.tokens) + '</div>' +
