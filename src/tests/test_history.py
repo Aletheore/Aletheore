@@ -181,6 +181,70 @@ def test_compute_diff_detects_a_resolved_vulnerability():
     assert diff["vulnerabilities"]["resolved"][0]["advisory_id"] == "GHSA-1"
 
 
+def test_compute_diff_filters_new_vulnerabilities_by_severity_threshold(tmp_path):
+    (tmp_path / ".aletheore.json").write_text(json.dumps({"severity_threshold": "high"}))
+
+    old = base_evidence()
+    old["repo_path"] = str(tmp_path)
+    old["security"]["dependency_vulnerabilities"]["findings"] = []
+    new = base_evidence()
+    new["repo_path"] = str(tmp_path)
+    # log4shell-shaped CVSS vector: base score 10.0, buckets "critical".
+    new["security"]["dependency_vulnerabilities"]["findings"] = [
+        {
+            "ecosystem": "Maven",
+            "package": "log4j-core",
+            "installed_version": "2.14.1",
+            "advisory_id": "GHSA-critical",
+            "summary": "critical rce",
+            "severity": [
+                {"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"}
+            ],
+        },
+        {
+            "ecosystem": "PyPI",
+            "package": "some-lib",
+            "installed_version": "1.0.0",
+            "advisory_id": "GHSA-low",
+            "summary": "low severity issue",
+            "severity": [
+                {"type": "CVSS_V3", "score": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N"}
+            ],
+        },
+    ]
+
+    diff = compute_diff(old, new)
+
+    new_advisory_ids = {f["advisory_id"] for f in diff["vulnerabilities"]["new"]}
+    assert new_advisory_ids == {"GHSA-critical"}
+
+
+def test_compute_diff_severity_threshold_never_touches_evidence_findings(tmp_path):
+    # The filter only affects the diff's "new"/"resolved" lists - the raw
+    # evidence.json findings list (what's actually persisted to disk by a
+    # real scan) is a completely separate object and is never mutated.
+    (tmp_path / ".aletheore.json").write_text(json.dumps({"severity_threshold": "critical"}))
+
+    old = base_evidence()
+    old["repo_path"] = str(tmp_path)
+    old["security"]["dependency_vulnerabilities"]["findings"] = []
+    new = base_evidence()
+    new["repo_path"] = str(tmp_path)
+    low_finding = {
+        "ecosystem": "PyPI",
+        "package": "some-lib",
+        "installed_version": "1.0.0",
+        "advisory_id": "GHSA-low",
+        "summary": "low severity issue",
+        "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N"}],
+    }
+    new["security"]["dependency_vulnerabilities"]["findings"] = [low_finding]
+
+    compute_diff(old, new)
+
+    assert new["security"]["dependency_vulnerabilities"]["findings"] == [low_finding]
+
+
 def test_compute_diff_detects_a_new_layer_violation():
     old = base_evidence()
     new = base_evidence()

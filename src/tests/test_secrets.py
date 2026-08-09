@@ -20,6 +20,21 @@ def test_find_secrets_detects_aws_key(tmp_path):
     assert finding["likely_placeholder"] is False
 
 
+def test_find_secrets_respects_ignored_paths_from_config(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    vendor = repo / "vendor"
+    vendor.mkdir()
+    (vendor / "config.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+    (repo / "real.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+    (repo / ".aletheore.json").write_text(json.dumps({"ignored_paths": ["vendor/**"]}))
+
+    result = find_secrets(repo)
+
+    paths = {finding["path"] for finding in result["findings"]}
+    assert paths == {"real.py"}
+
+
 def test_find_secrets_redacts_the_match(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

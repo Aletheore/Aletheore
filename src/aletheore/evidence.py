@@ -10,6 +10,7 @@ from aletheore.dead_code import find_dead_code
 from aletheore.endpoints import map_api_endpoints
 from aletheore.git_intel.analyzer import analyze_git, compute_hotspots
 from aletheore.licenses import check_dependency_licenses
+from aletheore.repo_config import load_repo_config
 from aletheore.scanner.detect import (
     detect_ai_usage,
     detect_build_tools,
@@ -297,9 +298,10 @@ def scan_repository(
 ) -> dict:
     report = progress or _noop_progress
     repo_path = repo_path.resolve()
+    ignored_paths = load_repo_config(repo_path)["ignored_paths"]
 
     report("Detecting languages, frameworks, and build tools")
-    languages = detect_languages(repo_path)
+    languages = detect_languages(repo_path, ignored_paths)
     frameworks = detect_frameworks(repo_path)
     ai_usage = detect_ai_usage(repo_path)
     policy_docs = detect_policy_docs(repo_path)
@@ -320,7 +322,7 @@ def scan_repository(
 
     report("Building module dependency graph (parsing source with tree-sitter)")
     modules, dependency_graph, unparseable_files = build_module_graph(
-        repo_path, unchanged_modules=unchanged_modules
+        repo_path, unchanged_modules=unchanged_modules, ignored_paths=ignored_paths
     )
 
     report("Analyzing git history and ownership")
@@ -354,7 +356,7 @@ def scan_repository(
     layer_violations = detect_layer_violations(dependency_graph, custom_markers=custom_markers)
 
     report("Detecting dead code")
-    dead_code_data = find_dead_code(repo_path, modules, architecture_config)
+    dead_code_data = find_dead_code(repo_path, modules, architecture_config, ignored_paths)
 
     if git_data.get("available"):
         report("Computing git hotspots")
@@ -385,7 +387,9 @@ def scan_repository(
 
     if map_endpoints:
         report("Mapping API endpoints")
-        api_endpoints_data = map_api_endpoints(repo_path, unchanged_endpoints=unchanged_endpoints)
+        api_endpoints_data = map_api_endpoints(
+            repo_path, unchanged_endpoints=unchanged_endpoints, ignored_paths=ignored_paths
+        )
     else:
         api_endpoints_data = {
             "checked": False,

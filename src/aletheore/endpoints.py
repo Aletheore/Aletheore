@@ -1062,7 +1062,12 @@ def _extract_aspnet_minimal_routes(root: Node, source: bytes, rel_path: str) -> 
     return entries
 
 
-def map_api_endpoints(repo_path: Path, *, unchanged_endpoints: dict[str, list[dict]] | None = None) -> dict:
+def map_api_endpoints(
+    repo_path: Path,
+    *,
+    unchanged_endpoints: dict[str, list[dict]] | None = None,
+    ignored_paths: list[str] | None = None,
+) -> dict:
     """unchanged_endpoints: path -> the list of endpoint dicts previously
     found in that file (possibly empty), for files known not to have
     changed since that data was computed - skips tree-sitter parsing for
@@ -1087,7 +1092,7 @@ def map_api_endpoints(repo_path: Path, *, unchanged_endpoints: dict[str, list[di
         parser.language = lang
         parsers[name] = parser
 
-    for path in _iter_source_files(repo_path):
+    for path in _iter_source_files(repo_path, ignored_paths):
         rel_path = _rel(repo_path, path)
 
         if unchanged_endpoints is not None and rel_path in unchanged_endpoints:

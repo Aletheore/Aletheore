@@ -1,4 +1,3 @@
-import json
 import math
 import os
 import re
@@ -7,6 +6,7 @@ import threading
 from collections import Counter
 from pathlib import Path
 
+from aletheore.repo_config import is_ignored, load_repo_config
 from aletheore.scanner.detect import IGNORED_DIRS
 
 BINARY_EXTENSIONS = {
@@ -70,7 +70,7 @@ SECRET_PATTERNS = [
 ]
 
 
-def iter_all_files(repo_path: Path):
+def iter_all_files(repo_path: Path, ignored_paths: list[str] | None = None):
     # os.walk(followlinks=False) rather than Path.rglob("*") - a symlinked
     # directory anywhere in the tree (real case: a monorepo tool, or an
     # accidental symlink to something outside the checkout) would otherwise
@@ -78,13 +78,23 @@ def iter_all_files(repo_path: Path):
     # repo. followlinks only stops descent into symlinked *directories* -
     # a symlinked file sitting directly in a real directory still needs its
     # own explicit is_symlink() check below.
+    patterns = ignored_paths or []
     for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
-        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        rel_dir = Path(dirpath).relative_to(repo_path).as_posix()
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d not in IGNORED_DIRS
+            and not is_ignored(f"{rel_dir}/{d}" if rel_dir != "." else d, patterns)
+        ]
         for filename in filenames:
             path = Path(dirpath) / filename
             if path.is_symlink() or not path.is_file():
                 continue
             if path.suffix in BINARY_EXTENSIONS:
+                continue
+            rel_path = path.relative_to(repo_path).as_posix()
+            if is_ignored(rel_path, patterns):
                 continue
             yield path
 
@@ -124,20 +134,7 @@ def _redact(value: str) -> str:
 
 
 def load_secrets_baseline(repo_path: Path) -> list[dict]:
-    config_file = repo_path / ".aletheore.json"
-    if not config_file.exists():
-        return []
-    try:
-        data = json.loads(config_file.read_text(encoding="utf-8", errors="ignore"))
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(data, dict):
-        return []
-
-    accepted = data.get("accepted_secrets", [])
-    if not isinstance(accepted, list):
-        return []
-    return [entry for entry in accepted if isinstance(entry, dict)]
+    return load_repo_config(repo_path)["accepted_secrets"]
 
 
 def _baseline_keys(baseline: list[dict] | None) -> set[tuple]:
@@ -152,8 +149,9 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
     findings: list[dict] = []
     scanned_files = 0
     accepted_keys = _baseline_keys(baseline)
+    ignored_paths = load_repo_config(repo_path)["ignored_paths"]
 
-    for path in iter_all_files(repo_path):
+    for path in iter_all_files(repo_path, ignored_paths):
         scanned_files += 1
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")

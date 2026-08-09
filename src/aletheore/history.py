@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
 
+from aletheore.repo_config import load_repo_config
+from aletheore.vulnerabilities import filter_by_severity
+
 
 def _history_dir(repo_path: Path) -> Path:
     return repo_path / ".aletheore" / "history"
@@ -119,6 +122,16 @@ def _compute_curated_diff(old: dict, new: dict) -> dict:
         new["security"]["dependency_vulnerabilities"]["findings"],
         ("ecosystem", "package", "advisory_id"),
     )
+    # severity_threshold only filters what's surfaced here (PR comments,
+    # SARIF, --fail-on-new-vulnerabilities) - evidence.json's own findings
+    # list, read by "new" above, is never filtered, so the scan record
+    # itself stays complete regardless of this repo's config.
+    new_repo_path = new.get("repo_path")
+    severity_threshold = (
+        load_repo_config(Path(new_repo_path))["severity_threshold"] if new_repo_path else None
+    )
+    new_vulns = filter_by_severity(new_vulns, severity_threshold)
+    resolved_vulns = filter_by_severity(resolved_vulns, severity_threshold)
     result["vulnerabilities"] = {"new": new_vulns, "resolved": resolved_vulns}
 
     new_violations, resolved_violations = _new_and_resolved(

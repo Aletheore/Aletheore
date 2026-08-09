@@ -676,3 +676,111 @@ def test_parse_nuget_pins_prefers_lockfile_over_project_files(tmp_path):
     )
 
     assert _parse_nuget_pins(repo) == [("Serilog", "4.0.1", "NuGet")]
+
+
+def test_cvss3_base_score_log4shell_is_10():
+    from aletheore.vulnerabilities import _cvss3_base_score
+
+    # CVE-2021-44228 (Log4Shell) - NVD-published base score 10.0
+    score = _cvss3_base_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H")
+    assert score == 10.0
+
+
+def test_cvss3_base_score_matches_a_known_critical_vector():
+    from aletheore.vulnerabilities import _cvss3_base_score
+
+    # A common unauthenticated-RCE vector shape - NVD publishes 9.8 for this.
+    score = _cvss3_base_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
+    assert score == 9.8
+
+
+def test_cvss3_base_score_low_impact_vector():
+    from aletheore.vulnerabilities import _cvss3_base_score
+
+    score = _cvss3_base_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H")
+    assert score == 7.5
+
+
+def test_cvss3_base_score_returns_none_for_missing_metrics():
+    from aletheore.vulnerabilities import _cvss3_base_score
+
+    assert _cvss3_base_score("CVSS:3.1/AV:N/AC:L") is None
+
+
+def test_cvss3_base_score_returns_none_for_unrecognized_metric_value():
+    from aletheore.vulnerabilities import _cvss3_base_score
+
+    assert _cvss3_base_score("CVSS:3.1/AV:X/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H") is None
+
+
+def test_normalize_severity_buckets_critical():
+    from aletheore.vulnerabilities import normalize_severity
+
+    result = normalize_severity(
+        [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"}]
+    )
+    assert result == "critical"
+
+
+def test_normalize_severity_buckets_high():
+    from aletheore.vulnerabilities import normalize_severity
+
+    result = normalize_severity(
+        [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"}]
+    )
+    assert result == "high"
+
+
+def test_normalize_severity_buckets_medium():
+    from aletheore.vulnerabilities import normalize_severity
+
+    # Computed base score 4.3 (medium range 4.0-6.9), verified via
+    # _cvss3_base_score directly before being used here.
+    result = normalize_severity(
+        [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"}]
+    )
+    assert result == "medium"
+
+
+def test_normalize_severity_ignores_non_cvss_v3_entries():
+    from aletheore.vulnerabilities import normalize_severity
+
+    assert normalize_severity([{"type": "CVSS_V4", "score": "CVSS:4.0/AV:N/..."}]) is None
+    assert normalize_severity([{"type": "Ubuntu", "score": "Medium"}]) is None
+
+
+def test_normalize_severity_returns_none_for_empty_list():
+    from aletheore.vulnerabilities import normalize_severity
+
+    assert normalize_severity([]) is None
+    assert normalize_severity(None) is None
+
+
+def test_filter_by_severity_no_threshold_returns_unchanged():
+    from aletheore.vulnerabilities import filter_by_severity
+
+    findings = [{"severity": []}, {"severity": [{"type": "CVSS_V3", "score": "bad"}]}]
+    assert filter_by_severity(findings, None) == findings
+
+
+def test_filter_by_severity_keeps_findings_at_or_above_threshold():
+    from aletheore.vulnerabilities import filter_by_severity
+
+    critical = {
+        "advisory_id": "critical-one",
+        "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"}],
+    }
+    low = {
+        "advisory_id": "low-one",
+        "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N"}],
+    }
+    result = filter_by_severity([critical, low], "high")
+    assert result == [critical]
+
+
+def test_filter_by_severity_always_keeps_findings_with_no_derivable_severity():
+    from aletheore.vulnerabilities import filter_by_severity
+
+    unknown = {"advisory_id": "no-cvss-data", "severity": []}
+    result = filter_by_severity([unknown], "critical")
+    assert result == [unknown]

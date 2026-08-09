@@ -543,11 +543,16 @@ def test_elapsed_ticker_prints_start_and_done_once_when_not_a_tty(capsys):
 
 
 def test_main_audit_invokes_audit_flow(tmp_path):
+    # No --check-*/--no-check-* flags passed: each resolves to None here,
+    # not True - _scan() (called inside _audit) is what resolves None
+    # against .aletheore.json's disabled_checks, defaulting to True when
+    # there's no config. See test_scan_command_* tests below for the
+    # explicit-flag and config-driven resolution behavior end to end.
     with patch("aletheore.cli._audit", return_value=0) as mock_audit:
         result = runner.invoke(app, ["audit", str(tmp_path), "--agent", "claude"])
 
     assert result.exit_code == 0
-    mock_audit.assert_called_once_with(str(tmp_path), "claude", True, True, True, True)
+    mock_audit.assert_called_once_with(str(tmp_path), "claude", None, None, None, None)
 
 
 def test_scan_command_reports_git_analysis_error_cleanly(tmp_path):
@@ -830,6 +835,30 @@ def test_main_scan_positive_check_licenses_flag_is_also_accepted(tmp_path):
     (repo / "main.py").write_text("x = 1\n")
 
     result = runner.invoke(app, ["scan", str(repo), "--check-licenses", "--no-check-vulnerabilities"])
+
+    assert result.exit_code == 0
+    evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
+    assert evidence["security"]["dependency_licenses"]["checked"] is True
+
+
+def test_main_scan_honors_disabled_checks_from_config(tmp_path):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    (repo / ".aletheore.json").write_text(json.dumps({"disabled_checks": ["licenses"]}))
+
+    result = runner.invoke(app, ["scan", str(repo)])
+
+    assert result.exit_code == 0
+    evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
+    assert evidence["security"]["dependency_licenses"]["checked"] is False
+
+
+def test_main_scan_explicit_flag_overrides_disabled_checks_config(tmp_path):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+    (repo / ".aletheore.json").write_text(json.dumps({"disabled_checks": ["licenses"]}))
+
+    result = runner.invoke(app, ["scan", str(repo), "--check-licenses"])
 
     assert result.exit_code == 0
     evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
@@ -1188,6 +1217,9 @@ def test_init_writes_aletheore_json_with_defaults(tmp_path):
         "cluster_resolution": 1.0,
         "dead_code_entry_points": [],
         "accepted_secrets": [],
+        "ignored_paths": [],
+        "disabled_checks": [],
+        "severity_threshold": None,
     }
 
 

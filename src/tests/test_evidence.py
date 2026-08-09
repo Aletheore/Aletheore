@@ -121,6 +121,22 @@ def test_scan_repository_produces_full_schema(tmp_path):
     assert evidence["git"]["total_commits"] == 1
 
 
+def test_scan_repository_honors_ignored_paths_from_config(tmp_path):
+    repo = make_repo(tmp_path)
+    vendor = repo / "vendor"
+    vendor.mkdir()
+    (vendor / "lib.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+    (repo / ".aletheore.json").write_text(json.dumps({"ignored_paths": ["vendor/**"]}))
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo, check_licenses=False)
+
+    module_paths = {module["path"] for module in evidence["repository"]["modules"]}
+    assert "vendor/lib.py" not in module_paths
+    secret_paths = {f["path"] for f in evidence["security"]["secrets"]["findings"]}
+    assert "vendor/lib.py" not in secret_paths
+
+
 def test_scan_repository_handles_no_git_history(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
