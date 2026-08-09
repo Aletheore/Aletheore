@@ -313,6 +313,10 @@ def test_happy_path_posts_comment_and_writes_history(bare_repo_with_two_commits,
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
@@ -335,6 +339,55 @@ def test_happy_path_posts_comment_and_writes_history(bare_repo_with_two_commits,
     assert posted["pr_number"] == 7
 
 
+def test_run_pr_scan_job_excludes_a_dismissed_secret_from_the_pr_comment(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # Same fixture and setup as test_happy_path_posts_comment_and_writes_history
+    # above (which confirms "Secrets" IS present when nothing is dismissed) -
+    # this test only changes get_dismissed_identity_keys to report the
+    # planted secret finding as already dismissed, and confirms it no
+    # longer reaches the posted PR comment. filter_dismissed/
+    # finding_identity_key's own correctness is covered directly in
+    # test_dismissed_findings.py - this test is only about the wiring: that
+    # run_pr_scan_job actually applies the filter before posting.
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    posted = {}
+
+    def fake_upsert(client, token, repo_full_name, pr_number, body):
+        posted["body"] = body
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": {"dismiss-everything"}, "vulnerability": set()},
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.filter_dismissed",
+        lambda findings, finding_type, dismissed_keys: (
+            [] if finding_type == "secret" and dismissed_keys == {"dismiss-everything"} else findings
+        ),
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
+
+    run_pr_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        pr_number=7,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert "Secrets" not in posted["body"]
+
+
 def test_check_run_failure_does_not_overwrite_diff_comment(bare_repo_with_two_commits, monkeypatch):
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     posted = {}
@@ -347,6 +400,10 @@ def test_check_run_failure_does_not_overwrite_diff_comment(bare_repo_with_two_co
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
@@ -458,6 +515,10 @@ def test_slack_alert_fires_on_paid_install_with_webhook_url_and_new_secret(
         "scan_worker.jobs.get_installation_row",
         lambda *a, **k: {"plan": "air", "webhook_url": "https://hooks.slack.com/x"},
     )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     sent = {}
     monkeypatch.setattr(
@@ -484,6 +545,10 @@ def test_check_run_failure_on_new_secret(bare_repo_with_two_commits, monkeypatch
     monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     created = {}
     monkeypatch.setattr(
@@ -2622,6 +2687,10 @@ def test_run_pr_scan_job_wires_changed_files_into_live_wiki_update(bare_repo_wit
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
@@ -2663,6 +2732,10 @@ def test_run_pr_scan_job_logs_slack_alert_failure_instead_of_swallowing_it(
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
@@ -2833,6 +2906,10 @@ def test_run_pr_scan_job_free_plan_is_not_subject_to_monthly_scan_cap(bare_repo_
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
     monkeypatch.setattr(
         "scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not be called for free plan")),

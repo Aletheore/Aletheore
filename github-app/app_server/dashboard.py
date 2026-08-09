@@ -15,6 +15,7 @@ from app_server.admin import (
 )
 from app_server.auth import get_current_session
 from app_server.config import get_settings
+from app_server.dismissed_findings import dismiss_finding, get_dismissed_identity_keys, undismiss_finding
 from app_server.db import (
     MAX_SCANNED_REPOS_PER_MONTH,
     count_monthly_scanned_repos,
@@ -176,7 +177,7 @@ async def list_my_repos(request: Request):
     return {"repos": result}
 
 
-async def _require_dashboard_installation(request: Request, org: str, repo: str) -> int:
+async def _require_dashboard_installation(request: Request, org: str, repo: str) -> tuple[dict, int]:
     # Session + ownership check first, before any repo lookup - an unauthenticated
     # caller should not learn whether a given org/repo has scan history at all.
     session = await get_current_session(request)
@@ -196,21 +197,68 @@ async def _require_dashboard_installation(request: Request, org: str, repo: str)
             raise HTTPException(status_code=402, detail="the managed dashboard requires a paid plan")
         await _require_seat_if_paid(pool, installation, session["github_login"])
 
-    return installation_id
+    return session, installation_id
 
 
 @dashboard_router.get("/app/{org}/{repo}")
 async def get_dashboard(org: str, repo: str, request: Request):
-    installation_id = await _require_dashboard_installation(request, org, repo)
+    _session, installation_id = await _require_dashboard_installation(request, org, repo)
     pool = request.app.state.db_pool
     repo_full_name = f"{org}/{repo}"
     history = await get_recent_history(pool, installation_id, repo_full_name)
-    return {"repo_full_name": repo_full_name, "history": history}
+    dismissed = await get_dismissed_identity_keys(pool, installation_id, repo_full_name)
+    return {
+        "repo_full_name": repo_full_name,
+        "history": history,
+        "dismissed_finding_keys": {
+            "secret": list(dismissed["secret"]),
+            "vulnerability": list(dismissed["vulnerability"]),
+        },
+    }
+
+
+@dashboard_router.post("/app/{org}/{repo}/findings/dismiss")
+async def dismiss_finding_route(org: str, repo: str, request: Request):
+    session, installation_id = await _require_dashboard_installation(request, org, repo)
+    body = await request.json()
+    finding_type = body.get("finding_type")
+    finding = body.get("finding")
+    if finding_type not in ("secret", "vulnerability") or not isinstance(finding, dict):
+        raise HTTPException(status_code=400, detail="invalid finding_type or finding")
+
+    pool = request.app.state.db_pool
+    repo_full_name = f"{org}/{repo}"
+    try:
+        await dismiss_finding(
+            pool, installation_id, repo_full_name, finding_type, finding,
+            session["github_login"], body.get("reason"),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"finding missing required field: {exc}") from exc
+    return {"ok": True}
+
+
+@dashboard_router.post("/app/{org}/{repo}/findings/undismiss")
+async def undismiss_finding_route(org: str, repo: str, request: Request):
+    _session, installation_id = await _require_dashboard_installation(request, org, repo)
+    body = await request.json()
+    finding_type = body.get("finding_type")
+    finding = body.get("finding")
+    if finding_type not in ("secret", "vulnerability") or not isinstance(finding, dict):
+        raise HTTPException(status_code=400, detail="invalid finding_type or finding")
+
+    pool = request.app.state.db_pool
+    repo_full_name = f"{org}/{repo}"
+    try:
+        await undismiss_finding(pool, installation_id, repo_full_name, finding_type, finding)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"finding missing required field: {exc}") from exc
+    return {"ok": True}
 
 
 @dashboard_router.get("/app/{org}/{repo}/health")
 async def get_dashboard_health(org: str, repo: str, request: Request):
-    installation_id = await _require_dashboard_installation(request, org, repo)
+    _session, installation_id = await _require_dashboard_installation(request, org, repo)
     pool = request.app.state.db_pool
     repo_full_name = f"{org}/{repo}"
 
@@ -270,7 +318,7 @@ async def get_dashboard_health_history(
     target_id: int | None = None,
     limit: int = 50,
 ):
-    installation_id = await _require_dashboard_installation(request, org, repo)
+    _session, installation_id = await _require_dashboard_installation(request, org, repo)
     pool = request.app.state.db_pool
     repo_full_name = f"{org}/{repo}"
 
