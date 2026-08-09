@@ -4,6 +4,7 @@ from scan_worker.scheduler import (
     DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS,
     HEALTH_QUEUE_NAME,
     HEALTH_SWEEP_JOB_TIMEOUT_SECONDS,
+    HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS,
     SCANS_QUEUE_NAME,
     SESSION_CLEANUP_JOB_TIMEOUT_SECONDS,
     WEEKLY_DIGEST_SWEEP_JOB_TIMEOUT_SECONDS,
@@ -42,7 +43,7 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         assert call.args == ("scan_worker.jobs.run_health_check_sweep_job",)
         assert call.kwargs == {"job_timeout": HEALTH_SWEEP_JOB_TIMEOUT_SECONDS}
 
-    assert scans_queue.enqueue.call_count == 12
+    assert scans_queue.enqueue.call_count == 15
     session_cleanup_calls = [
         c for c in scans_queue.enqueue.call_args_list
         if c.args == ("scan_worker.jobs.run_session_cleanup_job",)
@@ -59,10 +60,15 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         c for c in scans_queue.enqueue.call_args_list
         if c.args == ("scan_worker.jobs.run_weekly_digest_sweep_job",)
     ]
+    staleness_check_calls = [
+        c for c in scans_queue.enqueue.call_args_list
+        if c.args == ("scan_worker.jobs.run_health_sweep_staleness_check_job",)
+    ]
     assert len(session_cleanup_calls) == 3
     assert len(docs_catchup_calls) == 3
     assert len(wiki_catchup_calls) == 3
     assert len(weekly_digest_calls) == 3
+    assert len(staleness_check_calls) == 3
     for call in session_cleanup_calls:
         assert call.kwargs == {"job_timeout": SESSION_CLEANUP_JOB_TIMEOUT_SECONDS}
     for call in docs_catchup_calls:
@@ -71,5 +77,19 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         assert call.kwargs == {"job_timeout": WIKI_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS}
     for call in weekly_digest_calls:
         assert call.kwargs == {"job_timeout": WEEKLY_DIGEST_SWEEP_JOB_TIMEOUT_SECONDS}
+    for call in staleness_check_calls:
+        assert call.kwargs == {"job_timeout": HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS}
     # Sleeps between iterations, not after the last one.
     assert sleeps == [42, 42]
+
+
+def test_run_forever_touches_heartbeat_once_per_completed_iteration(monkeypatch):
+    monkeypatch.setattr("scan_worker.scheduler.Queue", lambda name, **kwargs: MagicMock())
+    monkeypatch.setattr("scan_worker.scheduler.Redis.from_url", lambda url: MagicMock())
+    monkeypatch.setattr("scan_worker.scheduler.time.sleep", lambda seconds: None)
+    touches = []
+    monkeypatch.setattr("scan_worker.scheduler.touch_heartbeat", lambda: touches.append(True))
+
+    run_forever(interval_seconds=1, max_iterations=3)
+
+    assert len(touches) == 3

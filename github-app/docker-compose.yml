@@ -4,6 +4,28 @@ services:
       context: ..
       dockerfile: github-app/Dockerfile.app-server
     restart: unless-stopped
+    labels:
+      - autoheal=true
+    # `restart: unless-stopped` only reacts to the process actually
+    # exiting - it did nothing to help an import-time crash-loop earlier
+    # (correctly kept restarting it, since the process really did exit
+    # each time) but would do nothing at all for a process that's still
+    # running but hung. This HEALTHCHECK plus the autoheal service below
+    # closes that gap: any container Docker reports unhealthy for
+    # AUTOHEAL_START_PERIOD gets `docker restart`ed automatically. Uses
+    # Python's stdlib rather than adding curl to the image.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     env_file:
       - path: .env
         required: false
@@ -26,6 +48,19 @@ services:
       context: ..
       dockerfile: github-app/Dockerfile.scan-worker
     restart: unless-stopped
+    labels:
+      - autoheal=true
+    # No HTTP server here (RQ worker) - see app_server/heartbeat.py. A
+    # background thread touches /tmp/heartbeat every ~30s; this fails once
+    # that file goes stale, e.g. the process is hung. See app-server's
+    # healthcheck comment above for why this matters beyond `restart:
+    # unless-stopped` alone.
+    healthcheck:
+      test: ["CMD-SHELL", "find /tmp/heartbeat -mmin -2 | grep -q ."]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     env_file:
       - path: .env
         required: false
@@ -68,6 +103,16 @@ services:
       context: ..
       dockerfile: github-app/Dockerfile.scan-worker
     restart: unless-stopped
+    labels:
+      - autoheal=true
+    # See scan-worker's healthcheck comment above - same mechanism, this
+    # container's own /tmp/heartbeat, checked independently.
+    healthcheck:
+      test: ["CMD-SHELL", "find /tmp/heartbeat -mmin -2 | grep -q ."]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     command: ["python", "-m", "scan_worker.health_worker"]
     env_file:
       - path: .env
@@ -161,6 +206,20 @@ services:
       context: ..
       dockerfile: github-app/Dockerfile.scan-worker
     restart: unless-stopped
+    labels:
+      - autoheal=true
+    # touch_heartbeat() runs at the end of every completed loop iteration
+    # (scan_worker/scheduler.py) - a stronger signal than the RQ workers'
+    # background-thread heartbeat, since it only updates once the whole
+    # enqueue batch (including the Redis calls that stopped working for 11
+    # days without anyone noticing) actually succeeds. 180s iteration
+    # interval, so a wider window than the RQ workers' 30s thread tick.
+    healthcheck:
+      test: ["CMD-SHELL", "find /tmp/heartbeat -mmin -6 | grep -q ."]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     command: ["python", "-m", "scan_worker.scheduler"]
     env_file:
       - path: .env
@@ -212,6 +271,24 @@ services:
       - aletheore_caddy_config:/config
     depends_on:
       - app-server
+
+  # `docker restart`s any container labeled autoheal=true that Docker
+  # reports unhealthy for AUTOHEAL_START_PERIOD. `restart: unless-stopped`
+  # alone only reacts to a container actually exiting - nothing in this
+  # stack detected a process that's still running but stuck, which is the
+  # likely shape of the failure that let the health-check sweep go silent
+  # for 11 days without anyone noticing. willfarrell/autoheal: a small,
+  # widely-used, single-purpose image - just watches the Docker socket, no
+  # code of ours to maintain here.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: unless-stopped
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_START_PERIOD=60
+      - AUTOHEAL_INTERVAL=30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   aletheore_postgres_data:
