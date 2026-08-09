@@ -612,3 +612,97 @@ async def test_callback_degrades_gracefully_when_email_permission_not_granted(po
     assert response.status_code == 307
     row = await pool.fetchrow("SELECT 1 FROM github_user_emails WHERE github_login = 'octocat'")
     assert row is None
+
+
+@pytest.mark.asyncio
+async def test_login_rate_limits_after_threshold(pool, monkeypatch, redis_conn):
+    import app_server.auth as auth_module
+    from app_server.rate_limit import is_rate_limited as real_is_rate_limited
+
+    monkeypatch.setattr(auth_module, "is_rate_limited", real_is_rate_limited)
+    monkeypatch.setattr(auth_module, "AUTH_RATE_LIMIT", 2)
+    monkeypatch.setattr("redis.Redis.from_url", lambda url: redis_conn)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    headers = {"x-forwarded-for": "203.0.113.60"}
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.get("/auth/login", headers=headers, follow_redirects=False)
+        second = await client.get("/auth/login", headers=headers, follow_redirects=False)
+        third = await client.get("/auth/login", headers=headers, follow_redirects=False)
+
+    assert first.status_code == 307
+    assert second.status_code == 307
+    assert third.status_code == 429
+    assert "retry-after" in third.headers
+
+
+@pytest.mark.asyncio
+async def test_auth_rate_limit_is_shared_between_login_and_callback(pool, monkeypatch, redis_conn):
+    # Same logical flow, one budget - a separate limit per endpoint would
+    # just double an attacker's effective allowance.
+    import app_server.auth as auth_module
+    from app_server.rate_limit import is_rate_limited as real_is_rate_limited
+
+    monkeypatch.setattr(auth_module, "is_rate_limited", real_is_rate_limited)
+    monkeypatch.setattr(auth_module, "AUTH_RATE_LIMIT", 1)
+    monkeypatch.setattr("redis.Redis.from_url", lambda url: redis_conn)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    headers = {"x-forwarded-for": "203.0.113.61"}
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        login_response = await client.get("/auth/login", headers=headers, follow_redirects=False)
+        callback_response = await client.get(
+            "/auth/callback?code=fake-code", headers=headers, follow_redirects=False
+        )
+
+    assert login_response.status_code == 307
+    assert callback_response.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_auth_rate_limit_is_keyed_per_ip(pool, monkeypatch, redis_conn):
+    import app_server.auth as auth_module
+    from app_server.rate_limit import is_rate_limited as real_is_rate_limited
+
+    monkeypatch.setattr(auth_module, "is_rate_limited", real_is_rate_limited)
+    monkeypatch.setattr(auth_module, "AUTH_RATE_LIMIT", 1)
+    monkeypatch.setattr("redis.Redis.from_url", lambda url: redis_conn)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.get(
+            "/auth/login", headers={"x-forwarded-for": "1.1.1.1"}, follow_redirects=False
+        )
+        second_same_ip = await client.get(
+            "/auth/login", headers={"x-forwarded-for": "1.1.1.1"}, follow_redirects=False
+        )
+        first_other_ip = await client.get(
+            "/auth/login", headers={"x-forwarded-for": "2.2.2.2"}, follow_redirects=False
+        )
+
+    assert first.status_code == 307
+    assert second_same_ip.status_code == 429
+    assert first_other_ip.status_code == 307
+
+
+@pytest.mark.asyncio
+async def test_login_fails_open_when_redis_is_unreachable(pool, monkeypatch):
+    import app_server.auth as auth_module
+    from app_server.rate_limit import is_rate_limited as real_is_rate_limited
+
+    monkeypatch.setattr(auth_module, "is_rate_limited", real_is_rate_limited)
+
+    def _boom(url):
+        raise ConnectionError("redis unreachable")
+
+    monkeypatch.setattr("redis.Redis.from_url", _boom)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/auth/login", follow_redirects=False)
+
+    assert response.status_code == 307

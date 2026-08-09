@@ -97,6 +97,19 @@ def _no_real_paddle_ip_fetch(monkeypatch):
     monkeypatch.setattr(paddle_ip_allowlist, "_fetch_paddle_networks", _fake_fetch)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_auth_rate_limiting(monkeypatch):
+    # /auth/login and /auth/callback share one real-Redis-backed rate limit
+    # keyed by client IP - every test hitting either route runs from the
+    # same "testclient" source IP, so without this the whole suite (well
+    # over AUTH_RATE_LIMIT calls across test_auth.py and
+    # test_frontend_subscribe.py alone) would trip real 429s partway
+    # through, unrelated to whatever each test actually verifies. Tests
+    # that specifically exercise the 429 path patch is_rate_limited back
+    # to something real (or fake it directly) within their own test body.
+    monkeypatch.setattr("app_server.auth.is_rate_limited", lambda *a, **k: False)
+
+
 def _make_git_repo(path: Path, files: dict[str, str]) -> str:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q"], cwd=path, check=True)
