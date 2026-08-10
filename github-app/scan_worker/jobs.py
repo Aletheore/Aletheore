@@ -410,6 +410,15 @@ def _build_unchanged_scan_cache(
     return cache_path
 
 
+# The scan-worker container's own environment holds every secret we have -
+# DATABASE_URL, GITHUB_APP_PRIVATE_KEY, PADDLE_API_KEY, SESSION_SECRET,
+# AUDIT_SIGNING_PRIVATE_KEY, and more - none of which the CLI's static
+# parsing needs. This subprocess's entire job is walking source files from
+# an attacker-controlled, arbitrary customer repo, so it gets an explicit
+# minimal env instead of inheriting all of ours via **os.environ.
+_SCAN_SUBPROCESS_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL")
+
+
 def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> Path:
     # See GRAPH_COLD_SYNC_DEPTH_CAP and SECRETS_HISTORY_DEPTH_CAP - the
     # CLI's own analyze_git and find_secrets_in_history calls (inside this
@@ -417,11 +426,9 @@ def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> 
     # Postgres sync below, and run first, so they need the same caps. Both
     # left unset for a developer running `aletheore scan` directly on their
     # own machine (see evidence.py's handling of both env vars).
-    env = {
-        **os.environ,
-        "ALETHEORE_GIT_HISTORY_DEPTH_CAP": str(GRAPH_COLD_SYNC_DEPTH_CAP),
-        "ALETHEORE_SECRETS_HISTORY_DEPTH_CAP": str(SECRETS_HISTORY_DEPTH_CAP),
-    }
+    env = {name: os.environ[name] for name in _SCAN_SUBPROCESS_ENV_ALLOWLIST if name in os.environ}
+    env["ALETHEORE_GIT_HISTORY_DEPTH_CAP"] = str(GRAPH_COLD_SYNC_DEPTH_CAP)
+    env["ALETHEORE_SECRETS_HISTORY_DEPTH_CAP"] = str(SECRETS_HISTORY_DEPTH_CAP)
     if unchanged_scan_cache_path is not None:
         env["ALETHEORE_UNCHANGED_SCAN_CACHE"] = str(unchanged_scan_cache_path)
     subprocess.run(["aletheore", "scan", str(repo_dir)], check=True, env=env)
@@ -2626,7 +2633,8 @@ def _maybe_sync_docs_to_repo(dsn: str, installation_id: int, repo_full_name: str
                 "mode": row["mode"],
             }
         modules = build_api_reference(evidence, ai_descriptions_by_module)
-        result = sync_docs_to_repo(client, token, repo_full_name, modules, settings)
+        bot_login = f"{get_settings().github_app_slug}[bot]"
+        result = sync_docs_to_repo(client, token, repo_full_name, modules, settings, bot_login)
         if result is not None:
             content_hash, pr_number = result
             record_docs_repo_commit(dsn, installation_id, repo_full_name, content_hash, pr_number)

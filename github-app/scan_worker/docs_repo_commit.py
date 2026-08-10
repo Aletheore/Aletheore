@@ -41,10 +41,14 @@ def sync_docs_to_repo(
     repo_full_name: str,
     modules: dict[str, str],
     settings: dict | None,
+    bot_login: str,
 ) -> tuple[str, int] | None:
     """Returns (content_hash, pr_number) to persist via
     record_docs_repo_commit when a push happened, or None when nothing
-    changed (not opted in, or content identical to the last push)."""
+    changed (not opted in, or content identical to the last push).
+
+    bot_login (e.g. "aletheore[bot]") is used to verify we actually own
+    DOCS_COMMIT_BRANCH before force-pushing over it - see ensure_branch_at."""
     if settings is None or not settings.get("enabled"):
         return None
 
@@ -54,7 +58,7 @@ def sync_docs_to_repo(
         return None
 
     default_branch, base_sha = fetch_default_branch_and_head_sha(client, token, repo_full_name)
-    ensure_branch_at(client, token, repo_full_name, DOCS_COMMIT_BRANCH, base_sha)
+    ensure_branch_at(client, token, repo_full_name, DOCS_COMMIT_BRANCH, base_sha, bot_login)
     upsert_repo_file(
         client, token, repo_full_name, DOCS_COMMIT_PATH, DOCS_COMMIT_BRANCH, markdown, DOCS_COMMIT_MESSAGE,
     )

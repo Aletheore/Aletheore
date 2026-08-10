@@ -9,6 +9,13 @@ MAX_CONTEXT_FILE_BYTES = 40_000
 MAX_CONTEXT_TOTAL_BYTES = 200_000
 
 
+class BranchNotOwnedByAletheoreError(Exception):
+    """Raised by ensure_branch_at when a branch with our reserved name
+    already exists but its HEAD commit wasn't made by us - force-pushing
+    over it would silently destroy someone else's work (e.g. a
+    contributor who happened to push to a branch with the same name)."""
+
+
 def upsert_pr_comment(
     client: httpx.Client,
     token: str,
@@ -196,11 +203,18 @@ def ensure_branch_at(
     repo_full_name: str,
     branch: str,
     target_sha: str,
+    expected_committer_login: str,
 ) -> None:
     """Points `branch` at target_sha, creating it if it doesn't exist yet or
     force-resetting it if it does - used for a bot-owned branch that should
     always be exactly "latest default branch + our one file change", never
-    accumulating drift from earlier runs."""
+    accumulating drift from earlier runs.
+
+    Before force-resetting an existing branch, verifies its HEAD commit was
+    actually made by us (GitHub attributes commits made via an installation
+    token to `{app_slug}[bot]`). Someone else could push a branch with this
+    same reserved name (accidentally, or otherwise) - without this check
+    we'd silently force-push over and destroy whatever was there."""
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
@@ -215,6 +229,18 @@ def ensure_branch_at(
         response.raise_for_status()
         return
     existing.raise_for_status()
+    existing_sha = existing.json()["object"]["sha"]
+
+    commit = client.get(f"/repos/{repo_full_name}/commits/{existing_sha}", headers=headers)
+    commit.raise_for_status()
+    committer = commit.json().get("committer") or {}
+    if committer.get("login") != expected_committer_login:
+        raise BranchNotOwnedByAletheoreError(
+            f"refusing to force-push {repo_full_name}:{branch}: existing HEAD commit "
+            f"{existing_sha} was committed by {committer.get('login')!r}, not "
+            f"{expected_committer_login!r}"
+        )
+
     response = client.patch(
         f"/repos/{repo_full_name}/git/refs/heads/{branch}",
         headers=headers,

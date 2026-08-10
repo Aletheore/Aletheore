@@ -61,6 +61,25 @@ def test_run_scan_sets_git_history_depth_cap_env_var(tmp_path):
     assert kwargs["env"]["ALETHEORE_SECRETS_HISTORY_DEPTH_CAP"] == str(SECRETS_HISTORY_DEPTH_CAP)
 
 
+def test_run_scan_does_not_leak_our_secrets_into_the_subprocess_env(tmp_path, monkeypatch):
+    # This subprocess parses source files from an arbitrary, attacker-
+    # controlled customer repo - it must not inherit DATABASE_URL,
+    # GITHUB_APP_PRIVATE_KEY, or any other secret from the scan-worker
+    # container's own environment.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://should-not-leak")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "-----BEGIN RSA PRIVATE KEY-----should-not-leak")
+    monkeypatch.setenv("SESSION_SECRET", "should-not-leak")
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    with patch("scan_worker.jobs.subprocess.run") as mock_run:
+        _run_scan(repo_dir)
+    _, kwargs = mock_run.call_args
+    env = kwargs["env"]
+    assert "DATABASE_URL" not in env
+    assert "GITHUB_APP_PRIVATE_KEY" not in env
+    assert "SESSION_SECRET" not in env
+
+
 def _fake_evidence() -> dict:
     return {
         "git": {"available": True},
