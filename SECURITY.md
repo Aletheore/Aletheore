@@ -103,7 +103,7 @@ writes it, and gates a pair of expensive full AIRview and Docs builds on that
 read having been `free`. Two deliveries of one event arriving together would
 both observe `free` and both enqueue those builds. The atomic claim is what
 makes that gate hold. A payload without an `event_id` is rejected with 400
-rather than processed undeduplicated.
+rather than processed without a dedupe check.
 
 ### Both paths
 

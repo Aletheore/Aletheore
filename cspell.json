@@ -82,6 +82,7 @@
     "nomic",
     "opencode",
     "openvswitch",
+    "pathlib",
     "petclinic",
     "psycopg",
     "pipx",
