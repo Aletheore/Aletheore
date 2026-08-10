@@ -33,6 +33,15 @@ BINARY_EXTENSIONS = {
     ".dll",
 }
 
+# iter_all_files feeds full-file reads (find_secrets, mcp_server's
+# aletheore_search) on the shared scan-worker, where every installation's
+# scans compete for the same container's memory - a single unusually large
+# committed file (a data dump, a generated fixture, a vendored bundle) read
+# in full would risk OOMing that container for everyone. Skipped the same
+# way BINARY_EXTENSIONS files are: silently excluded from the walk, not
+# truncated (a truncated secrets scan could misreport line numbers).
+MAX_SCANNED_FILE_BYTES = 10 * 1024 * 1024
+
 PLACEHOLDER_PATH_MARKERS = ("example", "test", "fixture", "mock")
 
 # Substrings that show up in hand-written placeholder values themselves
@@ -92,6 +101,11 @@ def iter_all_files(repo_path: Path, ignored_paths: list[str] | None = None):
             if path.is_symlink() or not path.is_file():
                 continue
             if path.suffix in BINARY_EXTENSIONS:
+                continue
+            try:
+                if path.stat().st_size > MAX_SCANNED_FILE_BYTES:
+                    continue
+            except OSError:
                 continue
             rel_path = path.relative_to(repo_path).as_posix()
             if is_ignored(rel_path, patterns):

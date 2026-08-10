@@ -84,8 +84,22 @@ def _save_key(provider_name: str, key: str, credentials_path: Path) -> None:
         except json.JSONDecodeError:
             data = {}
     data[provider_name] = key
-    credentials_path.write_text(json.dumps(data, indent=2))
-    credentials_path.chmod(0o600)
+    content = json.dumps(data, indent=2)
+    # os.open's mode only applies when it creates the file - an existing
+    # file (e.g. one that pre-dates this restrictive-permissions fix, or
+    # was seeded some other way) keeps whatever permissions it already had.
+    # fchmod before writing closes that gap too: permissions are locked
+    # down before any new key content is written, whether the file is new
+    # or pre-existing, instead of write_text() then chmod() after, which
+    # left the file (and the key) briefly world/group-readable in between.
+    fd = os.open(credentials_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except BaseException:
+        os.close(fd)
+        raise
+    with os.fdopen(fd, "w") as f:
+        f.write(content)
 
 
 def clear_api_key(provider_name: str, credentials_path: Path = DEFAULT_CREDENTIALS_PATH) -> bool:

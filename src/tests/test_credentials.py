@@ -119,6 +119,23 @@ def test_save_key_sets_restrictive_permissions(monkeypatch, tmp_path):
     assert mode == 0o600
 
 
+def test_save_key_tightens_permissions_on_a_pre_existing_looser_file(monkeypatch, tmp_path):
+    # A file that already exists (e.g. from before this restrictive-
+    # permissions fix, or seeded some other way) with looser permissions
+    # must still end up at 0o600 - os.open's mode argument is a no-op on
+    # an existing file, so this only holds if _save_key explicitly chmods.
+    monkeypatch.delenv("TESTPROVIDER_API_KEY", raising=False)
+    creds_path = tmp_path / "creds.json"
+    creds_path.write_text(json.dumps({}))
+    creds_path.chmod(0o644)
+    responses = iter(["sk-entered", "save"])
+
+    get_api_key("TESTPROVIDER_API_KEY", "testprovider", creds_path, lambda _msg: next(responses))
+
+    mode = creds_path.stat().st_mode & 0o777
+    assert mode == 0o600
+
+
 def test_save_key_preserves_other_providers_existing_keys(monkeypatch, tmp_path):
     monkeypatch.delenv("PROVIDER_B_KEY", raising=False)
     creds_path = tmp_path / "creds.json"

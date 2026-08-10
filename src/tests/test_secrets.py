@@ -1,6 +1,6 @@
 import json
-from pathlib import Path
 
+import aletheore.secrets as secrets_module
 from aletheore.secrets import find_secrets, load_secrets_baseline
 
 
@@ -114,6 +114,23 @@ def test_find_secrets_ignores_ignored_dirs_and_binary_extensions(tmp_path):
 
     assert result["findings"] == []
     assert result["scanned_files"] == 1
+
+
+def test_find_secrets_skips_files_over_the_size_cap(tmp_path, monkeypatch):
+    # A single unusually large committed file (a data dump, a vendored
+    # bundle) read in full would risk OOMing the shared scan-worker
+    # container - files over the cap are excluded from the walk entirely,
+    # the same way binary extensions already are.
+    monkeypatch.setattr(secrets_module, "MAX_SCANNED_FILE_BYTES", 10)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "huge.py").write_text('KEY = "AKIAABCDEFGHIJKLMNOP"\n' * 5)
+    (repo / "small.py").write_text("x = 1\n")
+
+    result = find_secrets(repo)
+
+    assert result["scanned_files"] == 1
+    assert result["findings"] == []
 
 
 def test_find_secrets_no_matches_in_ordinary_file(tmp_path):
