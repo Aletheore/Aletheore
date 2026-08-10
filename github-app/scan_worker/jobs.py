@@ -212,8 +212,30 @@ def _url_without_credentials(url: str) -> str:
     return urlunsplit(parts._replace(netloc=parts.hostname))
 
 
+def _run_git(args: list[str], **kwargs) -> None:
+    """subprocess.run wrapper for git invocations whose argv may embed a
+    credentialed clone URL (see _clone_url). A failing git command raises
+    CalledProcessError, whose __str__ includes the full argv verbatim -
+    unredacted, that string is what logging_config.log_job both writes to
+    the structured job-failure log and emails via
+    error_alerts.send_error_alert, so a transient clone/fetch failure (a
+    network blip, not a security event) would otherwise plaintext a live
+    installation token to an inbox and a log store. Scrubs any arg that
+    parses as a URL with embedded credentials before letting the error
+    propagate.
+    """
+    try:
+        subprocess.run(args, check=True, **kwargs)
+    except subprocess.CalledProcessError as exc:
+        exc.cmd = [
+            _url_without_credentials(arg) if isinstance(arg, str) and urlsplit(arg).username else arg
+            for arg in exc.cmd
+        ]
+        raise
+
+
 def _clone_ref(url: str, ref: str, dest: Path) -> None:
-    subprocess.run(["git", "clone", "-q", "--no-checkout", url, str(dest)], check=True)
+    _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
     subprocess.run(["git", "checkout", "-q", ref], cwd=dest, check=True)
 
 
@@ -286,7 +308,7 @@ def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path)
     """
     credential_free_url = _url_without_credentials(url)
     if (checkout_dir / ".git").exists():
-        subprocess.run(["git", "remote", "set-url", "origin", url], cwd=checkout_dir, check=True)
+        _run_git(["git", "remote", "set-url", "origin", url], cwd=checkout_dir)
         try:
             subprocess.run(["git", "fetch", "-q", "origin"], cwd=checkout_dir, check=True)
             subprocess.run(["git", "checkout", "-q", "-f", checkout_sha], cwd=checkout_dir, check=True)
@@ -298,7 +320,7 @@ def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path)
     else:
         checkout_dir.mkdir(parents=True, exist_ok=True)
         try:
-            subprocess.run(["git", "clone", "-q", "--no-checkout", url, str(checkout_dir)], check=True)
+            _run_git(["git", "clone", "-q", "--no-checkout", url, str(checkout_dir)])
             subprocess.run(["git", "checkout", "-q", checkout_sha], cwd=checkout_dir, check=True)
         finally:
             if (checkout_dir / ".git").exists():
@@ -970,7 +992,7 @@ def run_push_scan_job(
 
 
 def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
-    subprocess.run(["git", "clone", "-q", "--no-checkout", url, str(dest)], check=True)
+    _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
     subprocess.run(
         ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
         cwd=dest,

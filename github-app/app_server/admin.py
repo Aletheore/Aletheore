@@ -1,5 +1,7 @@
 import asyncio
+import functools
 import hashlib
+import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -176,12 +178,60 @@ def _fetch_administered_installation_ids(github_token: str) -> set[int]:
     return {item["id"] for item in response.json().get("installations", [])}
 
 
+_ADMINISTERED_INSTALLATIONS_CACHE_TTL_SECONDS = 30
+
+
+def _administered_installations_cache_key(github_token: str) -> str:
+    # Never the raw token as a cache key - same discipline as API token
+    # storage elsewhere in this file.
+    return "administered-installations:" + hashlib.sha256(github_token.encode()).hexdigest()
+
+
+@functools.lru_cache(maxsize=1)
+def _administered_installations_cache_redis():
+    from redis import Redis
+
+    # lru_cache'd (same convention as get_settings()) so this is one
+    # pooled connection reused across every call, not a fresh TCP
+    # handshake per request. A short connect timeout, not the client
+    # default (multiple seconds) - this cache sits in front of nearly
+    # every dashboard/admin request, so a Redis outage must fail fast
+    # into the live GitHub fallback below rather than stalling every
+    # request behind it.
+    return Redis.from_url(get_settings().redis_url, socket_connect_timeout=0.5, socket_timeout=0.5)
+
+
 async def _administered_installation_ids(github_token: str) -> set[int]:
     # This gates nearly every admin/dashboard route via
-    # _require_admin_installation - run off the event loop via
-    # asyncio.to_thread so one slow GitHub API round-trip can't stall
-    # every other in-flight request on this single-worker server.
-    return await asyncio.to_thread(_fetch_administered_installation_ids, github_token)
+    # _require_admin_installation - a single dashboard page can fire
+    # several requests, each previously making its own live GitHub API
+    # round-trip here (latency, a hard GitHub-availability dependency for
+    # the whole app, and burned user rate limit for no reason - the
+    # answer barely changes install-to-install). A short cache absorbs
+    # that fan-out; run off the event loop via asyncio.to_thread so one
+    # slow GitHub round-trip (on a cache miss) still can't stall every
+    # other in-flight request on this single-worker server.
+    cache_key = _administered_installations_cache_key(github_token)
+    try:
+        cached = await asyncio.to_thread(_administered_installations_cache_redis().get, cache_key)
+        if cached is not None:
+            return {int(installation_id) for installation_id in json.loads(cached)}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("administered-installations cache read failed (%s); falling back to GitHub", exc)
+
+    installation_ids = await asyncio.to_thread(_fetch_administered_installation_ids, github_token)
+
+    try:
+        await asyncio.to_thread(
+            _administered_installations_cache_redis().set,
+            cache_key,
+            json.dumps(list(installation_ids)),
+            _ADMINISTERED_INSTALLATIONS_CACHE_TTL_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("administered-installations cache write failed (%s)", exc)
+
+    return installation_ids
 
 
 async def _administered_installation_ids_or_401(github_token: str) -> set[int]:

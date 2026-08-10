@@ -3824,3 +3824,14 @@ def test_run_health_sweep_staleness_check_job_does_not_alert_when_no_data_yet(mo
     run_health_sweep_staleness_check_job()
 
     assert alerts == []
+
+
+def test_run_git_scrubs_credentialed_url_from_a_failed_clone_error(tmp_path):
+    from scan_worker.jobs import _run_git
+
+    credentialed_url = "https://x-access-token:supersecrettoken@github.com/acme/does-not-exist.git"
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        _run_git(["git", "clone", "-q", credentialed_url, str(tmp_path / "dest")])
+
+    assert "supersecrettoken" not in str(exc_info.value)
+    assert "https://github.com/acme/does-not-exist.git" in exc_info.value.cmd

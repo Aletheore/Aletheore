@@ -31,13 +31,12 @@ class StartDemoScanRequest(BaseModel):
 
 
 def _client_ip(request: Request) -> str:
-    # app-server is only reachable via Caddy's reverse_proxy inside the
-    # docker network (bound to 127.0.0.1:8000 on the host) - Caddy is the
-    # only thing that can set this header, so trusting it here is safe.
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for
+
+    return client_ip_from_forwarded_for(
+        request.headers.get("x-forwarded-for"),
+        request.client.host if request.client else "unknown",
+    )
 
 
 def _get_queue(redis_url: str):
