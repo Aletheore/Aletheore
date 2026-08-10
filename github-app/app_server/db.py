@@ -37,6 +37,23 @@ async def get_installation(pool: asyncpg.Pool, installation_id: int) -> dict | N
     return dict(row) if row else None
 
 
+async def get_installation_by_account_login(pool: asyncpg.Pool, account_login: str) -> dict | None:
+    # Relies on installations_account_login_unique (migration 042) for a
+    # well-defined result - before that constraint existed, a duplicate
+    # row here would have made this an arbitrary pick.
+    row = await pool.fetchrow(
+        """
+        SELECT installation_id, account_login, plan, webhook_url, max_api_tokens,
+               health_check_base_url, health_check_latency_threshold_ms,
+               paddle_subscription_id, paddle_customer_id, llm_suggestions_enabled
+        FROM installations
+        WHERE account_login = $1
+        """,
+        account_login,
+    )
+    return dict(row) if row else None
+
+
 async def set_installation_plan(pool: asyncpg.Pool, installation_id: int, plan: str) -> None:
     await pool.execute(
         "UPDATE installations SET plan = $2, updated_at = now() WHERE installation_id = $1",
