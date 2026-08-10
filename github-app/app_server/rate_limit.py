@@ -10,6 +10,16 @@ _TIERS = (
 )
 _DEFAULT_COOLDOWN_SECONDS = 24 * 3600
 
+# The real cooldown is only known after a scan runs (it's derived from the
+# evidence the scan produces), which means the actual per-repo cooldown
+# can't be checked before doing that work. But every tier is at least this
+# long, so a repo whose last run was more recent than this is guaranteed
+# to still be cooling down under whatever the real duration turns out to
+# be - a cheap, conservative pre-check the managed-audit job runs before
+# cloning/scanning, so a burst of repeat triggers gets turned away before
+# wasting compute on the shared scans queue instead of after.
+MIN_MANAGED_AUDIT_COOLDOWN_SECONDS = _TIERS[0][1]
+
 
 def cooldown_seconds_for_loc(total_loc: int) -> int:
     for threshold, cooldown_seconds in _TIERS:

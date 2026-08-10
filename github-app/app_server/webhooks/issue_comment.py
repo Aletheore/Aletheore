@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from app_server.config import get_settings
+from app_server.db import get_installation
 from app_server.github_auth import generate_app_jwt, get_installation_token, get_repo_permission_for_user
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ def _verify_commenter_permission_sync(
     return get_repo_permission_for_user(repo_full_name, commenter, token)
 
 
-async def handle_issue_comment_event(payload: dict, redis_url: str, queue=None) -> None:
+async def handle_issue_comment_event(payload: dict, pool, redis_url: str, queue=None) -> None:
     if payload.get("action") != "created":
         return
     if "pull_request" not in payload.get("issue", {}):
@@ -33,6 +34,25 @@ async def handle_issue_comment_event(payload: dict, redis_url: str, queue=None) 
     installation_id = payload["installation"]["id"]
     repo_full_name = payload["repository"]["full_name"]
     commenter = payload["comment"]["user"]["login"]
+
+    # Managed audits are a paid feature (see managed_audit_api.py's own
+    # 402 for the HTTP trigger) - this ChatOps trigger had no equivalent
+    # gate at all, letting any repo with write/admin access (trivially
+    # granted by installing the free app on your own repo) run unlimited
+    # clone+scan cycles on the shared scans queue. Silent, matching the
+    # permission-denied case right below: this fires from any commenter
+    # with write access, not just the installer, so it's not obviously a
+    # billing question they're asking - same reasoning as staying quiet
+    # on a permission check failure rather than narrating access details
+    # to whoever happens to comment.
+    installation = await get_installation(pool, installation_id)
+    if installation is None or installation["plan"] == "free":
+        logger.info(
+            "ignoring '%s' on %s: managed audits require a paid plan",
+            AUDIT_COMMAND,
+            repo_full_name,
+        )
+        return
 
     settings = get_settings()
     try:
