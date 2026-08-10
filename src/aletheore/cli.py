@@ -741,7 +741,11 @@ def _healthcheck(repo_path: str, base_url: str) -> int:
         return 1
 
     endpoints = evidence["repository"].get("api_endpoints", {}).get("endpoints", [])
-    result = run_healthcheck(endpoints, base_url)
+    try:
+        result = run_healthcheck(endpoints, base_url)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
     save_healthcheck(result, repo)
 
     for entry in result["results"]:

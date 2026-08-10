@@ -1,4 +1,6 @@
 import urllib.error
+
+import pytest
 from unittest.mock import MagicMock, patch
 
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
@@ -382,6 +384,33 @@ def test_run_healthcheck_response_shape_is_none_on_unreachable():
         result = run_healthcheck(endpoints, "http://localhost:9999")
 
     assert result["results"][0]["response_shape"] is None
+
+
+def test_run_healthcheck_rejects_file_scheme(tmp_path):
+    # urllib's default opener retains a FileHandler regardless of which
+    # extra handlers build_opener() is given - without this check, a
+    # file:// base_url is opened as a local file rather than rejected.
+    secret = tmp_path / "secret.json"
+    secret.write_text('{"password": "hunter2"}')
+
+    with pytest.raises(ValueError, match="http or https"):
+        run_healthcheck([], f"file://{secret}")
+
+
+def test_run_healthcheck_rejects_ftp_scheme():
+    with pytest.raises(ValueError, match="http or https"):
+        run_healthcheck([], "ftp://example.com")
+
+
+def test_run_healthcheck_rejects_missing_scheme():
+    with pytest.raises(ValueError, match="http or https"):
+        run_healthcheck([], "example.com")
+
+
+def test_run_healthcheck_accepts_https():
+    with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", return_value=_mock_response(200)):
+        result = run_healthcheck([], "https://example.com")
+    assert result["base_url"] == "https://example.com"
 
 
 def test_save_healthcheck_rotates_at_21st_save_keeping_20_newest(tmp_path):

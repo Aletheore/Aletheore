@@ -771,3 +771,20 @@ async def test_aletheore_healthcheck_tool_returns_results(tmp_path):
 
     body = tool_result_body(result)["result"]
     assert body["results"][0]["status_code"] == 200
+
+
+@pytest.mark.asyncio
+async def test_aletheore_healthcheck_tool_rejects_file_scheme_base_url(tmp_path):
+    # An LLM agent driven by untrusted content in a scanned repo (e.g. a
+    # malicious README) could try to point this tool at file:// to read
+    # local files instead of probing a real HTTP endpoint - this must
+    # surface as a normal tool error, not silently open the local file.
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool(
+        "aletheore_healthcheck", {"base_url": "file:///etc/passwd"}
+    )
+
+    body = tool_result_body(result)["result"]
+    assert "http or https" in body["error"]
