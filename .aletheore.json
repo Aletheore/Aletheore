@@ -1,0 +1,13 @@
+{
+  "layer_markers": {},
+  "cluster_resolution": 1.0,
+  "dead_code_entry_points": [],
+  "accepted_secrets": [],
+  "ignored_paths": [
+    "src/tests",
+    "github-app/tests",
+    "docs/superpowers/plans"
+  ],
+  "disabled_checks": [],
+  "severity_threshold": null
+}
