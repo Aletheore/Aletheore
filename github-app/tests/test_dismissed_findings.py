@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from app_server.db import upsert_installation
@@ -11,6 +13,8 @@ from app_server.dismissed_findings import (
 
 SECRET_FINDING = {"path": "config.py", "pattern": "aws_access_key_id", "match_preview": "AKIA****...MNOP"}
 VULN_FINDING = {"ecosystem": "PyPI", "package": "requests", "advisory_id": "GHSA-1"}
+
+MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
 
 def test_finding_identity_key_secret():
@@ -106,3 +110,29 @@ async def test_dismissed_findings_are_scoped_per_repo(pool):
 
     dismissed = await get_dismissed_identity_keys(pool, 1, "octocat/repo-b")
     assert dismissed["secret"] == set()
+
+
+@pytest.mark.asyncio
+async def test_migration_045_purges_legacy_format_secret_dismissals_only(pool):
+    # SECRET_FINDING's match_preview ("AKIA****...MNOP") is the pre-CLI-3
+    # format - a dismissal keyed on it can never match a finding from the
+    # current scanner (which always produces a sha256:-prefixed preview), so
+    # it's permanently dead weight migration 045 is meant to clear out.
+    await upsert_installation(pool, 1, "octocat")
+    hash_format_finding = {
+        "path": "config.py",
+        "pattern": "aws_access_key_id",
+        "match_preview": "sha256:aaaaaaaaaaaa",
+    }
+    await dismiss_finding(pool, 1, "octocat/repo", "secret", SECRET_FINDING, "octocat")
+    await dismiss_finding(pool, 1, "octocat/repo", "secret", hash_format_finding, "octocat")
+    await dismiss_finding(pool, 1, "octocat/repo", "vulnerability", VULN_FINDING, "octocat")
+
+    migration_sql = (MIGRATIONS_DIR / "045_purge_legacy_secret_dismissals.sql").read_text()
+    await pool.execute(migration_sql)
+
+    dismissed = await get_dismissed_identity_keys(pool, 1, "octocat/repo")
+    assert dismissed["secret"] == {finding_identity_key("secret", hash_format_finding)}
+    # Vulnerability dismissals aren't touched - the legacy-format concern is
+    # specific to secrets' match_preview, which vulnerabilities don't have.
+    assert dismissed["vulnerability"] == {finding_identity_key("vulnerability", VULN_FINDING)}
