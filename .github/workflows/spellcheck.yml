@@ -18,6 +18,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Spell check
-        uses: streetsidesoftware/cspell-action@v6
+        uses: streetsidesoftware/cspell-action@v8
         with:
           config: cspell.json
