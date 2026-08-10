@@ -1,16 +1,19 @@
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
+import asyncpg
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app_server.affiliates import create_affiliate, list_affiliates_with_totals, mark_commissions_paid
 from app_server.auth import encrypt_access_token, get_current_session, refresh_github_access_token
 from app_server.config import get_settings
 from app_server.http_client import get_github_api_client
@@ -58,6 +61,7 @@ from app_server.db import (
 )
 from app_server.llm_cost import EXTRA_SEAT_PRICE_USD, base_cap_for_plan, monthly_cap_for_installation
 from app_server.paddle_client import PaddleAPIError
+from app_server.paddle_client import create_discount as create_paddle_discount
 from app_server.paddle_client import create_portal_session
 from app_server.paddle_client import get_subscription as get_paddle_subscription
 from app_server.paddle_client import update_subscription_items as update_paddle_subscription_items
@@ -122,6 +126,12 @@ class DeleteInstallationDataRequest(BaseModel):
 
 class AddMemberRequest(BaseModel):
     github_login: str = Field(min_length=1, max_length=39, pattern=_GITHUB_LOGIN_PATTERN)
+
+
+# Paddle discount codes accept up to 32 alphanumeric characters.
+class CreateAffiliateRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9]+$")
+    name: str = Field(min_length=1, max_length=200, pattern=_LABEL_PATTERN)
 
 
 BRANCH_PROTECTION_DISCLOSURE = (
@@ -1082,3 +1092,65 @@ async def create_cli_token(request: Request, body: CreateCliTokenRequest):
     await create_api_token(pool, installation_id, token_hash, body.label, installation["account_login"])
     token_id = (await list_api_tokens(pool, installation_id))[0]["id"]
     return {"token": raw_token, "id": token_id, "label": body.label}
+
+
+# ---------------------------------------------------------------------------
+# Affiliate program - internal admin only, not scoped to a customer
+# installation. Same optional/404-if-unset bearer-token pattern as
+# /v1/internal/queue-stats in metrics.py, gated on its own dedicated
+# affiliate_admin_token rather than reusing internal_metrics_token: this
+# token can create real Paddle discount codes and see revenue, a different
+# privilege level than read-only queue stats. See
+# docs/superpowers/specs/2026-08-10-aletheore-affiliate-program-design.md.
+# ---------------------------------------------------------------------------
+
+
+def _require_affiliate_admin_token(request: Request) -> None:
+    settings = get_settings()
+    if not settings.affiliate_admin_token:
+        raise HTTPException(status_code=404, detail="not found")
+    auth_header = request.headers.get("Authorization", "")
+    if not hmac.compare_digest(auth_header, f"Bearer {settings.affiliate_admin_token}"):
+        raise HTTPException(status_code=401, detail="missing or invalid token")
+
+
+@admin_router.post("/admin/affiliates")
+async def create_affiliate_route(request: Request, body: CreateAffiliateRequest):
+    _require_affiliate_admin_token(request)
+    settings = get_settings()
+    try:
+        # Off the event loop: create_paddle_discount is a blocking httpx
+        # call, same reasoning as every other synchronous paddle_client
+        # call in this file (see _adjust_extra_seat_sync and
+        # get_billing_portal_url above).
+        discount = await asyncio.to_thread(
+            create_paddle_discount, settings.paddle_api_key, body.code, f"Affiliate: {body.name}"
+        )
+    except PaddleAPIError as exc:
+        logger.error("affiliate discount creation failed for code %s: %s", body.code, exc)
+        raise HTTPException(
+            status_code=502, detail="Could not create the Paddle discount code right now."
+        ) from exc
+
+    pool = request.app.state.db_pool
+    try:
+        affiliate = await create_affiliate(pool, body.code, discount["id"], body.name)
+    except asyncpg.UniqueViolationError as exc:
+        raise HTTPException(status_code=409, detail="an affiliate with that code already exists") from exc
+    return jsonable_encoder(affiliate)
+
+
+@admin_router.get("/admin/affiliates")
+async def list_affiliates_route(request: Request):
+    _require_affiliate_admin_token(request)
+    pool = request.app.state.db_pool
+    affiliates = await list_affiliates_with_totals(pool)
+    return {"affiliates": jsonable_encoder(affiliates)}
+
+
+@admin_router.post("/admin/affiliates/{affiliate_id}/mark-paid")
+async def mark_affiliate_paid_route(affiliate_id: int, request: Request):
+    _require_affiliate_admin_token(request)
+    pool = request.app.state.db_pool
+    marked_count = await mark_commissions_paid(pool, affiliate_id)
+    return {"marked_paid_count": marked_count}

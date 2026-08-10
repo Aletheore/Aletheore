@@ -4,6 +4,7 @@ import pytest
 from app_server.paddle_client import (
     PaddleAPIError,
     PaddleAPINotConfigured,
+    create_discount,
     create_portal_session,
     get_subscription,
     update_subscription_items,
@@ -13,6 +14,62 @@ from app_server.paddle_client import (
 def test_get_subscription_requires_api_key():
     with pytest.raises(PaddleAPINotConfigured):
         get_subscription(None, "sub_123")
+
+
+def test_create_discount_requires_api_key():
+    with pytest.raises(PaddleAPINotConfigured):
+        create_discount(None, "SARAH10", "Affiliate: Sarah")
+
+
+def test_create_discount_sends_post_with_expected_body(monkeypatch):
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        import json
+
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(201, json={"data": {"id": "dsc_123", "code": "SARAH10"}})
+
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda url, headers, json: httpx.Client(transport=httpx.MockTransport(handler)).post(
+            url, headers=headers, json=json
+        ),
+    )
+
+    result = create_discount("test_key", "SARAH10", "Affiliate: Sarah")
+
+    assert result == {"id": "dsc_123", "code": "SARAH10"}
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/discounts"
+    assert captured["body"] == {
+        "description": "Affiliate: Sarah",
+        "type": "percentage",
+        "amount": "10",
+        "code": "SARAH10",
+        "recur": True,
+        "maximum_recurring_intervals": 1,
+        "enabled_for_checkout": True,
+    }
+
+
+def test_create_discount_wraps_http_errors(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json={"error": "code already exists"})
+
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        lambda url, headers, json: httpx.Client(transport=httpx.MockTransport(handler)).post(
+            url, headers=headers, json=json
+        ),
+    )
+
+    with pytest.raises(PaddleAPIError):
+        create_discount("test_key", "SARAH10", "Affiliate: Sarah")
 
 
 def test_create_portal_session_requires_api_key():
