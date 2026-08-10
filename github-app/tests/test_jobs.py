@@ -3676,7 +3676,8 @@ def test_maybe_sync_docs_to_repo_pushes_and_records_when_enabled(monkeypatch):
     sync_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs.sync_docs_to_repo",
-        lambda client, token, repo, modules, s: sync_calls.append((repo, modules, s)) or ("hash123", 7),
+        lambda client, token, repo, modules, s, bot_login: sync_calls.append((repo, modules, s, bot_login))
+        or ("hash123", 7),
     )
     record_calls = []
     monkeypatch.setattr(
@@ -3687,10 +3688,13 @@ def test_maybe_sync_docs_to_repo_pushes_and_records_when_enabled(monkeypatch):
     _maybe_sync_docs_to_repo("dsn", 1, "octocat/hello-world")
 
     assert len(sync_calls) == 1
-    repo, modules, s = sync_calls[0]
+    repo, modules, s, bot_login = sync_calls[0]
     assert repo == "octocat/hello-world"
     assert "a.py" in modules
     assert s is settings
+    # bot_login gates the force-push ownership check in ensure_branch_at -
+    # must be derived from our own app slug, not left for the caller to guess.
+    assert bot_login == "aletheore[bot]"
     assert record_calls == [(1, "octocat/hello-world", "hash123", 7)]
 
 
