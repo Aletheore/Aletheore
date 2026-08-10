@@ -84,6 +84,23 @@ def _clear_settings_cache():
 
 
 @pytest.fixture(autouse=True)
+def _clear_redis_client_cache():
+    # Same reasoning as _clear_settings_cache above, for get_redis_client()
+    # (also @lru_cache'd, for the same "one pooled connection instead of a
+    # fresh one per caller" reason). Without this, whichever test calls it
+    # first in the whole session permanently pins every later test to that
+    # first real connection - a test that monkeypatches get_redis_client to
+    # simulate a Redis outage would silently have no effect, since the
+    # cached real client from an earlier test is what every caller actually
+    # gets.
+    from app_server.redis_client import get_redis_client
+
+    get_redis_client.cache_clear()
+    yield
+    get_redis_client.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_paddle_ip_fetch(monkeypatch):
     # Without this, every full-route webhook test would make a real network
     # call to Paddle's /ips endpoint on the first request (module-level

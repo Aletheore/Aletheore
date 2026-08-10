@@ -34,17 +34,19 @@ class StartManagedAuditRequest(BaseModel):
 
 
 def _get_queue(redis_url: str):
-    from redis import Redis
     from rq import Queue
 
-    return Queue("scans", connection=Redis.from_url(redis_url))
+    from app_server.redis_client import get_redis_client
+
+    return Queue("scans", connection=get_redis_client())
 
 
 def _fetch_job(job_id: str, redis_url: str):
-    from redis import Redis
     from rq.job import Job
 
-    return Job.fetch(job_id, connection=Redis.from_url(redis_url))
+    from app_server.redis_client import get_redis_client
+
+    return Job.fetch(job_id, connection=get_redis_client())
 
 
 async def _authenticate_token(request: Request) -> tuple[dict, str]:

@@ -24,8 +24,10 @@ from app_server.db import (
 )
 from app_server.email_queue import enqueue_transactional_email
 from app_server.github_auth import generate_app_jwt, get_installation_details
+from app_server.http_client import get_github_api_client, get_github_oauth_client
 from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for
 from app_server.rate_limit import is_rate_limited
+from app_server.redis_client import get_redis_client
 
 SESSION_COOKIE_NAME = "session"
 SESSION_TTL = timedelta(days=30)
@@ -48,16 +50,13 @@ logger = logging.getLogger(__name__)
 
 
 def _enforce_auth_rate_limit(request: Request) -> None:
-    from redis import Redis
-
-    settings = get_settings()
     client_ip = client_ip_from_forwarded_for(
         request.headers.get("x-forwarded-for"),
         request.client.host if request.client else "",
     )
     try:
         rate_limited = is_rate_limited(
-            Redis.from_url(settings.redis_url),
+            get_redis_client(),
             f"ratelimit:auth:{client_ip}",
             AUTH_RATE_LIMIT,
             AUTH_RATE_LIMIT_WINDOW_SECONDS,
@@ -106,11 +105,11 @@ def decrypt_access_token(encrypted: str, session_secret: str) -> str:
 
 
 def _github_oauth_http_client() -> httpx.Client:
-    return httpx.Client(base_url="https://github.com")
+    return get_github_oauth_client()
 
 
 def _github_http_client() -> httpx.Client:
-    return httpx.Client(base_url="https://api.github.com")
+    return get_github_api_client()
 
 
 def _fetch_primary_verified_email(access_token: str) -> str | None:

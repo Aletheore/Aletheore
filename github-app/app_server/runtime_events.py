@@ -55,12 +55,11 @@ class RuntimeEventRequest(BaseModel):
 
 
 def _enforce_runtime_event_rate_limit(installation_id: int) -> None:
-    from redis import Redis
+    from app_server.redis_client import get_redis_client
 
-    settings = get_settings()
     try:
         rate_limited = is_rate_limited(
-            Redis.from_url(settings.redis_url),
+            get_redis_client(),
             f"ratelimit:runtime-events:{installation_id}",
             RUNTIME_EVENT_RATE_LIMIT,
             RUNTIME_EVENT_RATE_LIMIT_WINDOW_SECONDS,

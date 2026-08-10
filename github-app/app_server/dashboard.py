@@ -492,10 +492,9 @@ PUBLIC_HEALTH_STALE_AFTER = timedelta(minutes=15)
 async def get_public_health(org: str, repo: str, request: Request, response: Response):
     response.headers["Access-Control-Allow-Origin"] = "*"
 
-    from redis import Redis
-
     from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for
     from app_server.rate_limit import is_rate_limited
+    from app_server.redis_client import get_redis_client
 
     client_ip = client_ip_from_forwarded_for(
         request.headers.get("x-forwarded-for"),
@@ -503,7 +502,7 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
     )
     try:
         rate_limited = is_rate_limited(
-            Redis.from_url(get_settings().redis_url),
+            get_redis_client(),
             f"ratelimit:public_health:{client_ip}",
             PUBLIC_HEALTH_RATE_LIMIT,
             PUBLIC_HEALTH_RATE_LIMIT_WINDOW_SECONDS,

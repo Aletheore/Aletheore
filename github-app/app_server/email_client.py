@@ -1,5 +1,7 @@
 import httpx
 
+from app_server.http_client import get_generic_http_client
+
 RESEND_API_URL = "https://api.resend.com/emails"
 
 
@@ -19,12 +21,15 @@ def send_transactional_email(
     send_health_alert/send_slack_alert - the caller (the RQ job) is what
     decides retry/dedupe behavior, not this function.
     """
+    client = http_client or get_generic_http_client()
     # httpx's 5s default (confirmed too tight against a real, otherwise-
     # healthy Resend call in prod - a ReadTimeout on this container's
     # first-ever request to a new external host, most likely DNS/TLS cold
     # start) is a needless failure here: this runs in a background job,
     # not a live request path, so there's no user waiting on the clock.
-    client = http_client or httpx.Client(timeout=15.0)
+    # Passed per-call rather than baked into a dedicated client - the
+    # shared client here is also reused by Slack alerts, which don't need
+    # this override.
     response = client.post(
         RESEND_API_URL,
         headers={"Authorization": f"Bearer {api_key}"},
@@ -36,6 +41,7 @@ def send_transactional_email(
             "html": html,
             "text": text,
         },
+        timeout=15.0,
     )
     response.raise_for_status()
     return response.json()

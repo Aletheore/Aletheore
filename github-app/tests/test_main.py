@@ -108,7 +108,7 @@ async def test_healthz_returns_200_when_dependencies_are_healthy(monkeypatch):
     app.state.db_pool = MagicMock()
     app.state.db_pool.fetchval = AsyncMock(return_value=1)
     fake_redis = MagicMock()
-    monkeypatch.setattr("redis.Redis.from_url", lambda url: fake_redis)
+    monkeypatch.setattr("app_server.redis_client.get_redis_client", lambda: fake_redis)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -123,7 +123,7 @@ async def test_healthz_returns_503_when_database_is_unreachable(monkeypatch):
     app.state.db_pool = MagicMock()
     app.state.db_pool.fetchval = AsyncMock(side_effect=Exception("connection refused"))
     fake_redis = MagicMock()
-    monkeypatch.setattr("redis.Redis.from_url", lambda url: fake_redis)
+    monkeypatch.setattr("app_server.redis_client.get_redis_client", lambda: fake_redis)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -141,10 +141,10 @@ async def test_healthz_returns_503_when_redis_is_unreachable(monkeypatch):
     app.state.db_pool = MagicMock()
     app.state.db_pool.fetchval = AsyncMock(return_value=1)
 
-    def _raise(url):
+    def _raise():
         raise ConnectionError("redis unreachable")
 
-    monkeypatch.setattr("redis.Redis.from_url", _raise)
+    monkeypatch.setattr("app_server.redis_client.get_redis_client", _raise)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

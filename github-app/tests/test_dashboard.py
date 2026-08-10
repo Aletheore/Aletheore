@@ -788,7 +788,7 @@ async def test_public_health_rate_limits_after_threshold(pool, monkeypatch, redi
         )
 
     monkeypatch.setattr(dashboard, "PUBLIC_HEALTH_RATE_LIMIT", 2)
-    monkeypatch.setattr("redis.Redis.from_url", lambda url: redis_conn)
+    monkeypatch.setattr("app_server.redis_client.get_redis_client", lambda: redis_conn)
 
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
@@ -821,7 +821,7 @@ async def test_public_health_rate_limit_is_keyed_per_ip(pool, monkeypatch, redis
         )
 
     monkeypatch.setattr(dashboard, "PUBLIC_HEALTH_RATE_LIMIT", 1)
-    monkeypatch.setattr("redis.Redis.from_url", lambda url: redis_conn)
+    monkeypatch.setattr("app_server.redis_client.get_redis_client", lambda: redis_conn)
 
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
@@ -854,10 +854,10 @@ async def test_public_health_fails_open_when_redis_is_unreachable(pool, monkeypa
             """
         )
 
-    def _boom(url):
+    def _boom():
         raise ConnectionError("redis unreachable")
 
-    monkeypatch.setattr("redis.Redis.from_url", _boom)
+    monkeypatch.setattr("app_server.redis_client.get_redis_client", _boom)
 
     app.state.db_pool = pool
     transport = ASGITransport(app=app)

@@ -146,9 +146,9 @@ async def healthz(request: Request):
         checks["database"] = "error"
 
     try:
-        from redis import Redis
+        from app_server.redis_client import get_redis_client
 
-        Redis.from_url(settings.redis_url).ping()
+        get_redis_client().ping()
     except Exception:
         checks["redis"] = "error"
 
