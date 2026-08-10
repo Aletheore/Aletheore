@@ -5,7 +5,13 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app_server.auth import encrypt_access_token, sign_session_id
-from app_server.db import create_session, insert_repo_history, set_installation_plan, upsert_installation
+from app_server.db import (
+    create_session,
+    insert_repo_history,
+    set_installation_plan,
+    set_public_status_enabled,
+    upsert_installation,
+)
 from app_server.main import app
 
 
@@ -665,6 +671,7 @@ async def test_undismiss_finding_route_removes_it(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_public_health_returns_latest_per_endpoint(pool):
     await upsert_installation(pool, 500, "octocat")
+    await set_public_status_enabled(pool, 500, True)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -710,6 +717,7 @@ async def test_public_health_returns_latest_per_endpoint(pool):
 @pytest.mark.asyncio
 async def test_public_health_uptime_pct_excludes_checks_older_than_7_days(pool):
     await upsert_installation(pool, 507, "octocat")
+    await set_public_status_enabled(pool, 507, True)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -741,6 +749,7 @@ async def test_public_health_excludes_endpoints_not_checked_recently(pool):
     # sweep has stopped checking it, and this public API shouldn't keep
     # reporting it as "up" forever off one ancient row.
     await upsert_installation(pool, 508, "octocat")
+    await set_public_status_enabled(pool, 508, True)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -768,6 +777,7 @@ async def test_public_health_rate_limits_after_threshold(pool, monkeypatch, redi
     from app_server import dashboard
 
     await upsert_installation(pool, 508, "octocat")
+    await set_public_status_enabled(pool, 508, True)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -800,6 +810,7 @@ async def test_public_health_rate_limit_is_keyed_per_ip(pool, monkeypatch, redis
     from app_server import dashboard
 
     await upsert_installation(pool, 509, "octocat")
+    await set_public_status_enabled(pool, 509, True)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -833,6 +844,7 @@ async def test_public_health_rate_limit_is_keyed_per_ip(pool, monkeypatch, redis
 @pytest.mark.asyncio
 async def test_public_health_fails_open_when_redis_is_unreachable(pool, monkeypatch):
     await upsert_installation(pool, 510, "octocat")
+    await set_public_status_enabled(pool, 510, True)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -863,6 +875,57 @@ async def test_public_health_404s_with_no_data(pool):
         response = await client.get("/v1/health/octocat/no-such-repo")
     assert response.status_code == 404
     assert response.headers["access-control-allow-origin"] == "*"
+
+
+@pytest.mark.asyncio
+async def test_public_health_404s_when_not_opted_in(pool):
+    # Off by default (migration 043) - real health data exists, but the
+    # installation never turned public status on.
+    await upsert_installation(pool, 511, "octocat")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+            VALUES (511, 'octocat/hello-world', 'GET', '/api/users', true)
+            """
+        )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/health/octocat/hello-world")
+
+    assert response.status_code == 404
+    # Same detail text as "no data at all" - not opted in must not be
+    # distinguishable from never-scanned by an outside prober.
+    assert response.json()["detail"] == "no health data for this repo"
+
+
+@pytest.mark.asyncio
+async def test_public_health_opting_in_then_out_toggles_visibility(pool):
+    await upsert_installation(pool, 512, "octocat")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+            VALUES (512, 'octocat/hello-world', 'GET', '/api/users', true)
+            """
+        )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        before = await client.get("/v1/health/octocat/hello-world")
+        await set_public_status_enabled(pool, 512, True)
+        during = await client.get("/v1/health/octocat/hello-world")
+        await set_public_status_enabled(pool, 512, False)
+        after = await client.get("/v1/health/octocat/hello-world")
+
+    assert before.status_code == 404
+    assert during.status_code == 200
+    assert after.status_code == 404
 
 
 @pytest.mark.asyncio

@@ -28,7 +28,7 @@ async def get_installation(pool: asyncpg.Pool, installation_id: int) -> dict | N
         """
         SELECT installation_id, account_login, plan, webhook_url, max_api_tokens,
                health_check_base_url, health_check_latency_threshold_ms,
-               paddle_subscription_id, paddle_customer_id, llm_suggestions_enabled
+               paddle_subscription_id, paddle_customer_id, llm_suggestions_enabled, public_status_enabled
         FROM installations
         WHERE installation_id = $1
         """,
@@ -45,7 +45,7 @@ async def get_installation_by_account_login(pool: asyncpg.Pool, account_login: s
         """
         SELECT installation_id, account_login, plan, webhook_url, max_api_tokens,
                health_check_base_url, health_check_latency_threshold_ms,
-               paddle_subscription_id, paddle_customer_id, llm_suggestions_enabled
+               paddle_subscription_id, paddle_customer_id, llm_suggestions_enabled, public_status_enabled
         FROM installations
         WHERE account_login = $1
         """,
@@ -104,6 +104,19 @@ async def delete_installation(pool: asyncpg.Pool, installation_id: int) -> None:
     remains as the raw primitive for cascade tests.
     """
     await pool.execute("DELETE FROM installations WHERE installation_id = $1", installation_id)
+
+
+async def set_public_status_enabled(pool: asyncpg.Pool, installation_id: int, enabled: bool) -> None:
+    """Opts an installation's repos into (or out of) the public,
+    unauthenticated /v1/health/{org}/{repo} status API. Off by default
+    (see migration 043) - endpoint paths, reachability, and latency
+    derived from a customer's private repository must never be exposed
+    without an explicit choice to do so."""
+    await pool.execute(
+        "UPDATE installations SET public_status_enabled = $2, updated_at = now() WHERE installation_id = $1",
+        installation_id,
+        enabled,
+    )
 
 
 async def set_llm_suggestions_enabled(

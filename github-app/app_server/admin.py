@@ -52,6 +52,7 @@ from app_server.db import (
     revoke_api_token,
     set_docs_repo_commit_enabled,
     set_llm_suggestions_enabled,
+    set_public_status_enabled,
     set_webhook_url,
     update_session_tokens,
 )
@@ -106,6 +107,10 @@ _GITHUB_LOGIN_PATTERN = r"^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$"
 
 
 class SetLLMSuggestionsRequest(BaseModel):
+    enabled: bool
+
+
+class SetPublicStatusRequest(BaseModel):
     enabled: bool
 
 
@@ -695,6 +700,21 @@ async def test_webhook_url_route(org: str, repo: str, request: Request):
     if not webhook_url:
         raise HTTPException(status_code=400, detail="no alert webhook is configured yet")
 
+    # validate_external_https_url only ran once, when the URL was saved
+    # (set_webhook_url_route) - re-checking here, immediately before the
+    # fetch, closes the DNS-rebinding window down to the gap between this
+    # call and the actual request instead of "until someone edits the URL
+    # again." Same reasoning and pattern as the health-check sweep (see
+    # scan_worker/jobs.py's re-validation right before _endpoint_results).
+    # An attacker who fully controls this webhook URL's domain could
+    # otherwise register one that resolves to a public IP at save time,
+    # pass validation, then repoint DNS at an internal service before
+    # clicking "test."
+    try:
+        validate_external_https_url(webhook_url)
+    except UnsafeURLError:
+        raise HTTPException(status_code=400, detail="this webhook URL no longer resolves to a safe address") from None
+
     from scan_worker.slack import send_health_alert
 
     try:
@@ -702,8 +722,11 @@ async def test_webhook_url_route(org: str, repo: str, request: Request):
             webhook_url,
             {"text": f"*Aletheore*: test notification for `{org}/{repo}` - your alert webhook is configured correctly."},
         )
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"could not reach webhook: {exc}") from exc
+    except httpx.HTTPError:
+        # Not the raw exception message - it's an SSRF oracle otherwise,
+        # distinguishing "connection refused" from "timed out" from an
+        # actual response body/status from whatever the URL resolved to.
+        raise HTTPException(status_code=502, detail="could not reach that webhook URL") from None
     return {"ok": True}
 
 
@@ -797,6 +820,24 @@ async def set_llm_suggestions_route(
         {"enabled": body.enabled},
     )
     return {"ok": True, "llm_suggestions_enabled": body.enabled}
+
+
+@admin_router.put("/admin/{org}/{repo}/public-status")
+async def set_public_status_route(org: str, repo: str, request: Request, body: SetPublicStatusRequest):
+    """Opt-in for the unauthenticated /v1/health/{org}/{repo} status API
+    (dashboard.py) - endpoint paths, reachability, and latency derived
+    from this repo are exposed to anyone who knows the org/repo, with no
+    other access control. Off by default (migration 043); this is the
+    only way to turn it on."""
+    installation = await _require_admin_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    await set_public_status_enabled(pool, installation["installation_id"], body.enabled)
+    session = await get_current_session(request)
+    await record_admin_action(
+        pool, installation["installation_id"], session["github_login"], "public_status_setting_changed",
+        {"repo_full_name": f"{org}/{repo}", "enabled": body.enabled},
+    )
+    return {"ok": True, "public_status_enabled": body.enabled}
 
 
 @admin_router.get("/admin/{org}/{repo}/export-data")
