@@ -97,3 +97,45 @@ def test_run_migrations_backfills_schema_migrations_for_already_bootstrapped_db(
 
     second = run_migrations(fresh_database)
     assert second == []
+
+
+def test_concurrent_migrate_runs_do_not_collide(tmp_path):
+    """Two processes running migrate.py against the same database at once -
+    the shape of starting a second app-server replica, or a restart
+    overlapping an in-flight one. Without the advisory lock both read
+    schema_migrations, both see the same file pending, and the second one's
+    INSERT fails on the primary key, crash-looping the container.
+    """
+    import threading
+    import uuid
+
+    # Unique per run: schema_migrations persists across tests in the shared
+    # test database, so fixed filenames would be "already applied" on the
+    # second run and the assertion below would pass vacuously.
+    run_id = uuid.uuid4().hex[:8]
+    migrations_dir = tmp_path / "migrations"
+    migrations_dir.mkdir()
+    names = [f"{i:03d}_{run_id}.sql" for i in range(6)]
+    for i, name in enumerate(names):
+        (migrations_dir / name).write_text(
+            f"CREATE TABLE IF NOT EXISTS concurrent_t{run_id}_{i} (id INT);"
+        )
+
+    results: list = []
+    errors: list = []
+
+    def run():
+        try:
+            results.append(run_migrations(TEST_DATABASE_URL, migrations_dir))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+
+    assert errors == [], f"concurrent migration raised: {errors}"
+    # Exactly one runner applies each file; the others wait, then find nothing.
+    assert sorted(sum(results, [])) == sorted(names)
