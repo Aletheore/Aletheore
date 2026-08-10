@@ -44,8 +44,13 @@ def test_find_secrets_redacts_the_match(tmp_path):
 
     preview = result["findings"][0]["match_preview"]
     assert "AKIAABCDEFGHIJKLMNOP" not in preview
-    assert preview.startswith("AKIA")
-    assert preview.endswith("MNOP")
+    # Previously this asserted the preview started with "AKIA" and ended with
+    # "MNOP" - i.e. that four real leading and four real trailing characters
+    # of the credential were published. That is the leak the salted hash
+    # replaced, so the assertion is now the inverse.
+    assert preview.startswith("sha256:")
+    assert "AKIA" not in preview
+    assert "MNOP" not in preview
 
 
 def test_find_secrets_flags_test_fixture_paths_as_likely_placeholder(tmp_path):
@@ -176,25 +181,24 @@ def test_find_secrets_does_not_descend_into_a_symlinked_directory_outside_the_re
 
 
 def test_find_secrets_generic_credential_preview_previews_the_value_not_the_keyword(tmp_path):
+    # The property under test is unchanged: the preview must be derived from
+    # the credential VALUE, not from the "secret"/"password"/"api_key" keyword
+    # that happens to precede it on the line. It used to be checked by
+    # asserting the preview began with the value's own first four characters,
+    # which is no longer true (and was itself the leak). Checked here instead
+    # by holding the keyword fixed and varying only the value: a preview keyed
+    # off the keyword would be identical across both files.
     repo = tmp_path / "repo"
     repo.mkdir()
-    real_value = "totallyrealvalue1234567890tailend"
-    (repo / "config.py").write_text(f'secret = "{real_value}"\n')
+    (repo / "a.py").write_text('secret = "totallyrealvalue1234567890tailend"\n')
+    (repo / "b.py").write_text('secret = "adifferentvalue0987654321tailend"\n')
 
-    result = find_secrets(repo)
+    previews = {f["path"]: f for f in find_secrets(repo)["findings"]}
 
-    finding = result["findings"][0]
-    assert finding["pattern"] == "generic_credential_assignment"
-    # the full value must never appear in the preview
-    assert real_value not in finding["match_preview"]
-    # the preview must reflect the credential VALUE's own prefix (matching the
-    # redaction scheme used by every other pattern), not the "secret"/"password"/
-    # "api_key" keyword that happens to precede it in the source line - a keyword
-    # prefix reveals nothing useful and previously meant the last chars shown were
-    # an accidental mix of real value characters and a stray closing quote rather
-    # than a clean, intentional preview of the value itself
-    assert finding["match_preview"].startswith(real_value[:4])
-    assert not finding["match_preview"].lower().startswith("secr")
+    assert previews["a.py"]["pattern"] == "generic_credential_assignment"
+    assert "totallyrealvalue1234567890tailend" not in previews["a.py"]["match_preview"]
+    assert previews["a.py"]["match_preview"] != previews["b.py"]["match_preview"]
+    assert not previews["a.py"]["match_preview"].lower().startswith("secr")
 
 
 def test_find_secrets_always_includes_accepted_key_defaulting_false(tmp_path):
@@ -269,3 +273,76 @@ def test_load_secrets_baseline_filters_out_non_dict_entries(tmp_path):
     (repo / ".aletheore.json").write_text(json.dumps({"accepted_secrets": [entry, "garbage", 5]}))
 
     assert load_secrets_baseline(repo) == [entry]
+
+
+def test_match_preview_no_longer_leaks_characters_of_the_value(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+
+    findings = find_secrets(repo)["findings"]
+
+    assert findings, "expected the planted secret to be detected"
+    preview = findings[0]["match_preview"]
+    assert preview.startswith("sha256:")
+    # The specific regression: the old format emitted the first four and last
+    # four real characters, so these must not survive anywhere in the preview.
+    assert "AKIA" not in preview
+    assert "MNOP" not in preview
+
+
+def test_match_preview_is_salted_so_the_same_value_differs_by_location(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    secret = 'AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n'
+    (repo / "a.py").write_text(secret)
+    (repo / "b.py").write_text(secret)
+
+    previews = {f["path"]: f["match_preview"] for f in find_secrets(repo)["findings"]}
+
+    assert len(previews) == 2
+    assert previews["a.py"] != previews["b.py"]
+
+
+def test_match_preview_is_stable_across_scans_of_the_same_file(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+
+    first = find_secrets(repo)["findings"][0]["match_preview"]
+    second = find_secrets(repo)["findings"][0]["match_preview"]
+
+    assert first == second, "baseline matching depends on this being deterministic"
+
+
+def test_a_baseline_written_in_the_old_preview_format_still_matches(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    value = "AKIAABCDEFGHIJKLMNOP"
+    (repo / "app.py").write_text(f'AWS_KEY = "{value}"\n')
+    detected = find_secrets(repo)["findings"][0]
+    legacy_baseline = [
+        {
+            "path": "app.py",
+            "pattern": detected["pattern"],
+            "match_preview": f"{value[:4]}{'*' * 4}...{value[-4:]}",
+        }
+    ]
+
+    findings = find_secrets(repo, baseline=legacy_baseline)["findings"]
+
+    assert findings[0]["accepted"] is True
+
+
+def test_a_baseline_written_in_the_new_preview_format_matches(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+    detected = find_secrets(repo)["findings"][0]
+    baseline = [
+        {"path": "app.py", "pattern": detected["pattern"], "match_preview": detected["match_preview"]}
+    ]
+
+    findings = find_secrets(repo, baseline=baseline)["findings"]
+
+    assert findings[0]["accepted"] is True

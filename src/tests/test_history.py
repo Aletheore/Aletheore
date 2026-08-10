@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 from aletheore.history import compute_diff, list_snapshots, save_snapshot, to_sarif
 
@@ -506,3 +505,58 @@ def test_to_sarif_ignores_resolved_findings():
     }
 
     assert to_sarif(curated)["runs"][0]["results"] == []
+
+
+def _evidence_with_secrets(findings):
+    evidence = json.loads(json.dumps(base_evidence()))
+    evidence["security"]["secrets"]["findings"] = findings
+    return evidence
+
+
+def test_diff_does_not_report_every_secret_as_new_when_the_preview_format_changes():
+    # The upgrade that replaced the first4...last4 preview with a salted hash
+    # changes the identity of every already-known secret. Diffed naively, a
+    # scan that introduced nothing would report the whole findings list as new
+    # - flooding PR comments and failing --fail-on-new-secrets everywhere.
+    old = _evidence_with_secrets(
+        [{"path": "config.py", "pattern": "aws_access_key_id", "match_preview": "AKIA****...MNOP"}]
+    )
+    new = _evidence_with_secrets(
+        [{"path": "config.py", "pattern": "aws_access_key_id", "match_preview": "sha256:abc123def456"}]
+    )
+
+    result = compute_diff(old, new)
+
+    assert result["secrets"]["new"] == []
+    assert result["secrets"]["resolved"] == []
+
+
+def test_diff_still_reports_a_genuinely_new_secret_across_the_format_change():
+    old = _evidence_with_secrets(
+        [{"path": "config.py", "pattern": "aws_access_key_id", "match_preview": "AKIA****...MNOP"}]
+    )
+    new = _evidence_with_secrets(
+        [
+            {"path": "config.py", "pattern": "aws_access_key_id", "match_preview": "sha256:abc123def456"},
+            {"path": "new.py", "pattern": "github_token", "match_preview": "sha256:999888777666"},
+        ]
+    )
+
+    result = compute_diff(old, new)
+
+    assert [f["path"] for f in result["secrets"]["new"]] == ["new.py"]
+
+
+def test_diff_uses_the_full_identity_once_both_sides_are_hashed():
+    # Self-healing: the fallback only applies to the one straddling scan.
+    old = _evidence_with_secrets(
+        [{"path": "config.py", "pattern": "aws_access_key_id", "match_preview": "sha256:aaaaaaaaaaaa"}]
+    )
+    new = _evidence_with_secrets(
+        [{"path": "config.py", "pattern": "aws_access_key_id", "match_preview": "sha256:bbbbbbbbbbbb"}]
+    )
+
+    result = compute_diff(old, new)
+
+    assert len(result["secrets"]["new"]) == 1
+    assert len(result["secrets"]["resolved"]) == 1
