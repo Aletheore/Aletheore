@@ -5,6 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+from aletheore.air_schema import validate_evidence
 from aletheore.architecture import build_clusters, detect_layer_violations, load_architecture_config
 from aletheore.dead_code import find_dead_code
 from aletheore.endpoints import map_api_endpoints
@@ -76,13 +77,24 @@ class IncompatibleEvidenceVersionError(Exception):
     pass
 
 
+class MalformedEvidenceError(Exception):
+    pass
+
+
 def load_evidence_file(evidence_path: Path) -> dict:
     """Reads and validates a raw air.json or snapshot file, refusing evidence
-    written by an incompatible schema version.
+    written by an incompatible schema version or with the wrong shape.
 
     Every direct reader of an evidence file (CLI query/index/diff/healthcheck,
     the MCP server) should route through this or load_evidence rather than a
     bare json.loads - see is_evidence_version_compatible for why.
+
+    Two distinct failures are possible and they need different messages. A
+    version mismatch means "this file is fine, your build is different" and
+    re-scanning fixes it. A schema violation on a *compatible* version means
+    the file is truncated, hand-edited, or not AIR at all - re-scanning may
+    not help, and the caller needs to know which key is wrong rather than
+    discovering it as a KeyError three modules away.
     """
     evidence = json.loads(evidence_path.read_text())
     written_version = evidence.get("aletheore_version") if isinstance(evidence, dict) else None
@@ -91,6 +103,15 @@ def load_evidence_file(evidence_path: Path) -> dict:
             f"{evidence_path} was written by aletheore_version={written_version!r}, which "
             f"isn't compatible with this build's evidence schema ({EVIDENCE_VERSION}) - "
             "re-run 'aletheore scan' to refresh it"
+        )
+    problems = validate_evidence(evidence)
+    if problems:
+        detail = "; ".join(problems[:5])
+        if len(problems) > 5:
+            detail += f" (and {len(problems) - 5} more)"
+        raise MalformedEvidenceError(
+            f"{evidence_path} claims a compatible aletheore_version but does not match the "
+            f"AIR schema: {detail} - re-run 'aletheore scan' to regenerate it"
         )
     return evidence
 

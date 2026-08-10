@@ -16,6 +16,12 @@ HEALTH_SWEEP_INTERVAL_SECONDS = 180
 HEALTH_SWEEP_JOB_TIMEOUT_SECONDS = 600
 # A single indexed DELETE against a small table - generous but bounded.
 SESSION_CLEANUP_JOB_TIMEOUT_SECONDS = 60
+# Same shape as the session cleanup: one range DELETE over an index on
+# webhook_deliveries.received_at. Runs on every tick, which is far more
+# often than a 30-day retention window needs, but it costs a no-op query
+# and means the table can never quietly grow unbounded if the scheduler
+# spends a long stretch restarting.
+WEBHOOK_DELIVERY_CLEANUP_JOB_TIMEOUT_SECONDS = 60
 # The sweep itself only calls run_live_docs_full_build_job for repos that
 # list_paid_repos_due_for_docs_catchup already filtered to "genuinely due"
 # (48h+ since last sweep, real activity since then) - most ticks this
@@ -66,6 +72,10 @@ def run_forever(
         scans_queue.enqueue(
             "scan_worker.jobs.run_session_cleanup_job",
             job_timeout=SESSION_CLEANUP_JOB_TIMEOUT_SECONDS,
+        )
+        scans_queue.enqueue(
+            "scan_worker.jobs.run_webhook_delivery_cleanup_job",
+            job_timeout=WEBHOOK_DELIVERY_CLEANUP_JOB_TIMEOUT_SECONDS,
         )
         scans_queue.enqueue(
             "scan_worker.jobs.run_live_docs_catchup_sweep_job",

@@ -5,7 +5,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app_server.audit_signing import public_key_hex_from_private, verify_report
+from app_server.audit_signing import (
+    LLM_SUGGESTION_HEADING,
+    contains_non_evidence_backed_section,
+    public_key_hex_from_private,
+    verify_report,
+)
 from app_server.config import get_settings
 from app_server.db import (
     MAX_SCANNED_REPOS_PER_MONTH,
@@ -122,11 +127,23 @@ async def verify_audit_report(verification_token: str, request: Request):
     public_key_hex = public_key_hex_from_private(settings.audit_signing_private_key)
     verified = verify_report(report["report_text"], report["signature"], public_key_hex)
 
+    # A signature attests "Aletheore produced this exact text" - not "every
+    # claim in it is backed by a citation". Those are different guarantees,
+    # and a certificate that reports only `verified: true` invites a reader to
+    # conflate them, extending the signature's authority to the one section
+    # that is deliberately a model opinion. Stating it here means a consumer
+    # of this endpoint can tell the two apart without parsing the markdown.
+    has_opinion_section = contains_non_evidence_backed_section(report["report_text"])
+
     return {
         "repo_full_name": report["repo_full_name"],
         "content_hash": report["content_hash"],
         "signed_at": report["created_at"].isoformat(),
         "verified": verified,
+        "fully_evidence_backed": not has_opinion_section,
+        "non_evidence_backed_sections": [LLM_SUGGESTION_HEADING.lstrip("# ")]
+        if has_opinion_section
+        else [],
         # Included so this is an actual verifiable certificate, not just an
         # "our database says so" boolean - anyone can independently confirm
         # signature over content_hash using this public key, without

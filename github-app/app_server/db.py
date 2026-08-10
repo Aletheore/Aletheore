@@ -28,7 +28,7 @@ async def get_installation(pool: asyncpg.Pool, installation_id: int) -> dict | N
         """
         SELECT installation_id, account_login, plan, webhook_url, max_api_tokens,
                health_check_base_url, health_check_latency_threshold_ms,
-               paddle_subscription_id, paddle_customer_id
+               paddle_subscription_id, paddle_customer_id, llm_suggestions_enabled
         FROM installations
         WHERE installation_id = $1
         """,
@@ -79,7 +79,193 @@ async def list_installations_for_ids(pool: asyncpg.Pool, installation_ids: list[
 
 
 async def delete_installation(pool: asyncpg.Pool, installation_id: int) -> None:
+    """Drop the installations row and everything cascading off it.
+
+    Prefer purge_installation_data() for anything customer-facing: this
+    leaves behind the member email addresses and sessions that are keyed by
+    github_login rather than installation_id, and writes no audit row. It
+    remains as the raw primitive for cascade tests.
+    """
     await pool.execute("DELETE FROM installations WHERE installation_id = $1", installation_id)
+
+
+async def set_llm_suggestions_enabled(
+    pool: asyncpg.Pool, installation_id: int, enabled: bool
+) -> None:
+    """Turn the non-evidence-backed suggestion section of managed audits on or off.
+
+    Off means a managed audit contains only cited, evidence-backed findings -
+    which is what the product promises, and what some customers need in order
+    to hand a signed report to an auditor without caveats.
+    """
+    await pool.execute(
+        "UPDATE installations SET llm_suggestions_enabled = $2, updated_at = now() "
+        "WHERE installation_id = $1",
+        installation_id,
+        enabled,
+    )
+
+
+async def claim_webhook_delivery(
+    pool: asyncpg.Pool, source: str, delivery_id: str, event: str
+) -> bool:
+    """Try to claim one inbound webhook delivery. True means this caller won
+    it and should process the event; False means it has already been handled
+    and this is a retry, a replay, or a concurrent duplicate.
+
+    `source` namespaces the id ("github" for X-GitHub-Delivery GUIDs,
+    "paddle" for event ids) so the two providers can't collide.
+
+    A single INSERT ... ON CONFLICT DO NOTHING does the whole thing
+    atomically. A read-then-write would leave a window where two concurrent
+    deliveries of the same id both see "not seen yet" and both proceed -
+    which is the exact duplicate-work outcome this exists to prevent.
+    """
+    row = await pool.fetchrow(
+        """
+        INSERT INTO webhook_deliveries (source, delivery_id, event)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (source, delivery_id) DO NOTHING
+        RETURNING delivery_id
+        """,
+        source,
+        delivery_id,
+        event,
+    )
+    return row is not None
+
+
+async def release_webhook_delivery(pool: asyncpg.Pool, source: str, delivery_id: str) -> None:
+    """Give up a claim so the provider's own retry of the same id can be
+    processed later.
+
+    Without this, a handler that raised would leave the delivery marked as
+    handled forever and the retry - the thing that would have rescued it -
+    would be silently discarded. Losing events outright is a worse failure
+    than processing one twice.
+    """
+    await pool.execute(
+        "DELETE FROM webhook_deliveries WHERE source = $1 AND delivery_id = $2",
+        source,
+        delivery_id,
+    )
+
+
+async def record_installation_access(
+    pool: asyncpg.Pool, installation_id: int, github_login: str
+) -> None:
+    """Note that this login has passed _require_authorized_installation for
+    this installation - on every plan, not just paid seats.
+
+    This is purge_installation_data's actual source of truth for "who might
+    have PII tied to this installation": installation_members is populated
+    only for paid-plan seat holders (_require_seat_if_paid skips free plans
+    entirely), so a free-plan installation always has zero rows there even
+    though its real users have real sessions and captured emails. This
+    table is separate from and doesn't affect installation_members, which
+    remains exactly what it was - seat/billing bookkeeping.
+    """
+    await pool.execute(
+        """
+        INSERT INTO installation_access_log (installation_id, github_login)
+        VALUES ($1, $2)
+        ON CONFLICT (installation_id, github_login) DO UPDATE SET last_seen_at = now()
+        """,
+        installation_id,
+        github_login,
+    )
+
+
+async def purge_installation_data(
+    pool: asyncpg.Pool, installation_id: int, actor_login: str
+) -> dict | None:
+    """Erase everything the hosted service holds for one installation, and
+    write an audit row proving it happened. Returns None if the
+    installation was already gone (the caller asked for a no-op), otherwise
+    a summary dict.
+
+    Deleting the installations row cascades to every installation-scoped
+    table. Two kinds of row don't cascade, because they're keyed by
+    github_login rather than installation_id:
+
+      - github_user_emails - a real email address, no TTL
+      - sessions           - an encrypted GitHub access token
+
+    Those are account-level, not installation-level, so they're only purged
+    for people left with no *other* installation after this one goes. A
+    user who administers two orgs shouldn't be logged out of the second one
+    because the first deleted itself. "Left with no other installation" is
+    decided from installation_access_log, not installation_members - the
+    latter only covers paid seats and would silently skip every free-plan
+    user's PII (see record_installation_access).
+
+    The whole thing runs in one transaction: a partial purge that dropped
+    the evidence but kept the email - or wrote the audit row for a delete
+    that then rolled back - is worse than either outcome cleanly.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            installation = await conn.fetchrow(
+                "SELECT account_login FROM installations WHERE installation_id = $1",
+                installation_id,
+            )
+            if installation is None:
+                return None
+
+            # Read the access log and repo count before the cascade takes
+            # both away - after the DELETE there is nothing left to count.
+            member_logins = [
+                row["github_login"]
+                for row in await conn.fetch(
+                    "SELECT github_login FROM installation_access_log WHERE installation_id = $1",
+                    installation_id,
+                )
+            ]
+            repos_deleted = await conn.fetchval(
+                "SELECT count(DISTINCT repo_full_name) FROM repo_history WHERE installation_id = $1",
+                installation_id,
+            )
+
+            await conn.execute(
+                "DELETE FROM installations WHERE installation_id = $1", installation_id
+            )
+
+            users_purged = 0
+            for login in member_logins:
+                # installation_access_log rows for this installation are
+                # gone with the cascade, so anything still here is another
+                # installation this person has accessed.
+                still_a_member = await conn.fetchval(
+                    "SELECT count(*) FROM installation_access_log WHERE github_login = $1",
+                    login,
+                )
+                if still_a_member:
+                    continue
+                await conn.execute(
+                    "DELETE FROM github_user_emails WHERE github_login = $1", login
+                )
+                await conn.execute("DELETE FROM sessions WHERE github_login = $1", login)
+                users_purged += 1
+
+            await conn.execute(
+                """
+                INSERT INTO data_deletion_log
+                    (installation_id, account_login, actor_login, repos_deleted, users_purged)
+                VALUES ($1, $2, $3, $4, $5)
+                """,
+                installation_id,
+                installation["account_login"],
+                actor_login,
+                repos_deleted,
+                users_purged,
+            )
+
+    return {
+        "installation_id": installation_id,
+        "account_login": installation["account_login"],
+        "repos_deleted": repos_deleted,
+        "users_purged": users_purged,
+    }
 
 
 async def insert_repo_history(

@@ -40,9 +40,14 @@ async def pool():
         migrations_dir = Path(__file__).resolve().parents[1] / "migrations"
         for migration in sorted(migrations_dir.glob("*.sql")):
             await conn.execute(migration.read_text())
+        # data_deletion_log and webhook_deliveries are listed explicitly
+        # because neither has an FK to installations (see
+        # 035_data_deletion_log.sql and 036_webhook_deliveries.sql) - the
+        # CASCADE from installations doesn't reach them, so without this
+        # their rows would leak from one test into the next.
         await conn.execute(
             "TRUNCATE installations, sessions, demo_scan_rate_limits, cli_telemetry_events, "
-            "github_user_emails, sent_emails CASCADE"
+            "github_user_emails, sent_emails, data_deletion_log, webhook_deliveries CASCADE"
         )
     yield p
     await p.close()

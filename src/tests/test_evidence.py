@@ -12,6 +12,7 @@ from aletheore.evidence import (
     scan_repository,
     write_evidence,
 )
+from tests.air_fixtures import minimal_air_evidence
 
 
 def run(repo: Path, *args: str):
@@ -58,9 +59,13 @@ def test_is_evidence_version_compatible_rejects_missing_or_malformed_versions():
 
 def test_load_evidence_file_returns_a_compatible_evidence_dict(tmp_path):
     evidence_path = tmp_path / "air.json"
-    evidence_path.write_text(json.dumps({"aletheore_version": EVIDENCE_VERSION, "repository": {}}))
+    evidence = minimal_air_evidence()
+    evidence["repository"]["modules"] = [
+        {"path": "a.py", "language": "python", "imports": [], "imported_by": []}
+    ]
+    evidence_path.write_text(json.dumps(evidence))
 
-    assert load_evidence_file(evidence_path)["repository"] == {}
+    assert load_evidence_file(evidence_path)["repository"]["modules"][0]["path"] == "a.py"
 
 
 def test_load_evidence_file_rejects_an_incompatible_version(tmp_path):
@@ -96,9 +101,7 @@ def test_load_evidence_raises_file_not_found_when_repo_never_scanned(tmp_path):
 
 def test_load_evidence_reads_the_repos_own_air_json(tmp_path):
     (tmp_path / ".aletheore").mkdir()
-    (tmp_path / ".aletheore" / "air.json").write_text(
-        json.dumps({"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}})
-    )
+    (tmp_path / ".aletheore" / "air.json").write_text(json.dumps(minimal_air_evidence()))
 
     assert load_evidence(tmp_path)["repository"]["modules"] == []
 

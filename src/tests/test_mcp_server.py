@@ -185,7 +185,10 @@ def test_read_evidence_rejects_evidence_with_no_version_field(tmp_path, monkeypa
 @pytest.mark.asyncio
 async def test_build_server_registers_expected_tools(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
-    server = build_server(repo)
+    # Every effect permitted, so this stays an inventory of the full tool
+    # surface. What the *default* posture registers is covered in
+    # tests/test_mcp_consent.py.
+    server = build_server(repo, allow=frozenset({"write", "network", "external"}))
 
     tools = await server.list_tools()
     names = {t.name for t in tools}
@@ -473,7 +476,9 @@ async def test_aletheore_hotspots_tool_returns_toon_results(tmp_path):
 @pytest.mark.asyncio
 async def test_aletheore_managed_audit_tool_calls_client(tmp_path, monkeypatch):
     repo = make_repo_with_evidence(tmp_path)
-    server = build_server(repo)
+    # This tool uploads evidence off-machine, so it is withheld by default -
+    # opt in explicitly to exercise it.
+    server = build_server(repo, allow=frozenset({"write", "network", "external"}))
     monkeypatch.setattr(
         "aletheore.mcp_server.run_managed_audit_request",
         lambda evidence, token: "# Report\n\nmanaged audit text",
@@ -492,7 +497,7 @@ async def test_aletheore_managed_audit_tool_falls_back_to_saved_credential(tmp_p
     # available" error through MCP even though the CLI's own `audit --managed`
     # worked fine for the exact same saved credential.
     repo = make_repo_with_evidence(tmp_path)
-    server = build_server(repo)
+    server = build_server(repo, allow=frozenset({"write", "network", "external"}))
     monkeypatch.delenv("ALETHEORE_API_TOKEN", raising=False)
     monkeypatch.setattr(
         "aletheore.mcp_server.get_api_key",

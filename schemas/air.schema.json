@@ -1,0 +1,496 @@
+{
+  "$id": "https://aletheore.com/schemas/air.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Deterministic repository evidence produced by `aletheore scan`.",
+  "properties": {
+    "aletheore_version": {
+      "type": "string"
+    },
+    "architecture": {
+      "properties": {
+        "clusters": {
+          "items": {
+            "properties": {
+              "id": {
+                "type": "integer"
+              },
+              "modules": {
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "modules"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "config_applied": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "cross_cluster_edges": {
+          "type": "array"
+        },
+        "layer_violations": {
+          "properties": {
+            "convention_detected": {
+              "type": "boolean"
+            },
+            "layers": {
+              "type": "array"
+            },
+            "violations": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "convention_detected",
+            "layers",
+            "violations"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "clusters",
+        "config_applied",
+        "cross_cluster_edges",
+        "layer_violations"
+      ],
+      "type": "object"
+    },
+    "git": {
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "branches": {
+          "items": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "commit_cadence": {
+          "properties": {
+            "most_recent_week_partial": {
+              "type": "boolean"
+            },
+            "trend": {
+              "type": "string"
+            },
+            "weekly_counts": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "most_recent_week_partial",
+            "trend",
+            "weekly_counts"
+          ],
+          "type": "object"
+        },
+        "history_depth_limited": {
+          "type": "boolean"
+        },
+        "hotspots": {
+          "type": "array"
+        },
+        "ownership": {
+          "items": {
+            "properties": {
+              "commit_count": {
+                "type": "integer"
+              },
+              "email": {
+                "type": "string"
+              },
+              "percent": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "commit_count",
+              "email",
+              "percent"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "repo_age_days": {
+          "type": "integer"
+        },
+        "total_commits": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "available"
+      ],
+      "type": "object"
+    },
+    "repo_path": {
+      "type": "string"
+    },
+    "repository": {
+      "properties": {
+        "ai_usage": {
+          "properties": {
+            "local_inference": {
+              "type": "array"
+            },
+            "mcp": {
+              "type": "array"
+            },
+            "orchestration": {
+              "type": "array"
+            },
+            "providers": {
+              "type": "array"
+            },
+            "vector_stores": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "local_inference",
+            "mcp",
+            "orchestration",
+            "providers",
+            "vector_stores"
+          ],
+          "type": "object"
+        },
+        "api_endpoints": {
+          "properties": {
+            "checked": {
+              "type": "boolean"
+            },
+            "endpoints": {
+              "items": {
+                "properties": {
+                  "file": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file",
+                  "line",
+                  "method",
+                  "path"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "checked",
+            "endpoints"
+          ],
+          "type": "object"
+        },
+        "build_tools": {
+          "type": "array"
+        },
+        "database": {
+          "properties": {
+            "migration_directories": {
+              "type": "array"
+            },
+            "orm_frameworks": {
+              "type": "array"
+            },
+            "schema_files": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "migration_directories",
+            "orm_frameworks",
+            "schema_files"
+          ],
+          "type": "object"
+        },
+        "dead_code": {
+          "properties": {
+            "entry_points_detected": {
+              "type": "array"
+            },
+            "unreachable_modules": {
+              "type": "array"
+            },
+            "unused_dependencies": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "entry_points_detected",
+            "unreachable_modules",
+            "unused_dependencies"
+          ],
+          "type": "object"
+        },
+        "dependency_graph": {
+          "properties": {
+            "edges": {
+              "type": "array"
+            },
+            "nodes": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "edges",
+            "nodes"
+          ],
+          "type": "object"
+        },
+        "environment_variables": {
+          "properties": {
+            "declared": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "declared"
+          ],
+          "type": "object"
+        },
+        "frameworks": {
+          "type": "array"
+        },
+        "infrastructure": {
+          "properties": {
+            "docker_compose_services": {
+              "type": "array"
+            },
+            "helm_charts": {
+              "type": "array"
+            },
+            "kubernetes_manifests": {
+              "type": "array"
+            },
+            "terraform_files": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "docker_compose_services",
+            "helm_charts",
+            "kubernetes_manifests",
+            "terraform_files"
+          ],
+          "type": "object"
+        },
+        "languages": {
+          "items": {
+            "properties": {
+              "file_count": {
+                "type": "integer"
+              },
+              "loc": {
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file_count",
+              "loc",
+              "name"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "modules": {
+          "items": {
+            "properties": {
+              "imported_by": {
+                "type": "array"
+              },
+              "imports": {
+                "type": "array"
+              },
+              "language": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "imported_by",
+              "imports",
+              "language",
+              "path"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "monorepo": {
+          "properties": {
+            "detected": {
+              "type": "boolean"
+            },
+            "workspaces": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "detected",
+            "workspaces"
+          ],
+          "type": "object"
+        },
+        "policy_docs": {
+          "type": "array"
+        },
+        "unparseable_files": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "ai_usage",
+        "api_endpoints",
+        "build_tools",
+        "database",
+        "dead_code",
+        "dependency_graph",
+        "environment_variables",
+        "frameworks",
+        "infrastructure",
+        "languages",
+        "modules",
+        "monorepo",
+        "policy_docs",
+        "unparseable_files"
+      ],
+      "type": "object"
+    },
+    "scanned_at": {
+      "type": "string"
+    },
+    "security": {
+      "properties": {
+        "dependency_licenses": {
+          "properties": {
+            "checked": {
+              "type": "boolean"
+            },
+            "findings": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "checked",
+            "findings"
+          ],
+          "type": "object"
+        },
+        "dependency_vulnerabilities": {
+          "properties": {
+            "checked": {
+              "type": "boolean"
+            },
+            "findings": {
+              "type": "array"
+            }
+          },
+          "required": [
+            "checked",
+            "findings"
+          ],
+          "type": "object"
+        },
+        "secrets": {
+          "properties": {
+            "findings": {
+              "items": {
+                "properties": {
+                  "line": {
+                    "type": "integer"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "pattern": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "line",
+                  "path",
+                  "pattern"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "history_findings": {
+              "type": "array"
+            },
+            "history_scanned_commits": {
+              "type": "integer"
+            },
+            "scanned_files": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "findings",
+            "history_findings",
+            "history_scanned_commits",
+            "scanned_files"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "dependency_licenses",
+        "dependency_vulnerabilities",
+        "secrets"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "aletheore_version",
+    "architecture",
+    "git",
+    "repo_path",
+    "repository",
+    "scanned_at",
+    "security"
+  ],
+  "title": "Aletheore Intermediate Representation (AIR)",
+  "type": "object"
+}

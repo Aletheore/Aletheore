@@ -24,6 +24,7 @@ from aletheore.cli import (
 from aletheore.device_auth import DeviceFlowError
 from aletheore.evidence import EVIDENCE_VERSION
 from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
+from tests.air_fixtures import minimal_air_evidence
 from aletheore.report import (
     AmbiguousAdapterError,
     NoAdapterAvailableError,
@@ -1438,24 +1439,15 @@ def make_evidence_file(
     vulnerabilities: list[dict] | None = None,
     layer_violations: list[dict] | None = None,
 ) -> Path:
-    evidence = {
-        "aletheore_version": EVIDENCE_VERSION,
-        "repository": {"modules": [], "dependency_graph": {"nodes": [], "edges": []}},
-        "git": {"total_commits": 0},
-        "security": {
-            "secrets": {
-                "findings": findings or [],
-                "history_scanned_commits": 0,
-                "history_findings": [],
-            },
-            "dependency_vulnerabilities": {
-                "checked": True,
-                "reason": None,
-                "findings": vulnerabilities or [],
-            },
-        },
-        "architecture": {"layer_violations": {"violations": layer_violations or []}},
-    }
+    # Built on the full schema skeleton rather than a hand-picked subset:
+    # `aletheore diff` reads these through load_evidence_file, which rejects
+    # anything that isn't a complete AIR document - and no real snapshot has
+    # ever been anything less.
+    evidence = minimal_air_evidence()
+    evidence["security"]["secrets"]["findings"] = findings or []
+    evidence["security"]["dependency_vulnerabilities"]["checked"] = True
+    evidence["security"]["dependency_vulnerabilities"]["findings"] = vulnerabilities or []
+    evidence["architecture"]["layer_violations"]["violations"] = layer_violations or []
     path.write_text(json.dumps(evidence))
     return path
 

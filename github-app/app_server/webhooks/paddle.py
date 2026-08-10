@@ -5,8 +5,10 @@ from fastapi import APIRouter, Request, Response
 from app_server.config import get_settings
 from app_server.db import (
     add_paddle_ids_to_installation,
+    claim_webhook_delivery,
     get_installation,
     list_installation_member_emails,
+    release_webhook_delivery,
     set_extra_seats,
     set_installation_plan,
 )
@@ -184,6 +186,32 @@ async def handle_paddle_webhook(request: Request) -> Response:
     if not isinstance(payload, dict):
         return Response(status_code=401)
 
-    await handle_paddle_webhook_event(payload, request.app.state.db_pool, settings.redis_url)
+    # Claimed after signature and IP verification, so an unauthenticated
+    # caller can't burn an event id and suppress the genuine delivery.
+    #
+    # The signature's own 5s timestamp tolerance already makes captured
+    # payload replay a narrow window. This is here for concurrency:
+    # handle_paddle_webhook_event reads installations.plan, then writes it,
+    # and gates a pair of expensive full AIRview/Docs builds on that read
+    # having been "free". Two deliveries of the same event arriving together
+    # both read "free" and both enqueue those builds - real duplicated LLM
+    # spend. The claim is what makes that gate hold under concurrency.
+    event_id = payload.get("event_id")
+    if not isinstance(event_id, str) or not event_id:
+        logger.warning("paddle webhook missing event_id, refusing to process undedupable event")
+        return Response(status_code=400)
+
+    pool = request.app.state.db_pool
+    if not await claim_webhook_delivery(pool, "paddle", event_id, payload.get("event_type") or ""):
+        logger.info("duplicate paddle webhook %s ignored", event_id)
+        return Response(status_code=200)
+
+    try:
+        await handle_paddle_webhook_event(payload, pool, settings.redis_url)
+    except Exception:
+        # Hand the id back before failing, or Paddle's retry of this same
+        # event would be discarded as a duplicate and the plan change lost.
+        await release_webhook_delivery(pool, "paddle", event_id)
+        raise
 
     return Response(status_code=200)

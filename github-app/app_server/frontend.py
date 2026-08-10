@@ -329,6 +329,11 @@ table.findings tr:last-child td { border-bottom: none; }
 .settings-block { margin-bottom: 18px; }
 .settings-block-label { font-size: 12px; font-weight: 500; margin-bottom: 7px; }
 .settings-block-hint { font-size: 11px; color: var(--slate-600); margin-top: 6px; }
+.danger-zone { margin-top: 24px; border: 1px solid var(--critical); border-radius: 6px; padding: 14px 16px; }
+.danger-zone .settings-block-label { color: var(--critical); }
+.danger-zone .btn-danger { background: var(--critical); border-color: var(--critical); color: #fff; }
+.danger-zone .btn-danger[disabled] { opacity: 0.5; cursor: not-allowed; }
+.danger-repo-list { font-size: 11px; color: var(--slate-600); margin-top: 6px; word-break: break-all; }
 .token-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
 .token-row:last-child { border-bottom: none; }
 .token-label { font-weight: 500; }
@@ -1801,6 +1806,27 @@ async function generateToken() {{
   refreshTokenList();
 }}
 
+async function saveLlmSuggestions(checkbox) {{
+  const status = document.getElementById('llm-suggestions-status');
+  checkbox.disabled = true;
+  const res = await fetch(adminBase + '/llm-suggestions', {{
+    method: 'PUT', headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ enabled: checkbox.checked }}),
+  }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  checkbox.disabled = false;
+  if (!res.ok) {{
+    checkbox.checked = !checkbox.checked;
+    status.textContent = data.detail || 'Could not save.';
+    status.style.color = 'var(--critical)';
+    return;
+  }}
+  status.textContent = checkbox.checked
+    ? 'Audits will include the model\\'s second opinion.'
+    : 'Audits will contain only evidence-backed findings.';
+  status.style.color = 'var(--success)';
+}}
+
 async function saveWebhook() {{
   const input = document.getElementById('webhook-url-input');
   const status = document.getElementById('webhook-status');
@@ -1869,6 +1895,76 @@ async function openBillingPortal() {{
   }}
 }}
 
+// The danger zone renders on every plan, including free and lapsed - the
+// settings page 402s those customers out of everything else, but locking
+// someone out of erasing their own data because their card failed is not
+// defensible. It hangs off its own endpoint for the same reason: the main
+// /admin GET is plan-gated, this one isn't.
+async function loadDangerZone() {{
+  const host = document.getElementById('danger-zone');
+  if (!host) return;
+  const res = await fetch(adminBase + '/deletion-preview');
+  if (!res.ok) return;
+  const data = await res.json();
+  window._deleteConfirmPhrase = data.account_login;
+  const repos = data.repos || [];
+  // Deletion is installation-wide but this page is repo-scoped. Naming the
+  // other repos is the only honest way to show the real blast radius.
+  const repoLine = repos.length
+    ? 'This deletes scan history, evidence, findings, and documentation for all ' +
+      repos.length + ' repositor' + (repos.length === 1 ? 'y' : 'ies') + ' in this installation: ' +
+      repos.map(escapeHtml).join(', ') + '.'
+    : 'This deletes everything stored for this installation.';
+  host.innerHTML =
+    '<div class="danger-zone">' +
+      '<div class="settings-block-label">Delete all data</div>' +
+      '<div class="settings-block-hint">' + repoLine + '</div>' +
+      '<div class="danger-repo-list">API tokens, team seats, and alert settings go too. ' +
+      'Members who belong to no other Aletheore installation have their stored email address and ' +
+      'sessions erased as well. This cannot be undone.</div>' +
+      '<div class="form-row" style="margin-top:10px;">' +
+        '<input class="field" id="delete-confirm-input" autocomplete="off" ' +
+        'placeholder="Type ' + escapeHtml(data.account_login) + ' to confirm" ' +
+        'oninput="syncDeleteButton()">' +
+        '<button class="btn btn-danger" id="delete-all-btn" disabled onclick="deleteAllData()">Delete</button>' +
+      '</div>' +
+      '<div id="delete-status" class="settings-block-hint"></div>' +
+    '</div>';
+}}
+
+function syncDeleteButton() {{
+  const input = document.getElementById('delete-confirm-input');
+  const btn = document.getElementById('delete-all-btn');
+  if (!input || !btn) return;
+  btn.disabled = input.value.trim() !== window._deleteConfirmPhrase;
+}}
+
+async function deleteAllData() {{
+  const input = document.getElementById('delete-confirm-input');
+  const btn = document.getElementById('delete-all-btn');
+  const status = document.getElementById('delete-status');
+  btn.disabled = true;
+  status.textContent = 'Deleting...';
+  status.style.color = 'var(--slate-600)';
+  const res = await fetch(adminBase + '/delete-all-data', {{
+    method: 'POST',
+    headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ confirm: input.value.trim() }}),
+  }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  if (!res.ok) {{
+    status.textContent = data.detail || 'Could not delete your data.';
+    status.style.color = 'var(--critical)';
+    syncDeleteButton();
+    return;
+  }}
+  // Everything this page reads is gone, including possibly this session -
+  // there is nothing left here to re-render, so leave for the marketing site.
+  status.textContent = 'Deleted. Signing you out...';
+  status.style.color = 'var(--success)';
+  window.location.href = '/auth/logout';
+}}
+
 async function loadSettings() {{
   const body = document.getElementById('settings-body');
   const res = await apiGet(adminBase);
@@ -1885,7 +1981,9 @@ async function loadSettings() {{
       // that's blocking everything else on this page.
       '<div class="settings-block-hint" style="text-align:center;margin-top:12px;">' +
       'Already subscribed? <a href="#" onclick="openBillingPortal(); return false;">Manage billing</a>' +
-      '</div>';
+      '</div>' +
+      '<div id="danger-zone"></div>';
+    loadDangerZone();
     return;
   }}
   if (!res.ok) {{
@@ -1949,11 +2047,28 @@ async function loadSettings() {{
           '<div class="settings-block-hint">New critical findings are posted here shortly after a scan finishes. Paste a Slack incoming-webhook URL or a Teams workflow webhook URL - both are auto-detected.</div>' +
         '</div>' +
         '<div class="settings-block">' +
+          '<div class="settings-block-label">Managed audit content</div>' +
+          '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;">' +
+          '<input type="checkbox" id="llm-suggestions-toggle"' +
+          (installation.llm_suggestions_enabled === false ? '' : ' checked') +
+          ' onchange="saveLlmSuggestions(this)">' +
+          'Include the model\\'s second opinion' +
+          '</label>' +
+          '<div id="llm-suggestions-status" class="settings-block-hint"></div>' +
+          '<div class="settings-block-hint">Every finding in an audit is tied to a citation in your code. ' +
+          'This one optional section is not: it is the model\\'s own overall rating and improvement ideas, ' +
+          'appended after the evidence-backed findings and labelled as such. Turn it off to have audits ' +
+          'contain only cited findings - the signed report and its verification page will then confirm ' +
+          'the report is fully evidence-backed.</div>' +
+        '</div>' +
+        '<div class="settings-block">' +
           '<div class="settings-block-label">Endpoint health targets</div>' +
           '<div class="settings-block-hint">Configure staging/production URLs and see live results on the <a data-href="/health">Endpoint health</a> page.</div>' +
         '</div>' +
       '</div>' +
-    '</div>';
+    '</div>' +
+    '<div id="danger-zone"></div>';
+  loadDangerZone();
   document.querySelectorAll('[data-href]').forEach(function (el) {{ el.href = pageBase + el.dataset.href; }});
 }}
 

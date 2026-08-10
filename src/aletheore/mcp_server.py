@@ -1,8 +1,11 @@
 import json
+import os
 import re
+import sys
 from pathlib import Path, PurePath
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 
 from aletheore.adapters.base import AgentAdapter
 from aletheore.answer import answer_question
@@ -125,6 +128,88 @@ _QUERY_TOOL_DESCRIPTIONS = {
 _SEARCH_MATCH_CAP = 200
 
 
+# ---------------------------------------------------------------------------
+# Effect classes and the consent boundary.
+#
+# Most tools here just read .aletheore/air.json. A few do more: write files,
+# reach the network, or transmit this repository's evidence to a third party.
+# Until this, nothing distinguished them - an agent driving the server saw one
+# undifferentiated list and could trigger a scan, a live HTTP probe, or an
+# upload to the hosted audit service without anyone having agreed to it.
+#
+# Two mechanisms, because one alone isn't enough:
+#
+#   1. ToolAnnotations on every tool. This is MCP's own vocabulary, so clients
+#      already know how to read and display it. But the spec is explicit that
+#      annotations are *hints* - "clients should never make tool use decisions
+#      based on ToolAnnotations received from untrusted servers" - so they
+#      describe behavior, they don't constrain it.
+#
+#   2. ALETHEORE_MCP_ALLOW, below. This is the part that actually binds: a
+#      tool whose effects aren't permitted is never registered, so it isn't in
+#      the tool list and cannot be called at all.
+# ---------------------------------------------------------------------------
+
+EFFECT_WRITE = "write"  # writes files under the repo
+EFFECT_NETWORK = "network"  # outbound requests (OSV, registries, health probes, embeddings)
+EFFECT_EXTERNAL = "external"  # transmits repository evidence to a third-party service
+
+_ALL_EFFECTS = frozenset({EFFECT_WRITE, EFFECT_NETWORK, EFFECT_EXTERNAL})
+
+# Reading evidence is the server's reason to exist and is always permitted, so
+# it isn't an effect class - the empty set means "read-only".
+#
+# `external` is the one class off by default. Scanning and indexing are what a
+# tool called "aletheore" is for, and their effects stay on this machine; the
+# genuinely surprising action is this repository's evidence leaving it. That
+# happens with no launch-time consent step today, because the managed-audit
+# tool silently resolves a token from the OS keychain - a user who once ran
+# `aletheore login` has an agent that can upload without ever being asked.
+#
+# (aletheore_answer also reaches an LLM, but it is registered only when the
+# operator passes `aletheore mcp --agent`, which is itself the consent step.)
+_DEFAULT_ALLOWED_EFFECTS = frozenset({EFFECT_WRITE, EFFECT_NETWORK})
+
+_ALLOW_ENV_VAR = "ALETHEORE_MCP_ALLOW"
+
+
+class UnknownEffectError(ValueError):
+    pass
+
+
+def allowed_effects(raw: str | None) -> frozenset[str]:
+    """Parse ALETHEORE_MCP_ALLOW into the permitted effect classes.
+
+    Unset uses the default. An explicit value replaces it wholesale rather
+    than adding to it, so `ALETHEORE_MCP_ALLOW=read` is a genuinely read-only
+    server rather than the default plus a redundant token. An unrecognized
+    name is an error rather than a silent no-op: a typo like "extenral" that
+    quietly left evidence upload disabled would be merely confusing, but one
+    that quietly left it *enabled* would be a security hole with a plausible
+    explanation attached.
+    """
+    if raw is None:
+        return _DEFAULT_ALLOWED_EFFECTS
+    names = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    # "read" is always implied; accept it as a spelling of "nothing else".
+    names.discard("read")
+    unknown = names - _ALL_EFFECTS
+    if unknown:
+        raise UnknownEffectError(
+            f"{_ALLOW_ENV_VAR} contains unknown effect(s): {', '.join(sorted(unknown))} - "
+            f"valid values are read, {', '.join(sorted(_ALL_EFFECTS))}"
+        )
+    return frozenset(names)
+
+
+READ_ONLY_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+
+
 def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     for tool_name, kind in _TOOL_NAME_TO_QUERY_KIND.items():
         func, requires_target = QUERY_FUNCTIONS[kind]
@@ -147,11 +232,11 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
         tool_func = make_tool()
         tool_func.__name__ = tool_name
         tool_func.__doc__ = _QUERY_TOOL_DESCRIPTIONS[kind]
-        mcp_instance.tool(name=tool_name)(tool_func)
+        mcp_instance.tool(name=tool_name, annotations=READ_ONLY_ANNOTATIONS)(tool_func)
 
 
 def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
-    @mcp_instance.tool(name="aletheore_changes")
+    @mcp_instance.tool(name="aletheore_changes", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_changes(full: bool = False) -> str:
         """What changed between the two most recent scans of this repo."""
         snapshots = list_snapshots(repo_path)
@@ -166,7 +251,7 @@ def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
 
 
 def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
-    @mcp_instance.tool(name="aletheore_neighborhood")
+    @mcp_instance.tool(name="aletheore_neighborhood", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_neighborhood(target: str) -> str:
         """A module's imports, dependents, and cluster in one call."""
         evidence = read_evidence(repo_path)
@@ -187,7 +272,7 @@ def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
 
 
 def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
-    @mcp_instance.tool(name="aletheore_search")
+    @mcp_instance.tool(name="aletheore_search", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_search(pattern: str, regex: bool = False, path_glob: str | None = None) -> str:
         """Deterministic literal or regex search over the repository's source files."""
         compiled = re.compile(pattern) if regex else None
@@ -217,7 +302,7 @@ def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
 
 
 def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
-    @mcp_instance.tool(name="aletheore_symbol_source")
+    @mcp_instance.tool(name="aletheore_symbol_source", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_symbol_source(module: str, symbol: str) -> str:
         """Exact source text for one named function/class, with resolved line bounds."""
         evidence = read_evidence(repo_path)
@@ -225,19 +310,19 @@ def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> No
 
 
 def _register_code_evidence_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
-    @mcp_instance.tool(name="aletheore_find_evidence_for_endpoint")
+    @mcp_instance.tool(name="aletheore_find_evidence_for_endpoint", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_find_evidence_for_endpoint(method: str, path: str) -> str:
         """Resolve an API endpoint to source evidence: file, line, symbol, owner, commit, dependency, and risk."""
         evidence = read_evidence(repo_path)
         return _toon_result(find_code_evidence_for_endpoint(evidence, f"{method} {path}", repo_path))
 
-    @mcp_instance.tool(name="aletheore_find_evidence_for_symbol")
+    @mcp_instance.tool(name="aletheore_find_evidence_for_symbol", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_find_evidence_for_symbol(symbol: str) -> str:
         """Resolve a function or class symbol to source evidence."""
         evidence = read_evidence(repo_path)
         return _toon_result(find_code_evidence_for_symbol(evidence, symbol, repo_path))
 
-    @mcp_instance.tool(name="aletheore_find_evidence_for_dependency")
+    @mcp_instance.tool(name="aletheore_find_evidence_for_dependency", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_find_evidence_for_dependency(dependency: str) -> str:
         """Resolve a dependency or import to source evidence."""
         evidence = read_evidence(repo_path)
@@ -276,7 +361,16 @@ def _scan_summary(evidence: dict) -> dict:
 
 
 def _register_scan_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
-    @mcp_instance.tool(name="aletheore_scan")
+    @mcp_instance.tool(
+        name="aletheore_scan",
+        # Rewrites .aletheore/ and appends a snapshot, and reaches OSV.dev and
+        # package registries unless those checks are disabled. Not destructive
+        # (everything it overwrites it derived) and not idempotent (each run
+        # adds a snapshot and a fresh timestamp).
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+        ),
+    )
     def aletheore_scan(
         check_vulnerabilities: bool = True,
         scan_git_history: bool = True,
@@ -297,7 +391,15 @@ def _register_scan_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
 
 
 def _register_healthcheck_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
-    @mcp_instance.tool(name="aletheore_healthcheck")
+    @mcp_instance.tool(
+        name="aletheore_healthcheck",
+        # Issues live GETs against a caller-supplied base_url and writes the
+        # result. The most openly world-affecting tool here: the target is an
+        # argument, so it can be pointed anywhere the host can reach.
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True
+        ),
+    )
     def aletheore_healthcheck(base_url: str) -> str:
         """GET-only live health check of mapped API endpoints against a running instance."""
         evidence = read_evidence(repo_path)
@@ -308,7 +410,14 @@ def _register_healthcheck_tool(mcp_instance: MCPServer, repo_path: Path) -> None
 
 
 def _register_index_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
-    @mcp_instance.tool(name="aletheore_index")
+    @mcp_instance.tool(
+        name="aletheore_index",
+        # Writes the vector index and sends code chunks to the embedding
+        # provider - local Ollama when it is up, OpenAI on fallback.
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True
+        ),
+    )
     def aletheore_index() -> str:
         """Build the semantic search index this repo's evidence, required
         before aletheore_search_codebase or aletheore_answer can be used.
@@ -330,7 +439,14 @@ _NO_INDEX_ERROR = {
 
 
 def _register_search_codebase_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
-    @mcp_instance.tool(name="aletheore_search_codebase")
+    @mcp_instance.tool(
+        name="aletheore_search_codebase",
+        # Writes nothing, but embeds the query text through the configured
+        # provider, so it can reach the network.
+        annotations=ToolAnnotations(
+            readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
+        ),
+    )
     def aletheore_search_codebase(query: str, k: int = 10) -> str:
         """Semantic search over the repository's indexed code."""
         try:
@@ -342,7 +458,13 @@ def _register_search_codebase_tool(mcp_instance: MCPServer, repo_path: Path) -> 
 def _register_answer_tool(
     mcp_instance: MCPServer, repo_path: Path, answer_adapter: AgentAdapter
 ) -> None:
-    @mcp_instance.tool(name="aletheore_answer")
+    @mcp_instance.tool(
+        name="aletheore_answer",
+        # Sends retrieved code chunks to the configured LLM adapter.
+        annotations=ToolAnnotations(
+            readOnlyHint=True, destructiveHint=False, idempotentHint=False, openWorldHint=True
+        ),
+    )
     def aletheore_answer(question: str, k: int = 5) -> str:
         """Answer a natural-language question about this repository from the semantic index."""
         try:
@@ -352,7 +474,13 @@ def _register_answer_tool(
 
 
 def _register_managed_audit_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
-    @mcp_instance.tool(name="aletheore_managed_audit")
+    @mcp_instance.tool(
+        name="aletheore_managed_audit",
+        # Uploads this repository's full evidence to the hosted service.
+        annotations=ToolAnnotations(
+            readOnlyHint=True, destructiveHint=False, idempotentHint=False, openWorldHint=True
+        ),
+    )
     def aletheore_managed_audit(token: str | None = None) -> str:
         """Run a full audit report using Aletheore's managed audit service."""
         # Same resolution the CLI's own `aletheore audit --managed` uses -
@@ -373,7 +501,36 @@ def _register_managed_audit_tool(mcp_instance: MCPServer, repo_path: Path) -> No
         return _toon_result({"report": run_managed_audit_request(evidence, resolved_token)})
 
 
-def build_server(repo_path: Path, answer_adapter: AgentAdapter | None = None) -> MCPServer:
+"""What each effectful tool needs permission to do.
+
+Read-only tools are absent from this map: reading evidence is the server's
+purpose and is never gated.
+"""
+TOOL_REQUIRED_EFFECTS: dict[str, frozenset[str]] = {
+    "aletheore_search_codebase": frozenset({EFFECT_NETWORK}),
+    "aletheore_scan": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
+    "aletheore_healthcheck": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
+    "aletheore_index": frozenset({EFFECT_WRITE, EFFECT_NETWORK}),
+    "aletheore_answer": frozenset({EFFECT_NETWORK}),
+    "aletheore_managed_audit": frozenset({EFFECT_EXTERNAL, EFFECT_NETWORK}),
+}
+
+
+def build_server(
+    repo_path: Path,
+    answer_adapter: AgentAdapter | None = None,
+    allow: frozenset[str] | None = None,
+) -> MCPServer:
+    """Assemble the MCP server, registering only tools whose effects are permitted.
+
+    Withheld tools are not registered rather than registered-and-refusing.
+    A tool absent from the list cannot be invoked at all, which is the actual
+    boundary; a registered tool that returns "not permitted" is only a
+    convention, and it still spends the agent's context advertising something
+    it may not do.
+    """
+    effects = allowed_effects(os.environ.get(_ALLOW_ENV_VAR)) if allow is None else allow
+
     mcp_instance = MCPServer("aletheore")
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
@@ -381,11 +538,37 @@ def build_server(repo_path: Path, answer_adapter: AgentAdapter | None = None) ->
     _register_search_tool(mcp_instance, repo_path)
     _register_symbol_source_tool(mcp_instance, repo_path)
     _register_code_evidence_tools(mcp_instance, repo_path)
-    _register_scan_tool(mcp_instance, repo_path)
-    _register_healthcheck_tool(mcp_instance, repo_path)
-    _register_index_tool(mcp_instance, repo_path)
-    _register_search_codebase_tool(mcp_instance, repo_path)
-    _register_managed_audit_tool(mcp_instance, repo_path)
-    if answer_adapter is not None:
+
+    withheld: list[str] = []
+
+    def permitted(tool_name: str) -> bool:
+        if TOOL_REQUIRED_EFFECTS[tool_name] <= effects:
+            return True
+        withheld.append(tool_name)
+        return False
+
+    if permitted("aletheore_scan"):
+        _register_scan_tool(mcp_instance, repo_path)
+    if permitted("aletheore_healthcheck"):
+        _register_healthcheck_tool(mcp_instance, repo_path)
+    if permitted("aletheore_index"):
+        _register_index_tool(mcp_instance, repo_path)
+    if permitted("aletheore_search_codebase"):
+        _register_search_codebase_tool(mcp_instance, repo_path)
+    if permitted("aletheore_managed_audit"):
+        _register_managed_audit_tool(mcp_instance, repo_path)
+    if answer_adapter is not None and permitted("aletheore_answer"):
         _register_answer_tool(mcp_instance, repo_path, answer_adapter)
+
+    if withheld:
+        # stderr, not stdout: stdout is the MCP transport. The operator is the
+        # one who grants consent, so they need to see what was withheld and
+        # how to allow it - otherwise a missing tool looks like a bug.
+        missing = sorted(set().union(*(TOOL_REQUIRED_EFFECTS[name] for name in withheld)) - effects)
+        print(
+            f"aletheore: withholding {len(withheld)} tool(s) needing "
+            f"{', '.join(missing)}: {', '.join(sorted(withheld))}. "
+            f"Set {_ALLOW_ENV_VAR}={','.join(sorted(effects | set(missing)))} to enable.",
+            file=sys.stderr,
+        )
     return mcp_instance

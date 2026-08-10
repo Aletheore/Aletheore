@@ -1,3 +1,4 @@
+import threading
 from unittest.mock import MagicMock
 
 from scan_worker.scheduler import (
@@ -7,6 +8,7 @@ from scan_worker.scheduler import (
     HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS,
     SCANS_QUEUE_NAME,
     SESSION_CLEANUP_JOB_TIMEOUT_SECONDS,
+    WEBHOOK_DELIVERY_CLEANUP_JOB_TIMEOUT_SECONDS,
     WEEKLY_DIGEST_SWEEP_JOB_TIMEOUT_SECONDS,
     WIKI_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS,
     run_forever,
@@ -26,7 +28,17 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
     monkeypatch.setattr("scan_worker.scheduler.Queue", _fake_queue)
     monkeypatch.setattr("scan_worker.scheduler.Redis.from_url", lambda url: MagicMock())
     sleeps = []
-    monkeypatch.setattr("scan_worker.scheduler.time.sleep", lambda seconds: sleeps.append(seconds))
+
+    def _record_main_thread_sleep(seconds):
+        # scan_worker.scheduler.time IS the global time module, so this patch
+        # is global too - and test_heartbeat.py leaves a daemon thread
+        # sleeping on a 0.05s loop for the rest of the session. Recording
+        # only the main thread keeps this assertion about run_forever's own
+        # sleeps instead of whatever else happens to be ticking.
+        if threading.current_thread() is threading.main_thread():
+            sleeps.append(seconds)
+
+    monkeypatch.setattr("scan_worker.scheduler.time.sleep", _record_main_thread_sleep)
 
     run_forever(interval_seconds=42, max_iterations=3)
 
@@ -43,7 +55,7 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         assert call.args == ("scan_worker.jobs.run_health_check_sweep_job",)
         assert call.kwargs == {"job_timeout": HEALTH_SWEEP_JOB_TIMEOUT_SECONDS}
 
-    assert scans_queue.enqueue.call_count == 15
+    assert scans_queue.enqueue.call_count == 18
     session_cleanup_calls = [
         c for c in scans_queue.enqueue.call_args_list
         if c.args == ("scan_worker.jobs.run_session_cleanup_job",)
@@ -64,11 +76,16 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         c for c in scans_queue.enqueue.call_args_list
         if c.args == ("scan_worker.jobs.run_health_sweep_staleness_check_job",)
     ]
+    webhook_cleanup_calls = [
+        c for c in scans_queue.enqueue.call_args_list
+        if c.args == ("scan_worker.jobs.run_webhook_delivery_cleanup_job",)
+    ]
     assert len(session_cleanup_calls) == 3
     assert len(docs_catchup_calls) == 3
     assert len(wiki_catchup_calls) == 3
     assert len(weekly_digest_calls) == 3
     assert len(staleness_check_calls) == 3
+    assert len(webhook_cleanup_calls) == 3
     for call in session_cleanup_calls:
         assert call.kwargs == {"job_timeout": SESSION_CLEANUP_JOB_TIMEOUT_SECONDS}
     for call in docs_catchup_calls:
@@ -79,6 +96,8 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         assert call.kwargs == {"job_timeout": WEEKLY_DIGEST_SWEEP_JOB_TIMEOUT_SECONDS}
     for call in staleness_check_calls:
         assert call.kwargs == {"job_timeout": HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS}
+    for call in webhook_cleanup_calls:
+        assert call.kwargs == {"job_timeout": WEBHOOK_DELIVERY_CLEANUP_JOB_TIMEOUT_SECONDS}
     # Sleeps between iterations, not after the last one.
     assert sleeps == [42, 42]
 

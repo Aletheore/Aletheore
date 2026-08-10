@@ -4,7 +4,7 @@ import logging
 import httpx
 
 from app_server.config import get_settings
-from app_server.db import delete_installation, upsert_installation
+from app_server.db import purge_installation_data, upsert_installation
 from app_server.github_auth import generate_app_jwt, get_installation_token
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,13 @@ async def handle_installation_event(
     account_login = installation["account"]["login"]
 
     if event_name == "installation" and action == "deleted":
-        await delete_installation(pool, installation_id)
+        # Uninstalling is a deletion request like any other - it goes
+        # through the same purge as the dashboard button so it clears the
+        # user-scoped email/session rows too, and lands in the same audit
+        # log. A bare DELETE here would leave those behind.
+        sender = payload.get("sender") or {}
+        actor = sender.get("login") or "github:installation.deleted"
+        await purge_installation_data(pool, installation_id, actor)
         return
 
     await upsert_installation(pool, installation_id, account_login)
