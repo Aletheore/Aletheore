@@ -141,6 +141,28 @@ def test_scan_repository_produces_full_schema(tmp_path):
     assert evidence["git"]["total_commits"] == 1
 
 
+def test_scan_repository_reports_the_same_file_count_across_repeated_scans(tmp_path):
+    # _ensure_aletheore_dir_gitignored used to run only in write_evidence,
+    # after the file-counting walk below had already happened - so the
+    # .gitignore it created was invisible to the scan that created it, but
+    # counted by the NEXT scan of the same, otherwise-untouched repo (a real
+    # repo scanned twice in a row reported 22 -> 23 -> 23, confirmed
+    # empirically). It now runs before any counting, in scan_repository
+    # itself, so every scan - including the first - already reflects it.
+    repo = make_repo(tmp_path)
+    assert not (repo / ".gitignore").exists()
+
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        first = scan_repository(repo, check_licenses=False)
+        assert (repo / ".gitignore").exists()
+        second = scan_repository(repo, check_licenses=False)
+
+    first_python = next(e for e in first["repository"]["languages"] if e["name"] == "python")
+    second_python = next(e for e in second["repository"]["languages"] if e["name"] == "python")
+    assert first_python["file_count"] == second_python["file_count"]
+
+
 def test_scan_repository_honors_ignored_paths_from_config(tmp_path):
     repo = make_repo(tmp_path)
     vendor = repo / "vendor"
