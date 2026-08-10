@@ -53,6 +53,23 @@ As of 2026-08-10, following a redeploy to `master` (`git reset --hard origin/mas
 - No errors, tracebacks, or exceptions in `app-server`, `scan-worker`, `health-worker`, or `scheduler` logs since restart.
 - Disk: 129G available of 193G (34% used).
 
+## Paddle Webhook Destination (live account config, not in git)
+
+The set of events Paddle actually delivers to `/webhooks/paddle` is configured on Paddle's side
+(notification destination `ntfset_01kyksktbmvr49pyygmxa3vfjz`), not in this repository - adding a
+new event handler in `app_server/webhooks/paddle.py` does **not** make Paddle start sending that
+event type. Confirmed via the Paddle API (`notificationSettings.list`/`.get`) that this destination
+is currently subscribed to `subscription.canceled`, `subscription.created`, `subscription.paused`,
+`subscription.resumed`, `subscription.updated`, and `transaction.completed`.
+
+`transaction.completed` was added 2026-08-10 alongside the affiliate-commission feature - it was
+initially missing (the destination predates that handler and was never updated), which would have
+made the entire commission-recording code path permanently unreachable in production despite
+passing all tests, since tests exercise the handler directly rather than real Paddle delivery. This
+is now a standing check: any new webhook handler for an event type not already in the list above
+needs both the code AND this destination's `subscribed_events` updated, verified live via
+`notificationSettings.get`, not assumed from the code change alone.
+
 ## Recovery Rule
 
 If any deployed state differs from repository expectations, treat production as stale until the exact commit and Compose configuration are verified.
