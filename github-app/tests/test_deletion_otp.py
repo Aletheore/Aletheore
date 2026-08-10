@@ -1,4 +1,5 @@
 import hashlib
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -120,6 +121,7 @@ async def test_full_otp_flow_end_to_end(pool, monkeypatch):
         "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
     )
     monkeypatch.setattr("app_server.admin.is_rate_limited", lambda *a, **k: False)
+    monkeypatch.setattr("rq.Queue.enqueue", MagicMock())
     async with client:
         request_response = await client.post("/admin/octocat/hello-world/delete-all-data/request-otp")
         assert request_response.status_code == 200, request_response.text

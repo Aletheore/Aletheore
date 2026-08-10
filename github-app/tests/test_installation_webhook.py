@@ -31,7 +31,7 @@ async def test_installation_deleted_removes_row(pool):
         "action": "deleted",
         "installation": {"id": 555, "account": {"login": "octocat"}},
     }
-    await handle_installation_event("installation", payload, pool, "redis://unused")
+    await handle_installation_event("installation", payload, pool, "redis://unused", queue=MagicMock())
     assert await get_installation(pool, 555) is None
 
 

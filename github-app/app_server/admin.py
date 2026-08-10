@@ -945,6 +945,18 @@ async def delete_all_data(
     if result is None:
         raise HTTPException(status_code=404, detail="installation not found")
 
+    # purge_installation_data is SQL-only - app-server has no filesystem
+    # access to the persistent-checkout volume scan-worker owns (see
+    # scan_worker.jobs._ensure_persistent_checkout), so the on-disk purge
+    # runs there instead, same as the uninstall webhook.
+    from rq import Queue
+
+    Queue("scans", connection=Redis.from_url(settings.redis_url)).enqueue(
+        "scan_worker.jobs.purge_persistent_checkouts_job",
+        job_timeout=120,
+        installation_id=installation_id,
+    )
+
     logger.info(
         "purged installation %s (%s) on request of %s: %s repos, %s users",
         result["installation_id"],

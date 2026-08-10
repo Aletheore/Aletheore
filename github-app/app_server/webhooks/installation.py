@@ -10,6 +10,23 @@ from app_server.github_auth import generate_app_jwt, get_installation_token
 logger = logging.getLogger(__name__)
 
 
+def _enqueue_checkout_purge(installation_id: int, redis_url: str, queue=None) -> None:
+    """purge_installation_data (app_server/db.py) is SQL-only - app-server
+    has no filesystem access to the persistent-checkout volume that only
+    scan-worker mounts (see scan_worker.jobs._ensure_persistent_checkout),
+    so the on-disk deletion has to happen there instead."""
+    if queue is None:
+        from redis import Redis
+        from rq import Queue
+
+        queue = Queue("scans", connection=Redis.from_url(redis_url))
+    queue.enqueue(
+        "scan_worker.jobs.purge_persistent_checkouts_job",
+        job_timeout=120,
+        installation_id=installation_id,
+    )
+
+
 def _fetch_installation_repos_sync(installation_id: int, app_jwt: str) -> list[str]:
     token = get_installation_token(installation_id, app_jwt)
     response = httpx.Client(base_url="https://api.github.com").get(
@@ -45,6 +62,7 @@ async def handle_installation_event(
         sender = payload.get("sender") or {}
         actor = sender.get("login") or "github:installation.deleted"
         await purge_installation_data(pool, installation_id, actor)
+        _enqueue_checkout_purge(installation_id, redis_url, queue)
         return
 
     await upsert_installation(pool, installation_id, account_login)

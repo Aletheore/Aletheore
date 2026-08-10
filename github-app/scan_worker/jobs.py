@@ -230,6 +230,28 @@ def _persistent_checkout_dir(installation_id: int, repo_full_name: str) -> Path:
     return root / str(installation_id) / safe_name
 
 
+def _installation_checkout_root(installation_id: int) -> Path:
+    root = Path(os.environ.get(_REPO_CHECKOUT_ROOT_ENV, _DEFAULT_REPO_CHECKOUT_ROOT))
+    return root / str(installation_id)
+
+
+@log_job
+def purge_persistent_checkouts_job(installation_id: int) -> None:
+    """Deletes every persistent checkout (see _ensure_persistent_checkout)
+    for one installation - the on-disk counterpart to
+    purge_installation_data, which is SQL-only and has no filesystem
+    access to this volume from app-server. Enqueued by the uninstall
+    webhook and the self-serve delete-all-data route right after that SQL
+    purge succeeds, since a customer's source code surviving on disk after
+    every DB row about them is gone is exactly the gap this closes.
+
+    ignore_errors=True: a purge that can't find the directory (already
+    gone, or a fallback-to-ephemeral installation that never got a
+    persistent checkout at all) is a no-op, not a failure worth surfacing.
+    """
+    shutil.rmtree(_installation_checkout_root(installation_id), ignore_errors=True)
+
+
 def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path) -> None:
     """Keeps one real checkout per repo, reused across scans, instead of
     the clone-fresh-and-delete pattern _clone_ref/_clone_pr_head use for
