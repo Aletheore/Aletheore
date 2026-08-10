@@ -176,6 +176,56 @@ async def record_installation_access(
     )
 
 
+async def record_admin_action(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    actor_login: str,
+    action: str,
+    detail: dict | None = None,
+) -> None:
+    """Record one admin-mutating dashboard action - member/token/setting
+    changes, not the data-deletion path, which already writes its own
+    permanent data_deletion_log row.
+
+    `detail` is for context that helps read the log later (a target login,
+    a token label, a changed setting's new value) - never a secret. Callers
+    must not pass a raw API token or webhook URL containing credentials.
+    """
+    await pool.execute(
+        """
+        INSERT INTO admin_action_log (installation_id, actor_login, action, detail)
+        VALUES ($1, $2, $3, $4::jsonb)
+        """,
+        installation_id,
+        actor_login,
+        action,
+        json.dumps(detail) if detail is not None else None,
+    )
+
+
+async def list_admin_actions(
+    pool: asyncpg.Pool, installation_id: int, limit: int = 200
+) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT id, actor_login, action, detail, created_at
+        FROM admin_action_log
+        WHERE installation_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2
+        """,
+        installation_id,
+        limit,
+    )
+    actions = []
+    for row in rows:
+        action = dict(row)
+        detail = action["detail"]
+        action["detail"] = json.loads(detail) if isinstance(detail, str) else detail
+        actions.append(action)
+    return actions
+
+
 async def purge_installation_data(
     pool: asyncpg.Pool, installation_id: int, actor_login: str
 ) -> dict | None:
@@ -620,6 +670,24 @@ async def list_health_check_targets(pool: asyncpg.Pool, installation_id: int, re
     return [dict(row) for row in rows]
 
 
+async def list_health_check_targets_for_installation(pool: asyncpg.Pool, installation_id: int) -> list[dict]:
+    """Every health check target across every repo this installation has,
+    for the data-export route - list_health_check_targets is scoped to one
+    repo_full_name and would silently return nothing if called without one,
+    not every target the installation actually has.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT id, repo_full_name, label, base_url, latency_threshold_ms, created_at
+        FROM health_check_targets
+        WHERE installation_id = $1
+        ORDER BY repo_full_name ASC, created_at ASC
+        """,
+        installation_id,
+    )
+    return [dict(row) for row in rows]
+
+
 async def count_health_check_targets(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> int:
     row = await pool.fetchrow(
         "SELECT count(*) AS n FROM health_check_targets WHERE installation_id = $1 AND repo_full_name = $2",
@@ -834,6 +902,55 @@ async def upsert_github_user_email(pool: asyncpg.Pool, github_login: str, email:
         email,
     )
     return row["inserted"]
+
+
+async def get_github_user_email(pool: asyncpg.Pool, github_login: str) -> str | None:
+    return await pool.fetchval(
+        "SELECT email FROM github_user_emails WHERE github_login = $1", github_login
+    )
+
+
+async def create_deletion_otp_code(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    requested_by: str,
+    code_hash: str,
+    expires_at: datetime,
+) -> None:
+    await pool.execute(
+        """
+        INSERT INTO deletion_otp_codes (installation_id, requested_by, code_hash, expires_at)
+        VALUES ($1, $2, $3, $4)
+        """,
+        installation_id,
+        requested_by,
+        code_hash,
+        expires_at,
+    )
+
+
+async def consume_deletion_otp_code(pool: asyncpg.Pool, installation_id: int, code_hash: str) -> bool:
+    """Atomically claims one matching, unused, unexpired code. True means
+    this call won it; a second call with the same code (a replay, or a
+    double-submit) gets False, since used_at is now set.
+    """
+    row = await pool.fetchrow(
+        """
+        UPDATE deletion_otp_codes
+        SET used_at = now()
+        WHERE id = (
+            SELECT id FROM deletion_otp_codes
+            WHERE installation_id = $1 AND code_hash = $2
+              AND used_at IS NULL AND expires_at > now()
+            ORDER BY created_at DESC
+            LIMIT 1
+        )
+        RETURNING id
+        """,
+        installation_id,
+        code_hash,
+    )
+    return row is not None
 
 
 async def get_session(pool: asyncpg.Pool, session_id: str) -> dict | None:

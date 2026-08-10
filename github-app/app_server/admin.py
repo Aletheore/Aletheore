@@ -2,13 +2,18 @@ import asyncio
 import hashlib
 import logging
 import secrets
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app_server.auth import encrypt_access_token, get_current_session, refresh_github_access_token
 from app_server.config import get_settings
+from app_server.email_client import send_transactional_email
+from app_server.email_templates import deletion_otp_email
 from app_server.db import (
     DEFAULT_HEALTH_CHECK_TARGET_LIMIT,
     DEFAULT_SEAT_LIMIT,
@@ -16,23 +21,29 @@ from app_server.db import (
     INCLUDED_SEATS,
     add_health_check_target,
     add_installation_member,
+    consume_deletion_otp_code,
     count_active_tokens,
     count_health_check_targets,
     count_installation_members,
     create_api_token,
+    create_deletion_otp_code,
     delete_session,
     get_docs_repo_commit_settings,
     get_extra_seats,
     get_flash_review_count_this_month,
+    get_github_user_email,
     get_installation,
+    get_latest_evidence,
     get_llm_spend_this_month,
     get_max_tokens,
     is_installation_member,
     list_api_tokens,
     list_health_check_targets,
+    list_health_check_targets_for_installation,
     list_installation_members,
     list_repos_for_installations,
     purge_installation_data,
+    record_admin_action,
     record_installation_access,
     remove_health_check_target,
     remove_installation_member,
@@ -48,6 +59,7 @@ from app_server.paddle_client import create_portal_session
 from app_server.paddle_client import get_subscription as get_paddle_subscription
 from app_server.paddle_client import update_subscription_items as update_paddle_subscription_items
 from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
+from app_server.rate_limit import is_rate_limited
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
 
 admin_router = APIRouter()
@@ -97,6 +109,7 @@ class SetLLMSuggestionsRequest(BaseModel):
 
 class DeleteInstallationDataRequest(BaseModel):
     confirm: str = Field(min_length=1, max_length=200)
+    otp_code: str = Field(min_length=6, max_length=6)
 
 
 class AddMemberRequest(BaseModel):
@@ -384,6 +397,10 @@ async def add_member(org: str, repo: str, request: Request, body: AddMemberReque
                 ),
             )
         await add_installation_member(pool, installation_id, body.github_login, session["github_login"])
+        await record_admin_action(
+            pool, installation_id, session["github_login"], "member_added",
+            {"github_login": body.github_login},
+        )
     return {"ok": True}
 
 
@@ -456,6 +473,11 @@ async def buy_extra_seat(org: str, repo: str, request: Request):
             detail="Could not update billing right now - please try again, or contact support if this keeps happening.",
         ) from exc
 
+    session = await get_current_session(request)
+    await record_admin_action(
+        request.app.state.db_pool, installation["installation_id"], session["github_login"],
+        "extra_seat_purchase_requested",
+    )
     # extra_seats itself is reconciled from the resulting subscription.updated
     # webhook, not set optimistically here - same pattern installations.plan
     # already follows for the base subscription price.
@@ -488,6 +510,11 @@ async def remove_extra_seat(org: str, repo: str, request: Request):
             detail="Could not update billing right now - please try again, or contact support if this keeps happening.",
         ) from exc
 
+    session = await get_current_session(request)
+    await record_admin_action(
+        request.app.state.db_pool, installation["installation_id"], session["github_login"],
+        "extra_seat_removal_requested",
+    )
     return {"ok": True}
 
 
@@ -542,7 +569,13 @@ async def get_billing_portal_url(org: str, repo: str, request: Request):
 @admin_router.delete("/admin/{org}/{repo}/members/{github_login}")
 async def remove_member(org: str, repo: str, github_login: str, request: Request):
     installation = await _require_admin_installation(request, org, repo)
-    await remove_installation_member(request.app.state.db_pool, installation["installation_id"], github_login)
+    pool = request.app.state.db_pool
+    await remove_installation_member(pool, installation["installation_id"], github_login)
+    session = await get_current_session(request)
+    await record_admin_action(
+        pool, installation["installation_id"], session["github_login"], "member_removed",
+        {"github_login": github_login},
+    )
     return {"ok": True}
 
 
@@ -561,13 +594,24 @@ async def generate_token(org: str, repo: str, request: Request, body: GenerateTo
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
     await create_api_token(pool, installation_id, token_hash, body.label, session["github_login"])
     token_id = (await list_api_tokens(pool, installation_id))[0]["id"]
+    # Label only - never the raw token or its hash.
+    await record_admin_action(
+        pool, installation_id, session["github_login"], "api_token_created",
+        {"label": body.label, "token_id": token_id},
+    )
     return {"token": raw_token, "id": token_id, "label": body.label}
 
 
 @admin_router.delete("/admin/{org}/{repo}/tokens/{token_id}")
 async def revoke_token(org: str, repo: str, token_id: int, request: Request):
     installation = await _require_admin_installation(request, org, repo)
-    await revoke_api_token(request.app.state.db_pool, installation["installation_id"], token_id)
+    pool = request.app.state.db_pool
+    await revoke_api_token(pool, installation["installation_id"], token_id)
+    session = await get_current_session(request)
+    await record_admin_action(
+        pool, installation["installation_id"], session["github_login"], "api_token_revoked",
+        {"token_id": token_id},
+    )
     return {"ok": True}
 
 
@@ -579,10 +623,13 @@ async def set_webhook_url_route(org: str, repo: str, request: Request, body: Set
             validate_external_https_url(body.webhook_url)
         except UnsafeURLError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    await set_webhook_url(
-        request.app.state.db_pool,
-        installation["installation_id"],
-        body.webhook_url,
+    pool = request.app.state.db_pool
+    await set_webhook_url(pool, installation["installation_id"], body.webhook_url)
+    session = await get_current_session(request)
+    # Never the URL itself - it can carry a token/secret in its query string.
+    await record_admin_action(
+        pool, installation["installation_id"], session["github_login"], "webhook_url_changed",
+        {"cleared": body.webhook_url is None},
     )
     return {"ok": True}
 
@@ -628,8 +675,12 @@ async def set_docs_repo_commit_route(org: str, repo: str, request: Request, body
     # .aletheore/docs/), unlike every other Docs surface which only reads
     # evidence - opt-in and reversible at any time, never defaulted on.
     installation = await _require_admin_installation(request, org, repo)
-    await set_docs_repo_commit_enabled(
-        request.app.state.db_pool, installation["installation_id"], f"{org}/{repo}", body.enabled
+    pool = request.app.state.db_pool
+    await set_docs_repo_commit_enabled(pool, installation["installation_id"], f"{org}/{repo}", body.enabled)
+    session = await get_current_session(request)
+    await record_admin_action(
+        pool, installation["installation_id"], session["github_login"], "docs_repo_commit_setting_changed",
+        {"repo_full_name": f"{org}/{repo}", "enabled": body.enabled},
     )
     return {"ok": True}
 
@@ -655,14 +706,23 @@ async def add_health_check_target_route(org: str, repo: str, request: Request, b
     target_id = await add_health_check_target(
         pool, installation_id, repo_full_name, body.label, body.base_url, body.latency_threshold_ms
     )
+    session = await get_current_session(request)
+    await record_admin_action(
+        pool, installation_id, session["github_login"], "health_check_target_added",
+        {"repo_full_name": repo_full_name, "label": body.label, "target_id": target_id},
+    )
     return {"id": target_id}
 
 
 @admin_router.delete("/admin/{org}/{repo}/health-targets/{target_id}")
 async def remove_health_check_target_route(org: str, repo: str, target_id: int, request: Request):
     installation = await _require_admin_installation(request, org, repo)
-    await remove_health_check_target(
-        request.app.state.db_pool, installation["installation_id"], f"{org}/{repo}", target_id
+    pool = request.app.state.db_pool
+    await remove_health_check_target(pool, installation["installation_id"], f"{org}/{repo}", target_id)
+    session = await get_current_session(request)
+    await record_admin_action(
+        pool, installation["installation_id"], session["github_login"], "health_check_target_removed",
+        {"repo_full_name": f"{org}/{repo}", "target_id": target_id},
     )
     return {"ok": True}
 
@@ -679,10 +739,66 @@ async def set_llm_suggestions_route(
     audits to configure has nothing to set here.
     """
     installation = await _require_admin_installation(request, org, repo)
-    await set_llm_suggestions_enabled(
-        request.app.state.db_pool, installation["installation_id"], body.enabled
+    pool = request.app.state.db_pool
+    await set_llm_suggestions_enabled(pool, installation["installation_id"], body.enabled)
+    session = await get_current_session(request)
+    await record_admin_action(
+        pool, installation["installation_id"], session["github_login"], "llm_suggestions_setting_changed",
+        {"enabled": body.enabled},
     )
     return {"ok": True, "llm_suggestions_enabled": body.enabled}
+
+
+@admin_router.get("/admin/{org}/{repo}/export-data")
+async def export_data(org: str, repo: str, request: Request):
+    """Self-serve export of what the hosted service holds for this
+    installation, as a single downloadable JSON file.
+
+    Gated on _require_authorized_installation, same as deletion-preview and
+    delete-all-data: no plan or seat gate. Exporting your own data isn't a
+    paid feature to unlock, and a customer whose payment failed still owns
+    what's already here.
+
+    Deliberately excludes anything a leaked export would turn into a
+    working credential: API tokens are listed by label/id only, never the
+    token or its hash (list_api_tokens never returns either); the webhook
+    URL is omitted entirely, since Slack-style webhook URLs embed a secret
+    in the path itself.
+    """
+    session, installation = await _require_authorized_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    installation_id = installation["installation_id"]
+
+    repos = await list_repos_for_installations(pool, [installation_id])
+    repo_full_names = [row["repo_full_name"] for row in repos]
+    findings_by_repo = {}
+    for full_name in repo_full_names:
+        evidence = await get_latest_evidence(pool, installation_id, full_name)
+        if evidence is not None:
+            findings_by_repo[full_name] = evidence
+
+    extra_seats = await get_extra_seats(pool, installation_id)
+    export = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "account_login": installation["account_login"],
+        "plan": installation["plan"],
+        "connected_repos": repo_full_names,
+        "latest_findings_by_repo": findings_by_repo,
+        "members": await list_installation_members(pool, installation_id),
+        "api_tokens": await list_api_tokens(pool, installation_id),
+        "health_check_targets": await list_health_check_targets_for_installation(pool, installation_id),
+        "extra_seats": extra_seats,
+        "llm_spend_month_to_date": await get_llm_spend_this_month(pool, installation_id),
+        "flash_reviews_month_to_date": await get_flash_review_count_this_month(pool, installation_id),
+    }
+
+    await record_admin_action(pool, installation_id, session["github_login"], "data_exported")
+
+    filename = f"aletheore-export-{installation['account_login']}-{datetime.now(timezone.utc).strftime('%Y%m%d')}.json"
+    return JSONResponse(
+        content=jsonable_encoder(export),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @admin_router.get("/admin/{org}/{repo}/deletion-preview")
@@ -704,6 +820,79 @@ async def deletion_preview(org: str, repo: str, request: Request):
     }
 
 
+DELETION_OTP_RATE_LIMIT = 5
+DELETION_OTP_RATE_LIMIT_WINDOW_SECONDS = 3600
+DELETION_OTP_ATTEMPT_LIMIT = 10
+DELETION_OTP_ATTEMPT_WINDOW_SECONDS = 3600
+DELETION_OTP_VALIDITY_MINUTES = 10
+
+
+@admin_router.post("/admin/{org}/{repo}/delete-all-data/request-otp")
+async def request_deletion_otp(org: str, repo: str, request: Request):
+    """Emails a one-time code required to actually run delete-all-data.
+
+    The typed account-login confirmation on delete-all-data defends against
+    an accidental click - the name is right there on the page. It proves
+    nothing about who's asking, since anyone holding a stolen session
+    cookie can read that name and type it back. This closes that gap: the
+    code goes to the acting session's own captured email (not necessarily
+    the account owner's - a teammate with their own seat can delete too),
+    so completing a delete requires proving control of that inbox right
+    now, not just possession of a session.
+    """
+    session, installation = await _require_authorized_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    installation_id = installation["installation_id"]
+
+    from redis import Redis
+
+    settings = get_settings()
+    try:
+        rate_limited = is_rate_limited(
+            Redis.from_url(settings.redis_url),
+            f"ratelimit:deletion-otp:{installation_id}",
+            DELETION_OTP_RATE_LIMIT,
+            DELETION_OTP_RATE_LIMIT_WINDOW_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("deletion OTP rate limit check failed (%s); allowing request", exc)
+        rate_limited = False
+    if rate_limited:
+        raise HTTPException(status_code=429, detail="too many code requests - try again later")
+
+    to_email = await get_github_user_email(pool, session["github_login"])
+    if not to_email:
+        raise HTTPException(
+            status_code=400,
+            detail="no verified email on file for your GitHub account - contact support@aletheore.com",
+        )
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    code_hash = hashlib.sha256(code.encode()).hexdigest()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=DELETION_OTP_VALIDITY_MINUTES)
+    await create_deletion_otp_code(pool, installation_id, session["github_login"], code_hash, expires_at)
+
+    if settings.resend_api_key:
+        message = deletion_otp_email(installation["account_login"], code)
+        await asyncio.to_thread(
+            send_transactional_email,
+            settings.resend_api_key,
+            settings.email_from_address,
+            settings.email_reply_to_address,
+            to_email,
+            message["subject"],
+            message["html"],
+            message["text"],
+        )
+    else:
+        # No email provider configured (local dev) - log it instead of
+        # silently succeeding with a code nobody can ever receive.
+        logger.warning("RESEND_API_KEY not configured, deletion OTP not sent: %s", code)
+
+    masked = to_email[0] + "***" + to_email[to_email.index("@"):] if "@" in to_email else "***"
+    return {"ok": True, "sent_to": masked}
+
+
 @admin_router.post("/admin/{org}/{repo}/delete-all-data")
 async def delete_all_data(
     org: str, repo: str, request: Request, body: DeleteInstallationDataRequest
@@ -717,6 +906,8 @@ async def delete_all_data(
     their data. A 402 on this route would be indefensible.
     """
     session, installation = await _require_authorized_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    installation_id = installation["installation_id"]
 
     # The typed confirmation is the account login, not the repo name: the
     # blast radius is the whole installation, and making someone type the
@@ -727,11 +918,30 @@ async def delete_all_data(
             detail=f"type {installation['account_login']} exactly to confirm deletion",
         )
 
-    result = await purge_installation_data(
-        request.app.state.db_pool,
-        installation["installation_id"],
-        session["github_login"],
-    )
+    from redis import Redis
+
+    settings = get_settings()
+    try:
+        attempt_limited = is_rate_limited(
+            Redis.from_url(settings.redis_url),
+            f"ratelimit:deletion-otp-attempt:{installation_id}",
+            DELETION_OTP_ATTEMPT_LIMIT,
+            DELETION_OTP_ATTEMPT_WINDOW_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("deletion OTP attempt rate limit check failed (%s); allowing request", exc)
+        attempt_limited = False
+    if attempt_limited:
+        raise HTTPException(status_code=429, detail="too many incorrect codes - try again later")
+
+    code_hash = hashlib.sha256(body.otp_code.strip().encode()).hexdigest()
+    if not await consume_deletion_otp_code(pool, installation_id, code_hash):
+        raise HTTPException(
+            status_code=400,
+            detail="that code is invalid, expired, or already used - request a new one",
+        )
+
+    result = await purge_installation_data(pool, installation_id, session["github_login"])
     if result is None:
         raise HTTPException(status_code=404, detail="installation not found")
 

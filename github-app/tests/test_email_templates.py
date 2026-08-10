@@ -1,4 +1,5 @@
 from app_server.email_templates import (
+    deletion_otp_email,
     payment_failed_email,
     subscription_canceled_email,
     weekly_digest_email,
@@ -23,6 +24,17 @@ def test_payment_failed_email_names_account_and_does_not_promise_a_grace_period(
     # grace period) - the copy must say so, not imply access is still on.
     assert "resubscribe" in message["text"].lower()
     assert "pricing.html" in message["html"]
+
+
+def test_deletion_otp_email_includes_the_code_and_a_10_minute_expiry():
+    message = deletion_otp_email("acme-corp", "424242")
+    assert "424242" in message["subject"]
+    assert "424242" in message["html"]
+    assert "424242" in message["text"]
+    assert "acme-corp" in message["text"]
+    assert "10 minutes" in message["text"]
+    for key in ("subject", "html", "text"):
+        assert message[key]
 
 
 def test_subscription_canceled_email_names_account_and_lists_what_is_lost():
