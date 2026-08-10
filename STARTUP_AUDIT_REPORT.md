@@ -1,3 +1,11 @@
+> **STALE - superseded 2026-08-10.** This report references `prototype/aletheore/*` and
+> `constitution/*`, directories that no longer exist - the codebase has since consolidated into
+> `src/aletheore/` (CLI/scanner) and `github-app/` (hosted backend). Its evidence basis no longer
+> matches the repository. For current findings, see
+> [`docs/operations/SECURITY-AUDIT-2026-08-10.md`](docs/operations/SECURITY-AUDIT-2026-08-10.md).
+> Kept here for historical reference only - do not treat anything below as reflecting the current
+> codebase.
+
 # Startup Technical Due Diligence Audit Report
 
 Project: Veridion / Aletheore  
