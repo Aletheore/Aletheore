@@ -24,6 +24,7 @@ from app_server.db import (
     get_endpoint_health_summary_since,
     get_endpoint_uptime_pct_since,
     get_installation,
+    get_installation_by_account_login,
     get_latest_evidence,
     get_recent_endpoint_health,
     get_recent_history,
@@ -527,6 +528,21 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
         )
 
     repo_full_name = f"{org}/{repo}"
+
+    # Off by default (migration 043) - endpoint paths, reachability, and
+    # latency derived from a customer's private repository must not be
+    # exposed to anyone who knows the org/repo without an explicit
+    # opt-in. Same 404 shape as "no health data" below, rather than a
+    # distinct status, so this doesn't itself disclose whether the repo
+    # has simply never opted in vs never been scanned.
+    installation = await get_installation_by_account_login(request.app.state.db_pool, org)
+    if installation is None or not installation["public_status_enabled"]:
+        raise HTTPException(
+            status_code=404,
+            detail="no health data for this repo",
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+
     rows = await request.app.state.db_pool.fetch(
         """
         SELECT DISTINCT ON (endpoint_method, endpoint_path)

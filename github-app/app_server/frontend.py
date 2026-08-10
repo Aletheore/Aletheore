@@ -1110,16 +1110,40 @@ async function loadTargets() {{
 
   const origin = window.location.origin;
   const statusUrl = origin + data.public_status_url;
-  statusApiBody.innerHTML = '<div class="copy-box"><input class="field" id="status-url-field" value="' + escapeHtml(statusUrl) + '" readonly>' +
-    '<button class="btn" id="copy-status-url">Copy</button></div>' +
-    '<div class="settings-block-hint">Unauthenticated and CORS-enabled - safe to call from a public status page.</div>';
-  document.getElementById('copy-status-url').addEventListener('click', function () {{
-    navigator.clipboard.writeText(statusUrl).then(function () {{
-      const btn = document.getElementById('copy-status-url');
-      btn.textContent = 'Copied';
-      setTimeout(function () {{ btn.textContent = 'Copy'; }}, 1500);
+  const publicStatusEnabled = data.installation.public_status_enabled === true;
+  statusApiBody.innerHTML =
+    '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;">' +
+    '<input type="checkbox" id="public-status-toggle"' +
+    (publicStatusEnabled ? ' checked' : '') +
+    '> Make this repo\\'s endpoint status publicly readable</label>' +
+    '<div id="public-status-status" class="settings-block-hint"></div>' +
+    (publicStatusEnabled
+      ? '<div class="copy-box"><input class="field" id="status-url-field" value="' + escapeHtml(statusUrl) + '" readonly>' +
+        '<button class="btn" id="copy-status-url">Copy</button></div>' +
+        '<div class="settings-block-hint">Unauthenticated and CORS-enabled - safe to call from a public status page.</div>'
+      : '<div class="settings-block-hint">Off by default. Endpoint paths, reachability, and latency for this repo are only visible in this dashboard until you turn this on.</div>');
+
+  document.getElementById('public-status-toggle').addEventListener('change', async function (e) {{
+    const statusEl = document.getElementById('public-status-status');
+    statusEl.textContent = 'Saving...';
+    const res = await fetch(adminBase + '/public-status', {{
+      method: 'PUT', headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ enabled: e.target.checked }}),
     }});
+    if (!res.ok) {{ statusEl.textContent = 'Could not save.'; e.target.checked = !e.target.checked; return; }}
+    statusEl.textContent = 'Saved.';
+    loadTargets();
   }});
+
+  const copyBtn = document.getElementById('copy-status-url');
+  if (copyBtn) {{
+    copyBtn.addEventListener('click', function () {{
+      navigator.clipboard.writeText(statusUrl).then(function () {{
+        copyBtn.textContent = 'Copied';
+        setTimeout(function () {{ copyBtn.textContent = 'Copy'; }}, 1500);
+      }});
+    }});
+  }}
 }}
 
 async function loadResults() {{

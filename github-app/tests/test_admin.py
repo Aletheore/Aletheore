@@ -1,5 +1,6 @@
 import socket
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ from app_server.admin import (
     _repo_installation_id,
 )
 from app_server.auth import decrypt_access_token, encrypt_access_token, sign_session_id
+from app_server.url_validation import UnsafeURLError
 from app_server.db import (
     add_paddle_ids_to_installation,
     create_session,
@@ -417,7 +419,11 @@ async def test_send_test_notification_reports_delivery_failure(pool, monkeypatch
     client = await _logged_in_client(pool, monkeypatch)
 
     def fake_send_health_alert(webhook_url, message, http_client=None):
-        raise httpx.HTTPStatusError("bad gateway", request=None, response=httpx.Response(502))
+        raise httpx.HTTPStatusError(
+            "internal secret detail that must never reach the caller",
+            request=None,
+            response=httpx.Response(502),
+        )
 
     monkeypatch.setattr("scan_worker.slack.send_health_alert", fake_send_health_alert)
     async with client:
@@ -428,6 +434,36 @@ async def test_send_test_notification_reports_delivery_failure(pool, monkeypatch
         response = await client.post("/admin/octocat/hello-world/webhook-url/test")
 
     assert response.status_code == 502
+    # The raw exception message is an SSRF oracle (distinguishes refused
+    # vs timed out vs an actual response from whatever the URL resolved
+    # to) - must never be echoed back to the caller.
+    assert "internal secret detail" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_send_test_notification_revalidates_the_url_right_before_fetching(pool, monkeypatch):
+    # Same DNS-rebinding defense as the health-check sweep: a URL that
+    # validated fine when saved could resolve somewhere unsafe by the
+    # time "test" is clicked. This must be caught here too, not just at
+    # save time.
+    client = await _logged_in_client(pool, monkeypatch)
+
+    def fake_send_health_alert(webhook_url, message, http_client=None):
+        raise AssertionError("must not fetch a webhook URL that just failed revalidation")
+
+    monkeypatch.setattr("scan_worker.slack.send_health_alert", fake_send_health_alert)
+    async with client:
+        await client.put(
+            "/admin/octocat/hello-world/webhook-url",
+            json={"webhook_url": "https://hooks.slack.com/services/x"},
+        )
+        monkeypatch.setattr(
+            "app_server.admin.validate_external_https_url",
+            MagicMock(side_effect=UnsafeURLError("now resolves internally")),
+        )
+        response = await client.post("/admin/octocat/hello-world/webhook-url/test")
+
+    assert response.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -436,6 +472,30 @@ async def test_send_test_notification_requires_login(pool):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post("/admin/octocat/hello-world/webhook-url/test")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_set_public_status_route_toggles_the_flag(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        on_response = await client.put(
+            "/admin/octocat/hello-world/public-status", json={"enabled": True}
+        )
+        dashboard_response = await client.get("/admin/octocat/hello-world")
+    assert on_response.status_code == 200
+    assert on_response.json()["public_status_enabled"] is True
+    assert dashboard_response.json()["installation"]["public_status_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_set_public_status_route_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.put(
+            "/admin/octocat/hello-world/public-status", json={"enabled": True}
+        )
     assert response.status_code == 401
 
 
