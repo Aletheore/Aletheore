@@ -9,6 +9,17 @@ def finding_identity_key(finding_type: str, finding: dict) -> str:
     (ecosystem, package, advisory_id) for vulnerabilities. \x1f (unit
     separator) joins fields - not a character any of these fields would
     plausibly contain.
+
+    For secrets, match_preview embeds this server's only knowledge of "which
+    credential" - the raw value never leaves the scan (see
+    src/aletheore/secrets.py's _redact), so if that preview's format ever
+    changes again, a dismissal keyed on the old format becomes permanently
+    unmatchable here, unlike the CLI's own accepted_secrets baseline, which
+    can recompute a legacy-format preview from the value it still has on
+    hand. There's no dual-check to add on this side - see migration 045 for
+    the cleanup this fired once already, and repeat that pattern (a
+    migration that purges now-unreachable rows, not a data migration) if the
+    preview format changes again.
     """
     if finding_type == "secret":
         return f"{finding['path']}\x1f{finding['pattern']}\x1f{finding['match_preview']}"
