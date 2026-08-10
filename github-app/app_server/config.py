@@ -25,6 +25,7 @@ class Settings:
     resend_api_key: str | None
     email_from_address: str
     email_reply_to_address: str
+    affiliate_admin_token: str | None
 
 
 def _required_env(name: str) -> str:
@@ -127,4 +128,11 @@ def get_settings() -> Settings:
             "EMAIL_FROM_ADDRESS", "Aletheore <hello@notify.aletheore.com>"
         ),
         email_reply_to_address=os.environ.get("EMAIL_REPLY_TO_ADDRESS", "support@aletheore.com"),
+        # Gates the internal affiliate-program admin routes (create
+        # affiliate, view report, mark paid) - same optional/404-if-unset
+        # pattern as internal_metrics_token, and deliberately a separate
+        # secret from it: this token can create real Paddle discount codes
+        # and see revenue, a different privilege level than read-only queue
+        # stats.
+        affiliate_admin_token=os.environ.get("AFFILIATE_ADMIN_TOKEN", "").strip() or None,
     )

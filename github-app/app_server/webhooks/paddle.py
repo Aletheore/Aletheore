@@ -1,7 +1,10 @@
 import logging
+from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from fastapi import APIRouter, Request, Response
 
+from app_server.affiliates import get_affiliate_by_discount_id, get_referral, record_commission, record_referral
 from app_server.config import get_settings
 from app_server.db import (
     add_paddle_ids_to_installation,
@@ -41,9 +44,17 @@ _SUBSCRIPTION_EVENT_TYPES = {
 # silently extending it is the safer default for a paid feature.
 _ACTIVE_SUBSCRIPTION_STATUSES = {"active", "trialing"}
 
+# The affiliate's payout share of what Paddle actually collects per
+# transaction (net of that transaction's own discount) - see
+# docs/superpowers/specs/2026-08-10-aletheore-affiliate-program-design.md.
+_AFFILIATE_COMMISSION_RATE = Decimal("0.15")
+
 
 async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue=None) -> None:
     event_type = payload.get("event_type")
+    if event_type == "transaction.completed":
+        await _handle_transaction_completed(payload.get("data") or {}, pool)
+        return
     if event_type not in _SUBSCRIPTION_EVENT_TYPES:
         return
 
@@ -110,6 +121,20 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     # installation's wiki stayed limited to whatever clusters an
     # incremental push happened to touch after the fact.
     if previous_plan == "free" and plan != "free":
+        # Attribution: first time this installation goes free -> paid, if it
+        # was checked out with a known affiliate's discount code, credit
+        # that affiliate. Gated the same free -> paid transition as the
+        # wiki/docs build below, so a later subscription.updated for the
+        # same installation (e.g. switching monthly <-> annual) can't
+        # re-attribute or steal credit - record_referral is also itself a
+        # database-enforced no-op past the first row (installation_id is
+        # that table's primary key).
+        discount_id = data.get("discount_id")
+        if discount_id:
+            affiliate = await get_affiliate_by_discount_id(pool, discount_id)
+            if affiliate is not None:
+                await record_referral(pool, installation_id, affiliate["id"])
+
         if queue is None:
             from redis import Redis
             from rq import Queue
@@ -156,6 +181,63 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
                     to_email=member_email,
                     installation_id=installation_id,
                 )
+
+
+async def _handle_transaction_completed(data: dict, pool) -> None:
+    """Records an affiliate commission for one completed transaction, if
+    and only if the paying installation has a referral on file. Every other
+    (unreferred) transaction.completed event - the overwhelming majority -
+    is a fast no-op after the referral lookup.
+
+    15% of `details.totals.total`, Paddle's collected amount net of that
+    transaction's own discount, in the currency's minor unit (cents) as a
+    string - matches the "15% of everything Paddle actually collects"
+    scope decision for both a discounted first month and every undiscounted
+    month after it, without special-casing either.
+    """
+    installation_id_raw = (data.get("custom_data") or {}).get("installation_id")
+    installation_id = None
+    if installation_id_raw is not None:
+        try:
+            installation_id = int(installation_id_raw)
+        except (TypeError, ValueError):
+            installation_id = None
+    if installation_id is None:
+        return
+
+    referral = await get_referral(pool, installation_id)
+    if referral is None:
+        return
+
+    transaction_id = data.get("id")
+    total_raw = ((data.get("details") or {}).get("totals") or {}).get("total")
+    billed_at_raw = data.get("billed_at") or data.get("created_at")
+    if not transaction_id or total_raw is None or not billed_at_raw:
+        logger.warning(
+            "transaction.completed for a referred installation is missing fields "
+            "needed for commission calculation"
+        )
+        return
+
+    try:
+        total_minor_units = Decimal(str(total_raw))
+        billed_at = datetime.fromisoformat(billed_at_raw)
+    except (InvalidOperation, ValueError):
+        logger.warning("transaction.completed has an unparseable total or billed_at")
+        return
+
+    commission_usd = (total_minor_units / Decimal(100) * _AFFILIATE_COMMISSION_RATE).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+
+    await record_commission(
+        pool,
+        referral["affiliate_id"],
+        installation_id,
+        transaction_id,
+        commission_usd,
+        billed_at,
+    )
 
 
 @paddle_webhook_router.post("/webhooks/paddle")

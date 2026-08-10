@@ -3,12 +3,14 @@ import hmac
 import ipaddress
 import json
 import time
+from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app_server import paddle_ip_allowlist
+from app_server.affiliates import create_affiliate, get_referral, list_affiliates_with_totals, record_referral
 from app_server.db import (
     add_installation_member,
     claim_webhook_delivery,
@@ -32,9 +34,12 @@ def _sign(raw_body: bytes, secret: str = WEBHOOK_SECRET) -> str:
 
 
 def _subscription_created_payload(
-    price_id: str, installation_id: int, event_id: str = "evt_created_default"
+    price_id: str,
+    installation_id: int,
+    event_id: str = "evt_created_default",
+    discount_id: str | None = None,
 ) -> dict:
-    return {
+    payload = {
         "event_id": event_id,
         "event_type": "subscription.created",
         "data": {
@@ -43,6 +48,27 @@ def _subscription_created_payload(
             "status": "active",
             "custom_data": {"installation_id": str(installation_id)},
             "items": [{"price": {"id": price_id}}],
+        },
+    }
+    if discount_id is not None:
+        payload["data"]["discount_id"] = discount_id
+    return payload
+
+
+def _transaction_completed_payload(
+    installation_id: int,
+    total_cents: str,
+    transaction_id: str = "txn_test_1",
+    event_id: str = "evt_txn_default",
+) -> dict:
+    return {
+        "event_id": event_id,
+        "event_type": "transaction.completed",
+        "data": {
+            "id": transaction_id,
+            "custom_data": {"installation_id": str(installation_id)},
+            "details": {"totals": {"total": total_cents}},
+            "billed_at": "2026-08-10T12:00:00Z",
         },
     }
 
@@ -701,3 +727,140 @@ async def test_failed_paddle_handler_releases_the_claim_for_retry(pool, monkeypa
 
     assert second.status_code == 200
     assert len(attempts) == 2, "retry of a failed Paddle event was wrongly suppressed"
+
+
+# ---------------------------------------------------------------------------
+# Affiliate program: referral attribution on subscription.created, and
+# commission recording on transaction.completed. See
+# docs/superpowers/specs/2026-08-10-aletheore-affiliate-program-design.md.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_subscription_created_with_known_discount_id_records_referral(pool):
+    fake_queue = MagicMock()
+    affiliate = await create_affiliate(pool, "SARAH10", "dsc_sarah_wh", "Sarah")
+    await upsert_installation(pool, 900, "acme")
+
+    payload = _subscription_created_payload(
+        "pri_01kyhevc8bkcghfpwjymz16y2h", 900, discount_id="dsc_sarah_wh"
+    )
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    referral = await get_referral(pool, 900)
+    assert referral is not None
+    assert referral["affiliate_id"] == affiliate["id"]
+
+
+@pytest.mark.asyncio
+async def test_subscription_created_with_unknown_discount_id_creates_no_referral(pool):
+    fake_queue = MagicMock()
+    await upsert_installation(pool, 901, "acme")
+
+    payload = _subscription_created_payload(
+        "pri_01kyhevc8bkcghfpwjymz16y2h", 901, discount_id="dsc_totally_unknown"
+    )
+    # Must not raise despite the discount id not matching any affiliate.
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert await get_referral(pool, 901) is None
+
+
+@pytest.mark.asyncio
+async def test_subscription_created_without_discount_id_creates_no_referral(pool):
+    fake_queue = MagicMock()
+    await upsert_installation(pool, 902, "acme")
+
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 902)
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert await get_referral(pool, 902) is None
+
+
+@pytest.mark.asyncio
+async def test_paid_to_paid_change_with_discount_id_does_not_attribute(pool):
+    # Referral attribution is gated on the free -> paid transition, same as
+    # the one-time wiki build - a later subscription.updated for an
+    # already-paid installation must not create or steal a referral.
+    affiliate = await create_affiliate(pool, "TINA10", "dsc_tina_wh", "Tina")
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (903, 'acme', 'air')"
+    )
+
+    payload = _subscription_created_payload(
+        "pri_01kyhevc9xn6z2nghmy8057jvp", 903, discount_id="dsc_tina_wh"
+    )
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert await get_referral(pool, 903) is None
+
+
+@pytest.mark.asyncio
+async def test_transaction_completed_for_referred_installation_records_commission(pool):
+    affiliate = await create_affiliate(pool, "NORA10", "dsc_nora_wh", "Nora")
+    await upsert_installation(pool, 910, "acme")
+    await record_referral(pool, 910, affiliate["id"])
+
+    # $26.99 (2699 cents) net of that transaction's own discount - 15% of it
+    # is $4.05 (rounded from 4.0485).
+    payload = _transaction_completed_payload(910, "2699")
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("4.05")
+
+
+@pytest.mark.asyncio
+async def test_transaction_completed_for_unreferred_installation_records_nothing(pool):
+    await upsert_installation(pool, 911, "acme")
+
+    payload = _transaction_completed_payload(911, "2699")
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert await list_affiliates_with_totals(pool) == []
+
+
+@pytest.mark.asyncio
+async def test_repeated_transaction_completed_delivery_does_not_double_commission(pool):
+    # Paddle retries webhook delivery on any non-2xx response, re-sending
+    # the same transaction id - the route-level dedupe (webhook_deliveries)
+    # already guards this at the HTTP layer, but the handler itself must
+    # also be safe if ever called twice for the same transaction.
+    affiliate = await create_affiliate(pool, "OLA10", "dsc_ola_wh", "Ola")
+    await upsert_installation(pool, 912, "acme")
+    await record_referral(pool, 912, affiliate["id"])
+
+    payload = _transaction_completed_payload(912, "2699", transaction_id="txn_repeat")
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("4.05")
+
+
+@pytest.mark.asyncio
+async def test_transaction_completed_missing_installation_id_does_not_error(pool):
+    payload = _transaction_completed_payload(913, "2699")
+    del payload["data"]["custom_data"]["installation_id"]
+
+    # Must not raise.
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+
+@pytest.mark.asyncio
+async def test_full_webhook_route_records_commission_for_referred_installation(pool, monkeypatch):
+    monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    app.state.db_pool = pool
+    affiliate = await create_affiliate(pool, "PIA10", "dsc_pia_wh", "Pia")
+    await upsert_installation(pool, 914, "acme")
+    await record_referral(pool, 914, affiliate["id"])
+
+    body = json.dumps(_transaction_completed_payload(914, "2699", event_id="evt_txn_route")).encode()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/webhooks/paddle", content=body, headers={"paddle-signature": _sign(body)}
+        )
+
+    assert response.status_code == 200
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("4.05")

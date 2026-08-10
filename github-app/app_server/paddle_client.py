@@ -52,6 +52,31 @@ def create_portal_session(
     return response.json()["data"]
 
 
+def create_discount(api_key: str | None, code: str, description: str) -> dict:
+    """Creates a merchant-defined percentage discount code in Paddle for an
+    affiliate: 10% off, applied to exactly one billing period
+    (maximum_recurring_intervals=1), enabled for checkout entry. The
+    returned discount's id (dsc_...) is the attribution key stored against
+    the affiliates row - see app_server/affiliates.py."""
+    if not api_key:
+        raise PaddleAPINotConfigured("PADDLE_API_KEY is not configured")
+    payload = {
+        "description": description,
+        "type": "percentage",
+        "amount": "10",
+        "code": code,
+        "recur": True,
+        "maximum_recurring_intervals": 1,
+        "enabled_for_checkout": True,
+    }
+    try:
+        response = httpx.post(f"{_PADDLE_API_BASE}/discounts", headers=_headers(api_key), json=payload)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise PaddleAPIError(f"could not create discount {code}: {exc}") from exc
+    return response.json()["data"]
+
+
 def update_subscription_items(
     api_key: str | None,
     subscription_id: str,
