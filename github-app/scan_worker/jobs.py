@@ -40,7 +40,11 @@ from app_server.error_alerts import send_error_alert
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation
 from app_server.logging_config import log_job
-from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
+from app_server.rate_limit import (
+    MIN_MANAGED_AUDIT_COOLDOWN_SECONDS,
+    cooldown_seconds_for_loc,
+    total_loc_from_evidence,
+)
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
 from aletheore.docs_reference import build_api_reference
 from scan_worker import live_docs, live_wiki
@@ -56,6 +60,7 @@ from scan_worker.db import (
     delete_wiki_subsystems_not_in,
     email_already_sent,
     get_dismissed_identity_keys,
+    managed_audit_definitely_still_cooling_down,
     get_docs_repo_commit_settings,
     get_endpoint_health_summary,
     get_extra_seats,
@@ -1096,6 +1101,18 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
 
     if plan != "free" and not check_and_reserve_monthly_repo_scan_slot(
         settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
+    ):
+        return
+
+    # The real cooldown (below, after the scan) is scaled by the repo's
+    # LOC, which isn't known until the scan runs - but every tier is at
+    # least MIN_MANAGED_AUDIT_COOLDOWN_SECONDS, so a repo whose last run
+    # was more recent than that is guaranteed to still be cooling down
+    # regardless of what the real duration turns out to be. Catches a
+    # burst of repeat triggers before wasting a clone+scan on the shared
+    # scans queue, instead of after.
+    if managed_audit_definitely_still_cooling_down(
+        settings.database_url, installation_id, repo_full_name, MIN_MANAGED_AUDIT_COOLDOWN_SECONDS
     ):
         return
 

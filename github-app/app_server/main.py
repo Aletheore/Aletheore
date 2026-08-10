@@ -207,7 +207,7 @@ async def webhook(request: Request):
         elif event == "issue_comment":
             from app_server.webhooks.issue_comment import handle_issue_comment_event
 
-            await handle_issue_comment_event(payload, settings.redis_url)
+            await handle_issue_comment_event(payload, pool, settings.redis_url)
     except Exception:
         # Hand the GUID back before failing, or GitHub's retry of this same
         # delivery would be treated as a duplicate and dropped - turning a
