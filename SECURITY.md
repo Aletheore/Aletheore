@@ -4,7 +4,7 @@
 **Status:** Active baseline
 **Owner:** TODO
 **Related Documents:** [.github/ISSUE_TEMPLATE/security-report.md](.github/ISSUE_TEMPLATE/security-report.md), [docs/operations/DATA-HANDLING.md](docs/operations/DATA-HANDLING.md), [docs/operations/INCIDENT-RESPONSE.md](docs/operations/INCIDENT-RESPONSE.md)
-**Last Updated:** 2026-07-23
+**Last Updated:** 2026-08-10
 
 ## Purpose
 
