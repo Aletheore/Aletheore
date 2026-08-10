@@ -16,7 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from rq import get_current_job
 
-from app_server.audit_signing import content_hash, sign_report
+from app_server.audit_signing import content_hash, public_key_hex_from_private, sign_report
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.code_graph_diff import diff_endpoints, diff_modules
@@ -1033,6 +1033,10 @@ def _sign_and_persist_audit_report(
         verification_token = secrets.token_hex(32)
         report_hash = content_hash(report_text)
         signature = sign_report(report_text, settings.audit_signing_private_key)
+        # Recorded per report so a later key rotation can't retroactively
+        # invalidate this certificate - the verifier checks against the key
+        # that actually signed it, not whichever key is current when someone
+        # happens to look.
         insert_audit_report(
             settings.database_url,
             installation_id,
@@ -1041,6 +1045,7 @@ def _sign_and_persist_audit_report(
             report_text,
             report_hash,
             signature,
+            public_key_hex_from_private(settings.audit_signing_private_key),
         )
         return verification_token
     except Exception as exc:  # noqa: BLE001

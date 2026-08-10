@@ -239,6 +239,7 @@ def insert_audit_report(
     report_text: str,
     content_hash: str,
     signature: str,
+    signing_public_key: str,
 ) -> None:
     import psycopg
 
@@ -247,8 +248,9 @@ def insert_audit_report(
             cur.execute(
                 """
                 INSERT INTO audit_reports
-                    (installation_id, repo_full_name, verification_token, report_text, content_hash, signature)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                    (installation_id, repo_full_name, verification_token, report_text,
+                     content_hash, signature, signing_public_key)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     installation_id,
@@ -257,6 +259,7 @@ def insert_audit_report(
                     report_text,
                     content_hash,
                     signature,
+                    signing_public_key,
                 ),
             )
         conn.commit()

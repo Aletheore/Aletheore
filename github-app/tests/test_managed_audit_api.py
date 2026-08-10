@@ -505,3 +505,92 @@ async def test_whoami_returns_account_login_and_plan_for_valid_token(pool):
 
     assert response.status_code == 200
     assert response.json() == {"account_login": "acme", "plan": "indie"}
+
+
+@pytest.mark.asyncio
+async def test_verify_uses_the_key_that_signed_the_report_after_a_rotation(pool, monkeypatch):
+    # The regression: the public key was derived from whatever
+    # AUDIT_SIGNING_PRIVATE_KEY was set to at request time, so rotating the
+    # signing key reported verified=false for every certificate ever issued.
+    old_key = "11" * 32
+    new_key = "22" * 32
+    monkeypatch.setenv("AUDIT_SIGNING_PRIVATE_KEY", old_key)
+    await upsert_installation(pool, 611, "octocat")
+    report_text = "signed before the rotation"
+    await pool.execute(
+        """
+        INSERT INTO audit_reports
+            (installation_id, repo_full_name, verification_token, report_text,
+             content_hash, signature, signing_public_key)
+        VALUES (611, 'octocat/hello-world', 'tok-rotated', $1, $2, $3, $4)
+        """,
+        report_text,
+        content_hash(report_text),
+        sign_report(report_text, old_key),
+        public_key_hex_from_private(old_key),
+    )
+
+    # The key rotates; the already-issued certificate must still verify.
+    monkeypatch.setenv("AUDIT_SIGNING_PRIVATE_KEY", new_key)
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/audit/tok-rotated/verify")
+
+    body = response.json()
+    assert body["verified"] is True
+    assert body["public_key"] == public_key_hex_from_private(old_key)
+    assert body["is_current_key"] is False
+
+
+@pytest.mark.asyncio
+async def test_verify_falls_back_to_the_current_key_for_pre_migration_rows(pool, monkeypatch):
+    # Rows written before migration 044 have no recorded key and were signed
+    # by whatever key is current - the pre-migration behaviour, preserved for
+    # those rows alone.
+    key = "33" * 32
+    monkeypatch.setenv("AUDIT_SIGNING_PRIVATE_KEY", key)
+    await upsert_installation(pool, 612, "octocat")
+    report_text = "signed before migration 044"
+    await pool.execute(
+        """
+        INSERT INTO audit_reports
+            (installation_id, repo_full_name, verification_token, report_text, content_hash, signature)
+        VALUES (612, 'octocat/hello-world', 'tok-legacy', $1, $2, $3)
+        """,
+        report_text,
+        content_hash(report_text),
+        sign_report(report_text, key),
+    )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/audit/tok-legacy/verify")
+
+    body = response.json()
+    assert body["verified"] is True
+    assert body["is_current_key"] is True
+
+
+@pytest.mark.asyncio
+async def test_signing_key_endpoint_serves_the_current_public_key(monkeypatch):
+    key = "44" * 32
+    monkeypatch.setenv("AUDIT_SIGNING_PRIVATE_KEY", key)
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/audit/signing-key")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "algorithm": "Ed25519",
+        "public_key": public_key_hex_from_private(key),
+    }

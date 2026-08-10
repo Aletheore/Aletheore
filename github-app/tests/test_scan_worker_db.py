@@ -343,6 +343,7 @@ async def test_insert_audit_report(pool):
         "the report text",
         "hash-1",
         "sig-1",
+        "pubkey-1",
     )
 
     row = await pool.fetchrow(
@@ -353,6 +354,8 @@ async def test_insert_audit_report(pool):
     assert row["report_text"] == "the report text"
     assert row["content_hash"] == "hash-1"
     assert row["signature"] == "sig-1"
+    # Recorded per report so a later key rotation can't invalidate it.
+    assert row["signing_public_key"] == "pubkey-1"
 
 
 @pytest.mark.asyncio
