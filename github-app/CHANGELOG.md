@@ -14,6 +14,12 @@ file is the history; that one is the current state.
 
 ## 2026-08-10
 
+- Affiliate program: manually-onboarded creators get a Paddle discount code (10% off first month)
+  that doubles as the attribution key. `subscription.created` now records a referral on free ->
+  paid signup when the code matches a known affiliate; `transaction.completed` (previously
+  unhandled) records 15% recurring commission per billing cycle. New internal admin routes
+  (`/admin/affiliates`) behind a dedicated `AFFILIATE_ADMIN_TOKEN` for onboarding, reporting, and
+  marking commissions paid. Payouts stay manual and off-platform.
 - Self-serve data export (JSON snapshot of repos, findings, members, token labels, health
   targets), an admin action audit log covering member/token/webhook/setting changes, and an
   email-OTP requirement on top of the existing typed confirmation for delete-all-data — closing a
