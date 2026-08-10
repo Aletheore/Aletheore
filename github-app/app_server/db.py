@@ -1114,7 +1114,7 @@ async def get_audit_report_by_token(
 ) -> dict | None:
     row = await pool.fetchrow(
         """
-        SELECT repo_full_name, report_text, content_hash, signature, created_at
+        SELECT repo_full_name, report_text, content_hash, signature, signing_public_key, created_at
         FROM audit_reports
         WHERE verification_token = $1
         """,

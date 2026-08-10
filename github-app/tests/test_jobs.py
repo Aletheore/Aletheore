@@ -813,11 +813,12 @@ def test_managed_audit_api_job_signs_and_persists_the_report(monkeypatch):
     stored = {}
     monkeypatch.setattr(
         "scan_worker.jobs.insert_audit_report",
-        lambda dsn, iid, repo, token, text, chash, sig: stored.update(
+        lambda dsn, iid, repo, token, text, chash, sig, pubkey: stored.update(
             installation_id=iid,
             repo_full_name=repo,
             token=token,
             text=text,
+            signing_public_key=pubkey,
         ),
     )
 
@@ -990,13 +991,14 @@ def test_managed_audit_pr_job_persists_and_signs_the_report(monkeypatch, tmp_pat
     stored = {}
     monkeypatch.setattr(
         "scan_worker.jobs.insert_audit_report",
-        lambda dsn, iid, repo, token, text, chash, sig: stored.update(
+        lambda dsn, iid, repo, token, text, chash, sig, pubkey: stored.update(
             installation_id=iid,
             repo_full_name=repo,
             token=token,
             text=text,
             hash=chash,
             sig=sig,
+            signing_public_key=pubkey,
         ),
     )
     check_runs = []

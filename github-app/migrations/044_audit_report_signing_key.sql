@@ -1,0 +1,17 @@
+-- Records which public key signed each audit report.
+--
+-- /v1/audit/{token}/verify derived the public key from whatever
+-- AUDIT_SIGNING_PRIVATE_KEY happened to be set to at request time, and the row
+-- stored only the signature. That made key rotation retroactively destructive:
+-- rotating the signing key would have reported verified=false for every
+-- certificate ever issued, because they were checked against a key that had
+-- never signed them. There was no rotation path at all - the only safe move was
+-- never to rotate, which is not a property you want on a signing key.
+--
+-- Nullable rather than NOT NULL DEFAULT: rows written before this migration
+-- were signed by the key currently in the environment, but that key lives in
+-- env, not in SQL, so it cannot be backfilled here. NULL means "signed by
+-- whatever the current key is", which is exactly the pre-migration behaviour,
+-- and the verify endpoint keeps that fallback for those rows only. Every row
+-- written from now on names its key explicitly.
+ALTER TABLE audit_reports ADD COLUMN IF NOT EXISTS signing_public_key TEXT;
