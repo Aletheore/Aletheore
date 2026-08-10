@@ -1,3 +1,4 @@
+import hashlib
 import math
 import os
 import re
@@ -141,7 +142,32 @@ def _is_likely_placeholder(rel_path: str, value: str) -> bool:
     return _value_looks_like_a_placeholder(value)
 
 
-def _redact(value: str) -> str:
+def _redact(value: str, salt: str) -> str:
+    # Salted with the finding's own (path, pattern) rather than a fixed or
+    # global salt - two identical secret values at different locations (or
+    # in different repos) hash differently, so match_preview can't be used
+    # as a lookup key to correlate/deanonymize a value across scan output.
+    # This is a display truncation, not a real cryptographic protection
+    # (whoever owns the repo can always read the raw value straight from
+    # path:line); the point is only that a match_preview pasted into a PR
+    # comment or dashboard, or scraped from either, no longer hands out 8
+    # real characters of the secret the way the old first4...last4 format
+    # did.
+    digest = hashlib.sha256(f"{salt}:{value}".encode("utf-8")).hexdigest()[:12]
+    return f"sha256:{digest}"
+
+
+def _legacy_redact(value: str) -> str:
+    # The pre-hash preview format (first 4 + last 4 raw characters) - kept
+    # only so an accepted_secrets baseline entry written before this fix
+    # still matches on the next scan. A finding's live value is re-derived
+    # fresh from the file every scan, so this can be recomputed and checked
+    # alongside the new format without needing to store or migrate
+    # anything; there's no way to derive it FROM an old match_preview
+    # (only 8 of the value's characters ever left the scan), so baseline
+    # entries can't be rewritten automatically - they keep working via this
+    # dual check indefinitely, and naturally end up in the new format
+    # whenever someone re-baselines from current scan output.
     if len(value) <= 8:
         return "*" * len(value)
     return f"{value[:4]}{'*' * 4}...{value[-4:]}"
@@ -157,6 +183,13 @@ def _baseline_keys(baseline: list[dict] | None) -> set[tuple]:
     # about that specific value at that path, not about one particular commit that happens to
     # surface it.
     return {(entry.get("path"), entry.get("pattern"), entry.get("match_preview")) for entry in (baseline or [])}
+
+
+def _is_accepted(accepted_keys: set[tuple], path: str | None, pattern_name: str, value: str) -> bool:
+    salt = f"{path}:{pattern_name}"
+    if (path, pattern_name, _redact(value, salt)) in accepted_keys:
+        return True
+    return (path, pattern_name, _legacy_redact(value)) in accepted_keys
 
 
 def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
@@ -178,7 +211,7 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
                 match = pattern.search(line)
                 if match:
                     value = match.group(value_group)
-                    match_preview = _redact(value)
+                    match_preview = _redact(value, f"{rel_path}:{pattern_name}")
                     findings.append(
                         {
                             "path": rel_path,
@@ -186,7 +219,7 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
                             "pattern": pattern_name,
                             "match_preview": match_preview,
                             "likely_placeholder": _is_likely_placeholder(rel_path, value),
-                            "accepted": (rel_path, pattern_name, match_preview) in accepted_keys,
+                            "accepted": _is_accepted(accepted_keys, rel_path, pattern_name, value),
                         }
                     )
 
@@ -276,7 +309,7 @@ def find_secrets_in_history(
                 match = pattern.search(content)
                 if match:
                     value = match.group(value_group)
-                    match_preview = _redact(value)
+                    match_preview = _redact(value, f"{current_file}:{pattern_name}")
                     findings.append(
                         {
                             "commit": current_commit,
@@ -285,7 +318,7 @@ def find_secrets_in_history(
                             "pattern": pattern_name,
                             "match_preview": match_preview,
                             "likely_placeholder": _is_likely_placeholder(current_file or "", value),
-                            "accepted": (current_file, pattern_name, match_preview) in accepted_keys,
+                            "accepted": _is_accepted(accepted_keys, current_file, pattern_name, value),
                         }
                     )
     finally:

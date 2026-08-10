@@ -61,7 +61,10 @@ def test_find_secrets_in_history_finds_a_secret_added_then_removed(tmp_path):
     assert finding["path"] == "main.py"
     assert finding["pattern"] == "aws_access_key_id"
     assert "AKIAABCDEFGHIJKLMNOP" not in finding["match_preview"]
-    assert finding["match_preview"].startswith("AKIA")
+    # Was startswith("AKIA") - history findings use the same salted-hash
+    # preview as live ones, so no real characters of the value are published.
+    assert finding["match_preview"].startswith("sha256:")
+    assert "AKIA" not in finding["match_preview"]
     assert finding["likely_placeholder"] is False
     assert result["history_scanned_commits"] == 3
 
