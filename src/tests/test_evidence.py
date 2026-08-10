@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -6,6 +7,7 @@ from unittest.mock import patch
 from aletheore.evidence import (
     EVIDENCE_VERSION,
     IncompatibleEvidenceVersionError,
+    _hash_file,
     is_evidence_version_compatible,
     load_evidence,
     load_evidence_file,
@@ -13,6 +15,21 @@ from aletheore.evidence import (
     write_evidence,
 )
 from tests.air_fixtures import minimal_air_evidence
+
+
+def test_hash_file_matches_a_plain_blake2b_of_the_full_content(tmp_path):
+    # _hash_file streams the file in chunks (to stay memory-bounded on
+    # arbitrarily large committed files) instead of reading it all at once -
+    # must still produce the exact same digest either way.
+    path = tmp_path / "f.py"
+    content = b"x = 1\n" * 1000
+    path.write_bytes(content)
+
+    assert _hash_file(path) == hashlib.blake2b(content, digest_size=16).hexdigest()
+
+
+def test_hash_file_returns_none_for_a_missing_file(tmp_path):
+    assert _hash_file(tmp_path / "does-not-exist.py") is None
 
 
 def run(repo: Path, *args: str):

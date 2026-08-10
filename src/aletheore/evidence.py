@@ -215,9 +215,23 @@ def _local_scan_cache_path(repo_path: Path) -> Path:
     return repo_path / ".aletheore" / _LOCAL_SCAN_CACHE_FILENAME
 
 
+_HASH_CHUNK_BYTES = 1024 * 1024
+
+
 def _hash_file(path: Path) -> str | None:
+    # Streamed rather than path.read_bytes() - this runs once per module on
+    # every scan (cache-hit check), on the shared scan-worker where an
+    # unusually large committed file (a data dump, a vendored bundle) read
+    # in full would risk OOMing the container for every installation's scan
+    # running alongside it. Chunked hashing keeps memory bounded regardless
+    # of file size instead of skipping large files outright, so caching
+    # still works for them.
     try:
-        return hashlib.blake2b(path.read_bytes(), digest_size=16).hexdigest()
+        hasher = hashlib.blake2b(digest_size=16)
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(_HASH_CHUNK_BYTES), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
     except OSError:
         return None
 
