@@ -6,6 +6,16 @@ aletheore.com, app.aletheore.com {
         X-Frame-Options "DENY"
         X-Content-Type-Options "nosniff"
         Referrer-Policy "strict-origin-when-cross-origin"
+        # 'unsafe-inline' on script-src/style-src is a real gap, not an
+        # oversight - frontend.py's dashboard pages are built from inline
+        # <script> blocks and don't yet use nonces/hashes, so a strict CSP
+        # would break every page. What this still buys: no script, object,
+        # or frame origin outside what's explicitly listed can load into
+        # this origin at all - the exact class of attack a compromised or
+        # malicious CDN dependency (see mermaid/tabler-icons SRI pins
+        # above) would otherwise be free to exploit even with SRI in place
+        # on the two we do trust.
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.paddle.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net; img-src 'self' data: https:; connect-src 'self' https://*.paddle.com; frame-src https://*.paddle.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
     }
 
     reverse_proxy app-server:8000

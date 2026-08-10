@@ -115,6 +115,41 @@ def _no_real_auth_rate_limiting(monkeypatch):
     monkeypatch.setattr("app_server.auth.is_rate_limited", lambda *a, **k: False)
 
 
+@pytest.fixture(scope="session")
+def _test_redis_connection():
+    # One real connection reused for the whole run - reconnecting fresh
+    # per test (as a function-scoped fixture would) adds a TCP handshake
+    # to every single test in the suite for what's otherwise a single
+    # flushdb() round trip.
+    from redis import Redis
+
+    try:
+        conn = Redis.from_url(TEST_REDIS_URL, socket_connect_timeout=0.5, socket_timeout=0.5)
+        conn.ping()
+    except Exception:
+        yield None
+        return
+    yield conn
+    conn.close()
+
+
+@pytest.fixture(autouse=True)
+def _flush_test_redis(_test_redis_connection):
+    # Real, persistent state in Redis (the administered-installations
+    # cache, deletion OTP codes, etc.) otherwise survives between tests -
+    # unlike `pool`, which truncates Postgres per test, nothing previously
+    # cleared Redis, so a cache entry written by one test (often reusing
+    # the same literal token/session fixtures as many others) could be
+    # read back by a later, unrelated test. No-ops if no test Redis is
+    # reachable, same as `redis_conn` above.
+    if _test_redis_connection is None:
+        yield
+        return
+    _test_redis_connection.flushdb()
+    yield
+    _test_redis_connection.flushdb()
+
+
 def _make_git_repo(path: Path, files: dict[str, str]) -> str:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q"], cwd=path, check=True)

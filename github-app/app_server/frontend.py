@@ -32,11 +32,24 @@ frontend_router = APIRouter()
 
 PRICING_URL = "https://www.aletheore.com/pricing"
 
+# Both pinned to an exact version with a Subresource Integrity hash - a
+# floating "@10"/"@latest" tag would let jsdelivr (or anyone who
+# compromised it) serve different, unverified code into the authenticated
+# dashboard origin at any time. SRI would be no-op against a floating tag
+# anyway: the hash would go stale the moment the CDN's "latest" pointer
+# moved. Regenerate the hash (openssl dgst -sha384 -binary <file> | openssl
+# base64 -A) any time the pinned version bumps.
 ICONS_LINK = (
     '<link rel="stylesheet" '
-    'href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.45.0/dist/tabler-icons.min.css">'
+    'href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.45.0/dist/tabler-icons.min.css" '
+    'integrity="sha384-Ty9WrQxUB1vb9rF2T/wNBTcyJbiR5tK7e3gTrDGAbepOnWoasjD9lNXP4z0QkZML" '
+    'crossorigin="anonymous">'
 )
-MERMAID_SCRIPT = '<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>'
+MERMAID_SCRIPT = (
+    '<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.8/dist/mermaid.min.js" '
+    'integrity="sha384-N3QqR/7q+xm3BGX+CBbNI8AUmRRqcsDzToy+0z1NLDI0QmTKW8zvwLvqulJgk3dP" '
+    'crossorigin="anonymous"></script>'
+)
 
 STYLE = """
 <style>
