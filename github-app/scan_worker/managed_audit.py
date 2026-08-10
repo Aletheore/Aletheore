@@ -6,6 +6,7 @@ from typing import Callable
 import aletheore.cli as _aletheore_cli
 from aletheore.citation_verifier import citation_verification_section as _citation_verification_section
 from aletheore.report import run_reasoning_phase
+from app_server.audit_signing import LLM_SUGGESTION_HEADING
 from scan_worker.model_tiers import writing_adapter_for_plan
 
 logger = logging.getLogger("scan_worker.managed_audit")
@@ -44,7 +45,7 @@ def _llm_based_suggestion_section(
         return None
 
     lines = [
-        "\n\n---\n\n## LLM Based Suggestion (Not Evidence Backed)\n",
+        f"\n\n---\n\n{LLM_SUGGESTION_HEADING}\n",
         "_Everything above is Aletheore's deterministic, evidence-grounded audit. "
         "The section below is the model's own broader judgment, not tied to a specific "
         "citation - treat it as a second opinion, not a finding._\n",
@@ -60,6 +61,7 @@ def run_managed_audit(
     plan: str,
     manual_dir: str | None = None,
     on_usage: Callable[[int, int], None] | None = None,
+    include_llm_suggestions: bool = True,
 ) -> str:
     adapter = writing_adapter_for_plan(plan, on_usage=on_usage)
     report_path = run_reasoning_phase(
@@ -75,7 +77,12 @@ def run_managed_audit(
     # here would be measuring the wrong thing.
     report_text += _citation_verification_section(report_text, repo_path)
 
-    suggestion_section = _llm_based_suggestion_section(report_text, plan, on_usage=on_usage)
-    if suggestion_section:
-        report_text += suggestion_section
+    # Skipped entirely rather than generated-and-discarded when the
+    # installation has opted out: this is a billed model call, and a customer
+    # who turned the section off should not be paying for it against their
+    # monthly LLM spend cap.
+    if include_llm_suggestions:
+        suggestion_section = _llm_based_suggestion_section(report_text, plan, on_usage=on_usage)
+        if suggestion_section:
+            report_text += suggestion_section
     return report_text

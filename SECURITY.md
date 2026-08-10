@@ -63,6 +63,87 @@ Reports involving hosted data are security-sensitive when they involve:
 
 Please give maintainers a reasonable opportunity to investigate and patch before public disclosure. Coordinated disclosure timing will depend on impact, exploitability, and whether active abuse is suspected.
 
+## Inbound Webhook Handling
+
+Both inbound webhook paths authenticate before doing anything else, and both
+deduplicate deliveries afterwards in a shared `webhook_deliveries` ledger
+retained 30 days. The claim is a single atomic `INSERT … ON CONFLICT DO
+NOTHING`, so two deliveries of one event arriving together cannot both win it.
+The ledger is keyed by `(source, delivery_id)`, keeping GitHub and Paddle
+identifiers in separate namespaces.
+
+### GitHub
+
+Authenticated by HMAC-SHA256 over the raw body, compared with
+`hmac.compare_digest`; a failing request is rejected with 401. GitHub
+signatures carry no timestamp, so the ledger is this path's only replay
+protection. Deliveries are deduplicated on the `X-GitHub-Delivery` GUID:
+
+- **Automatic retries** reuse the GUID and are suppressed, so a delivery that
+  already succeeded cannot enqueue a second scan or review.
+- **Replays of a captured payload** carry a GUID already on file and are
+  likewise suppressed. The header is mandatory — a request without it is
+  rejected with 400 rather than processed, so it cannot be stripped to bypass
+  this.
+- **Manual redelivery** from the GitHub UI mints a fresh GUID and is processed,
+  which is the intended operator behavior.
+- **Failed processing** releases the claim before returning the error, so
+  GitHub's retry is not mistaken for a duplicate and the event is not lost.
+
+### Paddle
+
+Authenticated by HMAC-SHA256 over `timestamp:body`, with the timestamp checked
+to a 5-second tolerance and an allowlist check against Paddle's published
+source addresses. Because the timestamp is inside the signed payload, replay of
+a captured payload is bounded to that 5-second window.
+
+Deduplication on `event_id` therefore exists here for concurrency rather than
+replay: the subscription handler reads an installation's current plan, then
+writes it, and gates a pair of expensive full AIRview and Docs builds on that
+read having been `free`. Two deliveries of one event arriving together would
+both observe `free` and both enqueue those builds. The atomic claim is what
+makes that gate hold. A payload without an `event_id` is rejected with 400
+rather than processed undeduplicated.
+
+### Both paths
+
+The claim is taken only after signature verification, so an unauthenticated
+caller cannot poison the ledger with invented identifiers to suppress the
+genuine deliveries that follow. A handler that raises releases its claim before
+the error propagates, so the provider's retry is not mistaken for a duplicate —
+losing an event outright is a worse failure than processing one twice.
+
+## What an Audit Signature Attests
+
+Managed audit reports are signed with Ed25519 and can be checked at
+`/v1/audit/{token}/verify`, which returns the signature, the public key, and a
+`verified` boolean. That signature attests **provenance and integrity**: this
+exact text was produced by Aletheore and has not been altered since. It does
+not attest that every claim in the report is backed by a citation.
+
+Those are different guarantees, and the difference is load-bearing. Every
+finding in an audit resolves to evidence in your code. One optional section
+does not: the model's own overall rating and improvement suggestions, appended
+after the findings under a heading that names it as not evidence-backed. It is
+excluded from the Citation Verification section's counts, because measuring
+citation coverage across text that is allowed to speak without citations would
+report the wrong number.
+
+So that a reader cannot mistake one guarantee for the other, the verification
+response states it directly:
+
+| Field | Meaning |
+| --- | --- |
+| `verified` | The signature is valid for this content hash — provenance and integrity. |
+| `fully_evidence_backed` | `true` when the report contains only cited findings. |
+| `non_evidence_backed_sections` | Names any section that is not, empty when there are none. |
+
+Installations that need reports containing only cited findings can turn the
+section off in Settings → Managed audit content. With it off, the model call is
+skipped entirely rather than made and discarded, so it costs nothing against
+the monthly LLM spend cap, and the report's certificate reports
+`fully_evidence_backed: true`.
+
 ## Current Limitations
 
 - This project is not yet SOC 2 certified.

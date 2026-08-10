@@ -51,6 +51,7 @@ from scan_worker.db import (
     count_repo_scans_since,
     delete_docs_symbols_not_in,
     delete_expired_sessions,
+    delete_expired_webhook_deliveries,
     delete_wiki_subsystems_not_in,
     email_already_sent,
     get_dismissed_identity_keys,
@@ -1037,6 +1038,12 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
     plan = installation["plan"] if installation is not None else "air"
+    # Read off the row already fetched rather than a second query. Defaults to
+    # on for a missing row or an older row, matching the column default - a
+    # lookup miss must not silently change what a customer's report contains.
+    include_suggestions = (
+        installation.get("llm_suggestions_enabled", True) if installation is not None else True
+    )
 
     if plan != "free" and not check_and_reserve_monthly_repo_scan_slot(
         settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
@@ -1081,7 +1088,12 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                             spend_accumulator["model"], prompt_tokens, completion_tokens
                         )
 
-                    report_text = run_managed_audit(repo_dir, on_usage=_on_usage, plan=plan)
+                    report_text = run_managed_audit(
+                        repo_dir,
+                        on_usage=_on_usage,
+                        plan=plan,
+                        include_llm_suggestions=include_suggestions,
+                    )
                     record_llm_spend(
                         settings.database_url, installation_id, spend_accumulator["total"]
                     )
@@ -1132,6 +1144,12 @@ def run_managed_audit_api_job(
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
     plan = installation["plan"] if installation is not None else "air"
+    # Read off the row already fetched rather than a second query. Defaults to
+    # on for a missing row or an older row, matching the column default - a
+    # lookup miss must not silently change what a customer's report contains.
+    include_suggestions = (
+        installation.get("llm_suggestions_enabled", True) if installation is not None else True
+    )
     with installation_spend_lock(settings.database_url, installation_id):
         extra_seats = get_extra_seats(settings.database_url, installation_id)
         monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
@@ -1157,7 +1175,12 @@ def run_managed_audit_api_job(
                     spend_accumulator["model"], prompt_tokens, completion_tokens
                 )
 
-            result = run_managed_audit(job_dir, on_usage=_on_usage, plan=plan)
+            result = run_managed_audit(
+                job_dir,
+                on_usage=_on_usage,
+                plan=plan,
+                include_llm_suggestions=include_suggestions,
+            )
             record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
             verification_token = _sign_and_persist_audit_report(
                 settings,
@@ -1882,6 +1905,21 @@ def run_session_cleanup_job() -> None:
     deleted = delete_expired_sessions(dsn)
     logging.getLogger("scan_worker.jobs").info(
         "session cleanup completed", extra={"deleted_count": deleted}
+    )
+
+
+# Matches GitHub's own ~30-day delivery-log horizon, so a redelivered or
+# replayed event can never outlive its ledger entry. See
+# delete_expired_webhook_deliveries.
+WEBHOOK_DELIVERY_RETENTION_DAYS = 30
+
+
+@log_job
+def run_webhook_delivery_cleanup_job() -> None:
+    dsn = get_settings().database_url
+    deleted = delete_expired_webhook_deliveries(dsn, WEBHOOK_DELIVERY_RETENTION_DAYS)
+    logging.getLogger("scan_worker.jobs").info(
+        "webhook delivery cleanup completed", extra={"deleted_count": deleted}
     )
 
 

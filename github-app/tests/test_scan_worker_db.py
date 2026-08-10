@@ -13,6 +13,7 @@ from scan_worker.db import (
     count_repo_scans_since,
     delete_docs_symbols_not_in,
     delete_expired_sessions,
+    delete_expired_webhook_deliveries,
     delete_wiki_subsystems_not_in,
     email_already_sent,
     get_dismissed_identity_keys,
@@ -279,6 +280,31 @@ async def test_delete_expired_sessions_removes_only_expired_rows(pool):
     assert deleted == 1
     remaining = await pool.fetch("SELECT id FROM sessions")
     assert {row["id"] for row in remaining} == {"active-session"}
+
+
+@pytest.mark.asyncio
+async def test_delete_expired_webhook_deliveries_keeps_rows_inside_the_window(pool):
+    now = datetime.now(timezone.utc)
+    await pool.execute(
+        "INSERT INTO webhook_deliveries (source, delivery_id, event, received_at) "
+        "VALUES ('github', $1, $2, $3)",
+        "old-delivery",
+        "push",
+        now - timedelta(days=31),
+    )
+    await pool.execute(
+        "INSERT INTO webhook_deliveries (source, delivery_id, event, received_at) "
+        "VALUES ('github', $1, $2, $3)",
+        "recent-delivery",
+        "push",
+        now - timedelta(days=29),
+    )
+
+    deleted = delete_expired_webhook_deliveries(TEST_DATABASE_URL, 30)
+
+    assert deleted == 1
+    remaining = await pool.fetch("SELECT delivery_id FROM webhook_deliveries")
+    assert {row["delivery_id"] for row in remaining} == {"recent-delivery"}
 
 
 @pytest.mark.asyncio

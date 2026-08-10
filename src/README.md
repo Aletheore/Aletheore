@@ -441,8 +441,9 @@ Starts a stdio MCP server scoped to one repository, so a coding agent can query 
 directly instead of shelling out via Bash or re-reading files on every lookup. Every tool
 result is [TOON](https://toonformat.dev)-encoded rather than plain JSON — the calling agent's
 own token budget is what actually pays for reading these results, and evidence's shape (almost
-entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 28 tools
-by default, plus one optional answer tool when started with `--agent`:
+entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 27 tools
+by default — see [Tool permissions](#tool-permissions) for the 28th — plus one optional answer
+tool when started with `--agent`:
 
 - The 16 query kinds above as tools, each named `aletheore_<kind>` with underscores in place of
   hyphens (`aletheore_imports`, `aletheore_imported_by`, `aletheore_symbols`, `aletheore_branch`,
@@ -468,15 +469,66 @@ by default, plus one optional answer tool when started with `--agent`:
   persists the result under `.aletheore/healthchecks/`.
 - `aletheore_index()` — builds the local semantic search index, same as `aletheore index`.
 - `aletheore_search_codebase(query, k=10)` — semantic search over the local code index.
-- `aletheore_managed_audit(token=None)` — runs a full managed audit report via Aletheore's
-  hosted service, resolving the token the same way `aletheore login` does: an explicit `token`
-  argument, then `ALETHEORE_API_TOKEN`, then the credential saved by `aletheore login`.
+- `aletheore_managed_audit(token=None)` — **not registered by default** (see below). Runs a full
+  managed audit report via Aletheore's hosted service, resolving the token the same way
+  `aletheore login` does: an explicit `token` argument, then `ALETHEORE_API_TOKEN`, then the
+  credential saved by `aletheore login`.
 - Optional: `aletheore_answer(question, k=5)` — available only when the MCP server is started
   with `--agent`, answers from the semantic index using the selected provider.
 
 ```bash
 aletheore mcp .
 ```
+
+#### Tool permissions
+
+Most of these tools only read `.aletheore/air.json`. A few do more, so each one carries standard
+MCP [tool annotations](https://modelcontextprotocol.io/specification/server/tools) —
+`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` — that any MCP client can
+read and display.
+
+Annotations are **hints**, though; the MCP spec is explicit that clients should not make tool-use
+decisions based on them. So the actual boundary is `ALETHEORE_MCP_ALLOW`, which controls which
+effect classes are permitted. A tool whose effects aren't permitted is **never registered** — it
+does not appear in the tool list and cannot be called.
+
+| Effect | Meaning | Default |
+| --- | --- | --- |
+| *(read)* | Reads evidence. Always permitted; not gateable. | on |
+| `write` | Writes files under `.aletheore/`. | on |
+| `network` | Outbound requests — OSV.dev, package registries, health probes, embeddings. | on |
+| `external` | Transmits this repository's evidence to a third-party service. | **off** |
+
+`external` is the one class off by default. Scanning and indexing are what the tool is *for*, and
+their effects stay on this machine; the genuinely surprising action is your repository's evidence
+leaving it. That could previously happen with no consent step at all, because
+`aletheore_managed_audit` silently resolves a token from the OS keychain — anyone who had once run
+`aletheore login` had an agent that could upload without being asked.
+
+```bash
+# Default: everything except evidence upload.
+aletheore mcp .
+
+# Allow the managed-audit tool to upload evidence.
+ALETHEORE_MCP_ALLOW=write,network,external aletheore mcp .
+
+# Read-only server: evidence queries only, no scans, writes, or network.
+ALETHEORE_MCP_ALLOW=read aletheore mcp .
+```
+
+An explicit value **replaces** the default rather than adding to it, so `read` really does mean
+read-only. An unrecognized effect name is a startup error rather than a silent no-op. When tools
+are withheld, the server prints one line to stderr naming them and the variable to set.
+
+`aletheore_answer` reaches an LLM provider but is not gated, because it is registered only when
+you pass `aletheore mcp --agent` — that flag is already the consent step.
+
+`aletheore_index` and `aletheore_search_codebase` embed through a local Ollama instance and can
+fall back to OpenAI, which is why they might look like they belong under `external`. They don't:
+that fallback requires an interactive confirmation and is refused outright when stdin isn't a
+TTY, and an MCP server is always spawned with piped stdio. From MCP these tools reach Ollama on
+localhost or fail — they cannot send code to OpenAI. If Ollama isn't running, expect an
+"embedding provider unavailable" error rather than a silent upload.
 
 ### `aletheore mcp-install [path]`
 

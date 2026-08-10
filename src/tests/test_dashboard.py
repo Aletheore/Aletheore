@@ -217,7 +217,10 @@ def test_api_graph_returns_shape(tmp_path):
     assert set(body.keys()) == {"nodes", "edges", "clusters"}
 
 
-def test_api_mcp_tools_returns_28_tools(tmp_path):
+def test_api_mcp_tools_reflects_the_configured_consent_posture(tmp_path):
+    # The dashboard lists what an agent would actually be offered, so it
+    # shows the default posture: everything except the evidence-upload tool,
+    # which is withheld until ALETHEORE_MCP_ALLOW opts into `external`.
     repo = make_repo_with_evidence(tmp_path)
     app = build_app(repo)
     client = TestClient(app)
@@ -226,8 +229,9 @@ def test_api_mcp_tools_returns_28_tools(tmp_path):
 
     assert response.status_code == 200
     tools = response.json()
-    assert len(tools) == 28
+    assert len(tools) == 27
     names = {t["name"] for t in tools}
+    assert "aletheore_managed_audit" not in names
     assert "aletheore_scan" in names
     assert "aletheore_search" in names
     assert "aletheore_index" in names
@@ -240,7 +244,6 @@ def test_api_mcp_tools_returns_28_tools(tmp_path):
     assert "aletheore_database" in names
     assert "aletheore_infrastructure" in names
     assert "aletheore_environment_variables" in names
-    assert "aletheore_managed_audit" in names
 
 
 def test_logo_route_serves_the_bundled_png(tmp_path):

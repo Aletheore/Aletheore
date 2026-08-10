@@ -31,10 +31,14 @@ from app_server.db import (
     list_api_tokens,
     list_health_check_targets,
     list_installation_members,
+    list_repos_for_installations,
+    purge_installation_data,
+    record_installation_access,
     remove_health_check_target,
     remove_installation_member,
     revoke_api_token,
     set_docs_repo_commit_enabled,
+    set_llm_suggestions_enabled,
     set_webhook_url,
     update_session_tokens,
 )
@@ -85,6 +89,14 @@ class CreateCliTokenRequest(BaseModel):
 # look-around, so this is segment-based rather than a lookahead pattern -
 # still rejects leading/trailing/doubled hyphens.)
 _GITHUB_LOGIN_PATTERN = r"^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$"
+
+
+class SetLLMSuggestionsRequest(BaseModel):
+    enabled: bool
+
+
+class DeleteInstallationDataRequest(BaseModel):
+    confirm: str = Field(min_length=1, max_length=200)
 
 
 class AddMemberRequest(BaseModel):
@@ -301,6 +313,10 @@ async def _require_authorized_installation(request: Request, org: str, repo: str
     installation = await get_installation(pool, installation_id)
     if installation is None:
         raise HTTPException(status_code=404, detail="installation not found")
+    # Every plan, not just paid seats - this is the record
+    # purge_installation_data actually relies on to find PII to purge, since
+    # installation_members only ever exists for paid seat holders.
+    await record_installation_access(pool, installation_id, session["github_login"])
     return session, installation
 
 
@@ -649,6 +665,85 @@ async def remove_health_check_target_route(org: str, repo: str, target_id: int, 
         request.app.state.db_pool, installation["installation_id"], f"{org}/{repo}", target_id
     )
     return {"ok": True}
+
+
+@admin_router.put("/admin/{org}/{repo}/llm-suggestions")
+async def set_llm_suggestions_route(
+    org: str, repo: str, request: Request, body: SetLLMSuggestionsRequest
+):
+    """Opt the installation in or out of the non-evidence-backed suggestion
+    section on managed audits.
+
+    Uses the admin gate (paid plan + seat) rather than the looser authorized
+    gate, because managed audits are a paid feature - an installation with no
+    audits to configure has nothing to set here.
+    """
+    installation = await _require_admin_installation(request, org, repo)
+    await set_llm_suggestions_enabled(
+        request.app.state.db_pool, installation["installation_id"], body.enabled
+    )
+    return {"ok": True, "llm_suggestions_enabled": body.enabled}
+
+
+@admin_router.get("/admin/{org}/{repo}/deletion-preview")
+async def deletion_preview(org: str, repo: str, request: Request):
+    """What a purge would actually destroy, so the confirmation dialog can
+    say it out loud. Deletion is installation-wide but every admin route is
+    repo-scoped, so a customer standing on acme/api's settings page is one
+    click from wiping acme/web too - naming the other repos is the only
+    honest way to present that.
+    """
+    _session, installation = await _require_authorized_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    installation_id = installation["installation_id"]
+    repos = await list_repos_for_installations(pool, [installation_id])
+    return {
+        "account_login": installation["account_login"],
+        "repos": [row["repo_full_name"] for row in repos],
+        "member_count": await count_installation_members(pool, installation_id),
+    }
+
+
+@admin_router.post("/admin/{org}/{repo}/delete-all-data")
+async def delete_all_data(
+    org: str, repo: str, request: Request, body: DeleteInstallationDataRequest
+):
+    """Self-serve erasure for everything the hosted service holds.
+
+    Gated on _require_authorized_installation, not _require_admin_installation:
+    no plan gate and no seat gate. Same reasoning as the billing portal above -
+    a customer on the free plan, or one whose card just failed and got
+    downgraded, is precisely the person who must still be able to delete
+    their data. A 402 on this route would be indefensible.
+    """
+    session, installation = await _require_authorized_installation(request, org, repo)
+
+    # The typed confirmation is the account login, not the repo name: the
+    # blast radius is the whole installation, and making someone type the
+    # repo they happen to be looking at would misrepresent that.
+    if body.confirm.strip() != installation["account_login"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"type {installation['account_login']} exactly to confirm deletion",
+        )
+
+    result = await purge_installation_data(
+        request.app.state.db_pool,
+        installation["installation_id"],
+        session["github_login"],
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="installation not found")
+
+    logger.info(
+        "purged installation %s (%s) on request of %s: %s repos, %s users",
+        result["installation_id"],
+        result["account_login"],
+        session["github_login"],
+        result["repos_deleted"],
+        result["users_purged"],
+    )
+    return {"ok": True, **result}
 
 
 @admin_router.get("/v1/my-installations")

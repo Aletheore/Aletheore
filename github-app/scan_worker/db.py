@@ -334,7 +334,8 @@ def get_installation(dsn: str, installation_id: int) -> dict | None:
             cur.execute(
                 """
                 SELECT installation_id, account_login, plan, webhook_url,
-                       health_check_base_url, health_check_latency_threshold_ms
+                       health_check_base_url, health_check_latency_threshold_ms,
+                       llm_suggestions_enabled
                 FROM installations
                 WHERE installation_id = %s
                 """,
@@ -539,6 +540,28 @@ def insert_endpoint_health(
                 (installation_id, repo_full_name, method, path, target_id, keep),
             )
         conn.commit()
+
+
+def delete_expired_webhook_deliveries(dsn: str, retention_days: int) -> int:
+    """Drop delivery GUIDs older than the retention window.
+
+    The window has to outlive GitHub's own redelivery horizon, or an
+    operator redelivering an old event - or an attacker replaying a captured
+    payload - would find the ledger already swept and the delivery treated
+    as new. GitHub keeps delivery logs for roughly 30 days, so the default
+    matches that rather than the ~3-day automatic retry window.
+    """
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM webhook_deliveries WHERE received_at < now() - make_interval(days => %s)",
+                (retention_days,),
+            )
+            deleted = cur.rowcount
+        conn.commit()
+    return deleted
 
 
 def delete_expired_sessions(dsn: str) -> int:

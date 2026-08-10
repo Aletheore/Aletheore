@@ -32,8 +32,8 @@ async def test_webhook_rejects_invalid_signature():
 
 
 @pytest.mark.asyncio
-async def test_webhook_dispatches_pull_request_enqueue(monkeypatch):
-    app.state.db_pool = object()
+async def test_webhook_dispatches_pull_request_enqueue(monkeypatch, pool):
+    app.state.db_pool = pool
     payload = {
         "action": "opened",
         "number": 9,
@@ -58,6 +58,7 @@ async def test_webhook_dispatches_pull_request_enqueue(monkeypatch):
             headers={
                 "X-Hub-Signature-256": _signature(body, settings.github_webhook_secret),
                 "X-GitHub-Event": "pull_request",
+                "X-GitHub-Delivery": "delivery-pr-1",
             },
         )
 
@@ -67,8 +68,8 @@ async def test_webhook_dispatches_pull_request_enqueue(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_webhook_dispatches_push_enqueue(monkeypatch):
-    app.state.db_pool = object()
+async def test_webhook_dispatches_push_enqueue(monkeypatch, pool):
+    app.state.db_pool = pool
     payload = {
         "ref": "refs/heads/main",
         "after": "def456",
@@ -93,6 +94,7 @@ async def test_webhook_dispatches_push_enqueue(monkeypatch):
             headers={
                 "X-Hub-Signature-256": _signature(body, settings.github_webhook_secret),
                 "X-GitHub-Event": "push",
+                "X-GitHub-Delivery": "delivery-push-1",
             },
         )
 
@@ -178,6 +180,11 @@ async def test_unhandled_exception_returns_generic_500_and_alerts(monkeypatch):
             headers={
                 "X-Hub-Signature-256": _signature(body, settings.github_webhook_secret),
                 "X-GitHub-Event": "installation",
+                # Present so the request gets past the delivery-header check
+                # and fails where this test intends: parsing the body. The
+                # pool stub is never touched, since parsing precedes the
+                # delivery claim.
+                "X-GitHub-Delivery": "delivery-malformed-1",
             },
         )
 

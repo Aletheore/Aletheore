@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 from app_server import paddle_ip_allowlist
 from app_server.db import (
     add_installation_member,
+    claim_webhook_delivery,
     get_extra_seats,
     get_installation,
     upsert_github_user_email,
@@ -30,8 +31,11 @@ def _sign(raw_body: bytes, secret: str = WEBHOOK_SECRET) -> str:
     return f"ts={ts};h1={digest}"
 
 
-def _subscription_created_payload(price_id: str, installation_id: int) -> dict:
+def _subscription_created_payload(
+    price_id: str, installation_id: int, event_id: str = "evt_created_default"
+) -> dict:
     return {
+        "event_id": event_id,
         "event_type": "subscription.created",
         "data": {
             "id": "sub_test_123",
@@ -43,8 +47,15 @@ def _subscription_created_payload(price_id: str, installation_id: int) -> dict:
     }
 
 
-def _subscription_event_payload(event_type: str, status: str, installation_id: int, price_id: str | None = None) -> dict:
+def _subscription_event_payload(
+    event_type: str,
+    status: str,
+    installation_id: int,
+    price_id: str | None = None,
+    event_id: str = "evt_event_default",
+) -> dict:
     return {
+        "event_id": event_id,
         "event_type": event_type,
         "data": {
             "id": "sub_test_123",
@@ -535,8 +546,158 @@ async def test_no_email_enqueued_without_event_id(pool, monkeypatch):
         lambda redis_url, **kwargs: enqueue_calls.append(kwargs),
     )
 
-    payload = _subscription_event_payload("subscription.updated", "past_due", 704)
+    # Explicitly event_id-less. The /webhooks/paddle route now rejects such
+    # a payload outright, but the handler keeps its own guard - it is called
+    # directly here and from tests, and an email dedupe key built from a
+    # missing id would collide across unrelated events.
+    payload = _subscription_event_payload("subscription.updated", "past_due", 704, event_id=None)
 
     await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
 
     assert enqueue_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Delivery dedupe. Paddle signatures already embed a timestamp checked to a 5s
+# tolerance, so replay of a captured payload is a narrow window. These cover
+# the concurrency case instead: handle_paddle_webhook_event reads
+# installations.plan, then writes it, and gates a pair of expensive full
+# AIRview/Docs builds on that read having been "free". Two deliveries of one
+# event arriving together would both read "free" and both enqueue.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_duplicate_paddle_event_is_only_handled_once(pool, monkeypatch):
+    monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    app.state.db_pool = pool
+    await upsert_installation(pool, 800, "acme")
+
+    handled = []
+
+    async def counting_handler(payload, pool_arg, redis_url, queue=None):
+        handled.append(payload)
+
+    monkeypatch.setattr(
+        "app_server.webhooks.paddle.handle_paddle_webhook_event", counting_handler
+    )
+
+    body = json.dumps(
+        _subscription_created_payload(
+            "pri_01kyhevc8bkcghfpwjymz16y2h", 800, event_id="evt_dupe_1"
+        )
+    ).encode()
+    headers = {"paddle-signature": _sign(body)}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first = await client.post("/webhooks/paddle", content=body, headers=headers)
+        second = await client.post("/webhooks/paddle", content=body, headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(handled) == 1, "a duplicate Paddle event was processed twice"
+
+
+@pytest.mark.asyncio
+async def test_distinct_paddle_events_are_both_handled(pool, monkeypatch):
+    monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    app.state.db_pool = pool
+    await upsert_installation(pool, 801, "acme")
+
+    handled = []
+
+    async def counting_handler(payload, pool_arg, redis_url, queue=None):
+        handled.append(payload)
+
+    monkeypatch.setattr(
+        "app_server.webhooks.paddle.handle_paddle_webhook_event", counting_handler
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for event_id in ("evt_distinct_1", "evt_distinct_2"):
+            body = json.dumps(
+                _subscription_created_payload(
+                    "pri_01kyhevc8bkcghfpwjymz16y2h", 801, event_id=event_id
+                )
+            ).encode()
+            await client.post(
+                "/webhooks/paddle", content=body, headers={"paddle-signature": _sign(body)}
+            )
+
+    assert len(handled) == 2
+
+
+@pytest.mark.asyncio
+async def test_paddle_event_without_event_id_is_rejected(pool, monkeypatch):
+    # Undedupable. Accepting it would leave the concurrency gap open for any
+    # caller willing to omit the field.
+    monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    app.state.db_pool = pool
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 802)
+    del payload["event_id"]
+    body = json.dumps(payload).encode()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/webhooks/paddle", content=body, headers={"paddle-signature": _sign(body)}
+        )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_forged_paddle_signature_never_claims_an_event_id(pool, monkeypatch):
+    # Otherwise anyone could burn an event id and suppress the real delivery.
+    monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    app.state.db_pool = pool
+    body = json.dumps(
+        _subscription_created_payload(
+            "pri_01kyhevc8bkcghfpwjymz16y2h", 803, event_id="evt_forged_1"
+        )
+    ).encode()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/webhooks/paddle", content=body, headers={"paddle-signature": "ts=1;h1=deadbeef"}
+        )
+
+    assert response.status_code == 401
+    assert await claim_webhook_delivery(pool, "paddle", "evt_forged_1", "") is True
+
+
+@pytest.mark.asyncio
+async def test_failed_paddle_handler_releases_the_claim_for_retry(pool, monkeypatch):
+    monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    app.state.db_pool = pool
+    await upsert_installation(pool, 804, "acme")
+    attempts = []
+
+    async def failing_handler(payload, pool_arg, redis_url, queue=None):
+        attempts.append(payload)
+        raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr("app_server.webhooks.paddle.handle_paddle_webhook_event", failing_handler)
+
+    body = json.dumps(
+        _subscription_created_payload(
+            "pri_01kyhevc8bkcghfpwjymz16y2h", 804, event_id="evt_retry_1"
+        )
+    ).encode()
+    headers = {"paddle-signature": _sign(body)}
+
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await client.post("/webhooks/paddle", content=body, headers=headers)
+        assert first.status_code == 500
+
+        # Paddle's retry carries the same event_id. A stuck claim would drop
+        # it and the plan change would be lost for good.
+        async def working_handler(payload, pool_arg, redis_url, queue=None):
+            attempts.append(payload)
+
+        monkeypatch.setattr(
+            "app_server.webhooks.paddle.handle_paddle_webhook_event", working_handler
+        )
+        second = await client.post("/webhooks/paddle", content=body, headers=headers)
+
+    assert second.status_code == 200
+    assert len(attempts) == 2, "retry of a failed Paddle event was wrongly suppressed"

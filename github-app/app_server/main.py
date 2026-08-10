@@ -13,7 +13,7 @@ from app_server.admin import admin_router
 from app_server.auth import auth_router
 from app_server.config import get_settings
 from app_server.dashboard import dashboard_router
-from app_server.db import create_pool
+from app_server.db import claim_webhook_delivery, create_pool, release_webhook_delivery
 from app_server.demo_scan_api import demo_scan_router
 from app_server.error_alerts import send_error_alert
 from app_server.frontend import frontend_router
@@ -144,27 +144,53 @@ async def webhook(request: Request):
     if not verify_signature(body, signature, settings.github_webhook_secret):
         raise HTTPException(status_code=401, detail="invalid signature")
 
+    # Required, not optional. GitHub sends X-GitHub-Delivery on every
+    # delivery including pings, and treating a missing header as "just
+    # process it" would hand anyone holding a captured payload a one-header
+    # bypass of the replay protection below.
+    delivery_id = request.headers.get("X-GitHub-Delivery", "")
+    if not delivery_id:
+        raise HTTPException(status_code=400, detail="missing X-GitHub-Delivery")
+
     event = request.headers.get("X-GitHub-Event", "")
     payload = json.loads(body)
     pool = request.app.state.db_pool
 
-    if event in ("installation", "installation_repositories"):
-        await handle_installation_event(event, payload, pool, settings.redis_url)
-    elif event == "marketplace_purchase":
-        from app_server.webhooks.marketplace import handle_marketplace_event
+    # Claimed after the signature check, so an unauthenticated caller can't
+    # poison the ledger with invented GUIDs and suppress the real deliveries
+    # that follow. Also after JSON parsing, so a body that could never be
+    # handled doesn't burn a GUID on its way to failing.
+    if not await claim_webhook_delivery(pool, "github", delivery_id, event):
+        access_logger.info(
+            "duplicate webhook delivery ignored",
+            extra={"delivery_id": delivery_id, "github_event": event},
+        )
+        return {"ok": True, "duplicate": True}
 
-        await handle_marketplace_event(payload, pool, settings.redis_url)
-    elif event == "pull_request":
-        from app_server.webhooks.pull_request import handle_pull_request_event
+    try:
+        if event in ("installation", "installation_repositories"):
+            await handle_installation_event(event, payload, pool, settings.redis_url)
+        elif event == "marketplace_purchase":
+            from app_server.webhooks.marketplace import handle_marketplace_event
 
-        await handle_pull_request_event(payload, settings.redis_url)
-    elif event == "push":
-        from app_server.webhooks.push import handle_push_event
+            await handle_marketplace_event(payload, pool, settings.redis_url)
+        elif event == "pull_request":
+            from app_server.webhooks.pull_request import handle_pull_request_event
 
-        await handle_push_event(payload, settings.redis_url)
-    elif event == "issue_comment":
-        from app_server.webhooks.issue_comment import handle_issue_comment_event
+            await handle_pull_request_event(payload, settings.redis_url)
+        elif event == "push":
+            from app_server.webhooks.push import handle_push_event
 
-        await handle_issue_comment_event(payload, settings.redis_url)
+            await handle_push_event(payload, settings.redis_url)
+        elif event == "issue_comment":
+            from app_server.webhooks.issue_comment import handle_issue_comment_event
+
+            await handle_issue_comment_event(payload, settings.redis_url)
+    except Exception:
+        # Hand the GUID back before failing, or GitHub's retry of this same
+        # delivery would be treated as a duplicate and dropped - turning a
+        # transient error into permanent event loss.
+        await release_webhook_delivery(pool, "github", delivery_id)
+        raise
 
     return {"ok": True}
