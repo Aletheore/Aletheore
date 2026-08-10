@@ -654,6 +654,40 @@ async def test_aletheore_search_ignores_ignored_dirs(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_aletheore_search_rejects_invalid_regex_pattern(tmp_path):
+    # Previously an invalid pattern raised an uncaught re.error - a crash,
+    # not a normal tool result.
+    repo = make_repo_with_files(tmp_path, {"a.py": "x = 1\n"})
+    server = build_server(repo)
+
+    result = await server.call_tool(
+        "aletheore_search", {"pattern": "(unbalanced", "regex": True}
+    )
+
+    body = tool_result_body(result)["result"]
+    assert "invalid regex" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_search_times_out_on_catastrophic_backtracking(tmp_path):
+    # (a+)+$ against a run of a's with no trailing match is the textbook
+    # ReDoS case - measured ~23s for one 29-char line in the audit that
+    # found this. The call must return within the search's time budget
+    # (the worker process gets killed) rather than hang, and must say so
+    # rather than silently reporting no match.
+    evil_line = "a" * 30 + "!"
+    repo = make_repo_with_files(tmp_path, {"evil.py": evil_line + "\n"})
+    server = build_server(repo)
+
+    result = await server.call_tool(
+        "aletheore_search", {"pattern": r"(a+)+$", "regex": True}
+    )
+
+    body = tool_result_body(result)["result"]
+    assert "time budget" in body["error"]
+
+
+@pytest.mark.asyncio
 async def test_aletheore_search_caps_at_200_and_flags_truncated(tmp_path):
     content = "\n".join(f"MATCH_ME line {i}" for i in range(250))
     repo = make_repo_with_files(tmp_path, {"big.py": content})

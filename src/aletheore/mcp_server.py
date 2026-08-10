@@ -1,5 +1,7 @@
 import json
+import multiprocessing
 import os
+import queue
 import re
 import sys
 from pathlib import Path, PurePath
@@ -126,6 +128,65 @@ _QUERY_TOOL_DESCRIPTIONS = {
 }
 
 _SEARCH_MATCH_CAP = 200
+# Guards the whole regex search against catastrophic backtracking (e.g.
+# (a+)+$) on a crafted line - measured ~23s for one such 29-char line
+# against every line of every file. Two timeout mechanisms were tried and
+# rejected before this one, both confirmed empirically rather than assumed:
+#   - A thread-based timeout (submit to a worker, future.result(timeout=..))
+#     does not work: CPython's _sre C extension holds the GIL for the whole
+#     match, so the waiting thread can't wake up to check its own clock
+#     until the runaway match finally releases it. A 1s future.result
+#     timeout still blocked for the full ~45s match.
+#   - signal.alarm does interrupt a runaway match (SIGALRM delivery is
+#     checked by the interpreter even mid-match), but signal.signal() only
+#     works on the process's main thread - and this tool is invoked from a
+#     worker thread the MCP framework dispatches sync tool calls onto, not
+#     the main thread, so it raised ValueError every time in practice.
+# A separate process is the only mechanism that isn't at the mercy of the
+# GIL or which thread called in: the OS can terminate it regardless of what
+# it's doing. The whole search runs as one worker (not one process per
+# line - that overhead would dominate for any real search) under a single
+# overall deadline; on timeout the process is killed and the tool reports
+# what happened rather than returning results.
+_SEARCH_TIMEOUT_SECONDS = 5.0
+
+
+def _search_files(repo_path: Path, pattern: str, regex: bool, path_glob: str | None) -> dict:
+    """The actual search. Literal (non-regex) mode has no backtracking risk
+    and is called directly in-process; regex mode is only ever called
+    through _run_search in a subprocess (see _SEARCH_TIMEOUT_SECONDS)."""
+    compiled = re.compile(pattern) if regex else None
+    matches: list[dict] = []
+    truncated = False
+
+    for path in iter_all_files(repo_path):
+        rel_path = path.relative_to(repo_path).as_posix()
+        if path_glob is not None and not PurePath(rel_path).match(path_glob):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            found = compiled.search(line) is not None if compiled else pattern in line
+            if found:
+                if len(matches) >= _SEARCH_MATCH_CAP:
+                    truncated = True
+                    break
+                matches.append({"path": rel_path, "line": line_no, "text": line})
+        if truncated:
+            break
+
+    return {"matches": matches, "truncated": truncated}
+
+
+def _run_search(
+    repo_path: Path, pattern: str, regex: bool, path_glob: str | None, result_queue: "multiprocessing.Queue"
+) -> None:
+    """Runs in a child process - must stay a top-level function so the
+    spawn start method can pickle and import it."""
+    result_queue.put(_search_files(repo_path, pattern, regex, path_glob))
 
 
 # ---------------------------------------------------------------------------
@@ -275,30 +336,38 @@ def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_search(pattern: str, regex: bool = False, path_glob: str | None = None) -> str:
         """Deterministic literal or regex search over the repository's source files."""
-        compiled = re.compile(pattern) if regex else None
-        matches: list[dict] = []
-        truncated = False
+        if not regex:
+            return _toon_result(_search_files(repo_path, pattern, regex, path_glob))
 
-        for path in iter_all_files(repo_path):
-            rel_path = path.relative_to(repo_path).as_posix()
-            if path_glob is not None and not PurePath(rel_path).match(path_glob):
-                continue
-            try:
-                text = path.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                continue
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            return _toon_result({"error": f"invalid regex pattern: {exc}"})
 
-            for line_no, line in enumerate(text.splitlines(), start=1):
-                found = compiled.search(line) if compiled else pattern in line
-                if found:
-                    if len(matches) >= _SEARCH_MATCH_CAP:
-                        truncated = True
-                        break
-                    matches.append({"path": rel_path, "line": line_no, "text": line})
-            if truncated:
-                break
-
-        return _toon_result({"matches": matches, "truncated": truncated})
+        ctx = multiprocessing.get_context("spawn")
+        result_queue: multiprocessing.Queue = ctx.Queue()
+        process = ctx.Process(
+            target=_run_search, args=(repo_path, pattern, regex, path_glob, result_queue)
+        )
+        process.start()
+        try:
+            result = result_queue.get(timeout=_SEARCH_TIMEOUT_SECONDS)
+        except queue.Empty:
+            process.terminate()
+            process.join(timeout=1.0)
+            if process.is_alive():
+                process.kill()
+            return _toon_result(
+                {
+                    "error": (
+                        f"search exceeded its {_SEARCH_TIMEOUT_SECONDS:.0f}s time budget - "
+                        "likely a catastrophic-backtracking regex pattern; try a simpler "
+                        "pattern or a literal (non-regex) search"
+                    )
+                }
+            )
+        process.join()
+        return _toon_result(result)
 
 
 def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
