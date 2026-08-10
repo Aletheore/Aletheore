@@ -16,7 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from rq import get_current_job
 
-from app_server.audit_signing import content_hash, sign_report
+from app_server.audit_signing import content_hash, public_key_hex_from_private, sign_report
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.code_graph_diff import diff_endpoints, diff_modules
@@ -40,7 +40,11 @@ from app_server.error_alerts import send_error_alert
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation
 from app_server.logging_config import log_job
-from app_server.rate_limit import cooldown_seconds_for_loc, total_loc_from_evidence
+from app_server.rate_limit import (
+    MIN_MANAGED_AUDIT_COOLDOWN_SECONDS,
+    cooldown_seconds_for_loc,
+    total_loc_from_evidence,
+)
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
 from aletheore.docs_reference import build_api_reference
 from scan_worker import live_docs, live_wiki
@@ -56,6 +60,7 @@ from scan_worker.db import (
     delete_wiki_subsystems_not_in,
     email_already_sent,
     get_dismissed_identity_keys,
+    managed_audit_definitely_still_cooling_down,
     get_docs_repo_commit_settings,
     get_endpoint_health_summary,
     get_extra_seats,
@@ -212,8 +217,30 @@ def _url_without_credentials(url: str) -> str:
     return urlunsplit(parts._replace(netloc=parts.hostname))
 
 
+def _run_git(args: list[str], **kwargs) -> None:
+    """subprocess.run wrapper for git invocations whose argv may embed a
+    credentialed clone URL (see _clone_url). A failing git command raises
+    CalledProcessError, whose __str__ includes the full argv verbatim -
+    unredacted, that string is what logging_config.log_job both writes to
+    the structured job-failure log and emails via
+    error_alerts.send_error_alert, so a transient clone/fetch failure (a
+    network blip, not a security event) would otherwise plaintext a live
+    installation token to an inbox and a log store. Scrubs any arg that
+    parses as a URL with embedded credentials before letting the error
+    propagate.
+    """
+    try:
+        subprocess.run(args, check=True, **kwargs)
+    except subprocess.CalledProcessError as exc:
+        exc.cmd = [
+            _url_without_credentials(arg) if isinstance(arg, str) and urlsplit(arg).username else arg
+            for arg in exc.cmd
+        ]
+        raise
+
+
 def _clone_ref(url: str, ref: str, dest: Path) -> None:
-    subprocess.run(["git", "clone", "-q", "--no-checkout", url, str(dest)], check=True)
+    _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
     subprocess.run(["git", "checkout", "-q", ref], cwd=dest, check=True)
 
 
@@ -228,6 +255,28 @@ def _persistent_checkout_dir(installation_id: int, repo_full_name: str) -> Path:
     root = Path(os.environ.get(_REPO_CHECKOUT_ROOT_ENV, _DEFAULT_REPO_CHECKOUT_ROOT))
     safe_name = repo_full_name.replace("/", "__")
     return root / str(installation_id) / safe_name
+
+
+def _installation_checkout_root(installation_id: int) -> Path:
+    root = Path(os.environ.get(_REPO_CHECKOUT_ROOT_ENV, _DEFAULT_REPO_CHECKOUT_ROOT))
+    return root / str(installation_id)
+
+
+@log_job
+def purge_persistent_checkouts_job(installation_id: int) -> None:
+    """Deletes every persistent checkout (see _ensure_persistent_checkout)
+    for one installation - the on-disk counterpart to
+    purge_installation_data, which is SQL-only and has no filesystem
+    access to this volume from app-server. Enqueued by the uninstall
+    webhook and the self-serve delete-all-data route right after that SQL
+    purge succeeds, since a customer's source code surviving on disk after
+    every DB row about them is gone is exactly the gap this closes.
+
+    ignore_errors=True: a purge that can't find the directory (already
+    gone, or a fallback-to-ephemeral installation that never got a
+    persistent checkout at all) is a no-op, not a failure worth surfacing.
+    """
+    shutil.rmtree(_installation_checkout_root(installation_id), ignore_errors=True)
 
 
 def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path) -> None:
@@ -264,7 +313,7 @@ def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path)
     """
     credential_free_url = _url_without_credentials(url)
     if (checkout_dir / ".git").exists():
-        subprocess.run(["git", "remote", "set-url", "origin", url], cwd=checkout_dir, check=True)
+        _run_git(["git", "remote", "set-url", "origin", url], cwd=checkout_dir)
         try:
             subprocess.run(["git", "fetch", "-q", "origin"], cwd=checkout_dir, check=True)
             subprocess.run(["git", "checkout", "-q", "-f", checkout_sha], cwd=checkout_dir, check=True)
@@ -276,7 +325,7 @@ def _ensure_persistent_checkout(url: str, checkout_sha: str, checkout_dir: Path)
     else:
         checkout_dir.mkdir(parents=True, exist_ok=True)
         try:
-            subprocess.run(["git", "clone", "-q", "--no-checkout", url, str(checkout_dir)], check=True)
+            _run_git(["git", "clone", "-q", "--no-checkout", url, str(checkout_dir)])
             subprocess.run(["git", "checkout", "-q", checkout_sha], cwd=checkout_dir, check=True)
         finally:
             if (checkout_dir / ".git").exists():
@@ -361,6 +410,15 @@ def _build_unchanged_scan_cache(
     return cache_path
 
 
+# The scan-worker container's own environment holds every secret we have -
+# DATABASE_URL, GITHUB_APP_PRIVATE_KEY, PADDLE_API_KEY, SESSION_SECRET,
+# AUDIT_SIGNING_PRIVATE_KEY, and more - none of which the CLI's static
+# parsing needs. This subprocess's entire job is walking source files from
+# an attacker-controlled, arbitrary customer repo, so it gets an explicit
+# minimal env instead of inheriting all of ours via **os.environ.
+_SCAN_SUBPROCESS_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL")
+
+
 def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> Path:
     # See GRAPH_COLD_SYNC_DEPTH_CAP and SECRETS_HISTORY_DEPTH_CAP - the
     # CLI's own analyze_git and find_secrets_in_history calls (inside this
@@ -368,11 +426,9 @@ def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> 
     # Postgres sync below, and run first, so they need the same caps. Both
     # left unset for a developer running `aletheore scan` directly on their
     # own machine (see evidence.py's handling of both env vars).
-    env = {
-        **os.environ,
-        "ALETHEORE_GIT_HISTORY_DEPTH_CAP": str(GRAPH_COLD_SYNC_DEPTH_CAP),
-        "ALETHEORE_SECRETS_HISTORY_DEPTH_CAP": str(SECRETS_HISTORY_DEPTH_CAP),
-    }
+    env = {name: os.environ[name] for name in _SCAN_SUBPROCESS_ENV_ALLOWLIST if name in os.environ}
+    env["ALETHEORE_GIT_HISTORY_DEPTH_CAP"] = str(GRAPH_COLD_SYNC_DEPTH_CAP)
+    env["ALETHEORE_SECRETS_HISTORY_DEPTH_CAP"] = str(SECRETS_HISTORY_DEPTH_CAP)
     if unchanged_scan_cache_path is not None:
         env["ALETHEORE_UNCHANGED_SCAN_CACHE"] = str(unchanged_scan_cache_path)
     subprocess.run(["aletheore", "scan", str(repo_dir)], check=True, env=env)
@@ -948,7 +1004,7 @@ def run_push_scan_job(
 
 
 def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
-    subprocess.run(["git", "clone", "-q", "--no-checkout", url, str(dest)], check=True)
+    _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
     subprocess.run(
         ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
         cwd=dest,
@@ -977,6 +1033,10 @@ def _sign_and_persist_audit_report(
         verification_token = secrets.token_hex(32)
         report_hash = content_hash(report_text)
         signature = sign_report(report_text, settings.audit_signing_private_key)
+        # Recorded per report so a later key rotation can't retroactively
+        # invalidate this certificate - the verifier checks against the key
+        # that actually signed it, not whichever key is current when someone
+        # happens to look.
         insert_audit_report(
             settings.database_url,
             installation_id,
@@ -985,6 +1045,7 @@ def _sign_and_persist_audit_report(
             report_text,
             report_hash,
             signature,
+            public_key_hex_from_private(settings.audit_signing_private_key),
         )
         return verification_token
     except Exception as exc:  # noqa: BLE001
@@ -1038,7 +1099,11 @@ def _maybe_create_audit_certificate_check_run(
 def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_number: int) -> None:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    plan = installation["plan"] if installation is not None else "air"
+    # A missing row is an anomaly (a real installation should always have
+    # one) - defaulting to "free" here rather than a paid tier is
+    # deliberate fail-closed behavior. Same default used everywhere else
+    # in this file a plan is read off a possibly-missing installation row.
+    plan = installation["plan"] if installation is not None else "free"
     # Read off the row already fetched rather than a second query. Defaults to
     # on for a missing row or an older row, matching the column default - a
     # lookup miss must not silently change what a customer's report contains.
@@ -1048,6 +1113,18 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
 
     if plan != "free" and not check_and_reserve_monthly_repo_scan_slot(
         settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
+    ):
+        return
+
+    # The real cooldown (below, after the scan) is scaled by the repo's
+    # LOC, which isn't known until the scan runs - but every tier is at
+    # least MIN_MANAGED_AUDIT_COOLDOWN_SECONDS, so a repo whose last run
+    # was more recent than that is guaranteed to still be cooling down
+    # regardless of what the real duration turns out to be. Catches a
+    # burst of repeat triggers before wasting a clone+scan on the shared
+    # scans queue, instead of after.
+    if managed_audit_definitely_still_cooling_down(
+        settings.database_url, installation_id, repo_full_name, MIN_MANAGED_AUDIT_COOLDOWN_SECONDS
     ):
         return
 
@@ -1144,7 +1221,7 @@ def run_managed_audit_api_job(
 ) -> str:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    plan = installation["plan"] if installation is not None else "air"
+    plan = installation["plan"] if installation is not None else "free"
     # Read off the row already fetched rather than a second query. Defaults to
     # on for a missing row or an older row, matching the column default - a
     # lookup miss must not silently change what a customer's report contains.
@@ -2243,7 +2320,7 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
         return
 
     installation = get_installation_row(dsn, installation_id)
-    plan = installation["plan"] if installation is not None else "air"
+    plan = installation["plan"] if installation is not None else "free"
     model_used = model_for_plan(plan)
 
     try:
@@ -2561,7 +2638,8 @@ def _maybe_sync_docs_to_repo(dsn: str, installation_id: int, repo_full_name: str
                 "mode": row["mode"],
             }
         modules = build_api_reference(evidence, ai_descriptions_by_module)
-        result = sync_docs_to_repo(client, token, repo_full_name, modules, settings)
+        bot_login = f"{get_settings().github_app_slug}[bot]"
+        result = sync_docs_to_repo(client, token, repo_full_name, modules, settings, bot_login)
         if result is not None:
             content_hash, pr_number = result
             record_docs_repo_commit(dsn, installation_id, repo_full_name, content_hash, pr_number)
@@ -2579,7 +2657,7 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         return  # nothing scanned for this repo yet - nothing to build from
 
     installation = get_installation_row(dsn, installation_id)
-    plan = installation["plan"] if installation is not None else "air"
+    plan = installation["plan"] if installation is not None else "free"
 
     candidate_modules = [
         m for m in evidence["repository"]["modules"]

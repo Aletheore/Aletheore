@@ -2,8 +2,11 @@ import base64
 
 import httpx
 
+import pytest
+
 from aletheore.pr_comment import COMMENT_MARKER
 from scan_worker.github_api import (
+    BranchNotOwnedByAletheoreError,
     create_check_run,
     create_pull_request,
     ensure_branch_at,
@@ -315,25 +318,40 @@ def test_ensure_branch_at_creates_ref_when_missing():
         return httpx.Response(201, json={"ref": "refs/heads/aletheore/docs-update"})
 
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
-    ensure_branch_at(client, "token", "octocat/hello-world", "aletheore/docs-update", "abc123")
+    ensure_branch_at(client, "token", "octocat/hello-world", "aletheore/docs-update", "abc123", "aletheore[bot]")
     assert [method for method, _ in calls] == ["GET", "POST"]
 
 
-def test_ensure_branch_at_force_updates_existing_ref():
+def test_ensure_branch_at_force_updates_existing_ref_owned_by_us():
     calls = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append((request.method, str(request.url)))
-        if request.method == "GET":
+        if request.method == "GET" and str(request.url).endswith("/git/ref/heads/aletheore/docs-update"):
             return httpx.Response(200, json={"object": {"sha": "old-sha"}})
+        if request.method == "GET" and str(request.url).endswith("/commits/old-sha"):
+            return httpx.Response(200, json={"committer": {"login": "aletheore[bot]"}})
         assert request.method == "PATCH"
         import json as _json
         assert _json.loads(request.content) == {"sha": "new-sha", "force": True}
         return httpx.Response(200, json={})
 
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
-    ensure_branch_at(client, "token", "octocat/hello-world", "aletheore/docs-update", "new-sha")
-    assert [method for method, _ in calls] == ["GET", "PATCH"]
+    ensure_branch_at(client, "token", "octocat/hello-world", "aletheore/docs-update", "new-sha", "aletheore[bot]")
+    assert [method for method, _ in calls] == ["GET", "GET", "PATCH"]
+
+
+def test_ensure_branch_at_refuses_to_force_push_when_not_owned_by_us():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and str(request.url).endswith("/git/ref/heads/aletheore/docs-update"):
+            return httpx.Response(200, json={"object": {"sha": "old-sha"}})
+        if request.method == "GET" and str(request.url).endswith("/commits/old-sha"):
+            return httpx.Response(200, json={"committer": {"login": "some-contributor"}})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    with pytest.raises(BranchNotOwnedByAletheoreError):
+        ensure_branch_at(client, "token", "octocat/hello-world", "aletheore/docs-update", "new-sha", "aletheore[bot]")
 
 
 def test_upsert_repo_file_creates_when_no_existing_file():

@@ -9,7 +9,11 @@ def verify_paddle_signature(
     raw_body: bytes,
     signature_header: str,
     secret: str,
-    tolerance_seconds: int = 5,
+    # Paddle's own retry ledger (claim_webhook_delivery) already blocks
+    # replay, so widening this only trades a little freshness for not
+    # 401ing every billing webhook on modest host clock drift - 5s was
+    # tight enough that a customer could pay and never get upgraded.
+    tolerance_seconds: int = 60,
 ) -> bool:
     try:
         parts = dict(part.split("=", 1) for part in signature_header.split(";") if "=" in part)

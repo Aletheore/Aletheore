@@ -109,6 +109,13 @@ def test_protocol_relative_next_url_rejected():
     assert _is_safe_next_path("//evil.example.com/phish") == "/dashboard"
 
 
+def test_backslash_protocol_relative_next_url_rejected():
+    # Browsers normalize a leading backslash to a forward slash, turning
+    # this into the same protocol-relative "//evil.example.com" attack
+    # test_protocol_relative_next_url_rejected already covers.
+    assert _is_safe_next_path("/\\evil.example.com/phish") == "/dashboard"
+
+
 def test_next_path_not_starting_with_slash_rejected():
     assert _is_safe_next_path("evil.example.com") == "/dashboard"
 
@@ -262,11 +269,13 @@ async def test_callback_rejects_mismatched_state(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_callback_without_state_cookie_succeeds_for_app_install_flow(pool, monkeypatch):
-    # GitHub App "Install" redirects straight to /auth/callback with
-    # installation_id + code, never going through /auth/login first - so
-    # there's no oauth_state cookie and often no state param at all. This
-    # entry point must still work.
+async def test_callback_without_state_cookie_redirects_to_login_instead_of_trusting_the_code(pool, monkeypatch):
+    # No oauth_state cookie means this request either came from GitHub's
+    # direct "Install" redirect, or is a forged OAuth-login-CSRF link - the
+    # two are indistinguishable, so neither gets to exchange the code
+    # in-place. Both get bounced through /auth/login, which always sets
+    # state; a real installer's browser completes that round trip
+    # invisibly, a forged code just goes unused.
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -294,33 +303,17 @@ async def test_callback_without_state_cookie_succeeds_for_app_install_flow(pool,
         )
 
     assert response.status_code == 307
-    assert "session" in response.cookies
+    assert response.headers["location"] == "/auth/login"
+    assert "session" not in response.cookies
 
 
 @pytest.mark.asyncio
-async def test_callback_direct_install_honors_state_as_next_path(pool, monkeypatch):
+async def test_callback_without_state_cookie_forwards_state_as_next_on_the_login_redirect(pool, monkeypatch):
     # github_app_install_url() puts our own next_path in `state` for the
     # direct-install entry point (no oauth_state cookie, so state isn't a
-    # CSRF nonce here) - the callback should redirect there instead of the
-    # /dashboard default.
+    # CSRF nonce here) - that destination must survive the extra hop
+    # through /auth/login rather than being silently dropped.
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/login/oauth/access_token":
-            return httpx.Response(200, json={"access_token": "gho_faketoken"})
-        if request.url.path == "/user":
-            return httpx.Response(200, json={"id": 42, "login": "octocat"})
-        return httpx.Response(404)
-
-    monkeypatch.setattr(
-        "app_server.auth._github_http_client",
-        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
-    )
-    monkeypatch.setattr(
-        "app_server.auth._github_oauth_http_client",
-        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
-    )
-
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="https://test") as client:
@@ -331,35 +324,18 @@ async def test_callback_direct_install_honors_state_as_next_path(pool, monkeypat
         )
 
     assert response.status_code == 307
-    assert response.headers["location"] == "/subscribe?plan=team&interval=month"
+    assert response.headers["location"] == "/auth/login?next=%2Fsubscribe%3Fplan%3Dteam%26interval%3Dmonth"
 
 
 @pytest.mark.asyncio
-async def test_callback_with_installation_id_upserts_installation_synchronously(pool, monkeypatch):
-    # /subscribe reads installations from our DB, which is normally populated
-    # by the async `installation` webhook - a browser redirect straight back
-    # from GitHub's install flow can land here before that webhook arrives.
-    # The callback must upsert the row itself so /subscribe never sees a gap.
+async def test_callback_without_state_cookie_does_not_reach_the_synchronous_installation_upsert(pool, monkeypatch):
+    # Closing the OAuth login CSRF gap means installation_id can no longer
+    # be trusted on a stateless request either - this scenario used to
+    # synchronously upsert the installations row so /subscribe never saw a
+    # gap before the async `installation` webhook landed. That gap is now
+    # an accepted tradeoff: the webhook alone is the source of truth here.
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     monkeypatch.setattr("app_server.auth.generate_app_jwt", lambda app_id, key: "fake-app-jwt")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/login/oauth/access_token":
-            return httpx.Response(200, json={"access_token": "gho_faketoken"})
-        if request.url.path == "/user":
-            return httpx.Response(200, json={"id": 42, "login": "octocat"})
-        if request.url.path == "/app/installations/999":
-            return httpx.Response(200, json={"id": 999, "account": {"login": "acme-corp"}})
-        return httpx.Response(404)
-
-    monkeypatch.setattr(
-        "app_server.auth._github_http_client",
-        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
-    )
-    monkeypatch.setattr(
-        "app_server.auth._github_oauth_http_client",
-        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
-    )
 
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
@@ -370,45 +346,8 @@ async def test_callback_with_installation_id_upserts_installation_synchronously(
         )
 
     assert response.status_code == 307
-    installation = await get_installation(pool, 999)
-    assert installation is not None
-    assert installation["account_login"] == "acme-corp"
-
-
-@pytest.mark.asyncio
-async def test_callback_installation_upsert_failure_does_not_break_signin(pool, monkeypatch):
-    # The synchronous upsert is best-effort - the webhook is still the
-    # source of truth. If GitHub's /app/installations/{id} call fails (or
-    # the JWT can't be generated), sign-in must still succeed.
-    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/login/oauth/access_token":
-            return httpx.Response(200, json={"access_token": "gho_faketoken"})
-        if request.url.path == "/user":
-            return httpx.Response(200, json={"id": 42, "login": "octocat"})
-        return httpx.Response(404)
-
-    monkeypatch.setattr(
-        "app_server.auth._github_http_client",
-        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
-    )
-    monkeypatch.setattr(
-        "app_server.auth._github_oauth_http_client",
-        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://github.com"),
-    )
-
-    app.state.db_pool = pool
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="https://test") as client:
-        response = await client.get(
-            "/auth/callback?code=fake-code&installation_id=998&setup_action=install",
-            follow_redirects=False,
-        )
-
-    assert response.status_code == 307
-    assert "session" in response.cookies
-    assert await get_installation(pool, 998) is None
+    assert response.headers["location"] == "/auth/login"
+    assert await get_installation(pool, 999) is None
 
 
 @pytest.mark.asyncio
@@ -444,6 +383,33 @@ async def test_get_current_session_decrypts_refresh_token_when_present(pool, mon
 
     session = await get_current_session(FakeRequest())
     assert session["github_refresh_token"] == "ghr_realrefresh"
+
+
+@pytest.mark.asyncio
+async def test_get_current_session_logs_out_gracefully_on_undecryptable_token(pool, monkeypatch):
+    # A cookie with a valid signature but a stored access token that can't
+    # be Fernet-decrypted (corruption, a partial write - see get_current_session's
+    # comment for why this is NOT the same case as a SESSION_SECRET
+    # rotation) must not 500 - it should behave like "not logged in" and
+    # clean up the now-unusable row.
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    await create_session(
+        pool,
+        "sess-corrupted",
+        42,
+        "octocat",
+        "not-a-valid-fernet-token",
+        datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    signed = sign_session_id("sess-corrupted", "test-session-secret")
+
+    class FakeRequest:
+        cookies = {"session": signed}
+        app = type("App", (), {"state": type("State", (), {"db_pool": pool})()})()
+
+    session = await get_current_session(FakeRequest())
+    assert session is None
+    assert await get_session(pool, "sess-corrupted") is None
 
 
 @pytest.mark.asyncio

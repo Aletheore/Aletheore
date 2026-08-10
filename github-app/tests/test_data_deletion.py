@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -39,6 +40,10 @@ async def _get_otp_code(client, delete_path, monkeypatch):
     """
     monkeypatch.setattr("app_server.admin.secrets.randbelow", lambda _n: 424242)
     monkeypatch.setattr("app_server.admin.is_rate_limited", lambda *a, **k: False)
+    # delete-all-data itself (called after this helper returns) enqueues a
+    # persistent-checkout purge job - same unreachable-Redis-in-tests
+    # reasoning as is_rate_limited above.
+    monkeypatch.setattr("rq.Queue.enqueue", MagicMock())
     response = await client.post(f"{delete_path}/request-otp")
     assert response.status_code == 200, response.text
     return "424242"
@@ -195,7 +200,12 @@ async def test_uninstall_webhook_purges_user_rows_too(pool):
         "installation": {"id": 905, "account": {"login": "acme"}},
         "sender": {"login": "solo-dev"},
     }
-    await handle_installation_event("installation", payload, pool, "redis://unused")
+    fake_queue = MagicMock()
+    await handle_installation_event("installation", payload, pool, "redis://unused", queue=fake_queue)
+
+    fake_queue.enqueue.assert_called_once_with(
+        "scan_worker.jobs.purge_persistent_checkouts_job", job_timeout=120, installation_id=905
+    )
 
     assert await get_installation(pool, 905) is None
     assert await get_session(pool, "sess-uninstall") is None

@@ -1,20 +1,58 @@
-from app_server.db import add_installation_member, get_installation, set_installation_plan, upsert_installation
+import logging
+
+from app_server.db import add_installation_member, get_installation_by_account_login, set_installation_plan
+
+logger = logging.getLogger(__name__)
+
+
+def _normalize_marketplace_plan_name(raw_name: str) -> str:
+    """Marketplace plan display names are configured on GitHub's own
+    listing page, not by our code - `purchase["plan"]["name"]` could be
+    anything an admin typed there, and the only two slugs the rest of the
+    codebase understands are "free" and "air" (see paddle_pricing.py).
+    Writing the raw name straight into installations.plan meant any name
+    that wasn't exactly the lowercase string "free" granted full paid
+    access, including a plan literally named "Free" with a capital F.
+
+    Recognizes anything naming the paid tier ("air", case-insensitive,
+    matching the product's own AIR branding) and defaults everything
+    else to "free" - fail-closed, not fail-open, for a name this doesn't
+    recognize. Whatever the listing's plans are actually named should be
+    confirmed against this function before the Marketplace listing goes
+    live (website copy still says it's pending GitHub's review as of this
+    writing).
+    """
+    if "air" in raw_name.strip().lower():
+        return "air"
+    return "free"
 
 
 async def handle_marketplace_event(payload: dict, pool, redis_url: str, queue=None) -> None:
     action = payload.get("action")
     purchase = payload["marketplace_purchase"]
     account = purchase["account"]
-    installation_id = account["id"]
     account_login = account["login"]
 
-    previous = await get_installation(pool, installation_id)
-    previous_plan = previous["plan"] if previous is not None else "free"
-
-    await upsert_installation(pool, installation_id, account_login)
+    # purchase["account"]["id"] is a GitHub user/org account ID, a
+    # different ID space from the GitHub App installation ID everywhere
+    # else in this codebase uses - the Marketplace webhook carries no
+    # installation ID at all. The only reliable correlation is by
+    # account_login against a row the `installation` webhook already
+    # created (relies on installations_account_login_unique, migration
+    # 042, for a well-defined lookup).
+    installation = await get_installation_by_account_login(pool, account_login)
+    if installation is None:
+        logger.warning(
+            "marketplace_purchase for %s (action=%s) has no matching installation yet - skipping",
+            account_login,
+            action,
+        )
+        return
+    installation_id = installation["installation_id"]
+    previous_plan = installation["plan"]
 
     if action in ("purchased", "changed"):
-        new_plan = purchase["plan"]["name"]
+        new_plan = _normalize_marketplace_plan_name(purchase["plan"]["name"])
         await set_installation_plan(pool, installation_id, new_plan)
 
         # Whoever completed the purchase becomes seat one, so they're never

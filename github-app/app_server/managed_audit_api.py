@@ -124,7 +124,14 @@ async def verify_audit_report(verification_token: str, request: Request):
         raise HTTPException(status_code=404, detail="report not found")
 
     settings = get_settings()
-    public_key_hex = public_key_hex_from_private(settings.audit_signing_private_key)
+    # The key recorded on the report itself, not whichever key is current.
+    # Deriving it from AUDIT_SIGNING_PRIVATE_KEY at request time meant a
+    # rotation would report verified=false for every certificate ever issued -
+    # so the only safe operation on the signing key was never to rotate it.
+    # Rows written before migration 044 carry no key and were signed by the
+    # current one; that fallback applies to them alone.
+    current_public_key_hex = public_key_hex_from_private(settings.audit_signing_private_key)
+    public_key_hex = report["signing_public_key"] or current_public_key_hex
     verified = verify_report(report["report_text"], report["signature"], public_key_hex)
 
     # A signature attests "Aletheore produced this exact text" - not "every
@@ -145,12 +152,36 @@ async def verify_audit_report(verification_token: str, request: Request):
         if has_opinion_section
         else [],
         # Included so this is an actual verifiable certificate, not just an
-        # "our database says so" boolean - anyone can independently confirm
-        # signature over content_hash using this public key, without
-        # trusting this endpoint's own "verified" field.
+        # "our database says so" boolean - anyone can confirm signature over
+        # content_hash using this public key, without trusting this endpoint's
+        # own "verified" field.
+        #
+        # That independence is only real if the verifier obtained the key from
+        # somewhere other than this response, so /v1/audit/signing-key serves
+        # the current one at a stable URL to pin out-of-band, and is_current_key
+        # says whether this report was signed by it. A false here is not a
+        # problem - it means the report predates a rotation and was checked
+        # against its own recorded key, exactly as intended.
         "algorithm": "Ed25519",
         "signature": report["signature"],
         "public_key": public_key_hex,
+        "is_current_key": public_key_hex == current_public_key_hex,
+    }
+
+
+@managed_audit_router.get("/v1/audit/signing-key")
+async def audit_signing_key():
+    """The public half of the key currently signing audit reports.
+
+    Exists so a consumer can pin the key out-of-band and verify a certificate
+    without taking the verifying endpoint's word for either the key or the
+    result. Public and unauthenticated by design: a public key is not a secret,
+    and a verifier who has to authenticate to fetch it is back to trusting us.
+    """
+    settings = get_settings()
+    return {
+        "algorithm": "Ed25519",
+        "public_key": public_key_hex_from_private(settings.audit_signing_private_key),
     }
 
 

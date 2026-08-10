@@ -43,6 +43,39 @@ def insert_repo_history(
         conn.commit()
 
 
+def managed_audit_definitely_still_cooling_down(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    min_cooldown_seconds: int,
+) -> bool:
+    """Cheap, read-only, conservative pre-check for run_managed_audit_pr_job
+    to run before cloning/scanning - the real cooldown is only known after
+    a scan (it's derived from the evidence that scan produces, see
+    app_server.rate_limit.cooldown_seconds_for_loc), so it can't be
+    checked before doing that work. But every tier is at least
+    min_cooldown_seconds, so a last run more recent than that is
+    guaranteed to still be cooling down regardless of what the real
+    duration turns out to be. False means "maybe allowed" (the real,
+    authoritative check is check_and_reserve_managed_audit, after the
+    scan) - this only ever turns away requests that would certainly have
+    been rejected anyway, so it can't produce a false rejection.
+    """
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1 FROM managed_audit_rate_limits
+                WHERE installation_id = %s AND repo_full_name = %s
+                  AND last_run_at > now() - %s * interval '1 second'
+                """,
+                (installation_id, repo_full_name, min_cooldown_seconds),
+            )
+            return cur.fetchone() is not None
+
+
 def check_and_reserve_managed_audit(
     dsn: str,
     installation_id: int,
@@ -206,6 +239,7 @@ def insert_audit_report(
     report_text: str,
     content_hash: str,
     signature: str,
+    signing_public_key: str,
 ) -> None:
     import psycopg
 
@@ -214,8 +248,9 @@ def insert_audit_report(
             cur.execute(
                 """
                 INSERT INTO audit_reports
-                    (installation_id, repo_full_name, verification_token, report_text, content_hash, signature)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                    (installation_id, repo_full_name, verification_token, report_text,
+                     content_hash, signature, signing_public_key)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     installation_id,
@@ -224,6 +259,7 @@ def insert_audit_report(
                     report_text,
                     content_hash,
                     signature,
+                    signing_public_key,
                 ),
             )
         conn.commit()

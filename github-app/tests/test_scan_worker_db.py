@@ -9,6 +9,7 @@ from app_server.evidence_limits import EvidenceTooLargeError, MAX_EVIDENCE_BYTES
 from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
+    managed_audit_definitely_still_cooling_down,
     check_and_reserve_monthly_repo_scan_slot,
     count_repo_scans_since,
     delete_docs_symbols_not_in,
@@ -342,6 +343,7 @@ async def test_insert_audit_report(pool):
         "the report text",
         "hash-1",
         "sig-1",
+        "pubkey-1",
     )
 
     row = await pool.fetchrow(
@@ -352,6 +354,8 @@ async def test_insert_audit_report(pool):
     assert row["report_text"] == "the report text"
     assert row["content_hash"] == "hash-1"
     assert row["signature"] == "sig-1"
+    # Recorded per report so a later key rotation can't invalidate it.
+    assert row["signing_public_key"] == "pubkey-1"
 
 
 @pytest.mark.asyncio
@@ -512,6 +516,61 @@ async def test_check_and_reserve_managed_audit_allows_after_cooldown_elapses(poo
             old_run,
         )
     allowed = check_and_reserve_managed_audit(TEST_DATABASE_URL, 301, "a/repo1", cooldown_seconds=3600)
+    assert allowed is True
+
+
+@pytest.mark.asyncio
+async def test_managed_audit_definitely_still_cooling_down_true_for_a_recent_run(pool):
+    await _insert_installation(pool, 303, "a")
+    check_and_reserve_managed_audit(TEST_DATABASE_URL, 303, "a/repo1", cooldown_seconds=3600)
+    assert (
+        managed_audit_definitely_still_cooling_down(
+            TEST_DATABASE_URL, 303, "a/repo1", min_cooldown_seconds=3600
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_managed_audit_definitely_still_cooling_down_false_for_an_old_run(pool):
+    await _insert_installation(pool, 304, "a")
+    old_run = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO managed_audit_rate_limits (installation_id, repo_full_name, last_run_at)
+            VALUES ($1, $2, $3)
+            """,
+            304,
+            "a/repo1",
+            old_run,
+        )
+    assert (
+        managed_audit_definitely_still_cooling_down(
+            TEST_DATABASE_URL, 304, "a/repo1", min_cooldown_seconds=3600
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_managed_audit_definitely_still_cooling_down_false_when_never_run(pool):
+    await _insert_installation(pool, 305, "a")
+    assert (
+        managed_audit_definitely_still_cooling_down(
+            TEST_DATABASE_URL, 305, "a/repo1", min_cooldown_seconds=3600
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_managed_audit_definitely_still_cooling_down_does_not_reserve_a_slot(pool):
+    # Read-only pre-check - unlike check_and_reserve_managed_audit, calling
+    # this must not itself count as a run or block a later real check.
+    await _insert_installation(pool, 306, "a")
+    managed_audit_definitely_still_cooling_down(TEST_DATABASE_URL, 306, "a/repo1", min_cooldown_seconds=3600)
+    allowed = check_and_reserve_managed_audit(TEST_DATABASE_URL, 306, "a/repo1", cooldown_seconds=3600)
     assert allowed is True
 
 

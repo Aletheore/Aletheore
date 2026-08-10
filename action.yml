@@ -76,18 +76,29 @@ runs:
     - name: Diff
       id: diff
       shell: bash
+      env:
+        # Passed via env: and read as shell variables below rather than
+        # interpolated directly into the script (${{ inputs.full }} etc.
+        # inline in `run:`) - a workflow that sets these from something
+        # other than a literal "true"/"false" (a repo variable, an output
+        # of an earlier step) would otherwise have that value spliced
+        # verbatim into the script text before bash ever runs it.
+        ALETHEORE_FULL: ${{ inputs.full }}
+        ALETHEORE_FAIL_ON_NEW_SECRETS: ${{ inputs.fail-on-new-secrets }}
+        ALETHEORE_FAIL_ON_NEW_VULNERABILITIES: ${{ inputs.fail-on-new-vulnerabilities }}
+        ALETHEORE_FAIL_ON_NEW_LAYER_VIOLATIONS: ${{ inputs.fail-on-new-layer-violations }}
       run: |
         ARGS=""
-        if [ "${{ inputs.full }}" = "true" ]; then
+        if [ "$ALETHEORE_FULL" = "true" ]; then
           ARGS="$ARGS --full"
         fi
-        if [ "${{ inputs.fail-on-new-secrets }}" = "true" ]; then
+        if [ "$ALETHEORE_FAIL_ON_NEW_SECRETS" = "true" ]; then
           ARGS="$ARGS --fail-on-new-secrets"
         fi
-        if [ "${{ inputs.fail-on-new-vulnerabilities }}" = "true" ]; then
+        if [ "$ALETHEORE_FAIL_ON_NEW_VULNERABILITIES" = "true" ]; then
           ARGS="$ARGS --fail-on-new-vulnerabilities"
         fi
-        if [ "${{ inputs.fail-on-new-layer-violations }}" = "true" ]; then
+        if [ "$ALETHEORE_FAIL_ON_NEW_LAYER_VIOLATIONS" = "true" ]; then
           ARGS="$ARGS --fail-on-new-layer-violations"
         fi
 

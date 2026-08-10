@@ -813,11 +813,12 @@ def test_managed_audit_api_job_signs_and_persists_the_report(monkeypatch):
     stored = {}
     monkeypatch.setattr(
         "scan_worker.jobs.insert_audit_report",
-        lambda dsn, iid, repo, token, text, chash, sig: stored.update(
+        lambda dsn, iid, repo, token, text, chash, sig, pubkey: stored.update(
             installation_id=iid,
             repo_full_name=repo,
             token=token,
             text=text,
+            signing_public_key=pubkey,
         ),
     )
 
@@ -919,6 +920,7 @@ def test_managed_audit_pr_job_clones_pr_head_runs_audit_and_replies(monkeypatch,
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda *a, **k: "# Managed Audit")
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_managed_audit", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.managed_audit_definitely_still_cooling_down", lambda *a, **k: False)
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
@@ -976,6 +978,7 @@ def test_managed_audit_pr_job_persists_and_signs_the_report(monkeypatch, tmp_pat
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda *a, **k: "the audit findings")
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_managed_audit", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.managed_audit_definitely_still_cooling_down", lambda *a, **k: False)
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
@@ -988,13 +991,14 @@ def test_managed_audit_pr_job_persists_and_signs_the_report(monkeypatch, tmp_pat
     stored = {}
     monkeypatch.setattr(
         "scan_worker.jobs.insert_audit_report",
-        lambda dsn, iid, repo, token, text, chash, sig: stored.update(
+        lambda dsn, iid, repo, token, text, chash, sig, pubkey: stored.update(
             installation_id=iid,
             repo_full_name=repo,
             token=token,
             text=text,
             hash=chash,
             sig=sig,
+            signing_public_key=pubkey,
         ),
     )
     check_runs = []
@@ -1054,6 +1058,7 @@ def test_managed_audit_pr_job_skips_check_run_when_signing_fails(monkeypatch, tm
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda *a, **k: "the audit findings")
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_managed_audit", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.managed_audit_definitely_still_cooling_down", lambda *a, **k: False)
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
@@ -1108,6 +1113,7 @@ def test_managed_audit_pr_job_still_posts_report_when_signing_fails(monkeypatch,
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda *a, **k: "the audit findings")
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_managed_audit", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.managed_audit_definitely_still_cooling_down", lambda *a, **k: False)
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
@@ -1167,6 +1173,7 @@ def test_managed_audit_pr_job_skips_llm_call_when_spend_cap_reached(monkeypatch,
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_managed_audit", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.managed_audit_definitely_still_cooling_down", lambda *a, **k: False)
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
@@ -1223,6 +1230,7 @@ def test_managed_audit_pr_job_skips_llm_call_when_rate_limited(monkeypatch, tmp_
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_managed_audit", lambda *a, **k: False)
+    monkeypatch.setattr("scan_worker.jobs.managed_audit_definitely_still_cooling_down", lambda *a, **k: False)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
 
@@ -3670,7 +3678,8 @@ def test_maybe_sync_docs_to_repo_pushes_and_records_when_enabled(monkeypatch):
     sync_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs.sync_docs_to_repo",
-        lambda client, token, repo, modules, s: sync_calls.append((repo, modules, s)) or ("hash123", 7),
+        lambda client, token, repo, modules, s, bot_login: sync_calls.append((repo, modules, s, bot_login))
+        or ("hash123", 7),
     )
     record_calls = []
     monkeypatch.setattr(
@@ -3681,10 +3690,13 @@ def test_maybe_sync_docs_to_repo_pushes_and_records_when_enabled(monkeypatch):
     _maybe_sync_docs_to_repo("dsn", 1, "octocat/hello-world")
 
     assert len(sync_calls) == 1
-    repo, modules, s = sync_calls[0]
+    repo, modules, s, bot_login = sync_calls[0]
     assert repo == "octocat/hello-world"
     assert "a.py" in modules
     assert s is settings
+    # bot_login gates the force-push ownership check in ensure_branch_at -
+    # must be derived from our own app slug, not left for the caller to guess.
+    assert bot_login == "aletheore[bot]"
     assert record_calls == [(1, "octocat/hello-world", "hash123", 7)]
 
 
@@ -3824,3 +3836,14 @@ def test_run_health_sweep_staleness_check_job_does_not_alert_when_no_data_yet(mo
     run_health_sweep_staleness_check_job()
 
     assert alerts == []
+
+
+def test_run_git_scrubs_credentialed_url_from_a_failed_clone_error(tmp_path):
+    from scan_worker.jobs import _run_git
+
+    credentialed_url = "https://x-access-token:supersecrettoken@github.com/acme/does-not-exist.git"
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        _run_git(["git", "clone", "-q", credentialed_url, str(tmp_path / "dest")])
+
+    assert "supersecrettoken" not in str(exc_info.value)
+    assert "https://github.com/acme/does-not-exist.git" in exc_info.value.cmd

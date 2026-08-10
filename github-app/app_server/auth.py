@@ -4,9 +4,10 @@ import hmac
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import httpx
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import APIRouter, HTTPException, Request
@@ -242,18 +243,40 @@ async def get_current_session(request: Request) -> dict | None:
     row = await get_session(request.app.state.db_pool, session_id)
     if row is None:
         return None
-    row["github_access_token"] = decrypt_access_token(
-        row["github_access_token"], settings.session_secret
-    )
-    if row["github_refresh_token"] is not None:
-        row["github_refresh_token"] = decrypt_access_token(
-            row["github_refresh_token"], settings.session_secret
+    try:
+        row["github_access_token"] = decrypt_access_token(
+            row["github_access_token"], settings.session_secret
         )
+        if row["github_refresh_token"] is not None:
+            row["github_refresh_token"] = decrypt_access_token(
+                row["github_refresh_token"], settings.session_secret
+            )
+    except InvalidToken:
+        # NOT the SESSION_SECRET-rotation case it might look like - the
+        # cookie's own HMAC signature (_signing_secret) and this token's
+        # Fernet key (_fernet_key) are both HKDF-derived from that same
+        # root secret, so a straightforward rotation already fails at
+        # unsign_session_id above and returns None before ever reaching
+        # here. What this guards is a stored token that's undecryptable
+        # for any other reason - corruption, a partial write, a future
+        # encryption-scheme change - which previously reached the global
+        # exception handler (main.py's handle_unexpected_exception) as an
+        # uncaught error: a 500 on every request from that one user,
+        # firing an error alert email each time. Delete the now-unusable
+        # session and let the normal not-logged-in path (a fresh
+        # /auth/login) take over instead.
+        await delete_session(request.app.state.db_pool, session_id)
+        return None
     return row
 
 
 def _is_safe_next_path(next_path: str | None) -> str:
-    if not next_path or not next_path.startswith("/") or next_path.startswith("//"):
+    # Browsers normalize a leading backslash to a forward slash before
+    # resolving a URL, so "/\evil.com" becomes the protocol-relative
+    # "//evil.com" by the time it's followed - "//" alone isn't enough to
+    # block, the character right after the first "/" has to be checked for
+    # either variant.
+    if not next_path or not next_path.startswith("/") or next_path[1:2] in ("/", "\\"):
         return "/dashboard"
     return next_path
 
@@ -298,13 +321,39 @@ async def callback(code: str, request: Request, state: str | None = None, instal
     # GitHub redirects here from two different entry points: our own
     # /auth/login (which always sets this cookie and a matching state) and a
     # direct "Install" click on GitHub's own App page, which never goes
-    # through /auth/login and so has no state to echo back at all. Only
-    # enforce state when we actually set the cookie ourselves.
+    # through /auth/login and so has no state cookie to check against.
+    #
+    # A missing cookie can't be told apart from an OAuth login CSRF attempt:
+    # an attacker who separately authorizes their own GitHub account can
+    # read the resulting `code` out of their own browser's address bar and
+    # send a victim a bare /auth/callback?code=<that code> link. Nothing
+    # about the request looks different from a real direct-install
+    # redirect - GitHub's OAuth `code` isn't bound to the browser that
+    # requested it - so silently trusting it here binds the victim's
+    # browser to a session for the attacker's identity.
+    #
+    # Since this `code` is single-use and about to be discarded either way,
+    # there's nothing to lose by not exchanging it: redirect through
+    # /auth/login instead, which always sets state. A real installer's
+    # browser already has GitHub App authorization, so this round-trip
+    # completes instantly and invisibly; a forged link's code just goes
+    # unused. installation_id isn't threaded through this second hop - the
+    # async `installation` webhook upserts that row independently and
+    # reliably regardless, same as it does for every other install event.
+    # `state` was repurposed as a next-path hint for this stateless entry
+    # point (see github_app_install_url) rather than a CSRF nonce, since
+    # there was never a cookie to verify it against - forward it as
+    # /auth/login's own `next` so that UX survives the extra hop.
     signed_state = request.cookies.get(OAUTH_STATE_COOKIE_NAME)
-    if signed_state is not None:
-        expected_state = unsign_oauth_state(signed_state, settings.session_secret)
-        if not expected_state or not state or not hmac.compare_digest(expected_state, state):
-            raise HTTPException(status_code=400, detail="invalid oauth state")
+    if signed_state is None:
+        login_url = "/auth/login"
+        if state:
+            login_url += f"?next={quote(state, safe='')}"
+        return RedirectResponse(url=login_url, status_code=307)
+
+    expected_state = unsign_oauth_state(signed_state, settings.session_secret)
+    if not expected_state or not state or not hmac.compare_digest(expected_state, state):
+        raise HTTPException(status_code=400, detail="invalid oauth state")
 
     access_token, refresh_token, user, email = await asyncio.to_thread(
         _exchange_code_and_fetch_user, code, settings.github_client_id, settings.github_client_secret

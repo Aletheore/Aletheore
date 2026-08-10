@@ -215,9 +215,23 @@ def _local_scan_cache_path(repo_path: Path) -> Path:
     return repo_path / ".aletheore" / _LOCAL_SCAN_CACHE_FILENAME
 
 
+_HASH_CHUNK_BYTES = 1024 * 1024
+
+
 def _hash_file(path: Path) -> str | None:
+    # Streamed rather than path.read_bytes() - this runs once per module on
+    # every scan (cache-hit check), on the shared scan-worker where an
+    # unusually large committed file (a data dump, a vendored bundle) read
+    # in full would risk OOMing the container for every installation's scan
+    # running alongside it. Chunked hashing keeps memory bounded regardless
+    # of file size instead of skipping large files outright, so caching
+    # still works for them.
     try:
-        return hashlib.blake2b(path.read_bytes(), digest_size=16).hexdigest()
+        hasher = hashlib.blake2b(digest_size=16)
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(_HASH_CHUNK_BYTES), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
     except OSError:
         return None
 
@@ -464,7 +478,46 @@ def scan_repository(
     }
 
 
+_GITIGNORE_ALETHEORE_ENTRIES = (".aletheore/", ".aletheore", "/.aletheore/", "/.aletheore")
+
+
+def _ensure_aletheore_dir_gitignored(repo_path: Path) -> None:
+    # Best-effort, and only inside an actual git checkout - a plain
+    # directory has no .gitignore worth creating. Without this, .aletheore/'s
+    # scan cache and evidence output (which can include secrets-scan match
+    # previews and the absolute repo path) is one `git add .` away from
+    # landing in a commit.
+    #
+    # Hosted and demo scans DO reach this - they run against real `git clone`
+    # output, so the .git check does not exclude them - but it is inert there:
+    # ephemeral clones are deleted with the job, persistent checkouts are
+    # reset by the `git checkout -f` + `git clean -fdx` that precedes every
+    # reuse, incremental scans diff commit-to-commit rather than against the
+    # working tree, and Docs repo commits are built through the GitHub API
+    # from explicit content rather than pushed from this tree. Anything that
+    # changes one of those - in particular, committing from the checkout -
+    # needs to gate this call rather than assume it never fires server-side.
+    if not (repo_path / ".git").exists():
+        return
+    gitignore_path = repo_path / ".gitignore"
+    existing = ""
+    if gitignore_path.exists():
+        try:
+            existing = gitignore_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return
+        if any(line.strip() in _GITIGNORE_ALETHEORE_ENTRIES for line in existing.splitlines()):
+            return
+    separator = "" if not existing or existing.endswith("\n") else "\n"
+    try:
+        with gitignore_path.open("a", encoding="utf-8") as f:
+            f.write(f"{separator}.aletheore/\n")
+    except OSError:
+        pass
+
+
 def write_evidence(evidence: dict, repo_path: Path) -> Path:
+    _ensure_aletheore_dir_gitignored(repo_path)
     aletheore_dir = repo_path / ".aletheore"
     aletheore_dir.mkdir(parents=True, exist_ok=True)
     output_path = aletheore_dir / "air.json"
