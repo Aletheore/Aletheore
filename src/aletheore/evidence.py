@@ -335,6 +335,19 @@ def scan_repository(
     repo_path = repo_path.resolve()
     ignored_paths = load_repo_config(repo_path)["ignored_paths"]
 
+    # Must run before any file-counting walk below (detect_languages is the
+    # first one), not after the scan in write_evidence as before - creating
+    # or appending to .gitignore here is itself a countable file-system
+    # change, and doing it post-scan meant THIS scan's counts (e.g.
+    # scanned_files) reflected the repo's pre-mutation state while the NEXT
+    # scan of the same, otherwise-untouched repo reflected the post-mutation
+    # state - a real repo scanned twice in a row, without a single file of
+    # its own changing, reported different numbers (22 -> 23 -> 23,
+    # confirmed empirically). Running it first makes every scan - including
+    # the very first one - already reflect whatever .gitignore state results,
+    # so counts are stable and reproducible from the first call onward.
+    _ensure_aletheore_dir_gitignored(repo_path)
+
     report("Detecting languages, frameworks, and build tools")
     languages = detect_languages(repo_path, ignored_paths)
     frameworks = detect_frameworks(repo_path)
@@ -517,6 +530,11 @@ def _ensure_aletheore_dir_gitignored(repo_path: Path) -> None:
 
 
 def write_evidence(evidence: dict, repo_path: Path) -> Path:
+    # Usually already a no-op by the time evidence written via
+    # scan_repository() gets here - see the call at the top of
+    # scan_repository for why it moved there. Kept here too as a safety net
+    # for any caller that writes evidence without going through
+    # scan_repository.
     _ensure_aletheore_dir_gitignored(repo_path)
     aletheore_dir = repo_path / ".aletheore"
     aletheore_dir.mkdir(parents=True, exist_ok=True)
