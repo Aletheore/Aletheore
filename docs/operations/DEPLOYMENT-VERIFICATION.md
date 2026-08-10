@@ -57,3 +57,12 @@ As of 2026-08-10, following a redeploy to `master` (`git reset --hard origin/mas
 
 If any deployed state differs from repository expectations, treat production as stale until the exact commit and Compose configuration are verified.
 
+## Deploy History
+
+This file is a snapshot of *current* production state — it gets overwritten on every redeploy, so
+it never shows what was live last week. For that, every production deploy is tagged
+`github-app-deploy-YYYY-MM-DD` (append `-N` for a second same-day deploy), and
+[`../../github-app/CHANGELOG.md`](../../github-app/CHANGELOG.md) has a dated, human-readable entry
+per deploy. `git tag -l 'github-app-deploy-*'` lists every tracked deploy point;
+`git log <prev-tag>..<tag>` gives the exact commit range for any one of them.
+
