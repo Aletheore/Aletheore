@@ -164,6 +164,30 @@ def payment_failed_email(account_login: str) -> dict:
     return {"subject": subject, "html": html, "text": text}
 
 
+def deletion_otp_email(account_login: str, code: str) -> dict:
+    subject = f"Your Aletheore deletion code: {code}"
+    preheader = f"Confirm you want to permanently delete all data for {account_login}."
+    text = (
+        f"Someone requested deletion of all Aletheore data for {account_login}.\n\n"
+        f"Confirmation code: {code}\n\n"
+        "This code expires in 10 minutes and can be used once. If you didn't "
+        "request this, ignore this email - nothing is deleted without it."
+        f"{_FOOTER_TEXT}"
+    )
+    body_html = (
+        f'<p style="margin:0 0 16px;">Someone requested deletion of all Aletheore '
+        f'data for <strong>{account_login}</strong>.</p>'
+        f'<p style="margin:0 0 8px;color:{_TEXT_MUTED};font-size:14px;">Confirmation code</p>'
+        f'<p style="margin:0 0 24px;font-size:32px;font-weight:700;letter-spacing:4px;'
+        f'font-family:{_FONT};">{code}</p>'
+        f'<p style="margin:0;color:{_TEXT_MUTED};font-size:14px;">This code expires in 10 '
+        'minutes and can be used once. If you didn\'t request this, ignore this email '
+        '&mdash; nothing is deleted without it.</p>'
+    )
+    html = _shell(preheader, body_html)
+    return {"subject": subject, "html": html, "text": text}
+
+
 def weekly_digest_email(
     account_login: str,
     scans_this_week: int,

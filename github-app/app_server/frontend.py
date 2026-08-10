@@ -1900,6 +1900,22 @@ async function openBillingPortal() {{
 // someone out of erasing their own data because their card failed is not
 // defensible. It hangs off its own endpoint for the same reason: the main
 // /admin GET is plan-gated, this one isn't.
+// Same reasoning as loadDangerZone: gated on session + admin rights only,
+// no plan or seat check - a payment-failed customer still owns their data
+// and needs to be able to leave with it, not just delete it.
+function loadExportZone() {{
+  const host = document.getElementById('export-zone');
+  if (!host) return;
+  host.innerHTML =
+    '<div class="settings-block">' +
+      '<div class="settings-block-label">Export your data</div>' +
+      '<div class="settings-block-hint">Download everything stored for this installation - ' +
+      'connected repos and their latest findings, team members, health check targets, and ' +
+      'usage - as one JSON file. Never includes API tokens themselves or your alert webhook URL.</div>' +
+      '<a class="btn" href="' + adminBase + '/export-data" download>Download my data</a>' +
+    '</div>';
+}}
+
 async function loadDangerZone() {{
   const host = document.getElementById('danger-zone');
   if (!host) return;
@@ -1926,6 +1942,14 @@ async function loadDangerZone() {{
         '<input class="field" id="delete-confirm-input" autocomplete="off" ' +
         'placeholder="Type ' + escapeHtml(data.account_login) + ' to confirm" ' +
         'oninput="syncDeleteButton()">' +
+        '<button class="btn" id="send-otp-btn" disabled onclick="requestDeletionOtp()">Send code</button>' +
+      '</div>' +
+      // Typing the org name only proves you can see this page - it says
+      // nothing about who's holding the session. The code, sent to the
+      // account's own verified email, is what actually gates the button.
+      '<div id="otp-row" class="form-row" style="margin-top:10px;display:none;">' +
+        '<input class="field" id="delete-otp-input" autocomplete="off" inputmode="numeric" ' +
+        'maxlength="6" placeholder="6-digit code from your email" oninput="syncDeleteButton()">' +
         '<button class="btn btn-danger" id="delete-all-btn" disabled onclick="deleteAllData()">Delete</button>' +
       '</div>' +
       '<div id="delete-status" class="settings-block-hint"></div>' +
@@ -1933,14 +1957,41 @@ async function loadDangerZone() {{
 }}
 
 function syncDeleteButton() {{
-  const input = document.getElementById('delete-confirm-input');
-  const btn = document.getElementById('delete-all-btn');
-  if (!input || !btn) return;
-  btn.disabled = input.value.trim() !== window._deleteConfirmPhrase;
+  const confirmInput = document.getElementById('delete-confirm-input');
+  const otpInput = document.getElementById('delete-otp-input');
+  const sendBtn = document.getElementById('send-otp-btn');
+  const deleteBtn = document.getElementById('delete-all-btn');
+  if (!confirmInput || !sendBtn) return;
+  const confirmed = confirmInput.value.trim() === window._deleteConfirmPhrase;
+  sendBtn.disabled = !confirmed;
+  if (deleteBtn) {{
+    deleteBtn.disabled = !confirmed || !otpInput || otpInput.value.trim().length !== 6;
+  }}
+}}
+
+async function requestDeletionOtp() {{
+  const btn = document.getElementById('send-otp-btn');
+  const status = document.getElementById('delete-status');
+  btn.disabled = true;
+  status.textContent = 'Sending code...';
+  status.style.color = 'var(--slate-600)';
+  const res = await fetch(adminBase + '/delete-all-data/request-otp', {{ method: 'POST' }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  if (!res.ok) {{
+    status.textContent = data.detail || 'Could not send a code.';
+    status.style.color = 'var(--critical)';
+    syncDeleteButton();
+    return;
+  }}
+  status.textContent = 'Code sent to ' + (data.sent_to || 'your email') + ' - expires in 10 minutes.';
+  status.style.color = 'var(--slate-600)';
+  document.getElementById('otp-row').style.display = '';
+  document.getElementById('delete-otp-input').focus();
 }}
 
 async function deleteAllData() {{
-  const input = document.getElementById('delete-confirm-input');
+  const confirmInput = document.getElementById('delete-confirm-input');
+  const otpInput = document.getElementById('delete-otp-input');
   const btn = document.getElementById('delete-all-btn');
   const status = document.getElementById('delete-status');
   btn.disabled = true;
@@ -1949,7 +2000,10 @@ async function deleteAllData() {{
   const res = await fetch(adminBase + '/delete-all-data', {{
     method: 'POST',
     headers: {{ 'Content-Type': 'application/json' }},
-    body: JSON.stringify({{ confirm: input.value.trim() }}),
+    body: JSON.stringify({{
+      confirm: confirmInput.value.trim(),
+      otp_code: otpInput.value.trim(),
+    }}),
   }});
   const data = await res.json().catch(function () {{ return {{}}; }});
   if (!res.ok) {{
@@ -1982,7 +2036,9 @@ async function loadSettings() {{
       '<div class="settings-block-hint" style="text-align:center;margin-top:12px;">' +
       'Already subscribed? <a href="#" onclick="openBillingPortal(); return false;">Manage billing</a>' +
       '</div>' +
+      '<div id="export-zone"></div>' +
       '<div id="danger-zone"></div>';
+    loadExportZone();
     loadDangerZone();
     return;
   }}
@@ -2067,7 +2123,9 @@ async function loadSettings() {{
         '</div>' +
       '</div>' +
     '</div>' +
+    '<div id="export-zone"></div>' +
     '<div id="danger-zone"></div>';
+  loadExportZone();
   loadDangerZone();
   document.querySelectorAll('[data-href]').forEach(function (el) {{ el.href = pageBase + el.dataset.href; }});
 }}

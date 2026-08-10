@@ -29,6 +29,21 @@ async def _seed_installation(pool, installation_id, account_login, repo_full_nam
     )
 
 
+async def _get_otp_code(client, delete_path, monkeypatch):
+    """Drives the real request-otp endpoint and returns the real code it
+    generated. The code is deliberately never returned by the API (it only
+    goes out by email) - randbelow is pinned so the test can know it
+    without needing to intercept an actual email send. is_rate_limited is
+    mocked to skip a real (unreachable in this test env) Redis round-trip -
+    rate limiting itself has its own dedicated test.
+    """
+    monkeypatch.setattr("app_server.admin.secrets.randbelow", lambda _n: 424242)
+    monkeypatch.setattr("app_server.admin.is_rate_limited", lambda *a, **k: False)
+    response = await client.post(f"{delete_path}/request-otp")
+    assert response.status_code == 200, response.text
+    return "424242"
+
+
 async def _seed_user(pool, session_id, login, email, user_id=1):
     await create_session(
         pool,
@@ -193,10 +208,15 @@ async def test_uninstall_webhook_purges_user_rows_too(pool):
 @pytest.mark.asyncio
 async def test_delete_all_data_route_purges_on_correct_confirmation(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch)
+    await pool.execute(
+        "INSERT INTO github_user_emails (github_login, email) VALUES ('octocat', 'octocat@example.com') "
+        "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
+    )
     async with client:
+        otp_code = await _get_otp_code(client, "/admin/octocat/hello-world/delete-all-data", monkeypatch)
         response = await client.post(
             "/admin/octocat/hello-world/delete-all-data",
-            json={"confirm": "octocat"},
+            json={"confirm": "octocat", "otp_code": otp_code},
         )
 
     assert response.status_code == 200, response.text
@@ -206,15 +226,61 @@ async def test_delete_all_data_route_purges_on_correct_confirmation(pool, monkey
 
 @pytest.mark.asyncio
 async def test_delete_all_data_route_rejects_wrong_confirmation(pool, monkeypatch):
+    # A wrong confirm phrase is rejected before the OTP is ever checked -
+    # any syntactically valid code works here, since it's never consumed.
     client = await _logged_in_client(pool, monkeypatch)
     async with client:
         response = await client.post(
             "/admin/octocat/hello-world/delete-all-data",
-            json={"confirm": "hello-world"},
+            json={"confirm": "hello-world", "otp_code": "000000"},
         )
 
     assert response.status_code == 400
     assert await get_installation(pool, 100) is not None, "deleted without confirmation"
+
+
+@pytest.mark.asyncio
+async def test_delete_all_data_route_rejects_missing_otp(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    await pool.execute(
+        "INSERT INTO github_user_emails (github_login, email) VALUES ('octocat', 'octocat@example.com') "
+        "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
+    )
+    async with client:
+        # Confirm phrase is correct, but no code was ever requested - the
+        # typed name alone must never be enough to delete.
+        response = await client.post(
+            "/admin/octocat/hello-world/delete-all-data",
+            json={"confirm": "octocat", "otp_code": "000000"},
+        )
+
+    assert response.status_code == 400
+    assert "code" in response.json()["detail"]
+    assert await get_installation(pool, 100) is not None, "deleted without a valid code"
+
+
+@pytest.mark.asyncio
+async def test_consume_deletion_otp_code_is_single_use(pool):
+    from app_server.db import consume_deletion_otp_code, create_deletion_otp_code
+
+    await _seed_installation(pool, 955, "acme-otp", "acme-otp/api")
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    await create_deletion_otp_code(pool, 955, "octocat", "hash-of-424242", expires_at)
+
+    assert await consume_deletion_otp_code(pool, 955, "hash-of-424242") is True
+    assert await consume_deletion_otp_code(pool, 955, "hash-of-424242") is False, \
+        "the same code was accepted twice"
+
+
+@pytest.mark.asyncio
+async def test_consume_deletion_otp_code_rejects_an_expired_code(pool):
+    from app_server.db import consume_deletion_otp_code, create_deletion_otp_code
+
+    await _seed_installation(pool, 956, "acme-expired", "acme-expired/api")
+    expired_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    await create_deletion_otp_code(pool, 956, "octocat", "hash-of-424242", expired_at)
+
+    assert await consume_deletion_otp_code(pool, 956, "hash-of-424242") is False
 
 
 @pytest.mark.asyncio
@@ -232,9 +298,10 @@ async def test_delete_all_data_route_works_on_the_free_plan(pool, monkeypatch):
         "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
     )
     async with client:
+        otp_code = await _get_otp_code(client, "/admin/octocat/hello-world/delete-all-data", monkeypatch)
         response = await client.post(
             "/admin/octocat/hello-world/delete-all-data",
-            json={"confirm": "octocat"},
+            json={"confirm": "octocat", "otp_code": otp_code},
         )
 
     assert response.status_code == 200, response.text
@@ -248,6 +315,9 @@ async def test_delete_all_data_route_works_on_the_free_plan(pool, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_delete_all_data_route_rejects_non_administrator(pool, monkeypatch):
+    # 403 fires inside _require_authorized_installation, before the OTP is
+    # ever looked at - "000000" just needs to be syntactically valid so
+    # Pydantic doesn't 422 the request before that check even runs.
     client = await _logged_in_client(pool, monkeypatch, installation_id=100)
     # A second installation this session does not administer - the mocked
     # GitHub /user/installations response only ever returns id 100.
@@ -255,7 +325,7 @@ async def test_delete_all_data_route_rejects_non_administrator(pool, monkeypatch
     async with client:
         response = await client.post(
             "/admin/globex/web/delete-all-data",
-            json={"confirm": "globex"},
+            json={"confirm": "globex", "otp_code": "000000"},
         )
 
     assert response.status_code == 403
@@ -269,7 +339,7 @@ async def test_delete_all_data_route_requires_login(pool, monkeypatch):
         client.cookies.clear()
         response = await client.post(
             "/admin/octocat/hello-world/delete-all-data",
-            json={"confirm": "octocat"},
+            json={"confirm": "octocat", "otp_code": "000000"},
         )
 
     assert response.status_code == 401
@@ -278,18 +348,24 @@ async def test_delete_all_data_route_requires_login(pool, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_delete_all_data_route_404s_if_installation_vanishes_mid_request(pool, monkeypatch):
-    # Concurrent uninstall: authorization passed, but the row is gone by the
-    # time the purge runs. Must not report success for a delete that no-oped.
+    # Concurrent uninstall: authorization and the OTP both passed, but the
+    # row is gone by the time the purge runs. Must not report success for
+    # a delete that no-oped.
     client = await _logged_in_client(pool, monkeypatch)
+    await pool.execute(
+        "INSERT INTO github_user_emails (github_login, email) VALUES ('octocat', 'octocat@example.com') "
+        "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
+    )
 
     async def _already_gone(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr("app_server.admin.purge_installation_data", _already_gone)
     async with client:
+        otp_code = await _get_otp_code(client, "/admin/octocat/hello-world/delete-all-data", monkeypatch)
+        monkeypatch.setattr("app_server.admin.purge_installation_data", _already_gone)
         response = await client.post(
             "/admin/octocat/hello-world/delete-all-data",
-            json={"confirm": "octocat"},
+            json={"confirm": "octocat", "otp_code": otp_code},
         )
 
     assert response.status_code == 404
