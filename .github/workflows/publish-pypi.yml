@@ -27,6 +27,10 @@ jobs:
           python -m build
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        # Pinned to a commit SHA rather than the release/v1 branch - this
+        # step runs with an OIDC trusted-publishing token scoped to PyPI
+        # uploads, so a compromised upstream branch would mean silently
+        # supply-chain-tampered releases to every aletheore user. v1.14.2.
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: src/dist

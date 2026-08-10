@@ -409,6 +409,46 @@ def test_write_evidence_also_writes_a_toon_copy(tmp_path):
     assert toon.decode(toon_path.read_text()) == evidence
 
 
+def test_write_evidence_adds_aletheore_dir_to_a_missing_gitignore(tmp_path):
+    repo = make_repo(tmp_path)
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+
+    write_evidence(evidence, repo)
+
+    assert (repo / ".gitignore").read_text() == ".aletheore/\n"
+
+
+def test_write_evidence_appends_to_an_existing_gitignore(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / ".gitignore").write_text("*.pyc\n")
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+
+    write_evidence(evidence, repo)
+
+    assert (repo / ".gitignore").read_text() == "*.pyc\n.aletheore/\n"
+
+
+def test_write_evidence_does_not_duplicate_an_existing_aletheore_gitignore_entry(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / ".gitignore").write_text(".aletheore/\n")
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+
+    write_evidence(evidence, repo)
+
+    assert (repo / ".gitignore").read_text() == ".aletheore/\n"
+
+
+def test_write_evidence_does_not_touch_gitignore_outside_a_git_repo(tmp_path):
+    repo = tmp_path / "not-a-git-repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("def hello():\n    return 1\n")
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+
+    write_evidence(evidence, repo)
+
+    assert not (repo / ".gitignore").exists()
+
+
 def test_scan_repository_includes_security_block(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
