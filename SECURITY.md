@@ -113,6 +113,42 @@ genuine deliveries that follow. A handler that raises releases its claim before
 the error propagates, so the provider's retry is not mistaken for a duplicate —
 losing an event outright is a worse failure than processing one twice.
 
+## Inbound Ingestion Limits
+
+Two endpoints accept caller-supplied bodies outside the webhook paths above, and
+each is bounded on three axes: request size, request rate, and accepted schema.
+
+| | `/v1/telemetry` | `/v1/runtime-events` |
+| --- | --- | --- |
+| Auth | None — the CLI has no account to authenticate with | Bearer API token, paid plans only |
+| Body cap | 2 KiB | 256 KiB |
+| Rate limit | 120/hour per client IP | 300/hour per installation |
+| Schema | Unknown fields rejected; both fields length-bounded | Unknown top-level fields rejected; `event` deliberately open |
+| Retention | 365 days, swept on the scheduler tick | n/a — events are not stored, only correlated |
+
+**Body caps are enforced in middleware, before routing.** A check inside the
+handler would reject a payload the server had already read and parsed, which is
+the cost the cap exists to avoid. Requests declaring no `Content-Length` are
+rejected with 411 rather than waved through — without a declared size the cap is
+unenforceable before reading, and both legitimate clients always send one. The
+caps are per-path on purpose: a global limit would break the managed audit API,
+which accepts large evidence payloads by design.
+
+**The two rate limits are keyed differently, deliberately.** Telemetry is keyed
+by client IP, taken from the *last* `X-Forwarded-For` entry — the one the
+reverse proxy appends. Earlier entries arrive with the request and are
+attacker-controlled, so keying on them would let one caller mint unlimited
+buckets by varying a header. Runtime events are keyed by installation instead:
+that is the unit that owns the cost, and the only identity an authenticated
+caller cannot change. Each accepted runtime event enqueues a job onto the same
+`scans` queue that runs Flash reviews, AIRview builds, and managed audits, so an
+uncapped caller there delays billed work for every installation sharing the
+worker.
+
+Both limits fail open if Redis is unavailable, matching the sign-in rate limit
+and the Paddle IP allowlist: an outage should cost abuse protection, not
+availability.
+
 ## What an Audit Signature Attests
 
 Managed audit reports are signed with Ed25519 and can be checked at

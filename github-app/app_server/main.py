@@ -17,6 +17,11 @@ from app_server.db import claim_webhook_delivery, create_pool, release_webhook_d
 from app_server.demo_scan_api import demo_scan_router
 from app_server.error_alerts import send_error_alert
 from app_server.frontend import frontend_router
+from app_server.ingest_limits import (
+    BodyTooLargeError,
+    MissingContentLengthError,
+    check_declared_body_size,
+)
 from app_server.logging_config import configure_json_logging
 from app_server.managed_audit_api import managed_audit_router
 from app_server.metrics import metrics_router
@@ -61,6 +66,23 @@ app.include_router(paddle_webhook_router)
 app.include_router(demo_scan_router)
 app.include_router(telemetry_router)
 app.include_router(runtime_events_router)
+
+
+@app.middleware("http")
+async def limit_ingest_body_size(request: Request, call_next):
+    # Runs before routing, so an oversized body is refused on its declared
+    # size rather than after the server has read and parsed it.
+    try:
+        check_declared_body_size(
+            request.url.path, request.method, request.headers.get("content-length")
+        )
+    except BodyTooLargeError as exc:
+        return JSONResponse(status_code=413, content={"detail": str(exc)})
+    except MissingContentLengthError:
+        return JSONResponse(
+            status_code=411, content={"detail": "content-length required for this endpoint"}
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")
