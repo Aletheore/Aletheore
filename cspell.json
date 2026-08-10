@@ -3,7 +3,8 @@
   "language": "en",
   "ignoreRegExpList": [
     "pri_[0-9a-z]+",
-    "pro_[0-9a-z]+"
+    "pro_[0-9a-z]+",
+    "ntfset_[0-9a-z]+"
   ],
   "ignorePaths": [
     ".git",
