@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import certifi
 
@@ -13,16 +14,33 @@ from aletheore.history import _save_json_with_rotation
 
 _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
+# urllib's default opener retains a FileHandler regardless of which extra
+# handlers build_opener() is given - a base_url of file:///etc/passwd or
+# any local path is opened as a local file, not rejected as an invalid
+# health-check target. Scoping to http(s) is deliberately the only
+# restriction: localhost and private-network targets stay allowed, since a
+# developer running this against their own local dev server (http://
+# localhost:5000, matching this module's own tests) is the common case for
+# both the CLI and the MCP tool.
+_ALLOWED_SCHEMES = {"http", "https"}
+
+
+def _require_http_scheme(base_url: str) -> None:
+    scheme = urlsplit(base_url).scheme.lower()
+    if scheme not in _ALLOWED_SCHEMES:
+        raise ValueError(
+            f"base_url must be http or https, got scheme {scheme!r} in {base_url!r}"
+        )
+
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     # Health checks must never follow a redirect: the destination hasn't
-    # gone through validate_external_https_url the way base_url has, so
-    # chasing it would let a monitored endpoint redirect this checker at an
-    # address it has no business reaching (scan_worker shares a network
-    # with postgres/redis/ollama). Returning None here makes the opener
-    # raise HTTPError for the 3xx instead of following it - the redirect
-    # response itself still proves the endpoint is up, which is all
-    # reachability monitoring claims to answer.
+    # been through _require_http_scheme the way base_url has, so chasing it
+    # would let a monitored endpoint redirect this checker at a file:// or
+    # other non-http(s) target. Returning None here makes the opener raise
+    # HTTPError for the 3xx instead of following it - the redirect response
+    # itself still proves the endpoint is up, which is all reachability
+    # monitoring claims to answer.
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
@@ -70,6 +88,7 @@ def _response_shape(response) -> list[str] | None:
 
 
 def run_healthcheck(endpoints: list[dict], base_url: str, timeout: float = 5.0) -> dict:
+    _require_http_scheme(base_url)
     results: list[dict] = []
 
     for endpoint in endpoints:

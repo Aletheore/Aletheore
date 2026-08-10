@@ -404,7 +404,10 @@ def _register_healthcheck_tool(mcp_instance: MCPServer, repo_path: Path) -> None
         """GET-only live health check of mapped API endpoints against a running instance."""
         evidence = read_evidence(repo_path)
         endpoints = evidence["repository"].get("api_endpoints", {}).get("endpoints", [])
-        result = run_healthcheck(endpoints, base_url)
+        try:
+            result = run_healthcheck(endpoints, base_url)
+        except ValueError as exc:
+            return _toon_result({"error": str(exc)})
         save_healthcheck(result, repo_path)
         return _toon_result(result)
 
