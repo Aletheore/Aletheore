@@ -553,6 +553,65 @@ def test_detect_helm_charts_finds_chart_yaml(tmp_path):
     assert result == ["charts/myapp/Chart.yaml"]
 
 
+def test_detect_terraform_files_returns_a_sorted_list(tmp_path):
+    # rglob traversal order is filesystem-dependent (confirmed: the same
+    # repo produced differently-ordered results on APFS vs ext4) - the
+    # detector must sort its own output rather than pass through whatever
+    # order the OS happens to return.
+    from aletheore.scanner.detect import _detect_terraform_files
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for name in ("zulu", "delta", "mike", "alpha"):
+        (repo / f"{name}.tf").write_text('resource "x" "y" {}\n')
+
+    result = _detect_terraform_files(repo)
+
+    assert result == sorted(result)
+    assert result == ["alpha.tf", "delta.tf", "mike.tf", "zulu.tf"]
+
+
+def test_detect_helm_charts_returns_a_sorted_list(tmp_path):
+    from aletheore.scanner.detect import _detect_helm_charts
+
+    repo = tmp_path / "repo"
+    for name in ("zulu", "alpha", "mike"):
+        chart_dir = repo / "charts" / name
+        chart_dir.mkdir(parents=True)
+        (chart_dir / "Chart.yaml").write_text("apiVersion: v2\nname: x\nversion: 0.1.0\n")
+
+    result = _detect_helm_charts(repo)
+
+    assert result == sorted(result)
+    assert result == [
+        "charts/alpha/Chart.yaml",
+        "charts/mike/Chart.yaml",
+        "charts/zulu/Chart.yaml",
+    ]
+
+
+def test_detect_declared_env_vars_orders_by_source_but_preserves_line_order_within_it(tmp_path):
+    # ENV_FILE_MARKERS are exact filenames (".env.example", etc.), not
+    # globs - each source here lives in its own subdirectory so two
+    # differently-named markers can still be told apart by path.
+    from aletheore.scanner.detect import _detect_declared_env_vars
+
+    repo = tmp_path / "repo"
+    (repo / "zulu").mkdir(parents=True)
+    (repo / "zulu" / ".env.example").write_text("SECOND=1\nFIRST=2\n")
+    (repo / "alpha").mkdir(parents=True)
+    (repo / "alpha" / ".env.sample").write_text("FOURTH=3\nTHIRD=4\n")
+
+    result = _detect_declared_env_vars(repo)
+
+    assert result == [
+        {"name": "FOURTH", "source": "alpha/.env.sample"},
+        {"name": "THIRD", "source": "alpha/.env.sample"},
+        {"name": "SECOND", "source": "zulu/.env.example"},
+        {"name": "FIRST", "source": "zulu/.env.example"},
+    ]
+
+
 def test_detect_infrastructure_categories_return_empty_when_nothing_present(tmp_path):
     from aletheore.scanner.detect import (
         _detect_helm_charts,
