@@ -1,10 +1,13 @@
+import threading
+import time
+
 import httpx
-import pytest
 
 from aletheore.telemetry import (
     is_telemetry_disabled,
     load_or_create_anonymous_id,
     report_scan_event,
+    report_scan_event_in_background,
 )
 
 
@@ -104,3 +107,47 @@ def test_report_scan_event_never_raises_on_network_failure(tmp_path, monkeypatch
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://app.aletheore.com")
 
     report_scan_event(path=id_path, http_client=client)  # must not raise
+
+
+def test_report_scan_event_in_background_waits_for_the_report_to_finish():
+    # The regression this guards: a bare Thread(daemon=True).start() returned
+    # immediately, so a scan that finished before the POST completed exited and
+    # took the unsent event with it.
+    completed = []
+
+    def slow_report() -> None:
+        time.sleep(0.2)
+        completed.append("done")
+
+    thread = report_scan_event_in_background(wait_seconds=5.0, report_fn=slow_report)
+
+    assert completed == ["done"]
+    assert not thread.is_alive()
+
+
+def test_report_scan_event_in_background_gives_up_on_a_hanging_report():
+    started = threading.Event()
+    release = threading.Event()
+
+    def hanging_report() -> None:
+        started.set()
+        release.wait(30)
+
+    start = time.monotonic()
+    thread = report_scan_event_in_background(wait_seconds=0.05, report_fn=hanging_report)
+    elapsed = time.monotonic() - start
+
+    assert started.wait(5), "the report should have been started at all"
+    assert elapsed < 2.0, f"a hanging report held up the scan for {elapsed:.2f}s"
+    # Left running rather than waited on - it is a daemon, so interpreter
+    # shutdown reclaims it instead of the CLI blocking on it.
+    assert thread.daemon
+    release.set()
+
+
+def test_report_scan_event_in_background_defaults_to_the_real_reporter(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_TELEMETRY_DISABLED", "1")
+
+    thread = report_scan_event_in_background(wait_seconds=5.0)
+
+    assert not thread.is_alive()
