@@ -26,13 +26,13 @@ jobs:
             tag: aletheore-scan-worker:ci
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Build image
         run: docker build -f "${{ matrix.dockerfile }}" -t "${{ matrix.tag }}" .
 
       - name: Scan image report
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ matrix.tag }}
           format: table
@@ -41,7 +41,7 @@ jobs:
           exit-code: "0"
 
       - name: Enforce image scan
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ matrix.tag }}
           format: sarif
@@ -53,7 +53,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
         with:
           sarif_file: trivy-${{ matrix.image }}.sarif
 
@@ -72,20 +72,20 @@ jobs:
             tag: aletheore-scan-worker:ci
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Build image
         run: docker build -f "${{ matrix.dockerfile }}" -t "${{ matrix.tag }}" .
 
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0.24.0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           image: ${{ matrix.tag }}
           format: spdx-json
           output-file: sbom-${{ matrix.image }}.spdx.json
 
       - name: Upload SBOM
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sbom-${{ matrix.image }}
           path: sbom-${{ matrix.image }}.spdx.json

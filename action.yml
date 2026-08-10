@@ -45,19 +45,19 @@ runs:
   using: "composite"
   steps:
     - name: Checkout base
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         ref: ${{ inputs.base-ref }}
         path: aletheore-base
 
     - name: Checkout head
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         ref: ${{ inputs.head-ref }}
         path: aletheore-head
 
     - name: Set up Python
-      uses: actions/setup-python@v7
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
         python-version: "3.12"
 
@@ -182,7 +182,7 @@ runs:
     - name: Post PR comment
       if: always() && inputs.post-pr-comment == 'true' && github.event_name == 'pull_request'
       continue-on-error: true
-      uses: actions/github-script@v9
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
       with:
         script: |
           const fs = require('fs');
