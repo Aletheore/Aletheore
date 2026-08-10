@@ -109,6 +109,13 @@ def test_protocol_relative_next_url_rejected():
     assert _is_safe_next_path("//evil.example.com/phish") == "/dashboard"
 
 
+def test_backslash_protocol_relative_next_url_rejected():
+    # Browsers normalize a leading backslash to a forward slash, turning
+    # this into the same protocol-relative "//evil.example.com" attack
+    # test_protocol_relative_next_url_rejected already covers.
+    assert _is_safe_next_path("/\\evil.example.com/phish") == "/dashboard"
+
+
 def test_next_path_not_starting_with_slash_rejected():
     assert _is_safe_next_path("evil.example.com") == "/dashboard"
 
@@ -376,6 +383,33 @@ async def test_get_current_session_decrypts_refresh_token_when_present(pool, mon
 
     session = await get_current_session(FakeRequest())
     assert session["github_refresh_token"] == "ghr_realrefresh"
+
+
+@pytest.mark.asyncio
+async def test_get_current_session_logs_out_gracefully_on_undecryptable_token(pool, monkeypatch):
+    # A cookie with a valid signature but a stored access token that can't
+    # be Fernet-decrypted (corruption, a partial write - see get_current_session's
+    # comment for why this is NOT the same case as a SESSION_SECRET
+    # rotation) must not 500 - it should behave like "not logged in" and
+    # clean up the now-unusable row.
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    await create_session(
+        pool,
+        "sess-corrupted",
+        42,
+        "octocat",
+        "not-a-valid-fernet-token",
+        datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    signed = sign_session_id("sess-corrupted", "test-session-secret")
+
+    class FakeRequest:
+        cookies = {"session": signed}
+        app = type("App", (), {"state": type("State", (), {"db_pool": pool})()})()
+
+    session = await get_current_session(FakeRequest())
+    assert session is None
+    assert await get_session(pool, "sess-corrupted") is None
 
 
 @pytest.mark.asyncio
