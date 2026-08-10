@@ -50,16 +50,15 @@ class TelemetryEvent(BaseModel):
 
 
 def _enforce_telemetry_rate_limit(request: Request) -> None:
-    from redis import Redis
+    from app_server.redis_client import get_redis_client
 
-    settings = get_settings()
     client_ip = client_ip_from_forwarded_for(
         request.headers.get("x-forwarded-for"),
         request.client.host if request.client else "",
     )
     try:
         rate_limited = is_rate_limited(
-            Redis.from_url(settings.redis_url),
+            get_redis_client(),
             f"ratelimit:telemetry:{client_ip}",
             TELEMETRY_RATE_LIMIT,
             TELEMETRY_RATE_LIMIT_WINDOW_SECONDS,

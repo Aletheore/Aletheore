@@ -40,17 +40,19 @@ def _client_ip(request: Request) -> str:
 
 
 def _get_queue(redis_url: str):
-    from redis import Redis
     from rq import Queue
 
-    return Queue(DEMO_SCAN_QUEUE_NAME, connection=Redis.from_url(redis_url))
+    from app_server.redis_client import get_redis_client
+
+    return Queue(DEMO_SCAN_QUEUE_NAME, connection=get_redis_client())
 
 
 def _fetch_job(job_id: str, redis_url: str):
-    from redis import Redis
     from rq.job import Job
 
-    return Job.fetch(job_id, connection=Redis.from_url(redis_url))
+    from app_server.redis_client import get_redis_client
+
+    return Job.fetch(job_id, connection=get_redis_client())
 
 
 _GENERIC_FAILURE_DETAIL = "scan failed - the repo may be invalid, private, or too large"

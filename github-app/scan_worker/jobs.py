@@ -38,6 +38,7 @@ from app_server.db import MAX_SCANNED_REPOS_PER_MONTH
 from app_server.dismissed_findings import filter_dismissed
 from app_server.error_alerts import send_error_alert
 from app_server.github_auth import generate_app_jwt, get_installation_token
+from app_server.http_client import get_github_api_client
 from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation
 from app_server.logging_config import log_job
 from app_server.rate_limit import (
@@ -720,7 +721,7 @@ def _post_failure_comment(
 ) -> None:
     app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
     token = _token_sync(installation_id, app_jwt)
-    client = httpx.Client(base_url="https://api.github.com")
+    client = get_github_api_client()
     upsert_pr_comment(client, token, repo_full_name, pr_number, _failure_body(error))
 
 
@@ -733,7 +734,7 @@ def _post_flash_review_failure_comment(
 ) -> None:
     app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
     token = _token_sync(installation_id, app_jwt)
-    client = httpx.Client(base_url="https://api.github.com")
+    client = get_github_api_client()
     body = (
         f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
         f"Aletheore couldn't complete this flash review: {error}"
@@ -800,7 +801,7 @@ def run_pr_scan_job(
             diff["vulnerabilities"]["new"], "vulnerability", dismissed["vulnerability"]
         )
 
-        client = httpx.Client(base_url="https://api.github.com")
+        client = get_github_api_client()
         upsert_pr_comment(client, token, repo_full_name, pr_number, format_diff_comment(diff))
         new = _sync_persistent_git_graph(installation_id, repo_full_name, head_dir, new)
         _sync_code_graph(installation_id, repo_full_name, head_sha, new)
@@ -908,7 +909,7 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
     try:
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
         token = _token_sync(installation_id, app_jwt)
-        client = httpx.Client(base_url="https://api.github.com")
+        client = get_github_api_client()
 
         head_sha = fetch_default_branch_head_sha(client, token, repo_full_name)
         clone_url = _clone_url(repo_full_name, token)
@@ -1138,7 +1139,7 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
 
         evidence = json.loads(evidence_path.read_text())
         cooldown_seconds = cooldown_seconds_for_loc(total_loc_from_evidence(evidence))
-        client = httpx.Client(base_url="https://api.github.com")
+        client = get_github_api_client()
         if not check_and_reserve_managed_audit(
             settings.database_url, installation_id, repo_full_name, cooldown_seconds
         ):
@@ -1330,7 +1331,7 @@ def _run_flash_review(
 ) -> None:
     app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
     token = _token_sync(installation_id, app_jwt)
-    client = httpx.Client(base_url="https://api.github.com")
+    client = get_github_api_client()
 
     last_reviewed_sha = get_last_reviewed_sha(
         settings.database_url, installation_id, repo_full_name, pr_number
@@ -1665,8 +1666,8 @@ def _fix_suggestion_attachment(
         settings = get_settings()
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
         token = _token_sync(installation_id, app_jwt)
-        with httpx.Client(base_url="https://api.github.com") as client:
-            file_content = fetch_file_content(client, token, repo_full_name, source_file)
+        client = get_github_api_client()
+        file_content = fetch_file_content(client, token, repo_full_name, source_file)
         if not file_content:
             return None
 
@@ -2210,7 +2211,7 @@ def _real_line_count_fetcher(
         settings = get_settings()
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
         token = _token_sync(installation_id, app_jwt)
-        client = httpx.Client(base_url="https://api.github.com")
+        client = get_github_api_client()
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
             "could not set up line-count fetcher (%s); citations checked for file existence only",
@@ -2358,10 +2359,11 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
 
 @log_job
 def _scans_queue(redis_url: str):
-    from redis import Redis
     from rq import Queue
 
-    return Queue("scans", connection=Redis.from_url(redis_url))
+    from app_server.redis_client import get_redis_client
+
+    return Queue("scans", connection=get_redis_client())
 
 
 def run_live_wiki_full_build_for_installation_job(installation_id: int) -> None:
@@ -2491,7 +2493,7 @@ def _github_client_and_token(installation_id: int) -> tuple[httpx.Client, str] |
         settings = get_settings()
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
         token = _token_sync(installation_id, app_jwt)
-        return httpx.Client(base_url="https://api.github.com"), token
+        return get_github_api_client(), token
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
             "live docs: could not set up GitHub client for installation=%s (%s)",

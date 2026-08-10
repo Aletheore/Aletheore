@@ -2,6 +2,8 @@ import re
 
 import httpx
 
+from app_server.http_client import get_generic_http_client
+
 
 def _detect_platform(webhook_url: str) -> str:
     # Slack incoming webhooks are always hooks.slack.com. Modern Teams
@@ -134,7 +136,7 @@ def send_slack_alert(
 ) -> None:
     if not _has_new_findings(diff):
         return
-    client = http_client or httpx.Client()
+    client = http_client or get_generic_http_client()
     payload = _render_payload(webhook_url, format_slack_message(diff, repo_full_name, pr_number))
     response = client.post(webhook_url, json=payload)
     response.raise_for_status()
@@ -257,7 +259,7 @@ def send_health_alert(
     message: dict,
     http_client: httpx.Client | None = None,
 ) -> None:
-    client = http_client or httpx.Client()
+    client = http_client or get_generic_http_client()
     payload = _render_payload(webhook_url, message)
     response = client.post(webhook_url, json=payload)
     response.raise_for_status()

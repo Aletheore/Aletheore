@@ -15,10 +15,11 @@ def enqueue_transactional_email(
     to_email: str,
     installation_id: int | None = None,
 ) -> None:
-    from redis import Redis
     from rq import Queue
 
-    Queue("email", connection=Redis.from_url(redis_url)).enqueue(
+    from app_server.redis_client import get_redis_client
+
+    Queue("email", connection=get_redis_client()).enqueue(
         "scan_worker.jobs.send_transactional_email_job",
         dedupe_key=dedupe_key,
         template_name=template_name,

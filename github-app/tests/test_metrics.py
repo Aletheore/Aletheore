@@ -61,7 +61,7 @@ async def test_queue_stats_returns_counts_for_valid_token(monkeypatch):
 
         return _factory
 
-    monkeypatch.setattr("app_server.metrics.Redis.from_url", lambda url: MagicMock())
+    monkeypatch.setattr("app_server.metrics.get_redis_client", lambda: MagicMock())
     monkeypatch.setattr("app_server.metrics.Queue", _fake_queue)
     monkeypatch.setattr(
         "app_server.metrics.StartedJobRegistry", _by_queue({"scans": 1, "health": 0})

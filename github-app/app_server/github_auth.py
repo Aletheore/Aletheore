@@ -3,6 +3,8 @@ import time
 import httpx
 import jwt
 
+from app_server.http_client import get_github_api_client
+
 
 def generate_app_jwt(app_id: str, private_key_pem: str) -> str:
     now = int(time.time())
@@ -19,7 +21,7 @@ def get_installation_token(
     app_jwt: str,
     http_client: httpx.Client | None = None,
 ) -> str:
-    client = http_client or httpx.Client(base_url="https://api.github.com")
+    client = http_client or get_github_api_client()
     response = client.post(
         f"/app/installations/{installation_id}/access_tokens",
         headers={
@@ -36,7 +38,7 @@ def get_installation_details(
     app_jwt: str,
     http_client: httpx.Client | None = None,
 ) -> dict:
-    client = http_client or httpx.Client(base_url="https://api.github.com")
+    client = http_client or get_github_api_client()
     response = client.get(
         f"/app/installations/{installation_id}",
         headers={
@@ -62,7 +64,7 @@ def get_repo_permission_for_user(
     should be able to spend an installation's paid LLM budget or occupy
     its managed-audit cooldown slot.
     """
-    client = http_client or httpx.Client(base_url="https://api.github.com")
+    client = http_client or get_github_api_client()
     response = client.get(
         f"/repos/{repo_full_name}/collaborators/{username}/permission",
         headers={

@@ -1,5 +1,4 @@
 import asyncio
-import functools
 import hashlib
 import json
 import logging
@@ -14,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from app_server.auth import encrypt_access_token, get_current_session, refresh_github_access_token
 from app_server.config import get_settings
+from app_server.http_client import get_github_api_client
 from app_server.email_client import send_transactional_email
 from app_server.email_templates import deletion_otp_email
 from app_server.db import (
@@ -63,6 +63,7 @@ from app_server.paddle_client import get_subscription as get_paddle_subscription
 from app_server.paddle_client import update_subscription_items as update_paddle_subscription_items
 from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
 from app_server.rate_limit import is_rate_limited
+from app_server.redis_client import get_redis_client
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
 
 admin_router = APIRouter()
@@ -137,7 +138,7 @@ BRANCH_PROTECTION_DISCLOSURE = (
 
 
 def _github_http_client() -> httpx.Client:
-    return httpx.Client(base_url="https://api.github.com")
+    return get_github_api_client()
 
 
 async def _repo_installation_id(pool, org: str, repo: str) -> int:
@@ -192,20 +193,6 @@ def _administered_installations_cache_key(github_token: str) -> str:
     return "administered-installations:" + hashlib.sha256(github_token.encode()).hexdigest()
 
 
-@functools.lru_cache(maxsize=1)
-def _administered_installations_cache_redis():
-    from redis import Redis
-
-    # lru_cache'd (same convention as get_settings()) so this is one
-    # pooled connection reused across every call, not a fresh TCP
-    # handshake per request. A short connect timeout, not the client
-    # default (multiple seconds) - this cache sits in front of nearly
-    # every dashboard/admin request, so a Redis outage must fail fast
-    # into the live GitHub fallback below rather than stalling every
-    # request behind it.
-    return Redis.from_url(get_settings().redis_url, socket_connect_timeout=0.5, socket_timeout=0.5)
-
-
 async def _administered_installation_ids(github_token: str) -> set[int]:
     # This gates nearly every admin/dashboard route via
     # _require_admin_installation - a single dashboard page can fire
@@ -218,7 +205,7 @@ async def _administered_installation_ids(github_token: str) -> set[int]:
     # other in-flight request on this single-worker server.
     cache_key = _administered_installations_cache_key(github_token)
     try:
-        cached = await asyncio.to_thread(_administered_installations_cache_redis().get, cache_key)
+        cached = await asyncio.to_thread(get_redis_client().get, cache_key)
         if cached is not None:
             return {int(installation_id) for installation_id in json.loads(cached)}
     except Exception as exc:  # noqa: BLE001
@@ -228,7 +215,7 @@ async def _administered_installation_ids(github_token: str) -> set[int]:
 
     try:
         await asyncio.to_thread(
-            _administered_installations_cache_redis().set,
+            get_redis_client().set,
             cache_key,
             json.dumps(list(installation_ids)),
             _ADMINISTERED_INSTALLATIONS_CACHE_TTL_SECONDS,
@@ -935,12 +922,10 @@ async def request_deletion_otp(org: str, repo: str, request: Request):
     pool = request.app.state.db_pool
     installation_id = installation["installation_id"]
 
-    from redis import Redis
-
     settings = get_settings()
     try:
         rate_limited = is_rate_limited(
-            Redis.from_url(settings.redis_url),
+            get_redis_client(),
             f"ratelimit:deletion-otp:{installation_id}",
             DELETION_OTP_RATE_LIMIT,
             DELETION_OTP_RATE_LIMIT_WINDOW_SECONDS,
@@ -1009,12 +994,9 @@ async def delete_all_data(
             detail=f"type {installation['account_login']} exactly to confirm deletion",
         )
 
-    from redis import Redis
-
-    settings = get_settings()
     try:
         attempt_limited = is_rate_limited(
-            Redis.from_url(settings.redis_url),
+            get_redis_client(),
             f"ratelimit:deletion-otp-attempt:{installation_id}",
             DELETION_OTP_ATTEMPT_LIMIT,
             DELETION_OTP_ATTEMPT_WINDOW_SECONDS,
@@ -1042,7 +1024,7 @@ async def delete_all_data(
     # runs there instead, same as the uninstall webhook.
     from rq import Queue
 
-    Queue("scans", connection=Redis.from_url(settings.redis_url)).enqueue(
+    Queue("scans", connection=get_redis_client()).enqueue(
         "scan_worker.jobs.purge_persistent_checkouts_job",
         job_timeout=120,
         installation_id=installation_id,

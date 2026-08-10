@@ -587,7 +587,7 @@ async def test_login_rate_limits_after_threshold(pool, monkeypatch, redis_conn):
 
     monkeypatch.setattr(auth_module, "is_rate_limited", real_is_rate_limited)
     monkeypatch.setattr(auth_module, "AUTH_RATE_LIMIT", 2)
-    monkeypatch.setattr("redis.Redis.from_url", lambda url: redis_conn)
+    monkeypatch.setattr("app_server.auth.get_redis_client", lambda: redis_conn)
 
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
@@ -612,7 +612,7 @@ async def test_auth_rate_limit_is_shared_between_login_and_callback(pool, monkey
 
     monkeypatch.setattr(auth_module, "is_rate_limited", real_is_rate_limited)
     monkeypatch.setattr(auth_module, "AUTH_RATE_LIMIT", 1)
-    monkeypatch.setattr("redis.Redis.from_url", lambda url: redis_conn)
+    monkeypatch.setattr("app_server.auth.get_redis_client", lambda: redis_conn)
 
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
@@ -634,7 +634,7 @@ async def test_auth_rate_limit_is_keyed_per_ip(pool, monkeypatch, redis_conn):
 
     monkeypatch.setattr(auth_module, "is_rate_limited", real_is_rate_limited)
     monkeypatch.setattr(auth_module, "AUTH_RATE_LIMIT", 1)
-    monkeypatch.setattr("redis.Redis.from_url", lambda url: redis_conn)
+    monkeypatch.setattr("app_server.auth.get_redis_client", lambda: redis_conn)
 
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
@@ -661,10 +661,10 @@ async def test_login_fails_open_when_redis_is_unreachable(pool, monkeypatch):
 
     monkeypatch.setattr(auth_module, "is_rate_limited", real_is_rate_limited)
 
-    def _boom(url):
+    def _boom():
         raise ConnectionError("redis unreachable")
 
-    monkeypatch.setattr("redis.Redis.from_url", _boom)
+    monkeypatch.setattr("app_server.auth.get_redis_client", _boom)
 
     app.state.db_pool = pool
     transport = ASGITransport(app=app)
