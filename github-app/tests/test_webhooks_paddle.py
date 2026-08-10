@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import time
 from decimal import Decimal
 from unittest.mock import MagicMock
@@ -206,6 +207,24 @@ async def test_missing_signature_header_rejected(pool):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/webhooks/paddle", content=body)
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_signature_failure_is_logged_with_header_presence_and_length(pool, caplog):
+    # Previously silent - a real signature failure (rotated secret, clock
+    # drift past tolerance, a forged request) and a missing header looked
+    # identical from the outside with nothing to go on.
+    app.state.db_pool = pool
+    body = json.dumps(_subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 108)).encode()
+    with caplog.at_level(logging.WARNING, logger="app_server.webhooks.paddle"):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/webhooks/paddle", content=body, headers={"paddle-signature": "ts=1;h1=deadbeef"}
+            )
+    assert response.status_code == 401
+    record = next(r for r in caplog.records if "signature verification failed" in r.message)
+    assert "header_present=True" in record.message
+    assert "header_len=16" in record.message
 
 
 @pytest.mark.asyncio

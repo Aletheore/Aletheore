@@ -246,6 +246,16 @@ async def handle_paddle_webhook(request: Request) -> Response:
     signature = request.headers.get("paddle-signature", "")
     settings = get_settings()
     if not signature or not verify_paddle_signature(raw_body, signature, settings.paddle_webhook_secret):
+        # Previously silent - a real signature failure (rotated secret,
+        # clock drift past tolerance, a genuinely forged request) and a
+        # missing header looked identical from the outside with nothing to
+        # go on. header_present/header_len are safe to log (no secret or
+        # payment data); the raw signature and body are not logged.
+        logger.warning(
+            "paddle webhook signature verification failed (header_present=%s, header_len=%d)",
+            bool(signature),
+            len(signature),
+        )
         return Response(status_code=401)
 
     # Defense-in-depth on top of signature verification, not a replacement
