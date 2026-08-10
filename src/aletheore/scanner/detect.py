@@ -412,6 +412,11 @@ def _detect_migration_directories(repo_path: Path) -> list[dict]:
         file_count = sum(1 for f in rails_migrate.iterdir() if f.is_file() and f.suffix == ".rb")
         results.append({"path": "db/migrate", "file_count": file_count})
 
+    # rglob traversal order is filesystem-dependent (APFS vs ext4 can order
+    # the same directory's entries differently) - sorted here so the same
+    # repo produces the same evidence bytes regardless of what it's scanned
+    # on.
+    results.sort(key=lambda entry: entry["path"])
     return results
 
 
@@ -438,6 +443,8 @@ def _detect_docker_compose_services(repo_path: Path) -> list[dict]:
                 results.append(
                     {"file": compose_file.relative_to(repo_path).as_posix(), "services": services}
                 )
+    # See _detect_migration_directories for why this is sorted.
+    results.sort(key=lambda entry: entry["file"])
     return results
 
 
@@ -462,6 +469,8 @@ def _detect_kubernetes_manifests(repo_path: Path) -> list[str]:
                 ):
                     results.append(candidate.relative_to(repo_path).as_posix())
                     break
+    # See _detect_migration_directories for why this is sorted.
+    results.sort()
     return results
 
 
@@ -472,6 +481,8 @@ def _detect_terraform_files(repo_path: Path) -> list[str]:
         if any(part in IGNORED_DIRS for part in rel_parts):
             continue
         results.append(candidate.relative_to(repo_path).as_posix())
+    # See _detect_migration_directories for why this is sorted.
+    results.sort()
     return results
 
 
@@ -482,6 +493,8 @@ def _detect_helm_charts(repo_path: Path) -> list[str]:
         if any(part in IGNORED_DIRS for part in rel_parts):
             continue
         results.append(candidate.relative_to(repo_path).as_posix())
+    # See _detect_migration_directories for why this is sorted.
+    results.sort()
     return results
 
 
@@ -500,6 +513,11 @@ def _detect_declared_env_vars(repo_path: Path) -> list[dict]:
                 name = stripped.split("=", 1)[0].strip()
                 if name and all(c.isalnum() or c == "_" for c in name):
                     results.append({"name": name, "source": source})
+    # Stable sort by source only (not name too) - which file gets visited
+    # first is what's filesystem-dependent and needs pinning down; each
+    # file's own variables should stay in their original declaration order.
+    # See _detect_migration_directories for the general rationale.
+    results.sort(key=lambda entry: entry["source"])
     return results
 
 
