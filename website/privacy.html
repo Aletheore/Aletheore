@@ -1,46 +1,122 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Privacy Policy - Aletheore</title>
-  <link rel="icon" type="image/png" href="assets/logo-mark.png">
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-  <div class="container">
-    <nav class="site-nav" aria-label="Main navigation">
-      <a class="wordmark" href="index.html">
-        <img src="assets/logo-mark.png" alt="" width="28" height="28">
-        Aletheore
-      </a>
-      <div class="nav-links">
-        <a href="pricing.html">Pricing</a>
-        <a href="developers.html">Developers</a>
-        <a href="dogfooding.html">Proof</a>
-        <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
-        <a href="https://www.linkedin.com/company/aletheore">LinkedIn</a>
-        <a href="https://app.aletheore.com/">Dashboard</a>
-      </div>
-    </nav>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy Policy - Aletheore</title>
+    <link rel="icon" type="image/png" href="assets/logo-mark.png" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <nav class="site-nav" aria-label="Main navigation">
+        <a class="wordmark" href="index.html">
+          <img src="assets/logo-mark.png" alt="" width="28" height="28" />
+          Aletheore
+        </a>
+        <div class="nav-links">
+          <a href="pricing.html">Pricing</a>
+          <a href="developers.html">Developers</a>
+          <a href="dogfooding.html">Proof</a>
+          <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+          <a href="https://www.linkedin.com/company/aletheore">LinkedIn</a>
+          <a href="https://app.aletheore.com/">Dashboard</a>
+        </div>
+      </nav>
 
-    <main class="legal-body">
-      <h1>Privacy Policy</h1>
-      <p>Last updated: July 2026</p>
+      <main class="legal-body">
+        <h1>Privacy Policy</h1>
+        <p>Last updated: August 2026</p>
 
-      <h2>The free CLI</h2>
-      <p>Running <code>aletheore scan</code> locally sends nothing to Aletheore's servers. Evidence is written to your own machine. If you use an AI-assisted audit command, evidence, not source code, is sent to whichever LLM provider you configure, using your own API key.</p>
+        <h2>The free CLI</h2>
+        <p>
+          Your source code and the evidence <code>aletheore scan</code> produces stay on your
+          machine. Evidence is written to <code>.aletheore/</code> in the repository you scanned;
+          nothing about your code, your repository, or your identity is transmitted.
+        </p>
+        <p>
+          One exception, so it is stated plainly: each completed scan sends a single anonymous usage
+          ping to Aletheore - the event name <code>scan</code> and a random identifier generated
+          once on first run and stored in <code>~/.aletheore/telemetry_id</code>. It is not derived
+          from and cannot be linked to your machine, your account, or anything you scanned, and the
+          request necessarily carries your IP address as any HTTP request does. It exists only so we
+          can count how often the CLI is actually used. Disable it by setting either
+          <code>ALETHEORE_TELEMETRY_DISABLED=1</code> or the cross-vendor
+          <code>DO_NOT_TRACK=1</code>, and nothing is sent at all.
+        </p>
+        <p>
+          If you use an AI-assisted audit command, evidence, not source code, is sent to whichever
+          LLM provider you configure, using your own API key.
+        </p>
 
-      <h2>The GitHub App (Aletheore AIR)</h2>
-      <p>Installing the GitHub App is a different trust boundary. Source code is transiently cloned to run a scan, then immediately discarded. Only derived evidence, such as secrets findings, dependency graphs, and endpoint health rows, is stored. Managed audit and AIRview runs send evidence, not source code, to our LLM provider - OpenAI (GPT-5.6 Luna), using our shared key - with an automatic fallback to DeepSeek if OpenAI is unavailable.</p>
+        <h2>The GitHub App (Aletheore AIR)</h2>
+        <p>
+          Installing the GitHub App is a different trust boundary, and source code does reach our
+          servers.
+        </p>
+        <p>
+          We clone your repository to run a scan. For repositories we scan repeatedly, a working
+          copy is <strong>kept on our scan worker between scans</strong> rather than deleted after
+          each one - this is what lets a later scan process only what changed instead of starting
+          from nothing every time. That copy is deleted when you uninstall the app or request
+          deletion, and is not retained after either.
+        </p>
+        <p>
+          What is stored long-term is derived evidence: secrets findings, dependency graphs,
+          endpoint health rows, and generated documentation.
+        </p>
+        <p>
+          What we send to our LLM provider depends on the feature, and one of them is not evidence:
+        </p>
+        <ul>
+          <li>
+            <strong>Flash review</strong> (automated pull request review) sends
+            <strong>the pull request's diff</strong> - that is your source code, for the changed
+            lines - along with limited surrounding file context.
+          </li>
+          <li>
+            <strong>Managed audits</strong> and <strong>AIRview</strong> send derived evidence, not
+            source code.
+          </li>
+        </ul>
+        <p>
+          Our provider is OpenAI (GPT-5.6 Luna), using our shared key, with an automatic fallback to
+          DeepSeek if OpenAI is unavailable.
+        </p>
 
-      <h2>What we store</h2>
-      <p>For paid installations: your GitHub account or organization identity, evidence snapshots from scans, and, if configured, a Slack/Teams webhook URL and health-check monitoring settings. We do not sell this data or share it beyond the service providers necessary to run Aletheore, including our LLM provider for managed audits and our payment provider for billing.</p>
+        <h2>What we store</h2>
+        <p>
+          For paid installations: your GitHub account or organization identity, the email address on
+          your GitHub account, evidence snapshots from scans, findings you have dismissed, an audit
+          log of administrative actions taken on your installation, signed audit reports, and, if
+          configured, a Slack/Teams webhook URL and health-check monitoring settings.
+        </p>
+        <p>
+          Health-check results are private to your dashboard unless you explicitly turn on the
+          public status API for your installation, which is off by default.
+        </p>
+        <p>
+          We do not sell this data or share it beyond the service providers necessary to run
+          Aletheore: our LLM provider for the features listed above, our payment provider for
+          billing, and our email provider for transactional mail.
+        </p>
 
-      <h2>Contact</h2>
-      <p>Questions about this policy or a data deletion request: <a href="mailto:support@aletheore.com">support@aletheore.com</a></p>
-    </main>
-  </div>
-  <script src="vendor/motion.js"></script>
-</body>
+        <h2>Deleting your data</h2>
+        <p>
+          Uninstalling the GitHub App erases everything held for that installation, including the
+          retained working copy of your repository. The same erasure is available on demand from
+          your dashboard without uninstalling. Both paths remove account-level records - your
+          captured email address and any active sessions - once you have no other installation
+          remaining.
+        </p>
+
+        <h2>Contact</h2>
+        <p>
+          Questions about this policy or a data deletion request:
+          <a href="mailto:support@aletheore.com">support@aletheore.com</a>
+        </p>
+      </main>
+    </div>
+    <script src="vendor/motion.js"></script>
+  </body>
 </html>
