@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import httpx
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import APIRouter, HTTPException, Request
@@ -243,18 +243,40 @@ async def get_current_session(request: Request) -> dict | None:
     row = await get_session(request.app.state.db_pool, session_id)
     if row is None:
         return None
-    row["github_access_token"] = decrypt_access_token(
-        row["github_access_token"], settings.session_secret
-    )
-    if row["github_refresh_token"] is not None:
-        row["github_refresh_token"] = decrypt_access_token(
-            row["github_refresh_token"], settings.session_secret
+    try:
+        row["github_access_token"] = decrypt_access_token(
+            row["github_access_token"], settings.session_secret
         )
+        if row["github_refresh_token"] is not None:
+            row["github_refresh_token"] = decrypt_access_token(
+                row["github_refresh_token"], settings.session_secret
+            )
+    except InvalidToken:
+        # NOT the SESSION_SECRET-rotation case it might look like - the
+        # cookie's own HMAC signature (_signing_secret) and this token's
+        # Fernet key (_fernet_key) are both HKDF-derived from that same
+        # root secret, so a straightforward rotation already fails at
+        # unsign_session_id above and returns None before ever reaching
+        # here. What this guards is a stored token that's undecryptable
+        # for any other reason - corruption, a partial write, a future
+        # encryption-scheme change - which previously reached the global
+        # exception handler (main.py's handle_unexpected_exception) as an
+        # uncaught error: a 500 on every request from that one user,
+        # firing an error alert email each time. Delete the now-unusable
+        # session and let the normal not-logged-in path (a fresh
+        # /auth/login) take over instead.
+        await delete_session(request.app.state.db_pool, session_id)
+        return None
     return row
 
 
 def _is_safe_next_path(next_path: str | None) -> str:
-    if not next_path or not next_path.startswith("/") or next_path.startswith("//"):
+    # Browsers normalize a leading backslash to a forward slash before
+    # resolving a URL, so "/\evil.com" becomes the protocol-relative
+    # "//evil.com" by the time it's followed - "//" alone isn't enough to
+    # block, the character right after the first "/" has to be checked for
+    # either variant.
+    if not next_path or not next_path.startswith("/") or next_path[1:2] in ("/", "\\"):
         return "/dashboard"
     return next_path
 

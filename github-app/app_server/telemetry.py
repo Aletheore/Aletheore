@@ -11,6 +11,7 @@ body-size cap enforced in middleware (app_server/ingest_limits.py), and
 a schema narrow enough that nothing but the two expected fields is
 accepted at all.
 """
+import hmac
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
@@ -94,7 +95,7 @@ async def telemetry_stats(request: Request, event: str = "scan"):
         raise HTTPException(status_code=404, detail="not found")
 
     auth_header = request.headers.get("Authorization", "")
-    if auth_header != f"Bearer {settings.internal_metrics_token}":
+    if not hmac.compare_digest(auth_header, f"Bearer {settings.internal_metrics_token}"):
         raise HTTPException(status_code=401, detail="missing or invalid token")
 
     return await count_telemetry_events(request.app.state.db_pool, event)

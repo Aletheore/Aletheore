@@ -1082,7 +1082,11 @@ def _maybe_create_audit_certificate_check_run(
 def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_number: int) -> None:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    plan = installation["plan"] if installation is not None else "air"
+    # A missing row is an anomaly (a real installation should always have
+    # one) - defaulting to "free" here rather than a paid tier is
+    # deliberate fail-closed behavior. Same default used everywhere else
+    # in this file a plan is read off a possibly-missing installation row.
+    plan = installation["plan"] if installation is not None else "free"
     # Read off the row already fetched rather than a second query. Defaults to
     # on for a missing row or an older row, matching the column default - a
     # lookup miss must not silently change what a customer's report contains.
@@ -1188,7 +1192,7 @@ def run_managed_audit_api_job(
 ) -> str:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    plan = installation["plan"] if installation is not None else "air"
+    plan = installation["plan"] if installation is not None else "free"
     # Read off the row already fetched rather than a second query. Defaults to
     # on for a missing row or an older row, matching the column default - a
     # lookup miss must not silently change what a customer's report contains.
@@ -2287,7 +2291,7 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
         return
 
     installation = get_installation_row(dsn, installation_id)
-    plan = installation["plan"] if installation is not None else "air"
+    plan = installation["plan"] if installation is not None else "free"
     model_used = model_for_plan(plan)
 
     try:
@@ -2623,7 +2627,7 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         return  # nothing scanned for this repo yet - nothing to build from
 
     installation = get_installation_row(dsn, installation_id)
-    plan = installation["plan"] if installation is not None else "air"
+    plan = installation["plan"] if installation is not None else "free"
 
     candidate_modules = [
         m for m in evidence["repository"]["modules"]

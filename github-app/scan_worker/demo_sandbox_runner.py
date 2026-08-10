@@ -26,6 +26,7 @@ import json
 import logging
 import re
 import subprocess
+import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -34,6 +35,16 @@ logger = logging.getLogger(__name__)
 DEMO_SANDBOX_IMAGE = "aletheore-demo-sandbox:latest"
 CONTAINER_TIMEOUT_SECONDS = 90
 PORT = 8090
+
+# ThreadingHTTPServer spawns one thread per request with no cap of its own,
+# and this endpoint's only real cost is `docker run --cpus=1 --memory=1g` -
+# each concurrent sandbox is a full container on the host. In practice
+# demo-scan-worker's single RQ worker already serializes requests to this
+# service, but that's an upstream property of a different process, not
+# something this one enforces - this semaphore is the actual limit,
+# independent of anything upstream.
+MAX_CONCURRENT_SANDBOXES = 4
+_sandbox_slots = threading.Semaphore(MAX_CONCURRENT_SANDBOXES)
 
 # Mirrors app_server.demo_scan_validation._REPO_URL_RE exactly. Re-checked
 # here rather than trusted from the caller: this process, not
@@ -68,6 +79,15 @@ def run_sandboxed_scan(repo_url: str) -> dict:
     if not _REPO_URL_RE.match(repo_url.strip()):
         raise SandboxRunError("invalid_repo_url")
 
+    if not _sandbox_slots.acquire(timeout=CONTAINER_TIMEOUT_SECONDS):
+        raise SandboxRunError("too_many_concurrent_scans")
+    try:
+        return _run_sandboxed_scan_with_slot_held(repo_url)
+    finally:
+        _sandbox_slots.release()
+
+
+def _run_sandboxed_scan_with_slot_held(repo_url: str) -> dict:
     container_name = f"demo-scan-{uuid.uuid4().hex}"
     cmd = [
         "docker",
