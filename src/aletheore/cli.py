@@ -45,7 +45,7 @@ from aletheore.evidence import (
 from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot, to_sarif
-from aletheore.telemetry import report_scan_event
+from aletheore.telemetry import report_scan_event_in_background
 from aletheore.managed_audit_client import ManagedAuditError, run_managed_audit_request
 from aletheore.query import (
     BranchNotFoundInEvidenceError,
@@ -328,11 +328,10 @@ def _scan(
             "[yellow]Warning: secrets history scan timed out - findings reflect a partial scan[/yellow]"
         )
     _print_result("Scan complete", result_lines)
-    # Fire-and-forget, off the main thread: report_scan_event already has
-    # its own short timeout and swallows every exception, but a background
-    # thread means even a slow/hanging network path can never add latency
-    # to a real scan.
-    threading.Thread(target=report_scan_event, daemon=True).start()
+    # Off the main thread, but waited on with a bound - see
+    # report_scan_event_in_background for why the previous start-and-return
+    # silently dropped most of the events it looked like it was sending.
+    report_scan_event_in_background()
     return 0, evidence, evidence_path
 
 
