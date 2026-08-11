@@ -35,7 +35,13 @@ async def test_signin_page_is_not_cacheable(pool):
 async def test_get_session_returns_none_for_expired_session(pool):
     monkeypatch_secret = "test-session-secret"
     encrypted = encrypt_access_token("gho_realtoken", monkeypatch_secret)
-    already_expired = datetime.now(timezone.utc) - timedelta(seconds=1)
+    # get_session compares expires_at against the DB server's own now(), not
+    # the test runner's clock - a 1-second margin flakes under any real
+    # clock skew between the two (observed locally against a Docker
+    # Postgres container). 5 minutes is well past any skew worth worrying
+    # about while still clearly testing "already expired", not "expires
+    # soon".
+    already_expired = datetime.now(timezone.utc) - timedelta(minutes=5)
     await create_session(pool, "sess-expired", 42, "octocat", encrypted, already_expired)
 
     assert await get_session(pool, "sess-expired") is None
