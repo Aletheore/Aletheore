@@ -1,6 +1,8 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import httpx
+import openai
 import pytest
 import toon
 
@@ -11,6 +13,14 @@ from aletheore.adapters.openai_compatible import (
     REQUIRED_SECTIONS,
     _get_by_dot_path,
 )
+
+
+def _openai_error(cls, status_code=None):
+    request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+    if cls is openai.APIConnectionError:
+        return cls(request=request)
+    response = httpx.Response(status_code, request=request)
+    return cls("boom", response=response, body=None)
 
 
 def test_get_by_dot_path_simple_key():
@@ -201,6 +211,101 @@ def test_invoke_normalizes_provider_errors_without_leaking_details(mock_openai_c
     message = str(exc_info.value)
     assert "testprovider invocation failed: RuntimeError" in message
     assert "secret detail" not in message
+
+
+@patch("aletheore.adapters.openai_compatible.time.sleep")
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_retries_a_transient_authentication_error_and_succeeds(
+    mock_openai_class, mock_sleep, tmp_path
+):
+    # A real production run hit AuthenticationError twice in a row from a
+    # long-lived process using a key that had already succeeded earlier
+    # that morning and succeeded again minutes later with no config change
+    # in between (see _RETRYABLE_EXCEPTIONS' comment) - confirming this was
+    # transient, not a genuinely bad key, which would fail identically on
+    # retry too.
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = [
+        _openai_error(openai.AuthenticationError, status_code=401),
+        _openai_error(openai.AuthenticationError, status_code=401),
+        *_write_all_sections_then_finish_responses(),
+    ]
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        result = adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert "Summary" in result
+    assert mock_sleep.call_count == 2
+
+
+@patch("aletheore.adapters.openai_compatible.time.sleep")
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_gives_up_after_exhausting_retries_on_persistent_auth_error(
+    mock_openai_class, mock_sleep, tmp_path
+):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _openai_error(
+        openai.AuthenticationError, status_code=401
+    )
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError) as exc_info:
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert "testprovider invocation failed: AuthenticationError" in str(exc_info.value)
+    assert mock_client.chat.completions.create.call_count == 3
+
+
+@patch("aletheore.adapters.openai_compatible.time.sleep")
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_does_not_retry_a_non_transient_bad_request_error(
+    mock_openai_class, mock_sleep, tmp_path
+):
+    # Retrying a client error that will fail identically every time (bad
+    # params, content policy, etc.) just delays surfacing it - only the
+    # conventional transient set (auth/rate-limit/connection/timeout/5xx)
+    # is worth retrying.
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _openai_error(
+        openai.BadRequestError, status_code=400
+    )
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert mock_client.chat.completions.create.call_count == 1
+    mock_sleep.assert_not_called()
+
+
+@patch("aletheore.adapters.openai_compatible.time.sleep")
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_simple_completion_retries_a_transient_rate_limit_error(mock_openai_class, mock_sleep, tmp_path):
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    success = MagicMock()
+    success.choices = [MagicMock(message=MagicMock(content="ok"))]
+    success.usage = None
+    mock_client.chat.completions.create.side_effect = [
+        _openai_error(openai.RateLimitError, status_code=429),
+        success,
+    ]
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        result = adapter.simple_completion("system", "user", cwd=str(tmp_path))
+
+    assert result == "ok"
+    assert mock_sleep.call_count == 1
 
 
 @patch("aletheore.adapters.openai_compatible.OpenAI")
