@@ -13,6 +13,7 @@ macOS and inotify on Linux, so idle cost is essentially zero and cost scales
 with edits rather than repository size.
 """
 
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -52,13 +53,17 @@ def _ignored_dirs() -> frozenset[str]:
 
 
 def _is_relevant(repo_path: Path, changed: Path) -> bool:
-    """Whether a filesystem event should trigger a rebuild.
+    """Whether a filesystem event's path is even a candidate for a rebuild.
 
     `.aletheore/` is excluded first and deliberately: a scan writes
     air.json, air.toon, scan-cache.json, a history snapshot and the LanceDB
-    index into it. Without this the rebuild's own output retriggers the
-    watcher, which rebuilds, which writes - a loop that never settles and
-    burns a core until the process is killed.
+    index into it, and without this exclusion those writes would themselves
+    be candidates. This is necessary but not sufficient to stop a rebuild
+    retriggering itself, though - a path outside `.aletheore/` can still be
+    a false positive: `rebuild()` reads every watched file's content, and on
+    Linux that read alone generates a real filesystem event (see
+    _DebouncedHandler). Path is all this function can judge; _real_changes
+    is what catches the rest.
     """
     try:
         relative = changed.resolve().relative_to(repo_path.resolve())
@@ -70,6 +75,38 @@ def _is_relevant(repo_path: Path, changed: Path) -> bool:
     return changed.suffix in _watched_suffixes()
 
 
+def _current_mtimes(repo_path: Path) -> dict[Path, float]:
+    """mtime for every currently-relevant file, walked once at startup.
+
+    This is the baseline _DebouncedHandler compares new events against - see
+    _real_changes for why that comparison exists at all. os.walk with
+    dirnames pruned in place, matching the scanner's own convention, rather
+    than Path.rglob("*") + a post-filter: this way node_modules or .git is
+    never descended into at all, not walked and thrown away.
+
+    Paid once, not per rebuild. This is the same walk+stat this module's own
+    docstring already costs at 841 ms for 644 files - the number that ruled
+    out polling in the first place. Doing it once at startup rather than
+    every debounce cycle is the entire point; it does not reintroduce what
+    was rejected above.
+    """
+    mtimes: dict[Path, float] = {}
+    suffixes = _watched_suffixes()
+    ignored = _ignored_dirs()
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in ignored]
+        for filename in filenames:
+            path = Path(dirpath) / filename
+            if path.suffix not in suffixes or path.is_symlink():
+                continue
+            try:
+                resolved = path.resolve()
+                mtimes[resolved] = resolved.stat().st_mtime
+            except OSError:
+                continue
+    return mtimes
+
+
 class _DebouncedHandler:
     """Records that something changed; the run loop decides when to act.
 
@@ -79,6 +116,17 @@ class _DebouncedHandler:
     _observer_handler below adapts this to the real interface rather than
     duck-typing it - relying on the observer to call the method we happen to
     have defined is how this silently stopped receiving events once.
+
+    A settled batch is filtered against on-disk mtimes before it is handed
+    back - see _real_changes. `.aletheore/` writes are not the only way a
+    rebuild retriggers itself: `rebuild()` reads every watched file's
+    content (scan_repository, and build_chunks for an existing index), and
+    on Linux that read alone is a real filesystem event - inotify's IN_OPEN,
+    and often IN_ATTRIB from the atime update, both indistinguishable from a
+    genuine write once watchdog turns them into a FileModifiedEvent /
+    FileOpenedEvent. Path-based filtering alone cannot catch this, since the
+    path is legitimately a watched source file; only content actually having
+    changed can.
     """
 
     def __init__(self, repo_path: Path) -> None:
@@ -86,6 +134,10 @@ class _DebouncedHandler:
         self._lock = threading.Lock()
         self._last_event_at: float | None = None
         self._changed: set[Path] = set()
+        # Built once, synchronously, before the observer starts - see
+        # _current_mtimes for why this is a one-time cost rather than the
+        # per-cycle poll this module exists to avoid.
+        self._known_mtimes: dict[Path, float] = _current_mtimes(repo_path)
 
     def on_any_event(self, event) -> None:  # noqa: ANN001 - watchdog event, kept untyped to avoid the import
         if event.is_directory:
@@ -104,7 +156,13 @@ class _DebouncedHandler:
             self._last_event_at = time.monotonic()
 
     def take_settled_batch(self, debounce_seconds: float) -> set[Path] | None:
-        """The pending changes, once the tree has been quiet long enough."""
+        """The pending changes, once the tree has been quiet long enough.
+
+        Empty and non-empty are different outcomes here: an event batch that
+        turns out, on inspection, to be entirely read-triggered noise still
+        settles and clears - it must not sit in `_changed` holding the
+        debounce timer hostage - it just produces no rebuild.
+        """
         with self._lock:
             if self._last_event_at is None:
                 return None
@@ -112,7 +170,32 @@ class _DebouncedHandler:
                 return None
             batch, self._changed = self._changed, set()
             self._last_event_at = None
-            return batch
+        return self._real_changes(batch) or None
+
+    def _real_changes(self, batch: set[Path]) -> set[Path]:
+        """batch, minus any path whose mtime did not actually move.
+
+        Reading a file - an open(), or an atime-only metadata update -
+        changes neither its mtime nor its content, only a real write does.
+        A path missing from disk (deleted, or a transient temp file already
+        gone by the time this runs) has nothing to compare and is trusted as
+        a real change; its stale baseline is dropped either way so a file
+        recreated later is judged fresh rather than against a deleted
+        version's mtime.
+        """
+        real: set[Path] = set()
+        for path in batch:
+            resolved = path.resolve()
+            try:
+                mtime = resolved.stat().st_mtime
+            except OSError:
+                self._known_mtimes.pop(resolved, None)
+                real.add(path)
+                continue
+            if self._known_mtimes.get(resolved) != mtime:
+                real.add(path)
+            self._known_mtimes[resolved] = mtime
+        return real
 
 
 def _observer_handler(handler: "_DebouncedHandler"):
@@ -187,11 +270,14 @@ def watch(
     from watchdog.observers import Observer
 
     stop = stop or threading.Event()
+    # Printed before building the mtime baseline (_DebouncedHandler.__init__
+    # walks the tree once - see _current_mtimes) so a large repo shows
+    # something immediately instead of an apparent hang.
+    report(f"watching {repo_path} - Ctrl-C to stop")
     handler = _DebouncedHandler(repo_path)
     observer = Observer()
     observer.schedule(_observer_handler(handler), str(repo_path), recursive=True)
     observer.start()
-    report(f"watching {repo_path} - Ctrl-C to stop")
 
     try:
         while not stop.is_set():
