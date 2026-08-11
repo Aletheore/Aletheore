@@ -18,6 +18,18 @@ def _noop_spend_lock(*args, **kwargs):
     yield
 
 
+def _patch_no_spend_cap(monkeypatch) -> None:
+    """AIRview/Docs build jobs now gate on the same installation monthly
+    LLM spend cap managed audits and flash review already used - real
+    DB-backed functions the rest of this file's tests never had to mock
+    before this. Well under any cap, so the gate is always a no-op here;
+    the cap-reached path gets its own dedicated tests."""
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+
+
 class _FakeCodeGraphStore:
     """Stands in for scan_worker.code_graph_store.CodeGraphStore so
     _sync_code_graph's wiring can be tested without a real database - the
@@ -1827,6 +1839,7 @@ def _wiki_evidence():
 
 
 def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_wiki_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -1854,8 +1867,10 @@ def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch)
         def simple_completion(self, *a, **k):
             return json.dumps({"0": "Auth"})
 
-    monkeypatch.setattr("scan_worker.jobs._live_wiki_full_build_writing_adapter", lambda plan: _SpyAdapter())
-    monkeypatch.setattr("scan_worker.jobs._live_wiki_naming_adapter", lambda: _NamingAdapter())
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_wiki_full_build_writing_adapter", lambda plan, on_usage=None: _SpyAdapter()
+    )
+    monkeypatch.setattr("scan_worker.jobs._live_wiki_naming_adapter", lambda on_usage=None: _NamingAdapter())
     monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
 
@@ -2632,6 +2647,7 @@ def test_maybe_update_live_wiki_skips_when_no_clusters_affected(monkeypatch):
 
 
 def test_maybe_update_live_wiki_generates_and_stores_for_affected_clusters(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -2669,6 +2685,7 @@ def test_maybe_update_live_wiki_generates_and_stores_for_affected_clusters(monke
 
 
 def test_maybe_update_live_wiki_records_failure_status_on_exception(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -2690,6 +2707,32 @@ def test_maybe_update_live_wiki_records_failure_status_on_exception(monkeypatch)
     _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["auth/login.py"], "sha1")
 
     assert status_calls == [("failed", "LLM API unavailable")]
+
+
+def test_maybe_update_live_wiki_skips_llm_call_when_spend_cap_reached(monkeypatch):
+    from scan_worker.jobs import _maybe_update_live_wiki
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+
+    llm_called = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems", lambda *a, **k: llm_called.append(True)
+    )
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error_message=None: status_calls.append((status, error_message)),
+    )
+
+    _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["auth/login.py"], "sha1")
+
+    assert llm_called == []
+    assert status_calls[0][0] == "failed"
+    assert "spend cap" in status_calls[0][1]
 
 
 def test_run_pr_scan_job_wires_changed_files_into_live_wiki_update(bare_repo_with_two_commits, monkeypatch):
@@ -2995,6 +3038,7 @@ def test_run_live_wiki_full_build_job_skips_without_evidence(monkeypatch):
 
 
 def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_wiki_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3036,6 +3080,7 @@ def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
 
 
 def test_run_live_wiki_full_build_job_records_failed_status_on_error(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_wiki_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3056,6 +3101,37 @@ def test_run_live_wiki_full_build_job_records_failed_status_on_error(monkeypatch
     run_live_wiki_full_build_job(1, "octocat/hello-world")
 
     assert build_status_calls == [("failed", "model provider unavailable")]
+
+
+def test_run_live_wiki_full_build_job_skips_llm_call_when_spend_cap_reached(monkeypatch):
+    # H-4: AIRview/Docs builds had no dollar spend cap at all, unlike
+    # managed audits and flash review - this is the same gate those
+    # already had, now closing that gap.
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+
+    llm_called = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems", lambda *a, **k: llm_called.append(True)
+    )
+    build_status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error=None: build_status_calls.append((status, error)),
+    )
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert llm_called == []
+    assert build_status_calls[0][0] == "failed"
+    assert "spend cap" in build_status_calls[0][1]
 
 
 def test_real_line_count_fetcher_returns_none_when_token_setup_fails(monkeypatch):
@@ -3087,6 +3163,7 @@ def test_real_line_count_fetcher_returns_real_line_count(monkeypatch):
 
 
 def test_run_live_wiki_full_build_job_passes_fetch_line_count_through(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_wiki_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3168,6 +3245,7 @@ def test_clusters_with_uncovered_wiki_work_empty_when_everything_covered():
 
 
 def test_run_live_wiki_full_build_job_only_requests_uncovered_clusters(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_wiki_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3272,6 +3350,7 @@ def test_live_wiki_catchup_sweep_job_survives_one_repo_failing(monkeypatch):
 
 
 def test_maybe_update_live_wiki_passes_fetch_line_count_through(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3484,7 +3563,41 @@ def test_run_live_docs_full_build_job_excludes_test_files_from_candidate_modules
     assert status_calls == [("ready", None)]
 
 
+def test_run_live_docs_full_build_job_skips_llm_call_when_spend_cap_reached(monkeypatch):
+    from scan_worker.jobs import run_live_docs_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    module = _docs_module(functions=[{"name": "f", "is_public": True, "docstring": None}])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([module]))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
+    )
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+
+    adapter_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_docs_full_build_writing_adapter",
+        lambda plan, on_usage=None: adapter_calls.append(True),
+    )
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+
+    run_live_docs_full_build_job(1, "octocat/hello-world")
+
+    assert adapter_calls == []
+    assert status_calls[0][0] == "failed"
+    assert "spend cap" in status_calls[0][1]
+
+
 def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_docs_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3499,7 +3612,7 @@ def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
     )
 
     def fake_fetch(client, token, repo, path, ref):
@@ -3533,6 +3646,7 @@ def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
 
 
 def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_docs_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3544,7 +3658,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(mon
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
@@ -3563,7 +3677,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(mon
     assert status_calls == [("failed", "model provider unavailable")]
 
 
-def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
+def test_maybe_update_live_docs_skips_llm_call_when_spend_cap_reached(monkeypatch):
     from scan_worker.jobs import _maybe_update_live_docs
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3571,7 +3685,40 @@ def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
-    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda: object())
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+
+    adapter_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_docs_update_writing_adapter",
+        lambda on_usage=None: adapter_calls.append(True),
+    )
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+
+    evidence = _docs_evidence([_docs_module("good.py")])
+
+    _maybe_update_live_docs(1, "octocat/hello-world", evidence, ["good.py"], "sha1")
+
+    assert adapter_calls == []
+    assert status_calls[0][0] == "failed"
+    assert "spend cap" in status_calls[0][1]
+
+
+def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
+    from scan_worker.jobs import _maybe_update_live_docs
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
+    )
+    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None: object())
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
     def fake_store(dsn, iid, repo, module, adapter, source_lines, commit):
@@ -3598,6 +3745,7 @@ def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
 
 
 def test_maybe_update_live_docs_excludes_test_files_from_changed_modules(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import _maybe_update_live_docs
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3605,7 +3753,7 @@ def test_maybe_update_live_docs_excludes_test_files_from_changed_modules(monkeyp
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
-    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda: object())
+    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None: object())
 
     fetched_for = []
     monkeypatch.setattr(
