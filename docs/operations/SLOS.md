@@ -23,6 +23,10 @@ These targets are internal engineering objectives, not customer SLAs.
 
 ## Alert Candidates
 
+**None of these are wired up yet** - this is a proposed list, not a status
+report. No alerting/paging exists in the codebase for any of them as of
+2026-08-11.
+
 - App server unavailable for 2 consecutive checks.
 - Queue depth above threshold for 10 minutes.
 - Failed jobs above threshold for 10 minutes.

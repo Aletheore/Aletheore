@@ -10,6 +10,7 @@ from aletheore.dashboard import (
     build_history_summary,
 )
 from aletheore.evidence import EVIDENCE_VERSION
+from tests.air_fixtures import minimal_air_evidence
 
 
 def make_evidence(scanned_at: str, module_count: int = 2, secrets_count: int = 0) -> dict:
@@ -28,7 +29,11 @@ def make_evidence(scanned_at: str, module_count: int = 2, secrets_count: int = 0
         },
         "git": {
             "total_commits": 10,
-            "commit_cadence": {"weekly_counts": [1, 2, 3], "trend": "steady"},
+            "commit_cadence": {
+                "weekly_counts": [1, 2, 3],
+                "trend": "steady",
+                "most_recent_week_partial": False,
+            },
             "ownership": [{"path": "m0.py", "top_author": "alice"}],
             "branches": [{"name": "main", "ahead_of_main": 0}],
         },
@@ -161,11 +166,27 @@ def test_build_graph_summary_handles_unclustered_node():
     assert result["nodes"] == [{"id": "orphan.py", "cluster": None}]
 
 
+def _deep_merge(base: dict, overrides: dict) -> dict:
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
 def make_repo_with_evidence(tmp_path: Path) -> Path:
+    # Merged onto minimal_air_evidence() (schema-valid, every collection
+    # empty) rather than written as-is - the dashboard API now routes
+    # through read_evidence -> load_evidence_file, which validates full AIR
+    # schema shape. make_evidence()'s hand-rolled dict, used directly (in
+    # memory, never through this file-writing path) by many other tests
+    # here, omits several required keys nothing used to check for.
     repo = tmp_path / "repo"
     aletheore_dir = repo / ".aletheore"
     aletheore_dir.mkdir(parents=True)
-    (aletheore_dir / "air.json").write_text(json.dumps(make_evidence("2026-07-15T12:00:00+00:00")))
+    evidence = _deep_merge(minimal_air_evidence(), make_evidence("2026-07-15T12:00:00+00:00"))
+    (aletheore_dir / "air.json").write_text(json.dumps(evidence))
     return repo
 
 

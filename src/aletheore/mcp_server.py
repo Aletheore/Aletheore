@@ -12,7 +12,13 @@ from mcp.types import ToolAnnotations
 from aletheore.adapters.base import AgentAdapter
 from aletheore.answer import answer_question
 from aletheore.credentials import get_api_key
-from aletheore.evidence import EVIDENCE_VERSION, is_evidence_version_compatible, scan_repository, write_evidence
+from aletheore.evidence import (
+    IncompatibleEvidenceVersionError,
+    MalformedEvidenceError,
+    load_evidence_file,
+    scan_repository,
+    write_evidence,
+)
 from aletheore.healthcheck import run_healthcheck, save_healthcheck
 from aletheore.history import compute_diff, list_snapshots, save_snapshot
 from aletheore.managed_audit_client import run_managed_audit_request
@@ -46,10 +52,6 @@ from aletheore.toon_encoding import to_toon
 _evidence_cache: dict[Path, tuple[tuple[float, int], dict]] = {}
 
 
-class IncompatibleEvidenceVersionError(Exception):
-    pass
-
-
 def read_evidence(repo_path: Path) -> dict:
     evidence_path = repo_path / ".aletheore" / "air.json"
     if not evidence_path.exists():
@@ -62,14 +64,16 @@ def read_evidence(repo_path: Path) -> dict:
     cached = _evidence_cache.get(repo_path)
     if cached is not None and cached[0] == cache_key:
         return cached[1]
-    evidence = json.loads(evidence_path.read_text())
-    written_version = evidence.get("aletheore_version")
-    if not is_evidence_version_compatible(written_version):
-        raise IncompatibleEvidenceVersionError(
-            f"{evidence_path} was written by aletheore_version={written_version!r}, which "
-            f"isn't compatible with this build's evidence schema ({EVIDENCE_VERSION}) - "
-            f"re-run 'aletheore scan {repo_path}' to refresh it"
-        )
+    # Routes through the same version-compatibility AND schema-shape checks
+    # every other evidence reader (CLI query/index/diff/healthcheck) uses,
+    # rather than a bare json.loads - a truncated or hand-edited air.json
+    # with a *compatible* version used to pass straight through here and
+    # only surface as a raw KeyError deep inside whichever tool first
+    # touched the missing/wrong field, instead of one clear, actionable
+    # error up front (IncompatibleEvidenceVersionError / MalformedEvidenceError,
+    # both re-exported from aletheore.evidence so callers of either module
+    # catch the same exception types).
+    evidence = load_evidence_file(evidence_path)
     _evidence_cache[repo_path] = (cache_key, evidence)
     return evidence
 
