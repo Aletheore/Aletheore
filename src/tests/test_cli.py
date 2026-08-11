@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import typer.main
 from typer.testing import CliRunner
 
 from aletheore.cli import (
@@ -1858,12 +1859,21 @@ def test_unknown_query_kind_with_no_close_match_still_lists_the_kinds():
 def test_every_path_taking_command_accepts_the_path_option():
     """`--path` worked on `query` alone, so a user who learned it there got
     "No such option '--path'" from the other eight - reproduced live against
-    `aletheore dashboard --path .`."""
+    `aletheore dashboard --path .`.
+
+    Checks the registered click params directly rather than grepping rendered
+    `--help` text: rich wraps long option names across lines (and inserts ANSI
+    resets between characters) once the render width is narrow enough, which
+    made a substring check on the rendered text flaky under CI's terminal
+    width rather than the local one.
+    """
+    command_group = typer.main.get_command(app)
     for name in (
         "scan", "audit", "init", "index", "mcp", "mcp-install", "dashboard", "healthcheck", "query",
     ):
-        help_text = CliRunner().invoke(app, [name, "--help"]).output
-        assert "--path" in help_text, f"{name} does not accept --path"
+        command = command_group.commands[name]
+        opts = {opt for param in command.params for opt in getattr(param, "opts", [])}
+        assert "--path" in opts, f"{name} does not accept --path"
 
 
 def test_resolve_path_prefers_the_option_but_keeps_the_positional_default():
