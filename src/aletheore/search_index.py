@@ -358,9 +358,26 @@ def build_index(repo_path: Path, evidence: dict) -> int:
     # chooses its provider internally. Two distinct models with matching
     # dimensions would not be caught; that costs stale-but-valid vectors,
     # not a crash or a schema error.
-    if fresh_vectors and reusable:
+    #
+    # This has to run even when stale is empty. If every chunk's hash
+    # already matches the previous index, that's the "rebuild with no
+    # changes" case the incremental-indexing benchmark above measured at
+    # 0.2s - but the provider can still have changed underneath it with zero
+    # code changes in between (this is precisely "index with Ollama, lose
+    # Ollama": nothing edited, only the available provider). With
+    # fresh_vectors empty there's nothing to compare reusable's dimension
+    # against, so a one-item probe embed establishes it. Reproduced without
+    # this: the table silently kept 768-dim rows, and the next search()
+    # crashed on the mismatch between the table and the freshly-embedded
+    # 1536-dim query vector instead of degrading.
+    if reusable:
+        current_dimension = (
+            len(fresh_vectors[0])
+            if fresh_vectors
+            else len(_embed_in_batches([chunks[0]["text"]])[0])
+        )
         reused_dimensions = {len(vector) for vector in reusable.values()}
-        if reused_dimensions != {len(fresh_vectors[0])}:
+        if reused_dimensions != {current_dimension}:
             reusable = {}
             stale = chunks
             fresh_vectors = _embed_in_batches([chunk["text"] for chunk in stale])
@@ -448,12 +465,21 @@ def _rrf_fuse(vector_hits: list[dict], text_hits: list[dict]) -> list[dict]:
     return [by_key[key] for key, _ in sorted(scores.items(), key=lambda item: -item[1])]
 
 
-def _fts_candidates(table, query_text: str, limit: int) -> list[dict]:
+def _fts_candidates(
+    table, query_text: str, limit: int, language: str | None = None
+) -> list[dict]:
     # Degrades to vector-only rather than failing: an index built before
     # full-text existed has no text_idx, and a query full of punctuation can
     # be rejected by the tokenizer. Neither is worth losing search over.
     try:
-        return table.search(query_text, query_type="fts").limit(limit).to_list()
+        query = table.search(query_text, query_type="fts").limit(limit)
+        if language:
+            # Same pre-filter as the vector side, for the same reason: a
+            # minority language's fts hits would otherwise fill most of the
+            # over-fetched limit with chunks that get thrown away after
+            # fusion, which is exactly the situation the filter exists for.
+            query = query.where(f"language = '{_escape_sql_literal(language)}'")
+        return query.to_list()
     except Exception:  # noqa: BLE001
         return []
 
@@ -472,11 +498,12 @@ def search_index(
     if language:
         # A pre-filter, not a post-filter - restricting after ranking would
         # return fewer than k results for a language that is a minority of
-        # the repo, which is exactly when the filter is worth using.
+        # the repo, which is exactly when the filter is worth using. Applied
+        # to both retrievers, not just the vector one - see _fts_candidates.
         vector_query = vector_query.where(f"language = '{_escape_sql_literal(language)}'")
-    candidates = _rrf_fuse(vector_query.to_list(), _fts_candidates(table, query_text, limit))
-    if language:
-        candidates = [c for c in candidates if c.get("language") == language]
+    candidates = _rrf_fuse(
+        vector_query.to_list(), _fts_candidates(table, query_text, limit, language)
+    )
 
     per_file: dict[str, int] = {}
     raw_results = []

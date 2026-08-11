@@ -10,6 +10,7 @@ from aletheore.search_index import (
     MODULE_CHUNK_MAX_LINES,
     _embed_in_batches,
     _escape_sql_literal,
+    _fts_candidates,
     _reusable_vectors,
     _rrf_fuse,
     build_chunks,
@@ -404,6 +405,55 @@ def test_language_filter_is_escaped_before_reaching_the_where_clause():
     assert _escape_sql_literal("python' OR '1'='1") == "python'' OR ''1''=''1"
 
 
+def test_fts_candidates_applies_language_as_a_pre_filter():
+    """Regression: the fts side used to have no language parameter at all,
+    so a minority language's hits filled most of the over-fetched limit and
+    were only discarded after fusion - exactly the situation a pre-filter
+    exists to avoid. Must match the vector side's own where clause."""
+    table = MagicMock()
+    fts_query = table.search.return_value.limit.return_value
+    fts_query.where.return_value.to_list.return_value = [
+        {"module_path": "a.py", "symbol_name": "f", "start_line": 1, "end_line": 2,
+         "language": "python", "imports": [], "text": "x"}
+    ]
+
+    results = _fts_candidates(table, "anything", 20, language="python")
+
+    fts_query.where.assert_called_once_with("language = 'python'")
+    assert results == fts_query.where.return_value.to_list.return_value
+
+
+def test_fts_candidates_skips_the_where_clause_without_a_language():
+    table = MagicMock()
+    table.search.return_value.limit.return_value.to_list.return_value = []
+
+    _fts_candidates(table, "anything", 20)
+
+    table.search.return_value.limit.return_value.where.assert_not_called()
+
+
+def test_search_index_filters_both_retrievers_by_language(tmp_path):
+    """End-to-end version of the two tests above: search_index must pass the
+    same where clause to both the vector query and the fts query, not only
+    the vector one."""
+    table = MagicMock()
+    chain = table.search.return_value.limit.return_value
+    chain.where.return_value.to_list.return_value = [
+        {"module_path": "a.py", "symbol_name": "f", "start_line": 1, "end_line": 2,
+         "language": "python", "imports": [], "text": "x", "_distance": 0.1}
+    ]
+
+    with patch("aletheore.search_index.open_index", return_value=table), \
+         patch("aletheore.search_index.embed_texts", return_value=[[0.0]]):
+        search_index(tmp_path, "anything", k=5, language="python")
+
+    assert chain.where.call_count == 2
+    assert [c.args[0] for c in chain.where.call_args_list] == [
+        "language = 'python'",
+        "language = 'python'",
+    ]
+
+
 def test_chunks_carry_language_and_imports_from_evidence(tmp_path):
     """AIR already computed both, so attaching them is free - and it turns
     the index into something a polyglot repo can pre-filter rather than only
@@ -486,9 +536,14 @@ def test_build_index_only_embeds_chunks_whose_text_changed(tmp_path):
         build_index(tmp_path, evidence(1))
         first_call_count = len(embedded[0])
         embedded.clear()
-        # Same content: nothing to re-embed at all.
+        # Same content: nothing needs re-embedding for its own sake, but one
+        # probe item still runs to confirm the current provider's dimension
+        # still matches what's stored - see
+        # test_switching_embedding_provider_rebuilds_even_when_nothing_else_changed.
+        # The point of this assertion is that it stays bounded rather than
+        # scaling with corpus size, not that it is exactly zero.
         build_index(tmp_path, evidence(1))
-        assert embedded == [] or all(not batch for batch in embedded)
+        assert sum(len(batch) for batch in embedded) <= 1
 
         embedded.clear()
         build_index(tmp_path, evidence(99))
@@ -555,3 +610,41 @@ def test_switching_embedding_provider_rebuilds_instead_of_crashing(tmp_path):
     # b.py was unchanged, but its 768-dim vector cannot survive the switch.
     assert {len(row["vector"]) for row in rows} == {1536}
     assert len(rows) == 2
+
+
+def test_switching_embedding_provider_rebuilds_even_when_nothing_else_changed(tmp_path):
+    """Regression: the dimension guard used to only run when at least one
+    chunk was stale, comparing against that chunk's freshly-embedded vector.
+    If every chunk's hash already matched the previous index - the "rebuild,
+    no changes" case the incremental-indexing commit measured at 0.2s -
+    nothing got embedded to reveal the new dimension. That is precisely
+    "index with Ollama, lose Ollama" with no code change in between: the
+    table silently kept the old 768-dim vectors, and the next search() call
+    crashed on the mismatch between the table and a freshly-embedded
+    1536-dim query vector instead of degrading. A one-item probe embed now
+    runs whenever a previous index exists and nothing was otherwise stale."""
+
+    def evidence():
+        (tmp_path / "a.py").write_text("def f():\n    return 1\n")
+        return {"repository": {"modules": [{
+            "path": "a.py", "language": "python", "imports": [],
+            "symbols": {"functions": [{"name": "f", "start_line": 1, "end_line": 2}], "classes": []},
+        }]}}
+
+    with patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.1] * 768] * len(t)):
+        build_index(tmp_path, evidence())
+
+    calls = []
+
+    def fake_embed(texts):
+        calls.append(len(texts))
+        return [[0.2] * 1536] * len(texts)
+
+    # Same content as the first build - every chunk hash already matches the
+    # existing index - but the provider switched underneath it.
+    with patch("aletheore.search_index.embed_texts", side_effect=fake_embed):
+        build_index(tmp_path, evidence())
+
+    assert calls, "a probe embed must run to detect the provider change"
+    rows = open_index(tmp_path).to_arrow().to_pylist()
+    assert {len(row["vector"]) for row in rows} == {1536}
