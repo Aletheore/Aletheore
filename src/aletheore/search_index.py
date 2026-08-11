@@ -225,10 +225,41 @@ def open_index(repo_path: Path):
     return db.open_table(TABLE_NAME)
 
 
+# How many chunks one file may contribute to a single result set, and how
+# far past k to look when enforcing that.
+#
+# A large class-per-file (Flask's app.py, this repo's graph.py) has dozens of
+# symbol chunks, all plausibly related to any question about that area, so it
+# can take every slot and leave the answer invisible. Measured on Flask:
+# app.py and sansio/app.py were 16% of chunks and took three of the four
+# top-5 misses, and one query returned sansio/blueprints.py twice.
+#
+# Two rather than one: a file's module chunk plus its most relevant symbol is
+# a genuinely useful pair, and cutting to one would discard the symbol that
+# actually answers the question in favour of the overview.
+MAX_CHUNKS_PER_FILE = 2
+_OVERFETCH_FACTOR = 4
+
+
 def search_index(repo_path: Path, query_text: str, k: int = 10) -> list[dict]:
     table = open_index(repo_path)
     query_vector = embed_texts([query_text])[0]
-    raw_results = table.search(query_vector).limit(k).to_list()
+    # Over-fetch, then thin by file: the chunks displaced by the cap have to
+    # be replaced by something, and that something is only available if the
+    # search returned more than k to begin with. Ranking is otherwise
+    # untouched - this drops lower-ranked duplicates from a file already
+    # represented, it never promotes a worse match over a better one.
+    candidates = table.search(query_vector).limit(k * _OVERFETCH_FACTOR).to_list()
+    per_file: dict[str, int] = {}
+    raw_results = []
+    for candidate in candidates:
+        path = candidate["module_path"]
+        if per_file.get(path, 0) >= MAX_CHUNKS_PER_FILE:
+            continue
+        per_file[path] = per_file.get(path, 0) + 1
+        raw_results.append(candidate)
+        if len(raw_results) == k:
+            break
     return [
         {
             "module_path": result["module_path"],

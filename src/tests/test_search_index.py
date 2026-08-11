@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aletheore.search_index import (
+    MAX_CHUNKS_PER_FILE,
     MODULE_CHUNK_MAX_LINES,
     EmbeddingProviderUnavailableError,
     IndexNotFoundError,
@@ -298,3 +299,36 @@ def test_module_chunk_head_is_bounded(tmp_path):
 
     assert module_chunk["symbol_name"] is None
     assert module_chunk["end_line"] == MODULE_CHUNK_MAX_LINES
+
+
+def test_search_caps_chunks_per_file_and_backfills(tmp_path):
+    """A large class-per-file has dozens of plausibly-related symbol chunks
+    and can take every slot, leaving the answering file invisible. Measured
+    on Flask: app.py + sansio/app.py were 16% of chunks and took three of
+    four top-5 misses, and one query returned sansio/blueprints.py twice.
+
+    The displaced slots must be backfilled from lower-ranked candidates,
+    which is why the search over-fetches before thinning.
+    """
+    hoggish = [
+        {"module_path": "big.py", "symbol_name": f"f{i}", "start_line": i, "end_line": i,
+         "language": "python", "text": f"f{i}", "_distance": 0.1 + i / 1000}
+        for i in range(10)
+    ]
+    others = [
+        {"module_path": f"other{i}.py", "symbol_name": "g", "start_line": 1, "end_line": 1,
+         "language": "python", "text": "g", "_distance": 0.5 + i / 1000}
+        for i in range(5)
+    ]
+    table = MagicMock()
+    table.search.return_value.limit.return_value.to_list.return_value = hoggish + others
+
+    with patch("aletheore.search_index.open_index", return_value=table), \
+         patch("aletheore.search_index.embed_texts", return_value=[[0.0]]):
+        results = search_index(tmp_path, "anything", k=5)
+
+    paths = [r["module_path"] for r in results]
+    assert paths.count("big.py") == MAX_CHUNKS_PER_FILE
+    # Slots freed by the cap are backfilled rather than left short.
+    assert len(results) == 5
+    assert paths == ["big.py", "big.py", "other0.py", "other1.py", "other2.py"]
