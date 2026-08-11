@@ -47,6 +47,12 @@ dependencies = [
     "python-toon>=0.1.3,<0.2",
     "pyyaml>=6.0,<7.0",
     "typer>=0.24,<0.28",
+    # `aletheore watch` only. OS-level file events (FSEvents on macOS,
+    # inotify on Linux) rather than polling: measured on this repository,
+    # walking and stat-ing the tree costs 841 ms for 644 files, so a
+    # two-second poll would burn ~40% of a core continuously on a laptop
+    # already running an editor and a compiler.
+    "watchdog>=4.0,<7.0",
     "rich>=13.0",
     "tomli-w>=1.0,<2.0",
 ]
