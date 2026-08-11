@@ -1,8 +1,11 @@
+import logging
 import json
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from app_server.evidence_limits import check_evidence_size
+
+from aletheore.evidence import is_evidence_version_compatible
 
 
 def insert_repo_history(
@@ -460,7 +463,32 @@ def get_latest_evidence(dsn: str, installation_id: int, repo_full_name: str) -> 
             row = cur.fetchone()
             if row is None:
                 return None
-            return json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            evidence = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+
+    # repo_history rows outlive the schema that wrote them. The CLI, MCP
+    # server and dashboard all version-check evidence before reading it; this
+    # path did not, so after an EVIDENCE_VERSION bump every consumer here
+    # (AIRview, Flash review, health checks - 5 call sites) would keep
+    # reading old-shaped rows as if current, and KeyError the moment new code
+    # indexed a key the old shape lacks. That is exactly the silent drift
+    # AIR-SCHEMA.md's migration rules describe.
+    #
+    # Treated as "no evidence yet" rather than raising: every caller already
+    # handles None (it is the normal never-scanned-yet case) and the next
+    # scan overwrites the row anyway, so a stale row costs one skipped
+    # enrichment rather than a failed job.
+    if not is_evidence_version_compatible(
+        evidence.get("aletheore_version") if isinstance(evidence, dict) else None
+    ):
+        logging.getLogger("scan_worker.db").info(
+            "ignoring stored evidence for installation=%s repo=%s - written by "
+            "aletheore_version=%r, incompatible with this build; awaiting re-scan",
+            installation_id,
+            repo_full_name,
+            evidence.get("aletheore_version") if isinstance(evidence, dict) else None,
+        )
+        return None
+    return evidence
 
 
 def get_last_endpoint_health(

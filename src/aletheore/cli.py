@@ -139,6 +139,7 @@ QUERY_KIND_GROUPS: dict[str, list[str]] = {
         "cluster",
         "layer-violations",
         "dead-code",
+        "schema",
     ],
     "Security": ["secrets", "vulnerabilities", "licenses"],
     "Runtime": ["endpoints", "database", "infrastructure", "environment-variables"],
@@ -384,17 +385,49 @@ def _resolve_check_toggles(
     )
 
 
+_SCHEMA_UNENTITLED_REASON = (
+    "requires a paid plan - run 'aletheore login' to connect an entitled installation"
+)
+
+
+def _resolve_schema_entitlement() -> tuple[bool, str]:
+    """Whether this machine may run schema mapping, and why not if not.
+
+    Resolved from the saved managed-audit token via the existing /v1/whoami,
+    not from a new licensing mechanism - `status` already does exactly this.
+    Any failure (no token, offline, API down, free plan) is treated as
+    unentitled rather than raised: a scan must still produce evidence when
+    the entitlement service is unreachable, it just produces it with the
+    schema section unchecked and a reason saying so.
+    """
+    token = get_api_key("ALETHEORE_API_TOKEN", "aletheore-managed-audit", prompt_fn=lambda _: "")
+    if not token:
+        return False, _SCHEMA_UNENTITLED_REASON
+    who = _fetch_whoami(token)
+    if who is None:
+        return False, "could not reach the entitlement service - schema mapping skipped"
+    if who.get("plan", "free") == "free":
+        return False, _SCHEMA_UNENTITLED_REASON
+    return True, ""
+
+
 def _scan(
     repo_path: str,
     check_vulnerabilities: bool | None,
     scan_git_history: bool | None,
     check_licenses: bool | None = None,
     map_endpoints: bool | None = None,
+    map_schema: bool | None = None,
 ) -> tuple[int, dict, Path]:
     repo = Path(repo_path).resolve()
     resolved_vulnerabilities, resolved_git_history, resolved_licenses, resolved_endpoints = (
         _resolve_check_toggles(repo, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints)
     )
+    if map_schema is False:
+        resolved_schema, schema_reason = False, "skipped (--no-map-schema)"
+    else:
+        resolved_schema, schema_reason = _resolve_schema_entitlement()
+
     console.print(f"Scanning {repo}...")
     try:
         evidence = scan_repository(
@@ -403,6 +436,8 @@ def _scan(
             scan_git_history=resolved_git_history,
             check_licenses=resolved_licenses,
             map_endpoints=resolved_endpoints,
+            map_schema=resolved_schema,
+            map_schema_skip_reason=schema_reason,
             progress=_make_progress_printer(),
         )
     except GitAnalysisError as exc:
@@ -430,9 +465,10 @@ def _audit(
     scan_git_history: bool | None,
     check_licenses: bool | None = None,
     map_endpoints: bool | None = None,
+    map_schema: bool | None = None,
 ) -> int:
     scan_exit_code, _evidence, evidence_path = _scan(
-        repo_path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints
+        repo_path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema
     )
     if scan_exit_code != 0:
         return scan_exit_code
@@ -490,6 +526,7 @@ def _managed_audit(
     scan_git_history: bool | None,
     check_licenses: bool | None = None,
     map_endpoints: bool | None = None,
+    map_schema: bool | None = None,
 ) -> int:
     resolved_token = token or get_api_key("ALETHEORE_API_TOKEN", "aletheore-managed-audit")
     if not resolved_token:
@@ -502,6 +539,7 @@ def _managed_audit(
         scan_git_history,
         check_licenses,
         map_endpoints,
+        map_schema,
     )
     if scan_exit_code != 0:
         return scan_exit_code
@@ -550,6 +588,34 @@ def _fetch_whoami(
     except httpx.HTTPError:
         return None
     return response.json()
+
+
+def _query_schema(repo_path: str) -> int:
+    """The database schema as a mermaid erDiagram.
+
+    Printed as mermaid rather than TOON because the whole point of this
+    section is the picture - the raw tables/relations arrays are already
+    reachable through the evidence file for anything that wants them.
+    """
+    from aletheore.wiki_diagrams import build_schema_diagram
+
+    repo = Path(repo_path).resolve()
+    try:
+        evidence = load_evidence(repo)
+    except (FileNotFoundError, IncompatibleEvidenceVersionError) as exc:
+        console.print(f"[bold red]error:[/bold red] {exc}")
+        return 1
+
+    schema = evidence["repository"]["database"]["schema"]
+    if not schema["checked"]:
+        console.print(f"[yellow]schema mapping not run:[/yellow] {schema['reason']}")
+        return 1
+    diagram = build_schema_diagram(evidence)
+    if diagram is None:
+        console.print("no tables found - no migration directories were detected in this repo")
+        return 0
+    print(diagram)
+    return 0
 
 
 def _query_changes(repo_path: str, full: bool) -> int:
@@ -630,6 +696,9 @@ def _query(
             console.print(f"Did you mean [bold cyan]{suggestions[0]}[/bold cyan]?\n")
         console.print(_query_kinds_panel())
         return 1
+
+    if kind == "schema":
+        return _query_schema(repo_path)
 
     if kind == "changes":
         return _query_changes(repo_path, full)
@@ -1151,6 +1220,11 @@ def audit(
         "--check-licenses/--no-check-licenses",
         help="dependency-license check (on by default, or set by .aletheore.json's disabled_checks)",
     ),
+    map_schema: Optional[bool] = typer.Option(
+        None,
+        "--map-schema/--no-map-schema",
+        help="map database schema from migrations (paid plans; on by default when entitled)",
+    ),
     map_endpoints: Optional[bool] = typer.Option(
         None,
         "--map-endpoints/--no-map-endpoints",
@@ -1204,6 +1278,11 @@ def scan(
         "--check-licenses/--no-check-licenses",
         help="dependency-license check (on by default, or set by .aletheore.json's disabled_checks)",
     ),
+    map_schema: Optional[bool] = typer.Option(
+        None,
+        "--map-schema/--no-map-schema",
+        help="map database schema from migrations (paid plans; on by default when entitled)",
+    ),
     map_endpoints: Optional[bool] = typer.Option(
         None,
         "--map-endpoints/--no-map-endpoints",
@@ -1212,7 +1291,7 @@ def scan(
 ) -> None:
     path = _resolve_path(path, path_option)
     exit_code, _evidence, _evidence_path = _scan(
-        path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints
+        path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema
     )
     raise typer.Exit(code=exit_code)
 

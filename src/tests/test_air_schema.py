@@ -22,8 +22,8 @@ from tests.air_fixtures import minimal_air_evidence
 # stays "compatible" by version check while actually having a different
 # shape - which is exactly the silent drift the version field exists to
 # prevent. See docs/AIR-SCHEMA.md for the migration rules.
-EXPECTED_SCHEMA_FINGERPRINT = "e762994bf0e6f961"
-EXPECTED_EVIDENCE_VERSION = "0.2.0"
+EXPECTED_SCHEMA_FINGERPRINT = "ae1f3063d2364b26"
+EXPECTED_EVIDENCE_VERSION = "0.3.0"
 
 
 def test_schema_changes_require_an_evidence_version_bump():

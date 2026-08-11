@@ -95,4 +95,5 @@ architecture config, which is the common case.
 
 | Version | Change |
 | --- | --- |
+| `0.3.0` | Added `repository.database.schema`: tables, columns, foreign-key relations, and indexes replayed from Postgres DDL migrations, each citing the file:line that introduced it. Gated — present with `checked: false` when the installation is not entitled, so the section's keys are identical for every user and only `checked` varies. |
 | `0.2.0` | Contract formalized: JSON Schema extracted, published, and enforced in CI. No shape change from the `0.2.0` documents already in the wild — this version documents the existing shape rather than altering it. |

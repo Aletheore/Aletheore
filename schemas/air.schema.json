@@ -226,6 +226,137 @@
             "orm_frameworks": {
               "type": "array"
             },
+            "schema": {
+              "properties": {
+                "checked": {
+                  "type": "boolean"
+                },
+                "indexes": {
+                  "items": {
+                    "properties": {
+                      "columns": {
+                        "type": "array"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "table": {
+                        "type": "string"
+                      },
+                      "unique": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "columns",
+                      "name",
+                      "table",
+                      "unique"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "relations": {
+                  "items": {
+                    "properties": {
+                      "file": {
+                        "type": "string"
+                      },
+                      "from_column": {
+                        "type": "string"
+                      },
+                      "from_table": {
+                        "type": "string"
+                      },
+                      "line": {
+                        "type": "integer"
+                      },
+                      "to_column": {
+                        "type": "string"
+                      },
+                      "to_table": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "file",
+                      "from_column",
+                      "from_table",
+                      "line",
+                      "to_column",
+                      "to_table"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "sources": {
+                  "type": "array"
+                },
+                "tables": {
+                  "items": {
+                    "properties": {
+                      "columns": {
+                        "items": {
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "nullable": {
+                              "type": "boolean"
+                            },
+                            "primary_key": {
+                              "type": "boolean"
+                            },
+                            "type": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "nullable",
+                            "primary_key",
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "file": {
+                        "type": "string"
+                      },
+                      "line": {
+                        "type": "integer"
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "columns",
+                      "file",
+                      "line",
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "unsupported": {
+                  "type": "array"
+                }
+              },
+              "required": [
+                "checked",
+                "indexes",
+                "relations",
+                "sources",
+                "tables",
+                "unsupported"
+              ],
+              "type": "object"
+            },
             "schema_files": {
               "type": "array"
             }
@@ -233,6 +364,7 @@
           "required": [
             "migration_directories",
             "orm_frameworks",
+            "schema",
             "schema_files"
           ],
           "type": "object"

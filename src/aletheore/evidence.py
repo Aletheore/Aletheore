@@ -13,6 +13,7 @@ from aletheore.endpoints import map_api_endpoints
 from aletheore.git_intel.analyzer import analyze_git, compute_hotspots
 from aletheore.licenses import check_dependency_licenses
 from aletheore.repo_config import load_repo_config
+from aletheore.schema_map import extract_schema, skipped_schema
 from aletheore.scanner.detect import (
     detect_ai_usage,
     detect_build_tools,
@@ -34,7 +35,7 @@ from aletheore.secrets import (
 from aletheore.toon_encoding import to_toon
 from aletheore.vulnerabilities import check_vulnerabilities as check_dependency_vulnerabilities
 
-EVIDENCE_VERSION = "0.2.0"
+EVIDENCE_VERSION = "0.3.0"
 
 
 def _version_compatibility_key(version: str) -> tuple[int, int] | None:
@@ -362,6 +363,14 @@ def scan_repository(
     scan_git_history: bool = True,
     check_licenses: bool = True,
     map_endpoints: bool = True,
+    map_schema: bool = True,
+    # Why a caller-supplied reason rather than a fixed literal: this section
+    # is skipped for two unrelated causes - an explicit --no-map-schema, or
+    # an installation without the entitlement - and a reader who sees
+    # `checked: false` needs to know which. Keeping the string out here
+    # leaves evidence.py with no knowledge of plans or authentication,
+    # matching every other check it runs.
+    map_schema_skip_reason: str = "skipped (--no-map-schema)",
     progress: Callable[[str], None] | None = None,
 ) -> dict:
     report = progress or _noop_progress
@@ -467,6 +476,14 @@ def scan_repository(
             "findings": [],
         }
 
+    if map_schema:
+        report("Mapping database schema from migrations")
+        schema_data = extract_schema(repo_path, [
+            entry["path"] for entry in database["migration_directories"] if "path" in entry
+        ])
+    else:
+        schema_data = skipped_schema(map_schema_skip_reason)
+
     if map_endpoints:
         report("Mapping API endpoints")
         api_endpoints_data = map_api_endpoints(
@@ -501,7 +518,7 @@ def scan_repository(
             "policy_docs": policy_docs,
             "build_tools": build_tools,
             "monorepo": monorepo,
-            "database": database,
+            "database": {**database, "schema": schema_data},
             "infrastructure": infrastructure,
             "environment_variables": environment_variables,
             "modules": modules,
