@@ -286,7 +286,10 @@ def detect_languages(repo_path: Path, ignored_paths: list[str] | None = None) ->
             entry["loc"] += sum(1 for _ in path.open("r", encoding="utf-8", errors="ignore"))
         except OSError:
             continue
-    return list(counts.values())
+    # counts preserves _iter_source_files' filesystem-walk order, which is
+    # filesystem-dependent (APFS vs ext4 give different orders for the same
+    # repo) - sorted here for the same reason the other detectors below are.
+    return sorted(counts.values(), key=lambda entry: entry["name"])
 
 
 def detect_frameworks(repo_path: Path) -> list[dict]:

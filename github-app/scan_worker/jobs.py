@@ -430,6 +430,16 @@ def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> 
     env = {name: os.environ[name] for name in _SCAN_SUBPROCESS_ENV_ALLOWLIST if name in os.environ}
     env["ALETHEORE_GIT_HISTORY_DEPTH_CAP"] = str(GRAPH_COLD_SYNC_DEPTH_CAP)
     env["ALETHEORE_SECRETS_HISTORY_DEPTH_CAP"] = str(SECRETS_HISTORY_DEPTH_CAP)
+    # Every hosted scan clones someone else's repo - the repo owner can
+    # commit both a source file and a matching .aletheore/scan-cache.json
+    # entry whose cached "parse result" claims whatever they want (see
+    # evidence.py's _DISABLE_LOCAL_SCAN_CACHE_ENV for the full reasoning).
+    # Always set, regardless of whether an explicit unchanged_scan_cache_path
+    # is also passed below - the two are independent: this disables trusting
+    # a cache file sourced from inside the untrusted checkout itself, that
+    # one (when present) supplies our own trusted, DB-backed incremental
+    # cache instead.
+    env["ALETHEORE_DISABLE_LOCAL_SCAN_CACHE"] = "1"
     if unchanged_scan_cache_path is not None:
         env["ALETHEORE_UNCHANGED_SCAN_CACHE"] = str(unchanged_scan_cache_path)
     subprocess.run(["aletheore", "scan", str(repo_dir)], check=True, env=env)

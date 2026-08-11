@@ -39,6 +39,25 @@ def test_detect_languages_counts_files_and_loc(tmp_path):
     assert by_name["javascript"]["file_count"] == 1
 
 
+def test_detect_languages_returns_a_sorted_list(tmp_path):
+    # Built from _iter_source_files' raw filesystem-walk order, which is
+    # filesystem-dependent (confirmed elsewhere in this file: the same repo
+    # produces differently-ordered results on APFS vs ext4) - must sort its
+    # own output by name rather than pass through walk order, the same fix
+    # already applied to the other detectors below.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "z.go").write_text("package main\n")
+    (repo / "a.py").write_text("x = 1\n")
+    (repo / "m.rb").write_text("x = 1\n")
+
+    languages = detect_languages(repo)
+
+    names = [entry["name"] for entry in languages]
+    assert names == sorted(names)
+    assert names == ["go", "python", "ruby"]
+
+
 def test_detect_languages_covers_every_module_graph_language(tmp_path):
     # detect_languages() used to keep its own, separately-maintained extension
     # mapping that fell out of sync with graph.py's - it silently reported zero

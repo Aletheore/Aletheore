@@ -316,6 +316,33 @@ def test_build_module_graph_ignores_nested_git_worktree(tmp_path):
     assert {m["path"] for m in modules} == {"main.py"}
 
 
+def test_python_source_roots_returns_a_sorted_deterministic_list(tmp_path):
+    # Built via a set (roots.add(...) while walking the tree), which iterates
+    # in an order that depends on Path hashing - stable within one process
+    # but not guaranteed across separate interpreter runs (PYTHONHASHSEED is
+    # randomized per-process by default). Confirmed empirically: 12 separate
+    # `aletheore scan` invocations of the same repo split 6/6 between two
+    # different absolute-import resolutions. _resolve_python_module tries
+    # roots in order and returns on the first match, so an unsorted roots
+    # list makes an ambiguous import (resolvable via more than one root)
+    # resolve differently run to run. Sorting can't know which root a real
+    # `python` interpreter would actually prefer, but it does make the same
+    # repo always produce the same answer.
+    from aletheore.scanner.graph import _python_source_roots
+
+    repo = tmp_path / "repo"
+    for project, module in (("src", "pkg"), ("app", "pkg2")):
+        pkg_dir = repo / project / module
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "__init__.py").write_text("")
+        (pkg_dir / "mod.py").write_text("x = 1\n")
+
+    roots = _python_source_roots(repo)
+
+    assert roots == sorted(roots, key=lambda p: (len(p.parts), str(p)))
+    assert roots == [repo, repo / "app", repo / "src"]
+
+
 def test_build_module_graph_import_resolution_ignores_nested_git_worktree(tmp_path):
     # A different layer of the same real bug as
     # test_build_module_graph_ignores_nested_git_worktree above: that test
