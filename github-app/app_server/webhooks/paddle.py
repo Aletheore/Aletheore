@@ -129,7 +129,7 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
         # re-attribute or steal credit - record_referral is also itself a
         # database-enforced no-op past the first row (installation_id is
         # that table's primary key).
-        discount_id = data.get("discount_id")
+        discount_id = (data.get("discount") or {}).get("id")
         if discount_id:
             affiliate = await get_affiliate_by_discount_id(pool, discount_id)
             if affiliate is not None:

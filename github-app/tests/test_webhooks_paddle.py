@@ -52,7 +52,11 @@ def _subscription_created_payload(
         },
     }
     if discount_id is not None:
-        payload["data"]["discount_id"] = discount_id
+        # Real Paddle subscription payloads nest this under a `discount`
+        # object (`data.discount.id`) - there is no flat `discount_id`
+        # field. Matching that shape here is what caught the production
+        # bug where the handler read the flat field and never found it.
+        payload["data"]["discount"] = {"id": discount_id}
     return payload
 
 
