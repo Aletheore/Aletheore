@@ -1,9 +1,12 @@
+import asyncio
 import json
+import tempfile
 from pathlib import Path
 
 from starlette.testclient import TestClient
 
 from aletheore.dashboard import (
+    _watch_evidence_mtime,
     build_app,
     build_evidence_summary,
     build_graph_summary,
@@ -276,3 +279,109 @@ def test_logo_route_serves_the_bundled_png(tmp_path):
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
+
+
+# --- SSE stream: shutdown, cancellation, malformed evidence, browser icons ---
+
+
+def test_watch_evidence_mtime_ends_promptly_when_shutdown_is_signalled():
+    """The stream never ends on its own, so uvicorn sat at "Waiting for
+    connections to close" until the user pressed Ctrl-C a second time -
+    reproduced live, one SIGINT never exited. sse_starlette's own exit
+    listener does not fire (ContextVar bug in 3.0.3), so this event is ours."""
+
+    async def scenario(repo: Path) -> bool:
+        shutdown = asyncio.Event()
+        agen = _watch_evidence_mtime(repo, shutdown)
+        task = asyncio.ensure_future(agen.__anext__())
+        await asyncio.sleep(0.1)
+        assert not task.done()
+
+        shutdown.set()
+        # Well inside the 1.5s poll interval: the stream must react to the
+        # event, not merely notice it on the next scheduled wake-up.
+        try:
+            await asyncio.wait_for(task, timeout=0.5)
+            ended = False
+        except StopAsyncIteration:
+            ended = True
+        await agen.aclose()
+        return ended
+
+    with tempfile.TemporaryDirectory() as tmp:
+        assert asyncio.run(scenario(Path(tmp))) is True
+
+
+def test_watch_evidence_mtime_swallows_cancellation_instead_of_raising():
+    """A forced shutdown cancels this generator mid-flight; an un-caught
+    CancelledError propagates through sse_starlette into Starlette's ASGI
+    error handler, which is what printed two full tracebacks on Ctrl-C.
+
+    StopAsyncIteration is the assertion that matters - it means the generator
+    caught the cancellation and *returned* rather than re-raising."""
+
+    async def scenario(repo: Path) -> BaseException:
+        agen = _watch_evidence_mtime(repo)
+        task = asyncio.ensure_future(agen.__anext__())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+            raised: BaseException = RuntimeError("generator yielded instead of stopping")
+        except BaseException as exc:  # noqa: BLE001 - the exception type IS the assertion
+            raised = exc
+        await agen.aclose()
+        return raised
+
+    with tempfile.TemporaryDirectory() as tmp:
+        assert isinstance(asyncio.run(scenario(Path(tmp))), StopAsyncIteration)
+
+
+def test_watch_evidence_mtime_skips_malformed_evidence_instead_of_dying(tmp_path):
+    """This was the one evidence reader checking neither schema version nor
+    shape before indexing evidence["scanned_at"]. It fires on mtime, so it can
+    observe a scan mid-write - and a truncated file killed the stream, leaving
+    the dashboard silently not auto-refreshing for the rest of the session."""
+    aletheore_dir = tmp_path / ".aletheore"
+    aletheore_dir.mkdir()
+    evidence_path = aletheore_dir / "air.json"
+    evidence_path.write_text("placeholder")
+
+    good = minimal_air_evidence()
+    good["scanned_at"] = "2026-08-11T00:00:00Z"
+
+    async def scenario() -> str:
+        agen = _watch_evidence_mtime(tmp_path)
+        task = asyncio.ensure_future(agen.__anext__())
+        await asyncio.sleep(0.1)
+
+        evidence_path.write_text('{"aletheore_version": "0.2.0", "trunc')
+        await asyncio.sleep(2.0)
+        assert not task.done(), "a truncated air.json ended the stream"
+
+        # A valid write still gets through afterwards, so the stream is
+        # skipping bad ticks rather than having gone permanently deaf.
+        evidence_path.write_text(json.dumps(good))
+        event = await asyncio.wait_for(task, timeout=6)
+        await agen.aclose()
+        return json.loads(event["data"])["scanned_at"]
+
+    assert asyncio.run(scenario()) == "2026-08-11T00:00:00Z"
+
+
+def test_build_app_exposes_the_shutdown_event_the_cli_signals():
+    """cli._dashboard reaches for app.state.shutdown_event in its uvicorn
+    handle_exit override, so renaming it would break Ctrl-C silently."""
+    with tempfile.TemporaryDirectory() as tmp:
+        assert isinstance(build_app(Path(tmp)).state.shutdown_event, asyncio.Event)
+
+
+def test_browser_icon_requests_are_served_rather_than_404(tmp_path):
+    """A page load requests all four unprompted; each 404'd, filling the log
+    with errors for a dashboard that had served the page fine."""
+    client = TestClient(build_app(tmp_path))
+
+    for path in (
+        "/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/logo.png",
+    ):
+        assert client.get(path).status_code == 200, path

@@ -7,8 +7,15 @@ from starlette.applications import Starlette
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.routing import Route
 
+from aletheore.evidence import (
+    IncompatibleEvidenceVersionError,
+    MalformedEvidenceError,
+    load_evidence_file,
+)
 from aletheore.history import list_snapshots
 from aletheore.mcp_server import build_server, read_evidence
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def build_evidence_summary(evidence: dict) -> dict:
@@ -97,21 +104,83 @@ def build_graph_summary(evidence: dict) -> dict:
     return {"nodes": nodes, "edges": edges, "clusters": clusters}
 
 
-async def _watch_evidence_mtime(repo_path: Path):
+async def _sleep_unless_shutting_down(seconds: float, shutdown: asyncio.Event | None) -> bool:
+    """Sleep, returning True early if shutdown was signalled.
+
+    sse_starlette has its own shutdown listener, but in 3.0.3 it does not
+    fire: `_listen_for_exit_signal` stores its exit event in a ContextVar
+    from inside the request's task, and `AppStatus.handle_exit` then reads
+    that ContextVar from the *signal handler's* context, where the task's
+    value was never visible. It finds None, sets nothing, and the stream
+    waits on an event nobody will ever set - despite the comment there
+    saying "signal all waiters in all contexts."
+
+    The visible consequence was that Ctrl-C hung the dashboard at "Waiting
+    for connections to close" for as long as a browser tab was open, so
+    every user had to press Ctrl-C a second time - and that second one
+    force-quits mid-shutdown, which is where the two tracebacks came from.
+    Owning the event ourselves (see build_app) is independent of that bug.
+    """
+    if shutdown is None:
+        await asyncio.sleep(seconds)
+        return False
+    try:
+        await asyncio.wait_for(shutdown.wait(), timeout=seconds)
+    except TimeoutError:
+        return False
+    return True
+
+
+async def _watch_evidence_mtime(repo_path: Path, shutdown: asyncio.Event | None = None):
     evidence_path = repo_path / ".aletheore" / "air.json"
     last_mtime = evidence_path.stat().st_mtime if evidence_path.exists() else None
-    while True:
-        await asyncio.sleep(1.5)
-        if not evidence_path.exists():
-            continue
-        current_mtime = evidence_path.stat().st_mtime
-        if last_mtime is None or current_mtime != last_mtime:
+    # The whole loop is wrapped rather than just the sleep: on a forced
+    # shutdown the SSE task group cancels this generator wherever it happens
+    # to be, and an un-caught CancelledError propagates through sse_starlette
+    # into Starlette's ASGI error handler. Returning turns that back into an
+    # ordinary generator close. The shutdown check above it is what makes the
+    # *graceful* path work at all - without it uvicorn waits on this stream
+    # forever and the user never gets to a clean single Ctrl-C.
+    try:
+        while True:
+            if await _sleep_unless_shutting_down(1.5, shutdown):
+                return
+            if not evidence_path.exists():
+                continue
+            current_mtime = evidence_path.stat().st_mtime
+            if last_mtime == current_mtime:
+                continue
             last_mtime = current_mtime
-            evidence = json.loads(evidence_path.read_text())
+            # load_evidence_file, not a bare json.loads: this was the one
+            # evidence reader checking neither schema version nor shape before
+            # indexing evidence["scanned_at"]. Since it fires on mtime it can
+            # observe a scan mid-write, so a truncated or incompatible file
+            # killed the stream with JSONDecodeError or KeyError and the
+            # dashboard silently stopped auto-refreshing for the rest of the
+            # session. Skip the tick instead - the file is about to change
+            # again anyway.
+            try:
+                evidence = load_evidence_file(evidence_path)
+            except (
+                OSError,
+                json.JSONDecodeError,
+                IncompatibleEvidenceVersionError,
+                MalformedEvidenceError,
+            ):
+                continue
             yield {"event": "refresh", "data": json.dumps({"scanned_at": evidence["scanned_at"]})}
+    except asyncio.CancelledError:
+        return
 
 
 def build_app(repo_path: Path) -> Starlette:
+    # Set by the CLI's uvicorn handle_exit override at signal time, watched by
+    # every open /events stream. Built here rather than at import so each app
+    # (the test suite builds several) gets its own. asyncio.Event no longer
+    # binds to a loop at construction on 3.10+, so creating it outside a
+    # running loop is fine.
+    shutdown_event = asyncio.Event()
+
     async def index(request):
         return HTMLResponse(DASHBOARD_HTML)
 
@@ -132,13 +201,21 @@ def build_app(repo_path: Path) -> Starlette:
         return JSONResponse([{"name": t.name, "description": t.description} for t in tools])
 
     async def events(request):
-        return EventSourceResponse(_watch_evidence_mtime(repo_path))
+        return EventSourceResponse(_watch_evidence_mtime(repo_path, shutdown_event))
 
     async def logo(request):
-        logo_path = Path(__file__).resolve().parent / "static" / "logo.png"
-        return FileResponse(logo_path)
+        return FileResponse(_STATIC_DIR / "logo.png")
 
-    return Starlette(
+    # Browsers request all four of these unprompted on a page load, and every
+    # one 404'd - four error lines in the log for a dashboard that had in fact
+    # served the page fine. Reusing the existing logo is enough: this is a
+    # localhost dev UI, so a dedicated .ico plus the Apple sizes would be new
+    # binary assets to maintain for no gain over the PNG every current browser
+    # accepts.
+    async def favicon(request):
+        return FileResponse(_STATIC_DIR / "logo.png", media_type="image/png")
+
+    app = Starlette(
         routes=[
             Route("/", index),
             Route("/api/evidence", api_evidence),
@@ -147,8 +224,13 @@ def build_app(repo_path: Path) -> Starlette:
             Route("/api/mcp-tools", api_mcp_tools),
             Route("/events", events),
             Route("/logo.png", logo),
+            Route("/favicon.ico", favicon),
+            Route("/apple-touch-icon.png", favicon),
+            Route("/apple-touch-icon-precomposed.png", favicon),
         ]
     )
+    app.state.shutdown_event = shutdown_event
+    return app
 
 
 DASHBOARD_HTML = """<!DOCTYPE html>

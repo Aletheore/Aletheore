@@ -8,9 +8,13 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import typer.main
 from typer.testing import CliRunner
 
 from aletheore.cli import (
+    QUERY_KIND_CHOICES,
+    QUERY_KIND_GROUPS,
+    _resolve_path,
     _aletheore_command,
     _ElapsedTicker,
     _MCP_CLIENT_CONFIGS,
@@ -23,6 +27,7 @@ from aletheore.cli import (
 )
 from aletheore.device_auth import DeviceFlowError
 from aletheore.evidence import EVIDENCE_VERSION
+from aletheore.query import QUERY_FUNCTIONS
 from aletheore.git_intel.analyzer import GIT_ANALYSIS_RESOURCE_EXIT_CODE, GitAnalysisError
 from tests.air_fixtures import minimal_air_evidence
 from aletheore.report import (
@@ -1811,3 +1816,76 @@ def test_main_query_changes_full_flag_returns_raw_diff(tmp_path):
     assert result.exit_code == 0
     parsed = json.loads(result.output)
     assert set(parsed.keys()) == {"added", "removed", "changed"}
+
+
+# --- CLI discoverability: query kind listing, --path alias, healthcheck hint ---
+
+
+def test_bare_query_lists_every_kind_grouped_instead_of_a_usage_error():
+    """A bare `aletheore query` used to hit Typer's "Missing argument 'KIND'",
+    which names none of the kinds - leaving 23 capabilities discoverable only
+    through --help."""
+    result = CliRunner().invoke(app, ["query"])
+
+    assert result.exit_code == 0, result.output
+    for group in QUERY_KIND_GROUPS:
+        assert group in result.output
+    for kind in QUERY_KIND_CHOICES:
+        assert kind in result.output
+
+
+def test_query_kind_groups_cover_every_dispatchable_kind():
+    """The grouped listing is the only map of what `query` does, so a kind
+    added to QUERY_FUNCTIONS without a group would vanish from it."""
+    assert set(QUERY_FUNCTIONS) <= set(QUERY_KIND_CHOICES)
+
+
+def test_unknown_query_kind_suggests_the_closest_match():
+    result = CliRunner().invoke(app, ["query", "secret"])
+
+    assert result.exit_code == 1
+    assert "Did you mean" in result.output
+    assert "secrets" in result.output
+
+
+def test_unknown_query_kind_with_no_close_match_still_lists_the_kinds():
+    result = CliRunner().invoke(app, ["query", "zzzzzzzz"])
+
+    assert result.exit_code == 1
+    assert "is not a valid query kind" in result.output
+    assert "Structure" in result.output
+
+
+def test_every_path_taking_command_accepts_the_path_option():
+    """`--path` worked on `query` alone, so a user who learned it there got
+    "No such option '--path'" from the other eight - reproduced live against
+    `aletheore dashboard --path .`.
+
+    Checks the registered click params directly rather than grepping rendered
+    `--help` text: rich wraps long option names across lines (and inserts ANSI
+    resets between characters) once the render width is narrow enough, which
+    made a substring check on the rendered text flaky under CI's terminal
+    width rather than the local one.
+    """
+    command_group = typer.main.get_command(app)
+    for name in (
+        "scan", "audit", "init", "index", "mcp", "mcp-install", "dashboard", "healthcheck", "query",
+    ):
+        command = command_group.commands[name]
+        opts = {opt for param in command.params for opt in getattr(param, "opts", [])}
+        assert "--path" in opts, f"{name} does not accept --path"
+
+
+def test_resolve_path_prefers_the_option_but_keeps_the_positional_default():
+    assert _resolve_path(".", None) == "."
+    assert _resolve_path(".", "/somewhere") == "/somewhere"
+    # Not `option or positional` - an explicit empty string is still a choice.
+    assert _resolve_path(".", "") == ""
+
+
+def test_healthcheck_without_base_url_explains_what_a_base_url_is():
+    result = CliRunner().invoke(app, ["healthcheck", "."])
+
+    assert result.exit_code == 1
+    assert "running" in result.output
+    assert "http://localhost:8000" in result.output

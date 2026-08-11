@@ -1,3 +1,4 @@
+import difflib
 import json
 import shutil
 import socket
@@ -123,12 +124,99 @@ MANUAL_DIR = str(Path(__file__).resolve().parent / "manual")
 
 console = Console()
 
-QUERY_KIND_CHOICES = list(QUERY_FUNCTIONS.keys()) + [
-    "changes",
-    "search-codebase",
-    "answer",
-    "symbol-source",
-]
+# Grouped rather than flat because this list is the CLI's only map of what
+# `query` can actually do - 23 kinds printed as one comma-separated run is
+# unreadable, and a bare `aletheore query` previously got Typer's "Missing
+# argument 'KIND'" with no kinds named at all. The grouping is also the
+# answer to "why so few commands": every kind below reads the same air.json,
+# which is the point, so they belong under one verb rather than promoted to
+# 23 top-level commands.
+QUERY_KIND_GROUPS: dict[str, list[str]] = {
+    "Structure": [
+        "imports",
+        "imported-by",
+        "symbols",
+        "cluster",
+        "layer-violations",
+        "dead-code",
+    ],
+    "Security": ["secrets", "vulnerabilities", "licenses"],
+    "Runtime": ["endpoints", "database", "infrastructure", "environment-variables"],
+    "History": ["branch", "ownership", "hotspots", "changes"],
+    "Evidence": [
+        "evidence-for-symbol",
+        "evidence-for-endpoint",
+        "evidence-for-dependency",
+    ],
+    "AI-assisted": ["answer", "search-codebase", "symbol-source"],
+}
+
+# Derived from the groups rather than maintained beside them - a kind added
+# to QUERY_FUNCTIONS but forgotten in a group would otherwise silently vanish
+# from the listing while still being dispatchable. The four kinds not in
+# QUERY_FUNCTIONS ("changes", "search-codebase", "answer", "symbol-source")
+# are dispatched by hand inside _query, so the check runs one way only.
+QUERY_KIND_CHOICES = [kind for kinds in QUERY_KIND_GROUPS.values() for kind in kinds]
+
+_MISSING_FROM_GROUPS = set(QUERY_FUNCTIONS) - set(QUERY_KIND_CHOICES)
+if _MISSING_FROM_GROUPS:  # pragma: no cover - import-time invariant
+    raise RuntimeError(
+        "QUERY_KIND_GROUPS is missing query kinds that QUERY_FUNCTIONS defines: "
+        f"{', '.join(sorted(_MISSING_FROM_GROUPS))} - add them to a group so "
+        "`aletheore query` can list them"
+    )
+
+
+# Every command that takes a repository takes it positionally (`aletheore
+# scan .`) except `query`, whose first positional is the kind and whose third
+# is already a symbol name - PATH cannot be added there without breaking
+# `query symbol-source <module> <symbol>`. So rather than leave `--path`
+# working on exactly one command out of nine, it is accepted as an alias on
+# all of them. `aletheore dashboard --path .` previously failed with "No such
+# option '--path'. Did you mean '--port'?" purely because the user had just
+# learned `--path` from `query`.
+_PATH_OPTION = typer.Option(None, "--path", help="repository path (alias for the PATH argument)")
+
+
+def _resolve_path(positional: str, option: Optional[str]) -> str:
+    """The positional PATH unless --path was given, which wins.
+
+    Not `option or positional` - an explicit `--path ""` is still a choice
+    and should not silently fall back to the positional default.
+    """
+    return positional if option is None else option
+
+
+def _query_kinds_panel() -> Panel:
+    # A Table rather than manual padding in a Text: several groups are wider
+    # than the panel, and hand-padded rows wrap back to column 0, leaving
+    # "dead-code" and "evidence-for-dependency" hanging under the group
+    # labels as if they were groups themselves. A table wraps the kind column
+    # within its own bounds, so continuation lines stay aligned.
+    header = Text()
+    header.append("Usage: ", style="bold")
+    header.append("aletheore query KIND [TARGET] [SYMBOL] [--path PATH]")
+
+    kinds_table = Table(box=None, show_header=False, pad_edge=False, padding=(0, 2, 0, 0))
+    kinds_table.add_column(style="bold cyan", no_wrap=True, vertical="top")
+    kinds_table.add_column(overflow="fold")
+    for group, kinds in QUERY_KIND_GROUPS.items():
+        kinds_table.add_row(group, "  ".join(kinds))
+
+    footer = Text()
+    footer.append(
+        f"All {len(QUERY_KIND_CHOICES)} read the same .aletheore/air.json - "
+        "run 'aletheore scan' first.\n",
+        style="dim",
+    )
+    footer.append("Run 'aletheore query --help' for options.", style="dim")
+
+    return Panel(
+        Group(header, "", kinds_table, "", footer),
+        title="query kinds",
+        border_style="cyan",
+        width=78,
+    )
 
 
 def _sponsor_panel() -> Panel:
@@ -530,10 +618,17 @@ def _query(
     symbol: str | None = None,
 ) -> int:
     if kind not in QUERY_KIND_CHOICES:
-        console.print(
-            f"[bold red]error:[/bold red] '{kind}' is not a valid query kind. "
-            f"Choose from: {', '.join(QUERY_KIND_CHOICES)}"
-        )
+        # Suggestion first, listing after: a typo ("secret", "hotspot") is the
+        # common case and one close match answers it without making the user
+        # read 23 names. cutoff is difflib's default 0.6, which accepts
+        # "secret"->"secrets" while rejecting an unrelated word - a wrong
+        # suggestion is worse than none, since it sends the user off to run
+        # something they never meant.
+        suggestions = difflib.get_close_matches(kind, QUERY_KIND_CHOICES, n=1)
+        console.print(f"[bold red]error:[/bold red] '{kind}' is not a valid query kind.")
+        if suggestions:
+            console.print(f"Did you mean [bold cyan]{suggestions[0]}[/bold cyan]?\n")
+        console.print(_query_kinds_panel())
         return 1
 
     if kind == "changes":
@@ -963,7 +1058,29 @@ def _dashboard(repo_path: str, port: int) -> int:
     url = f"http://{host}:{port}"
     console.print(f"[green]Dashboard running at[/green] {url}")
     webbrowser.open(url)
-    uvicorn.run(app, host=host, port=port)
+
+    # A plain uvicorn.run() hung on Ctrl-C for as long as a browser tab was
+    # open: the dashboard's /events SSE stream never ends on its own, so
+    # uvicorn sat at "Waiting for connections to close" forever and the user
+    # had to press Ctrl-C a second time - which force-quits mid-shutdown and
+    # printed two tracebacks. Reproduced directly: one SIGINT produced zero
+    # tracebacks and never exited.
+    #
+    # sse_starlette is supposed to handle this itself and does not (see
+    # dashboard._sleep_unless_shutting_down for the ContextVar bug in 3.0.3),
+    # so the signal is ours. Starlette's own on_shutdown hook is too late -
+    # uvicorn waits for connections to close *before* running lifespan
+    # shutdown, which is the exact wait being blocked. handle_exit fires at
+    # signal time, which is early enough for the stream to notice and end.
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port))
+    original_handle_exit = server.handle_exit
+
+    def handle_exit(sig, frame):  # noqa: ANN001 - matches uvicorn's signature
+        app.state.shutdown_event.set()
+        original_handle_exit(sig, frame)
+
+    server.handle_exit = handle_exit
+    server.run()
     return 0
 
 
@@ -1003,6 +1120,7 @@ def _main_callback(
 @app.command(help="audit a repository")
 def audit(
     path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
     agent: Optional[str] = typer.Option(
         None, "--agent", help="force a specific agent adapter by name (ignored with --managed)"
     ),
@@ -1039,6 +1157,7 @@ def audit(
         help="static API endpoint mapping (on by default, or set by .aletheore.json's disabled_checks)",
     ),
 ) -> None:
+    path = _resolve_path(path, path_option)
     if managed:
         if agent is not None:
             console.print(
@@ -1067,6 +1186,7 @@ def audit(
 @app.command(help="run only the deterministic scan phase")
 def scan(
     path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
     check_vulnerabilities: Optional[bool] = typer.Option(
         None,
         "--check-vulnerabilities/--no-check-vulnerabilities",
@@ -1090,6 +1210,7 @@ def scan(
         help="static API endpoint mapping (on by default, or set by .aletheore.json's disabled_checks)",
     ),
 ) -> None:
+    path = _resolve_path(path, path_option)
     exit_code, _evidence, _evidence_path = _scan(
         path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints
     )
@@ -1097,7 +1218,11 @@ def scan(
 
 
 @app.command(help="scaffold a .aletheore.json config file in a repository")
-def init(path: str = typer.Argument(".", help="repository path")) -> None:
+def init(
+    path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    path = _resolve_path(path, path_option)
     config_path = Path(path) / ".aletheore.json"
     if config_path.exists():
         console.print(f"[bold red]error:[/bold red] {config_path} already exists - not overwriting it.")
@@ -1154,13 +1279,25 @@ def init(path: str = typer.Argument(".", help="repository path")) -> None:
         "'query answer' and the aletheore_search_codebase/aletheore_answer MCP tools)"
     )
 )
-def index(path: str = typer.Argument(".", help="repository path")) -> None:
+def index(
+    path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
+) -> None:
+    path = _resolve_path(path, path_option)
     raise typer.Exit(code=_index(path))
 
 
 @app.command(help="query an existing air.json")
 def query(
-    kind: str = typer.Argument(..., help=f"one of: {', '.join(QUERY_KIND_CHOICES)}"),
+    # Optional rather than required: a bare `aletheore query` previously hit
+    # Typer's "Missing argument 'KIND'", which names no kinds at all, leaving
+    # 23 capabilities discoverable only via --help. Defaulting to None turns
+    # the most likely first invocation into the listing the user was after.
+    # Exit code stays 0 - asking what the kinds are is a successful question,
+    # not a usage error. An *unknown* kind still exits 1, via _query.
+    kind: Optional[str] = typer.Argument(
+        None, help="one of the 23 query kinds; omit to list them by category"
+    ),
     target: Optional[str] = typer.Argument(None, help="target for kinds that need one (a file path, branch name, ...)"),
     symbol: Optional[str] = typer.Argument(None, help="symbol name for 'symbol-source'"),
     repo_path: str = typer.Option(".", "--path", help="repository path"),
@@ -1170,6 +1307,9 @@ def query(
     agent: Optional[str] = typer.Option(None, "--agent", help="provider for 'answer'"),
     k: int = typer.Option(10, "--k", help="number of semantic search results"),
 ) -> None:
+    if kind is None:
+        console.print(_query_kinds_panel())
+        raise typer.Exit(code=0)
     raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k, symbol))
 
 
@@ -1225,8 +1365,10 @@ def verify(
 @app.command(help="run an MCP server scoped to a repository")
 def mcp(
     path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
     agent: Optional[str] = typer.Option(None, "--agent", help="provider for the aletheore_answer tool"),
 ) -> None:
+    path = _resolve_path(path, path_option)
     raise typer.Exit(code=_mcp(path, agent))
 
 
@@ -1236,6 +1378,7 @@ def mcp(
 )
 def mcp_install(
     path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
     target: list[str] = typer.Option(
         [],
         "--target",
@@ -1245,22 +1388,48 @@ def mcp_install(
         ),
     ),
 ) -> None:
+    path = _resolve_path(path, path_option)
     raise typer.Exit(code=_mcp_install(path, target))
 
 
 @app.command(help="run a live local dashboard scoped to a repository")
 def dashboard(
     path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
     port: int = typer.Option(8420, "--port", help="port to serve the dashboard on"),
 ) -> None:
+    path = _resolve_path(path, path_option)
     raise typer.Exit(code=_dashboard(path, port))
 
 
 @app.command(help="GET-only live health check of mapped API endpoints")
 def healthcheck(
     path: str = typer.Argument(".", help="repository path"),
-    base_url: str = typer.Option(..., "--base-url", help="base URL of the running instance to check"),
+    path_option: Optional[str] = _PATH_OPTION,
+    # Optional rather than required so the missing case can explain itself.
+    # Typer's own required-option error is a bare "Missing option
+    # '--base-url'", which says nothing about what a base URL is for here -
+    # this command probes endpoints already mapped in evidence against a
+    # *running* instance, so the value is the root of a server the user has
+    # started, not the repository and not a URL found in the code.
+    base_url: Optional[str] = typer.Option(
+        None,
+        "--base-url",
+        help="base URL of the running instance to check, e.g. http://localhost:8000",
+    ),
 ) -> None:
+    path = _resolve_path(path, path_option)
+    if base_url is None:
+        console.print(
+            "[bold red]error:[/bold red] --base-url is required - it is the root URL of a "
+            "*running* instance of this repo, which healthcheck probes using the endpoints "
+            "already mapped in .aletheore/air.json."
+        )
+        console.print("\n  aletheore healthcheck . --base-url http://localhost:8000", style="cyan")
+        console.print(
+            "\nOnly GET endpoints are probed, and no request body is ever sent.", style="dim"
+        )
+        raise typer.Exit(code=1)
     raise typer.Exit(code=_healthcheck(path, base_url))
 
 
