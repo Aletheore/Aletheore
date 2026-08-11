@@ -526,3 +526,32 @@ def test_reusable_vectors_survives_an_unreadable_previous_index(tmp_path):
     """An index missing, corrupt, or written before chunk_hash existed must
     degrade to embedding everything - the old behavior - not raise."""
     assert _reusable_vectors(tmp_path / "nope.lancedb") == {}
+
+
+def test_switching_embedding_provider_rebuilds_instead_of_crashing(tmp_path):
+    """nomic-embed-text returns 768 dimensions and text-embedding-3-small
+    returns 1536; LanceDB rejects the mix with "Vector column 'vector' has
+    variable length vectors". Reproduced before this guard: index with
+    Ollama, lose Ollama, and the next build crashed on the fallback.
+
+    Re-embedding everything is also the only correct answer - vectors from
+    two models are not comparable, so reusing the old ones would return
+    nonsense rankings even if the write succeeded."""
+    def evidence(body):
+        (tmp_path / "a.py").write_text(f"def f():\n    return {body}\n")
+        (tmp_path / "b.py").write_text("def g():\n    return 2\n")
+        return {"repository": {"modules": [
+            {"path": p, "language": "python", "imports": [],
+             "symbols": {"functions": [{"name": p[0], "start_line": 1, "end_line": 2}], "classes": []}}
+            for p in ("a.py", "b.py")]}}
+
+    with patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.1] * 768] * len(t)):
+        build_index(tmp_path, evidence(1))
+
+    with patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.2] * 1536] * len(t)):
+        build_index(tmp_path, evidence(99))
+
+    rows = open_index(tmp_path).to_arrow().to_pylist()
+    # b.py was unchanged, but its 768-dim vector cannot survive the switch.
+    assert {len(row["vector"]) for row in rows} == {1536}
+    assert len(rows) == 2

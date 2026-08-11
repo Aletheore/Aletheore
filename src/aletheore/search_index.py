@@ -339,12 +339,33 @@ def build_index(repo_path: Path, evidence: dict) -> int:
     index_path = _index_path(repo_path)
     reusable = _reusable_vectors(index_path)
     stale = [chunk for chunk in chunks if chunk["chunk_hash"] not in reusable]
-    fresh = dict(
-        zip(
-            (chunk["chunk_hash"] for chunk in stale),
-            _embed_in_batches([chunk["text"] for chunk in stale]),
-        )
-    )
+    fresh_vectors = _embed_in_batches([chunk["text"] for chunk in stale])
+
+    # Vectors from two different embedding models cannot share an index -
+    # nomic-embed-text returns 768 dimensions and text-embedding-3-small
+    # returns 1536, and LanceDB rejects the mix outright with "Vector column
+    # 'vector' has variable length vectors". Reproduced directly: index with
+    # Ollama, lose Ollama, and the next build crashed on the fallback rather
+    # than degrading.
+    #
+    # A provider change therefore invalidates the whole cache and re-embeds
+    # from scratch, which is the correct answer anyway: the old vectors are
+    # not comparable to the new ones, so keeping them would return nonsense
+    # rankings even if the write succeeded.
+    #
+    # Keyed on dimension rather than model name because the dimension is
+    # observable from what embed_texts actually returned, and embed_texts
+    # chooses its provider internally. Two distinct models with matching
+    # dimensions would not be caught; that costs stale-but-valid vectors,
+    # not a crash or a schema error.
+    if fresh_vectors and reusable:
+        reused_dimensions = {len(vector) for vector in reusable.values()}
+        if reused_dimensions != {len(fresh_vectors[0])}:
+            reusable = {}
+            stale = chunks
+            fresh_vectors = _embed_in_batches([chunk["text"] for chunk in stale])
+
+    fresh = dict(zip((chunk["chunk_hash"] for chunk in stale), fresh_vectors))
     rows = [
         {**chunk, "vector": reusable.get(chunk["chunk_hash"]) or fresh[chunk["chunk_hash"]]}
         for chunk in chunks
