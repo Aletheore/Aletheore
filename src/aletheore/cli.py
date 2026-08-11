@@ -63,6 +63,7 @@ from aletheore.report import (
     select_adapter,
 )
 from aletheore.toon_encoding import to_toon
+from aletheore.watch import DEBOUNCE_SECONDS as WATCH_DEBOUNCE_SECONDS
 
 KNOWN_ADAPTERS = [
     ClaudeCodeAdapter(),
@@ -250,6 +251,7 @@ _COMMAND_SUMMARIES = [
     ("mcp-install", "write MCP client config for Claude Code, Cursor, VS Code, Kiro, Opencode, or Codex CLI"),
     ("dashboard", "a live local web UI over the same evidence"),
     ("healthcheck", "GET-only live check of mapped API endpoints"),
+    ("watch", "re-scan and re-index automatically as files change"),
     ("init", "scaffold a repository-local .aletheore.json config file"),
     ("login", "authenticate and save a managed-audit API token"),
     ("logout", "clear the locally saved managed-audit API token"),
@@ -1034,6 +1036,24 @@ def _port_is_available(host: str, port: int) -> bool:
             return False
 
 
+def _watch(repo_path: str, debounce: float) -> int:
+    from aletheore.watch import watch as run_watch
+
+    repo = Path(repo_path).resolve()
+
+    def report(message: str) -> None:
+        console.print(f"[dim]{time.strftime('%H:%M:%S')}[/dim] {message}")
+
+    try:
+        run_watch(repo, report, debounce_seconds=debounce)
+    except KeyboardInterrupt:
+        # Ctrl-C is how this command is meant to end, so it exits 0 with a
+        # word rather than a traceback - the dashboard's own Ctrl-C handling
+        # was a bug worth not repeating.
+        console.print("stopped")
+    return 0
+
+
 def _dashboard(repo_path: str, port: int) -> int:
     from aletheore.dashboard import build_app
 
@@ -1216,6 +1236,22 @@ def scan(
         path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints
     )
     raise typer.Exit(code=exit_code)
+
+
+@app.command(
+    help="re-scan and re-index automatically whenever source files change"
+)
+def watch(
+    path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
+    debounce: float = typer.Option(
+        WATCH_DEBOUNCE_SECONDS,
+        "--debounce",
+        help="seconds of quiet before rebuilding, so one burst of saves is one rebuild",
+    ),
+) -> None:
+    path = _resolve_path(path, path_option)
+    raise typer.Exit(code=_watch(path, debounce))
 
 
 @app.command(help="scaffold a .aletheore.json config file in a repository")
