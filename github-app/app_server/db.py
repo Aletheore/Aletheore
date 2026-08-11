@@ -1,9 +1,13 @@
 import json
+import logging
 from datetime import datetime
 
 import asyncpg
 
 from app_server.evidence_limits import check_evidence_size
+from app_server.llm_cost import WARN_FRACTION_OF_CAP, crossed_spend_warning_threshold
+
+logger = logging.getLogger(__name__)
 
 
 async def create_pool(dsn: str) -> asyncpg.Pool:
@@ -524,17 +528,39 @@ async def get_llm_spend_this_month(pool: asyncpg.Pool, installation_id: int) -> 
     return float(row["total_cost_usd"]) if row else 0.0
 
 
-async def record_llm_spend(pool: asyncpg.Pool, installation_id: int, cost_usd: float) -> None:
-    await pool.execute(
+async def record_llm_spend(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    cost_usd: float,
+    monthly_cap: float | None = None,
+) -> None:
+    """monthly_cap: when given, logs a one-time warning if this call is the
+    one that pushes the installation's spend this month past
+    WARN_FRACTION_OF_CAP of it - see llm_cost.crossed_spend_warning_threshold.
+    Omit it (as existing callers that predate this did) to skip the check
+    entirely; it has no effect on what gets recorded."""
+    row = await pool.fetchrow(
         """
         INSERT INTO llm_spend (installation_id, month, total_cost_usd)
         VALUES ($1, date_trunc('month', now())::date, $2)
         ON CONFLICT (installation_id, month) DO UPDATE
         SET total_cost_usd = llm_spend.total_cost_usd + EXCLUDED.total_cost_usd
+        RETURNING total_cost_usd
         """,
         installation_id,
         cost_usd,
     )
+    if monthly_cap is not None and row is not None:
+        new_total = float(row["total_cost_usd"])
+        previous_total = new_total - cost_usd
+        if crossed_spend_warning_threshold(previous_total, new_total, monthly_cap):
+            logger.warning(
+                "llm spend crossed %.0f%% of monthly cap: installation=%s $%.2f of $%.2f",
+                WARN_FRACTION_OF_CAP * 100,
+                installation_id,
+                new_total,
+                monthly_cap,
+            )
 
 
 async def get_flash_review_count_this_month(pool: asyncpg.Pool, installation_id: int) -> int:

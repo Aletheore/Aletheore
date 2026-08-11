@@ -1,8 +1,12 @@
 import json
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from app_server.evidence_limits import check_evidence_size
+from app_server.llm_cost import WARN_FRACTION_OF_CAP, crossed_spend_warning_threshold
+
+logger = logging.getLogger(__name__)
 
 
 def insert_repo_history(
@@ -181,7 +185,14 @@ def get_llm_spend_this_month(dsn: str, installation_id: int) -> float:
             return float(row[0]) if row else 0.0
 
 
-def record_llm_spend(dsn: str, installation_id: int, cost_usd: float) -> None:
+def record_llm_spend(
+    dsn: str, installation_id: int, cost_usd: float, monthly_cap: float | None = None
+) -> None:
+    """monthly_cap: when given, logs a one-time warning if this call is the
+    one that pushes the installation's spend this month past
+    WARN_FRACTION_OF_CAP of it - see llm_cost.crossed_spend_warning_threshold.
+    Omit it (as existing callers that predate this did) to skip the check
+    entirely; it has no effect on what gets recorded."""
     import psycopg
 
     with psycopg.connect(dsn) as conn:
@@ -192,10 +203,24 @@ def record_llm_spend(dsn: str, installation_id: int, cost_usd: float) -> None:
                 VALUES (%s, date_trunc('month', now())::date, %s)
                 ON CONFLICT (installation_id, month) DO UPDATE
                 SET total_cost_usd = llm_spend.total_cost_usd + EXCLUDED.total_cost_usd
+                RETURNING total_cost_usd
                 """,
                 (installation_id, cost_usd),
             )
+            row = cur.fetchone()
         conn.commit()
+
+    if monthly_cap is not None and row is not None:
+        new_total = float(row[0])
+        previous_total = new_total - cost_usd
+        if crossed_spend_warning_threshold(previous_total, new_total, monthly_cap):
+            logger.warning(
+                "llm spend crossed %.0f%% of monthly cap: installation=%s $%.2f of $%.2f",
+                WARN_FRACTION_OF_CAP * 100,
+                installation_id,
+                new_total,
+                monthly_cap,
+            )
 
 
 def get_flash_review_count_this_month(dsn: str, installation_id: int) -> int:

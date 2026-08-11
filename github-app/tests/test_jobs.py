@@ -1409,7 +1409,8 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     )
     recorded_spend = []
     monkeypatch.setattr(
-        "scan_worker.jobs.record_llm_spend", lambda dsn, iid, cost: recorded_spend.append(cost)
+        "scan_worker.jobs.record_llm_spend",
+        lambda dsn, iid, cost, **kwargs: recorded_spend.append(cost),
     )
     monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
     set_sha_calls = []

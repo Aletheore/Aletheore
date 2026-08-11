@@ -619,6 +619,27 @@ async def test_record_llm_spend_accumulates_sync(pool):
 
 
 @pytest.mark.asyncio
+async def test_record_llm_spend_sync_without_monthly_cap_never_warns(pool, caplog):
+    await _insert_installation(pool, 301, "a")
+    with caplog.at_level("WARNING"):
+        record_llm_spend(TEST_DATABASE_URL, 301, 10.00)
+    assert caplog.records == []
+
+
+@pytest.mark.asyncio
+async def test_record_llm_spend_sync_warns_once_when_crossing_the_threshold(pool, caplog):
+    await _insert_installation(pool, 301, "a")
+    with caplog.at_level("WARNING"):
+        record_llm_spend(TEST_DATABASE_URL, 301, 2.00, monthly_cap=15.00)  # under 30% ($4.50)
+        record_llm_spend(TEST_DATABASE_URL, 301, 5.00, monthly_cap=15.00)  # $7 total - crosses it
+        record_llm_spend(TEST_DATABASE_URL, 301, 1.00, monthly_cap=15.00)  # already over
+
+    warnings = [r for r in caplog.records if "installation=301" in r.message]
+    assert len(warnings) == 1
+    assert "30%" in warnings[0].message
+
+
+@pytest.mark.asyncio
 async def test_get_extra_seats_sync_defaults_to_zero(pool):
     await _insert_installation(pool, 301, "a")
     assert get_extra_seats(TEST_DATABASE_URL, 301) == 0

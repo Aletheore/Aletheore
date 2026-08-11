@@ -88,3 +88,27 @@ def base_cap_for_plan(plan: str) -> float:
 
 def monthly_cap_for_installation(base_cap_usd: float, extra_seats: int) -> float:
     return base_cap_usd + EXTRA_SEAT_LLM_CAP_USD * extra_seats
+
+
+# The cap itself is a worst-case abuse ceiling, not a target - see
+# CAP_FRACTION_OF_PRICE. This is a much lower bar: a signal that real usage
+# is starting to approach that ceiling, worth a log line so someone notices
+# before an installation actually hits it, not proof of a problem on its own.
+WARN_FRACTION_OF_CAP = 0.3
+
+
+def crossed_spend_warning_threshold(
+    previous_total_usd: float, new_total_usd: float, monthly_cap_usd: float
+) -> bool:
+    """Whether this specific increment is the one that pushed spend past
+    WARN_FRACTION_OF_CAP of the cap.
+
+    Edge-triggered on the previous/new pair rather than just checking
+    new_total_usd, so record_llm_spend logs once per crossing instead of on
+    every call for the rest of the month once an installation is over the
+    threshold.
+    """
+    if monthly_cap_usd <= 0:
+        return False
+    threshold = WARN_FRACTION_OF_CAP * monthly_cap_usd
+    return previous_total_usd < threshold <= new_total_usd
