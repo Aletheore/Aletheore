@@ -23,6 +23,7 @@ from app_server.ingest_limits import (
     check_declared_body_size,
 )
 from app_server.logging_config import configure_json_logging
+from app_server.embeddings_api import embeddings_router
 from app_server.managed_audit_api import managed_audit_router
 from app_server.metrics import metrics_router
 from app_server.runtime_events import runtime_events_router
@@ -60,6 +61,7 @@ app.include_router(dashboard_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(managed_audit_router)
+app.include_router(embeddings_router)
 app.include_router(metrics_router)
 app.include_router(frontend_router)
 app.include_router(paddle_webhook_router)

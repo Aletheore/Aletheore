@@ -3,6 +3,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+import httpx
 import lancedb
 from lancedb.index import FTS
 from openai import OpenAI
@@ -14,6 +15,15 @@ DEFAULT_EMBEDDING_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 OPENAI_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+
+# Aletheore's own embedding endpoint, used when a saved API token belongs to
+# an entitled installation. It serves the same OPENAI_EMBEDDING_MODEL, so a
+# user switching between hosted and their own key keeps the same 1536
+# dimensions and does not trigger the full re-embed a dimension change
+# forces. Local Ollama does not - nomic-embed-text is 768 - so that switch
+# does rebuild, correctly.
+HOSTED_EMBEDDING_PATH = "/v1/embeddings"
+DEFAULT_API_BASE_URL = "https://app.aletheore.com"
 INDEX_DIRNAME = "index.lancedb"
 TABLE_NAME = "chunks"
 
@@ -203,6 +213,61 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
     return chunks
 
 
+class HostedEmbeddingUnavailableError(Exception):
+    """The hosted endpoint refused or could not be reached.
+
+    Distinct from EmbeddingProviderUnavailableError because the caller's
+    recourse is different: this one is answered by upgrading, checking a
+    token, or falling back to a local provider, not by starting Ollama.
+    """
+
+
+def embed_texts_hosted(
+    texts: list[str],
+    token: str,
+    api_base_url: str = DEFAULT_API_BASE_URL,
+    http_client: httpx.Client | None = None,
+) -> list[list[float]]:
+    """Embed via Aletheore's endpoint using a saved API token.
+
+    The entitlement decision belongs to the server: a 402 here is the gate,
+    and the CLI's job is to report what the server said rather than to
+    pre-judge it locally. A client-side plan check in an open-source binary
+    is a suggestion; this is the real thing, and it also means a plan that
+    changes mid-session is honoured without the CLI knowing anything.
+    """
+    client = http_client or httpx.Client(base_url=api_base_url, timeout=120.0)
+    try:
+        response = client.post(
+            HOSTED_EMBEDDING_PATH,
+            json={"texts": texts},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    except httpx.HTTPError as exc:
+        raise HostedEmbeddingUnavailableError(
+            f"could not reach Aletheore's embedding service ({type(exc).__name__})"
+        ) from exc
+
+    if response.status_code == 402:
+        raise HostedEmbeddingUnavailableError(_detail_of(response))
+    if response.status_code == 401:
+        raise HostedEmbeddingUnavailableError(
+            "this API token was rejected - run 'aletheore login' again"
+        )
+    if response.status_code != 200:
+        raise HostedEmbeddingUnavailableError(
+            f"Aletheore's embedding service returned {response.status_code}: {_detail_of(response)}"
+        )
+    return response.json()["vectors"]
+
+
+def _detail_of(response: httpx.Response) -> str:
+    try:
+        return str(response.json().get("detail", "")) or response.reason_phrase
+    except ValueError:
+        return response.reason_phrase
+
+
 def embed_texts(
     texts: list[str],
     base_url: str = DEFAULT_EMBEDDING_BASE_URL,
@@ -276,9 +341,41 @@ EMBED_BATCH_SIZE = 200
 
 
 def _embed_in_batches(texts: list[str], batch_size: int = EMBED_BATCH_SIZE) -> list[list[float]]:
+    """Embed everything, preferring Aletheore's endpoint when entitled.
+
+    Hosted first, then local, and never the reverse: someone paying for
+    hosted embeddings should not silently have their code sent to their own
+    OpenAI account instead.
+
+    The fallback is only allowed before the first batch succeeds. After that,
+    switching providers mid-run would mix 1536-dimension vectors with 768-
+    dimension ones in a single index, which LanceDB rejects outright - so a
+    hosted failure partway through is raised rather than worked around. A
+    half-built index that errors is recoverable; one built from two models
+    is not.
+    """
+    token = get_api_key(
+        "ALETHEORE_API_TOKEN", "aletheore-managed-audit", prompt_fn=lambda _: ""
+    )
+    use_hosted = bool(token)
     vectors: list[list[float]] = []
+
     for start in range(0, len(texts), batch_size):
-        vectors.extend(embed_texts(texts[start : start + batch_size]))
+        batch = texts[start : start + batch_size]
+        if use_hosted:
+            try:
+                vectors.extend(embed_texts_hosted(batch, token))
+                continue
+            except HostedEmbeddingUnavailableError as exc:
+                if vectors:
+                    raise
+                # Nothing embedded yet, so falling back costs no consistency.
+                # Printed rather than swallowed: a 402 means the plan
+                # changed, which the user needs to see.
+                print(f"aletheore: hosted embeddings unavailable ({exc}); using local provider")
+                use_hosted = False
+        vectors.extend(embed_texts(batch))
+
     return vectors
 
 

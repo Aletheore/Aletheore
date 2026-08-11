@@ -24,9 +24,16 @@ TELEMETRY_MAX_BODY_BYTES = 2 * 1024
 # past this size is carrying data this endpoint has no use for.
 RUNTIME_EVENT_MAX_BODY_BYTES = 256 * 1024
 
+# 256 chunks at the 8,000-char ceiling embeddings_api enforces per text,
+# plus JSON overhead. The handler's own per-text and per-list limits are the
+# precise ones; this is the coarse guard that runs before the body is read
+# at all, so a caller cannot make the server parse megabytes to be told no.
+EMBEDDINGS_MAX_BODY_BYTES = 3 * 1024 * 1024
+
 MAX_BODY_BYTES_BY_PATH = {
     "/v1/telemetry": TELEMETRY_MAX_BODY_BYTES,
     "/v1/runtime-events": RUNTIME_EVENT_MAX_BODY_BYTES,
+    "/v1/embeddings": EMBEDDINGS_MAX_BODY_BYTES,
 }
 
 
