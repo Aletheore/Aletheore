@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aletheore.search_index import (
+    HostedEmbeddingUnavailableError,
     EmbeddingProviderUnavailableError,
     IndexNotFoundError,
     MAX_CHUNKS_PER_FILE,
@@ -555,3 +556,73 @@ def test_switching_embedding_provider_rebuilds_instead_of_crashing(tmp_path):
     # b.py was unchanged, but its 768-dim vector cannot survive the switch.
     assert {len(row["vector"]) for row in rows} == {1536}
     assert len(rows) == 2
+
+
+def _hosted_response(status: int, payload: dict | None = None):
+    response = MagicMock()
+    response.status_code = status
+    response.json.return_value = payload or {}
+    response.reason_phrase = "Error"
+    response.text = str(payload)
+    return response
+
+
+def test_hosted_embeddings_are_preferred_when_a_token_exists():
+    """Someone paying for hosted embeddings should not silently have their
+    code sent to their own OpenAI account instead."""
+    http = MagicMock()
+    http.post.return_value = _hosted_response(200, {"vectors": [[0.1] * 1536]})
+
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), \
+         patch("aletheore.search_index.httpx.Client", return_value=http), \
+         patch("aletheore.search_index.embed_texts") as local:
+        vectors = _embed_in_batches(["chunk"])
+
+    assert len(vectors[0]) == 1536
+    local.assert_not_called()
+    assert http.post.call_args.kwargs["headers"]["Authorization"] == "Bearer tok"
+
+
+def test_a_402_falls_back_to_local_and_says_why(capsys):
+    """The gate is the server's 402. The CLI reports it rather than
+    pre-judging entitlement locally."""
+    http = MagicMock()
+    http.post.return_value = _hosted_response(402, {"detail": "requires a paid plan"})
+
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), \
+         patch("aletheore.search_index.httpx.Client", return_value=http), \
+         patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.0] * 768] * len(t)):
+        vectors = _embed_in_batches(["chunk"])
+
+    assert len(vectors[0]) == 768
+    assert "requires a paid plan" in capsys.readouterr().out
+
+
+def test_hosted_failure_partway_through_raises_rather_than_mixing_providers():
+    """Switching providers mid-run would put 1536-dimension vectors beside
+    768-dimension ones in one index, which LanceDB rejects outright. A
+    half-built index that errors is recoverable; one built from two models
+    is not."""
+    http = MagicMock()
+    http.post.side_effect = [
+        _hosted_response(200, {"vectors": [[0.1] * 1536]}),
+        _hosted_response(502, {"detail": "provider down"}),
+    ]
+
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), \
+         patch("aletheore.search_index.httpx.Client", return_value=http), \
+         patch("aletheore.search_index.embed_texts") as local, \
+         pytest.raises(HostedEmbeddingUnavailableError):
+        _embed_in_batches(["a", "b"], batch_size=1)
+
+    local.assert_not_called()
+
+
+def test_no_token_means_no_hosted_call_at_all():
+    http = MagicMock()
+    with patch("aletheore.search_index.get_api_key", return_value=None), \
+         patch("aletheore.search_index.httpx.Client", return_value=http), \
+         patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.0]] * len(t)):
+        _embed_in_batches(["chunk"])
+
+    http.post.assert_not_called()
