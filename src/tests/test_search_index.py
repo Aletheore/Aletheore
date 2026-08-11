@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aletheore.search_index import (
+    MODULE_CHUNK_MAX_LINES,
     EmbeddingProviderUnavailableError,
     IndexNotFoundError,
     build_chunks,
@@ -35,8 +36,15 @@ def test_build_chunks_slices_real_source_per_symbol(tmp_path):
 
     chunks = build_chunks(evidence, tmp_path)
 
-    assert len(chunks) == 1
-    chunk = chunks[0]
+    # Two chunks now: a module overview covering the pre-symbol head, then
+    # the symbol itself. Without the overview nothing in the index answers
+    # "what is this file for" - see MODULE_CHUNK_MAX_LINES.
+    assert len(chunks) == 2
+    module_chunk, chunk = chunks
+    assert module_chunk["symbol_name"] is None
+    assert module_chunk["start_line"] == 1
+    assert "x = 1" in module_chunk["text"]
+    assert "defines: greet" in module_chunk["text"]
     assert chunk["module_path"] == "app.py"
     assert chunk["symbol_name"] == "greet"
     assert chunk["start_line"] == 2
@@ -258,3 +266,35 @@ def test_search_index_returns_ranked_results(mock_embed_texts, tmp_path):
     assert results[0]["module_path"] == "auth.py"
     assert results[0]["symbol_name"] == "login"
     assert "score" in results[0]
+
+
+def test_build_chunks_excludes_test_files(tmp_path):
+    """Tests were 61% of this repo's index and took 64% of top-5 result
+    slots, because a test shares its subject's identifiers while
+    outnumbering it. Excluding them moved top-5 retrieval from 45% to 68%."""
+    for path in ("tests/test_app.py", "app_test.py", "conftest.py", "spec/thing.py", "src/app.py"):
+        full = tmp_path / path
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text("def f():\n    return 1\n")
+
+    evidence = {"repository": {"modules": [
+        {"path": p, "language": "python",
+         "symbols": {"functions": [{"name": "f", "start_line": 1, "end_line": 2}], "classes": []}}
+        for p in ("tests/test_app.py", "app_test.py", "conftest.py", "spec/thing.py", "src/app.py")
+    ]}}
+
+    indexed = {c["module_path"] for c in build_chunks(evidence, tmp_path)}
+    assert indexed == {"src/app.py"}
+
+
+def test_module_chunk_head_is_bounded(tmp_path):
+    """A file with a huge constant table before its first function must not
+    produce one enormous chunk that matches every query."""
+    body = "\n".join(f"CONST_{i} = {i}" for i in range(500))
+    (tmp_path / "big.py").write_text(f"{body}\ndef f():\n    return 1\n")
+    evidence = _evidence_with_module("big.py", [{"name": "f", "start_line": 501, "end_line": 502}])
+
+    module_chunk = build_chunks(evidence, tmp_path)[0]
+
+    assert module_chunk["symbol_name"] is None
+    assert module_chunk["end_line"] == MODULE_CHUNK_MAX_LINES

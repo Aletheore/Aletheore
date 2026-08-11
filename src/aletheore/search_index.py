@@ -33,10 +33,43 @@ def _default_confirm_openai_fallback() -> bool:
     return input("Continue with OpenAI embeddings? [y/N]: ").strip().lower() == "y"
 
 
+# How much of a file's pre-symbol head (docstring, imports, top-level
+# constants) goes into its module chunk. Generous enough for a real module
+# docstring, bounded so a file with a 2,000-line lookup table before its
+# first function doesn't produce one enormous chunk that matches everything.
+MODULE_CHUNK_MAX_LINES = 80
+
+
+def _is_test_path(module_path: str) -> bool:
+    """Whether a path is test code rather than the implementation.
+
+    Measured on this repo: tests were 485 of 793 indexed chunks (61%) and
+    took 64% of all top-5 result slots, because a test shares its subject's
+    identifiers and domain vocabulary while outnumbering it. Retrieval
+    accuracy for "how does X work" went from 45% to 68% top-5 with these
+    excluded. Someone asking how something works wants the implementation;
+    if they want the test, they ask for the test by name and grep finds it.
+    """
+    parts = module_path.split("/")
+    if any(part in {"tests", "test", "spec", "__tests__", "testing"} for part in parts):
+        return True
+    name = parts[-1]
+    stem = name.rsplit(".", 1)[0]
+    return (
+        stem == "conftest"
+        or stem.startswith("test_")
+        or stem.endswith("_test")
+        or stem.endswith(".test")
+        or stem.endswith(".spec")
+    )
+
+
 def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
     chunks: list[dict] = []
     for module in evidence["repository"]["modules"]:
         module_path = module["path"]
+        if _is_test_path(module_path):
+            continue
         file_path = repo_path / module_path
         if not file_path.exists():
             continue
@@ -60,6 +93,39 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                 }
             )
             continue
+
+        # One chunk describing the module itself, before the per-symbol ones.
+        # Without it nothing in the index answers "what is this file for" -
+        # every chunk was a single function, so "how is the dependency graph
+        # built" matched private helpers like _rel and _symbol_entry and
+        # missed graph.py entirely. Measured on this repo: graph.py had 55
+        # chunks, the earliest starting at line 66, leaving the module
+        # docstring, imports and the LANGUAGE_BY_EXTENSION table unindexed -
+        # and only 5 of 793 chunks described a whole module at all.
+        #
+        # The head of a file is where a docstring, imports and top-level
+        # constants live, so it is both the best summary available and the
+        # part symbol extraction structurally cannot reach.
+        head_end = min(symbols[0]["start_line"] - 1, MODULE_CHUNK_MAX_LINES)
+        if head_end > 0:
+            head = "\n".join(lines[:head_end]).strip()
+            if head:
+                symbol_names = ", ".join(s["name"] for s in symbols[:40])
+                chunks.append(
+                    {
+                        "module_path": module_path,
+                        # None marks a module chunk, matching the symbol-less
+                        # fallback above so consumers need no new concept.
+                        "symbol_name": None,
+                        "start_line": 1,
+                        "end_line": head_end,
+                        "language": module.get("language", "unknown"),
+                        # Path and symbol list join the docstring so the chunk
+                        # is reachable by what the module *contains*, not only
+                        # by how its author happened to describe it.
+                        "text": f"{module_path} (module overview)\n{head}\n\ndefines: {symbol_names}",
+                    }
+                )
 
         for symbol in symbols:
             start_line = symbol["start_line"]
