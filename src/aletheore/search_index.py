@@ -40,6 +40,45 @@ def _default_confirm_openai_fallback() -> bool:
 # first function doesn't produce one enormous chunk that matches everything.
 MODULE_CHUNK_MAX_LINES = 80
 
+# nomic-embed-text has a hard 2048-token training context, and the hosted
+# side already learned this the expensive way: scan_worker/embedding_client.py
+# records that 6600 chars succeeded and 6990 failed against the real model,
+# and that its cache sat at a 0% hit rate for 38 hours before anyone noticed
+# every call was failing. 5000 keeps that same margin. The constant is
+# restated rather than imported because src/ must not depend on github-app/ -
+# the dependency runs the other way.
+#
+# Truncating rather than skipping: a genuinely large function should still be
+# findable by its opening, which is where the signature and docstring are.
+MAX_EMBEDDING_CHARS = 5000
+
+# Directories and suffixes whose contents are not this repository's code.
+# Measured on this repo: one minified bundle (website/vendor/motion.js) was
+# 98% of the entire index's embedding cost - tree-sitter finds 271 "functions"
+# in it, every one spanning lines 1-1, so each chunk contained the whole
+# 44,883-token file and it was embedded 271 times over. Nobody asks questions
+# about a vendored bundle, and the line-based MODULE_CHUNK_MAX_LINES cap is no
+# defense because the file is a single line.
+_VENDOR_DIR_MARKERS = frozenset(
+    {"vendor", "vendored", "third_party", "thirdparty", "external", "dist", "bundles"}
+)
+_MINIFIED_SUFFIXES = (".min.js", ".min.css", ".bundle.js", ".bundle.css", "-min.js")
+
+
+def _is_vendored_path(module_path: str) -> bool:
+    parts = module_path.split("/")
+    if any(part in _VENDOR_DIR_MARKERS for part in parts[:-1]):
+        return True
+    return parts[-1].endswith(_MINIFIED_SUFFIXES)
+
+
+def _truncate_for_embedding(text: str) -> str:
+    if len(text) <= MAX_EMBEDDING_CHARS:
+        return text
+    # Marked rather than silently cut, so a reader of the returned chunk can
+    # tell the difference between a short symbol and a clipped one.
+    return text[:MAX_EMBEDDING_CHARS] + "\n... (truncated for embedding)"
+
 
 def _is_test_path(module_path: str) -> bool:
     """Whether a path is test code rather than the implementation.
@@ -69,7 +108,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
     chunks: list[dict] = []
     for module in evidence["repository"]["modules"]:
         module_path = module["path"]
-        if _is_test_path(module_path):
+        if _is_test_path(module_path) or _is_vendored_path(module_path):
             continue
         file_path = repo_path / module_path
         if not file_path.exists():
@@ -102,7 +141,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "end_line": end_line,
                     "language": language,
                     "imports": imports,
-                    "text": f"{module_path} (no extracted symbols)\n{snippet}",
+                    "text": _truncate_for_embedding(f"{module_path} (no extracted symbols)\n{snippet}"),
                 }
             )
             continue
@@ -137,7 +176,9 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                         # Path and symbol list join the docstring so the chunk
                         # is reachable by what the module *contains*, not only
                         # by how its author happened to describe it.
-                        "text": f"{module_path} (module overview)\n{head}\n\ndefines: {symbol_names}",
+                        "text": _truncate_for_embedding(
+                            f"{module_path} (module overview)\n{head}\n\ndefines: {symbol_names}"
+                        ),
                     }
                 )
 
@@ -154,7 +195,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "end_line": end_line,
                     "language": language,
                     "imports": imports,
-                    "text": f"{header}\n{source}",
+                    "text": _truncate_for_embedding(f"{header}\n{source}"),
                 }
             )
 

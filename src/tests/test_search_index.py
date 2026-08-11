@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aletheore.search_index import (
+    MAX_EMBEDDING_CHARS,
     _embed_in_batches,
     _escape_sql_literal,
     _rrf_fuse,
@@ -415,3 +416,43 @@ def test_chunks_carry_language_and_imports_from_evidence(tmp_path):
     for chunk in build_chunks(evidence, tmp_path):
         assert chunk["language"] == "python"
         assert chunk["imports"] == ["os.py"]
+
+
+def test_vendored_and_minified_files_are_not_indexed(tmp_path):
+    """One minified bundle was 98% of this repo's entire embedding cost:
+    tree-sitter found 271 "functions" in website/vendor/motion.js, every one
+    spanning lines 1-1, so each chunk held the whole 44,883-token file and it
+    was embedded 271 times. The line-based module cap is no defense against a
+    file that is a single line."""
+    paths = ["website/vendor/motion.js", "dist/app.bundle.js", "src/lib.min.js",
+             "third_party/x.js", "src/real.js"]
+    for path in paths:
+        full = tmp_path / path
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text("function f(){return 1}\n")
+
+    evidence = {"repository": {"modules": [
+        {"path": p, "language": "javascript", "imports": [],
+         "symbols": {"functions": [{"name": "f", "start_line": 1, "end_line": 1}], "classes": []}}
+        for p in paths
+    ]}}
+
+    assert {c["module_path"] for c in build_chunks(evidence, tmp_path)} == {"src/real.js"}
+
+
+def test_chunk_text_is_truncated_to_the_embedding_limit(tmp_path):
+    """nomic-embed-text has a hard 2048-token context. The hosted side already
+    learned this: 6600 chars succeeded, 6990 failed, and its cache sat at a 0%
+    hit rate for 38 hours because every call was silently failing."""
+    huge = "x = 1  # " + "y" * 40_000
+    (tmp_path / "big.py").write_text(f"def f():\n    {huge}\n")
+    evidence = {"repository": {"modules": [{
+        "path": "big.py", "language": "python", "imports": [],
+        "symbols": {"functions": [{"name": "f", "start_line": 1, "end_line": 2}], "classes": []},
+    }]}}
+
+    chunk = build_chunks(evidence, tmp_path)[-1]
+
+    assert len(chunk["text"]) <= MAX_EMBEDDING_CHARS + len("\n... (truncated for embedding)")
+    # Marked, so a reader can tell a clipped chunk from a short one.
+    assert chunk["text"].endswith("... (truncated for embedding)")
