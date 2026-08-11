@@ -3,6 +3,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import lancedb
+from lancedb.index import FTS
 from openai import OpenAI
 
 from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api_key
@@ -78,6 +79,17 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
         except OSError:
             continue
 
+        # Structural metadata straight from AIR, attached to every chunk of
+        # this file. Free - the scan already computed it - and it turns
+        # LanceDB into something you can pre-filter rather than only rank:
+        # a polyglot repo (a Python backend beside a TypeScript frontend
+        # beside Terraform) otherwise ranks a matching TS chunk against a
+        # Python question with nothing to separate them but embedding
+        # distance. `imports` rides along unfiltered because it costs
+        # nothing and saves the agent a follow-up aletheore_imports call.
+        language = module.get("language", "unknown")
+        imports = module.get("imports", [])
+
         symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
         if not symbols:
             end_line = min(len(lines), FALLBACK_CHUNK_MAX_LINES)
@@ -88,7 +100,8 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "symbol_name": None,
                     "start_line": 1,
                     "end_line": end_line,
-                    "language": module.get("language", "unknown"),
+                    "language": language,
+                    "imports": imports,
                     "text": f"{module_path} (no extracted symbols)\n{snippet}",
                 }
             )
@@ -119,7 +132,8 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                         "symbol_name": None,
                         "start_line": 1,
                         "end_line": head_end,
-                        "language": module.get("language", "unknown"),
+                        "language": language,
+                        "imports": imports,
                         # Path and symbol list join the docstring so the chunk
                         # is reachable by what the module *contains*, not only
                         # by how its author happened to describe it.
@@ -131,14 +145,15 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
             start_line = symbol["start_line"]
             end_line = symbol["end_line"]
             source = "\n".join(lines[start_line - 1:end_line])
-            header = f"{module_path}::{symbol['name']} ({module.get('language', 'unknown')})"
+            header = f"{module_path}::{symbol['name']} ({language})"
             chunks.append(
                 {
                     "module_path": module_path,
                     "symbol_name": symbol["name"],
                     "start_line": start_line,
                     "end_line": end_line,
-                    "language": module.get("language", "unknown"),
+                    "language": language,
+                    "imports": imports,
                     "text": f"{header}\n{source}",
                 }
             )
@@ -196,6 +211,35 @@ def embed_texts(
         return [item.embedding for item in response.data]
 
 
+def _escape_sql_literal(value: str) -> str:
+    """Single quotes doubled, for a value going into a LanceDB where clause.
+
+    The value reaches here from an MCP tool argument, so it is caller-
+    supplied even though the caller is usually an agent rather than a person.
+    """
+    return value.replace("'", "''")
+
+
+# Chunks per embedding request. One request for the whole repo is what the
+# code did before, and it fails: Ollama returned
+# `Post "/tokenize": EOF` on a 1,535-chunk repo while 634 and 510 both
+# succeeded, so the ceiling sits inside the range of ordinary repositories
+# and indexing died outright rather than running slowly.
+#
+# 200 rather than as-large-as-works: measured throughput is flat from 200
+# upward (16.1 ms/chunk at 200, 16.0 at 500), so a bigger batch buys nothing
+# and only moves the failure point back to where the next-larger repo finds
+# it.
+EMBED_BATCH_SIZE = 200
+
+
+def _embed_in_batches(texts: list[str], batch_size: int = EMBED_BATCH_SIZE) -> list[list[float]]:
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), batch_size):
+        vectors.extend(embed_texts(texts[start : start + batch_size]))
+    return vectors
+
+
 def _index_path(repo_path: Path) -> Path:
     return repo_path / ".aletheore" / INDEX_DIRNAME
 
@@ -205,13 +249,28 @@ def build_index(repo_path: Path, evidence: dict) -> int:
     if not chunks:
         return 0
 
-    vectors = embed_texts([chunk["text"] for chunk in chunks])
+    vectors = _embed_in_batches([chunk["text"] for chunk in chunks])
     rows = [{**chunk, "vector": vector} for chunk, vector in zip(chunks, vectors)]
 
     index_path = _index_path(repo_path)
     index_path.parent.mkdir(parents=True, exist_ok=True)
     db = lancedb.connect(str(index_path))
-    db.create_table(TABLE_NAME, data=rows, mode="overwrite")
+    table = db.create_table(TABLE_NAME, data=rows, mode="overwrite")
+    # A full-text index beside the vectors, so search can match an exact
+    # identifier as well as a meaning. Measured on Flask, full-text alone
+    # beat embeddings on top-1 (80% vs 65%) because those questions used
+    # Flask's own public vocabulary - url_for, blueprint, jinja - which
+    # appears literally in the source. On this repo the ordering reversed
+    # (64% vs 77%), because its questions are conceptual and the answer
+    # lives in prose docstrings. Neither wins outright, which is the
+    # argument for keeping both rather than picking one.
+    #
+    # Best-effort: an index that fails to build costs the exact-identifier
+    # half of search, not the search itself (see _fts_candidates).
+    try:
+        table.create_index("text", config=FTS(), replace=True)
+    except Exception:  # noqa: BLE001 - any backend failure degrades, never fails the build
+        pass
     return len(rows)
 
 
@@ -241,15 +300,66 @@ MAX_CHUNKS_PER_FILE = 2
 _OVERFETCH_FACTOR = 4
 
 
-def search_index(repo_path: Path, query_text: str, k: int = 10) -> list[dict]:
+# Reciprocal-rank fusion constant. 60 is the value from the original RRF
+# paper and the one every implementation uses; it damps the difference
+# between rank 1 and rank 2 enough that neither retriever's top hit can
+# dominate the other's outright.
+_RRF_K = 60
+
+
+def _rrf_fuse(vector_hits: list[dict], text_hits: list[dict]) -> list[dict]:
+    """Interleave two ranked lists by reciprocal rank.
+
+    Fusion is on rank, not score, because the two are not comparable -
+    vector search returns an L2 distance and full-text returns a BM25
+    relevance, on different scales with opposite polarity. Rank is the only
+    thing both agree on.
+
+    Equal weight. Weighting full-text higher was measured and helps the repo
+    whose questions use its own public vocabulary while hurting the one
+    whose answers live in prose, so there is no weighting that is right for
+    both - and the caller does not know which kind of repo they have.
+    """
+    scores: dict[tuple, float] = {}
+    by_key: dict[tuple, dict] = {}
+    for hits in (vector_hits, text_hits):
+        for rank, hit in enumerate(hits):
+            key = (hit["module_path"], hit["symbol_name"], hit["start_line"])
+            scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_K + rank + 1)
+            by_key[key] = hit
+    return [by_key[key] for key, _ in sorted(scores.items(), key=lambda item: -item[1])]
+
+
+def _fts_candidates(table, query_text: str, limit: int) -> list[dict]:
+    # Degrades to vector-only rather than failing: an index built before
+    # full-text existed has no text_idx, and a query full of punctuation can
+    # be rejected by the tokenizer. Neither is worth losing search over.
+    try:
+        return table.search(query_text, query_type="fts").limit(limit).to_list()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def search_index(
+    repo_path: Path, query_text: str, k: int = 10, language: str | None = None
+) -> list[dict]:
     table = open_index(repo_path)
     query_vector = embed_texts([query_text])[0]
-    # Over-fetch, then thin by file: the chunks displaced by the cap have to
-    # be replaced by something, and that something is only available if the
-    # search returned more than k to begin with. Ranking is otherwise
-    # untouched - this drops lower-ranked duplicates from a file already
-    # represented, it never promotes a worse match over a better one.
-    candidates = table.search(query_vector).limit(k * _OVERFETCH_FACTOR).to_list()
+
+    # Over-fetch, then thin by file: the chunks displaced by the per-file cap
+    # have to be replaced by something, and that something is only available
+    # if the search returned more than k to begin with.
+    limit = k * _OVERFETCH_FACTOR
+    vector_query = table.search(query_vector).limit(limit)
+    if language:
+        # A pre-filter, not a post-filter - restricting after ranking would
+        # return fewer than k results for a language that is a minority of
+        # the repo, which is exactly when the filter is worth using.
+        vector_query = vector_query.where(f"language = '{_escape_sql_literal(language)}'")
+    candidates = _rrf_fuse(vector_query.to_list(), _fts_candidates(table, query_text, limit))
+    if language:
+        candidates = [c for c in candidates if c.get("language") == language]
+
     per_file: dict[str, int] = {}
     raw_results = []
     for candidate in candidates:
@@ -267,6 +377,7 @@ def search_index(repo_path: Path, query_text: str, k: int = 10) -> list[dict]:
             "start_line": result["start_line"],
             "end_line": result["end_line"],
             "language": result["language"],
+            "imports": result.get("imports") or [],
             "text": result["text"],
             "score": result.get("_distance"),
         }

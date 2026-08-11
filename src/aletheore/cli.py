@@ -616,6 +616,7 @@ def _query(
     forced_agent: str | None = None,
     k: int = 10,
     symbol: str | None = None,
+    language: str | None = None,
 ) -> int:
     if kind not in QUERY_KIND_CHOICES:
         # Suggestion first, listing after: a typo ("secret", "hotspot") is the
@@ -641,7 +642,7 @@ def _query(
         from aletheore.search_index import IndexNotFoundError, search_index
 
         try:
-            result = search_index(Path(repo_path).resolve(), target, k=k)
+            result = search_index(Path(repo_path).resolve(), target, k=k, language=language)
         except IndexNotFoundError as exc:
             console.print(f"[bold red]error:[/bold red] {exc}")
             return 1
@@ -1306,11 +1307,14 @@ def query(
     ),
     agent: Optional[str] = typer.Option(None, "--agent", help="provider for 'answer'"),
     k: int = typer.Option(10, "--k", help="number of semantic search results"),
+    language: Optional[str] = typer.Option(
+        None, "--language", help="restrict 'search-codebase' to one language, e.g. python"
+    ),
 ) -> None:
     if kind is None:
         console.print(_query_kinds_panel())
         raise typer.Exit(code=0)
-    raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k, symbol))
+    raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k, symbol, language))
 
 
 @app.command(help="compare two air.json files")

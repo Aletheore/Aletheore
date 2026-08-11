@@ -523,10 +523,14 @@ def _register_search_codebase_tool(mcp_instance: MCPServer, repo_path: Path) -> 
             readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
         ),
     )
-    def aletheore_search_codebase(query: str, k: int = 10) -> str:
-        """Semantic search over the repository's indexed code."""
+    def aletheore_search_codebase(query: str, k: int = 10, language: str | None = None) -> str:
+        """Hybrid search (meaning + exact identifiers) over the repository's
+        indexed code. language: optional filter, e.g. 'python', 'typescript' -
+        use it on a polyglot repo when the question is about one stack, since
+        an unfiltered search ranks every language's chunks against each other.
+        Names must match evidence's own repository.languages values."""
         try:
-            return _toon_result(search_index(repo_path, query, k=k))
+            return _toon_result(search_index(repo_path, query, k=k, language=language))
         except IndexNotFoundError:
             return _toon_result(_NO_INDEX_ERROR)
 

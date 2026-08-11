@@ -3,6 +3,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aletheore.search_index import (
+    _embed_in_batches,
+    _escape_sql_literal,
+    _rrf_fuse,
     MAX_CHUNKS_PER_FILE,
     MODULE_CHUNK_MAX_LINES,
     EmbeddingProviderUnavailableError,
@@ -332,3 +335,83 @@ def test_search_caps_chunks_per_file_and_backfills(tmp_path):
     # Slots freed by the cap are backfilled rather than left short.
     assert len(results) == 5
     assert paths == ["big.py", "big.py", "other0.py", "other1.py", "other2.py"]
+
+
+def test_embed_in_batches_splits_large_inputs():
+    """One request for the whole repo is what this did before, and it fails:
+    Ollama returned `Post "/tokenize": EOF` on a 1,535-chunk repo while 634
+    and 510 succeeded, so indexing died outright on ordinary repositories."""
+    calls = []
+
+    def fake_embed(texts):
+        calls.append(len(texts))
+        return [[0.0]] * len(texts)
+
+    with patch("aletheore.search_index.embed_texts", side_effect=fake_embed):
+        vectors = _embed_in_batches([f"t{i}" for i in range(450)], batch_size=200)
+
+    assert calls == [200, 200, 50]
+    assert len(vectors) == 450
+
+
+def test_rrf_fuse_ranks_a_chunk_found_by_both_retrievers_first():
+    """Fusion is on rank, not score: vector search returns an L2 distance and
+    full-text a BM25 relevance, on different scales with opposite polarity."""
+    def chunk(path, name):
+        return {"module_path": path, "symbol_name": name, "start_line": 1}
+
+    both = chunk("shared.py", "f")
+    fused = _rrf_fuse(
+        [chunk("vec_only.py", "a"), both],
+        [chunk("fts_only.py", "b"), both],
+    )
+
+    # Agreed-on chunk outranks either retriever's own first pick.
+    assert (fused[0]["module_path"], fused[0]["symbol_name"]) == ("shared.py", "f")
+    assert {c["module_path"] for c in fused} == {"shared.py", "vec_only.py", "fts_only.py"}
+
+
+def test_fts_failure_degrades_to_vector_only(tmp_path):
+    """An index built before full-text existed has no text_idx, and a query
+    full of punctuation can be rejected by the tokenizer. Neither is worth
+    losing search over."""
+    table = MagicMock()
+    table.search.return_value.limit.return_value.to_list.return_value = [
+        {"module_path": "a.py", "symbol_name": "f", "start_line": 1, "end_line": 2,
+         "language": "python", "imports": [], "text": "x", "_distance": 0.1}
+    ]
+
+    def search(arg, query_type=None):
+        if query_type == "fts":
+            raise RuntimeError("no fts index")
+        return table.search.return_value
+
+    table.search.side_effect = search
+
+    with patch("aletheore.search_index.open_index", return_value=table), \
+         patch("aletheore.search_index.embed_texts", return_value=[[0.0]]):
+        results = search_index(tmp_path, "anything", k=5)
+
+    assert [r["module_path"] for r in results] == ["a.py"]
+
+
+def test_language_filter_is_escaped_before_reaching_the_where_clause():
+    """The value arrives from an MCP tool argument, so it is caller-supplied
+    even when the caller is an agent rather than a person."""
+    assert _escape_sql_literal("python") == "python"
+    assert _escape_sql_literal("python' OR '1'='1") == "python'' OR ''1''=''1"
+
+
+def test_chunks_carry_language_and_imports_from_evidence(tmp_path):
+    """AIR already computed both, so attaching them is free - and it turns
+    the index into something a polyglot repo can pre-filter rather than only
+    rank."""
+    (tmp_path / "app.py").write_text("import os\ndef f():\n    return 1\n")
+    evidence = {"repository": {"modules": [{
+        "path": "app.py", "language": "python", "imports": ["os.py"],
+        "symbols": {"functions": [{"name": "f", "start_line": 2, "end_line": 3}], "classes": []},
+    }]}}
+
+    for chunk in build_chunks(evidence, tmp_path):
+        assert chunk["language"] == "python"
+        assert chunk["imports"] == ["os.py"]
