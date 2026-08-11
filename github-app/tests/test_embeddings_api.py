@@ -27,11 +27,14 @@ async def _installation_with_token(pool, installation_id: int, plan: str, token:
     )
 
 
-async def _post(pool, token: str | None, texts: list[str]):
+async def _post(pool, token: str | None, texts: list[str], repo_id: str | None = None):
     app.state.db_pool = pool
     headers = {"Authorization": f"Bearer {token}"} if token else {}
+    body = {"texts": texts}
+    if repo_id is not None:
+        body["repo_id"] = repo_id
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        return await client.post("/v1/embeddings", json={"texts": texts}, headers=headers)
+        return await client.post("/v1/embeddings", json=body, headers=headers)
 
 
 @pytest.mark.asyncio
@@ -163,3 +166,53 @@ async def test_the_only_row_written_is_the_spend_row(pool):
     after = {t: await pool.fetchval(f"SELECT count(*) FROM {t}") for t in tables}  # noqa: S608
     grew = {t for t in tables if after[t] != before[t]}
     assert grew == {"llm_spend"}, f"unexpected writes to {grew - {'llm_spend'}}"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_key_includes_repo_id_when_given(pool):
+    """`aletheore watch` running against several repos on one token would
+    otherwise share a single request budget - the key has to actually carry
+    the repo, not just accept the field and ignore it."""
+    await _installation_with_token(pool, 9009, "air", "repo-token")
+
+    with patch("app_server.embeddings_api.OpenAI", return_value=_fake_openai()), \
+         patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}), \
+         patch("app_server.embeddings_api.is_rate_limited", return_value=False) as rl:
+        await _post(pool, "repo-token", ["x"], repo_id="repo-abc")
+
+    assert rl.call_args.args[1] == "ratelimit:embeddings:9009:repo-abc"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_key_falls_back_to_installation_only_without_repo_id(pool):
+    """An older CLI that predates repo_id must keep working exactly as
+    before - the coarser, shared-per-installation bucket every caller used
+    to get."""
+    await _installation_with_token(pool, 9010, "air", "norepo-token")
+
+    with patch("app_server.embeddings_api.OpenAI", return_value=_fake_openai()), \
+         patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}), \
+         patch("app_server.embeddings_api.is_rate_limited", return_value=False) as rl:
+        await _post(pool, "norepo-token", ["x"])
+
+    assert rl.call_args.args[1] == "ratelimit:embeddings:9010"
+
+
+@pytest.mark.asyncio
+async def test_one_repo_being_rate_limited_does_not_block_another_repo_on_the_same_token(pool):
+    """The actual point of per-repo keying: one repo's rebase-heavy burst
+    hitting its own limit must not starve a second repo watched on the same
+    installation token."""
+    await _installation_with_token(pool, 9011, "air", "multi-repo-token")
+
+    def fake_rate_limited(redis_conn, key, limit, window):  # noqa: ANN001
+        return "repo-a" in key
+
+    with patch("app_server.embeddings_api.OpenAI", return_value=_fake_openai()), \
+         patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}), \
+         patch("app_server.embeddings_api.is_rate_limited", side_effect=fake_rate_limited):
+        blocked = await _post(pool, "multi-repo-token", ["x"], repo_id="repo-a")
+        allowed = await _post(pool, "multi-repo-token", ["x"], repo_id="repo-b")
+
+    assert blocked.status_code == 429
+    assert allowed.status_code == 200

@@ -12,11 +12,13 @@ from aletheore.search_index import (
     _embed_in_batches,
     _escape_sql_literal,
     _fts_candidates,
+    _repo_id,
     _reusable_vectors,
     _rrf_fuse,
     build_chunks,
     build_index,
     embed_texts,
+    embed_texts_hosted,
     open_index,
     search_index,
 )
@@ -658,6 +660,77 @@ def _hosted_response(status: int, payload: dict | None = None):
     response.reason_phrase = "Error"
     response.text = str(payload)
     return response
+
+
+def test_repo_id_is_stable_for_the_same_path(tmp_path):
+    """Same repo, same value every time - it's the key the hosted rate
+    limit buckets requests by, not a random tag."""
+    assert _repo_id(tmp_path) == _repo_id(tmp_path)
+
+
+def test_repo_id_differs_between_repos(tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    assert _repo_id(tmp_path) != _repo_id(other)
+
+
+def test_repo_id_never_contains_the_raw_path(tmp_path):
+    """A bucket key, not a filesystem disclosure - the server should learn
+    nothing about the caller's directory layout from it."""
+    assert str(tmp_path) not in _repo_id(tmp_path)
+    assert tmp_path.name not in _repo_id(tmp_path)
+
+
+def test_embed_texts_hosted_includes_repo_id_when_given():
+    http = MagicMock()
+    http.post.return_value = _hosted_response(200, {"vectors": [[0.1] * 1536]})
+
+    embed_texts_hosted(["chunk"], "tok", http_client=http, repo_id="abc123")
+
+    assert http.post.call_args.kwargs["json"]["repo_id"] == "abc123"
+
+
+def test_embed_texts_hosted_omits_repo_id_when_not_given():
+    """No repo_id, no key in the body - an older server that doesn't know
+    the field yet should see exactly the request it always saw."""
+    http = MagicMock()
+    http.post.return_value = _hosted_response(200, {"vectors": [[0.1] * 1536]})
+
+    embed_texts_hosted(["chunk"], "tok", http_client=http)
+
+    assert "repo_id" not in http.post.call_args.kwargs["json"]
+
+
+def test_embed_in_batches_forwards_repo_id_to_every_hosted_batch():
+    http = MagicMock()
+    http.post.return_value = _hosted_response(200, {"vectors": [[0.1] * 1536]})
+
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), \
+         patch("aletheore.search_index.httpx.Client", return_value=http):
+        _embed_in_batches(["a", "b"], batch_size=1, repo_id="repo-xyz")
+
+    assert http.post.call_count == 2
+    assert all(
+        call.kwargs["json"]["repo_id"] == "repo-xyz" for call in http.post.call_args_list
+    )
+
+
+def test_build_index_sends_the_repos_own_repo_id_to_hosted_embeddings(tmp_path):
+    """End-to-end wiring check: build_index computes repo_id from the path
+    it was given and it has to actually reach the wire, not just exist as a
+    parameter nothing calls."""
+    (tmp_path / "app.py").write_text("def greet():\n    return 'hi'\n")
+    evidence = _evidence_with_module(
+        "app.py", [{"name": "greet", "start_line": 1, "end_line": 2}]
+    )
+    http = MagicMock()
+    http.post.return_value = _hosted_response(200, {"vectors": [[0.1] * 1536]})
+
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), \
+         patch("aletheore.search_index.httpx.Client", return_value=http):
+        build_index(tmp_path, evidence)
+
+    assert http.post.call_args.kwargs["json"]["repo_id"] == _repo_id(tmp_path)
 
 
 def test_hosted_embeddings_are_preferred_when_a_token_exists():
