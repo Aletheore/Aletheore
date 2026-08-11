@@ -7,9 +7,9 @@ import pytest
 import toon
 from mcp.server.mcpserver.exceptions import ToolError
 
-from aletheore.evidence import EVIDENCE_VERSION
 from aletheore.mcp_server import build_server
 from aletheore.search_index import IndexNotFoundError
+from tests.air_fixtures import minimal_air_evidence
 
 
 def tool_result_body(result):
@@ -24,11 +24,17 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     aletheore_dir = repo / ".aletheore"
     aletheore_dir.mkdir(parents=True)
-    evidence = {
-        "aletheore_version": EVIDENCE_VERSION,
-        "scanned_at": "2026-07-15T10:00:00+00:00",
-        "repo_path": str(repo),
-        "repository": {
+    # Starts from minimal_air_evidence() (schema-valid, every collection
+    # empty) rather than a hand-rolled dict - read_evidence now routes
+    # through load_evidence_file, which validates full AIR schema shape,
+    # not just the version stamp. A hand-rolled dict here previously got
+    # away with omitting several required repository.* keys (ai_usage,
+    # build_tools, frameworks, monorepo, policy_docs) because nothing ever
+    # checked for them.
+    evidence = minimal_air_evidence()
+    evidence["scanned_at"] = "2026-07-15T10:00:00+00:00"
+    evidence["repo_path"] = str(repo)
+    evidence["repository"].update({
             "languages": [{"name": "python", "file_count": 2}],
             "modules": [
                 {
@@ -81,34 +87,35 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
             "environment_variables": {
                 "declared": [{"name": "FOO", "source": ".env.example"}],
             },
-        },
-        "git": {
-            "branches": [{"name": "main", "ahead_of_main": 0}],
-            "ownership": [{"path": "a.py", "top_author": "alice"}],
-            "total_commits": 5,
-            "hotspots": [
-                {
-                    "path": "a.py",
-                    "churn_count": 3,
-                    "co_change_partners": [{"path": "b.py", "co_occurrences": 2}],
-                    "dependents_count": 0,
-                }
-            ],
-        },
-        "security": {
-            "secrets": {
-                "findings": [],
-                "history_scanned_commits": 0,
-                "history_findings": [],
-            },
-            "dependency_vulnerabilities": {"checked": True, "reason": None, "findings": []},
-        },
-        "architecture": {
-            "clusters": [{"id": 0, "modules": ["a.py", "b.py"]}],
-            "cross_cluster_edges": [],
-            "layer_violations": {"convention_detected": False, "layers": [], "violations": []},
-        },
+    })
+    evidence["git"].update({
+        "branches": [{"name": "main", "ahead_of_main": 0}],
+        "ownership": [{"path": "a.py", "top_author": "alice"}],
+        "total_commits": 5,
+        "hotspots": [
+            {
+                "path": "a.py",
+                "churn_count": 3,
+                "co_change_partners": [{"path": "b.py", "co_occurrences": 2}],
+                "dependents_count": 0,
+            }
+        ],
+    })
+    evidence["security"]["secrets"].update({
+        "findings": [],
+        "history_scanned_commits": 0,
+        "history_findings": [],
+    })
+    evidence["security"]["dependency_vulnerabilities"] = {
+        "checked": True,
+        "reason": None,
+        "findings": [],
     }
+    evidence["architecture"].update({
+        "clusters": [{"id": 0, "modules": ["a.py", "b.py"]}],
+        "cross_cluster_edges": [],
+        "layer_violations": {"convention_detected": False, "layers": [], "violations": []},
+    })
     (aletheore_dir / "air.json").write_text(json.dumps(evidence))
     (repo / "a.py").write_text("def foo():\n    return 1\n")
     return repo
@@ -154,8 +161,29 @@ def test_read_evidence_caches_parsed_result_until_the_file_changes(tmp_path, mon
     assert third["scanned_at"].startswith("2026-07-16")
 
 
+def test_read_evidence_rejects_a_malformed_but_version_compatible_file(tmp_path, monkeypatch):
+    # read_evidence used to only check the version stamp, via its own bare
+    # json.loads - a truncated or hand-edited air.json with a *compatible*
+    # version passed straight through and only failed later as a raw
+    # KeyError deep inside whichever tool first touched the missing/wrong
+    # field, instead of one clear, actionable error naming what's wrong.
+    from aletheore.evidence import MalformedEvidenceError
+    from aletheore.mcp_server import read_evidence
+
+    monkeypatch.setattr("aletheore.mcp_server._evidence_cache", {})
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(evidence_path.read_text())
+    del evidence["repository"]
+    evidence_path.write_text(json.dumps(evidence))
+
+    with pytest.raises(MalformedEvidenceError):
+        read_evidence(repo)
+
+
 def test_read_evidence_rejects_an_incompatible_schema_version(tmp_path, monkeypatch):
-    from aletheore.mcp_server import IncompatibleEvidenceVersionError, read_evidence
+    from aletheore.evidence import IncompatibleEvidenceVersionError
+    from aletheore.mcp_server import read_evidence
 
     monkeypatch.setattr("aletheore.mcp_server._evidence_cache", {})
     repo = make_repo_with_evidence(tmp_path)
@@ -169,7 +197,8 @@ def test_read_evidence_rejects_an_incompatible_schema_version(tmp_path, monkeypa
 
 
 def test_read_evidence_rejects_evidence_with_no_version_field(tmp_path, monkeypatch):
-    from aletheore.mcp_server import IncompatibleEvidenceVersionError, read_evidence
+    from aletheore.evidence import IncompatibleEvidenceVersionError
+    from aletheore.mcp_server import read_evidence
 
     monkeypatch.setattr("aletheore.mcp_server._evidence_cache", {})
     repo = make_repo_with_evidence(tmp_path)
