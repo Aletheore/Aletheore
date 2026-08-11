@@ -80,6 +80,32 @@ def test_run_scan_does_not_leak_our_secrets_into_the_subprocess_env(tmp_path, mo
     assert "SESSION_SECRET" not in env
 
 
+def test_run_scan_always_disables_the_local_scan_cache(tmp_path):
+    # Every hosted scan clones an untrusted, attacker-controllable repo -
+    # ALETHEORE_DISABLE_LOCAL_SCAN_CACHE must always be set regardless of
+    # whether an explicit unchanged_scan_cache_path was passed, so the
+    # scanner never trusts a .aletheore/scan-cache.json the repo owner
+    # could have committed themselves (see evidence.py for why that cache
+    # is unsafe to read from a checkout you don't control).
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    with patch("scan_worker.jobs.subprocess.run") as mock_run:
+        _run_scan(repo_dir)
+    _, kwargs = mock_run.call_args
+    assert kwargs["env"]["ALETHEORE_DISABLE_LOCAL_SCAN_CACHE"] == "1"
+
+
+def test_run_scan_disables_the_local_scan_cache_even_with_an_unchanged_cache_path(tmp_path):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    cache_path = tmp_path / "unchanged-cache.json"
+    with patch("scan_worker.jobs.subprocess.run") as mock_run:
+        _run_scan(repo_dir, unchanged_scan_cache_path=cache_path)
+    _, kwargs = mock_run.call_args
+    assert kwargs["env"]["ALETHEORE_DISABLE_LOCAL_SCAN_CACHE"] == "1"
+    assert kwargs["env"]["ALETHEORE_UNCHANGED_SCAN_CACHE"] == str(cache_path)
+
+
 def _fake_evidence() -> dict:
     return {
         "git": {"available": True},

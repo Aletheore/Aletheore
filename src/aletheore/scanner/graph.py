@@ -1546,7 +1546,19 @@ def _python_source_roots(repo_path: Path) -> list[Path]:
         while directory != repo_path and (directory.parent / "__init__.py").exists():
             directory = directory.parent
         roots.add(directory.parent)
-    return list(roots)
+    # Built from a set, whose iteration order depends on Path hashing -
+    # stable within one process but not across separate interpreter runs
+    # (PYTHONHASHSEED is randomized per-process by default), which made an
+    # ambiguous absolute import (resolvable via more than one root) resolve
+    # differently between runs of the same repo - _resolve_python_module
+    # below tries roots in order and returns on the first match. Sorting
+    # can't know which root a real `python` interpreter would prefer for
+    # such an import, but it does make the same repo always produce the
+    # same answer. Shallower roots first: a root closer to repo_path is
+    # more likely to be the actual configured import root (repo root
+    # itself, or a top-level src/ layout) than one nested deep inside a
+    # single subproject.
+    return sorted(roots, key=lambda p: (len(p.parts), str(p)))
 
 
 def _module_or_package_path(repo_path: Path, as_path: Path) -> str | None:

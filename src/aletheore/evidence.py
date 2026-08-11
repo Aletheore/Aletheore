@@ -5,6 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+from aletheore import __version__
 from aletheore.air_schema import validate_evidence
 from aletheore.architecture import build_clusters, detect_layer_violations, load_architecture_config
 from aletheore.dead_code import find_dead_code
@@ -188,6 +189,20 @@ def _secrets_history_timeout_seconds() -> float:
 # scan_worker/jobs.py for how that file gets built and where it points.
 _UNCHANGED_SCAN_CACHE_ENV = "ALETHEORE_UNCHANGED_SCAN_CACHE"
 
+# Set unconditionally by every hosted scan-worker subprocess (see
+# scan_worker/jobs.py's _run_scan) to opt fully out of the local,
+# content-hash-keyed scan cache below. That cache is only safe when the
+# person reading it also controls (or trusts) the checkout it lives in -
+# a plain local `aletheore scan` on your own working copy. On the hosted
+# path, the checkout is someone else's repo: they can commit both a file
+# AND a matching .aletheore/scan-cache.json entry whose cached "parse
+# result" says whatever they want, since the hash has no secret and the
+# scanner never re-parses on a hit. It also provides zero legitimate
+# caching benefit there anyway - every hosted scan clones a fresh
+# checkout that gets deleted afterward, so nothing written ever survives
+# to the next scan except what an attacker deliberately committed.
+_DISABLE_LOCAL_SCAN_CACHE_ENV = "ALETHEORE_DISABLE_LOCAL_SCAN_CACHE"
+
 
 def _load_unchanged_scan_cache() -> tuple[dict[str, dict] | None, dict[str, list[dict]] | None]:
     raw_path = os.environ.get(_UNCHANGED_SCAN_CACHE_ENV)
@@ -247,6 +262,17 @@ def _load_local_scan_cache(
     except (OSError, json.JSONDecodeError):
         return None, None
 
+    # A content hash alone says nothing about whether the *code* that
+    # produced a cached parse result is still today's code - a scanner
+    # upgrade that changes parsing/detection logic without touching the
+    # scanned file's own bytes would otherwise silently keep serving the
+    # old version's (possibly wrong) results forever. Treating any
+    # version mismatch (including a pre-this-fix cache with no version key
+    # at all) the same as a missing cache file forces a full re-parse,
+    # which then overwrites the cache with a correctly-stamped one.
+    if cache.get("aletheore_version") != __version__:
+        return None, None
+
     cached_hashes = cache.get("hashes", {})
     cached_modules = cache.get("modules", {})
     cached_endpoints = cache.get("endpoints", {})
@@ -291,7 +317,14 @@ def _write_local_scan_cache(
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(
-            json.dumps({"hashes": hashes, "modules": modules_by_path, "endpoints": endpoints_by_path})
+            json.dumps(
+                {
+                    "aletheore_version": __version__,
+                    "hashes": hashes,
+                    "modules": modules_by_path,
+                    "endpoints": endpoints_by_path,
+                }
+            )
         )
     except OSError:
         # Best-effort: a failure to write the cache (disk full, permissions)
@@ -364,8 +397,9 @@ def scan_repository(
     # the CLI's own self-contained, content-hash-keyed cache from the
     # previous scan of this repo.
     using_hosted_cache = bool(os.environ.get(_UNCHANGED_SCAN_CACHE_ENV))
+    local_cache_disabled = bool(os.environ.get(_DISABLE_LOCAL_SCAN_CACHE_ENV))
     unchanged_modules, unchanged_endpoints = _load_unchanged_scan_cache()
-    if not using_hosted_cache:
+    if not using_hosted_cache and not local_cache_disabled:
         unchanged_modules, unchanged_endpoints = _load_local_scan_cache(repo_path)
 
     report("Building module dependency graph (parsing source with tree-sitter)")
@@ -445,7 +479,7 @@ def scan_repository(
             "endpoints": [],
         }
 
-    if not using_hosted_cache:
+    if not using_hosted_cache and not local_cache_disabled:
         # --no-map-endpoints leaves api_endpoints_data["endpoints"] empty for
         # this run only - don't write that as if it were real, or the next
         # normal scan would wrongly treat every file as having zero

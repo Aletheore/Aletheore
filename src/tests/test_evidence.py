@@ -408,6 +408,140 @@ def test_scan_repository_ignores_local_cache_when_hosted_cache_env_var_is_set(tm
     assert "cached" in [f["name"] for f in by_path["unchanged.py"]["symbols"]["functions"]]
 
 
+def test_scan_repository_reparses_when_local_cache_has_no_version_stamp(tmp_path):
+    # A cache written before this version stamp existed (or by a scanner
+    # upgrade whose parsing logic changed but whose file content hashes
+    # happen not to) must not be trusted just because a content hash
+    # matches - the content hash alone says nothing about whether the code
+    # that produced the cached parse result is still the code that would
+    # produce it today.
+    repo = make_repo(tmp_path)
+    (repo / "unchanged.py").write_text("def cached():\n    pass\n")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "add unchanged.py")
+
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        scan_repository(repo, check_licenses=False)
+
+    local_cache_path = repo / ".aletheore" / "scan-cache.json"
+    local_cache = json.loads(local_cache_path.read_text())
+    local_cache.pop("aletheore_version", None)
+    local_cache["modules"]["unchanged.py"]["symbols"]["functions"] = [
+        {"name": "stale_from_before_a_scanner_upgrade", "start_line": 1, "end_line": 2}
+    ]
+    local_cache_path.write_text(json.dumps(local_cache))
+
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo, check_licenses=False)
+
+    by_path = {m["path"]: m for m in evidence["repository"]["modules"]}
+    assert "stale_from_before_a_scanner_upgrade" not in [
+        f["name"] for f in by_path["unchanged.py"]["symbols"]["functions"]
+    ]
+    assert "cached" in [f["name"] for f in by_path["unchanged.py"]["symbols"]["functions"]]
+
+
+def test_scan_repository_reparses_when_local_cache_version_does_not_match(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / "unchanged.py").write_text("def cached():\n    pass\n")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "add unchanged.py")
+
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        scan_repository(repo, check_licenses=False)
+
+    local_cache_path = repo / ".aletheore" / "scan-cache.json"
+    local_cache = json.loads(local_cache_path.read_text())
+    local_cache["aletheore_version"] = "0.0.1-different-from-installed"
+    local_cache["modules"]["unchanged.py"]["symbols"]["functions"] = [
+        {"name": "stale_from_a_different_scanner_version", "start_line": 1, "end_line": 2}
+    ]
+    local_cache_path.write_text(json.dumps(local_cache))
+
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo, check_licenses=False)
+
+    by_path = {m["path"]: m for m in evidence["repository"]["modules"]}
+    assert "stale_from_a_different_scanner_version" not in [
+        f["name"] for f in by_path["unchanged.py"]["symbols"]["functions"]
+    ]
+    assert "cached" in [f["name"] for f in by_path["unchanged.py"]["symbols"]["functions"]]
+
+
+def test_scan_repository_writes_the_current_version_into_the_local_scan_cache(tmp_path):
+    from aletheore import __version__
+
+    repo = make_repo(tmp_path)
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        scan_repository(repo, check_licenses=False)
+
+    cache = json.loads((repo / ".aletheore" / "scan-cache.json").read_text())
+    assert cache["aletheore_version"] == __version__
+
+
+def test_scan_repository_ignores_local_cache_when_disabled_via_env_var(tmp_path, monkeypatch):
+    # A repo author fully controls both a committed file's content AND a
+    # committed .aletheore/scan-cache.json - the cache is only keyed by a
+    # plain (unkeyed) content hash, so nothing stops them from shipping a
+    # cache entry whose hash matches their real file but whose cached
+    # "parse result" claims something else entirely (e.g. hides a real
+    # import or a risky call). On the hosted path this cache file never
+    # legitimately survives between scans anyway (each scan clones a fresh,
+    # throwaway checkout), so ALETHEORE_DISABLE_LOCAL_SCAN_CACHE lets that
+    # path opt fully out - proving here that a poisoned committed cache is
+    # then completely ignored rather than trusted.
+    repo = make_repo(tmp_path)
+    (repo / "unchanged.py").write_text("def cached():\n    pass\n")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "add unchanged.py")
+
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        scan_repository(repo, check_licenses=False)
+
+    # Poison the cache with a fabricated parse result matching the file's
+    # real (unforged) content hash - exactly what a malicious repo author
+    # can commit themselves.
+    local_cache_path = repo / ".aletheore" / "scan-cache.json"
+    local_cache = json.loads(local_cache_path.read_text())
+    local_cache["modules"]["unchanged.py"]["symbols"]["functions"] = [
+        {"name": "should_never_be_used", "start_line": 1, "end_line": 2}
+    ]
+    local_cache_path.write_text(json.dumps(local_cache))
+
+    monkeypatch.setenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", "1")
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo, check_licenses=False)
+
+    by_path = {m["path"]: m for m in evidence["repository"]["modules"]}
+    assert "should_never_be_used" not in [
+        f["name"] for f in by_path["unchanged.py"]["symbols"]["functions"]
+    ]
+    assert "cached" in [f["name"] for f in by_path["unchanged.py"]["symbols"]["functions"]]
+
+
+def test_scan_repository_does_not_write_local_cache_when_disabled_via_env_var(tmp_path, monkeypatch):
+    # Writing is skipped too, not just reading - a hosted scan that wrote a
+    # fresh (correct) cache file into the throwaway checkout would provide
+    # no benefit (the checkout is deleted after the scan) and would only
+    # add confusion if that directory were ever inspected or persisted by
+    # some future change.
+    repo = make_repo(tmp_path)
+    monkeypatch.setenv("ALETHEORE_DISABLE_LOCAL_SCAN_CACHE", "1")
+
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        scan_repository(repo, check_licenses=False)
+
+    assert not (repo / ".aletheore" / "scan-cache.json").exists()
+
+
 def test_write_evidence_creates_aletheore_dir(tmp_path):
     repo = make_repo(tmp_path)
     evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
