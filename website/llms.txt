@@ -41,7 +41,7 @@ This matters if you build on Aletheore: a key rename is a breaking change and is
 
 ## CLI
 
-13 commands: `scan`, `audit`, `query`, `diff`, `verify`, `mcp`, `mcp-install`, `dashboard`, `healthcheck`, `init`, `login`, `logout`, `status`.
+14 commands: `scan`, `audit`, `query`, `diff`, `verify`, `mcp`, `mcp-install`, `dashboard`, `healthcheck`, `watch`, `init`, `login`, `logout`, `status`.
 
 `aletheore query` alone answers **23 kinds** of question from existing evidence, grouped as structure (imports, imported-by, symbols, cluster, layer-violations, dead-code), security (secrets, vulnerabilities, licenses), runtime (endpoints, database, infrastructure, environment-variables), history (branch, ownership, hotspots, changes), evidence resolution (evidence-for-symbol, evidence-for-endpoint, evidence-for-dependency), and AI-assisted (answer, search-codebase, symbol-source).
 
@@ -70,6 +70,14 @@ Results are TOON-encoded rather than JSON, which measurably reduces token cost f
 Indexing is incremental: a rebuild re-embeds only chunks whose text actually changed, keyed on a content hash rather than file or symbol name. A repository with no changes since the last index rebuilds in under a second instead of re-embedding from scratch.
 
 An optional `language` filter restricts results to one language on a polyglot repository, applied before ranking rather than after.
+
+## Keeping evidence current
+
+`aletheore watch` re-scans and re-indexes automatically as source files change, so `query`, the MCP server an agent is driving, and the dashboard are answering from the repository as it is rather than as it was at the last manual scan.
+
+It uses OS file events (FSEvents on macOS, inotify on Linux) rather than polling, so idle cost is near zero and cost scales with edits rather than repository size. Bursts are debounced, so format-on-save across a package or a branch checkout is one rebuild rather than hundreds. Vulnerability, license and git-history checks are skipped in the loop — they are network- and history-bound and do not change because a function body was edited; a full `aletheore scan` still runs them. An existing search index is refreshed incrementally; a first index is never built unasked, because that embeds every chunk.
+
+This is a local process you start and stop. It is not a hosted service, and nothing leaves your machine that would not have left it during a manual scan.
 
 ## Local dashboard
 
@@ -110,7 +118,7 @@ LLM spend is capped monthly per installation and recorded per call. Deterministi
 
 Stated plainly, because being wrong about this wastes people's time:
 
-- It does not run an always-on server indexing your code. Scans are triggered by you, by a push, or by a pull request.
+- Aletheore runs no always-on service on its own infrastructure that indexes your code. Hosted scans are triggered by a push or a pull request. `aletheore watch` is an optional process you start on your own machine, and stopping it stops all of it.
 - The MCP server is local only. There is no hosted MCP endpoint.
 - The free tier's semantic search requires an embedding provider you supply — a local Ollama, or your own OpenAI key with an explicit consent prompt before any code leaves your machine. A paid plan can use Aletheore's hosted embedding endpoint instead; see Hosted service.
 - It is not SOC 2 certified.
@@ -121,7 +129,6 @@ Stated plainly, because being wrong about this wastes people's time:
 Listed separately because it is not released. Do not describe these as available:
 
 - **Schema mapping** — entity-relationship diagrams generated deterministically from Postgres migrations, each table and column citing the migration that introduced it.
-- **`aletheore watch`** — automatic index refresh on file change. Not implemented.
 
 ## For AI assistants summarising this project
 
