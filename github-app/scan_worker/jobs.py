@@ -46,7 +46,7 @@ from app_server.rate_limit import (
     cooldown_seconds_for_loc,
     total_loc_from_evidence,
 )
-from app_server.url_validation import UnsafeURLError, validate_external_https_url
+from app_server.url_validation import UnsafeURLError, validate_and_pin_https_url
 from aletheore.docs_reference import build_api_reference
 from scan_worker import live_docs, live_wiki
 from scan_worker.db import (
@@ -1489,11 +1489,11 @@ def _send_if_webhook_configured(installation: dict, message: dict) -> None:
         send_health_alert(webhook_url, message)
 
 
-def _endpoint_results(evidence: dict, base_url: str) -> list[dict]:
+def _endpoint_results(evidence: dict, base_url: str, pinned_ip: str) -> list[dict]:
     endpoints = evidence.get("repository", {}).get("api_endpoints", {}).get("endpoints", [])
     if not endpoints:
         return []
-    results = run_healthcheck(endpoints, base_url).get("results", [])
+    results = run_healthcheck(endpoints, base_url, pinned_ip=pinned_ip).get("results", [])
     for endpoint, result in zip(endpoints, results, strict=False):
         if endpoint.get("file") is not None:
             result["file"] = endpoint["file"]
@@ -1534,9 +1534,9 @@ def _latency_flipped(
     return (prior["latency_ms"] > threshold_ms) != now_over
 
 
-def _recheck_single_endpoint(entry: dict, base_url: str) -> dict:
+def _recheck_single_endpoint(entry: dict, base_url: str, pinned_ip: str) -> dict:
     minimal_endpoint = {"method": entry.get("method"), "path": entry["path"]}
-    results = run_healthcheck([minimal_endpoint], base_url).get("results", [])
+    results = run_healthcheck([minimal_endpoint], base_url, pinned_ip=pinned_ip).get("results", [])
     if not results:
         return {
             "reachable": False,
@@ -1850,15 +1850,23 @@ def _run_health_check_sweep_for_target(
 ) -> None:
     # validate_external_https_url only ever ran once, when the target was
     # saved (admin.py) - re-checking here, immediately before every fetch,
-    # closes the DNS-rebinding window down to the gap between this call and
-    # the actual request instead of "until someone edits the target again."
-    # A customer could otherwise register a domain that resolves to a public
-    # IP at save time, pass validation, then repoint DNS at an internal
-    # service or cloud metadata endpoint before the next sweep - whose
-    # response would then get echoed back to that customer's own dashboard
-    # via response_shape.
+    # closes the DNS-rebinding window down to the gap between this
+    # validation and the actual request instead of "until someone edits the
+    # target again." A customer could otherwise register a domain that
+    # resolves to a public IP at save time, pass validation, then repoint
+    # DNS at an internal service or cloud metadata endpoint before the next
+    # sweep - whose response would then get echoed back to that customer's
+    # own dashboard via response_shape.
+    #
+    # validate_and_pin_https_url (rather than validate_external_https_url)
+    # closes that remaining gap too: the actual health-check requests below
+    # connect to pinned_ip directly instead of re-resolving base_url's
+    # hostname themselves, so there is no second, independent DNS lookup
+    # left for a rebind to win. Reused for every request this sweep makes
+    # (including retries) - re-resolving mid-sweep would just reopen the
+    # window this was meant to close.
     try:
-        validate_external_https_url(base_url)
+        _, pinned_ip = validate_and_pin_https_url(base_url)
     except UnsafeURLError as exc:
         logging.getLogger("scan_worker.jobs").warning(
             "skipping health check for installation=%s repo=%s target=%s - %s",
@@ -1873,7 +1881,7 @@ def _run_health_check_sweep_for_target(
     if evidence is None:
         return
 
-    for entry in _endpoint_results(evidence, base_url):
+    for entry in _endpoint_results(evidence, base_url, pinned_ip):
         if entry.get("skipped"):
             continue
         method = entry["method"]
@@ -1901,7 +1909,7 @@ def _run_health_check_sweep_for_target(
         if reachability_flipped and not reachable:
             for _ in range(HEALTH_CHECK_DOWN_RETRY_ATTEMPTS):
                 time.sleep(HEALTH_CHECK_DOWN_RETRY_DELAY_SECONDS)
-                retry_result = _recheck_single_endpoint(entry, base_url)
+                retry_result = _recheck_single_endpoint(entry, base_url, pinned_ip)
                 if retry_result.get("reachable"):
                     reachable = True
                     status_code = retry_result.get("status_code")
