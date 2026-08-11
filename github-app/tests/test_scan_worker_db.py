@@ -5,6 +5,7 @@ import pytest
 
 from datetime import timedelta
 
+from aletheore.evidence import EVIDENCE_VERSION
 from app_server.evidence_limits import EvidenceTooLargeError, MAX_EVIDENCE_BYTES
 from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
@@ -311,11 +312,47 @@ async def test_delete_expired_webhook_deliveries_keeps_rows_inside_the_window(po
 @pytest.mark.asyncio
 async def test_get_latest_evidence_returns_most_recent(pool):
     await _insert_installation(pool, 301, "a")
-    insert_repo_history(TEST_DATABASE_URL, 301, "a/repo1", datetime(2026, 1, 1, tzinfo=timezone.utc), {"v": 1})
-    insert_repo_history(TEST_DATABASE_URL, 301, "a/repo1", datetime(2026, 1, 2, tzinfo=timezone.utc), {"v": 2})
+    # Version-stamped because get_latest_evidence now refuses evidence written
+    # by an incompatible schema - a bare {"v": N} is not something any scan
+    # ever produced, so asserting against it was testing an impossible input.
+    insert_repo_history(
+        TEST_DATABASE_URL, 301, "a/repo1", datetime(2026, 1, 1, tzinfo=timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": 1},
+    )
+    insert_repo_history(
+        TEST_DATABASE_URL, 301, "a/repo1", datetime(2026, 1, 2, tzinfo=timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": 2},
+    )
 
     evidence = get_latest_evidence(TEST_DATABASE_URL, 301, "a/repo1")
     assert evidence["v"] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_latest_evidence_ignores_rows_from_an_incompatible_version(pool):
+    """repo_history rows outlive the schema that wrote them. The CLI, MCP
+    server and dashboard all version-check evidence before reading it; this
+    path did not, so an EVIDENCE_VERSION bump would leave its five callers
+    reading old-shaped rows as current and KeyError on the first new key.
+
+    None rather than raising: every caller already handles it as the normal
+    never-scanned-yet case, and the next scan overwrites the row anyway.
+    """
+    await _insert_installation(pool, 302, "a")
+    insert_repo_history(
+        TEST_DATABASE_URL, 302, "a/repo1", datetime(2026, 1, 1, tzinfo=timezone.utc),
+        {"aletheore_version": "0.1.0", "repository": {}},
+    )
+
+    assert get_latest_evidence(TEST_DATABASE_URL, 302, "a/repo1") is None
+
+    # A compatible row written afterwards is picked up normally, so this is
+    # a per-row check and not a latch that disables the whole read path.
+    insert_repo_history(
+        TEST_DATABASE_URL, 302, "a/repo1", datetime(2026, 1, 2, tzinfo=timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": 9},
+    )
+    assert get_latest_evidence(TEST_DATABASE_URL, 302, "a/repo1")["v"] == 9
 
 
 @pytest.mark.asyncio
