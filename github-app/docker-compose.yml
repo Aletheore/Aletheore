@@ -42,6 +42,19 @@ services:
       - "127.0.0.1:8000:8000"
     cpus: "1.0"
     mem_limit: 768m
+    # Own Python code, not a third-party image whose internal capability
+    # needs are unaudited - it does nothing (no raw sockets, no chroot, no
+    # binding a privileged <1024 port) that needs any Linux capability, so
+    # dropping all of them costs nothing here. no-new-privileges blocks a
+    # setuid/setgid binary or file capability from ever escalating this
+    # process further than it started, regardless of what capabilities it
+    # does hold. pids_limit is generous, not tuned to today's usage - a
+    # ceiling against a fork-bomb-shaped failure, not a throttle.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    pids_limit: 512
 
   scan-worker:
     build:
@@ -88,6 +101,15 @@ services:
         condition: service_started
     cpus: "1.0"
     mem_limit: 1g
+    # See app-server's identical block above for the reasoning. Higher
+    # pids_limit than the other services here specifically: a scan
+    # legitimately spawns many concurrent subprocesses (git, tree-sitter
+    # parsing via Popen streaming, dependency-vulnerability checks).
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    pids_limit: 1024
 
   # Consumes the "health" and "email" queues (see scan_worker/scheduler.py
   # and health_worker.py) - a dedicated worker so a long-running AI job on
@@ -128,6 +150,12 @@ services:
         condition: service_started
     cpus: "0.5"
     mem_limit: 512m
+    # See app-server's identical block above for the reasoning.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    pids_limit: 512
 
   # Never started via `up` - this service exists purely so `docker compose
   # build demo-sandbox` produces the aletheore-demo-sandbox:latest image on
@@ -163,6 +191,12 @@ services:
         condition: service_started
     cpus: "1.0"
     mem_limit: 512m
+    # See app-server's identical block above for the reasoning.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    pids_limit: 512
 
   demo-sandbox-runner:
     build:
@@ -184,6 +218,15 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     cpus: "1.0"
     mem_limit: 256m
+    # See app-server's identical block above for the reasoning - talking to
+    # the mounted Docker socket is Unix-socket file-permission-based, not
+    # gated by this container's own Linux capabilities, so dropping them
+    # doesn't affect the one thing this service does.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    pids_limit: 256
 
   postgres:
     image: postgres:16
@@ -200,6 +243,14 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+    # Third-party image - unlike the services above, its exact capability
+    # needs (CHOWN/SETUID/SETGID/DAC_OVERRIDE during initdb, at minimum)
+    # aren't ours to assert without a dedicated per-image audit, so only
+    # the always-safe directive is added here: no-new-privileges never
+    # removes a capability the container already has, it only blocks
+    # gaining new ones via a setuid/setgid binary or file capability.
+    security_opt:
+      - "no-new-privileges:true"
 
   scheduler:
     build:
@@ -231,14 +282,30 @@ services:
     depends_on:
       redis:
         condition: service_started
+    # See app-server's identical block above for the reasoning.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    pids_limit: 512
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Internal-only, no privileged port, no setuid/capability-bearing
+    # binary involved in starting redis-server - safe with no risk to the
+    # public-facing path (see caddy below for the one image this was
+    # deliberately NOT added to).
+    security_opt:
+      - "no-new-privileges:true"
 
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
+    # Internal-only (11434, never published to the host) - same reasoning
+    # as redis above.
+    security_opt:
+      - "no-new-privileges:true"
     # Tried OLLAMA_CONTEXT_LENGTH=8192 here first, assuming nomic-embed-text
     # supports an 8192-token context - it doesn't, not on the GGUF this
     # pulls: confirmed directly against the running server that the model's
@@ -262,6 +329,15 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    # Deliberately NOT given no-new-privileges here, unlike every other
+    # service in this file: this is the one process binding privileged
+    # ports 80/443, and depending on exactly how the official image starts
+    # the caddy binary (root directly vs. a non-root user relying on a
+    # CAP_NET_BIND_SERVICE file capability), no_new_privs can suppress
+    # that capability grant at exec time and break the public HTTPS
+    # termination for the entire product. Confirming which case applies
+    # and testing it live is real follow-up work, not something to guess
+    # at on the one container an outage here is most visible through.
     ports:
       - "80:80"
       - "443:443"
@@ -289,6 +365,10 @@ services:
       - AUTOHEAL_INTERVAL=30
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    # No published port, no privileged-port binding - safe for the same
+    # reason as redis/ollama above.
+    security_opt:
+      - "no-new-privileges:true"
 
 volumes:
   aletheore_postgres_data:
