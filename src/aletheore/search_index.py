@@ -222,11 +222,26 @@ class HostedEmbeddingUnavailableError(Exception):
     """
 
 
+def _repo_id(repo_path: Path) -> str:
+    """Stable, opaque identifier for a repository, derived from its resolved
+    local path.
+
+    Lets the hosted embeddings rate limit key on (installation, repo)
+    instead of only installation: `aletheore watch` running against several
+    repos on one token would otherwise share a single request budget, and
+    one repo's rebase-heavy burst could starve the others. Never the raw
+    path - just a bucket the server can count requests against without
+    learning anything about the caller's filesystem.
+    """
+    return hashlib.sha256(str(repo_path.resolve()).encode("utf-8")).hexdigest()[:16]
+
+
 def embed_texts_hosted(
     texts: list[str],
     token: str,
     api_base_url: str = DEFAULT_API_BASE_URL,
     http_client: httpx.Client | None = None,
+    repo_id: str | None = None,
 ) -> list[list[float]]:
     """Embed via Aletheore's endpoint using a saved API token.
 
@@ -237,10 +252,13 @@ def embed_texts_hosted(
     changes mid-session is honoured without the CLI knowing anything.
     """
     client = http_client or httpx.Client(base_url=api_base_url, timeout=120.0)
+    body: dict = {"texts": texts}
+    if repo_id:
+        body["repo_id"] = repo_id
     try:
         response = client.post(
             HOSTED_EMBEDDING_PATH,
-            json={"texts": texts},
+            json=body,
             headers={"Authorization": f"Bearer {token}"},
         )
     except httpx.HTTPError as exc:
@@ -340,7 +358,9 @@ def _escape_sql_literal(value: str) -> str:
 EMBED_BATCH_SIZE = 200
 
 
-def _embed_in_batches(texts: list[str], batch_size: int = EMBED_BATCH_SIZE) -> list[list[float]]:
+def _embed_in_batches(
+    texts: list[str], batch_size: int = EMBED_BATCH_SIZE, repo_id: str | None = None
+) -> list[list[float]]:
     """Embed everything, preferring Aletheore's endpoint when entitled.
 
     Hosted first, then local, and never the reverse: someone paying for
@@ -353,6 +373,9 @@ def _embed_in_batches(texts: list[str], batch_size: int = EMBED_BATCH_SIZE) -> l
     hosted failure partway through is raised rather than worked around. A
     half-built index that errors is recoverable; one built from two models
     is not.
+
+    repo_id: forwarded to embed_texts_hosted so the hosted rate limit can be
+    keyed per repo rather than per installation - see _repo_id.
     """
     token = get_api_key(
         "ALETHEORE_API_TOKEN", "aletheore-managed-audit", prompt_fn=lambda _: ""
@@ -364,7 +387,7 @@ def _embed_in_batches(texts: list[str], batch_size: int = EMBED_BATCH_SIZE) -> l
         batch = texts[start : start + batch_size]
         if use_hosted:
             try:
-                vectors.extend(embed_texts_hosted(batch, token))
+                vectors.extend(embed_texts_hosted(batch, token, repo_id=repo_id))
                 continue
             except HostedEmbeddingUnavailableError as exc:
                 if vectors:
@@ -436,7 +459,8 @@ def build_index(repo_path: Path, evidence: dict) -> int:
     index_path = _index_path(repo_path)
     reusable = _reusable_vectors(index_path)
     stale = [chunk for chunk in chunks if chunk["chunk_hash"] not in reusable]
-    fresh_vectors = _embed_in_batches([chunk["text"] for chunk in stale])
+    repo = _repo_id(repo_path)
+    fresh_vectors = _embed_in_batches([chunk["text"] for chunk in stale], repo_id=repo)
 
     # Vectors from two different embedding models cannot share an index -
     # nomic-embed-text returns 768 dimensions and text-embedding-3-small
@@ -471,13 +495,13 @@ def build_index(repo_path: Path, evidence: dict) -> int:
         current_dimension = (
             len(fresh_vectors[0])
             if fresh_vectors
-            else len(_embed_in_batches([chunks[0]["text"]])[0])
+            else len(_embed_in_batches([chunks[0]["text"]], repo_id=repo)[0])
         )
         reused_dimensions = {len(vector) for vector in reusable.values()}
         if reused_dimensions != {current_dimension}:
             reusable = {}
             stale = chunks
-            fresh_vectors = _embed_in_batches([chunk["text"] for chunk in stale])
+            fresh_vectors = _embed_in_batches([chunk["text"] for chunk in stale], repo_id=repo)
 
     fresh = dict(zip((chunk["chunk_hash"] for chunk in stale), fresh_vectors))
     rows = [

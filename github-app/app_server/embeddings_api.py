@@ -57,16 +57,33 @@ MAX_TEXTS_PER_REQUEST = 256
 # than a limit real usage approaches.
 MAX_CHARS_PER_TEXT = 8_000
 
-# Generous, because a legitimate first index of a large repository is a
-# burst: ~1,500 chunks at 200 per request is 8 calls, and a monorepo several
-# times that. The spend cap is the real cost control; this only stops a
-# caller from turning one token into unbounded upstream volume.
-RATE_LIMIT_REQUESTS = 400
+# Keyed per (installation, repo_id) below, not just installation - see the
+# repo_id field. `aletheore watch`'s 2-second debounce means one repo alone
+# can theoretically send up to 1,800 requests/hour (one settled batch every
+# debounce interval); real editing sessions land far below that, but the
+# ceiling has to clear it with room, not just the common case. Generous
+# beyond that too, because a legitimate first index of a large repository
+# is a burst: ~1,500 chunks at 200 per request is 8 calls, and a monorepo
+# several times that. The spend cap is the real cost control; this only
+# stops a caller from turning one token into unbounded upstream volume.
+RATE_LIMIT_REQUESTS = 2000
 RATE_LIMIT_WINDOW_SECONDS = 3600
+
+# Bucket key length, not a content limit: repo_id is a 16-char hex prefix of
+# a sha256 (see aletheore.search_index._repo_id) client-side, but the field
+# is caller-supplied and unauthenticated-in-meaning - it only ever affects
+# which rate-limit counter a request lands in, never authorization or
+# billing, so nothing worse than a wasted Redis key results from an odd
+# value. Bounded anyway against a pathological string bloating a key.
+MAX_REPO_ID_LENGTH = 128
 
 
 class EmbeddingsRequest(BaseModel):
     texts: list[str] = Field(min_length=1, max_length=MAX_TEXTS_PER_REQUEST)
+    # Optional so an older CLI that predates this field still works - it
+    # just shares the coarser, installation-only bucket every caller used
+    # to share (see the fallback in create_embeddings below).
+    repo_id: str | None = Field(default=None, max_length=MAX_REPO_ID_LENGTH)
 
 
 async def _authenticated_installation(request: Request) -> dict:
@@ -104,10 +121,23 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
                 detail=f"each text must be at most {MAX_CHARS_PER_TEXT} characters",
             )
 
+    # Per-repo when the caller sends one (see EmbeddingsRequest.repo_id):
+    # `aletheore watch` running against several repos on one token would
+    # otherwise share a single counter, and one repo's rebase-heavy burst
+    # could starve the others' embeddings on the same installation. Falls
+    # back to the old installation-only bucket for a caller that doesn't
+    # send it, rather than treating a missing repo_id as its own bucket -
+    # an empty-string "no repo" bucket would just recreate the shared-budget
+    # problem for every caller that omits the field.
+    rate_limit_key = (
+        f"ratelimit:embeddings:{installation_id}:{body.repo_id}"
+        if body.repo_id
+        else f"ratelimit:embeddings:{installation_id}"
+    )
     try:
         rate_limited = is_rate_limited(
             get_redis_client(),
-            f"ratelimit:embeddings:{installation_id}",
+            rate_limit_key,
             RATE_LIMIT_REQUESTS,
             RATE_LIMIT_WINDOW_SECONDS,
         )
