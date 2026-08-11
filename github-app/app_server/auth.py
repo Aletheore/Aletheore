@@ -405,15 +405,11 @@ async def callback(code: str, request: Request, state: str | None = None, instal
         except Exception:
             logger.warning("failed to synchronously upsert installation %s", installation_id, exc_info=True)
 
-    if signed_state is None and state:
-        # A direct "Install" click on GitHub's own App page never goes through
-        # /auth/login, so there's no next-cookie - but github_app_install_url()
-        # puts our own next_path in `state` for exactly this entry point (it's
-        # not a CSRF nonce here, since signed_state is absent and nothing was
-        # verified above).
-        next_path = _is_safe_next_path(state)
-    else:
-        next_path = _is_safe_next_path(request.cookies.get(NEXT_COOKIE_NAME))
+    # The `signed_state is None` case (a direct "Install" click on GitHub's
+    # own App page, which never goes through /auth/login) already returned
+    # via the /auth/login redirect above - by this point signed_state is
+    # always set, so next_path always comes from the login-set cookie.
+    next_path = _is_safe_next_path(request.cookies.get(NEXT_COOKIE_NAME))
     response = RedirectResponse(url=next_path, status_code=307)
     response.set_cookie(
         SESSION_COOKIE_NAME,
