@@ -138,7 +138,9 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
             status_code=402,
             detail=(
                 f"monthly spend cap reached for this installation (${monthly_cap:.2f}) - "
-                "hosted embeddings are paused until it resets"
+                "hosted embeddings resume next month, or contact support@aletheore.com to "
+                "raise the limit sooner. 'aletheore index' with a local Ollama or your own "
+                "OPENAI_API_KEY works right now and is free, with no cap"
             ),
         )
 
@@ -166,7 +168,12 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
     # Billed on the provider's own token count rather than a local estimate,
     # so the recorded spend matches the invoice.
     prompt_tokens = response.usage.prompt_tokens if response.usage else 0
-    await record_llm_spend(pool, installation_id, cost_for_usage(EMBEDDING_MODEL, prompt_tokens, 0))
+    await record_llm_spend(
+        pool,
+        installation_id,
+        cost_for_usage(EMBEDDING_MODEL, prompt_tokens, 0),
+        monthly_cap=monthly_cap,
+    )
 
     return {
         "model": EMBEDDING_MODEL,

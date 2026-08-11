@@ -3,7 +3,14 @@ from datetime import date
 import pytest
 
 from app_server import llm_cost
-from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation, stale_models
+from app_server.llm_cost import (
+    WARN_FRACTION_OF_CAP,
+    base_cap_for_plan,
+    cost_for_usage,
+    crossed_spend_warning_threshold,
+    monthly_cap_for_installation,
+    stale_models,
+)
 
 
 def test_cost_for_usage_deepseek_v4_pro():
@@ -94,3 +101,31 @@ def test_cost_for_usage_does_not_warn_for_freshly_verified_model(monkeypatch, ca
         cost_for_usage("deepseek-v4-flash", 1000, 1000)
 
     assert caplog.records == []
+
+
+def test_crossed_spend_warning_threshold_fires_on_the_crossing_increment():
+    """A $10 increment against a $15 cap crosses the 30% ($4.50) threshold
+    partway through - previous total ($2) was under it, new total ($12) is
+    over."""
+    assert crossed_spend_warning_threshold(2.0, 12.0, 15.0) is True
+
+
+def test_crossed_spend_warning_threshold_does_not_fire_while_still_under():
+    assert crossed_spend_warning_threshold(1.0, 2.0, 15.0) is False
+
+
+def test_crossed_spend_warning_threshold_does_not_refire_once_already_over():
+    """Edge-triggered: an installation already past the threshold must not
+    log again on every subsequent call for the rest of the month."""
+    assert crossed_spend_warning_threshold(10.0, 11.0, 15.0) is False
+
+
+def test_crossed_spend_warning_threshold_fires_exactly_at_the_boundary():
+    threshold = WARN_FRACTION_OF_CAP * 15.0
+    assert crossed_spend_warning_threshold(threshold - 0.01, threshold, 15.0) is True
+
+
+def test_crossed_spend_warning_threshold_never_fires_for_a_zero_cap():
+    """A zero cap means no plan matched (base_cap_for_plan's default) - not
+    a real installation to warn about."""
+    assert crossed_spend_warning_threshold(0.0, 100.0, 0.0) is False

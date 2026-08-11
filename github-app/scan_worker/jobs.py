@@ -1167,7 +1167,7 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                     body = (
                         f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n"
                         f"Monthly spend cap reached for this installation (${monthly_cap:.2f}). "
-                        "Try again next month, or contact support to increase your limit."
+                        "Resumes next month, or email support@aletheore.com to raise the limit sooner."
                     )
                 else:
                     spend_accumulator = {"total": 0.0, "model": model_for_plan(plan)}
@@ -1184,7 +1184,10 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                         include_llm_suggestions=include_suggestions,
                     )
                     record_llm_spend(
-                        settings.database_url, installation_id, spend_accumulator["total"]
+                        settings.database_url,
+                        installation_id,
+                        spend_accumulator["total"],
+                        monthly_cap=monthly_cap,
                     )
                     verification_token = _sign_and_persist_audit_report(
                         settings,
@@ -1270,7 +1273,12 @@ def run_managed_audit_api_job(
                 plan=plan,
                 include_llm_suggestions=include_suggestions,
             )
-            record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
+            record_llm_spend(
+                settings.database_url,
+                installation_id,
+                spend_accumulator["total"],
+                monthly_cap=monthly_cap,
+            )
             verification_token = _sign_and_persist_audit_report(
                 settings,
                 installation_id,
@@ -1320,7 +1328,7 @@ def run_flash_review_job(
 
         try:
             _run_flash_review(
-                settings, installation_id, repo_full_name, pr_number, base_sha, head_sha
+                settings, installation_id, repo_full_name, pr_number, base_sha, head_sha, monthly_cap
             )
         except Exception as exc:  # noqa: BLE001
             try:
@@ -1338,6 +1346,7 @@ def _run_flash_review(
     pr_number: int,
     base_sha: str,
     head_sha: str,
+    monthly_cap: float,
 ) -> None:
     app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
     token = _token_sync(installation_id, app_jwt)
@@ -1425,7 +1434,9 @@ def _run_flash_review(
                 file_contents=file_contents,
                 on_grounding_result=_on_grounding_result,
             )
-    record_llm_spend(settings.database_url, installation_id, spend_accumulator["total"])
+    record_llm_spend(
+        settings.database_url, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap
+    )
     increment_flash_review_count(settings.database_url, installation_id)
 
     proposed = grounding_result.get("proposed", 0)
@@ -2399,7 +2410,7 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
                 model_used=model_used,
                 fetch_line_count=fetch_line_count,
             )
-            record_llm_spend(dsn, installation_id, spend_accumulator["total"])
+            record_llm_spend(dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap)
             _store_wiki_generation(
                 dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None,
                 fetch_line_count=fetch_line_count,
@@ -2531,7 +2542,7 @@ def _maybe_update_live_wiki(
                 model_used=update_model,
                 fetch_line_count=fetch_line_count,
             )
-            record_llm_spend(dsn, installation_id, spend_accumulator["total"])
+            record_llm_spend(dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap)
             _store_wiki_generation(
                 dsn, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
                 fetch_line_count=fetch_line_count,
@@ -2802,7 +2813,7 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         succeeded, last_error = _run_docs_build_for_modules(
             dsn, installation_id, repo_full_name, modules, writing_adapter, client, token, None
         )
-        record_llm_spend(dsn, installation_id, spend_accumulator["total"])
+        record_llm_spend(dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap)
     if succeeded == 0 and last_error is not None:
         # Every module in this run failed - genuinely nothing new landed,
         # unlike a partial run where some succeeded and persisted already.
@@ -2941,7 +2952,7 @@ def _maybe_update_live_docs(
         succeeded, last_error = _run_docs_build_for_modules(
             dsn, installation_id, repo_full_name, changed_modules, writing_adapter, client, token, head_sha
         )
-        record_llm_spend(dsn, installation_id, spend_accumulator["total"])
+        record_llm_spend(dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap)
     if succeeded == 0 and last_error is not None:
         set_docs_build_status(dsn, installation_id, repo_full_name, "failed", last_error)
         return

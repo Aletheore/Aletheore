@@ -196,6 +196,29 @@ async def test_record_llm_spend_is_independent_per_installation(pool):
 
 
 @pytest.mark.asyncio
+async def test_record_llm_spend_without_monthly_cap_never_warns(pool, caplog):
+    """Existing callers that predate the cap-warning parameter must keep
+    working unchanged - omitting monthly_cap skips the check entirely."""
+    await upsert_installation(pool, 500, "octocat")
+    with caplog.at_level("WARNING"):
+        await record_llm_spend(pool, 500, 10.00)
+    assert caplog.records == []
+
+
+@pytest.mark.asyncio
+async def test_record_llm_spend_warns_once_when_crossing_the_threshold(pool, caplog):
+    await upsert_installation(pool, 500, "octocat")
+    with caplog.at_level("WARNING"):
+        await record_llm_spend(pool, 500, 2.00, monthly_cap=15.00)  # under 30% ($4.50)
+        await record_llm_spend(pool, 500, 5.00, monthly_cap=15.00)  # $7 total - crosses it
+        await record_llm_spend(pool, 500, 1.00, monthly_cap=15.00)  # already over - no refire
+
+    warnings = [r for r in caplog.records if "installation=500" in r.message]
+    assert len(warnings) == 1
+    assert "30%" in warnings[0].message
+
+
+@pytest.mark.asyncio
 async def test_get_extra_seats_defaults_to_zero(pool):
     await upsert_installation(pool, 500, "octocat")
     assert await get_extra_seats(pool, 500) == 0
