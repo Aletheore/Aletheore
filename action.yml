@@ -67,10 +67,26 @@ runs:
 
     - name: Scan base
       shell: bash
+      # On a fork PR, aletheore-head is checked out from the PR author's own
+      # branch - they fully control any .aletheore/scan-cache.json committed
+      # there. Without this, a poisoned cache entry (matching content hash,
+      # fabricated parse result) would be trusted verbatim instead of
+      # re-parsed, letting a PR author suppress what the diff step reports
+      # for their own changed files - including what
+      # --fail-on-new-layer-violations gates on. Same fix already applied to
+      # the hosted scan-worker (jobs.py) and the public demo sandbox; see
+      # evidence.py's _DISABLE_LOCAL_SCAN_CACHE_ENV for the full reasoning.
+      # Applied to the base scan too, not just head - base is also an
+      # external checkout (the PR's target branch at the time of the
+      # workflow run), not this action's own trusted content.
+      env:
+        ALETHEORE_DISABLE_LOCAL_SCAN_CACHE: "1"
       run: aletheore scan aletheore-base
 
     - name: Scan head
       shell: bash
+      env:
+        ALETHEORE_DISABLE_LOCAL_SCAN_CACHE: "1"
       run: aletheore scan aletheore-head
 
     - name: Diff
