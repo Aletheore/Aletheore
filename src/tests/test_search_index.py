@@ -3,14 +3,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aletheore.search_index import (
-    MAX_EMBEDDING_CHARS,
-    _embed_in_batches,
-    _escape_sql_literal,
-    _rrf_fuse,
-    MAX_CHUNKS_PER_FILE,
-    MODULE_CHUNK_MAX_LINES,
     EmbeddingProviderUnavailableError,
     IndexNotFoundError,
+    MAX_CHUNKS_PER_FILE,
+    MAX_EMBEDDING_CHARS,
+    MODULE_CHUNK_MAX_LINES,
+    _embed_in_batches,
+    _escape_sql_literal,
+    _reusable_vectors,
+    _rrf_fuse,
     build_chunks,
     build_index,
     embed_texts,
@@ -456,3 +457,72 @@ def test_chunk_text_is_truncated_to_the_embedding_limit(tmp_path):
     assert len(chunk["text"]) <= MAX_EMBEDDING_CHARS + len("\n... (truncated for embedding)")
     # Marked, so a reader can tell a clipped chunk from a short one.
     assert chunk["text"].endswith("... (truncated for embedding)")
+
+
+def test_build_index_only_embeds_chunks_whose_text_changed(tmp_path):
+    """Embedding is the entire cost of indexing - 16-80 ms per chunk against
+    microseconds for everything else - so the only optimization that matters
+    is not re-embedding unchanged text. Measured on this repo: editing one
+    function re-embedded 1 chunk of 631, 49.8s cold to 0.76s incremental."""
+    (tmp_path / "a.py").write_text("def f():\n    return 1\n")
+    (tmp_path / "b.py").write_text("def g():\n    return 2\n")
+
+    def evidence(f_body):
+        (tmp_path / "a.py").write_text(f"def f():\n    return {f_body}\n")
+        return {"repository": {"modules": [
+            {"path": "a.py", "language": "python", "imports": [],
+             "symbols": {"functions": [{"name": "f", "start_line": 1, "end_line": 2}], "classes": []}},
+            {"path": "b.py", "language": "python", "imports": [],
+             "symbols": {"functions": [{"name": "g", "start_line": 1, "end_line": 2}], "classes": []}},
+        ]}}
+
+    embedded: list[list[str]] = []
+
+    def fake_embed(texts):
+        embedded.append(list(texts))
+        return [[float(len(t))] * 3 for t in texts]
+
+    with patch("aletheore.search_index.embed_texts", side_effect=fake_embed):
+        build_index(tmp_path, evidence(1))
+        first_call_count = len(embedded[0])
+        embedded.clear()
+        # Same content: nothing to re-embed at all.
+        build_index(tmp_path, evidence(1))
+        assert embedded == [] or all(not batch for batch in embedded)
+
+        embedded.clear()
+        build_index(tmp_path, evidence(99))
+
+    changed = [text for batch in embedded for text in batch]
+    # One symbol chunk per file; neither gets a module chunk, since both
+    # start at line 1 so there is no pre-symbol head to summarise.
+    assert first_call_count == 2
+    # Only a.py's chunks come back; b.py is untouched and reuses its vectors.
+    assert changed and all("a.py" in text for text in changed)
+
+
+def test_build_index_drops_chunks_that_no_longer_exist(tmp_path):
+    """The table is rewritten wholesale rather than upserted, so a deleted
+    function stops being searchable. An upsert would leave it findable
+    forever."""
+    (tmp_path / "a.py").write_text("def f():\n    return 1\n\ndef gone():\n    return 2\n")
+    two = {"repository": {"modules": [{
+        "path": "a.py", "language": "python", "imports": [], "symbols": {"classes": [], "functions": [
+            {"name": "f", "start_line": 1, "end_line": 2},
+            {"name": "gone", "start_line": 4, "end_line": 5}]}}]}}
+    one = {"repository": {"modules": [{
+        "path": "a.py", "language": "python", "imports": [], "symbols": {"classes": [], "functions": [
+            {"name": "f", "start_line": 1, "end_line": 2}]}}]}}
+
+    with patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.0] * 3] * len(t)):
+        build_index(tmp_path, two)
+        build_index(tmp_path, one)
+
+    names = {r["symbol_name"] for r in open_index(tmp_path).to_arrow().to_pylist()}
+    assert "gone" not in names
+
+
+def test_reusable_vectors_survives_an_unreadable_previous_index(tmp_path):
+    """An index missing, corrupt, or written before chunk_hash existed must
+    degrade to embedding everything - the old behavior - not raise."""
+    assert _reusable_vectors(tmp_path / "nope.lancedb") == {}

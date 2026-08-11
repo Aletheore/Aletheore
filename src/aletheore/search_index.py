@@ -1,3 +1,4 @@
+import hashlib
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -285,15 +286,70 @@ def _index_path(repo_path: Path) -> Path:
     return repo_path / ".aletheore" / INDEX_DIRNAME
 
 
+def _chunk_hash(text: str) -> str:
+    """Content hash of a chunk's embedded text.
+
+    Keyed on the text actually sent to the model, not the file or the symbol
+    name, because that is exactly what determines the vector. A symbol that
+    moves down a file without changing keeps its hash and its vector; one
+    whose body changes gets a new hash and is re-embedded. Renaming the
+    symbol changes the header line inside `text`, so it correctly misses.
+    """
+    return hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
+
+
+def _reusable_vectors(index_path: Path) -> dict[str, list[float]]:
+    """chunk_hash -> vector, from the existing index if there is one.
+
+    Best-effort: any failure to read the previous index (missing, corrupt,
+    or written before chunk_hash existed) just means everything is embedded
+    fresh, which is the old behavior rather than an error.
+    """
+    if not index_path.exists():
+        return {}
+    try:
+        table = lancedb.connect(str(index_path)).open_table(TABLE_NAME)
+        return {
+            row["chunk_hash"]: row["vector"]
+            for row in table.to_arrow().to_pylist()
+            if row.get("chunk_hash")
+        }
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def build_index(repo_path: Path, evidence: dict) -> int:
     chunks = build_chunks(evidence, repo_path)
     if not chunks:
         return 0
 
-    vectors = _embed_in_batches([chunk["text"] for chunk in chunks])
-    rows = [{**chunk, "vector": vector} for chunk, vector in zip(chunks, vectors)]
+    for chunk in chunks:
+        chunk["chunk_hash"] = _chunk_hash(chunk["text"])
 
+    # Embedding is the whole cost of indexing - 16-80 ms per chunk against
+    # microseconds for everything else - so the only optimization that
+    # matters is not embedding a chunk whose text has not changed. Editing
+    # one file in a 634-chunk repo re-embeds that file's chunks and reuses
+    # the rest, turning a 50-second rebuild into a sub-second one.
+    #
+    # The table is still rewritten wholesale. That is deliberate: rewriting
+    # is cheap, and it deletes rows for chunks that no longer exist for
+    # free, where an upsert would leave a deleted function searchable
+    # forever.
     index_path = _index_path(repo_path)
+    reusable = _reusable_vectors(index_path)
+    stale = [chunk for chunk in chunks if chunk["chunk_hash"] not in reusable]
+    fresh = dict(
+        zip(
+            (chunk["chunk_hash"] for chunk in stale),
+            _embed_in_batches([chunk["text"] for chunk in stale]),
+        )
+    )
+    rows = [
+        {**chunk, "vector": reusable.get(chunk["chunk_hash"]) or fresh[chunk["chunk_hash"]]}
+        for chunk in chunks
+    ]
+
     index_path.parent.mkdir(parents=True, exist_ok=True)
     db = lancedb.connect(str(index_path))
     table = db.create_table(TABLE_NAME, data=rows, mode="overwrite")
