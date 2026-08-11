@@ -1,3 +1,4 @@
+import http.client
 import json
 import re
 import ssl
@@ -53,6 +54,70 @@ _NO_REDIRECT_OPENER = urllib.request.build_opener(
     _NoRedirectHandler, urllib.request.HTTPSHandler(context=_SSL_CONTEXT)
 )
 
+
+def _pinned_connection_class(base_class: type, pinned_ip: str) -> type:
+    # A caller that already resolved and validated a hostname (rejecting
+    # private/internal IPs - see app_server/url_validation.py) still hands
+    # this module a hostname, not an IP: http.client.HTTPConnection.connect()
+    # calls self._create_connection((self.host, self.port), ...), which
+    # re-resolves DNS independently of - and later than - that validation. A
+    # DNS record that changes between the two lookups (a "rebind") would then
+    # have this module connect somewhere the caller never actually validated.
+    #
+    # _create_connection is set as an INSTANCE attribute in HTTPConnection's
+    # own __init__ (its own comment: "to allow unit tests to replace it with
+    # a suitable mockup"), so overriding it as a class-level method would be
+    # silently shadowed by every new instance re-setting it in __init__.
+    # Wrapping it right after super().__init__() runs, as intended, closes
+    # the gap to zero: resolution and connection become the same step
+    # instead of two. HTTPS still verifies the certificate against the
+    # original hostname (self.host, untouched) via SNI, so this only changes
+    # which address is dialed, not what identity is trusted.
+    class _Pinned(base_class):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            _real_create_connection = self._create_connection
+
+            def _create_connection(address, *cc_args, **cc_kwargs):
+                _hostname, port = address
+                return _real_create_connection((pinned_ip, port), *cc_args, **cc_kwargs)
+
+            self._create_connection = _create_connection
+
+    _Pinned.__name__ = f"Pinned{base_class.__name__}"
+    return _Pinned
+
+
+def _opener_for(pinned_ip: str | None) -> urllib.request.OpenerDirector:
+    if pinned_ip is None:
+        return _NO_REDIRECT_OPENER
+    pinned_https = _pinned_connection_class(http.client.HTTPSConnection, pinned_ip)
+    pinned_http = _pinned_connection_class(http.client.HTTPConnection, pinned_ip)
+    return urllib.request.build_opener(
+        _NoRedirectHandler,
+        _PinnedHTTPSHandler(pinned_https, context=_SSL_CONTEXT),
+        _PinnedHTTPHandler(pinned_http),
+    )
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, connection_class: type, **kwargs):
+        super().__init__(**kwargs)
+        self._connection_class = connection_class
+
+    def https_open(self, req):
+        return self.do_open(self._connection_class, req, context=self._context)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, connection_class: type):
+        super().__init__()
+        self._connection_class = connection_class
+
+    def http_open(self, req):
+        return self.do_open(self._connection_class, req)
+
+
 _PATH_PARAM_PATTERNS = (
     re.compile(r"<[^>]+>"),
     re.compile(r"\{[^}]+\}"),
@@ -87,8 +152,17 @@ def _response_shape(response) -> list[str] | None:
     return None
 
 
-def run_healthcheck(endpoints: list[dict], base_url: str, timeout: float = 5.0) -> dict:
+def run_healthcheck(
+    endpoints: list[dict], base_url: str, timeout: float = 5.0, *, pinned_ip: str | None = None
+) -> dict:
+    """pinned_ip: when given, every request connects to this literal IP
+    instead of letting the connection resolve base_url's hostname itself -
+    for callers (the hosted health-sweep) that already resolved and
+    validated the hostname and need the actual request to hit the exact
+    address that was validated, not a fresh, unvalidated resolution. Plain
+    CLI/MCP callers pass nothing and keep today's normal DNS behavior."""
     _require_http_scheme(base_url)
+    opener = _opener_for(pinned_ip)
     results: list[dict] = []
 
     for endpoint in endpoints:
@@ -133,7 +207,7 @@ def run_healthcheck(endpoints: list[dict], base_url: str, timeout: float = 5.0) 
         start = time.monotonic()
         try:
             request = urllib.request.Request(url)
-            with _NO_REDIRECT_OPENER.open(request, timeout=timeout) as response:
+            with opener.open(request, timeout=timeout) as response:
                 entry["status_code"] = response.status
                 entry["reachable"] = True
                 entry["response_shape"] = None if reachability_only else _response_shape(response)

@@ -1893,7 +1893,9 @@ def _patch_sweep(
     monkeypatch.setattr("scan_worker.jobs.time.sleep", lambda *a, **k: None)
     # Real DNS resolution has no place in a unit test - SSRF re-validation
     # itself is covered by its own dedicated tests below.
-    monkeypatch.setattr("scan_worker.jobs.validate_external_https_url", lambda url: url)
+    monkeypatch.setattr(
+        "scan_worker.jobs.validate_and_pin_https_url", lambda url: (url, "93.184.216.34")
+    )
     monkeypatch.setattr(
         "scan_worker.jobs.list_health_check_targets_all",
         lambda dsn: [
@@ -1923,7 +1925,7 @@ def _patch_sweep(
     }
     calls = {"count": 0}
 
-    def fake_healthcheck(endpoints, base_url):
+    def fake_healthcheck(endpoints, base_url, pinned_ip=None):
         calls["count"] += 1
         if calls["count"] == 1 or retry_result_entry is None:
             return {"results": [default_first]}
@@ -2021,7 +2023,7 @@ def test_sweep_does_not_retry_a_recovery_flip(monkeypatch):
     )
     monkeypatch.setattr(
         "scan_worker.jobs.run_healthcheck",
-        lambda endpoints, base_url: healthcheck_calls.append(True)
+        lambda endpoints, base_url, pinned_ip=None: healthcheck_calls.append(True)
         or {
             "results": [
                 {
@@ -2306,7 +2308,9 @@ def test_sweep_isolates_one_targets_failure_from_others(monkeypatch):
     # take down the sweep for every other installation - this job runs
     # every HEALTH_SWEEP_INTERVAL_SECONDS for the whole customer base.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.validate_external_https_url", lambda url: url)
+    monkeypatch.setattr(
+        "scan_worker.jobs.validate_and_pin_https_url", lambda url: (url, "93.184.216.34")
+    )
     monkeypatch.setattr(
         "scan_worker.jobs.list_health_check_targets_all",
         lambda dsn: [
@@ -2339,7 +2343,7 @@ def test_sweep_isolates_one_targets_failure_from_others(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", fake_get_latest_evidence)
     monkeypatch.setattr(
         "scan_worker.jobs.run_healthcheck",
-        lambda endpoints, base_url: {
+        lambda endpoints, base_url, pinned_ip=None: {
             "results": [{"method": "GET", "path": "/x", "reachable": True, "status_code": 200, "latency_ms": 90.0}]
         },
     )
@@ -2386,7 +2390,7 @@ def test_sweep_revalidates_target_url_before_every_fetch_and_skips_on_ssrf_failu
     def fake_validate(url):
         raise UnsafeURLError(f"'{url}' now resolves to a disallowed address")
 
-    monkeypatch.setattr("scan_worker.jobs.validate_external_https_url", fake_validate)
+    monkeypatch.setattr("scan_worker.jobs.validate_and_pin_https_url", fake_validate)
 
     evidence_calls = []
     monkeypatch.setattr(
@@ -2397,7 +2401,7 @@ def test_sweep_revalidates_target_url_before_every_fetch_and_skips_on_ssrf_failu
     fetch_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs.run_healthcheck",
-        lambda endpoints, base_url: fetch_calls.append(True)
+        lambda endpoints, base_url, pinned_ip=None: fetch_calls.append(True)
         or {"results": [{"method": "GET", "path": "/x", "reachable": True, "status_code": 200, "latency_ms": 1.0}]},
     )
     monkeypatch.setattr("scan_worker.jobs.insert_endpoint_health", lambda *a, **k: None)
@@ -2431,8 +2435,8 @@ def test_sweep_proceeds_when_target_url_still_passes_validation(monkeypatch):
 
     validated_urls = []
     monkeypatch.setattr(
-        "scan_worker.jobs.validate_external_https_url",
-        lambda url: validated_urls.append(url) or url,
+        "scan_worker.jobs.validate_and_pin_https_url",
+        lambda url: validated_urls.append(url) or (url, "93.184.216.34"),
     )
     monkeypatch.setattr(
         "scan_worker.jobs.get_latest_evidence",
@@ -2440,7 +2444,7 @@ def test_sweep_proceeds_when_target_url_still_passes_validation(monkeypatch):
     )
     monkeypatch.setattr(
         "scan_worker.jobs.run_healthcheck",
-        lambda endpoints, base_url: {
+        lambda endpoints, base_url, pinned_ip=None: {
             "results": [{"method": "GET", "path": "/x", "reachable": True, "status_code": 200, "latency_ms": 1.0}]
         },
     )
@@ -2530,7 +2534,9 @@ def test_sweep_checks_every_target_independently(monkeypatch):
     # one up - must each be checked and alerted on their own, not merged or
     # short-circuited after the first.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.validate_external_https_url", lambda url: url)
+    monkeypatch.setattr(
+        "scan_worker.jobs.validate_and_pin_https_url", lambda url: (url, "93.184.216.34")
+    )
     monkeypatch.setattr(
         "scan_worker.jobs.list_health_check_targets_all",
         lambda dsn: [
@@ -2560,7 +2566,7 @@ def test_sweep_checks_every_target_independently(monkeypatch):
         lambda dsn, iid, repo: {"repository": {"api_endpoints": {"endpoints": [{"method": "GET", "path": "/x"}]}}},
     )
 
-    def fake_healthcheck(endpoints, base_url):
+    def fake_healthcheck(endpoints, base_url, pinned_ip=None):
         reachable = base_url == "https://staging.example.com"
         return {
             "results": [
