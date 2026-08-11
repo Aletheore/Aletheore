@@ -1,9 +1,12 @@
 import json
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
+import openai
 import toon
 from openai import OpenAI
 
@@ -13,6 +16,44 @@ from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api
 MAX_TOOL_ROUNDS = 20
 REQUEST_TIMEOUT_SECONDS = 120
 MAX_CONSECUTIVE_NO_TOOL_CALLS = 2
+
+# Confirmed transient in practice, not just theoretically: a real production
+# run hit AuthenticationError twice in a row (08:51 and 09:07 UTC 2026-08-11)
+# from a long-lived scan-worker process using a key that had already
+# succeeded earlier that morning and succeeded again minutes later from a
+# freshly-restarted process, no config change in between - most likely
+# transient edge/auth-cache inconsistency shortly after a key rotation, not
+# a genuinely bad key (which would fail identically on retry too, making
+# the retry harmless even if this guess about the cause is wrong).
+# RateLimitError/APIConnectionError/APITimeoutError/InternalServerError are
+# the conventional transient set any client of a hosted LLM API should
+# retry. BadRequestError and friends (bad params, content policy, 404) are
+# deliberately excluded - retrying an error that will fail identically
+# every time just delays surfacing it.
+_RETRYABLE_EXCEPTIONS: tuple[type[Exception], ...] = (
+    openai.AuthenticationError,
+    openai.RateLimitError,
+    openai.APIConnectionError,
+    openai.APITimeoutError,
+    openai.InternalServerError,
+)
+_MAX_CALL_ATTEMPTS = 3
+_RETRY_BASE_DELAY_SECONDS = 1.0
+
+_T = TypeVar("_T")
+
+
+def _call_with_retry(fn: Callable[[], _T]) -> _T:
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_CALL_ATTEMPTS):
+        try:
+            return fn()
+        except _RETRYABLE_EXCEPTIONS as exc:
+            last_exc = exc
+            if attempt < _MAX_CALL_ATTEMPTS - 1:
+                time.sleep(_RETRY_BASE_DELAY_SECONDS * (2**attempt))
+    assert last_exc is not None
+    raise last_exc
 
 NO_TOOL_CALL_NUDGE = (
     "You must call exactly one of the provided tools now: read_evidence_section, "
@@ -257,13 +298,15 @@ class OpenAICompatibleAdapter(AgentAdapter):
 
         client = OpenAI(base_url=self._base_url, api_key=api_key or "not-needed")
         try:
-            response = client.chat.completions.create(
-                model=self._model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                timeout=REQUEST_TIMEOUT_SECONDS,
+            response = _call_with_retry(
+                lambda: client.chat.completions.create(
+                    model=self._model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                )
             )
         except Exception as exc:
             raise AdapterInvocationError(
@@ -318,7 +361,9 @@ class OpenAICompatibleAdapter(AgentAdapter):
 
         for _round in range(MAX_TOOL_ROUNDS):
             try:
-                response = client.chat.completions.create(messages=messages, **create_kwargs)
+                response = _call_with_retry(
+                    lambda: client.chat.completions.create(messages=messages, **create_kwargs)
+                )
             except Exception as exc:
                 raise AdapterInvocationError(
                     f"{self.name} invocation failed: {type(exc).__name__}"
