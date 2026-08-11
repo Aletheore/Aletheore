@@ -2195,18 +2195,37 @@ def run_weekly_digest_sweep_job() -> None:
             )
 
 
-def _live_wiki_naming_adapter() -> OpenAICompatibleAdapter:
-    return writing_adapter_for(live_wiki.FLASH_MODEL)
+def _llm_spend_cap_reached(dsn: str, installation_id: int, plan: str) -> tuple[bool, float]:
+    """(cap_reached, monthly_cap) - caller must hold installation_spend_lock,
+    same as every other spend-gated call site (managed audits, flash
+    review). Factored out because AIRview/Docs builds now have four call
+    sites needing the identical cap computation, where every existing
+    caller only ever needed it once.
+    """
+    extra_seats = get_extra_seats(dsn, installation_id)
+    monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
+    current_spend = get_llm_spend_this_month(dsn, installation_id)
+    return current_spend >= monthly_cap, monthly_cap
 
 
-def _live_wiki_full_build_writing_adapter(plan: str) -> OpenAICompatibleAdapter | AnthropicAdapter:
+def _live_wiki_naming_adapter(
+    on_usage: Callable[[int, int], None] | None = None
+) -> OpenAICompatibleAdapter:
+    return writing_adapter_for(live_wiki.FLASH_MODEL, on_usage=on_usage)
+
+
+def _live_wiki_full_build_writing_adapter(
+    plan: str, on_usage: Callable[[int, int], None] | None = None
+) -> OpenAICompatibleAdapter | AnthropicAdapter:
     # The one-time full build uses the same model as managed audits (see
     # model_tiers.py) - Luna (falling back to DeepSeek Pro), for every plan.
-    return writing_adapter_for_plan(plan)
+    return writing_adapter_for_plan(plan, on_usage=on_usage)
 
 
-def _live_wiki_update_writing_adapter() -> OpenAICompatibleAdapter:
-    return writing_adapter_for(live_wiki.UPDATE_MODEL)
+def _live_wiki_update_writing_adapter(
+    on_usage: Callable[[int, int], None] | None = None
+) -> OpenAICompatibleAdapter:
+    return writing_adapter_for(live_wiki.UPDATE_MODEL, on_usage=on_usage)
 
 
 def _real_line_count_fetcher(
@@ -2338,36 +2357,55 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
     plan = installation["plan"] if installation is not None else "free"
     model_used = model_for_plan(plan)
 
-    try:
-        naming_adapter = _live_wiki_naming_adapter()
-        writing_adapter = _live_wiki_full_build_writing_adapter(plan)
-        fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, None)
-        records = live_wiki.generate_subsystems(
-            evidence,
-            naming_adapter,
-            writing_adapter,
-            cluster_ids=cluster_ids,
-            cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
-            cache_write=lambda packet, output, used: store_result(
-                dsn, installation_id, repo_full_name, packet, output, used
-            ),
-            model_used=model_used,
-            fetch_line_count=fetch_line_count,
-        )
-        _store_wiki_generation(
-            dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None,
-            fetch_line_count=fetch_line_count,
-        )
-    except Exception as exc:  # noqa: BLE001
-        # Without this, a failed build (LLM error, DB error) just leaves the
-        # AIRview page permanently blank with no way for the customer to
-        # tell "still building" apart from "broke and is never coming back".
-        logging.getLogger("scan_worker.jobs").warning(
-            "live wiki full build failed for installation=%s repo=%s (%s)",
-            installation_id, repo_full_name, exc,
-        )
-        set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
-        return
+    with installation_spend_lock(dsn, installation_id):
+        cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
+        if cap_reached:
+            logging.getLogger("scan_worker.jobs").info(
+                "live wiki full build skipped for installation=%s repo=%s - monthly spend cap reached (${%.2f})",
+                installation_id, repo_full_name, monthly_cap,
+            )
+            set_wiki_build_status(
+                dsn, installation_id, repo_full_name, "failed",
+                f"monthly spend cap reached (${monthly_cap:.2f})",
+            )
+            return
+
+        spend_accumulator = {"total": 0.0}
+
+        def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+            spend_accumulator["total"] += cost_for_usage(model_used, prompt_tokens, completion_tokens)
+
+        try:
+            naming_adapter = _live_wiki_naming_adapter(on_usage=_on_usage)
+            writing_adapter = _live_wiki_full_build_writing_adapter(plan, on_usage=_on_usage)
+            fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, None)
+            records = live_wiki.generate_subsystems(
+                evidence,
+                naming_adapter,
+                writing_adapter,
+                cluster_ids=cluster_ids,
+                cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
+                cache_write=lambda packet, output, used: store_result(
+                    dsn, installation_id, repo_full_name, packet, output, used
+                ),
+                model_used=model_used,
+                fetch_line_count=fetch_line_count,
+            )
+            record_llm_spend(dsn, installation_id, spend_accumulator["total"])
+            _store_wiki_generation(
+                dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None,
+                fetch_line_count=fetch_line_count,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Without this, a failed build (LLM error, DB error) just leaves the
+            # AIRview page permanently blank with no way for the customer to
+            # tell "still building" apart from "broke and is never coming back".
+            logging.getLogger("scan_worker.jobs").warning(
+                "live wiki full build failed for installation=%s repo=%s (%s)",
+                installation_id, repo_full_name, exc,
+            )
+            set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+            return
     set_wiki_build_status(dsn, installation_id, repo_full_name, "ready")
 
 
@@ -2448,38 +2486,60 @@ def _maybe_update_live_wiki(
         return
 
     dsn = settings.database_url
-    try:
-        naming_adapter = _live_wiki_naming_adapter()
-        writing_adapter = _live_wiki_update_writing_adapter()
-        fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, head_sha)
-        records = live_wiki.generate_subsystems(
-            evidence,
-            naming_adapter,
-            writing_adapter,
-            cluster_ids=cluster_ids,
-            cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
-            cache_write=lambda packet, output, used: store_result(
-                dsn, installation_id, repo_full_name, packet, output, used
-            ),
-            model_used=resolve_model(live_wiki.UPDATE_MODEL),
-            fetch_line_count=fetch_line_count,
-        )
-        _store_wiki_generation(
-            dsn, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
-            fetch_line_count=fetch_line_count,
-        )
-    except Exception as exc:  # noqa: BLE001
-        # Without this, a failed incremental update just leaves stale
-        # content in place with zero signal - the customer (and
-        # wiki_build_status) has no way to tell "stale" apart from
-        # "current", especially once a first full build has already
-        # succeeded and populated an overview.
-        logging.getLogger("scan_worker.jobs").warning(
-            "live wiki incremental update failed for installation=%s repo=%s (%s)",
-            installation_id, repo_full_name, exc,
-        )
-        set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
-        return
+    plan = installation["plan"]
+    with installation_spend_lock(dsn, installation_id):
+        cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
+        if cap_reached:
+            logging.getLogger("scan_worker.jobs").info(
+                "live wiki incremental update skipped for installation=%s repo=%s - "
+                "monthly spend cap reached (${%.2f})",
+                installation_id, repo_full_name, monthly_cap,
+            )
+            set_wiki_build_status(
+                dsn, installation_id, repo_full_name, "failed",
+                f"monthly spend cap reached (${monthly_cap:.2f})",
+            )
+            return
+
+        update_model = resolve_model(live_wiki.UPDATE_MODEL)
+        spend_accumulator = {"total": 0.0}
+
+        def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+            spend_accumulator["total"] += cost_for_usage(update_model, prompt_tokens, completion_tokens)
+
+        try:
+            naming_adapter = _live_wiki_naming_adapter(on_usage=_on_usage)
+            writing_adapter = _live_wiki_update_writing_adapter(on_usage=_on_usage)
+            fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, head_sha)
+            records = live_wiki.generate_subsystems(
+                evidence,
+                naming_adapter,
+                writing_adapter,
+                cluster_ids=cluster_ids,
+                cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
+                cache_write=lambda packet, output, used: store_result(
+                    dsn, installation_id, repo_full_name, packet, output, used
+                ),
+                model_used=update_model,
+                fetch_line_count=fetch_line_count,
+            )
+            record_llm_spend(dsn, installation_id, spend_accumulator["total"])
+            _store_wiki_generation(
+                dsn, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
+                fetch_line_count=fetch_line_count,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Without this, a failed incremental update just leaves stale
+            # content in place with zero signal - the customer (and
+            # wiki_build_status) has no way to tell "stale" apart from
+            # "current", especially once a first full build has already
+            # succeeded and populated an overview.
+            logging.getLogger("scan_worker.jobs").warning(
+                "live wiki incremental update failed for installation=%s repo=%s (%s)",
+                installation_id, repo_full_name, exc,
+            )
+            set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+            return
     set_wiki_build_status(dsn, installation_id, repo_full_name, "ready")
 
 
@@ -2494,12 +2554,16 @@ def _maybe_update_live_wiki(
 MAX_DOCS_FULL_BUILD_FILES = 50
 
 
-def _live_docs_full_build_writing_adapter(plan: str) -> OpenAICompatibleAdapter:
-    return writing_adapter_for_plan(plan)
+def _live_docs_full_build_writing_adapter(
+    plan: str, on_usage: Callable[[int, int], None] | None = None
+) -> OpenAICompatibleAdapter:
+    return writing_adapter_for_plan(plan, on_usage=on_usage)
 
 
-def _live_docs_update_writing_adapter() -> OpenAICompatibleAdapter:
-    return writing_adapter_for(live_docs.FLASH_MODEL)
+def _live_docs_update_writing_adapter(
+    on_usage: Callable[[int, int], None] | None = None
+) -> OpenAICompatibleAdapter:
+    return writing_adapter_for(live_docs.FLASH_MODEL, on_usage=on_usage)
 
 
 def _github_client_and_token(installation_id: int) -> tuple[httpx.Client, str] | None:
@@ -2698,19 +2762,39 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         return
     client, token = client_and_token
 
-    try:
-        writing_adapter = _live_docs_full_build_writing_adapter(plan)
-    except Exception as exc:  # noqa: BLE001
-        logging.getLogger("scan_worker.jobs").warning(
-            "live docs full build could not start for installation=%s repo=%s (%s)",
-            installation_id, repo_full_name, exc,
-        )
-        set_docs_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
-        return
+    with installation_spend_lock(dsn, installation_id):
+        cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
+        if cap_reached:
+            logging.getLogger("scan_worker.jobs").info(
+                "live docs full build skipped for installation=%s repo=%s - monthly spend cap reached (${%.2f})",
+                installation_id, repo_full_name, monthly_cap,
+            )
+            set_docs_build_status(
+                dsn, installation_id, repo_full_name, "failed",
+                f"monthly spend cap reached (${monthly_cap:.2f})",
+            )
+            return
 
-    succeeded, last_error = _run_docs_build_for_modules(
-        dsn, installation_id, repo_full_name, modules, writing_adapter, client, token, None
-    )
+        spend_accumulator = {"total": 0.0}
+        full_build_model = model_for_plan(plan)
+
+        def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+            spend_accumulator["total"] += cost_for_usage(full_build_model, prompt_tokens, completion_tokens)
+
+        try:
+            writing_adapter = _live_docs_full_build_writing_adapter(plan, on_usage=_on_usage)
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("scan_worker.jobs").warning(
+                "live docs full build could not start for installation=%s repo=%s (%s)",
+                installation_id, repo_full_name, exc,
+            )
+            set_docs_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+            return
+
+        succeeded, last_error = _run_docs_build_for_modules(
+            dsn, installation_id, repo_full_name, modules, writing_adapter, client, token, None
+        )
+        record_llm_spend(dsn, installation_id, spend_accumulator["total"])
     if succeeded == 0 and last_error is not None:
         # Every module in this run failed - genuinely nothing new landed,
         # unlike a partial run where some succeeded and persisted already.
@@ -2808,26 +2892,48 @@ def _maybe_update_live_docs(
     client, token = client_and_token
 
     dsn = settings.database_url
-    try:
-        writing_adapter = _live_docs_update_writing_adapter()
-    except Exception as exc:  # noqa: BLE001
-        logging.getLogger("scan_worker.jobs").warning(
-            "live docs incremental update could not start for installation=%s repo=%s (%s)",
-            installation_id, repo_full_name, exc,
-        )
-        set_docs_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
-        return
+    plan = installation["plan"]
+    with installation_spend_lock(dsn, installation_id):
+        cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
+        if cap_reached:
+            logging.getLogger("scan_worker.jobs").info(
+                "live docs incremental update skipped for installation=%s repo=%s - "
+                "monthly spend cap reached (${%.2f})",
+                installation_id, repo_full_name, monthly_cap,
+            )
+            set_docs_build_status(
+                dsn, installation_id, repo_full_name, "failed",
+                f"monthly spend cap reached (${monthly_cap:.2f})",
+            )
+            return
 
-    # Per-module resilience matters here too, even for a typically-small
-    # changed-file list: one file's transient API failure shouldn't
-    # discard descriptions already generated for the others in the same
-    # push. Deliberately doesn't skip already-covered symbols the way the
-    # full build does - these files just changed, so an existing stored
-    # description may no longer match the new source and needs a fresh
-    # look regardless of whether a docs_symbols row already exists.
-    succeeded, last_error = _run_docs_build_for_modules(
-        dsn, installation_id, repo_full_name, changed_modules, writing_adapter, client, token, head_sha
-    )
+        spend_accumulator = {"total": 0.0}
+        update_model = resolve_model(live_docs.FLASH_MODEL)
+
+        def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+            spend_accumulator["total"] += cost_for_usage(update_model, prompt_tokens, completion_tokens)
+
+        try:
+            writing_adapter = _live_docs_update_writing_adapter(on_usage=_on_usage)
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("scan_worker.jobs").warning(
+                "live docs incremental update could not start for installation=%s repo=%s (%s)",
+                installation_id, repo_full_name, exc,
+            )
+            set_docs_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+            return
+
+        # Per-module resilience matters here too, even for a typically-small
+        # changed-file list: one file's transient API failure shouldn't
+        # discard descriptions already generated for the others in the same
+        # push. Deliberately doesn't skip already-covered symbols the way the
+        # full build does - these files just changed, so an existing stored
+        # description may no longer match the new source and needs a fresh
+        # look regardless of whether a docs_symbols row already exists.
+        succeeded, last_error = _run_docs_build_for_modules(
+            dsn, installation_id, repo_full_name, changed_modules, writing_adapter, client, token, head_sha
+        )
+        record_llm_spend(dsn, installation_id, spend_accumulator["total"])
     if succeeded == 0 and last_error is not None:
         set_docs_build_status(dsn, installation_id, repo_full_name, "failed", last_error)
         return
