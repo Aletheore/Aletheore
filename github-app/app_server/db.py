@@ -71,12 +71,13 @@ async def add_paddle_ids_to_installation(
     installation_id: int,
     paddle_subscription_id: str,
     paddle_customer_id: str,
- ) -> int:
+) -> int:
     return await pool.fetchval(
         """
         UPDATE installations
         SET paddle_subscription_id = $2, paddle_customer_id = $3, updated_at = now()
         WHERE installation_id = $1
+        RETURNING installation_id
         """,
         installation_id,
         paddle_subscription_id,
