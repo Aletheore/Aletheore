@@ -3,6 +3,44 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.0 — 2026-08-12
+
+Scanner coverage across every supported language, plus the retrieval and wiki work that
+depends on it. Measured, with the harness and raw results published at
+[Aletheore/aletheore-benchmarks](https://github.com/Aletheore/aletheore-benchmarks).
+
+**Three languages had no working dependency graph.** Everything downstream — clustering,
+subsystem naming, importance ranking, AIRview, layer violations — consumes that graph, so
+their output was structurally wrong while looking normal.
+
+- **CommonJS produced an empty graph.** Only ESM `import` was extracted, never `require()`.
+  `expressjs/express` scanned as 141 modules with 0 resolved imports, so community detection
+  emitted one cluster per file. Now 125/141 modules, 159 edges, 27 clusters.
+- **Rust failed two ways, silently.** `serde-rs/serde` scanned as 208 modules with 0 edges:
+  Cargo workspaces were unsupported (only `<repo>/src/lib.rs` was checked), and `mod foo;` —
+  how a crate declares its module tree — was not treated as an edge.
+- **C#** resolved nothing for flat projects whose namespace comes from `<RootNamespace>`
+  with no mirroring directories.
+- **JavaScript missed assigned function expressions.** Express defines its whole surface as
+  `app.use = function use(fn) {...}`; 102 of its 141 files had no symbols at all.
+- **Module-level constants are now extracted in all 11 languages**, not just Python. A file
+  can export a public API with no function or class — Flask's `signals.py` is ten
+  assignments exporting ten public signals, and was invisible to every consumer of the
+  evidence. `symbols.constants` is present on every module.
+
+**Retrieval.** Each symbol chunk now carries its file's header comment, which disambiguates
+near-identical symbols in trait-heavy code — serde defines `deserialize` in 57 different
+files. Rust top-5 went 60.0% → 73.3%, Python top-3 93.8% → 96.9%. Constants are indexed only
+for files that define nothing else, so declaration-only files become findable without
+diluting files that already have code.
+
+**Ranking.** File importance now counts symbol size and public-API surface, not just
+in-degree — entry points sit at the top of the import tree so almost nothing imports them,
+which had `requests`' `api.py` (its entire public API) ranked 17th behind `compat.py`, a
+compatibility shim. Symbols shown to a writing model are ordered public-first by source span
+rather than concatenated by kind and truncated, which had left Flask's `app.py` showing 15
+symbols, all functions, with the `Flask` class itself invisible.
+
 ## 0.7.1 — 2026-08-07
 
 - Closed 3 known vulnerabilities (PYSEC-2026-3552/3553/3554) by bumping the `cryptography`
