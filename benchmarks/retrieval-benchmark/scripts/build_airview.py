@@ -1,12 +1,15 @@
+import os
 import json, os, sys
 from pathlib import Path
 
-sys.path.insert(0, "/Users/arihantkaul/Documents/GitHub/Veridion/github-app")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _bench
+sys.path.insert(0, os.environ.get("GITHUB_APP_PATH", os.path.join(_bench.ROOT, "..", "..", "github-app")))
 
 from scan_worker.live_wiki import generate_subsystems, generate_overview
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 
-REPO = Path("/private/tmp/bench-flask")
+REPO = Path(_bench.FLASK)
 evidence = json.loads((REPO / ".aletheore" / "air.json").read_text())
 
 
@@ -43,5 +46,5 @@ ov = generate_overview(evidence, subs, writing, fetch_line_count=fetch_line_coun
 print("overview:", "ok" if ov else "REJECTED", file=sys.stderr)
 
 json.dump({"subsystems": subs, "overview": ov},
-          open("/private/tmp/bench/airview.json", "w"), indent=2, default=str)
+          open(os.path.join(_bench.OUT, "airview.json"), "w"), indent=2, default=str)
 print("wrote airview.json", file=sys.stderr)

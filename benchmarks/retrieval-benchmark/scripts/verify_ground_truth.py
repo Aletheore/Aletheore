@@ -1,3 +1,4 @@
+import json
 """Verify every ground-truth claim against the corpus before any run.
 
 A benchmark whose ground truth is asserted rather than checked is worthless.
@@ -7,11 +8,13 @@ pointed at a symbol that no longer existed.
 
 Usage:  python3 verify_ground_truth.py /path/to/flask
 """
-import json, os, sys
+import os, sys
 
-repo = sys.argv[1] if len(sys.argv) > 1 else "/private/tmp/bench-flask"
-here = os.path.dirname(os.path.abspath(__file__))
-qs = json.load(open(os.path.join(here, "..", "questions", "location.json")))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _bench
+
+repo = sys.argv[1] if len(sys.argv) > 1 else _bench.FLASK
+qs = json.load(open(os.path.join(_bench.ROOT, "questions", "location.json")))
 
 bad = 0
 for q in qs:

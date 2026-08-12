@@ -1,6 +1,10 @@
-import json, os, sys
+import json
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _bench, os, sys
 
-FLASK = "/private/tmp/bench-flask"
+FLASK = _bench.FLASK
 
 
 def is_real_file(p):

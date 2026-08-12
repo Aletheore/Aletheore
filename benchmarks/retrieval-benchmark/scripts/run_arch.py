@@ -4,7 +4,7 @@ from pathlib import Path
 BUDGET = 12000  # equal context budget per tool, filled in rank order
 TOPK = 5
 
-qs = json.load(open("/private/tmp/bench/questions_arch.json"))
+qs = _bench.load_questions("architecture")
 
 
 def pack(pieces):
@@ -23,7 +23,7 @@ def pack(pieces):
 # ---------- Aletheore ----------
 from aletheore.search_index import search_index
 
-REPO_A = Path("/private/tmp/bench-flask")
+REPO_A = Path(_bench.FLASK)
 alet = {}
 for q in qs:
     hits = search_index(REPO_A, q["q"], k=TOPK)
@@ -39,7 +39,7 @@ from repowise.cli.commands.init_cmd import _resolve_embedder
 from repowise.cli.providers.embedders import build_embedder
 from repowise.core.persistence.vector_store import LanceDBVectorStore
 
-REPO_R = "/private/tmp/bench-flask-rw/flask"
+REPO_R = _bench.FLASK_RW
 db = sqlite3.connect(f"file:{REPO_R}/.repowise/wiki.db?mode=ro", uri=True)
 
 
@@ -77,5 +77,5 @@ async def main():
 rw = asyncio.run(main())
 json.dump([{"id": q["id"], "q": q["q"], "aletheore": alet[q["id"]], "repowise": rw[q["id"]]}
            for q in qs],
-          open("/private/tmp/bench/arch_context.json", "w"), indent=2)
+          open(os.path.join(_bench.OUT,"arch_context.json"), "w"), indent=2)
 print("wrote arch_context.json", file=sys.stderr)

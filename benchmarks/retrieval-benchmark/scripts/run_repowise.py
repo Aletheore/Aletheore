@@ -1,6 +1,10 @@
-import json, os, subprocess, sys, time, statistics
+import json
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _bench, os, subprocess, sys, time, statistics
 
-REPO = "/private/tmp/bench-flask-rw/flask"
+REPO = _bench.FLASK_RW
 MODE = sys.argv[1] if len(sys.argv) > 1 else "semantic"
 
 env = dict(os.environ)
@@ -14,7 +18,7 @@ env.update({
     "REPOWISE_EMBEDDING_MODEL": "nomic-embed-text",
     "REPOWISE_EMBEDDING_DIMS": "768",
 })
-for line in open("/private/tmp/bench/.env"):
+for line in open(_bench.ENV_FILE):
     line = line.strip()
     if "=" in line:
         k, v = line.split("=", 1)
@@ -40,7 +44,7 @@ def parse(out):
     return files
 
 
-qs = json.load(open("/private/tmp/bench/questions.json"))
+qs = _bench.load_questions("location")
 # warm-up
 subprocess.run(["repowise", "search", "warm up", "--mode", MODE, "--limit", "5"],
                cwd=REPO, env=env, capture_output=True, text=True, timeout=300)
@@ -59,7 +63,7 @@ for q in qs:
                 "ranked_files": files, "latency_s": dt})
     print(f"{q['id']} {dt*1000:7.1f}ms {files[:2]}", file=sys.stderr)
 
-json.dump(out, open(f"/private/tmp/bench/results_repowise_{MODE}.json", "w"), indent=2)
+json.dump(out, open(os.path.join(_bench.OUT, f"results_repowise_{MODE}.json"), "w"), indent=2)
 lats.sort()
 print(f"\nREPOWISE[{MODE}] latency n={len(lats)}", file=sys.stderr)
 print(f"  mean   {statistics.mean(lats)*1000:7.1f} ms", file=sys.stderr)

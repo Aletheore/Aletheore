@@ -14,19 +14,25 @@ Both halves are reported with equal prominence, as is the one speed metric we lo
 
 ## Reproduce
 
+See **REPRODUCIBILITY.md** — it lists every tool version, exactly which numbers
+reproduce bit-for-bit (all retrieval and scoring) and which do not (anything
+LLM-judged), and how to run it.
+
+Short version:
+
 ```bash
 git clone https://github.com/pallets/flask /tmp/bench-flask
-cd /tmp/bench-flask && git checkout 2a8a38b051fc248865730bf3511bf2e2ea325e81
+git -C /tmp/bench-flask checkout 2a8a38b051fc248865730bf3511bf2e2ea325e81
 
-python3 scripts/verify_ground_truth.py /tmp/bench-flask   # must print 32/32
-
+python3 scripts/verify_ground_truth.py            # must print 32/32
 cd /tmp/bench-flask && aletheore scan . && aletheore index .
-python3 scripts/run_aletheore.py
+cd - && python3 scripts/run_aletheore.py
 python3 scripts/score.py results/results_aletheore.json=ALETHEORE
 ```
 
-For the RepoWise side see METHODOLOGY.md — it requires an LLM key and, importantly,
-`REPOWISE_EMBEDDER=ollama` or its semantic mode silently degrades to full-text.
+Every published number can be recomputed from `results/*.json` with no API key
+and no network. The RepoWise side needs an LLM key and `REPOWISE_EMBEDDER=ollama`
+— without it, `repowise search --mode semantic` silently degrades to full-text.
 
 ## Layout
 

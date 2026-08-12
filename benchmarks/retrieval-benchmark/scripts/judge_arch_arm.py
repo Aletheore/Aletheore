@@ -65,10 +65,12 @@ def ask(question, a, b):
     return None
 
 
-ctx = json.load(open(os.path.join(_bench.OUT,"arch_context.json")))
+import os
+ARM=os.environ["ARM"]
+ctx = json.load(open(os.path.join(_bench.OUT,"arch_context2.json")))
 rows = []
 for c in ctx:
-    al, rw = scrub(c["aletheore"]), scrub(c["repowise"])
+    al, rw = scrub(c[ARM]), scrub(c["repowise"])
     # pass 1: aletheore = A ; pass 2: swapped, to cancel position bias
     r1 = ask(c["q"], al, rw)
     r2 = ask(c["q"], rw, al)
@@ -88,7 +90,7 @@ for c in ctx:
     print(f"{c['id']}  aletheore={sum(a_scores)/2:.1f} repowise={sum(r_scores)/2:.1f}  pref={pref}",
           file=sys.stderr)
 
-json.dump(rows, open(os.path.join(_bench.OUT,"arch_scores.json"), "w"), indent=2)
+json.dump(rows, open(os.path.join(_bench.OUT,"arch_scores_"+ARM+".json"),"w"), indent=2)
 n = len(rows)
 if n:
     print(f"\nARCHITECTURE QUESTIONS (n={n}, 0-3 scale, order-swapped mean)", file=sys.stderr)
@@ -97,3 +99,4 @@ if n:
     flat = [p for r in rows for p in r["pref"]]
     for k in ("aletheore", "repowise", "tie"):
         print(f"  pref {k}: {flat.count(k)}/{len(flat)}", file=sys.stderr)
+

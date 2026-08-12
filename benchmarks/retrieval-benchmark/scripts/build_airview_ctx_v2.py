@@ -13,7 +13,7 @@ BUDGET = 12000
 OLLAMA = "http://localhost:11434/api/embed"
 MODEL = "nomic-embed-text"
 
-av = json.load(open(os.path.join(_bench.OUT,"airview.json")))
+av = json.load(open(os.path.join(_bench.OUT,"airview_v3.json")))
 ovd = av["overview"].get("description", "")
 
 units = [f"# Repository overview\n{ovd}"]
@@ -23,6 +23,8 @@ for s in av["subsystems"]:
         blk = f"## {f.get('path')} (subsystem: {s['name']})\nRole: {f.get('role','')}\n"
         for k in f.get("key_symbols") or []:
             blk += f"- `{k.get('name')}` (line {k.get('line')}): {k.get('explanation','')}\n"
+        if f.get("detail"):
+            blk += "\n" + f["detail"]
         units.append(blk)
 print("AIRview units:", len(units))
 
@@ -54,7 +56,7 @@ for c, qv in zip(base, qvecs):
         if len(buf) >= BUDGET:
             break
         buf += units[i][: BUDGET - len(buf)] + "\n\n"
-    c["airview_full"] = buf[:BUDGET]
+    c["airview_v2"] = buf[:BUDGET]
     out.append(c)
     print(c["id"], len(c["airview_full"]))
 
