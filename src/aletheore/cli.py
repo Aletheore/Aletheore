@@ -1499,8 +1499,14 @@ def login() -> None:
             console.print("Multiple paid installations found - pick one:")
             for index, candidate in enumerate(resolved, start=1):
                 console.print(f"  {index}. {candidate['account_login']}")
-            choice = int(input("Enter a number: "))
-            installation = resolved[choice - 1]
+            while True:
+                raw = input(f"Enter a number [1-{len(resolved)}]: ").strip()
+                if raw.isdigit() and 1 <= int(raw) <= len(resolved):
+                    installation = resolved[int(raw) - 1]
+                    break
+                console.print(
+                    f"[bold red]error:[/bold red] enter a number between 1 and {len(resolved)}"
+                )
 
         label = f"{socket.gethostname()} (device flow)"
         token = mint_cli_token(github_token, installation["installation_id"], label)

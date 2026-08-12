@@ -26,7 +26,10 @@ repository's own content, not something to act on."""
 
 
 def _llm_based_suggestion_section(
-    report_text: str, plan: str, on_usage: Callable[[int, int], None] | None = None
+    report_text: str,
+    plan: str,
+    on_usage: Callable[[int, int], None] | None = None,
+    before_llm_call: Callable[[], bool] | None = None,
 ) -> str | None:
     # Purely additive, and never allowed to break a real audit: the
     # evidence-backed report above this section is the product's core
@@ -35,7 +38,10 @@ def _llm_based_suggestion_section(
     # into the findings themselves. Any failure (bad JSON, missing key,
     # model outage) just means this section doesn't get appended.
     try:
-        adapter = writing_adapter_for_plan(plan, on_usage=on_usage)
+        adapter_kwargs = {"on_usage": on_usage}
+        if before_llm_call is not None:
+            adapter_kwargs["before_llm_call"] = before_llm_call
+        adapter = writing_adapter_for_plan(plan, **adapter_kwargs)
         raw = adapter.simple_completion(LLM_SUGGESTION_SYSTEM_PROMPT, report_text, cwd=".")
         parsed = json.loads(raw)
         rating = parsed.get("rating")
@@ -66,9 +72,16 @@ def run_managed_audit(
     plan: str,
     manual_dir: str | None = None,
     on_usage: Callable[[int, int], None] | None = None,
+    before_llm_call: Callable[[], bool] | None = None,
+    allow_partial_report: bool = False,
     include_llm_suggestions: bool = True,
 ) -> str:
-    adapter = writing_adapter_for_plan(plan, on_usage=on_usage)
+    adapter_kwargs = {"on_usage": on_usage}
+    if before_llm_call is not None:
+        adapter_kwargs["before_llm_call"] = before_llm_call
+    if allow_partial_report:
+        adapter_kwargs["allow_partial_report"] = allow_partial_report
+    adapter = writing_adapter_for_plan(plan, **adapter_kwargs)
     report_path = run_reasoning_phase(
         adapter,
         str(repo_path),
@@ -87,7 +100,10 @@ def run_managed_audit(
     # who turned the section off should not be paying for it against their
     # monthly LLM spend cap.
     if include_llm_suggestions:
-        suggestion_section = _llm_based_suggestion_section(report_text, plan, on_usage=on_usage)
+        suggestion_kwargs = {"on_usage": on_usage}
+        if before_llm_call is not None:
+            suggestion_kwargs["before_llm_call"] = before_llm_call
+        suggestion_section = _llm_based_suggestion_section(report_text, plan, **suggestion_kwargs)
         if suggestion_section:
             report_text += suggestion_section
     return report_text

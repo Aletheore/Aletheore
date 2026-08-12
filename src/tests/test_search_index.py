@@ -559,6 +559,45 @@ def test_build_index_only_embeds_chunks_whose_text_changed(tmp_path):
     assert changed and all("a.py" in text for text in changed)
 
 
+def test_build_index_embeds_duplicate_chunk_hash_once(tmp_path):
+    shared_text = "generated boilerplate\nreturn same"
+    duplicate_chunks = [
+        {
+            "module_path": "a.py",
+            "language": "python",
+            "symbol_name": "first",
+            "kind": "function",
+            "start_line": 1,
+            "end_line": 2,
+            "text": shared_text,
+        },
+        {
+            "module_path": "b.py",
+            "language": "python",
+            "symbol_name": "second",
+            "kind": "function",
+            "start_line": 1,
+            "end_line": 2,
+            "text": shared_text,
+        },
+    ]
+    embedded: list[str] = []
+
+    def fake_embed(texts):
+        embedded.extend(texts)
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+    with patch("aletheore.search_index.build_chunks", return_value=duplicate_chunks), \
+         patch("aletheore.search_index.embed_texts", side_effect=fake_embed):
+        build_index(tmp_path, {"repository": {"modules": []}})
+
+    assert embedded == [shared_text]
+    rows = open_index(tmp_path).to_arrow().to_pylist()
+    assert len(rows) == 2
+    assert {row["symbol_name"] for row in rows} == {"first", "second"}
+    assert rows[0]["chunk_hash"] == rows[1]["chunk_hash"]
+
+
 def test_build_index_drops_chunks_that_no_longer_exist(tmp_path):
     """The table is rewritten wholesale rather than upserted, so a deleted
     function stops being searchable. An upsert would leave it findable

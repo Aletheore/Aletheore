@@ -1,5 +1,6 @@
 import http.server
 import threading
+import time
 import urllib.error
 
 import pytest
@@ -40,6 +41,26 @@ def test_run_healthcheck_reports_reachable_get_endpoint():
     assert entry["status_code"] == 200
     assert entry["reachable"] is True
     assert entry["note"] is None
+
+
+def test_run_healthcheck_checks_endpoints_concurrently():
+    endpoints = [
+        {"method": "GET", "path": f"/health/{index}", "unresolved": False}
+        for index in range(8)
+    ]
+
+    def slow_open(*args, **kwargs):
+        time.sleep(0.05)
+        return _mock_response(200)
+
+    start = time.monotonic()
+    with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", side_effect=slow_open):
+        result = run_healthcheck(endpoints, "http://localhost:5000")
+    elapsed = time.monotonic() - start
+
+    assert len(result["results"]) == len(endpoints)
+    assert all(entry["reachable"] is True for entry in result["results"])
+    assert elapsed < 0.25
 
 
 def test_run_healthcheck_substitutes_path_params_and_notes_it():

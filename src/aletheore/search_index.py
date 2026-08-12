@@ -438,6 +438,15 @@ def _reusable_vectors(index_path: Path) -> dict[str, list[float]]:
         return {}
 
 
+def _embed_stale_by_hash(stale: list[dict], repo_id: str | None = None) -> dict[str, list[float]]:
+    stale_by_hash = {chunk["chunk_hash"]: chunk["text"] for chunk in stale}
+    stale_hashes = list(stale_by_hash)
+    fresh_vectors = _embed_in_batches(
+        [stale_by_hash[chunk_hash] for chunk_hash in stale_hashes], repo_id=repo_id
+    )
+    return dict(zip(stale_hashes, fresh_vectors))
+
+
 def build_index(repo_path: Path, evidence: dict) -> int:
     chunks = build_chunks(evidence, repo_path)
     if not chunks:
@@ -460,7 +469,8 @@ def build_index(repo_path: Path, evidence: dict) -> int:
     reusable = _reusable_vectors(index_path)
     stale = [chunk for chunk in chunks if chunk["chunk_hash"] not in reusable]
     repo = _repo_id(repo_path)
-    fresh_vectors = _embed_in_batches([chunk["text"] for chunk in stale], repo_id=repo)
+    fresh = _embed_stale_by_hash(stale, repo_id=repo)
+    fresh_vectors = list(fresh.values())
 
     # Vectors from two different embedding models cannot share an index -
     # nomic-embed-text returns 768 dimensions and text-embedding-3-small
@@ -501,9 +511,8 @@ def build_index(repo_path: Path, evidence: dict) -> int:
         if reused_dimensions != {current_dimension}:
             reusable = {}
             stale = chunks
-            fresh_vectors = _embed_in_batches([chunk["text"] for chunk in stale], repo_id=repo)
+            fresh = _embed_stale_by_hash(stale, repo_id=repo)
 
-    fresh = dict(zip((chunk["chunk_hash"] for chunk in stale), fresh_vectors))
     rows = [
         {**chunk, "vector": reusable.get(chunk["chunk_hash"]) or fresh[chunk["chunk_hash"]]}
         for chunk in chunks
