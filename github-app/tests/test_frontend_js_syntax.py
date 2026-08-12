@@ -41,3 +41,35 @@ def test_embedded_script_blocks_are_valid_javascript(page_constant, tmp_path):
         assert result.returncode == 0, (
             f"{page_constant}'s script block {i} is not valid JavaScript:\n{result.stderr}"
         )
+
+
+def test_wiki_markdown_escapes_before_promoting_tags():
+    """AIRview file pages are model-written from repository content, so the
+    renderer must escape first and only then promote markdown. If those steps
+    were ever reordered, a repo could smuggle live HTML into the dashboard
+    through the model's output."""
+    js = frontend.FETCH_HELPERS
+    body = js[js.index("function renderWikiMarkdown") :]
+    body = body[: body.index("\nfunction ", 1)] if "\nfunction " in body[1:] else body
+    escape_at = body.index("escapeHtml(String(src")
+    promote_at = body.index("wiki-md-h")
+    assert escape_at < promote_at, "markdown promoted before escaping"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_wiki_markdown_renders_untrusted_html_inert():
+    js = frontend.FETCH_HELPERS
+    start = js.index("function renderWikiMarkdown")
+    end = js.index("\n}", js.index("return out.join")) + 2
+    harness = (
+        js[start:end]
+        + "\nfunction escapeHtml(s){return String(s).replace(/[&<>\"']/g,"
+        "function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"
+        "\"'\":'&#39;'}[c];});}\n"
+        "const out = renderWikiMarkdown('## H\\n<img src=x onerror=alert(1)>');\n"
+        "if (/<img/i.test(out)) { throw new Error('live HTML survived: ' + out); }\n"
+        "if (!out.includes('&lt;img')) { throw new Error('not escaped: ' + out); }\n"
+        "if (!out.includes('wiki-md-h')) { throw new Error('heading not promoted'); }\n"
+    )
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

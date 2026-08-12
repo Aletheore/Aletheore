@@ -2381,6 +2381,34 @@ def _clusters_with_uncovered_wiki_work(
     return set(uncovered[:limit])
 
 
+def _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count):
+    """Adds a per-file reference page to the subsystems just generated.
+
+    Scoped to files belonging to `records` on purpose: an incremental update
+    regenerates only the affected subsystems, and re-paying for pages whose
+    subsystem did not change would make every push cost like a full build.
+    `_store_wiki_generation` merges these records over the stored ones, so a
+    subsystem left untouched keeps the page text it already had.
+
+    Spend rides the caller's on_usage-wired adapter, so these calls count
+    against the same accumulator and monthly cap as the subsystem prose.
+    """
+    if not records:
+        return records
+    subsystem_by_path = {
+        f["path"]: r["name"] for r in records for f in (r.get("files") or []) if f.get("path")
+    }
+    planned = [p for p in live_wiki.select_file_page_paths(evidence) if p in subsystem_by_path]
+    pages = live_wiki.generate_file_pages(
+        evidence,
+        writing_adapter,
+        paths=planned,
+        subsystem_by_path=subsystem_by_path,
+        fetch_line_count=fetch_line_count,
+    )
+    return live_wiki.attach_file_pages(records, pages)
+
+
 @log_job
 def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> None:
     dsn = get_settings().database_url
@@ -2437,6 +2465,7 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
                 model_used=model_used,
                 fetch_line_count=fetch_line_count,
             )
+            _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count)
             record_llm_spend(dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap)
             _store_wiki_generation(
                 dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None,
@@ -2569,6 +2598,7 @@ def _maybe_update_live_wiki(
                 model_used=update_model,
                 fetch_line_count=fetch_line_count,
             )
+            _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count)
             record_llm_spend(dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap)
             _store_wiki_generation(
                 dsn, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
