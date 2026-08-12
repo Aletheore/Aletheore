@@ -4,6 +4,7 @@ import pytest
 
 from aletheore.search_index import (
     _file_header_comment,
+    _is_declaration_only_file,
     HostedEmbeddingUnavailableError,
     EmbeddingProviderUnavailableError,
     IndexNotFoundError,
@@ -376,6 +377,139 @@ def test_rrf_fuse_ranks_a_chunk_found_by_both_retrievers_first():
     # Agreed-on chunk outranks either retriever's own first pick.
     assert (fused[0]["module_path"], fused[0]["symbol_name"]) == ("shared.py", "f")
     assert {c["module_path"] for c in fused} == {"shared.py", "vec_only.py", "fts_only.py"}
+
+
+def test_rrf_fuse_demotes_a_declaration_only_hit_below_an_implementation():
+    """A demotion, not an exclusion: slimphp/Slim's interfaces displaced the
+    correct implementation on 4 of 6 misses by simply outranking it. Ranked
+    #1 by both retrievers, the interface chunk should lose to an
+    implementation chunk ranked #2 by both once the penalty applies."""
+    def chunk(path, name, is_declaration_only=False):
+        return {
+            "module_path": path, "symbol_name": name, "start_line": 1,
+            "is_declaration_only": is_declaration_only,
+        }
+
+    interface_hit = chunk("Interfaces/RouteInterface.php", "match", is_declaration_only=True)
+    impl_hit = chunk("Routing/RouteResolver.php", "resolve")
+
+    fused = _rrf_fuse(
+        [interface_hit, impl_hit],
+        [interface_hit, impl_hit],
+    )
+
+    assert fused[0]["module_path"] == "Routing/RouteResolver.php"
+
+
+def test_rrf_fuse_still_surfaces_a_declaration_only_hit_when_nothing_else_matches():
+    """Unlike a test path, which build_chunks excludes outright, an
+    interface is legitimately the answer to "where is the contract for X
+    defined?" - it must still come back when it's the only match."""
+    def chunk(path, name, is_declaration_only=False):
+        return {
+            "module_path": path, "symbol_name": name, "start_line": 1,
+            "is_declaration_only": is_declaration_only,
+        }
+
+    only_hit = chunk("Interfaces/RouteInterface.php", "match", is_declaration_only=True)
+
+    fused = _rrf_fuse([only_hit], [only_hit])
+
+    assert len(fused) == 1
+    assert fused[0]["module_path"] == "Interfaces/RouteInterface.php"
+
+
+def test_is_declaration_only_file_detects_a_php_interface():
+    assert _is_declaration_only_file(
+        "src/RouteInterface.php", "php", "<?php\ninterface RouteInterface\n{\n    public function match();\n}\n"
+    )
+
+
+def test_is_declaration_only_file_does_not_flag_a_php_class():
+    assert not _is_declaration_only_file(
+        "src/Route.php", "php", "<?php\nclass Route\n{\n    public function match() { return true; }\n}\n"
+    )
+
+
+def test_is_declaration_only_file_detects_path_under_an_interfaces_directory():
+    # Path-level signal alone, regardless of language or content - a PHP,
+    # Java, or C# codebase commonly puts every interface under one of these
+    # directories.
+    assert _is_declaration_only_file("src/Interfaces/RouteInterface.php", "php", "")
+    assert _is_declaration_only_file("src/Contracts/Repository.php", "php", "")
+
+
+def test_is_declaration_only_file_detects_a_typescript_declaration_file():
+    assert _is_declaration_only_file("types.d.ts", "typescript", "")
+
+
+def test_is_declaration_only_file_detects_a_typescript_file_with_only_types():
+    """colinhacks/zod's enumUtil.ts: entirely `type X = ...` declarations
+    inside a namespace, no function or class at all."""
+    assert _is_declaration_only_file(
+        "enumUtil.ts", "typescript",
+        "export namespace EnumUtil {\n  export type Values<T> = T[keyof T];\n}\n",
+    )
+
+
+def test_is_declaration_only_file_does_not_flag_a_typescript_file_with_an_implementation():
+    assert not _is_declaration_only_file(
+        "route.ts", "typescript",
+        "export interface Route {\n  match(): boolean;\n}\n\n"
+        "export function createRoute(): Route {\n  return { match: () => true };\n}\n",
+    )
+
+
+def test_is_declaration_only_file_detects_a_rust_trait_with_no_default_bodies():
+    assert _is_declaration_only_file(
+        "resolver.rs", "rust", "pub trait Resolver {\n    fn resolve(&self) -> bool;\n}\n"
+    )
+
+
+def test_is_declaration_only_file_does_not_flag_a_rust_trait_with_a_default_body():
+    assert not _is_declaration_only_file(
+        "resolver.rs", "rust",
+        "pub trait Resolver {\n    fn resolve(&self) -> bool { true }\n}\n",
+    )
+
+
+def test_is_declaration_only_file_detects_a_cpp_header_with_only_prototypes():
+    assert _is_declaration_only_file(
+        "resolver.h", "cpp", "class Resolver {\npublic:\n    bool resolve();\n};\n"
+    )
+
+
+def test_is_declaration_only_file_does_not_flag_a_cpp_header_with_a_defined_method():
+    assert not _is_declaration_only_file(
+        "resolver.h", "cpp",
+        "class Resolver {\npublic:\n    bool resolve() { return true; }\n};\n",
+    )
+
+
+def test_is_declaration_only_file_does_not_flag_a_php_abstract_class():
+    """Deliberately out of scope: unlike `interface`, PHP's `abstract class`
+    routinely mixes abstract and fully-implemented methods."""
+    assert not _is_declaration_only_file(
+        "Base.php", "php",
+        "<?php\nabstract class Base\n{\n    abstract public function match();\n"
+        "    public function helper() { return true; }\n}\n",
+    )
+
+
+def test_build_chunks_tags_a_php_interface_files_chunks_as_declaration_only(tmp_path):
+    (tmp_path / "RouteInterface.php").write_text(
+        "<?php\ninterface RouteInterface\n{\n    public function match();\n}\n"
+    )
+    evidence = _evidence_with_module(
+        "RouteInterface.php",
+        functions=[{"name": "match", "start_line": 3, "end_line": 3}],
+    )
+    evidence["repository"]["modules"][0]["language"] = "php"
+
+    chunks = build_chunks(evidence, tmp_path)
+
+    assert chunks
+    assert all(c["is_declaration_only"] for c in chunks)
 
 
 def test_fts_failure_degrades_to_vector_only(tmp_path):

@@ -212,6 +212,81 @@ def _is_test_path(module_path: str) -> bool:
     )
 
 
+# Directories a PHP, Java, or C# codebase commonly puts every interface under
+# regardless of what the file itself contains - a path-level signal that
+# needs no content inspection at all.
+_INTERFACE_DIR_MARKERS = frozenset({"interfaces", "contracts"})
+
+_PHP_INTERFACE_DECL = re.compile(r"^\s*interface\s+\w", re.MULTILINE)
+_JAVA_CSHARP_INTERFACE_DECL = re.compile(r"^\s*(?:public\s+|internal\s+)?interface\s+\w", re.MULTILINE)
+_RUST_TRAIT_DECL = re.compile(r"^\s*(?:pub\s+)?trait\s+\w", re.MULTILINE)
+# A trait method WITH a default body reads `fn name(...) { ... }`; a bare
+# signature ends in `;`. One match anywhere in the file is enough to treat
+# the trait as having real behaviour, not just a contract.
+_RUST_METHOD_WITH_BODY = re.compile(r"\bfn\s+\w[^;{}]*\{")
+# Same idea for a C/C++ header: a function DEFINITION closes its parameter
+# list with `{`, a prototype with `;`.
+_C_FUNCTION_DEFINITION = re.compile(r"\)\s*(?:const\s*)?\{")
+# TypeScript: `interface Foo` or `type Foo = ...` - either is pure API
+# surface. Matched separately from any real implementation below, because
+# unlike PHP/Java/C# a .ts file routinely mixes both (a types-and-helpers
+# module), and only the ones with neither should be treated as pure
+# contract - colinhacks/zod's enumUtil.ts is the case this exists for:
+# entirely `type X = ...` inside a namespace, no function or class at all.
+_TS_TYPE_DECL = re.compile(r"^\s*(?:export\s+)?(?:default\s+)?(?:interface|type)\s+\w", re.MULTILINE)
+_TS_CLASS_OR_FUNCTION_DECL = re.compile(
+    r"^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?(?:async\s+)?(?:class|function)\s+\w",
+    re.MULTILINE,
+)
+# `const f = () => {}` / `const f = function() {}` - see graph.py's own
+# _extract_javascript, which extracts exactly this shape as a function.
+_TS_ASSIGNED_FUNCTION = re.compile(
+    r"=\s*(?:async\s+)?(?:\([^()]*\)|\w+)\s*(?::[^=]+)?=>|=\s*(?:async\s+)?function\b"
+)
+
+
+def _is_declaration_only_file(module_path: str, language: str, source: str) -> bool:
+    """Whether a file is pure API surface with no implementation behind it.
+
+    Measured on slimphp/Slim: interfaces were 17 of 72 PHP files (24%) and
+    took 18 of 75 top-5 slots (24%), displacing the correct answer on 4 of 6
+    misses. A declaration-only file is pure contract - rich doc-comments
+    describing behaviour, nothing implementing it to dilute them - which
+    makes it unusually attractive to an embedder for "how does X work" when
+    the reader wants the implementation, not the interface. Same reasoning
+    as _is_test_path (a test shares its subject's vocabulary while
+    outnumbering it), but this is a demotion, not an exclusion: unlike a
+    test, an interface is legitimately the answer to "where is the contract
+    for X defined?" - see the rank penalty in _rrf_fuse.
+
+    Known gaps, left for a real corpus to surface before chasing them: Java
+    8+ `default` interface methods (an interface CAN have a body there), Go
+    interfaces (usually not split into their own file by convention, unlike
+    PHP/Java/C#), and PHP abstract classes (deliberately not treated as
+    declaration-only - unlike `interface`, PHP's `abstract class` routinely
+    mixes abstract and fully-implemented methods in the same file).
+    """
+    parts = module_path.split("/")
+    if any(part.lower() in _INTERFACE_DIR_MARKERS for part in parts[:-1]):
+        return True
+    name = parts[-1]
+    if name.endswith(".d.ts"):
+        return True
+    if language == "php":
+        return bool(_PHP_INTERFACE_DECL.search(source))
+    if language in ("java", "csharp"):
+        return bool(_JAVA_CSHARP_INTERFACE_DECL.search(source))
+    if language == "rust":
+        return bool(_RUST_TRAIT_DECL.search(source)) and not _RUST_METHOD_WITH_BODY.search(source)
+    if language == "cpp" and name.endswith((".h", ".hpp")):
+        return not _C_FUNCTION_DEFINITION.search(source)
+    if language == "typescript":
+        return bool(_TS_TYPE_DECL.search(source)) and not (
+            _TS_CLASS_OR_FUNCTION_DECL.search(source) or _TS_ASSIGNED_FUNCTION.search(source)
+        )
+    return False
+
+
 def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
     chunks: list[dict] = []
     for module in evidence["repository"]["modules"]:
@@ -251,6 +326,10 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
         # and repeating it here would drown the symbol's own body.
         file_context = _file_header_comment(lines)
 
+        # Computed once per file, attached to every chunk below - see
+        # _is_declaration_only_file and the rank penalty in _rrf_fuse.
+        is_declaration_only = _is_declaration_only_file(module_path, language, "\n".join(lines))
+
         code_symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
         # Constants are indexed only for files that define nothing else.
         #
@@ -283,6 +362,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "end_line": end_line,
                     "language": language,
                     "imports": imports,
+                    "is_declaration_only": is_declaration_only,
                     "text": _truncate_for_embedding(f"{module_path} (no extracted symbols)\n{snippet}"),
                 }
             )
@@ -315,6 +395,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                         "end_line": head_end,
                         "language": language,
                         "imports": imports,
+                        "is_declaration_only": is_declaration_only,
                         # Path and symbol list join the docstring so the chunk
                         # is reachable by what the module *contains*, not only
                         # by how its author happened to describe it.
@@ -339,6 +420,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "end_line": end_line,
                     "language": language,
                     "imports": imports,
+                    "is_declaration_only": is_declaration_only,
                     "text": _truncate_for_embedding(f"{header}\n{source}"),
                 }
             )
@@ -365,6 +447,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "end_line": end_line,
                     "language": language,
                     "imports": imports,
+                    "is_declaration_only": is_declaration_only,
                     "text": _truncate_for_embedding(
                         f"{module_path} (module-level declarations)\n"
                         f"declares: {names}\n{declared}"
@@ -733,6 +816,17 @@ _OVERFETCH_FACTOR = 4
 # dominate the other's outright.
 _RRF_K = 60
 
+# A demotion, not an exclusion, for a chunk from a declaration-only file (an
+# interface, a .d.ts, a header with only prototypes) - see
+# _is_declaration_only_file. Applied as a rank penalty rather than a flat
+# score multiplier so a declaration-only hit competes on the same terms as
+# a genuinely closer one: ranked far enough ahead of everything else, it
+# still wins, and when nothing else matches at all it is still the only
+# thing to return - unlike a test path, which build_chunks excludes
+# outright, an interface is legitimately the answer to "where is the
+# contract for X defined?".
+_DECLARATION_ONLY_RANK_PENALTY = 8
+
 
 def _rrf_fuse(vector_hits: list[dict], text_hits: list[dict]) -> list[dict]:
     """Interleave two ranked lists by reciprocal rank.
@@ -752,7 +846,10 @@ def _rrf_fuse(vector_hits: list[dict], text_hits: list[dict]) -> list[dict]:
     for hits in (vector_hits, text_hits):
         for rank, hit in enumerate(hits):
             key = (hit["module_path"], hit["symbol_name"], hit["start_line"])
-            scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_K + rank + 1)
+            effective_rank = rank
+            if hit.get("is_declaration_only"):
+                effective_rank += _DECLARATION_ONLY_RANK_PENALTY
+            scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_K + effective_rank + 1)
             by_key[key] = hit
     return [by_key[key] for key, _ in sorted(scores.items(), key=lambda item: -item[1])]
 

@@ -702,6 +702,40 @@ def test_build_module_graph_javascript_assigned_function_expressions_are_symbols
     assert {"use", "route", "init"} <= set(names)
 
 
+def test_build_module_graph_typescript_extracts_interfaces_and_type_aliases(tmp_path):
+    """colinhacks/zod has 972 `export type`/`export interface` declarations in
+    its core src - extracting only function/class declarations left 39 files
+    with zero other symbols and 210 of these invisible to the index."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "types.ts").write_text(
+        "export interface Foo {\n  bar(): void;\n}\n\n"
+        "export type Baz = { x: number };\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    names = symbol_names(modules[0]["symbols"]["classes"])
+    assert {"Foo", "Baz"} <= set(names)
+
+
+def test_build_module_graph_typescript_extracts_types_nested_in_a_namespace(tmp_path):
+    """zod nests types inside `export namespace EnumUtil { ... }` -
+    enumUtil.ts is entirely declarations like this and produced no symbols
+    at all before this, since only top-level shapes were ever checked."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "enumUtil.ts").write_text(
+        "export namespace EnumUtil {\n"
+        "  export type Values<T> = T[keyof T];\n"
+        "  export interface Inner {\n"
+        "    y: string;\n"
+        "  }\n"
+        "}\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    names = symbol_names(modules[0]["symbols"]["classes"])
+    assert {"Values", "Inner"} <= set(names)
+
+
 def test_build_module_graph_constants_extracted_for_every_language(tmp_path):
     """A file can export a public API with no function or class - Flask's
     signals.py is ten assignments. That shape exists in every language, and
