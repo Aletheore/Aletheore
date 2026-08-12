@@ -8,9 +8,14 @@ has to rediscover structure the scanner already knows.
 
 import os
 
-# Raised from 15: at 15, large files lost most of their surface before the
-# writing model ever saw it - 29 of Flask's 83 files hit the cap, including
-# app.py, which has 47 symbols.
+# Raised from 15, where large files lost most of their surface before the
+# writing model ever saw it - 29 of Flask's 83 files hit that cap. Briefly 50,
+# then reverted: the extra depth measured no better and an oversized brief is
+# what made the model stop finishing its output. What mattered was the
+# ordering, not the depth - entries are sorted public-first by source span, so
+# 30 trims genuine tail rather than silently dropping every class in a
+# function-heavy file (Flask's app.py showed 15 symbols, all functions, with
+# the Flask class itself invisible).
 MAX_SYMBOLS_PER_FILE = 30
 
 # Paths that are real code but almost never what a reader means by "explain

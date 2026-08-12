@@ -119,6 +119,9 @@ A short bulleted list: `` `name` (path:line) `` followed by what it does and whe
 Anything surprising a reader would otherwise trip on - ordering constraints, mutation,
 deprecations. Omit this heading if the code shows nothing surprising; do not invent one.
 
+Prefer depth over breadth within each heading: a reader who opens a file page wants the
+mechanism, not a restatement of the symbol list they can already see.
+
 Cite as `path/to/file.py:123`, using only line numbers you were given. You may cite the imported
 and importing files, not just this one. Every citation is checked against the scan and the page is
 discarded if any citation does not resolve. Describe only what the given symbols support - never
@@ -140,7 +143,7 @@ what's given. No markdown fences."""
 # Bump whenever any prompt in this module changes. It rides in the evidence
 # packet, so a bump invalidates cached pages written by the previous prompt
 # instead of serving them forever.
-AIRVIEW_PROMPT_VERSION = "2"
+AIRVIEW_PROMPT_VERSION = "4"
 
 # How many files get their own reference page, at most. Deliberately far below
 # a page-per-file: the top of the importance ranking is where a reader spends
@@ -210,26 +213,45 @@ def _symbol_matches_brief(symbol: dict, known_symbols: list[dict]) -> bool:
 
 
 def _sanitize_written_files(written_files, brief_files: list[dict]) -> list[dict]:
+    """Merges the model's prose onto the deterministic file list.
+
+    The file list is structural and comes from the scan, so it is built here
+    for every file in the brief regardless of what the model returned; the
+    model only supplies `role` and `key_symbols`, and anything it invented is
+    still dropped.
+
+    It used to be the other way around - the list *was* whatever the model
+    echoed back - which quietly made the wiki's structure depend on the model
+    finishing its output. Raising the symbol cap to 50 and merging clusters
+    made the prompt large enough that it stopped finishing: on Flask the
+    subsystem records went from 83 files to 14, taking 23 already-paid-for
+    file pages with them, because a page can only hang off a file entry that
+    exists. Structure now survives a truncated response; only prose is lost.
+    """
     if not isinstance(written_files, list):
-        return []
+        written_files = []
     brief_by_path = {f["path"]: f for f in brief_files}
 
-    sanitized = []
+    written_by_path: dict[str, dict] = {}
     for entry in written_files:
         if not isinstance(entry, dict):
             continue
-        brief_file = brief_by_path.get(entry.get("path"))
-        if brief_file is None:
-            continue  # file not in this subsystem's brief - drop, don't trust
+        path = entry.get("path")
+        # A file not in this subsystem's brief is dropped, not trusted.
+        if path in brief_by_path:
+            written_by_path[path] = entry
+
+    sanitized = []
+    for brief_file in brief_files:
+        entry = written_by_path.get(brief_file["path"], {})
         role = entry.get("role")
-        if not isinstance(role, str) or not role.strip():
-            continue
+        role = role.strip() if isinstance(role, str) and role.strip() else ""
         key_symbols = [
             {"name": s["name"], "line": s["line"], "explanation": s.get("explanation", "")}
-            for s in entry.get("key_symbols", [])
+            for s in entry.get("key_symbols", []) or []
             if isinstance(s, dict) and _symbol_matches_brief(s, brief_file["key_symbols"])
         ]
-        sanitized.append({"path": brief_file["path"], "role": role.strip(), "key_symbols": key_symbols})
+        sanitized.append({"path": brief_file["path"], "role": role, "key_symbols": key_symbols})
     return sanitized
 
 
@@ -447,6 +469,31 @@ def select_file_page_paths(
     return [r["path"] for r in ranked if r["score"] >= floor][:max_files]
 
 
+# A page must keep this share of its lines after salvage to be worth showing;
+# below it the model was mostly citing things that do not exist.
+_SALVAGE_MIN_RETAINED = 0.6
+
+
+def _strip_unverified_lines(detail: str, unverified: list[dict]) -> str | None:
+    """Removes only the lines carrying an unverifiable citation.
+
+    Line-granular rather than sentence-granular because a markdown bullet is a
+    line and that is the unit a bad `path:line` almost always sits in. Returns
+    None when too little survives to be a page.
+    """
+    if not unverified:
+        return detail
+    bad = {f"{c['file']}:{c['line']}" for c in unverified}
+    kept = [ln for ln in detail.splitlines() if not any(b in ln for b in bad)]
+    if not kept:
+        return None
+    original = [ln for ln in detail.splitlines() if ln.strip()]
+    remaining = [ln for ln in kept if ln.strip()]
+    if not original or len(remaining) / len(original) < _SALVAGE_MIN_RETAINED:
+        return None
+    return "\n".join(kept).strip() or None
+
+
 def build_file_page_record(
     evidence: dict,
     path: str,
@@ -487,6 +534,8 @@ def build_file_page_record(
         }
     )
 
+    last_detail: str | None = None
+    last_unverified: list[dict] = []
     for attempt in range(1, SUBSYSTEM_WRITE_ATTEMPTS + 1):
         raw = writing_adapter.simple_completion(FILE_PAGE_WRITING_SYSTEM_PROMPT, user_prompt, cwd=".")
         parsed = _parse_json_object(raw)
@@ -498,12 +547,28 @@ def build_file_page_record(
         if result["all_verified"]:
             return detail.strip()
         logger.info(
-            "AIRview file page %s rejected: %d/%d citation(s) unverified (%s)",
+            "AIRview file page %s: %d/%d citation(s) unverified (%s)",
             path,
             len(result["unverified"]),
             result["total_citations"],
             ", ".join(f"{c['file']}:{c['line']}" for c in result["unverified"]),
         )
+        last_detail, last_unverified = detail, result["unverified"]
+
+    # Every attempt cited something unverifiable. Salvage rather than discard:
+    # dropping the page threw away correct, verified prose to punish one bad
+    # line, and on Flask that lost debughelpers.py - 7 functions and 4 classes -
+    # entirely. Subsystems already degrade this way (see
+    # SUBSYSTEM_DESCRIPTION_UNAVAILABLE, which keeps the verified file list and
+    # withholds only the prose); file pages now match.
+    if last_detail:
+        salvaged = _strip_unverified_lines(last_detail, last_unverified)
+        if salvaged and verify_citations(
+            salvaged, evidence, fetch_line_count=fetch_line_count
+        )["all_verified"]:
+            logger.info("AIRview file page %s kept with %d unverified line(s) removed",
+                        path, len(last_unverified))
+            return salvaged
     return None
 
 

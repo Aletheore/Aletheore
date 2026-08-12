@@ -17,6 +17,7 @@ from scan_worker.live_wiki import (
     generate_file_pages,
     select_file_page_paths,
     _drop_test_only_briefs,
+    _strip_unverified_lines,
 )
 
 
@@ -174,7 +175,10 @@ def test_build_subsystem_record_keeps_deterministic_content_when_prose_fails():
     assert record["name"] == "Authentication"
     assert record["description"] == SUBSYSTEM_DESCRIPTION_UNAVAILABLE
     assert "totally/made/up.py" not in record["description"]
-    assert [f["path"] for f in record["files"]] == ["auth/login.py"]
+    # Every file from the scan survives even though the prose was rejected -
+    # the list never depended on the model, and now does not depend on it
+    # finishing either.
+    assert [f["path"] for f in record["files"]] == ["auth/login.py", "auth/tokens.py"]
     assert "flowchart TD" in record["diagram_mermaid"]
 
 
@@ -213,7 +217,12 @@ def test_build_subsystem_record_drops_hallucinated_file():
     record = build_subsystem_record(evidence, cluster, brief, "Authentication", adapter)
 
     paths = {f["path"] for f in record["files"]}
-    assert paths == {"auth/login.py"}
+    # The fabricated file is dropped; every real file in the brief is present
+    # whether or not the model mentioned it. The list is structural, built from
+    # the scan - making it depend on the model finishing its output silently
+    # shrank Flask's records from 83 files to 14 once the prompt grew.
+    assert "totally/made/up.py" not in paths
+    assert paths == {"auth/login.py", "auth/tokens.py"}
 
 
 def test_build_subsystem_record_drops_hallucinated_symbol():
@@ -611,3 +620,58 @@ def test_generate_subsystems_keeps_tests_when_the_repo_is_all_tests():
 def test_generate_subsystems_keeps_a_mixed_cluster():
     briefs = [_brief(0, "src/app.py", "tests/test_app.py")]
     assert _drop_test_only_briefs(briefs) == briefs
+
+
+def test_file_page_salvages_verified_prose_instead_of_discarding_the_page():
+    """Dropping a page over one bad citation threw away correct, verified prose:
+    on Flask that lost debughelpers.py - 7 functions, 4 classes - entirely.
+    Subsystems already degrade this way; file pages now match."""
+    evidence = make_evidence()
+    detail = (
+        "## Overview\nHandles login.\n"
+        "## How it works\nEntry at auth/login.py:10.\n"
+        "- `ghost` (auth/nowhere.py:99): does not exist.\n"
+        "## Gotchas\nNone.\n"
+    )
+    page = build_file_page_record(evidence, "auth/login.py", _adapter(json.dumps({"detail": detail})))
+    assert page is not None
+    assert "auth/nowhere.py:99" not in page
+    assert "auth/login.py:10" in page
+
+
+def test_file_page_salvage_gives_up_when_too_little_survives():
+    """A page that was mostly fabricated citations is not worth showing."""
+    evidence = make_evidence()
+    detail = "## Overview\nSee a/x.py:1.\nAnd b/y.py:2.\nAnd c/z.py:3.\n"
+    assert build_file_page_record(
+        evidence, "auth/login.py", _adapter(json.dumps({"detail": detail}))
+    ) is None
+
+
+def test_strip_unverified_lines_keeps_everything_when_nothing_failed():
+    assert _strip_unverified_lines("## A\nline\n", []) == "## A\nline\n"
+
+
+def test_subsystem_files_survive_a_truncated_model_response():
+    """The file list is structural. When the prompt grows large enough that the
+    model stops finishing its output, the wiki must not silently lose files -
+    on Flask that took the records from 83 files to 14 and stranded 23
+    already-generated file pages, since a page can only attach to a file entry
+    that exists."""
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    # Model returns only the first file, as if it ran out of output budget.
+    adapter = _adapter(json.dumps({
+        "description": "Handles login.",
+        "files": [{"path": "auth/login.py", "role": "Entry point.", "key_symbols": []}],
+    }))
+
+    record = build_subsystem_record(evidence, cluster, brief, "Authentication", adapter)
+
+    paths = [f["path"] for f in record["files"]]
+    assert paths == ["auth/login.py", "auth/tokens.py"]
+    # The file the model did describe keeps its prose; the other is structural only.
+    by_path = {f["path"]: f for f in record["files"]}
+    assert by_path["auth/login.py"]["role"] == "Entry point."
+    assert by_path["auth/tokens.py"]["role"] == ""
