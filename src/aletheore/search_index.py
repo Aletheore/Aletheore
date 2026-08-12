@@ -1,4 +1,5 @@
 import hashlib
+import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -83,6 +84,102 @@ def _is_vendored_path(module_path: str) -> bool:
     return parts[-1].endswith(_MINIFIED_SUFFIXES)
 
 
+FILE_CONTEXT_MAX_CHARS = 300
+
+_COMMENT_PREFIXES = ("#", "//", "///", "/*", "*", '"""', "'''", "--", ";;")
+
+_LEGAL_NOISE = re.compile(
+    r"copyright|all rights reserved|licen[sc]e|spdx|BSD|MIT |Apache|redistribution",
+    re.IGNORECASE,
+)
+
+# The first of these means later comments describe that symbol, not the file.
+_DEFINITION_START = re.compile(
+    r"^(pub\s+)?(async\s+)?(export\s+)?(default\s+)?"
+    r"(def|class|fn|func|impl|struct|enum|trait|interface|type|var|let|const|"
+    r"function|module|abstract|final|public|private|protected|static|template)\b"
+)
+
+
+def _file_header_comment(lines: list[str]) -> str:
+    """The file's leading comment/docstring text, flattened to one line.
+
+    Stops at the first run of real code, so a mid-file comment never leaks in
+    and a file whose header is only imports contributes nothing.
+    """
+    collected: list[str] = []
+    # Set while inside a multi-line triple-quoted docstring, to the
+    # delimiter that opened it. A standard Python module docstring's body
+    # lines carry no per-line comment marker of their own - without this,
+    # every body line falls through to "not a comment, not a definition"
+    # and the whole docstring is silently dropped.
+    open_triple_quote: str | None = None
+    for raw in lines[:MODULE_CHUNK_MAX_LINES]:
+        line = raw.strip()
+        if open_triple_quote is not None:
+            if not line:
+                continue
+            close_at = line.find(open_triple_quote)
+            text = line[:close_at] if close_at != -1 else line
+            text = text.strip()
+            if text and not _LEGAL_NOISE.search(text):
+                collected.append(text)
+            if close_at != -1:
+                open_triple_quote = None
+            if sum(len(c) for c in collected) >= FILE_CONTEXT_MAX_CHARS:
+                break
+            continue
+        if not line:
+            continue
+        if line.startswith(('"""', "'''")):
+            delim = line[:3]
+            rest = line[3:]
+            close_at = rest.find(delim)
+            if close_at == -1:
+                # Opens here with no closing delimiter on this line - the
+                # common multi-line module-docstring shape. Collect this
+                # line's own trailing text, if any, then keep consuming
+                # body lines until the matching close.
+                text = rest.strip()
+                if text and not _LEGAL_NOISE.search(text):
+                    collected.append(text)
+                open_triple_quote = delim
+            else:
+                # Single-line docstring - strip the delimiter from both
+                # ends, not just the left, or the closing """ leaks into
+                # the indexed text.
+                text = rest[:close_at].strip()
+                if text and not _LEGAL_NOISE.search(text):
+                    collected.append(text)
+            if sum(len(c) for c in collected) >= FILE_CONTEXT_MAX_CHARS:
+                break
+            continue
+        if line.startswith(_COMMENT_PREFIXES):
+            text = line.lstrip("/#*-!;\"' ").strip()
+            # Licence headers are the same on every file in a repo, so they
+            # carry no signal and actively dilute the symbol they ride on -
+            # gin's files all begin "Copyright 2013 Julien Schmidt".
+            if text and not _LEGAL_NOISE.search(text):
+                collected.append(text)
+            if sum(len(c) for c in collected) >= FILE_CONTEXT_MAX_CHARS:
+                break
+            continue
+        if _DEFINITION_START.match(line):
+            # A definition means any comment from here on documents that symbol,
+            # not the file. Skipping past it grabs the first class or function
+            # docstring and staples that one symbol's description onto every
+            # other symbol in the file - measured at Flask top-1 71.9% -> 65.6%.
+            break
+        # Anything else before the first definition - imports, the continuation
+        # lines of a braced import block, attributes - is skipped rather than
+        # treated as the end of the header. serde's `/// An efficient way of
+        # discarding data...` sits after a multi-line `use crate::de::{...}`
+        # block, and stopping at that block's continuation lines lost exactly
+        # the sentence worth carrying.
+        continue
+    return " ".join(collected)[:FILE_CONTEXT_MAX_CHARS]
+
+
 def _truncate_for_embedding(text: str) -> str:
     if len(text) <= MAX_EMBEDDING_CHARS:
         return text
@@ -140,7 +237,41 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
         language = module.get("language", "unknown")
         imports = module.get("imports", [])
 
-        symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
+        # A compact identity for this file, carried by every one of its symbol
+        # chunks. Without it, symbol chunks in trait-heavy code are near
+        # duplicates of each other across files: serde defines a symbol called
+        # `deserialize` in 57 different files, `expecting` in 44, and the bodies
+        # are boilerplate trait impls, so an embedder has almost nothing to tell
+        # them apart. The sentence that actually distinguishes the file ("An
+        # efficient way to discard data from a deserializer") lives in its
+        # header, and previously reached only the single module chunk, which
+        # then lost to 57 identical-looking siblings.
+        #
+        # Comment lines only: code from the head is already in the module chunk,
+        # and repeating it here would drown the symbol's own body.
+        file_context = _file_header_comment(lines)
+
+        code_symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
+        # Constants are indexed only for files that define nothing else.
+        #
+        # Measured both ways. Indexing them everywhere cost accuracy on files
+        # that already had functions and classes: on Flask the declarations
+        # chunk of signals.py, which contains `appcontext_pushed` and
+        # `appcontext_popped`, out-matched ctx.py for "the object pushed onto
+        # and popped off a stack", dropping top-1 from 75.0% to 71.9%. But
+        # skipping them entirely leaves declaration-only files unreachable, and
+        # that is not a Python corner case - a CommonJS or Go module that is all
+        # `const` had no indexable content at all.
+        #
+        # Restricting to files with no other symbols keeps both: a file that
+        # already has code is indexed exactly as before, and a file that would
+        # otherwise be empty becomes findable.
+        constants = []
+        if not code_symbols:
+            constants = [
+                c for c in module["symbols"].get("constants", []) if c.get("is_public", True)
+            ]
+        symbols = code_symbols + constants
         if not symbols:
             end_line = min(len(lines), FALLBACK_CHUNK_MAX_LINES)
             snippet = "\n".join(lines[:FALLBACK_CHUNK_MAX_LINES])
@@ -193,11 +324,13 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     }
                 )
 
-        for symbol in symbols:
+        for symbol in code_symbols:
             start_line = symbol["start_line"]
             end_line = symbol["end_line"]
             source = "\n".join(lines[start_line - 1:end_line])
             header = f"{module_path}::{symbol['name']} ({language})"
+            if file_context:
+                header = f"{header}\n[file] {file_context}"
             chunks.append(
                 {
                     "module_path": module_path,
@@ -207,6 +340,35 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "language": language,
                     "imports": imports,
                     "text": _truncate_for_embedding(f"{header}\n{source}"),
+                }
+            )
+
+        # Module-level bindings go into ONE chunk, not one chunk each. Measured
+        # on Flask's signals.py: emitting a chunk per constant produced eleven
+        # ~60-character chunks like `template_rendered = _signals.signal(...)`,
+        # each too thin to carry meaning on its own, and together they diluted
+        # the file's representation enough to push a genuinely better chunk off
+        # the top of an unrelated query. Grouped, the declarations read as the
+        # single API surface they actually are.
+        if constants:
+            start_line = min(c["start_line"] for c in constants)
+            end_line = max(c["end_line"] for c in constants)
+            declared = "\n".join(
+                line for line in lines[start_line - 1:end_line] if line.strip()
+            )
+            names = ", ".join(c["name"] for c in constants[:40])
+            chunks.append(
+                {
+                    "module_path": module_path,
+                    "symbol_name": None,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "language": language,
+                    "imports": imports,
+                    "text": _truncate_for_embedding(
+                        f"{module_path} (module-level declarations)\n"
+                        f"declares: {names}\n{declared}"
+                    ),
                 }
             )
 

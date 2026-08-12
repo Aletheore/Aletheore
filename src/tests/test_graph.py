@@ -612,3 +612,141 @@ def test_build_module_graph_without_unchanged_modules_is_unchanged(tmp_path):
     without_param = build_module_graph(repo)
 
     assert with_none == without_param
+
+
+def test_build_module_graph_records_module_level_constants(tmp_path):
+    """A file can export a whole public API without a def or a class.
+    Flask's signals.py is ten `x = _signals.signal(...)` assignments; on
+    functions+classes alone it looked like an empty module, so it got no wiki
+    page and produced no chunk the search index could retrieve."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "signals.py").write_text(
+        "from blinker import Namespace\n\n"
+        "_signals = Namespace()\n"
+        "template_rendered = _signals.signal('template-rendered')\n"
+        "request_started = _signals.signal('request-started')\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    constants = next(m for m in modules if m["path"] == "signals.py")["symbols"]["constants"]
+    names = {c["name"] for c in constants}
+    assert {"template_rendered", "request_started"} <= names
+    assert next(c for c in constants if c["name"] == "template_rendered")["is_public"] is True
+    assert next(c for c in constants if c["name"] == "_signals")["is_public"] is False
+
+
+def test_build_module_graph_constants_are_module_level_only(tmp_path):
+    """Locals and class attributes are not module exports; recording them
+    would bury the real API in noise."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "m.py").write_text(
+        "TOP = 1\n"
+        "TYPED: int = 2\n"
+        "def f():\n    local_only = 3\n    return local_only\n"
+        "class C:\n    class_attr = 4\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    names = {c["name"] for c in next(m for m in modules if m["path"] == "m.py")["symbols"]["constants"]}
+    assert names == {"TOP", "TYPED"}
+
+
+def test_build_module_graph_constants_skip_non_identifier_targets(tmp_path):
+    """Tuple unpacking and attribute/subscript targets have no single name a
+    reader could look up, so they are deliberately not recorded."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "m.py").write_text("import os\nKEEP = 1\na, b = 2, 3\nos.environ['X'] = '1'\n")
+    modules, _graph, _unparseable = build_module_graph(repo)
+    names = {c["name"] for c in next(m for m in modules if m["path"] == "m.py")["symbols"]["constants"]}
+    assert names == {"KEEP"}
+
+
+def test_build_module_graph_constants_key_present_for_non_python(tmp_path):
+    """Only the Python extractor records bindings so far; every other language
+    must still emit the key so consumers can read it unconditionally."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.js").write_text("export function f() { return 1; }\n")
+    modules, _graph, _unparseable = build_module_graph(repo)
+    assert next(m for m in modules if m["path"] == "a.js")["symbols"]["constants"] == []
+
+
+def test_build_module_graph_javascript_commonjs_require_is_an_edge(tmp_path):
+    """Handling only ESM `import` left every CommonJS codebase with an empty
+    dependency graph: expressjs/express scanned as 141 modules with 0 resolved
+    imports, so community detection emitted one cluster per file."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mod.js").write_text("function helper() { return 1; }\nmodule.exports = { helper };\n")
+    (repo / "main.js").write_text("const { helper } = require('./mod');\nfunction run() { return helper(); }\n")
+
+    _modules, dependency_graph, _unparseable = build_module_graph(repo)
+    assert ("main.js", "mod.js") in {tuple(e) for e in dependency_graph["edges"]}
+
+
+def test_build_module_graph_javascript_assigned_function_expressions_are_symbols(tmp_path):
+    """Express defines its whole surface as `app.use = function use(fn) {...}`.
+    Counting only `function f(){}` left 103 of its 141 files with no symbols at
+    all, so the search index had nothing but a fallback chunk to embed."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.js").write_text(
+        "const app = {};\n"
+        "app.use = function use(fn) { return fn; };\n"
+        "app.route = (path) => path;\n"
+        "exports.init = function init() {};\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    names = symbol_names(modules[0]["symbols"]["functions"])
+    assert {"use", "route", "init"} <= set(names)
+
+
+def test_build_module_graph_constants_extracted_for_every_language(tmp_path):
+    """A file can export a public API with no function or class - Flask's
+    signals.py is ten assignments. That shape exists in every language, and
+    only Python was recording it."""
+    cases = {
+        "a.js": ("javascript", "export const API_KEY = 'x';\n", "API_KEY"),
+        "a.ts": ("typescript", "export const API_KEY: string = 'x';\n", "API_KEY"),
+        "a.go": ("go", "package a\n\nconst MaxRetries = 3\n", "MaxRetries"),
+        "a.rs": ("rust", "pub const MAX_RETRIES: i32 = 3;\n", "MAX_RETRIES"),
+        "a.rb": ("ruby", "MAX_RETRIES = 3\n", "MAX_RETRIES"),
+        "a.c": ("c", "#define MAX_RETRIES 3\n", "MAX_RETRIES"),
+    }
+    for filename, (_lang, body, expected) in cases.items():
+        repo = tmp_path / filename.replace(".", "_")
+        repo.mkdir()
+        (repo / filename).write_text(body)
+        modules, _graph, _unparseable = build_module_graph(repo)
+        found = symbol_names(modules[0]["symbols"]["constants"])
+        assert expected in found, f"{filename}: expected {expected}, got {found}"
+
+
+def test_build_module_graph_has_modifier_does_not_false_positive_on_substring(tmp_path):
+    """has_modifier used to check `w in head` (plain substring), so a
+    declaration whose identifier merely contained a modifier word - e.g.
+    "construct_id" containing "const" - was misclassified as a constant.
+    An ordinary, non-const/non-static declaration with such a name must not
+    be extracted."""
+    cases = {
+        "a.c": ("c", "int construct_id = 5;\n"),
+        "a.java": ("java", "package a;\npublic class A { Object constants_registry = null; }\n"),
+    }
+    for filename, (_lang, body) in cases.items():
+        repo = tmp_path / filename.replace(".", "_")
+        repo.mkdir()
+        (repo / filename).write_text(body)
+        modules, _graph, _unparseable = build_module_graph(repo)
+        found = symbol_names(modules[0]["symbols"]["constants"])
+        assert found == [], f"{filename}: expected no constants, got {found}"
+
+
+def test_build_module_graph_constants_key_always_present(tmp_path):
+    """Consumers read symbols["constants"] unconditionally, so it must exist
+    even for a language whose extractor records none."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.java").write_text("package a;\npublic class A { void f() {} }\n")
+    modules, _graph, _unparseable = build_module_graph(repo)
+    assert "constants" in modules[0]["symbols"]

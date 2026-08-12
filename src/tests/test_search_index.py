@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aletheore.search_index import (
+    _file_header_comment,
     HostedEmbeddingUnavailableError,
     EmbeddingProviderUnavailableError,
     IndexNotFoundError,
@@ -831,3 +832,73 @@ def test_no_token_means_no_hosted_call_at_all():
         _embed_in_batches(["chunk"])
 
     http.post.assert_not_called()
+
+
+def test_file_header_comment_stops_at_the_first_definition():
+    """Skipping past code to find a comment does not find the file header - it
+    finds the first class or function docstring, and then staples that one
+    symbol's description onto every other symbol in the file. Measured at
+    Flask top-1 71.9% -> 65.6% before this stopped at definitions."""
+    lines = [
+        "import os",
+        "",
+        "class Session:",
+        '    """Expands a basic dictionary with session attributes."""',
+    ]
+    assert _file_header_comment(lines) == ""
+
+
+def test_file_header_comment_survives_a_multiline_import_block():
+    """serde's `/// An efficient way of discarding data...` sits after a braced
+    `use crate::de::{...}` block; treating the block's continuation lines as
+    the end of the header lost exactly the sentence worth carrying."""
+    lines = [
+        "use crate::lib::*;",
+        "",
+        "use crate::de::{",
+        "    Deserialize, Deserializer, Visitor,",
+        "};",
+        "",
+        "/// An efficient way of discarding data from a deserializer.",
+        "pub struct IgnoredAny;",
+    ]
+    assert "efficient way of discarding data" in _file_header_comment(lines)
+
+
+def test_file_header_comment_extracts_a_multiline_python_module_docstring():
+    # The standard PEP 257 module-docstring shape: body lines carry no
+    # per-line comment marker of their own, so a purely marker-driven scan
+    # silently dropped the whole thing and returned "" for the most common
+    # Python file-header idiom there is.
+    lines = [
+        '"""',
+        "Handles authentication for the app.",
+        '"""',
+        "",
+        "import os",
+    ]
+    assert _file_header_comment(lines) == "Handles authentication for the app."
+
+
+def test_file_header_comment_strips_both_quote_marks_from_a_single_line_docstring():
+    # lstrip() only strips the LEFT side, so the closing """ used to leak
+    # into the indexed text.
+    lines = ['"""Session attributes."""', "", "import os"]
+    context = _file_header_comment(lines)
+    assert context == "Session attributes."
+    assert '"""' not in context
+
+
+def test_file_header_comment_drops_licence_boilerplate():
+    """Every file in a repo carries the same licence header, so it adds no
+    signal and dilutes the symbol it rides on."""
+    lines = [
+        "// Copyright 2013 Julien Schmidt. All rights reserved.",
+        "// Use of this source code is governed by a BSD-style licence.",
+        "",
+        "// Param is a single URL parameter.",
+        "type Param struct {",
+    ]
+    context = _file_header_comment(lines)
+    assert "Copyright" not in context
+    assert "Param is a single URL parameter" in context

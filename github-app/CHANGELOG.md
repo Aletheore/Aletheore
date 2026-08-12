@@ -12,6 +12,37 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-12
+
+- AIRview depth: file-level reference pages. Each important file now gets a sectioned page
+  (Overview / Why it exists / How it works / Key symbols / Gotchas) hanging off the existing
+  `files` JSON column, so there is no migration and no new table. The dashboard renders it as a
+  collapsed "Reference" disclosure per file. Measured against RepoWise's wiki with a blind,
+  order-swapped judge: the gap closed from 1.33 to roughly 0.2, at about one seventh their token
+  cost. Harness and raw results at
+  [Aletheore/aletheore-benchmarks](https://github.com/Aletheore/aletheore-benchmarks).
+- Subsystem prose may now cite any file in the repository, not only files inside its own cluster.
+  `verify_citations` already validated repo-wide, so the restriction added no safety while
+  blocking exactly the cross-cutting explanations (request flow, lifecycle) that span subsystems.
+- **The wiki's file list no longer depends on the model finishing its output.** It was whatever
+  the model echoed back, so a large enough prompt silently shrank it — on Flask, records went from
+  83 files to 14, stranding 23 already-generated file pages, since a page can only attach to a
+  file entry that exists. The list is now built from the scan for every file in the brief and the
+  model's prose merged onto it. Invented files are still dropped. This would have hit any large
+  repository.
+- File pages salvage instead of discarding. One unverifiable citation used to throw away a whole
+  page of otherwise-verified prose; the offending lines are now removed and the remainder
+  re-verified, dropping the page only if less than 60% survives. Subsystems already degraded this
+  way; file pages now match. 28 of 31 pages kept on Flask.
+- Clusters made entirely of tests, examples or docs no longer get a subsystem or an LLM call.
+  Measured across eight repositories, 334 subsystem clusters became 87 — 74% fewer calls. serde
+  was the extreme case at 160 -> 10. Mixed clusters are kept, and a repo that is all tests keeps
+  everything rather than producing an empty wiki.
+- The AIRview cache key now carries a prompt version. It depended only on the scan, so editing any
+  writing prompt would have silently served pages written by the previous prompt forever.
+- Dashboard markdown for generated pages escapes before promoting any tag, so repository content
+  reaching the browser through a model's output cannot become live HTML.
+
 ## 2026-08-10
 
 - Affiliate program: manually-onboarded creators get a Paddle discount code (10% off first month)
