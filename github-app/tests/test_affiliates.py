@@ -156,3 +156,32 @@ async def test_mark_commissions_paid_does_not_touch_other_affiliates(pool):
     assert totals[affiliate_a["id"]]["total_paid_usd"] == Decimal("3.00")
     assert totals[affiliate_b["id"]]["total_owed_usd"] == Decimal("7.00")
     assert totals[affiliate_b["id"]]["total_paid_usd"] == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_totals_are_not_multiplied_by_referral_count(pool):
+    """Regression for a real bug: joining affiliate_referrals and
+    affiliate_commissions onto affiliates in one query is a cartesian
+    product between the two (R referrals x C commissions = R*C rows), so a
+    plain SUM(amount_usd) counted every commission once per referral
+    instead of once. The multiplier is exactly the referral count, which is
+    why a fixture with one referral - test_mark_commissions_paid_moves_owed_to_paid
+    above, R=1 - cannot catch it: the multiplication factor is 1 either
+    way. This needs at least two referrals and at least one commission to
+    expose it. Reproduced before the fix: 3 referrals + $30 of real
+    commissions reported $90.00 owed."""
+    affiliate = await create_affiliate(pool, "VERA10", "dsc_vera", "Vera")
+    await upsert_installation(pool, 910, "acme")
+    await upsert_installation(pool, 911, "beta")
+    await upsert_installation(pool, 912, "gamma")
+    await record_referral(pool, 910, affiliate["id"])
+    await record_referral(pool, 911, affiliate["id"])
+    await record_referral(pool, 912, affiliate["id"])
+    now = datetime.now(timezone.utc)
+    await record_commission(pool, affiliate["id"], 910, "txn_e", Decimal("10.00"), now)
+    await record_commission(pool, affiliate["id"], 911, "txn_f", Decimal("20.00"), now)
+
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+
+    assert totals[affiliate["id"]]["referral_count"] == 3
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("30.00")
