@@ -97,6 +97,8 @@ services:
       # Host-level backup-postgres.sh writes here; the ops monitor reads it
       # read-only from the scan worker to alert if dumps go missing/stale.
       - ./backups:/app/backups:ro
+    tmpfs:
+      - /tmp:size=1g,mode=1777
     depends_on:
       postgres:
         condition: service_healthy
@@ -148,6 +150,8 @@ services:
       - GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem
     volumes:
       - ./app-private-key.pem:/run/secrets/github-app-key.pem:ro
+    tmpfs:
+      - /tmp:size=512m,mode=1777
     depends_on:
       postgres:
         condition: service_healthy

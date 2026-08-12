@@ -483,6 +483,30 @@ def test_temp_dir_cleaned_up_on_success(bare_repo_with_two_commits, monkeypatch)
     assert not seen_job_dirs[0].exists()
 
 
+def test_run_job_temp_dir_cleanup_job_removes_only_old_job_dirs(tmp_path, monkeypatch):
+    from scan_worker.jobs import JOB_TEMP_DIR_MAX_AGE_SECONDS, run_job_temp_dir_cleanup_job
+
+    old_dir = tmp_path / "old"
+    old_dir.mkdir()
+    (old_dir / "repo.py").write_text("source")
+    fresh_dir = tmp_path / "fresh"
+    fresh_dir.mkdir()
+    marker_file = tmp_path / "not-a-dir"
+    marker_file.write_text("ignore me")
+
+    now = time.time()
+    old_mtime = now - JOB_TEMP_DIR_MAX_AGE_SECONDS - 60
+    os.utime(old_dir, (old_mtime, old_mtime))
+
+    monkeypatch.setattr("scan_worker.jobs.JOBS_ROOT", tmp_path)
+
+    run_job_temp_dir_cleanup_job()
+
+    assert not old_dir.exists()
+    assert fresh_dir.exists()
+    assert marker_file.exists()
+
+
 def test_clone_failure_posts_failure_comment_and_cleans_up(monkeypatch):
     import scan_worker.jobs as jobs_module
 

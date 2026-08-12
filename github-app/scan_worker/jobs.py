@@ -153,7 +153,9 @@ from scan_worker.slack import (
     send_slack_alert,
 )
 
-JOBS_ROOT = Path("/tmp/aletheore-jobs")
+_JOBS_ROOT_ENV = "ALETHEORE_JOBS_ROOT"
+JOBS_ROOT = Path(os.environ.get(_JOBS_ROOT_ENV, "/tmp/aletheore-jobs"))
+JOB_TEMP_DIR_MAX_AGE_SECONDS = 6 * 3600
 AUDIT_COMMENT_MARKER = "<!-- aletheore-audit -->"
 FLASH_REVIEW_MARKER = "<!-- aletheore-flash-review -->"
 # Generous: the one-time full build calls a strong model once per
@@ -2219,6 +2221,33 @@ def run_webhook_delivery_cleanup_job() -> None:
     logging.getLogger("scan_worker.jobs").info(
         "webhook delivery cleanup completed", extra={"deleted_count": deleted}
     )
+
+
+@log_job
+def run_job_temp_dir_cleanup_job() -> None:
+    if not JOBS_ROOT.exists():
+        return
+
+    now = time.time()
+    deleted = 0
+    logger = logging.getLogger("scan_worker.jobs")
+    for entry in JOBS_ROOT.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            if now - entry.stat().st_mtime <= JOB_TEMP_DIR_MAX_AGE_SECONDS:
+                continue
+            shutil.rmtree(entry)
+            deleted += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "job temp dir cleanup failed for %s (%s)",
+                entry,
+                type(exc).__name__,
+                exc_info=True,
+            )
+
+    logger.info("job temp dir cleanup completed", extra={"deleted_count": deleted})
 
 
 # The health sweep runs every HEALTH_SWEEP_INTERVAL_SECONDS (180s, see
