@@ -77,8 +77,18 @@ async def record_commission(
 async def list_affiliates_with_totals(pool: asyncpg.Pool) -> list[dict]:
     """One row per affiliate for the admin report page: how many
     installations they've referred, and total commission accrued vs. paid
-    so far. LEFT JOINs so an affiliate with no referrals/commissions yet
-    still shows up with zeroes rather than being dropped."""
+    so far.
+
+    Each total is a scalar subquery, not a JOIN, deliberately: joining
+    affiliate_referrals and affiliate_commissions onto affiliates in one
+    query is a cartesian product between the two (R referrals x C
+    commissions for one affiliate = R*C rows), and while
+    COUNT(DISTINCT r.installation_id) survives that fan-out, SUM(amount_usd)
+    does not - every commission was summed once per referral. Reproduced:
+    an affiliate with 3 referrals and $30 of real commissions reported
+    $90.00 owed. A single referral (R=1) hides it completely, which is
+    exactly what a one-referral manual check would show as correct.
+    """
     rows = await pool.fetch(
         """
         SELECT
@@ -86,13 +96,18 @@ async def list_affiliates_with_totals(pool: asyncpg.Pool) -> list[dict]:
             a.code,
             a.name,
             a.created_at,
-            COUNT(DISTINCT r.installation_id) AS referral_count,
-            COALESCE(SUM(c.amount_usd) FILTER (WHERE NOT c.paid), 0) AS total_owed_usd,
-            COALESCE(SUM(c.amount_usd) FILTER (WHERE c.paid), 0) AS total_paid_usd
+            (SELECT COUNT(*) FROM affiliate_referrals r WHERE r.affiliate_id = a.id) AS referral_count,
+            COALESCE(
+                (SELECT SUM(amount_usd) FROM affiliate_commissions c
+                 WHERE c.affiliate_id = a.id AND NOT c.paid),
+                0
+            ) AS total_owed_usd,
+            COALESCE(
+                (SELECT SUM(amount_usd) FROM affiliate_commissions c
+                 WHERE c.affiliate_id = a.id AND c.paid),
+                0
+            ) AS total_paid_usd
         FROM affiliates a
-        LEFT JOIN affiliate_referrals r ON r.affiliate_id = a.id
-        LEFT JOIN affiliate_commissions c ON c.affiliate_id = a.id
-        GROUP BY a.id, a.code, a.name, a.created_at
         ORDER BY a.created_at
         """
     )
