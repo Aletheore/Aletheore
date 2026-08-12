@@ -670,3 +670,64 @@ def test_build_module_graph_constants_key_present_for_non_python(tmp_path):
     (repo / "a.js").write_text("export function f() { return 1; }\n")
     modules, _graph, _unparseable = build_module_graph(repo)
     assert next(m for m in modules if m["path"] == "a.js")["symbols"]["constants"] == []
+
+
+def test_build_module_graph_javascript_commonjs_require_is_an_edge(tmp_path):
+    """Handling only ESM `import` left every CommonJS codebase with an empty
+    dependency graph: expressjs/express scanned as 141 modules with 0 resolved
+    imports, so community detection emitted one cluster per file."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mod.js").write_text("function helper() { return 1; }\nmodule.exports = { helper };\n")
+    (repo / "main.js").write_text("const { helper } = require('./mod');\nfunction run() { return helper(); }\n")
+
+    _modules, dependency_graph, _unparseable = build_module_graph(repo)
+    assert ("main.js", "mod.js") in {tuple(e) for e in dependency_graph["edges"]}
+
+
+def test_build_module_graph_javascript_assigned_function_expressions_are_symbols(tmp_path):
+    """Express defines its whole surface as `app.use = function use(fn) {...}`.
+    Counting only `function f(){}` left 103 of its 141 files with no symbols at
+    all, so the search index had nothing but a fallback chunk to embed."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.js").write_text(
+        "const app = {};\n"
+        "app.use = function use(fn) { return fn; };\n"
+        "app.route = (path) => path;\n"
+        "exports.init = function init() {};\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    names = symbol_names(modules[0]["symbols"]["functions"])
+    assert {"use", "route", "init"} <= set(names)
+
+
+def test_build_module_graph_constants_extracted_for_every_language(tmp_path):
+    """A file can export a public API with no function or class - Flask's
+    signals.py is ten assignments. That shape exists in every language, and
+    only Python was recording it."""
+    cases = {
+        "a.js": ("javascript", "export const API_KEY = 'x';\n", "API_KEY"),
+        "a.ts": ("typescript", "export const API_KEY: string = 'x';\n", "API_KEY"),
+        "a.go": ("go", "package a\n\nconst MaxRetries = 3\n", "MaxRetries"),
+        "a.rs": ("rust", "pub const MAX_RETRIES: i32 = 3;\n", "MAX_RETRIES"),
+        "a.rb": ("ruby", "MAX_RETRIES = 3\n", "MAX_RETRIES"),
+        "a.c": ("c", "#define MAX_RETRIES 3\n", "MAX_RETRIES"),
+    }
+    for filename, (_lang, body, expected) in cases.items():
+        repo = tmp_path / filename.replace(".", "_")
+        repo.mkdir()
+        (repo / filename).write_text(body)
+        modules, _graph, _unparseable = build_module_graph(repo)
+        found = symbol_names(modules[0]["symbols"]["constants"])
+        assert expected in found, f"{filename}: expected {expected}, got {found}"
+
+
+def test_build_module_graph_constants_key_always_present(tmp_path):
+    """Consumers read symbols["constants"] unconditionally, so it must exist
+    even for a language whose extractor records none."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.java").write_text("package a;\npublic class A { void f() {} }\n")
+    modules, _graph, _unparseable = build_module_graph(repo)
+    assert "constants" in modules[0]["symbols"]

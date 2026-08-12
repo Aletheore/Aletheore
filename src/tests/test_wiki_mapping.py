@@ -136,3 +136,32 @@ def test_rank_files_by_importance_is_stable_for_equal_scores():
 def test_rank_files_by_importance_survives_missing_git_and_symbols():
     evidence = {"repository": {"modules": [{"path": "a.py"}]}}
     assert [r["path"] for r in rank_files_by_importance(evidence)] == ["a.py"]
+
+
+def test_rank_files_by_importance_lifts_public_api_over_internal_utilities():
+    """In-degree actively works against entry points: a module re-exported by
+    __init__.py is imported once, while a leaf utility is imported by
+    everything. Measured on psf/requests - api.py, the whole public API,
+    ranked 17th and got no page while compat.py, a shim, ranked 1st."""
+    evidence = {
+        "repository": {
+            "modules": [
+                {"path": "pkg/__init__.py", "imports": ["pkg/api.py"], "imported_by": [], "symbols": {}},
+                {
+                    "path": "pkg/api.py",
+                    "imports": [], "imported_by": ["pkg/__init__.py"],
+                    "symbols": {"functions": [{"name": f"f{i}"} for i in range(8)]},
+                },
+                {
+                    "path": "pkg/compat.py",
+                    "imports": [], "imported_by": [f"pkg/m{i}.py" for i in range(16)],
+                    "symbols": {"functions": [{"name": "shim"}]},
+                },
+            ]
+        }
+    }
+    ranked = rank_files_by_importance(evidence)
+    order = [r["path"] for r in ranked]
+    assert order.index("pkg/api.py") < order.index("pkg/compat.py")
+    assert next(r for r in ranked if r["path"] == "pkg/api.py")["public_api"] is True
+    assert next(r for r in ranked if r["path"] == "pkg/compat.py")["public_api"] is False

@@ -140,7 +140,27 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
         language = module.get("language", "unknown")
         imports = module.get("imports", [])
 
-        symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
+        code_symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
+        # Constants are indexed only for files that define nothing else.
+        #
+        # Measured both ways. Indexing them everywhere cost accuracy on files
+        # that already had functions and classes: on Flask the declarations
+        # chunk of signals.py, which contains `appcontext_pushed` and
+        # `appcontext_popped`, out-matched ctx.py for "the object pushed onto
+        # and popped off a stack", dropping top-1 from 75.0% to 71.9%. But
+        # skipping them entirely leaves declaration-only files unreachable, and
+        # that is not a Python corner case - a CommonJS or Go module that is all
+        # `const` had no indexable content at all.
+        #
+        # Restricting to files with no other symbols keeps both: a file that
+        # already has code is indexed exactly as before, and a file that would
+        # otherwise be empty becomes findable.
+        constants = []
+        if not code_symbols:
+            constants = [
+                c for c in module["symbols"].get("constants", []) if c.get("is_public", True)
+            ]
+        symbols = code_symbols + constants
         if not symbols:
             end_line = min(len(lines), FALLBACK_CHUNK_MAX_LINES)
             snippet = "\n".join(lines[:FALLBACK_CHUNK_MAX_LINES])
@@ -193,7 +213,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     }
                 )
 
-        for symbol in symbols:
+        for symbol in code_symbols:
             start_line = symbol["start_line"]
             end_line = symbol["end_line"]
             source = "\n".join(lines[start_line - 1:end_line])
@@ -207,6 +227,35 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "language": language,
                     "imports": imports,
                     "text": _truncate_for_embedding(f"{header}\n{source}"),
+                }
+            )
+
+        # Module-level bindings go into ONE chunk, not one chunk each. Measured
+        # on Flask's signals.py: emitting a chunk per constant produced eleven
+        # ~60-character chunks like `template_rendered = _signals.signal(...)`,
+        # each too thin to carry meaning on its own, and together they diluted
+        # the file's representation enough to push a genuinely better chunk off
+        # the top of an unrelated query. Grouped, the declarations read as the
+        # single API surface they actually are.
+        if constants:
+            start_line = min(c["start_line"] for c in constants)
+            end_line = max(c["end_line"] for c in constants)
+            declared = "\n".join(
+                line for line in lines[start_line - 1:end_line] if line.strip()
+            )
+            names = ", ".join(c["name"] for c in constants[:40])
+            chunks.append(
+                {
+                    "module_path": module_path,
+                    "symbol_name": None,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "language": language,
+                    "imports": imports,
+                    "text": _truncate_for_embedding(
+                        f"{module_path} (module-level declarations)\n"
+                        f"declares: {names}\n{declared}"
+                    ),
                 }
             )
 
@@ -438,6 +487,15 @@ def _reusable_vectors(index_path: Path) -> dict[str, list[float]]:
         return {}
 
 
+def _embed_stale_by_hash(stale: list[dict], repo_id: str | None = None) -> dict[str, list[float]]:
+    stale_by_hash = {chunk["chunk_hash"]: chunk["text"] for chunk in stale}
+    stale_hashes = list(stale_by_hash)
+    fresh_vectors = _embed_in_batches(
+        [stale_by_hash[chunk_hash] for chunk_hash in stale_hashes], repo_id=repo_id
+    )
+    return dict(zip(stale_hashes, fresh_vectors))
+
+
 def build_index(repo_path: Path, evidence: dict) -> int:
     chunks = build_chunks(evidence, repo_path)
     if not chunks:
@@ -460,7 +518,8 @@ def build_index(repo_path: Path, evidence: dict) -> int:
     reusable = _reusable_vectors(index_path)
     stale = [chunk for chunk in chunks if chunk["chunk_hash"] not in reusable]
     repo = _repo_id(repo_path)
-    fresh_vectors = _embed_in_batches([chunk["text"] for chunk in stale], repo_id=repo)
+    fresh = _embed_stale_by_hash(stale, repo_id=repo)
+    fresh_vectors = list(fresh.values())
 
     # Vectors from two different embedding models cannot share an index -
     # nomic-embed-text returns 768 dimensions and text-embedding-3-small
@@ -501,9 +560,8 @@ def build_index(repo_path: Path, evidence: dict) -> int:
         if reused_dimensions != {current_dimension}:
             reusable = {}
             stale = chunks
-            fresh_vectors = _embed_in_batches([chunk["text"] for chunk in stale], repo_id=repo)
+            fresh = _embed_stale_by_hash(stale, repo_id=repo)
 
-    fresh = dict(zip((chunk["chunk_hash"] for chunk in stale), fresh_vectors))
     rows = [
         {**chunk, "vector": reusable.get(chunk["chunk_hash"]) or fresh[chunk["chunk_hash"]]}
         for chunk in chunks
