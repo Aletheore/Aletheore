@@ -108,9 +108,51 @@ def _file_header_comment(lines: list[str]) -> str:
     and a file whose header is only imports contributes nothing.
     """
     collected: list[str] = []
+    # Set while inside a multi-line triple-quoted docstring, to the
+    # delimiter that opened it. A standard Python module docstring's body
+    # lines carry no per-line comment marker of their own - without this,
+    # every body line falls through to "not a comment, not a definition"
+    # and the whole docstring is silently dropped.
+    open_triple_quote: str | None = None
     for raw in lines[:MODULE_CHUNK_MAX_LINES]:
         line = raw.strip()
+        if open_triple_quote is not None:
+            if not line:
+                continue
+            close_at = line.find(open_triple_quote)
+            text = line[:close_at] if close_at != -1 else line
+            text = text.strip()
+            if text and not _LEGAL_NOISE.search(text):
+                collected.append(text)
+            if close_at != -1:
+                open_triple_quote = None
+            if sum(len(c) for c in collected) >= FILE_CONTEXT_MAX_CHARS:
+                break
+            continue
         if not line:
+            continue
+        if line.startswith(('"""', "'''")):
+            delim = line[:3]
+            rest = line[3:]
+            close_at = rest.find(delim)
+            if close_at == -1:
+                # Opens here with no closing delimiter on this line - the
+                # common multi-line module-docstring shape. Collect this
+                # line's own trailing text, if any, then keep consuming
+                # body lines until the matching close.
+                text = rest.strip()
+                if text and not _LEGAL_NOISE.search(text):
+                    collected.append(text)
+                open_triple_quote = delim
+            else:
+                # Single-line docstring - strip the delimiter from both
+                # ends, not just the left, or the closing """ leaks into
+                # the indexed text.
+                text = rest[:close_at].strip()
+                if text and not _LEGAL_NOISE.search(text):
+                    collected.append(text)
+            if sum(len(c) for c in collected) >= FILE_CONTEXT_MAX_CHARS:
+                break
             continue
         if line.startswith(_COMMENT_PREFIXES):
             text = line.lstrip("/#*-!;\"' ").strip()

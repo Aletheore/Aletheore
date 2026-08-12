@@ -826,6 +826,30 @@ def test_file_header_comment_survives_a_multiline_import_block():
     assert "efficient way of discarding data" in _file_header_comment(lines)
 
 
+def test_file_header_comment_extracts_a_multiline_python_module_docstring():
+    # The standard PEP 257 module-docstring shape: body lines carry no
+    # per-line comment marker of their own, so a purely marker-driven scan
+    # silently dropped the whole thing and returned "" for the most common
+    # Python file-header idiom there is.
+    lines = [
+        '"""',
+        "Handles authentication for the app.",
+        '"""',
+        "",
+        "import os",
+    ]
+    assert _file_header_comment(lines) == "Handles authentication for the app."
+
+
+def test_file_header_comment_strips_both_quote_marks_from_a_single_line_docstring():
+    # lstrip() only strips the LEFT side, so the closing """ used to leak
+    # into the indexed text.
+    lines = ['"""Session attributes."""', "", "import os"]
+    context = _file_header_comment(lines)
+    assert context == "Session attributes."
+    assert '"""' not in context
+
+
 def test_file_header_comment_drops_licence_boilerplate():
     """Every file in a repo carries the same licence header, so it adds no
     signal and dilutes the symbol it rides on."""

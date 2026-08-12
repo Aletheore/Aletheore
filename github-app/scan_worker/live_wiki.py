@@ -19,6 +19,7 @@ by the caller, but this module never imports a cache or database client.
 
 import json
 import logging
+import re
 import statistics
 from typing import Callable
 
@@ -484,7 +485,12 @@ def _strip_unverified_lines(detail: str, unverified: list[dict]) -> str | None:
     if not unverified:
         return detail
     bad = {f"{c['file']}:{c['line']}" for c in unverified}
-    kept = [ln for ln in detail.splitlines() if not any(b in ln for b in bad)]
+    # A plain substring test would treat "foo.py:1" as present inside
+    # "foo.py:10" or "foo.py:100", silently stripping a different, valid
+    # citation's line too. The (?!\d) boundary stops a shorter bad line
+    # number from matching as a prefix of a longer one.
+    bad_patterns = [re.compile(re.escape(b) + r"(?!\d)") for b in bad]
+    kept = [ln for ln in detail.splitlines() if not any(p.search(ln) for p in bad_patterns)]
     if not kept:
         return None
     original = [ln for ln in detail.splitlines() if ln.strip()]
@@ -609,10 +615,12 @@ def generate_file_pages(
 def attach_file_pages(records: list[dict], pages: dict[str, str]) -> list[dict]:
     """Hangs each file page off the matching entry in the subsystem records.
 
-    Mutates nothing the caller owns - returns the same records with a `detail`
-    key added to file entries that have a page. Files without one are left
-    exactly as they were, so a partial generation degrades to today's output
-    rather than to an empty wiki.
+    Mutates each file entry's dict IN PLACE, adding a `detail` key to the
+    ones that have a page - both call sites (via _attach_wiki_file_pages in
+    jobs.py) discard the return value and rely on this. Files without a page
+    are left exactly as they were, so a partial generation degrades to
+    today's output rather than to an empty wiki. Returns `records` (same
+    objects, not copies) for callers that do want the reference back.
     """
     for record in records:
         for entry in record.get("files", []) or []:

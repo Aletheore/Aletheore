@@ -133,6 +133,32 @@ def test_build_module_graph_csharp_unmapped_namespace_does_not_resolve(tmp_path)
     assert dependency_graph["edges"] == []
 
 
+def test_build_module_graph_csharp_flat_project_does_not_cross_match_sibling_namespace(tmp_path):
+    # Regression test: the flat-project fallback in _csharp_prefix_and_root_for
+    # (triggered when no directory mirrors any suffix of the namespace, so the
+    # whole namespace becomes the implicit prefix) used to return that prefix
+    # WITHOUT a trailing dot, breaking the "." boundary every other return path
+    # in that function enforces. All three files below sit flat at repo root
+    # with distinct namespaces and no mirroring folders, so each falls into the
+    # fallback. Before the fix, "App.Data" (bare) trivially self-matched via
+    # plain startswith() with an empty remainder, which resolved to *every*
+    # .cs file in the shared root directory - including DataAccess.cs itself
+    # and the unrelated Other.cs.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Data.cs").write_text("namespace App.Data\n{\n    public class Repository {}\n}\n")
+    (repo / "Other.cs").write_text("namespace App.Other\n{\n    public class Unrelated {}\n}\n")
+    (repo / "DataAccess.cs").write_text(
+        "using App.Data;\n\nnamespace App.DataAccess\n{\n    public class Layer {}\n}\n"
+    )
+
+    _, dependency_graph, _ = build_module_graph(repo)
+    edges = {tuple(edge) for edge in dependency_graph["edges"]}
+
+    assert ("DataAccess.cs", "DataAccess.cs") not in edges
+    assert ("DataAccess.cs", "Other.cs") not in edges
+
+
 def test_build_module_graph_dotnet_obj_directory_is_excluded(tmp_path):
     repo = tmp_path / "repo"
     (repo / "obj" / "Debug").mkdir(parents=True)

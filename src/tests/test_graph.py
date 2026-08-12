@@ -723,6 +723,25 @@ def test_build_module_graph_constants_extracted_for_every_language(tmp_path):
         assert expected in found, f"{filename}: expected {expected}, got {found}"
 
 
+def test_build_module_graph_has_modifier_does_not_false_positive_on_substring(tmp_path):
+    """has_modifier used to check `w in head` (plain substring), so a
+    declaration whose identifier merely contained a modifier word - e.g.
+    "construct_id" containing "const" - was misclassified as a constant.
+    An ordinary, non-const/non-static declaration with such a name must not
+    be extracted."""
+    cases = {
+        "a.c": ("c", "int construct_id = 5;\n"),
+        "a.java": ("java", "package a;\npublic class A { Object constants_registry = null; }\n"),
+    }
+    for filename, (_lang, body) in cases.items():
+        repo = tmp_path / filename.replace(".", "_")
+        repo.mkdir()
+        (repo / filename).write_text(body)
+        modules, _graph, _unparseable = build_module_graph(repo)
+        found = symbol_names(modules[0]["symbols"]["constants"])
+        assert found == [], f"{filename}: expected no constants, got {found}"
+
+
 def test_build_module_graph_constants_key_always_present(tmp_path):
     """Consumers read symbols["constants"] unconditionally, so it must exist
     even for a language whose extractor records none."""

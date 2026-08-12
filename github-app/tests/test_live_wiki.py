@@ -652,6 +652,18 @@ def test_strip_unverified_lines_keeps_everything_when_nothing_failed():
     assert _strip_unverified_lines("## A\nline\n", []) == "## A\nline\n"
 
 
+def test_strip_unverified_lines_does_not_strip_a_different_valid_line_number():
+    # A plain substring test would treat "app.py:1" as present inside
+    # "app.py:10" or "app.py:100", wrongly stripping those verified lines
+    # too - the bad citation's line number must not match as a prefix of a
+    # different, longer one.
+    detail = "Bad at app.py:1.\nGood at app.py:10.\nAlso good at app.py:100.\n"
+    result = _strip_unverified_lines(detail, [{"file": "app.py", "line": 1}])
+    assert "app.py:1." not in result
+    assert "app.py:10." in result
+    assert "app.py:100." in result
+
+
 def test_subsystem_files_survive_a_truncated_model_response():
     """The file list is structural. When the prompt grows large enough that the
     model stops finishing its output, the wiki must not silently lose files -

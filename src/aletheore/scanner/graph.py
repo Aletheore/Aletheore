@@ -450,7 +450,11 @@ def _extract_module_constants(node: Node, source: bytes, language: str) -> list[
     def has_modifier(n: Node, *words: str) -> bool:
         text = source[n.start_byte:min(n.end_byte, n.start_byte + 400)].decode(errors="ignore")
         head = text.split("=")[0]
-        return all(w in head for w in words)
+        # Word-boundary match, not substring: plain `w in head` misclassifies
+        # any declaration whose identifier merely contains a modifier word,
+        # e.g. `int construct_id = 5;` or `Handler constants_registry = ...;`
+        # both false-positive on "const".
+        return all(re.search(rf"\b{re.escape(w)}\b", head) for w in words)
 
     stack = [node]
     while stack:
@@ -1748,7 +1752,16 @@ def _csharp_prefix_and_root_for(file_path: Path, namespace: str | None) -> tuple
     # Treat the whole namespace as the implicit prefix, rooted at the file's own
     # directory: `using App.Lib;` then matches this file's namespace exactly and
     # fans out to that directory, the same granularity a using operates at.
-    return namespace, file_path.parent
+    #
+    # Trailing "." matters here, not just cosmetically: without it, prefix
+    # matching in _resolve_csharp_using is a bare string startswith, so a
+    # namespace "App.Data" would also match an unrelated sibling namespace
+    # "App.DataAccess" (the same "." boundary every other return path in
+    # this function already enforces). This does mean a file can no longer
+    # self-match its own exact namespace via `using` with no further
+    # nesting - consistent with how a directory-mirrored prefix's own bare
+    # parent segment already never self-matches either.
+    return namespace + ".", file_path.parent
 
 
 def _resolve_csharp_using(prefix_map: dict[str, Path], dotted: str) -> list[Path]:
