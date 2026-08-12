@@ -669,6 +669,28 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
                         is_public=not _is_nested_in_function(n),
                     ))
+            elif n.type in ("interface_declaration", "type_alias_declaration"):
+                # In TypeScript these ARE the public API surface, especially
+                # for a type-centric library: colinhacks/zod has 972
+                # `export type`/`export interface` declarations in its core
+                # src, and 39 files with zero other symbols contained 210 of
+                # them - entirely invisible to everything downstream before
+                # this. Folded into `classes` rather than a new symbol group,
+                # the same way Java's and C#'s own interface_declaration
+                # already is - a type declaration is structurally the same
+                # kind of thing as a class here. No special-casing needed for
+                # a namespace/module body (`export namespace Foo { ... }`):
+                # this walk is unconditional over every child, so a
+                # type_alias_declaration nested inside one is visited the
+                # same as a top-level one.
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    raw_doc = _leading_block_comment(n, source)
+                    classes.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        is_public=not _is_nested_in_function(n),
+                    ))
             elif n.type in ("variable_declarator", "assignment_expression"):
                 # Functions assigned to a name rather than declared. Counting only
                 # `function f(){}` and `class C{}` left most of a real CommonJS

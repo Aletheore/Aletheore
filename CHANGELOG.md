@@ -3,6 +3,30 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.2 — 2026-08-12
+
+- **TypeScript type and interface declarations were never extracted.** `_extract_javascript`
+  handled function/class declarations and assigned function expressions, but not
+  `type_alias_declaration` or `interface_declaration` - in TypeScript those ARE the public API
+  surface, especially for a type-centric library. `colinhacks/zod` has 972 `export type`/
+  `export interface` declarations in its core src; 39 files with zero other symbols contained
+  210 of them, entirely invisible to the index (`enumUtil.ts`, for example, is entirely type
+  declarations inside a namespace). Now extracted into `classes`, the same way Java's and C#'s
+  own `interface_declaration` already was - including declarations nested inside a
+  `namespace`/`module` body, which zod uses.
+- **Declaration-only files (interfaces, `.d.ts`, headers with only prototypes) were crowding
+  out implementations in retrieval.** A pure-contract file has rich doc-comments describing
+  behaviour with no implementation to dilute them, which makes it unusually attractive to an
+  embedder for "how does X work" - measured on `slimphp/Slim`: interfaces were 17 of 72 PHP
+  files (24%) and took 18 of 75 top-5 slots (24%), displacing the correct answer on 4 of 6
+  misses. Fixed as a demotion, not an exclusion - unlike a test path, an interface is
+  legitimately the answer to "where is the contract for X defined?" - via a rank penalty in
+  the retriever's reciprocal-rank fusion, detected by path convention (`Interfaces/`,
+  `Contracts/`) or per-language content (PHP `interface`, Java/C# `interface`, a Rust `trait`
+  with no default bodies, a C/C++ header with only prototypes, a TypeScript file with type/
+  interface declarations and no implementation). These two had to ship together: extracting
+  TypeScript types without demoting them would have made the crowding-out problem worse.
+
 ## 0.8.1 — 2026-08-12
 
 - **Ruby constants were never extracted.** The 0.8.0 module-constants extraction required
