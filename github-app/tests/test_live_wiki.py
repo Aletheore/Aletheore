@@ -16,6 +16,7 @@ from scan_worker.live_wiki import (
     build_file_page_record,
     generate_file_pages,
     select_file_page_paths,
+    _drop_test_only_briefs,
 )
 
 
@@ -582,3 +583,31 @@ def test_select_file_page_paths_floor_is_not_anchored_to_an_outlier():
     evidence = {"repository": {"modules": modules}}
     assert len(select_file_page_paths(evidence, max_files=100)) > 1
     assert len(select_file_page_paths(evidence, max_files=3)) == 3
+
+
+def _brief(cid, *paths):
+    return {"cluster_id": cid, "files": [{"path": p, "key_symbols": []} for p in paths],
+            "fallback_name": "x"}
+
+
+def test_generate_subsystems_skips_clusters_that_are_only_tests():
+    """Community detection groups by import topology and readily produces
+    clusters made entirely of test files - 7 of Flask's 12, 150 of serde's 208.
+    Each cost a naming call and a writing call for a page nobody opens."""
+    kept = _drop_test_only_briefs([
+        _brief(0, "src/app.py"),
+        _brief(1, "tests/test_app.py", "tests/conftest.py"),
+        _brief(2, "examples/demo/main.py"),
+    ])
+    assert [b["cluster_id"] for b in kept] == [0]
+
+
+def test_generate_subsystems_keeps_tests_when_the_repo_is_all_tests():
+    """A test-suite repository should still get a wiki rather than an empty one."""
+    briefs = [_brief(0, "tests/test_a.py"), _brief(1, "tests/test_b.py")]
+    assert _drop_test_only_briefs(briefs) == briefs
+
+
+def test_generate_subsystems_keeps_a_mixed_cluster():
+    briefs = [_brief(0, "src/app.py", "tests/test_app.py")]
+    assert _drop_test_only_briefs(briefs) == briefs

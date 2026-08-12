@@ -25,7 +25,7 @@ from typing import Callable
 from aletheore.citation_verifier import verify_citations
 from aletheore.evidence_packet import build_evidence_packet
 from aletheore.wiki_diagrams import build_overview_diagram, build_subsystem_diagram
-from aletheore.wiki_mapping import build_cluster_briefs, rank_files_by_importance
+from aletheore.wiki_mapping import build_cluster_briefs, is_demoted_path, rank_files_by_importance
 
 FLASH_MODEL = "deepseek-v4-flash"
 UPDATE_MODEL = "deepseek-v4-flash"
@@ -362,6 +362,24 @@ def affected_cluster_ids(evidence: dict, changed_files: list[str]) -> set[int]:
     }
 
 
+def _drop_test_only_briefs(briefs: list[dict]) -> list[dict]:
+    """Removes clusters whose every file is a test, example or doc.
+
+    Community detection groups by import topology, which readily produces
+    clusters made entirely of test files - 7 of Flask's 12 and 150 of serde's
+    208. Each one costs a naming call and a writing call to produce a page
+    nobody opens, so this is the cost problem and the noise problem at once.
+
+    Kept only when the repo is *all* tests: a test-suite repository should
+    still get a wiki rather than an empty one, and the same "demote, do not
+    delete" principle applies here as in the importance ranking.
+    """
+    keep = [b for b in briefs if not all(is_demoted_path(f["path"]) for f in b["files"] or [{"path": ""}])]
+    if not keep:
+        return briefs
+    return keep
+
+
 def generate_subsystems(
     evidence: dict,
     naming_adapter,
@@ -380,6 +398,7 @@ def generate_subsystems(
     briefs = build_cluster_briefs(evidence)
     if cluster_ids is not None:
         briefs = [b for b in briefs if b["cluster_id"] in cluster_ids]
+    briefs = _drop_test_only_briefs(briefs)
     if not briefs:
         return []
 

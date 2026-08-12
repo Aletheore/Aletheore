@@ -75,7 +75,12 @@ def _fallback_name(file_paths: list[str]) -> str:
     return common or file_paths[0]
 
 
-def _is_demoted(path: str) -> bool:
+def is_demoted_path(path: str) -> bool:
+    """Whether a path is test, example or documentation code.
+
+    Public because the wiki generator needs the same judgement to decide which
+    clusters are worth an LLM call, and both must agree on what "demoted" means.
+    """
     normalized = path.replace(os.sep, "/")
     if os.path.basename(normalized) in _DEMOTED_BASENAMES:
         return True
@@ -161,7 +166,7 @@ def rank_files_by_importance(evidence: dict) -> list[dict]:
             + (symbols / max_symbols if max_symbols else 0.0) * 12.0
             + (_PUBLIC_API_WEIGHT if is_public_api else 0.0)
         )
-        demoted = _is_demoted(path)
+        demoted = is_demoted_path(path)
         if demoted:
             score *= _DEMOTION_FACTOR
         ranked.append(
