@@ -1,11 +1,11 @@
 import hashlib
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app_server.db import create_api_token, set_installation_plan, upsert_installation
-from app_server.embeddings_api import EMBEDDING_MODEL, MAX_CHARS_PER_TEXT
+from app_server.embeddings_api import EMBEDDING_MODEL, MAX_CHARS_PER_TEXT, get_openai_client
 from app_server.llm_cost import cost_for_usage
 from app_server.main import app
 
@@ -17,6 +17,13 @@ def _fake_openai(prompt_tokens: int = 100, dimensions: int = 1536, count: int = 
     response.usage = MagicMock(prompt_tokens=prompt_tokens)
     client.embeddings.create.return_value = response
     return client
+
+
+@pytest.fixture(autouse=True)
+def _clear_openai_client_cache():
+    get_openai_client.cache_clear()
+    yield
+    get_openai_client.cache_clear()
 
 
 async def _installation_with_token(pool, installation_id: int, plan: str, token: str) -> None:
@@ -82,6 +89,39 @@ async def test_paid_plan_gets_vectors_and_is_charged(pool):
 
     spent = await pool.fetchval("SELECT total_cost_usd FROM llm_spend WHERE installation_id = 9002")
     assert float(spent) == pytest.approx(cost_for_usage(EMBEDDING_MODEL, 5000, 0))
+
+
+@pytest.mark.asyncio
+async def test_embedding_route_uses_cached_openai_client_factory(pool):
+    await _installation_with_token(pool, 9013, "air", "cached-token")
+    client = _fake_openai(prompt_tokens=250)
+
+    with patch("app_server.embeddings_api.OpenAI", return_value=client) as openai_class, \
+         patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}):
+        first = await _post(pool, "cached-token", ["a"])
+        second = await _post(pool, "cached-token", ["b"])
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    openai_class.assert_called_once_with(api_key="sk-test")
+
+
+@pytest.mark.asyncio
+async def test_embedding_provider_call_is_offloaded_to_thread(pool):
+    await _installation_with_token(pool, 9012, "air", "thread-token")
+    client = _fake_openai(prompt_tokens=250, count=2)
+    offloaded = AsyncMock(return_value=client.embeddings.create.return_value)
+
+    with patch("app_server.embeddings_api.OpenAI", return_value=client), \
+         patch("app_server.embeddings_api.asyncio.to_thread", offloaded), \
+         patch.dict("os.environ", {"OPENAI_API_KEY": "sk-test"}):
+        response = await _post(pool, "thread-token", ["a", "b"])
+
+    assert response.status_code == 200
+    offloaded.assert_awaited_once()
+    call = offloaded.await_args
+    assert call.args == (client.embeddings.create,)
+    assert call.kwargs == {"model": EMBEDDING_MODEL, "input": ["a", "b"]}
 
 
 @pytest.mark.asyncio

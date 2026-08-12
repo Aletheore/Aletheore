@@ -17,7 +17,9 @@ async def queue_stats(request: Request):
         raise HTTPException(status_code=404, detail="not found")
 
     auth_header = request.headers.get("Authorization", "")
-    if not hmac.compare_digest(auth_header, f"Bearer {settings.internal_metrics_token}"):
+    if not hmac.compare_digest(
+        auth_header.encode(), f"Bearer {settings.internal_metrics_token}".encode()
+    ):
         raise HTTPException(status_code=401, detail="missing or invalid token")
 
     redis_conn = get_redis_client()

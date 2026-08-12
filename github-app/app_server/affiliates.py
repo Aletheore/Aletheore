@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import asyncpg
 
 
@@ -53,7 +55,7 @@ async def record_commission(
     affiliate_id: int,
     installation_id: int,
     paddle_transaction_id: str,
-    amount_usd: float,
+    amount_usd: Decimal,
     transaction_date,
 ) -> None:
     """paddle_transaction_id is UNIQUE, so a retried transaction.completed

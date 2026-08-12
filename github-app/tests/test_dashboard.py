@@ -12,6 +12,7 @@ from app_server.db import (
     set_public_status_enabled,
     upsert_installation,
 )
+from app_server.dashboard import _fetch_uninitialized_repos_sync
 from app_server.main import app
 
 
@@ -59,6 +60,31 @@ async def _seed_wiki_build_status(pool, installation_id, repo_full_name, status,
         status,
         error_message,
     )
+
+
+def test_fetch_uninitialized_repos_collects_paginated_results(monkeypatch):
+    repos = [{"full_name": f"some-user/repo-{i}"} for i in range(101)]
+    seen_params = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_params.append(dict(request.url.params))
+        page = int(request.url.params["page"])
+        assert request.url.params["per_page"] == "100"
+        start = (page - 1) * 100
+        return httpx.Response(
+            200,
+            json={"total_count": len(repos), "repositories": repos[start:start + 100]},
+            request=request,
+        )
+
+    monkeypatch.setattr("app_server.dashboard.get_installation_token", lambda *a, **k: "tok")
+    monkeypatch.setattr(
+        "app_server.dashboard._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    assert _fetch_uninitialized_repos_sync(801, "jwt") == repos
+    assert seen_params == [{"per_page": "100", "page": "1"}, {"per_page": "100", "page": "2"}]
 
 
 async def _seed_docs_symbol(

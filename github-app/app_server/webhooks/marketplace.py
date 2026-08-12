@@ -1,6 +1,11 @@
 import logging
 
-from app_server.db import add_installation_member, get_installation_by_account_login, set_installation_plan
+from app_server.db import (
+    add_installation_member,
+    get_installation_by_account_login,
+    set_extra_seats,
+    set_installation_plan,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,3 +91,4 @@ async def handle_marketplace_event(payload: dict, pool, redis_url: str, queue=No
             )
     elif action == "cancelled":
         await set_installation_plan(pool, installation_id, "free")
+        await set_extra_seats(pool, installation_id, 0)

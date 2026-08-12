@@ -388,7 +388,11 @@ async def callback(code: str, request: Request, state: str | None = None, instal
         return RedirectResponse(url=login_url, status_code=307)
 
     expected_state = unsign_oauth_state(signed_state, settings.session_secret)
-    if not expected_state or not state or not hmac.compare_digest(expected_state, state):
+    if (
+        not expected_state
+        or not state
+        or not hmac.compare_digest(expected_state.encode(), state.encode())
+    ):
         raise HTTPException(status_code=400, detail="invalid oauth state")
 
     access_token, refresh_token, user, email = await asyncio.to_thread(

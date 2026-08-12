@@ -1,5 +1,6 @@
 import httpx
 import jwt
+import time
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -12,11 +13,13 @@ TEST_PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048
 ).decode()
 
 
-def test_generated_jwt_has_correct_claims():
+def test_generated_jwt_has_correct_claims(monkeypatch):
+    monkeypatch.setattr("app_server.github_auth.time.time", lambda: 1_700_000_000)
     token = generate_app_jwt("12345", TEST_PRIVATE_KEY)
     decoded = jwt.decode(token, options={"verify_signature": False})
     assert decoded["iss"] == "12345"
-    assert decoded["exp"] - decoded["iat"] <= 660
+    assert decoded["iat"] == 1_699_999_940
+    assert decoded["exp"] == 1_700_000_540
 
 
 def test_generated_jwt_is_verifiable_with_public_key():

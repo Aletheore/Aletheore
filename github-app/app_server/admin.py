@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from app_server.affiliates import create_affiliate, list_affiliates_with_totals, mark_commissions_paid
 from app_server.auth import encrypt_access_token, get_current_session, refresh_github_access_token
 from app_server.config import get_settings
+from app_server.github_pagination import fetch_paginated_github_collection
 from app_server.http_client import get_github_api_client
 from app_server.email_client import send_transactional_email
 from app_server.email_templates import deletion_otp_email
@@ -25,7 +26,8 @@ from app_server.db import (
     INCLUDED_HEALTH_CHECK_TARGETS,
     INCLUDED_SEATS,
     add_health_check_target,
-    add_installation_member,
+    add_initial_installation_member_if_empty,
+    add_installation_member_within_seat_limit,
     consume_deletion_otp_code,
     count_active_tokens,
     count_health_check_targets,
@@ -184,15 +186,16 @@ async def _repo_installation_id(pool, org: str, repo: str) -> int:
 
 
 def _fetch_administered_installation_ids(github_token: str) -> set[int]:
-    response = _github_http_client().get(
+    installations = fetch_paginated_github_collection(
+        _github_http_client(),
         "/user/installations",
         headers={
             "Authorization": f"Bearer {github_token}",
             "Accept": "application/vnd.github+json",
         },
+        collection_key="installations",
     )
-    response.raise_for_status()
-    return {item["id"] for item in response.json().get("installations", [])}
+    return {item["id"] for item in installations}
 
 
 _ADMINISTERED_INSTALLATIONS_CACHE_TTL_SECONDS = 30
@@ -345,15 +348,16 @@ async def _require_seat_if_paid(pool, installation: dict, github_login: str) -> 
     """
     if installation["plan"] == "free":
         return
-    if await count_installation_members(pool, installation["installation_id"]) == 0:
-        await add_installation_member(pool, installation["installation_id"], github_login, github_login)
+    installation_id = installation["installation_id"]
+    if await is_installation_member(pool, installation_id, github_login):
         return
-    if not await is_installation_member(pool, installation["installation_id"], github_login):
-        raise HTTPException(
-            status_code=403,
-            detail="you administer this installation on GitHub, but haven't been added as a seat yet - "
-            "ask a teammate to add you in Settings",
-        )
+    if await add_initial_installation_member_if_empty(pool, installation_id, github_login, github_login):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="you administer this installation on GitHub, but haven't been added as a seat yet - "
+        "ask a teammate to add you in Settings",
+    )
 
 
 async def _require_authorized_installation(request: Request, org: str, repo: str) -> tuple[dict, dict]:
@@ -442,16 +446,18 @@ async def add_member(org: str, repo: str, request: Request, body: AddMemberReque
 
     included_seats = INCLUDED_SEATS.get(installation["plan"], DEFAULT_SEAT_LIMIT)
     seat_limit = included_seats + await get_extra_seats(pool, installation_id)
-    if not await is_installation_member(pool, installation_id, body.github_login):
-        if await count_installation_members(pool, installation_id) >= seat_limit:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"seat limit reached ({seat_limit}) - buy an extra seat in Settings "
-                    f"(${EXTRA_SEAT_PRICE_USD}/mo) or remove someone first."
-                ),
-            )
-        await add_installation_member(pool, installation_id, body.github_login, session["github_login"])
+    allowed, inserted = await add_installation_member_within_seat_limit(
+        pool, installation_id, body.github_login, session["github_login"], seat_limit
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"seat limit reached ({seat_limit}) - buy an extra seat in Settings "
+                f"(${EXTRA_SEAT_PRICE_USD}/mo) or remove someone first."
+            ),
+        )
+    if inserted:
         await record_admin_action(
             pool, installation_id, session["github_login"], "member_added",
             {"github_login": body.github_login},
@@ -1092,8 +1098,9 @@ async def create_cli_token(request: Request, body: CreateCliTokenRequest):
 
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    await create_api_token(pool, installation_id, token_hash, body.label, installation["account_login"])
-    token_id = (await list_api_tokens(pool, installation_id))[0]["id"]
+    token_id = await create_api_token(
+        pool, installation_id, token_hash, body.label, installation["account_login"]
+    )
     return {"token": raw_token, "id": token_id, "label": body.label}
 
 
@@ -1113,7 +1120,9 @@ def _require_affiliate_admin_token(request: Request) -> None:
     if not settings.affiliate_admin_token:
         raise HTTPException(status_code=404, detail="not found")
     auth_header = request.headers.get("Authorization", "")
-    if not hmac.compare_digest(auth_header, f"Bearer {settings.affiliate_admin_token}"):
+    if not hmac.compare_digest(
+        auth_header.encode(), f"Bearer {settings.affiliate_admin_token}".encode()
+    ):
         raise HTTPException(status_code=401, detail="missing or invalid token")
 
 

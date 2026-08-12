@@ -1,9 +1,10 @@
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 from app_server.db import get_installation, upsert_installation
-from app_server.webhooks.installation import handle_installation_event
+from app_server.webhooks.installation import _fetch_installation_repos_sync, handle_installation_event
 
 
 @pytest.mark.asyncio
@@ -69,6 +70,48 @@ async def test_installation_created_enqueues_initial_scan_for_every_repo(pool, m
     for call in fake_queue.enqueue.call_args_list:
         assert call.args[0] == "scan_worker.jobs.run_initial_scan_job"
         assert call.kwargs["installation_id"] == 557
+
+
+def test_fetch_installation_repos_uses_pooled_github_client(monkeypatch):
+    client = MagicMock()
+    response = MagicMock()
+    response.json.return_value = {"repositories": [{"full_name": "octocat/one"}]}
+    client.get.return_value = response
+    monkeypatch.setattr("app_server.webhooks.installation.get_installation_token", lambda *a, **k: "tok")
+    factory = MagicMock(return_value=client)
+    monkeypatch.setattr("app_server.webhooks.installation.get_github_api_client", factory)
+
+    repos = _fetch_installation_repos_sync(123, "jwt")
+
+    assert repos == ["octocat/one"]
+    factory.assert_called_once_with()
+    client.get.assert_called_once()
+    assert client.get.call_args.args == ("/installation/repositories",)
+
+
+def test_fetch_installation_repos_collects_paginated_results(monkeypatch):
+    repos = [{"full_name": f"octocat/repo-{i}"} for i in range(101)]
+    seen_params = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_params.append(dict(request.url.params))
+        page = int(request.url.params["page"])
+        assert request.url.params["per_page"] == "100"
+        start = (page - 1) * 100
+        return httpx.Response(
+            200,
+            json={"total_count": len(repos), "repositories": repos[start:start + 100]},
+            request=request,
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    monkeypatch.setattr("app_server.webhooks.installation.get_installation_token", lambda *a, **k: "tok")
+    monkeypatch.setattr("app_server.webhooks.installation.get_github_api_client", lambda: client)
+
+    fetched = _fetch_installation_repos_sync(123, "jwt")
+
+    assert fetched == [repo["full_name"] for repo in repos]
+    assert seen_params == [{"per_page": "100", "page": "1"}, {"per_page": "100", "page": "2"}]
 
 
 @pytest.mark.asyncio
