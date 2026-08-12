@@ -9,7 +9,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
   `_LEGAL_NOISE` caught licence/copyright lines but not the project banner line that precedes
   them (no legal keyword of its own), and `_file_header_comment` never stripped a trailing
   comment terminator or a leftover bare doc tag. `slimphp/Slim`'s files all open with a banner
-  whose "Slim Framework (https://slimframework.com)" line survived the filter and whose
+  whose `"Slim Framework (https://slimframework.com)"` line survived the filter and whose
   "@api */" line leaked both the tag and the comment closer. Measured: 372 of 455 chunks
   carried a `[file]` context, but only 17 distinct strings across the whole repo - 121 chunks
   shared the identical string, actively diluting every symbol's own body instead of
