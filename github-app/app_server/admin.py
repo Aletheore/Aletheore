@@ -41,6 +41,7 @@ from app_server.db import (
     get_latest_evidence,
     get_llm_spend_this_month,
     get_max_tokens,
+    get_public_status_enabled,
     is_installation_member,
     list_api_tokens,
     list_health_check_targets,
@@ -410,6 +411,7 @@ async def admin_page(org: str, repo: str, request: Request):
     llm_spend_month_to_date = await get_llm_spend_this_month(pool, installation_id)
     flash_reviews_month_to_date = await get_flash_review_count_this_month(pool, installation_id)
     llm_spend_cap = monthly_cap_for_installation(base_cap_for_plan(installation["plan"]), extra_seats)
+    public_status_enabled = await get_public_status_enabled(pool, installation_id, repo_full_name)
     return {
         "installation": installation,
         "tokens": tokens,
@@ -419,6 +421,7 @@ async def admin_page(org: str, repo: str, request: Request):
         "health_targets": health_targets,
         "health_target_limit": health_target_limit,
         "public_status_url": f"/v1/health/{org}/{repo}",
+        "public_status_enabled": public_status_enabled,
         "branch_protection_disclosure": BRANCH_PROTECTION_DISCLOSURE,
         # llm_spend and flash_review_monthly_count are already tracked
         # internally for the hard spend cap (scan_worker/jobs.py) - this is
@@ -828,7 +831,7 @@ async def set_public_status_route(org: str, repo: str, request: Request, body: S
     only way to turn it on."""
     installation = await _require_admin_installation(request, org, repo)
     pool = request.app.state.db_pool
-    await set_public_status_enabled(pool, installation["installation_id"], body.enabled)
+    await set_public_status_enabled(pool, installation["installation_id"], f"{org}/{repo}", body.enabled)
     session = await get_current_session(request)
     await record_admin_action(
         pool, installation["installation_id"], session["github_login"], "public_status_setting_changed",

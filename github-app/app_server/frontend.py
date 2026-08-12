@@ -1110,7 +1110,7 @@ async function loadTargets() {{
 
   const origin = window.location.origin;
   const statusUrl = origin + data.public_status_url;
-  const publicStatusEnabled = data.installation.public_status_enabled === true;
+  const publicStatusEnabled = data.public_status_enabled === true;
   statusApiBody.innerHTML =
     '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;">' +
     '<input type="checkbox" id="public-status-toggle"' +

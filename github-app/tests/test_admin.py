@@ -485,7 +485,19 @@ async def test_set_public_status_route_toggles_the_flag(pool, monkeypatch):
         dashboard_response = await client.get("/admin/octocat/hello-world")
     assert on_response.status_code == 200
     assert on_response.json()["public_status_enabled"] is True
-    assert dashboard_response.json()["installation"]["public_status_enabled"] is True
+    assert dashboard_response.json()["public_status_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_set_public_status_route_does_not_leak_to_other_repos(pool, monkeypatch):
+    # F21: this route is repo-scoped in its URL and docstring, but used to
+    # write an account-wide column - enabling it on one repo silently
+    # exposed every other repo in the account, including private ones.
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        await client.put("/admin/octocat/hello-world/public-status", json={"enabled": True})
+        other_repo_settings = await client.get("/admin/octocat/internal-billing")
+    assert other_repo_settings.json()["public_status_enabled"] is False
 
 
 @pytest.mark.asyncio
