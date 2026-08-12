@@ -8,7 +8,10 @@ from app_server.auth import (
     encrypt_access_token,
     get_current_session,
     refresh_github_access_token,
+    sign_checkout_installation_id,
+    sign_oauth_state,
     sign_session_id,
+    unsign_checkout_installation_id,
     unsign_session_id,
     _derive_key,
     _fernet_key,
@@ -678,3 +681,39 @@ async def test_login_fails_open_when_redis_is_unreachable(pool, monkeypatch):
         response = await client.get("/auth/login", follow_redirects=False)
 
     assert response.status_code == 307
+
+
+def test_checkout_installation_id_round_trips():
+    signed = sign_checkout_installation_id(12345, "a-secret")
+    assert unsign_checkout_installation_id(signed, "a-secret") == 12345
+
+
+def test_checkout_installation_id_rejects_tampering():
+    signed = sign_checkout_installation_id(12345, "a-secret")
+    # Flipped mid-string, not the trailing character: base64's own padding
+    # bits can leave the last character of a token free to change without
+    # altering the decoded bytes at all, which would make this assert
+    # nothing.
+    middle = len(signed) // 2
+    flipped = "x" if signed[middle] != "x" else "y"
+    tampered = signed[:middle] + flipped + signed[middle + 1 :]
+    assert unsign_checkout_installation_id(tampered, "a-secret") is None
+
+
+def test_checkout_installation_id_rejects_the_wrong_secret():
+    signed = sign_checkout_installation_id(12345, "a-secret")
+    assert unsign_checkout_installation_id(signed, "a-different-secret") is None
+
+
+def test_checkout_installation_id_rejects_garbage():
+    assert unsign_checkout_installation_id("not-a-real-token", "a-secret") is None
+
+
+def test_checkout_installation_id_and_oauth_state_do_not_cross_purposes():
+    """Both derive from the same secret via _signing_secret, but a distinct
+    salt per purpose means a token minted for one can't be replayed against
+    the other - an oauth_state token must not decode as an installation id,
+    even though it's a validly-signed itsdangerous payload from this same
+    server."""
+    oauth_token = sign_oauth_state("some-state-value", "a-secret")
+    assert unsign_checkout_installation_id(oauth_token, "a-secret") is None

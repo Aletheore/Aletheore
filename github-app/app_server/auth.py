@@ -35,6 +35,12 @@ OAUTH_STATE_COOKIE_NAME = "oauth_state"
 OAUTH_STATE_TTL = timedelta(minutes=10)
 NEXT_COOKIE_NAME = "aletheore_oauth_next"
 
+# How long a signed checkout token is good for - see sign_checkout_installation_id.
+# Long enough to sit on the /subscribe page and complete a Paddle Checkout
+# overlay; short enough that a leaked token (a shared screenshot, a proxy
+# log) isn't a standing bearer credential for someone else's installation.
+CHECKOUT_TOKEN_TTL = timedelta(minutes=30)
+
 # GitHub's own OAuth flow already gates against credential brute-forcing
 # (there's no password here to guess), but neither /auth/login nor
 # /auth/callback had any rate limiting at all - the latter makes two real
@@ -228,6 +234,37 @@ def unsign_oauth_state(signed: str, secret: str) -> str | None:
             max_age=int(OAUTH_STATE_TTL.total_seconds()),
         )
     except BadSignature:
+        return None
+
+
+def sign_checkout_installation_id(installation_id: int, secret: str) -> str:
+    """Binds a Paddle checkout's custom_data to one installation without
+    trusting the browser to name it.
+
+    The subscribe page renders one token per installation the current
+    session was already verified to administer
+    (_administered_installation_ids_for_session_or_401); the raw integer
+    never reaches the client. Paddle's webhook only ever proves "Paddle
+    sent this event", never "the payer was authorized to name this
+    installation" - a plain custom_data.installation_id lets anyone open
+    Paddle.Checkout.open() from the browser console with any id and have
+    the webhook act on it unconditionally. A distinct salt from
+    sign_oauth_state's, so a token minted for one purpose can't be replayed
+    against the other even though both derive from the same SESSION_SECRET.
+    """
+    return URLSafeTimedSerializer(_signing_secret(secret), salt="checkout-installation-id").dumps(
+        str(installation_id)
+    )
+
+
+def unsign_checkout_installation_id(signed: str, secret: str) -> int | None:
+    try:
+        value = URLSafeTimedSerializer(_signing_secret(secret), salt="checkout-installation-id").loads(
+            signed,
+            max_age=int(CHECKOUT_TOKEN_TTL.total_seconds()),
+        )
+        return int(value)
+    except (BadSignature, ValueError, TypeError):
         return None
 
 

@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app_server.admin import _administered_installation_ids_for_session_or_401
-from app_server.auth import SESSION_COOKIE_NAME, get_current_session
+from app_server.auth import SESSION_COOKIE_NAME, get_current_session, sign_checkout_installation_id
 from app_server.config import get_settings
 from app_server.db import list_installations_for_ids
 from app_server.github_install import github_app_install_url
@@ -2215,11 +2215,28 @@ def _subscribe_install_prompt_page(plan: str, next_path: str) -> str:
 
 
 def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]) -> str:
+    settings = get_settings()
+    # Signed here, not the raw installation_id: the browser fully controls
+    # what Paddle.Checkout.open() actually sends (devtools can call it
+    # directly with any custom_data), and the webhook has no other way to
+    # know the payer was authorized to name this installation - see
+    # sign_checkout_installation_id. Minted once per installation this
+    # session was already verified to administer
+    # (_administered_installation_ids_for_session_or_401, in the caller),
+    # so a token can only ever exist for an installation this user
+    # legitimately administers.
+    tokens = {
+        installation["installation_id"]: sign_checkout_installation_id(
+            installation["installation_id"], settings.session_secret
+        )
+        for installation in installations
+    }
+
     pw_customer_id: str | None = None
     if len(installations) == 1:
         installation = installations[0]
         pw_customer_id = installation.get("paddle_customer_id")
-        continue_attrs = f'data-installation-id="{installation["installation_id"]}"'
+        continue_attrs = f'data-installation-token="{tokens[installation["installation_id"]]}"'
         body = f"""
         <h1>Subscribe to {escape(_plan_display_name(plan))}</h1>
         <p>{escape(installation["account_login"])} is currently on {escape(_plan_display_name(installation["plan"]))}.</p>
@@ -2230,7 +2247,7 @@ def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]
         options = "\n".join(
             (
                 '<label class="claim-option">'
-                f'<input type="radio" name="installation_id" value="{installation["installation_id"]}"'
+                f'<input type="radio" name="installation_token" value="{tokens[installation["installation_id"]]}"'
                 f'{" checked" if index == 0 else ""}> '
                 f'{escape(installation["account_login"])} '
                 f'(currently {escape(_plan_display_name(installation["plan"]))})'
@@ -2246,7 +2263,6 @@ def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]
         <p><a href="/dashboard">Cancel</a></p>
         """
 
-    settings = get_settings()
     # pwCustomer (Paddle Retain) only makes sense for a known, already-Paddle
     # customer - only wireable here when there's exactly one installation to
     # check out for, since Paddle.Initialize() runs once for the whole page,
@@ -2259,11 +2275,11 @@ Paddle.Environment.set("{settings.paddle_environment}");
 Paddle.Initialize({{ token: "{settings.paddle_client_token}"{pw_customer_config} }});
 document.getElementById("continue-checkout").addEventListener("click", (event) => {{
   const btn = event.currentTarget;
-  const selected = document.querySelector('input[name="installation_id"]:checked');
-  const installationId = selected ? selected.value : btn.dataset.installationId;
+  const selected = document.querySelector('input[name="installation_token"]:checked');
+  const installationToken = selected ? selected.value : btn.dataset.installationToken;
   Paddle.Checkout.open({{
     items: [{{ priceId: "{price_id}", quantity: 1 }}],
-    customData: {{ installation_id: installationId }},
+    customData: {{ installation_token: installationToken }},
     settings: {{
       displayMode: "overlay",
       variant: "one-page",
