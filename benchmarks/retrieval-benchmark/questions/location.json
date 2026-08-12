@@ -1,0 +1,260 @@
+[
+  {
+    "id": "q01",
+    "question": "How does a session dictionary get turned into a signed cookie that is safe to send to the browser?",
+    "ground_truth_files": [
+      "src/flask/sessions.py"
+    ],
+    "verification_anchor": "SecureCookieSessionInterface"
+  },
+  {
+    "id": "q02",
+    "question": "Where does the framework decide whether to restart the server when a source file changes?",
+    "ground_truth_files": [
+      "src/flask/cli.py"
+    ],
+    "verification_anchor": "reload"
+  },
+  {
+    "id": "q03",
+    "question": "How is a URL built from an endpoint name and some keyword arguments?",
+    "ground_truth_files": [
+      "src/flask/helpers.py"
+    ],
+    "verification_anchor": "def url_for"
+  },
+  {
+    "id": "q04",
+    "question": "What code sends a file from disk back to the client, handling range requests and caching headers?",
+    "ground_truth_files": [
+      "src/flask/helpers.py"
+    ],
+    "verification_anchor": "def send_file"
+  },
+  {
+    "id": "q05",
+    "question": "How are one-time messages queued for display on the next page load?",
+    "ground_truth_files": [
+      "src/flask/helpers.py"
+    ],
+    "verification_anchor": "def flash"
+  },
+  {
+    "id": "q06",
+    "question": "Where is the object that holds per-request state pushed onto and popped off a stack?",
+    "ground_truth_files": [
+      "src/flask/ctx.py"
+    ],
+    "verification_anchor": "class AppContext"
+  },
+  {
+    "id": "q07",
+    "question": "How can a function be scheduled to run after the current request has been handled?",
+    "ground_truth_files": [
+      "src/flask/ctx.py"
+    ],
+    "verification_anchor": "def after_this_request"
+  },
+  {
+    "id": "q08",
+    "question": "How does configuration get loaded from environment variables with a common prefix?",
+    "ground_truth_files": [
+      "src/flask/config.py"
+    ],
+    "verification_anchor": "from_prefixed_env"
+  },
+  {
+    "id": "q09",
+    "question": "Where is configuration read out of a Python file at a given path?",
+    "ground_truth_files": [
+      "src/flask/config.py"
+    ],
+    "verification_anchor": "from_pyfile"
+  },
+  {
+    "id": "q10",
+    "question": "How does the framework serialize objects that JSON does not natively support, like dates and UUIDs?",
+    "ground_truth_files": [
+      "src/flask/json/provider.py"
+    ],
+    "verification_anchor": "_default"
+  },
+  {
+    "id": "q11",
+    "question": "How are Python types round-tripped through JSON with a type tag so they survive serialization?",
+    "ground_truth_files": [
+      "src/flask/json/tag.py"
+    ],
+    "verification_anchor": "class TaggedJSONSerializer"
+  },
+  {
+    "id": "q12",
+    "question": "What turns a dict into a JSON HTTP response with the right content type?",
+    "ground_truth_files": [
+      "src/flask/json/__init__.py"
+    ],
+    "verification_anchor": "def jsonify"
+  },
+  {
+    "id": "q13",
+    "question": "How does a class-based view get converted into something that can be registered as a URL rule?",
+    "ground_truth_files": [
+      "src/flask/views.py"
+    ],
+    "verification_anchor": "as_view"
+  },
+  {
+    "id": "q14",
+    "question": "Where does dispatching to a method based on the HTTP verb happen?",
+    "ground_truth_files": [
+      "src/flask/views.py"
+    ],
+    "verification_anchor": "class MethodView"
+  },
+  {
+    "id": "q15",
+    "question": "How does a test client simulate a request without running a real server?",
+    "ground_truth_files": [
+      "src/flask/testing.py"
+    ],
+    "verification_anchor": "class FlaskClient"
+  },
+  {
+    "id": "q16",
+    "question": "How can command line commands be invoked in tests?",
+    "ground_truth_files": [
+      "src/flask/testing.py"
+    ],
+    "verification_anchor": "CliRunner"
+  },
+  {
+    "id": "q17",
+    "question": "Where are template files looked up across the application and its modular components?",
+    "ground_truth_files": [
+      "src/flask/templating.py"
+    ],
+    "verification_anchor": "DispatchingJinjaLoader"
+  },
+  {
+    "id": "q18",
+    "question": "How is a template rendered to a string with the application's context injected?",
+    "ground_truth_files": [
+      "src/flask/templating.py"
+    ],
+    "verification_anchor": "def render_template"
+  },
+  {
+    "id": "q19",
+    "question": "Where is the default logger created and attached?",
+    "ground_truth_files": [
+      "src/flask/logging.py"
+    ],
+    "verification_anchor": "create_logger"
+  },
+  {
+    "id": "q20",
+    "question": "How are the proxy objects that let you access the current request from anywhere defined?",
+    "ground_truth_files": [
+      "src/flask/globals.py"
+    ],
+    "verification_anchor": "LocalProxy"
+  },
+  {
+    "id": "q21",
+    "question": "Where is the group of routes with a shared URL prefix attached to the main application?",
+    "ground_truth_files": [
+      "src/flask/sansio/blueprints.py",
+      "src/flask/blueprints.py"
+    ],
+    "verification_anchor": "def register"
+  },
+  {
+    "id": "q22",
+    "question": "How does an incoming request get matched to a view function and turned into a response?",
+    "ground_truth_files": [
+      "src/flask/app.py"
+    ],
+    "verification_anchor": "full_dispatch_request"
+  },
+  {
+    "id": "q23",
+    "question": "Where are uncaught exceptions turned into a 500 response?",
+    "ground_truth_files": [
+      "src/flask/app.py"
+    ],
+    "verification_anchor": "handle_exception"
+  },
+  {
+    "id": "q24",
+    "question": "How does the framework find the user-registered handler for a specific HTTP error code?",
+    "ground_truth_files": [
+      "src/flask/sansio/app.py",
+      "src/flask/app.py"
+    ],
+    "verification_anchor": "_find_error_handler"
+  },
+  {
+    "id": "q25",
+    "question": "How is a coroutine returned by an async view function actually awaited?",
+    "ground_truth_files": [
+      "src/flask/app.py"
+    ],
+    "verification_anchor": "async_to_sync"
+  },
+  {
+    "id": "q26",
+    "question": "Where is the decorator that associates a URL pattern with a function defined?",
+    "ground_truth_files": [
+      "src/flask/sansio/scaffold.py"
+    ],
+    "verification_anchor": "def route"
+  },
+  {
+    "id": "q27",
+    "question": "How does the framework guess the root directory of the package it was created in?",
+    "ground_truth_files": [
+      "src/flask/helpers.py"
+    ],
+    "verification_anchor": "get_root_path"
+  },
+  {
+    "id": "q28",
+    "question": "Where is the request object subclassed to add framework-specific properties?",
+    "ground_truth_files": [
+      "src/flask/wrappers.py"
+    ],
+    "verification_anchor": "class Request"
+  },
+  {
+    "id": "q29",
+    "question": "How does the shell command preload the application context for interactive use?",
+    "ground_truth_files": [
+      "src/flask/cli.py"
+    ],
+    "verification_anchor": "shell_command"
+  },
+  {
+    "id": "q30",
+    "question": "Where does the application get discovered automatically from a module or factory function?",
+    "ground_truth_files": [
+      "src/flask/cli.py"
+    ],
+    "verification_anchor": "find_best_app"
+  },
+  {
+    "id": "q31",
+    "question": "What produces the helpful error message when a template or static folder is misconfigured?",
+    "ground_truth_files": [
+      "src/flask/debughelpers.py"
+    ],
+    "verification_anchor": "explain_template_loading_attempts"
+  },
+  {
+    "id": "q32",
+    "question": "Where are the notification hooks that extensions can subscribe to declared?",
+    "ground_truth_files": [
+      "src/flask/signals.py"
+    ],
+    "verification_anchor": "template_rendered"
+  }
+]

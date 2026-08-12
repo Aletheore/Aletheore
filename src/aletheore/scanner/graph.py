@@ -302,12 +302,23 @@ def _python_return_type(source: bytes, enclosing_node: Node) -> str | None:
 
 def _extract_python(
     node: Node, source: bytes
-) -> tuple[list[str], list[tuple[str, list[str]]], list[dict], list[dict]]:
-    """Return plain imports, from-imports, functions, and classes."""
+) -> tuple[list[str], list[tuple[str, list[str]]], list[dict], list[dict], list[dict]]:
+    """Return plain imports, from-imports, functions, classes, and constants.
+
+    "Constants" are module-level name bindings - `X = ...` and `X: T = ...` at
+    the top level of the file. They are extracted because a file can define a
+    substantial public API without a single `def` or `class`: Flask's
+    `signals.py` is 17 lines of `template_rendered = _signals.signal(...)`
+    exporting ten public names, and with only functions/classes recorded it
+    looked like an empty module to every consumer of this evidence - no wiki
+    page, and nothing for the search index to embed. The same shape covers
+    settings modules, registries, enums and route tables.
+    """
     plain_imports: list[str] = []
     from_imports: list[tuple[str, list[str]]] = []
     functions: list[dict] = []
     classes: list[dict] = []
+    constants: list[dict] = []
 
     def walk(root: Node):
         # Iterative, not recursive - a deeply-nested real-world AST (confirmed on
@@ -364,10 +375,28 @@ def _extract_python(
                         docstring=_python_docstring(source, n),
                         is_public=_is_public_symbol(name, "python") and not _is_nested_in_function(n),
                     ))
+            elif n.type == "expression_statement" and n.parent is not None and n.parent.type == "module":
+                # Module level only. An assignment inside a function or a class
+                # body is a local or an attribute, not a module export, and
+                # recording those would bury the real API in noise.
+                for child in n.named_children:
+                    if child.type != "assignment":
+                        continue
+                    target = child.child_by_field_name("left")
+                    # Only plain `NAME = ...`. Tuple unpacking and subscript or
+                    # attribute targets are deliberately skipped: their "name"
+                    # is not a single identifier a reader could look up.
+                    if target is None or target.type != "identifier":
+                        continue
+                    name = source[target.start_byte:target.end_byte].decode()
+                    constants.append(_symbol_entry(
+                        source, target, n,
+                        is_public=_is_public_symbol(name, "python"),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
-    return plain_imports, from_imports, functions, classes
+    return plain_imports, from_imports, functions, classes, constants
 
 
 def _leading_block_comment(
@@ -1745,8 +1774,12 @@ def build_module_graph(
             source = path.read_bytes()
             tree = parser.parse(source)
 
+        # Only the Python extractor records module-level bindings so far; every
+        # other language falls back to an empty list rather than a missing key,
+        # so consumers can read "constants" unconditionally.
+        constants: list[dict] = []
         if language_name == "python":
-            plain_imports, from_imports, functions, classes = _extract_python(
+            plain_imports, from_imports, functions, classes, constants = _extract_python(
                 tree.root_node, source
             )
             resolved_imports: list[str] = []
@@ -1872,7 +1905,7 @@ def build_module_graph(
                 "language": language_name,
                 "imports": resolved_imports,
                 "imported_by": [],
-                "symbols": {"functions": functions, "classes": classes},
+                "symbols": {"functions": functions, "classes": classes, "constants": constants},
             }
         )
 

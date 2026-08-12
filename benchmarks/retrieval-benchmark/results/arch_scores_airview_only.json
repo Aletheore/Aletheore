@@ -1,0 +1,242 @@
+[
+  {
+    "id": "a01",
+    "q": "Explain the overall architecture of this codebase: what are the major layers and how do they relate?",
+    "aletheore": 1.0,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      1,
+      1
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "repowise",
+      "repowise"
+    ],
+    "why_a": "The material is mostly a file listing and subsystem categorization, but it lacks a clear explanation of the architectural layers and their relationships, which is the core of the question.",
+    "why_r": "The material provides a clear layered architecture overview, identifies key modules and their dependencies, and explains how the core, examples, and tests relate, which is sufficient for a competent engineer to answer the question."
+  },
+  {
+    "id": "a02",
+    "q": "How does a request flow through the system from the WSGI entry point to a returned response?",
+    "aletheore": 0.0,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      0,
+      0
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "repowise",
+      "repowise"
+    ],
+    "why_a": "The material is a high-level repository overview with subsystem descriptions and file lists, providing no concrete details about the WSGI request flow, routing, or response lifecycle.",
+    "why_r": "The material includes detailed documentation of the Request class, a walkthrough of the request lifecycle from WSGI entry through teardown, and references to key files and methods, enabling a competent engineer to trace the flow accurately."
+  },
+  {
+    "id": "a03",
+    "q": "Why is there a 'sansio' package, and what design problem does splitting it out solve?",
+    "aletheore": 0.5,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      1,
+      0
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "repowise",
+      "repowise"
+    ],
+    "why_a": "The material is a high-level repository overview that mentions the sansio package only in file listings, providing no explanation of the design problem it solves.",
+    "why_r": "The material thoroughly explains the sans-IO design, the split between App and Flask subclass, and the specific hooks and benefits, enabling a complete answer."
+  },
+  {
+    "id": "a04",
+    "q": "How does the framework keep per-request state isolated when several requests are handled concurrently?",
+    "aletheore": 0.0,
+    "repowise": 0.5,
+    "aletheore_raw": [
+      0,
+      0
+    ],
+    "repowise_raw": [
+      1,
+      0
+    ],
+    "pref": [
+      "tie",
+      "tie"
+    ],
+    "why_a": "The material is a high-level repository overview with file lists and subsystem descriptions, containing no information about request context isolation or concurrency.",
+    "why_r": "The material discusses request wrappers and limits but does not explain the context stack or how per-request state is isolated across concurrent requests."
+  },
+  {
+    "id": "a05",
+    "q": "What is the extension model \u2014 how do third-party packages hook into the framework's lifecycle?",
+    "aletheore": 0.5,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      1,
+      0
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "repowise",
+      "repowise"
+    ],
+    "why_a": "The material is a high-level repository overview that lists subsystems and files but provides no concrete details on how extensions hook into the lifecycle, such as the Scaffold registration methods or setup guards.",
+    "why_r": "The material thoroughly explains the Scaffold class, its registration APIs, setupmethod guard, and scoping semantics, which directly answer how third-party packages hook into the framework's lifecycle."
+  },
+  {
+    "id": "a06",
+    "q": "How is configuration layered, and what is the order of precedence between the different sources?",
+    "aletheore": 0.5,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      1,
+      0
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "repowise",
+      "repowise"
+    ],
+    "why_a": "The material is a high-level repository overview with file lists and subsystem descriptions, but it does not explain configuration layering or precedence at all.",
+    "why_r": "The material includes a detailed breakdown of the Config class methods and sources, and the precedence order is implied by the call graph and usage notes, covering the key mechanisms."
+  },
+  {
+    "id": "a07",
+    "q": "Describe the error handling strategy: how do exceptions become HTTP responses, and where can users intervene?",
+    "aletheore": 0.0,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      0,
+      0
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "repowise",
+      "repowise"
+    ],
+    "why_a": "The material is a high-level repository overview with no details on error handling mechanisms or user intervention points.",
+    "why_r": "The material thoroughly covers error handler registration, dispatch rules, precedence, and generic handlers, enabling a precise answer."
+  },
+  {
+    "id": "a08",
+    "q": "How does the templating integration work, and how does it stay aware of modular components?",
+    "aletheore": 0.5,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      1,
+      0
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "repowise",
+      "repowise"
+    ],
+    "why_a": "The material is mostly a high-level repository overview with file lists, lacking specific details about templating integration and blueprint awareness.",
+    "why_r": "The material provides a detailed explanation of the templating module, including the DispatchingJinjaLoader, blueprint-aware Environment, and how templates are resolved across app and blueprints."
+  },
+  {
+    "id": "a09",
+    "q": "What is the session architecture, and what are the security trade-offs of the default implementation?",
+    "aletheore": 0.0,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      0,
+      0
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "repowise",
+      "repowise"
+    ],
+    "why_a": "The material is a high-level repository overview with no details about session architecture or security trade-offs.",
+    "why_r": "Provides a thorough explanation of the default signed-cookie session backend, including serialization, signing, key rotation, and security trade-offs."
+  },
+  {
+    "id": "a10",
+    "q": "How does the CLI discover and load the application, and why is it designed that way?",
+    "aletheore": 0.5,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      1,
+      0
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "repowise",
+      "repowise"
+    ],
+    "why_a": "The material is a high-level repository overview with file lists and subsystem descriptions, but it lacks the specific mechanisms of CLI app discovery and loading, such as locate_app, find_best_app, and ScriptInfo.",
+    "why_r": "The material provides a detailed, accurate explanation of the CLI's app discovery and loading process, including functions like locate_app, find_best_app, ScriptInfo, and the design rationale."
+  },
+  {
+    "id": "a11",
+    "q": "How does the framework support async view functions on top of a synchronous WSGI core?",
+    "aletheore": 0.5,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      0,
+      1
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "repowise",
+      "repowise"
+    ],
+    "why_a": "The material is a high-level repository overview with no specific details about async view support or the WSGI core.",
+    "why_r": "The material directly explains the async-to-sync bridging via ensure_sync and async_to_sync, and the sansio/WSGI split, providing the key mechanisms with specifics."
+  },
+  {
+    "id": "a12",
+    "q": "What are the main extension points for grouping and reusing sets of routes across projects?",
+    "aletheore": 1.5,
+    "repowise": 1.5,
+    "aletheore_raw": [
+      1,
+      2
+    ],
+    "repowise_raw": [
+      2,
+      1
+    ],
+    "pref": [
+      "repowise",
+      "aletheore"
+    ],
+    "why_a": "The material is a high-level repository overview that mentions blueprints and examples but lacks specific details on how to group and reuse routes across projects.",
+    "why_r": "The material includes concrete examples of blueprints and application factories, but it does not deeply explain the extension points or how to reuse routes across projects."
+  }
+]

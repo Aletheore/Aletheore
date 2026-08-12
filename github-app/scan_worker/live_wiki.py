@@ -19,12 +19,13 @@ by the caller, but this module never imports a cache or database client.
 
 import json
 import logging
+import statistics
 from typing import Callable
 
 from aletheore.citation_verifier import verify_citations
 from aletheore.evidence_packet import build_evidence_packet
 from aletheore.wiki_diagrams import build_overview_diagram, build_subsystem_diagram
-from aletheore.wiki_mapping import build_cluster_briefs
+from aletheore.wiki_mapping import build_cluster_briefs, rank_files_by_importance
 
 FLASH_MODEL = "deepseek-v4-flash"
 UPDATE_MODEL = "deepseek-v4-flash"
@@ -62,15 +63,67 @@ markdown fences."""
 
 SUBSYSTEM_WRITING_SYSTEM_PROMPT = (
     """You write one page of a codebase wiki for a single subsystem.
-You are given the subsystem's name and a JSON brief listing its files and each file's key
-functions/classes with line numbers. Respond with ONLY a JSON object with this shape:
-{"description": "2-4 sentence overview of what this subsystem does and why it exists",
- "files": [{"path": "<exact path from the brief>", "role": "1-2 sentence description of this
- file's responsibility", "key_symbols": [{"name": "<exact name from the brief>", "line": <exact
- start_line from the brief>, "explanation": "one sentence on what it does"}]}]}
-Only describe files and symbols that appear in the brief - never invent a file, function, or line
-number that isn't there, and never cite a file that isn't in this subsystem's file list. If a file
-has no key symbols, return an empty key_symbols list for it. No markdown fences."""
+You are given the subsystem's name, a JSON brief listing its files and each file's key
+functions/classes with line numbers, and a `related_files` list naming files elsewhere in the
+repository that this subsystem imports or is imported by. Respond with ONLY a JSON object:
+{"description": "<see below>",
+ "files": [{"path": "<exact path from the brief>", "role": "2-3 sentences on this file's
+ responsibility and how it fits the subsystem", "key_symbols": [{"name": "<exact name from the
+ brief>", "line": <exact start_line from the brief>, "explanation": "1-2 sentences on what it does
+ and when it runs"}]}]}
+
+The description must be 4-8 sentences and must cover, in this order:
+1. What this subsystem does.
+2. WHY it exists as a separate unit - the design problem it solves. This is the most valuable
+   sentence on the page; a reader can already see the file list, they cannot see the rationale.
+3. How control or data flows through it, naming the specific symbols involved.
+4. How it connects to the neighbouring subsystems in `related_files`.
+
+The `files` and `key_symbols` arrays are structural: they may only contain paths and symbols that
+appear in this subsystem's brief, with exact names and exact start_line values. Never invent a
+file, function, or line number.
+
+The `description` prose is NOT restricted to this subsystem. You may reference and cite any file
+in the repository, including ones in `related_files`, using `path/to/file.py:123` citations -
+explaining a request flow or a lifecycle usually requires crossing subsystem boundaries, and a
+description that stops at the boundary is not worth writing. Every citation you write is checked
+against the scan, and the whole page is discarded if any citation does not resolve, so cite only
+line numbers you were actually given. No markdown fences."""
+    + _INJECTION_GUARD
+)
+
+FILE_PAGE_WRITING_SYSTEM_PROMPT = (
+    """You write the reference page for a single source file in a codebase wiki.
+You are given the file's path, its key functions/classes with line numbers, the subsystem it
+belongs to, and the files it imports and is imported by. Respond with ONLY a JSON object:
+{"detail": "<markdown, 250-400 words>"}
+
+Structure the markdown with these headings, in order:
+
+## Overview
+What this file is responsible for, in two or three sentences.
+
+## Why it exists
+The design problem this file solves and why it is a separate file. If the answer is visible in the
+code - a separation of concerns, a protocol boundary, a compatibility shim - say so specifically.
+Skip this heading only if the file is a trivial re-export.
+
+## How it works
+The main flow through the file, naming concrete symbols and citing them as `path:line`. This is
+where a reader learns the mechanism, so prefer specifics over restating names.
+
+## Key symbols
+A short bulleted list: `` `name` (path:line) `` followed by what it does and when it runs.
+
+## Gotchas
+Anything surprising a reader would otherwise trip on - ordering constraints, mutation,
+deprecations. Omit this heading if the code shows nothing surprising; do not invent one.
+
+Cite as `path/to/file.py:123`, using only line numbers you were given. You may cite the imported
+and importing files, not just this one. Every citation is checked against the scan and the page is
+discarded if any citation does not resolve. Describe only what the given symbols support - never
+invent a symbol, a line number, or behaviour you cannot see. No markdown fences around the whole
+response."""
     + _INJECTION_GUARD
 )
 
@@ -82,6 +135,48 @@ the subsystems listed relate to each other"}. Do not invent subsystems or relati
 what's given. No markdown fences."""
     + _INJECTION_GUARD
 )
+
+
+# Bump whenever any prompt in this module changes. It rides in the evidence
+# packet, so a bump invalidates cached pages written by the previous prompt
+# instead of serving them forever.
+AIRVIEW_PROMPT_VERSION = "2"
+
+# How many files get their own reference page, at most. Deliberately far below
+# a page-per-file: the top of the importance ranking is where a reader spends
+# their attention, and the tail is mostly re-exports and fixtures whose pages
+# cost tokens to produce and nothing to skip.
+DEFAULT_MAX_FILE_PAGES = 40
+
+# Files scoring below this share of the *median* non-demoted file are not worth
+# a page even if the budget has room. Anchored to the median rather than the top
+# score because one re-export hub distorts the maximum: Flask's `__init__.py`
+# scores 2.7x the runner-up, which pushed the floor high enough that `max_files`
+# could never bind - raising it from 22 to 83 changed nothing at all.
+FILE_PAGE_SCORE_FLOOR = 0.25
+
+MAX_RELATED_FILES = 25
+
+
+def _related_files(evidence: dict, brief: dict) -> list[str]:
+    """Files outside this subsystem that its members import or are imported by.
+
+    Given to the writing model so a description can explain how the subsystem
+    connects to its neighbours. Purely derived from the scan's import graph -
+    the model never learns of a file the scanner did not record.
+    """
+    modules_by_path = {m["path"]: m for m in evidence.get("repository", {}).get("modules", [])}
+    own = {f["path"] for f in brief.get("files", [])}
+
+    related: set[str] = set()
+    for path in own:
+        module = modules_by_path.get(path)
+        if module is None:
+            continue
+        for neighbour in list(module.get("imports", []) or []) + list(module.get("imported_by", []) or []):
+            if neighbour not in own and neighbour in modules_by_path:
+                related.add(neighbour)
+    return sorted(related)[:MAX_RELATED_FILES]
 
 
 def _parse_json_object(raw: str) -> dict | None:
@@ -180,7 +275,12 @@ def build_subsystem_record(
     fetch_line_count: Callable[[str], int | None] | None = None,
 ) -> dict | None:
     packet = build_evidence_packet(
-        evidence, cluster, brief, model_used, cache_eligible=cache_lookup is not None
+        evidence,
+        cluster,
+        brief,
+        model_used,
+        cache_eligible=cache_lookup is not None,
+        prompt_version=AIRVIEW_PROMPT_VERSION,
     )
     parsed = None
     description = None
@@ -200,7 +300,9 @@ def build_subsystem_record(
                 parsed, description = candidate
 
     if parsed is None:
-        user_prompt = json.dumps({"name": name, "brief": brief})
+        user_prompt = json.dumps(
+            {"name": name, "brief": brief, "related_files": _related_files(evidence, brief)}
+        )
         raw_parsed = None
         for attempt in range(1, SUBSYSTEM_WRITE_ATTEMPTS + 1):
             raw = writing_adapter.simple_completion(
@@ -303,6 +405,136 @@ def generate_subsystems(
         )
         if record is not None:
             records.append(record)
+    return records
+
+
+def select_file_page_paths(
+    evidence: dict,
+    *,
+    max_files: int = DEFAULT_MAX_FILE_PAGES,
+) -> list[str]:
+    """Which files earn their own reference page, most important first.
+
+    Split out from generation so a caller can see and cost the plan without
+    spending anything, and so the choice is testable without an LLM.
+    """
+    ranked = rank_files_by_importance(evidence)
+    if not ranked:
+        return []
+    # Median of the files that were not demoted: tests usually outnumber
+    # application code, so a median over everything would sit in the noise.
+    reference_scores = [r["score"] for r in ranked if not r["demoted"]] or [r["score"] for r in ranked]
+    floor = statistics.median(reference_scores) * FILE_PAGE_SCORE_FLOOR
+    return [r["path"] for r in ranked if r["score"] >= floor][:max_files]
+
+
+def build_file_page_record(
+    evidence: dict,
+    path: str,
+    writing_adapter,
+    *,
+    subsystem_name: str = "",
+    fetch_line_count: Callable[[str], int | None] | None = None,
+) -> str | None:
+    """Writes one file's reference page, or None if it could not be verified.
+
+    Returns markdown rather than a dict: the page hangs off the file entry
+    that already exists in the subsystem record, so it needs no new storage.
+    """
+    modules_by_path = {m["path"]: m for m in evidence.get("repository", {}).get("modules", [])}
+    module = modules_by_path.get(path)
+    if module is None:
+        return None
+
+    symbols = module.get("symbols", {}) or {}
+    key_symbols = [
+        {"name": s["name"], "kind": kind, "start_line": s.get("start_line"), "end_line": s.get("end_line")}
+        for kind, group in (("function", "functions"), ("class", "classes"), ("constant", "constants"))
+        for s in symbols.get(group, []) or []
+        if s.get("name") and (group != "constants" or s.get("is_public", True))
+    ]
+    if not key_symbols:
+        # Nothing to explain beyond the path; a page here would be padding.
+        return None
+
+    user_prompt = json.dumps(
+        {
+            "path": path,
+            "language": module.get("language"),
+            "subsystem": subsystem_name,
+            "key_symbols": key_symbols,
+            "imports": list(module.get("imports", []) or [])[:MAX_RELATED_FILES],
+            "imported_by": list(module.get("imported_by", []) or [])[:MAX_RELATED_FILES],
+        }
+    )
+
+    for attempt in range(1, SUBSYSTEM_WRITE_ATTEMPTS + 1):
+        raw = writing_adapter.simple_completion(FILE_PAGE_WRITING_SYSTEM_PROMPT, user_prompt, cwd=".")
+        parsed = _parse_json_object(raw)
+        detail = parsed.get("detail") if isinstance(parsed, dict) else None
+        if not isinstance(detail, str) or not detail.strip():
+            logger.info("AIRview file page %s: no usable detail (attempt %d)", path, attempt)
+            continue
+        result = verify_citations(detail, evidence, fetch_line_count=fetch_line_count)
+        if result["all_verified"]:
+            return detail.strip()
+        logger.info(
+            "AIRview file page %s rejected: %d/%d citation(s) unverified (%s)",
+            path,
+            len(result["unverified"]),
+            result["total_citations"],
+            ", ".join(f"{c['file']}:{c['line']}" for c in result["unverified"]),
+        )
+    return None
+
+
+def generate_file_pages(
+    evidence: dict,
+    writing_adapter,
+    *,
+    paths: list[str] | None = None,
+    max_files: int = DEFAULT_MAX_FILE_PAGES,
+    subsystem_by_path: dict[str, str] | None = None,
+    fetch_line_count: Callable[[str], int | None] | None = None,
+) -> dict[str, str]:
+    """Reference pages for the most important files, keyed by path.
+
+    The subsystem pages answer "what is this group of files for"; these answer
+    "how does this specific file work", which is the question a reader actually
+    arrives with. Pass `paths` to regenerate only some files (incremental
+    update); otherwise the top `max_files` by importance are written.
+    """
+    targets = paths if paths is not None else select_file_page_paths(evidence, max_files=max_files)
+    subsystem_by_path = subsystem_by_path or {}
+
+    pages: dict[str, str] = {}
+    for path in targets:
+        detail = build_file_page_record(
+            evidence,
+            path,
+            writing_adapter,
+            subsystem_name=subsystem_by_path.get(path, ""),
+            fetch_line_count=fetch_line_count,
+        )
+        if detail:
+            pages[path] = detail
+    logger.info("AIRview generated %d/%d file pages", len(pages), len(targets))
+    return pages
+
+
+def attach_file_pages(records: list[dict], pages: dict[str, str]) -> list[dict]:
+    """Hangs each file page off the matching entry in the subsystem records.
+
+    Mutates nothing the caller owns - returns the same records with a `detail`
+    key added to file entries that have a page. Files without one are left
+    exactly as they were, so a partial generation degrades to today's output
+    rather than to an empty wiki.
+    """
+    for record in records:
+        for entry in record.get("files", []) or []:
+            detail = pages.get(entry.get("path"))
+            if detail:
+                entry["detail"] = detail
     return records
 
 

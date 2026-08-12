@@ -1,0 +1,242 @@
+[
+  {
+    "id": "a01",
+    "q": "Explain the overall architecture of this codebase: what are the major layers and how do they relate?",
+    "aletheore": 2.0,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      2,
+      2
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "repowise",
+      "tie"
+    ],
+    "why_a": "System A provides some relevant information about the Flask architecture, but it is mostly focused on a specific part of the codebase and does not provide a clear overview of the major layers and thei",
+    "why_r": "System B provides an excellent high-level overview of the Flask repository's architecture, including its top-level directories, key components, and dependency analysis. It also includes a Mermaid diag"
+  },
+  {
+    "id": "a02",
+    "q": "How does a request flow through the system from the WSGI entry point to a returned response?",
+    "aletheore": 2.5,
+    "repowise": 2.5,
+    "aletheore_raw": [
+      3,
+      2
+    ],
+    "repowise_raw": [
+      2,
+      3
+    ],
+    "pref": [
+      "tie",
+      "tie"
+    ],
+    "why_a": "System A provides a clear and detailed explanation of the request flow through the system from WSGI entry point to returned response.",
+    "why_r": "System B provides some relevant information about Flask's architecture and how it handles requests, but it lacks specific details about the request flow and has a lot of extraneous information."
+  },
+  {
+    "id": "a03",
+    "q": "Why is there a 'sansio' package, and what design problem does splitting it out solve?",
+    "aletheore": 2.5,
+    "repowise": 2.5,
+    "aletheore_raw": [
+      3,
+      2
+    ],
+    "repowise_raw": [
+      2,
+      3
+    ],
+    "pref": [
+      "tie",
+      "repowise"
+    ],
+    "why_a": "System A provides a clear explanation of the design problem that splitting out 'sansio' solves, including specific details about how it improves debugging and extension behavior.",
+    "why_r": "System B mentions the design problem but does not provide as much detail or context as System A. It also includes some extraneous information about the file structure of Flask."
+  },
+  {
+    "id": "a04",
+    "q": "How does the framework keep per-request state isolated when several requests are handled concurrently?",
+    "aletheore": 2.5,
+    "repowise": 2.5,
+    "aletheore_raw": [
+      2,
+      3
+    ],
+    "repowise_raw": [
+      3,
+      2
+    ],
+    "pref": [
+      "repowise",
+      "tie"
+    ],
+    "why_a": "The material covers key mechanisms with some minor gaps in specifics.",
+    "why_r": "The material is fully sufficient and covers all key mechanisms with specific details."
+  },
+  {
+    "id": "a05",
+    "q": "What is the extension model \u2014 how do third-party packages hook into the framework's lifecycle?",
+    "aletheore": 2.0,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      2,
+      2
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "tie",
+      "tie"
+    ],
+    "why_a": "The material provides some relevant information about the Flask application object and its lifecycle, but it does not directly address how third-party packages hook into the framework's lifecycle.",
+    "why_r": "This system's material is more comprehensive and directly addresses the question by explaining the role of the `Scaffold` class in capturing common behavior shared between `Flask` and `Blueprint`, inc"
+  },
+  {
+    "id": "a06",
+    "q": "How is configuration layered, and what is the order of precedence between the different sources?",
+    "aletheore": 2.0,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      2,
+      2
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "repowise",
+      "tie"
+    ],
+    "why_a": "The material provides some relevant information about configuration in Flask, but it's mostly focused on the templating engine and doesn't directly address the question of how configuration is layered",
+    "why_r": "This system's material provides a clear explanation of the Config layer in Flask, including its purpose, architecture, and data flow. It also explains how configuration is layered and what order of pr"
+  },
+  {
+    "id": "a07",
+    "q": "Describe the error handling strategy: how do exceptions become HTTP responses, and where can users intervene?",
+    "aletheore": 3.0,
+    "repowise": 2.0,
+    "aletheore_raw": [
+      3,
+      3
+    ],
+    "repowise_raw": [
+      2,
+      2
+    ],
+    "pref": [
+      "tie",
+      "tie"
+    ],
+    "why_a": "System A provides a clear and detailed explanation of the error handling strategy in Flask, including how exceptions become HTTP responses and where users can intervene.",
+    "why_r": "System B's material is mostly sufficient but has minor gaps; it covers the registration of user error handlers, inheritance fallback, blueprint scoping, and generic fallback semantics, but lacks speci"
+  },
+  {
+    "id": "a08",
+    "q": "How does the templating integration work, and how does it stay aware of modular components?",
+    "aletheore": 2.0,
+    "repowise": 3.0,
+    "aletheore_raw": [
+      2,
+      2
+    ],
+    "repowise_raw": [
+      3,
+      3
+    ],
+    "pref": [
+      "repowise",
+      "repowise"
+    ],
+    "why_a": "The material provides some relevant information about Flask's templating integration and blueprint-aware Jinja2 environment, but it lacks specific details about how the template rendering process work",
+    "why_r": "The material provides a comprehensive overview of Flask's templating subsystem, including its public API, internal helpers, dependencies, usage notes, and test suite. It covers all aspects of template"
+  },
+  {
+    "id": "a09",
+    "q": "What is the session architecture, and what are the security trade-offs of the default implementation?",
+    "aletheore": 2.5,
+    "repowise": 2.5,
+    "aletheore_raw": [
+      3,
+      2
+    ],
+    "repowise_raw": [
+      2,
+      3
+    ],
+    "pref": [
+      "tie",
+      "tie"
+    ],
+    "why_a": "System A's material directly addresses the session architecture and security trade-offs of the default implementation, providing a clear understanding of how sessions are stored and managed in Flask.",
+    "why_r": "System B's material provides an overview of the session abstraction and pluggable backend bridge, but it lacks specific details about the security trade-offs of the default implementation."
+  },
+  {
+    "id": "a10",
+    "q": "How does the CLI discover and load the application, and why is it designed that way?",
+    "aletheore": 2.5,
+    "repowise": 2.5,
+    "aletheore_raw": [
+      3,
+      2
+    ],
+    "repowise_raw": [
+      2,
+      3
+    ],
+    "pref": [
+      "tie",
+      "repowise"
+    ],
+    "why_a": "System A provides a clear and detailed explanation of how the CLI discovers and loads the application, including the specific mechanisms used to locate the app, handle imports, and load environment va",
+    "why_r": "System B provides a good overview of the CLI's functionality and the various components involved in loading the application, but it lacks some of the specific details provided by System A, such as the"
+  },
+  {
+    "id": "a11",
+    "q": "How does the framework support async view functions on top of a synchronous WSGI core?",
+    "aletheore": 3.0,
+    "repowise": 2.0,
+    "aletheore_raw": [
+      3,
+      3
+    ],
+    "repowise_raw": [
+      2,
+      2
+    ],
+    "pref": [
+      "tie",
+      "aletheore"
+    ],
+    "why_a": "System A provides specific code and clear explanations of how Flask supports async view functions.",
+    "why_r": "System B provides a high-level overview of the framework's architecture but lacks specific details on how async views are supported."
+  },
+  {
+    "id": "a12",
+    "q": "What are the main extension points for grouping and reusing sets of routes across projects?",
+    "aletheore": 2.0,
+    "repowise": 2.5,
+    "aletheore_raw": [
+      1,
+      3
+    ],
+    "repowise_raw": [
+      3,
+      2
+    ],
+    "pref": [
+      "tie",
+      "tie"
+    ],
+    "why_a": "The material is partially relevant as it shows how to create a Flask application with multiple routes, but it does not directly address the question of extension points for grouping and reusing sets o",
+    "why_r": "The material is fully sufficient as it provides examples of using Flask Blueprints to modularize routes and reuse them across projects, which directly addresses the question."
+  }
+]

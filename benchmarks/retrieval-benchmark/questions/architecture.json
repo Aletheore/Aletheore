@@ -1,0 +1,14 @@
+[
+  {"id": "a01", "q": "Explain the overall architecture of this codebase: what are the major layers and how do they relate?"},
+  {"id": "a02", "q": "How does a request flow through the system from the WSGI entry point to a returned response?"},
+  {"id": "a03", "q": "Why is there a 'sansio' package, and what design problem does splitting it out solve?"},
+  {"id": "a04", "q": "How does the framework keep per-request state isolated when several requests are handled concurrently?"},
+  {"id": "a05", "q": "What is the extension model — how do third-party packages hook into the framework's lifecycle?"},
+  {"id": "a06", "q": "How is configuration layered, and what is the order of precedence between the different sources?"},
+  {"id": "a07", "q": "Describe the error handling strategy: how do exceptions become HTTP responses, and where can users intervene?"},
+  {"id": "a08", "q": "How does the templating integration work, and how does it stay aware of modular components?"},
+  {"id": "a09", "q": "What is the session architecture, and what are the security trade-offs of the default implementation?"},
+  {"id": "a10", "q": "How does the CLI discover and load the application, and why is it designed that way?"},
+  {"id": "a11", "q": "How does the framework support async view functions on top of a synchronous WSGI core?"},
+  {"id": "a12", "q": "What are the main extension points for grouping and reusing sets of routes across projects?"}
+]

@@ -47,7 +47,11 @@ def find_symbol_source(
     evidence: dict, repo_path: Path, module_path: str, symbol_name: str
 ) -> dict:
     module = _find_module(evidence, module_path)
-    symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
+    symbols = (
+        module["symbols"]["functions"]
+        + module["symbols"]["classes"]
+        + module["symbols"].get("constants", [])
+    )
     entry = next((symbol for symbol in symbols if symbol["name"] == symbol_name), None)
     if entry is None:
         raise SymbolNotFoundInEvidenceError(module_path, symbol_name)

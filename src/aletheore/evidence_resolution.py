@@ -342,7 +342,7 @@ def _resolve_symbol(evidence: dict, symbol: str) -> dict:
     modules = evidence.get("repository", {}).get("modules", [])
     for module_index, module in enumerate(modules):
         symbols = module.get("symbols", {})
-        for group in ("functions", "classes"):
+        for group in ("functions", "classes", "constants"):
             for symbol_index, entry in enumerate(symbols.get(group, [])):
                 if entry.get("name") == symbol:
                     return normalize_resolution(

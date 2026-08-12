@@ -3,6 +3,7 @@ import logging
 from unittest.mock import MagicMock
 
 from scan_worker.live_wiki import (
+    AIRVIEW_PROMPT_VERSION,
     FLASH_MODEL,
     SUBSYSTEM_DESCRIPTION_UNAVAILABLE,
     UPDATE_MODEL,
@@ -10,6 +11,11 @@ from scan_worker.live_wiki import (
     generate_overview,
     generate_subsystems,
     propose_cluster_names,
+    _related_files,
+    attach_file_pages,
+    build_file_page_record,
+    generate_file_pages,
+    select_file_page_paths,
 )
 
 
@@ -498,3 +504,81 @@ def test_affected_cluster_ids_maps_changed_files_to_clusters():
     assert affected_cluster_ids(evidence, ["auth/login.py", "billing/charge.py"]) == {0, 1}
     assert affected_cluster_ids(evidence, ["unrelated/file.py"]) == set()
     assert affected_cluster_ids(evidence, []) == set()
+
+
+def test_select_file_page_paths_puts_important_files_first_and_respects_budget():
+    evidence = make_evidence()
+    evidence["repository"]["modules"][0]["imported_by"] = ["auth/tokens.py"]
+    paths = select_file_page_paths(evidence, max_files=1)
+    assert paths == ["auth/login.py"]
+
+
+def test_build_file_page_record_returns_detail_when_citations_verify():
+    evidence = make_evidence()
+    detail = "## Overview\nHandles login at auth/login.py:10."
+    record = build_file_page_record(evidence, "auth/login.py", _adapter(json.dumps({"detail": detail})))
+    assert record == detail
+
+
+def test_build_file_page_record_rejects_page_citing_a_file_not_in_the_scan():
+    evidence = make_evidence()
+    adapter = _adapter(json.dumps({"detail": "## Overview\nSee totally/made/up.py:4."}))
+    assert build_file_page_record(evidence, "auth/login.py", adapter) is None
+
+
+def test_build_file_page_record_skips_files_with_no_symbols():
+    """auth/tokens.py has no functions or classes, so a page would be padding -
+    and the call is skipped entirely rather than spent."""
+    adapter = _adapter(json.dumps({"detail": "## Overview\nAnything."}))
+    assert build_file_page_record(make_evidence(), "auth/tokens.py", adapter) is None
+    adapter.simple_completion.assert_not_called()
+
+
+def test_generate_file_pages_keys_pages_by_path():
+    detail = "## Overview\nLogin lives at auth/login.py:10."
+    pages = generate_file_pages(
+        make_evidence(), _adapter(json.dumps({"detail": detail})), paths=["auth/login.py"]
+    )
+    assert pages == {"auth/login.py": detail}
+
+
+def test_attach_file_pages_leaves_files_without_a_page_untouched():
+    records = [{"files": [{"path": "auth/login.py", "role": "r"}, {"path": "auth/tokens.py", "role": "r"}]}]
+    attach_file_pages(records, {"auth/login.py": "## Overview\nx"})
+    assert records[0]["files"][0]["detail"] == "## Overview\nx"
+    assert "detail" not in records[0]["files"][1]
+
+
+def test_related_files_offers_neighbours_outside_the_subsystem():
+    """The description prose is allowed to cross subsystem boundaries, so the
+    model has to be told which files those are - otherwise it can only cite
+    within the cluster and cannot explain a cross-cutting flow."""
+    evidence = make_evidence()
+    evidence["repository"]["modules"].append(
+        {"path": "web/app.py", "language": "python", "imports": ["auth/login.py"], "symbols": {}}
+    )
+    evidence["repository"]["modules"][0]["imported_by"] = ["web/app.py"]
+    brief = {"files": [{"path": "auth/login.py"}, {"path": "auth/tokens.py"}]}
+    assert _related_files(evidence, brief) == ["web/app.py"]
+
+
+def test_evidence_packet_carries_prompt_version_so_edits_invalidate_cache():
+    from aletheore.evidence_packet import build_evidence_packet
+
+    packet = build_evidence_packet({}, {"modules": []}, {}, "", prompt_version=AIRVIEW_PROMPT_VERSION)
+    assert packet["prompt_version"] == AIRVIEW_PROMPT_VERSION
+
+
+def test_select_file_page_paths_floor_is_not_anchored_to_an_outlier():
+    """One re-export hub used to set the floor: Flask's __init__.py scores 2.7x
+    the runner-up, which put the cutoff so high that max_files could never bind -
+    raising it from 22 to 83 selected the same 22 files. The floor is anchored to
+    the median instead, so the budget is the control."""
+    modules = [{"path": "hub.py", "imported_by": [f"m{i}.py" for i in range(79)], "symbols": {}}]
+    modules += [
+        {"path": f"m{i}.py", "imported_by": ["hub.py"], "symbols": {"functions": [{"name": "f"}]}}
+        for i in range(12)
+    ]
+    evidence = {"repository": {"modules": modules}}
+    assert len(select_file_page_paths(evidence, max_files=100)) > 1
+    assert len(select_file_page_paths(evidence, max_files=3)) == 3
