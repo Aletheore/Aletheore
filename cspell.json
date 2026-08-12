@@ -55,6 +55,7 @@
     "asyncpg",
     "autoloading",
     "canonicality",
+    "capitalised",
     "confusables",
     "codex",
     "cpwx",

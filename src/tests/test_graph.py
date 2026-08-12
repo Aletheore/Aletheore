@@ -742,6 +742,44 @@ def test_build_module_graph_has_modifier_does_not_false_positive_on_substring(tm
         assert found == [], f"{filename}: expected no constants, got {found}"
 
 
+def test_build_module_graph_ruby_extracts_constants_declared_inside_class_or_module(tmp_path):
+    """Ruby constants are idiomatically declared inside a module or class
+    body, not at file scope - a real repo scan (sinatra/sinatra) found 10
+    constants indented inside module/class bodies and 0 at true top level.
+    Sinatra::Base::DROP_BODY_RESPONSES is exactly the API surface this
+    feature exists to capture."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "base.rb").write_text(
+        "module Sinatra\n"
+        "  class Base\n"
+        "    DROP_BODY = [204].freeze\n"
+        "  end\n"
+        "end\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    assert symbol_names(modules[0]["symbols"]["constants"]) == ["DROP_BODY"]
+
+
+def test_build_module_graph_ruby_does_not_extract_a_constant_assigned_inside_a_method(tmp_path):
+    """A capitalised assignment inside a def body is a method-local, not
+    part of the type's public API - must stay excluded even though it sits
+    inside a class body the same as a real constant does."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "base.rb").write_text(
+        "module Sinatra\n"
+        "  class Base\n"
+        "    def foo\n"
+        "      CONST = 1\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    assert symbol_names(modules[0]["symbols"]["constants"]) == []
+
+
 def test_build_module_graph_constants_key_always_present(tmp_path):
     """Consumers read symbols["constants"] unconditionally, so it must exist
     even for a language whose extractor records none."""
