@@ -5,6 +5,7 @@ import ssl
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -24,6 +25,7 @@ _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 # localhost:5000, matching this module's own tests) is the common case for
 # both the CLI and the MCP tool.
 _ALLOWED_SCHEMES = {"http", "https"}
+MAX_ENDPOINT_CHECK_WORKERS = 8
 
 
 def _require_http_scheme(base_url: str) -> None:
@@ -152,6 +154,61 @@ def _response_shape(response) -> list[str] | None:
     return None
 
 
+def _check_endpoint(endpoint: dict, base_url: str, opener, timeout: float) -> dict:
+    if endpoint.get("unresolved"):
+        return {
+            "method": endpoint.get("method"),
+            "path": endpoint["path"],
+            "skipped": True,
+            "reason": "unresolved routing indirection (include/mount), not a concrete endpoint",
+        }
+
+    method = endpoint.get("method")
+    # A non-GET endpoint (most commonly a webhook receiver) still gets
+    # probed with a GET request - any HTTP response, even a 405, proves
+    # the process behind it is up, which is the only thing reachability
+    # monitoring claims to answer. Only a connection failure/timeout
+    # means "down". The response body isn't meaningful for a method the
+    # endpoint doesn't actually implement, so response_shape is skipped
+    # for these rather than risking a misleading shape-change alert.
+    reachability_only = method not in ("GET", "ANY")
+
+    resolved_path, had_params = _substitute_path_params(endpoint["path"])
+    url = base_url.rstrip("/") + "/" + resolved_path.lstrip("/")
+    notes = []
+    if had_params:
+        notes.append("path contains parameters, tested with placeholder value(s)")
+    if reachability_only:
+        notes.append(
+            f"endpoint's declared method is {method}; probed via GET for "
+            "reachability only, not a full functional check"
+        )
+    entry = {
+        "method": method if reachability_only else "GET",
+        "path": endpoint["path"],
+        "note": "; ".join(notes) if notes else None,
+        "reachability_only": reachability_only,
+    }
+
+    start = time.monotonic()
+    try:
+        request = urllib.request.Request(url)
+        with opener.open(request, timeout=timeout) as response:
+            entry["status_code"] = response.status
+            entry["reachable"] = True
+            entry["response_shape"] = None if reachability_only else _response_shape(response)
+    except urllib.error.HTTPError as exc:
+        entry["status_code"] = exc.code
+        entry["reachable"] = True
+        entry["response_shape"] = None
+    except (urllib.error.URLError, TimeoutError, OSError):
+        entry["status_code"] = None
+        entry["reachable"] = False
+        entry["response_shape"] = None
+    entry["latency_ms"] = round((time.monotonic() - start) * 1000, 1)
+    return entry
+
+
 def run_healthcheck(
     endpoints: list[dict], base_url: str, timeout: float = 5.0, *, pinned_ip: str | None = None
 ) -> dict:
@@ -163,64 +220,19 @@ def run_healthcheck(
     CLI/MCP callers pass nothing and keep today's normal DNS behavior."""
     _require_http_scheme(base_url)
     opener = _opener_for(pinned_ip)
-    results: list[dict] = []
-
-    for endpoint in endpoints:
-        if endpoint.get("unresolved"):
-            results.append(
-                {
-                    "method": endpoint.get("method"),
-                    "path": endpoint["path"],
-                    "skipped": True,
-                    "reason": "unresolved routing indirection (include/mount), not a concrete endpoint",
-                }
+    results: list[dict]
+    if not endpoints:
+        results = []
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(MAX_ENDPOINT_CHECK_WORKERS, len(endpoints))
+        ) as pool:
+            results = list(
+                pool.map(
+                    lambda endpoint: _check_endpoint(endpoint, base_url, opener, timeout),
+                    endpoints,
+                )
             )
-            continue
-
-        method = endpoint.get("method")
-        # A non-GET endpoint (most commonly a webhook receiver) still gets
-        # probed with a GET request - any HTTP response, even a 405, proves
-        # the process behind it is up, which is the only thing reachability
-        # monitoring claims to answer. Only a connection failure/timeout
-        # means "down". The response body isn't meaningful for a method the
-        # endpoint doesn't actually implement, so response_shape is skipped
-        # for these rather than risking a misleading shape-change alert.
-        reachability_only = method not in ("GET", "ANY")
-
-        resolved_path, had_params = _substitute_path_params(endpoint["path"])
-        url = base_url.rstrip("/") + "/" + resolved_path.lstrip("/")
-        notes = []
-        if had_params:
-            notes.append("path contains parameters, tested with placeholder value(s)")
-        if reachability_only:
-            notes.append(
-                f"endpoint's declared method is {method}; probed via GET for "
-                "reachability only, not a full functional check"
-            )
-        entry = {
-            "method": method if reachability_only else "GET",
-            "path": endpoint["path"],
-            "note": "; ".join(notes) if notes else None,
-            "reachability_only": reachability_only,
-        }
-
-        start = time.monotonic()
-        try:
-            request = urllib.request.Request(url)
-            with opener.open(request, timeout=timeout) as response:
-                entry["status_code"] = response.status
-                entry["reachable"] = True
-                entry["response_shape"] = None if reachability_only else _response_shape(response)
-        except urllib.error.HTTPError as exc:
-            entry["status_code"] = exc.code
-            entry["reachable"] = True
-            entry["response_shape"] = None
-        except (urllib.error.URLError, TimeoutError, OSError):
-            entry["status_code"] = None
-            entry["reachable"] = False
-            entry["response_shape"] = None
-        entry["latency_ms"] = round((time.monotonic() - start) * 1000, 1)
-        results.append(entry)
 
     return {
         "base_url": base_url,

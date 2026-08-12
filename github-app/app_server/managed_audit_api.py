@@ -1,6 +1,8 @@
 import hashlib
 
 import toon
+from aletheore.air_schema import validate_evidence
+from aletheore.evidence import EVIDENCE_VERSION, is_evidence_version_compatible
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -49,6 +51,35 @@ def _fetch_job(job_id: str, redis_url: str):
     return Job.fetch(job_id, connection=get_redis_client())
 
 
+def _decode_and_validate_evidence(evidence_toon: str) -> dict:
+    try:
+        decoded_evidence = toon.decode(evidence_toon)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="evidence could not be decoded") from exc
+
+    if not isinstance(decoded_evidence, dict):
+        raise HTTPException(status_code=400, detail="evidence must decode to an AIR object")
+
+    written_version = decoded_evidence.get("aletheore_version")
+    if not is_evidence_version_compatible(written_version):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"evidence was written by aletheore_version={written_version!r}, which is not "
+                f"compatible with this service's AIR schema ({EVIDENCE_VERSION})"
+            ),
+        )
+
+    problems = validate_evidence(decoded_evidence)
+    if problems:
+        detail = "; ".join(problems[:5])
+        if len(problems) > 5:
+            detail += f" (and {len(problems) - 5} more)"
+        raise HTTPException(status_code=400, detail=f"evidence does not match AIR schema: {detail}")
+
+    return decoded_evidence
+
+
 async def _authenticate_token(request: Request) -> tuple[dict, str]:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -72,10 +103,7 @@ async def start_managed_audit(request: Request, body: StartManagedAuditRequest):
     if not body.repo_full_name:
         raise HTTPException(status_code=400, detail="repo_full_name is required")
 
-    try:
-        decoded_evidence = toon.decode(body.evidence)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="evidence could not be decoded") from exc
+    decoded_evidence = _decode_and_validate_evidence(body.evidence)
 
     if not await check_and_reserve_monthly_repo_scan_slot(
         pool, installation["installation_id"], body.repo_full_name, MAX_SCANNED_REPOS_PER_MONTH

@@ -43,6 +43,10 @@ WEEKLY_DIGEST_SWEEP_JOB_TIMEOUT_SECONDS = 300
 # A single max(checked_at) query plus, on the rare stale tick, one email -
 # nothing here can run long.
 HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS = 60
+# App health, queue-depth/failed-job counters, and backup freshness checks.
+# Each is bounded to a short HTTP request, Redis reads, or local filesystem
+# metadata, with email alerting only on threshold breach.
+OPS_MONITOR_JOB_TIMEOUT_SECONDS = 60
 
 SCANS_QUEUE_NAME = "scans"
 # The health sweep gets its own queue, consumed by a dedicated worker (see
@@ -101,6 +105,10 @@ def run_forever(
         scans_queue.enqueue(
             "scan_worker.jobs.run_health_sweep_staleness_check_job",
             job_timeout=HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS,
+        )
+        scans_queue.enqueue(
+            "scan_worker.jobs.run_ops_monitor_job",
+            job_timeout=OPS_MONITOR_JOB_TIMEOUT_SECONDS,
         )
         # Touched only after every enqueue call above succeeds - a hang on
         # any one of them (e.g. Redis unreachable) means this loop is stuck

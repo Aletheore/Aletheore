@@ -157,10 +157,7 @@ async def test_healthz_returns_503_when_redis_is_unreachable(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_unhandled_exception_returns_generic_500_and_alerts(monkeypatch):
-    # An unhandled exception here means something nobody deliberately
-    # raised via HTTPException - a real bug, not a routine 4xx. Previously
-    # the only way to learn about one was reading logs after the fact.
+async def test_malformed_json_body_with_valid_signature_returns_401_not_500(monkeypatch):
     app.state.db_pool = object()
     body = b"not valid json"
 
@@ -188,10 +185,32 @@ async def test_unhandled_exception_returns_generic_500_and_alerts(monkeypatch):
             },
         )
 
-    assert response.status_code == 500
-    assert response.json() == {"detail": "internal server error"}
-    assert len(calls) == 1
-    assert calls[0][0][0] == "app_server"
+    assert response.status_code == 401
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_non_object_json_body_with_valid_signature_returns_401_not_500(monkeypatch):
+    app.state.db_pool = object()
+    body = b"[1, 2, 3]"
+
+    calls = []
+    monkeypatch.setattr("app_server.main.send_error_alert", lambda *a, **k: calls.append((a, k)))
+
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhook",
+            content=body,
+            headers={
+                "X-Hub-Signature-256": _signature(body, settings.github_webhook_secret),
+                "X-GitHub-Event": "installation",
+                "X-GitHub-Delivery": "delivery-non-object-1",
+            },
+        )
+
+    assert response.status_code == 401
+    assert calls == []
 
 
 @pytest.mark.asyncio

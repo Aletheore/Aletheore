@@ -27,4 +27,4 @@ if __name__ == "__main__":
     # the multi-minute AI jobs "scans" carries, so this doesn't reintroduce
     # the contention problem "health" was split out to fix in the first
     # place.
-    Worker(["health", "email"], connection=redis_conn).work()
+    Worker(["health", "email"], connection=redis_conn).work(with_scheduler=True)

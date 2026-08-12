@@ -45,7 +45,10 @@ def resolve_model(fallback_model: str) -> str:
 
 
 def writing_adapter_for(
-    fallback_model: str, on_usage: Callable[[int, int], None] | None = None
+    fallback_model: str,
+    on_usage: Callable[[int, int], None] | None = None,
+    before_llm_call: Callable[[], bool] | None = None,
+    allow_partial_report: bool = False,
 ) -> OpenAICompatibleAdapter:
     if _openai_available():
         return OpenAICompatibleAdapter(
@@ -54,6 +57,8 @@ def writing_adapter_for(
             api_key_env_var="OPENAI_API_KEY",
             model=LUNA_MODEL,
             on_usage=on_usage,
+            before_llm_call=before_llm_call,
+            allow_partial_report=allow_partial_report,
         )
     logging.getLogger(__name__).warning(
         "OPENAI_API_KEY not configured - falling back to DeepSeek (%s)", fallback_model
@@ -69,6 +74,8 @@ def writing_adapter_for(
         # callers that only use simple_completion(), which never sets this.
         supports_tool_choice=False,
         on_usage=on_usage,
+        before_llm_call=before_llm_call,
+        allow_partial_report=allow_partial_report,
     )
 
 
@@ -77,6 +84,14 @@ def model_for_plan(plan: str) -> str:
 
 
 def writing_adapter_for_plan(
-    plan: str, on_usage: Callable[[int, int], None] | None = None
+    plan: str,
+    on_usage: Callable[[int, int], None] | None = None,
+    before_llm_call: Callable[[], bool] | None = None,
+    allow_partial_report: bool = False,
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for(PRO_MODEL, on_usage=on_usage)
+    return writing_adapter_for(
+        PRO_MODEL,
+        on_usage=on_usage,
+        before_llm_call=before_llm_call,
+        allow_partial_report=allow_partial_report,
+    )

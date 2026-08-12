@@ -5,7 +5,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -177,7 +177,12 @@ async def webhook(request: Request):
         raise HTTPException(status_code=400, detail="missing X-GitHub-Delivery")
 
     event = request.headers.get("X-GitHub-Event", "")
-    payload = json.loads(body)
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return Response(status_code=401)
+    if not isinstance(payload, dict):
+        return Response(status_code=401)
     pool = request.app.state.db_pool
 
     # Claimed after the signature check, so an unauthenticated caller can't

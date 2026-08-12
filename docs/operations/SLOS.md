@@ -4,7 +4,7 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [DEPLOYMENT-VERIFICATION.md](DEPLOYMENT-VERIFICATION.md)
-**Last Updated:** 2026-07-23
+**Last Updated:** 2026-08-12
 
 ## Purpose
 
@@ -23,17 +23,24 @@ These targets are internal engineering objectives, not customer SLAs.
 
 ## Alert Candidates
 
-**None of these are wired up yet** - this is a proposed list, not a status
-report. No alerting/paging exists in the codebase for any of them as of
-2026-08-11.
+The scheduler enqueues `run_ops_monitor_job` on the existing scan-worker
+loop every health-sweep interval. Alerts use the existing Resend ops-email
+destination (`EMAIL_REPLY_TO_ADDRESS`).
 
-- App server unavailable for 2 consecutive checks.
-- Queue depth above threshold for 10 minutes.
-- Failed jobs above threshold for 10 minutes.
-- PostgreSQL unhealthy.
-- Redis unavailable.
-- Backup missing for more than 24 hours.
-- Monthly LLM spend reaches 80% of configured cap.
+- Wired: App server unavailable for 2 consecutive checks
+  (`ALETHEORE_APP_HEALTH_URL`, default `http://app-server:8000/healthz`).
+- Wired: Queue depth above threshold for 10 minutes
+  (`ALETHEORE_OPS_QUEUE_DEPTH_THRESHOLD`, default `25`).
+- Wired: Failed jobs above threshold for 10 minutes
+  (`ALETHEORE_OPS_FAILED_JOBS_THRESHOLD`, default `0`).
+- Wired: Backup missing or stale for more than 24 hours
+  (`ALETHEORE_BACKUP_DIR`, default `/app/backups`).
+- Partly covered: PostgreSQL unhealthy and Redis unavailable are surfaced
+  through `/healthz` and Docker healthchecks when the monitor can still run,
+  but there is not yet an independent external pager for total Redis outage.
+- Not wired yet: Monthly LLM spend reaches 80% of configured cap. The hard
+  spend cap is enforced before LLM calls, but approaching-cap alerting still
+  needs a separate telemetry pass.
 
 ## Review Cadence
 

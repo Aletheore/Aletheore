@@ -272,6 +272,8 @@ class OpenAICompatibleAdapter(AgentAdapter):
         request_timeout_seconds: int = REQUEST_TIMEOUT_SECONDS,
         credentials_path: Path | None = None,
         on_usage: Callable[[int, int], None] | None = None,
+        before_llm_call: Callable[[], bool] | None = None,
+        allow_partial_report: bool = False,
     ) -> None:
         self.name = name
         self.requires_consent = requires_consent
@@ -283,6 +285,8 @@ class OpenAICompatibleAdapter(AgentAdapter):
         self._supports_tool_choice = supports_tool_choice
         self._credentials_path = credentials_path or DEFAULT_CREDENTIALS_PATH
         self._on_usage = on_usage
+        self._before_llm_call = before_llm_call
+        self._allow_partial_report = allow_partial_report
 
     def is_available(self) -> bool:
         if not self._needs_key:
@@ -290,6 +294,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         return has_api_key(self._api_key_env_var, self.name, self._credentials_path)
 
     def simple_completion(self, system_prompt: str, user_prompt: str, cwd: str) -> str:
+        self._ensure_budget_for_next_call()
         api_key = None
         if self._needs_key:
             api_key = get_api_key(self._api_key_env_var, self.name, self._credentials_path)
@@ -360,6 +365,13 @@ class OpenAICompatibleAdapter(AgentAdapter):
             create_kwargs["tool_choice"] = "required"
 
         for _round in range(MAX_TOOL_ROUNDS):
+            if not self._has_budget_for_next_call():
+                if self._allow_partial_report:
+                    return self._partial_report(sections)
+                raise AdapterInvocationError(
+                    f"{self.name} stopped before starting the next model call because "
+                    "the monthly LLM spend cap would be exceeded"
+                )
             try:
                 response = _call_with_retry(
                     lambda: client.chat.completions.create(messages=messages, **create_kwargs)
@@ -435,6 +447,30 @@ class OpenAICompatibleAdapter(AgentAdapter):
             )
 
         return "\n\n".join(f"## {name}\n\n{sections[name]}" for name in REQUIRED_SECTIONS)
+
+    def _has_budget_for_next_call(self) -> bool:
+        return self._before_llm_call is None or self._before_llm_call()
+
+    def _ensure_budget_for_next_call(self) -> None:
+        if not self._has_budget_for_next_call():
+            raise AdapterInvocationError(
+                f"{self.name} stopped before starting the next model call because "
+                "the monthly LLM spend cap would be exceeded"
+            )
+
+    def _partial_report(self, sections: dict[str, str]) -> str:
+        lines = [
+            "> **Partial report:** Aletheore stopped before starting the next "
+            "LLM call because the monthly spend cap would be exceeded.",
+            "",
+            "---",
+        ]
+        for name in REQUIRED_SECTIONS:
+            if name in sections:
+                lines.extend(["", f"## {name}", "", sections[name]])
+        if not sections:
+            lines.extend(["", "_No report sections were generated before the budget stop._"])
+        return "\n".join(lines)
 
     def _read_evidence_tool(self, evidence, args: dict) -> str:
         path = args.get("path", "")

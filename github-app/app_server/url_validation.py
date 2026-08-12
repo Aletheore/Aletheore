@@ -7,6 +7,23 @@ class UnsafeURLError(ValueError):
     pass
 
 
+_SHARED_ADDRESS_SPACE = ipaddress.ip_network("100.64.0.0/10")
+
+
+def _is_disallowed_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    mapped_ipv4 = ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) else None
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+        or ip in _SHARED_ADDRESS_SPACE
+        or (mapped_ipv4 is not None and mapped_ipv4 in _SHARED_ADDRESS_SPACE)
+    )
+
+
 def _validate_and_resolve(raw: str) -> list[str]:
     parsed = urlparse(raw)
     if parsed.scheme != "https":
@@ -25,14 +42,7 @@ def _validate_and_resolve(raw: str) -> list[str]:
     for entry in addresses:
         ip_str = entry[4][0]
         ip = ipaddress.ip_address(ip_str)
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
+        if _is_disallowed_ip(ip):
             raise UnsafeURLError(f"'{hostname}' resolves to a disallowed address")
         resolved_ips.append(ip_str)
     return resolved_ips

@@ -14,7 +14,8 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from rq import get_current_job
+from rq import Queue, get_current_job
+from rq.registry import FailedJobRegistry
 
 from app_server.audit_signing import content_hash, public_key_hex_from_private, sign_report
 from aletheore.adapters.anthropic_native import AnthropicAdapter
@@ -41,6 +42,7 @@ from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.http_client import get_github_api_client
 from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation
 from app_server.logging_config import log_job
+from app_server.redis_client import get_redis_client
 from app_server.rate_limit import (
     MIN_MANAGED_AUDIT_COOLDOWN_SECONDS,
     cooldown_seconds_for_loc,
@@ -161,6 +163,10 @@ LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS = 1800
 LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS = 300
 HEALTH_CHECK_DOWN_RETRY_ATTEMPTS = 2
 HEALTH_CHECK_DOWN_RETRY_DELAY_SECONDS = 2.0
+MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET = 64
+HEALTH_SWEEP_SOFT_DEADLINE_SECONDS = 540
+HEALTH_SWEEP_ROTATION_KEY = "health_sweep:target_rotation"
+HEALTH_DOWN_RETRY_JOB_TIMEOUT_SECONDS = 60
 # PR scans clone via `git checkout <sha>` (detached HEAD, not a named
 # branch) - the persisted git graph tracks one repo's mainline history
 # across scans, not each individual PR's ephemeral branch, so every hosted
@@ -201,6 +207,7 @@ SECRETS_HISTORY_DEPTH_CAP = 20_000
 # model_tiers.py/flash_review.py for which model that cost is actually
 # priced against (Luna, falling back to deepseek-v4-flash).
 MAX_FLASH_REVIEWS_PER_MONTH = 300
+DEFAULT_LLM_NEXT_CALL_RESERVE_USD = 0.001
 
 
 def _job_temp_dir() -> Path:
@@ -735,6 +742,28 @@ def _post_failure_comment(
     upsert_pr_comment(client, token, repo_full_name, pr_number, _failure_body(error))
 
 
+def _try_post_failure_comment(
+    settings,
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    error: Exception,
+    *,
+    source: str,
+) -> None:
+    try:
+        _post_failure_comment(settings, installation_id, repo_full_name, pr_number, error)
+    except Exception as comment_exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "%s failed to post failure comment for installation=%s repo=%s pr=%s (%s)",
+            source,
+            installation_id,
+            repo_full_name,
+            pr_number,
+            comment_exc,
+        )
+
+
 def _post_flash_review_failure_comment(
     settings,
     installation_id: int,
@@ -883,10 +912,10 @@ def run_pr_scan_job(
             except Exception:  # noqa: BLE001
                 pass
     except Exception as exc:  # noqa: BLE001
-        try:
-            _post_failure_comment(settings, installation_id, repo_full_name, pr_number, exc)
-        except Exception:  # noqa: BLE001
-            pass
+        _try_post_failure_comment(
+            settings, installation_id, repo_full_name, pr_number, exc, source="run_pr_scan_job"
+        )
+        raise
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
 
@@ -946,8 +975,14 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
                 run_live_docs_full_build_job(installation_id, repo_full_name)
             except Exception:  # noqa: BLE001
                 pass
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "initial scan job failed for installation=%s repo=%s (%s)",
+            installation_id,
+            repo_full_name,
+            exc,
+        )
+        raise
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
 
@@ -1010,6 +1045,7 @@ def run_push_scan_job(
         logging.getLogger("scan_worker.jobs").warning(
             "push scan job failed for installation=%s repo=%s (%s)", installation_id, repo_full_name, exc,
         )
+        raise
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
 
@@ -1219,10 +1255,15 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
             marker=AUDIT_COMMENT_MARKER,
         )
     except Exception as exc:  # noqa: BLE001
-        try:
-            _post_failure_comment(settings, installation_id, repo_full_name, pr_number, exc)
-        except Exception:  # noqa: BLE001
-            pass
+        _try_post_failure_comment(
+            settings,
+            installation_id,
+            repo_full_name,
+            pr_number,
+            exc,
+            source="run_managed_audit_pr_job",
+        )
+        raise
     finally:
         shutil.rmtree(job_dir, ignore_errors=True)
 
@@ -1260,24 +1301,21 @@ def run_managed_audit_api_job(
                 aletheore_dir.mkdir(parents=True, exist_ok=True)
                 (aletheore_dir / "air.toon").write_text(evidence)
                 (aletheore_dir / "air.json").write_text(json.dumps({"managed_evidence": True}))
-            spend_accumulator = {"total": 0.0, "model": model_for_plan(plan)}
-
-            def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-                spend_accumulator["total"] += cost_for_usage(
-                    spend_accumulator["model"], prompt_tokens, completion_tokens
-                )
+            spend_budget = _IncrementalSpendBudget(
+                settings.database_url,
+                installation_id,
+                model_for_plan(plan),
+                current_spend,
+                monthly_cap,
+            )
 
             result = run_managed_audit(
                 job_dir,
-                on_usage=_on_usage,
+                on_usage=spend_budget.record_usage,
+                before_llm_call=spend_budget.can_start_next_call,
+                allow_partial_report=True,
                 plan=plan,
                 include_llm_suggestions=include_suggestions,
-            )
-            record_llm_spend(
-                settings.database_url,
-                installation_id,
-                spend_accumulator["total"],
-                monthly_cap=monthly_cap,
             )
             verification_token = _sign_and_persist_audit_report(
                 settings,
@@ -1504,8 +1542,15 @@ def _endpoint_results(evidence: dict, base_url: str, pinned_ip: str) -> list[dic
     endpoints = evidence.get("repository", {}).get("api_endpoints", {}).get("endpoints", [])
     if not endpoints:
         return []
-    results = run_healthcheck(endpoints, base_url, pinned_ip=pinned_ip).get("results", [])
-    for endpoint, result in zip(endpoints, results, strict=False):
+    checked_endpoints = endpoints[:MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET]
+    if len(endpoints) > len(checked_endpoints):
+        logging.getLogger("scan_worker.jobs").warning(
+            "health check target has %s endpoints; checking first %s this sweep",
+            len(endpoints),
+            len(checked_endpoints),
+        )
+    results = run_healthcheck(checked_endpoints, base_url, pinned_ip=pinned_ip).get("results", [])
+    for endpoint, result in zip(checked_endpoints, results, strict=False):
         if endpoint.get("file") is not None:
             result["file"] = endpoint["file"]
         if endpoint.get("line") is not None:
@@ -1556,6 +1601,45 @@ def _recheck_single_endpoint(entry: dict, base_url: str, pinned_ip: str) -> dict
             "response_shape": None,
         }
     return results[0]
+
+
+def _rotated_health_check_targets(dsn: str) -> list[dict]:
+    targets = list(list_health_check_targets_all(dsn))
+    if len(targets) <= 1:
+        return targets
+    try:
+        offset = (get_redis_client().incr(HEALTH_SWEEP_ROTATION_KEY) - 1) % len(targets)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "health sweep rotation state unavailable (%s); using database order",
+            type(exc).__name__,
+        )
+        return targets
+    return targets[offset:] + targets[:offset]
+
+
+def _enqueue_health_down_retry(target: dict, entry: dict, attempt: int) -> bool:
+    try:
+        queue = Queue("health", connection=get_redis_client())
+        queue.enqueue_in(
+            timedelta(seconds=HEALTH_CHECK_DOWN_RETRY_DELAY_SECONDS),
+            "scan_worker.jobs.run_health_check_down_retry_job",
+            target,
+            entry,
+            attempt,
+            job_timeout=HEALTH_DOWN_RETRY_JOB_TIMEOUT_SECONDS,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "failed to enqueue health check down retry for installation=%s repo=%s target=%s path=%s (%s)",
+            target.get("installation_id"),
+            target.get("repo_full_name"),
+            target.get("target_id"),
+            entry.get("path"),
+            type(exc).__name__,
+        )
+        return False
 
 
 def _commit_attachment_from_graph(installation_id: int, repo_full_name: str, source_file: str) -> dict | None:
@@ -1821,8 +1905,16 @@ def run_runtime_event_job(
 def run_health_check_sweep_job() -> None:
     settings = get_settings()
     dsn = settings.database_url
+    deadline = time.monotonic() + HEALTH_SWEEP_SOFT_DEADLINE_SECONDS
+    targets = _rotated_health_check_targets(dsn)
 
-    for target in list_health_check_targets_all(dsn):
+    for index, target in enumerate(targets):
+        if time.monotonic() >= deadline:
+            logging.getLogger("scan_worker.jobs").warning(
+                "health check sweep reached soft deadline; deferring %s target(s) to the next tick",
+                len(targets) - index,
+            )
+            return
         installation_id = target["installation_id"]
         repo_full_name = target["repo_full_name"]
         target_id = target["target_id"]
@@ -1918,18 +2010,8 @@ def _run_health_check_sweep_for_target(
         )
 
         if reachability_flipped and not reachable:
-            for _ in range(HEALTH_CHECK_DOWN_RETRY_ATTEMPTS):
-                time.sleep(HEALTH_CHECK_DOWN_RETRY_DELAY_SECONDS)
-                retry_result = _recheck_single_endpoint(entry, base_url, pinned_ip)
-                if retry_result.get("reachable"):
-                    reachable = True
-                    status_code = retry_result.get("status_code")
-                    latency_ms = retry_result.get("latency_ms")
-                    response_shape = retry_result.get("response_shape")
-                    break
-            reachability_flipped = (prior is None and not reachable) or (
-                prior is not None and prior.get("reachable") != reachable
-            )
+            if _enqueue_health_down_retry(target, entry, 1):
+                continue
 
         if reachability_flipped:
             if not reachable and source_file:
@@ -2012,6 +2094,95 @@ def _run_health_check_sweep_for_target(
 
 
 @log_job
+def run_health_check_down_retry_job(target: dict, entry: dict, attempt: int) -> None:
+    settings = get_settings()
+    dsn = settings.database_url
+    installation_id = target["installation_id"]
+    repo_full_name = target["repo_full_name"]
+    target_id = target["target_id"]
+    base_url = target["base_url"]
+
+    try:
+        _, pinned_ip = validate_and_pin_https_url(base_url)
+    except UnsafeURLError as exc:
+        logging.getLogger("scan_worker.jobs").warning(
+            "skipping health check retry for installation=%s repo=%s target=%s - %s",
+            installation_id,
+            repo_full_name,
+            target_id,
+            exc,
+        )
+        return
+
+    retry_result = _recheck_single_endpoint(entry, base_url, pinned_ip)
+    method = retry_result.get("method") or entry.get("method")
+    path = retry_result.get("path") or entry["path"]
+    reachable = retry_result.get("reachable") is True
+    status_code = retry_result.get("status_code")
+    latency_ms = retry_result.get("latency_ms")
+    response_shape = retry_result.get("response_shape")
+
+    if not reachable and attempt < HEALTH_CHECK_DOWN_RETRY_ATTEMPTS:
+        _enqueue_health_down_retry(target, entry, attempt + 1)
+        return
+
+    source_file = entry.get("file")
+    source_line = entry.get("line")
+    evidence = _latest_evidence_or_none(dsn, installation_id, repo_full_name)
+    evidence_resolution = entry.get("evidence_resolution")
+    prior = get_last_endpoint_health(
+        dsn,
+        installation_id,
+        repo_full_name,
+        method,
+        path,
+        target_id=target_id,
+    )
+    reachability_flipped = (prior is None and not reachable) or (
+        prior is not None and prior.get("reachable") != reachable
+    )
+
+    if reachability_flipped:
+        if not reachable and source_file:
+            evidence_resolution = _attach_recent_commit_for_failure(
+                installation_id,
+                repo_full_name,
+                source_file,
+                evidence_resolution,
+                evidence,
+                method=method,
+                path=path,
+                status_code=status_code,
+                source_line=source_line,
+            )
+        _send_if_webhook_configured(
+            target,
+            format_reachability_alert(
+                repo_full_name,
+                method,
+                path,
+                source_file,
+                source_line,
+                reachable,
+                evidence_resolution=evidence_resolution,
+            ),
+        )
+
+    insert_endpoint_health(
+        dsn,
+        installation_id,
+        repo_full_name,
+        method,
+        path,
+        reachable,
+        status_code,
+        latency_ms,
+        response_shape=response_shape,
+        target_id=target_id,
+    )
+
+
+@log_job
 def run_session_cleanup_job() -> None:
     dsn = get_settings().database_url
     deleted = delete_expired_sessions(dsn)
@@ -2088,6 +2259,208 @@ def run_health_sweep_staleness_check_job() -> None:
         ),
         "run_health_sweep_staleness_check_job",
     )
+
+
+OPS_APP_HEALTH_URL_ENV = "ALETHEORE_APP_HEALTH_URL"
+OPS_BACKUP_DIR_ENV = "ALETHEORE_BACKUP_DIR"
+OPS_QUEUE_DEPTH_THRESHOLD_ENV = "ALETHEORE_OPS_QUEUE_DEPTH_THRESHOLD"
+OPS_FAILED_JOBS_THRESHOLD_ENV = "ALETHEORE_OPS_FAILED_JOBS_THRESHOLD"
+
+OPS_DEFAULT_APP_HEALTH_URL = "http://app-server:8000/healthz"
+OPS_DEFAULT_BACKUP_DIR = "/app/backups"
+OPS_DEFAULT_QUEUE_DEPTH_THRESHOLD = 25
+OPS_DEFAULT_FAILED_JOBS_THRESHOLD = 0
+OPS_THRESHOLD_DURATION_SECONDS = 600
+OPS_BACKUP_STALE_SECONDS = 86400
+OPS_APP_HEALTH_CONSECUTIVE_FAILURES = 2
+OPS_MONITORED_QUEUES = ("scans", "health")
+
+
+class OpsMonitorError(RuntimeError):
+    pass
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logging.getLogger("scan_worker.jobs").warning(
+            "invalid integer env var, using default",
+            extra={"env_var": name, "value": raw, "default": default},
+        )
+        return default
+
+
+def _decode_redis_value(value) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
+
+
+def _redis_get_float(redis_conn, key: str) -> float | None:
+    value = redis_conn.get(key)
+    if value is None:
+        return None
+    return float(_decode_redis_value(value))
+
+
+def _set_with_expiry(redis_conn, key: str, value, ttl_seconds: int) -> None:
+    try:
+        redis_conn.set(key, value, ex=ttl_seconds)
+    except TypeError:
+        redis_conn.set(key, value)
+        if hasattr(redis_conn, "expire"):
+            redis_conn.expire(key, ttl_seconds)
+
+
+def _fetch_app_health(url: str) -> tuple[bool, str]:
+    try:
+        response = httpx.get(url, timeout=5)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
+    if response.status_code == 200:
+        return True, f"HTTP {response.status_code}"
+    return False, f"HTTP {response.status_code}: {response.text[:200]}"
+
+
+def _send_ops_alert(source: str, message: str, context: str) -> None:
+    send_error_alert(source, OpsMonitorError(message), context)
+
+
+def _check_app_health(redis_conn, health_url: str) -> None:
+    healthy, detail = _fetch_app_health(health_url)
+    key = "ops_monitor:app_health:consecutive_failures"
+    if healthy:
+        redis_conn.delete(key)
+        return
+
+    failures = redis_conn.incr(key)
+    if hasattr(redis_conn, "expire"):
+        redis_conn.expire(key, OPS_THRESHOLD_DURATION_SECONDS * 2)
+    if failures < OPS_APP_HEALTH_CONSECUTIVE_FAILURES:
+        return
+
+    _send_ops_alert(
+        "ops_monitor.app_health",
+        f"app server health check failed {failures} consecutive times",
+        f"url={health_url} detail={detail}",
+    )
+
+
+def _check_threshold_duration(
+    redis_conn,
+    *,
+    state_key: str,
+    source: str,
+    metric_name: str,
+    current_value: int,
+    threshold: int,
+    now: float,
+) -> None:
+    if current_value <= threshold:
+        redis_conn.delete(state_key)
+        return
+
+    first_seen = _redis_get_float(redis_conn, state_key)
+    if first_seen is None:
+        _set_with_expiry(redis_conn, state_key, now, OPS_THRESHOLD_DURATION_SECONDS * 3)
+        return
+
+    if now - first_seen < OPS_THRESHOLD_DURATION_SECONDS:
+        return
+
+    _send_ops_alert(
+        source,
+        f"{metric_name} has been above threshold for at least {OPS_THRESHOLD_DURATION_SECONDS}s",
+        f"{metric_name}={current_value} threshold={threshold} first_seen={first_seen:.0f}",
+    )
+
+
+def _check_queue_alerts(redis_conn, now: float) -> None:
+    queue_depth_threshold = _env_int(
+        OPS_QUEUE_DEPTH_THRESHOLD_ENV, OPS_DEFAULT_QUEUE_DEPTH_THRESHOLD
+    )
+    failed_jobs_threshold = _env_int(
+        OPS_FAILED_JOBS_THRESHOLD_ENV, OPS_DEFAULT_FAILED_JOBS_THRESHOLD
+    )
+    for queue_name in OPS_MONITORED_QUEUES:
+        queue = Queue(queue_name, connection=redis_conn)
+        _check_threshold_duration(
+            redis_conn,
+            state_key=f"ops_monitor:queue_depth:{queue_name}:first_seen",
+            source=f"ops_monitor.queue_depth.{queue_name}",
+            metric_name=f"{queue_name} queue depth",
+            current_value=queue.count,
+            threshold=queue_depth_threshold,
+            now=now,
+        )
+        failed_count = FailedJobRegistry(queue=queue).count
+        _check_threshold_duration(
+            redis_conn,
+            state_key=f"ops_monitor:failed_jobs:{queue_name}:first_seen",
+            source=f"ops_monitor.failed_jobs.{queue_name}",
+            metric_name=f"{queue_name} failed jobs",
+            current_value=failed_count,
+            threshold=failed_jobs_threshold,
+            now=now,
+        )
+
+
+def _latest_backup_age_seconds(backup_dir: Path, now: float) -> float | None:
+    backups = list(backup_dir.glob("aletheore_app_*.dump"))
+    if not backups:
+        return None
+    newest = max(path.stat().st_mtime for path in backups)
+    return now - newest
+
+
+def _check_backup_freshness(now: float) -> None:
+    backup_dir = Path(os.environ.get(OPS_BACKUP_DIR_ENV, OPS_DEFAULT_BACKUP_DIR))
+    if not backup_dir.is_dir():
+        _send_ops_alert(
+            "ops_monitor.backup_freshness",
+            "PostgreSQL backup directory is not available",
+            f"backup_dir={backup_dir}",
+        )
+        return
+
+    age_seconds = _latest_backup_age_seconds(backup_dir, now)
+    if age_seconds is None:
+        _send_ops_alert(
+            "ops_monitor.backup_freshness",
+            "no PostgreSQL backup dump found",
+            f"backup_dir={backup_dir} stale_after={OPS_BACKUP_STALE_SECONDS}s",
+        )
+        return
+
+    if age_seconds <= OPS_BACKUP_STALE_SECONDS:
+        return
+
+    _send_ops_alert(
+        "ops_monitor.backup_freshness",
+        "latest PostgreSQL backup is stale",
+        f"backup_dir={backup_dir} age_seconds={age_seconds:.0f} "
+        f"stale_after={OPS_BACKUP_STALE_SECONDS}s",
+    )
+
+
+@log_job
+def run_ops_monitor_job() -> None:
+    """Small production-readiness checks that feed the existing ops email
+    alert path. Runs on "scans" alongside the health-sweep staleness check,
+    so a backed-up or dead health queue cannot hide its own alerting gap.
+    """
+    redis_conn = get_redis_client()
+    now = time.time()
+    _check_app_health(
+        redis_conn,
+        os.environ.get(OPS_APP_HEALTH_URL_ENV, OPS_DEFAULT_APP_HEALTH_URL),
+    )
+    _check_queue_alerts(redis_conn, now)
+    _check_backup_freshness(now)
 
 
 # Each template function takes exactly one positional string arg
@@ -2225,6 +2598,44 @@ def _llm_spend_cap_reached(dsn: str, installation_id: int, plan: str) -> tuple[b
     monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
     current_spend = get_llm_spend_this_month(dsn, installation_id)
     return current_spend >= monthly_cap, monthly_cap
+
+
+class _IncrementalSpendBudget:
+    def __init__(
+        self,
+        dsn: str,
+        installation_id: int,
+        model: str,
+        current_spend: float,
+        monthly_cap: float,
+        next_call_reserve_usd: float = DEFAULT_LLM_NEXT_CALL_RESERVE_USD,
+    ) -> None:
+        self.dsn = dsn
+        self.installation_id = installation_id
+        self.model = model
+        self.current_spend = current_spend
+        self.monthly_cap = monthly_cap
+        self.next_call_reserve_usd = next_call_reserve_usd
+        self.spent_this_job = 0.0
+
+    def can_start_next_call(self) -> bool:
+        return (
+            self.current_spend + self.spent_this_job + self.next_call_reserve_usd
+            <= self.monthly_cap
+        )
+
+    def record_usage(self, prompt_tokens: int, completion_tokens: int) -> None:
+        cost = cost_for_usage(self.model, prompt_tokens, completion_tokens)
+        if cost <= 0:
+            return
+        record_llm_spend(self.dsn, self.installation_id, cost)
+        self.spent_this_job += cost
+
+    def cap_message(self) -> str:
+        return (
+            f"monthly spend cap reached (${self.monthly_cap:.2f}); "
+            "stopped before starting the next LLM call"
+        )
 
 
 def _live_wiki_naming_adapter(
@@ -2675,6 +3086,7 @@ def _run_docs_build_for_modules(
     client: httpx.Client,
     token: str,
     ref: str | None,
+    spend_budget: _IncrementalSpendBudget | None = None,
 ) -> tuple[int, str | None]:
     """Processes each module independently - one module's failure (a
     transient API error, a malformed response) is logged and skipped, not
@@ -2691,6 +3103,9 @@ def _run_docs_build_for_modules(
     succeeded = 0
     last_error: str | None = None
     for module in modules:
+        if spend_budget is not None and not spend_budget.can_start_next_call():
+            last_error = spend_budget.cap_message()
+            break
         try:
             content = fetch_file_content(client, token, repo_full_name, module["path"], ref)
             if content is None:
@@ -2794,11 +3209,14 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
             )
             return
 
-        spend_accumulator = {"total": 0.0}
         full_build_model = model_for_plan(plan)
+        current_spend = get_llm_spend_this_month(dsn, installation_id)
+        spend_budget = _IncrementalSpendBudget(
+            dsn, installation_id, full_build_model, current_spend, monthly_cap
+        )
 
         def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-            spend_accumulator["total"] += cost_for_usage(full_build_model, prompt_tokens, completion_tokens)
+            spend_budget.record_usage(prompt_tokens, completion_tokens)
 
         try:
             writing_adapter = _live_docs_full_build_writing_adapter(plan, on_usage=_on_usage)
@@ -2811,9 +3229,16 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
             return
 
         succeeded, last_error = _run_docs_build_for_modules(
-            dsn, installation_id, repo_full_name, modules, writing_adapter, client, token, None
+            dsn,
+            installation_id,
+            repo_full_name,
+            modules,
+            writing_adapter,
+            client,
+            token,
+            None,
+            spend_budget=spend_budget,
         )
-        record_llm_spend(dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap)
     if succeeded == 0 and last_error is not None:
         # Every module in this run failed - genuinely nothing new landed,
         # unlike a partial run where some succeeded and persisted already.
