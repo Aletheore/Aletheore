@@ -512,6 +512,68 @@ def test_build_chunks_tags_a_php_interface_files_chunks_as_declaration_only(tmp_
     assert all(c["is_declaration_only"] for c in chunks)
 
 
+def test_build_chunks_drops_a_banner_repeated_across_many_files_even_if_no_regex_catches_it(
+    tmp_path,
+):
+    """The durable backstop: a context string shared by more than
+    _BOILERPLATE_MIN_REPEAT_COUNT files is boilerplate by definition,
+    regardless of whether any regex above recognizes its shape. A repo
+    where every file opens with an identical banner comment must produce
+    empty file context, not the banner."""
+    banner = "/**\n * Totally Unrecognized Proprietary Banner Text\n */\n"
+    modules = []
+    for i in range(4):
+        name = f"file{i}.js"
+        (tmp_path / name).write_text(f"{banner}function fn{i}() {{ return {i}; }}\n")
+        modules.append({
+            "path": name,
+            "language": "javascript",
+            "symbols": {
+                "functions": [{"name": f"fn{i}", "start_line": 4, "end_line": 4}],
+                "classes": [],
+            },
+        })
+    evidence = {"repository": {"modules": modules}}
+
+    chunks = build_chunks(evidence, tmp_path)
+
+    symbol_chunks = [c for c in chunks if c["symbol_name"] is not None]
+    assert symbol_chunks
+    assert all("[file]" not in c["text"] for c in symbol_chunks)
+    assert all("Unrecognized Proprietary Banner" not in c["text"] for c in symbol_chunks)
+
+
+def test_build_chunks_keeps_a_context_shared_by_only_a_couple_of_files(tmp_path):
+    """The frequency guard must not fire on ordinary, small-scale
+    coincidence - only real repo-wide boilerplate."""
+    (tmp_path / "a.js").write_text(
+        "/** Handles the request pipeline. */\nfunction fnA() { return 1; }\n"
+    )
+    (tmp_path / "b.js").write_text(
+        "/** Handles the request pipeline. */\nfunction fnB() { return 2; }\n"
+    )
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.js", "language": "javascript",
+                    "symbols": {"functions": [{"name": "fnA", "start_line": 2, "end_line": 2}], "classes": []},
+                },
+                {
+                    "path": "b.js", "language": "javascript",
+                    "symbols": {"functions": [{"name": "fnB", "start_line": 2, "end_line": 2}], "classes": []},
+                },
+            ]
+        }
+    }
+
+    chunks = build_chunks(evidence, tmp_path)
+
+    symbol_chunks = [c for c in chunks if c["symbol_name"] is not None]
+    assert symbol_chunks
+    assert all("Handles the request pipeline" in c["text"] for c in symbol_chunks)
+
+
 def test_fts_failure_degrades_to_vector_only(tmp_path):
     """An index built before full-text existed has no text_idx, and a query
     full of punctuation can be rejected by the tokenizer. Neither is worth
@@ -1036,3 +1098,48 @@ def test_file_header_comment_drops_licence_boilerplate():
     context = _file_header_comment(lines)
     assert "Copyright" not in context
     assert "Param is a single URL parameter" in context
+
+
+def test_file_header_comment_drops_a_project_banner_line():
+    """"Slim Framework (https://slimframework.com)" carries no licence
+    keyword at all, so it survived the old filter untouched - the single
+    most common leaked string measured on slimphp/Slim (121 of 455
+    chunks)."""
+    lines = [
+        "/**",
+        " * Slim Framework (https://slimframework.com)",
+        " *",
+        " * @license https://github.com/slimphp/Slim/blob/4.x/LICENSE.md (MIT License)",
+        " */",
+        "",
+        "class App {",
+    ]
+    context = _file_header_comment(lines)
+    assert "Slim Framework" not in context
+    assert "@license" not in context
+
+
+def test_file_header_comment_drops_a_bare_doc_tag_and_its_trailing_comment_terminator():
+    """The real banner closes with "@api */" on one line - @api carries no
+    legal keyword, and the closing "*/" trails whatever's left after the
+    tag itself is filtered, or would leak in on its own if it weren't."""
+    lines = [
+        "/**",
+        " * Slim Framework (https://slimframework.com)",
+        " *",
+        " * @api */",
+        "",
+        "class App {",
+    ]
+    context = _file_header_comment(lines)
+    assert "@api" not in context
+    assert "*/" not in context
+
+
+def test_file_header_comment_strips_a_trailing_comment_terminator_from_real_content():
+    """A legitimate doc line closing the block on the same line
+    ("real content */") must still lose the terminator, independent of
+    whether the line is otherwise noise."""
+    lines = ["/**", " * Handles authentication for the app. */", "", "class Auth {"]
+    context = _file_header_comment(lines)
+    assert context == "Handles authentication for the app."

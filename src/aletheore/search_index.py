@@ -89,9 +89,28 @@ FILE_CONTEXT_MAX_CHARS = 300
 _COMMENT_PREFIXES = ("#", "//", "///", "/*", "*", '"""', "'''", "--", ";;")
 
 _LEGAL_NOISE = re.compile(
-    r"copyright|all rights reserved|licen[sc]e|spdx|BSD|MIT |Apache|redistribution",
+    r"copyright|all rights reserved|licen[sc]e|spdx|BSD|MIT |Apache|redistribution"
+    # A bare Javadoc/PHPDoc tag line - @license is already caught above via
+    # "licen[sc]e", but @author/@package/@link/@copyright/@api carry no
+    # legal keyword of their own and slipped through untouched. slimphp/Slim
+    # closes its banner with "@api */" on one line, which this catches at
+    # the tag; the trailing "*/" is stripped separately below regardless.
+    r"|^@(author|package|link|copyright|api)\b"
+    # A line that is only a bare URL - the boilerplate part of a banner like
+    # "Slim Framework (https://slimframework.com)" once the parenthetical
+    # is split out, and common on its own as a licence-file pointer.
+    r"|^https?://\S+$",
     re.IGNORECASE,
 )
+# The other half of that same banner shape: a project name followed by a
+# parenthesised URL, with no legal keyword in it at all - "Slim Framework
+# (https://slimframework.com)" reads as ordinary prose to _LEGAL_NOISE
+# above, and was the single most common leaked string measured on
+# slimphp/Slim (121 of 455 chunks). The cross-file repeat-count guard in
+# build_chunks is the durable backstop for banners this regex doesn't
+# anticipate; this catches the common shape without waiting for a second
+# file to prove it's boilerplate.
+_PROJECT_BANNER = re.compile(r"\([^)]*https?://[^)]*\)\s*$")
 
 # The first of these means later comments describe that symbol, not the file.
 _DEFINITION_START = re.compile(
@@ -122,7 +141,7 @@ def _file_header_comment(lines: list[str]) -> str:
             close_at = line.find(open_triple_quote)
             text = line[:close_at] if close_at != -1 else line
             text = text.strip()
-            if text and not _LEGAL_NOISE.search(text):
+            if text and not _LEGAL_NOISE.search(text) and not _PROJECT_BANNER.search(text):
                 collected.append(text)
             if close_at != -1:
                 open_triple_quote = None
@@ -156,10 +175,18 @@ def _file_header_comment(lines: list[str]) -> str:
             continue
         if line.startswith(_COMMENT_PREFIXES):
             text = line.lstrip("/#*-!;\"' ").strip()
+            # A C-style block comment's closing "*/" only ever shows up on
+            # the RIGHT of whatever else is on its line (the lstrip above
+            # only ever touches the left), and often rides along with
+            # otherwise-harmless trailing content - slimphp/Slim closes its
+            # banner with "@api */" on one line. Stripped unconditionally,
+            # not just when the line is noise, since a real trailing "*/"
+            # on a legitimate doc line is exactly as unwanted.
+            text = re.sub(r"\*+/\s*$", "", text).strip()
             # Licence headers are the same on every file in a repo, so they
             # carry no signal and actively dilute the symbol they ride on -
             # gin's files all begin "Copyright 2013 Julien Schmidt".
-            if text and not _LEGAL_NOISE.search(text):
+            if text and not _LEGAL_NOISE.search(text) and not _PROJECT_BANNER.search(text):
                 collected.append(text)
             if sum(len(c) for c in collected) >= FILE_CONTEXT_MAX_CHARS:
                 break
@@ -287,8 +314,25 @@ def _is_declaration_only_file(module_path: str, language: str, source: str) -> b
     return False
 
 
+_BOILERPLATE_MIN_REPEAT_COUNT = 2
+
+
 def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
-    chunks: list[dict] = []
+    # First pass: read every file once, computing its [file] context and
+    # tallying how often each distinct context string recurs across the
+    # repo. A context shared by more than _BOILERPLATE_MIN_REPEAT_COUNT
+    # files is boilerplate by definition - a licence banner, a
+    # generated-file notice, a copyright block the regex filters above
+    # didn't anticipate - not a coincidence. Measured on slimphp/Slim: 121
+    # of 455 chunks carried the identical "Slim Framework
+    # (https://slimframework.com) @api */" string, stamping the same 50
+    # characters of noise onto a quarter of the index instead of the
+    # distinguishing sentence this feature exists to add. Deterministic and
+    # language-agnostic where the regex filters are neither, and it catches
+    # banners no regex anticipated - the durable fix; the regexes above are
+    # the quick one.
+    pending: list[tuple[dict, list[str], str]] = []
+    context_counts: dict[str, int] = {}
     for module in evidence["repository"]["modules"]:
         module_path = module["path"]
         if _is_test_path(module_path) or _is_vendored_path(module_path):
@@ -300,6 +344,21 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
             lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
         except OSError:
             continue
+        file_context = _file_header_comment(lines)
+        if file_context:
+            context_counts[file_context] = context_counts.get(file_context, 0) + 1
+        pending.append((module, lines, file_context))
+
+    boilerplate_contexts = {
+        context for context, count in context_counts.items()
+        if count > _BOILERPLATE_MIN_REPEAT_COUNT
+    }
+
+    chunks: list[dict] = []
+    for module, lines, file_context in pending:
+        module_path = module["path"]
+        if file_context in boilerplate_contexts:
+            file_context = ""
 
         # Structural metadata straight from AIR, attached to every chunk of
         # this file. Free - the scan already computed it - and it turns
@@ -311,20 +370,6 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
         # nothing and saves the agent a follow-up aletheore_imports call.
         language = module.get("language", "unknown")
         imports = module.get("imports", [])
-
-        # A compact identity for this file, carried by every one of its symbol
-        # chunks. Without it, symbol chunks in trait-heavy code are near
-        # duplicates of each other across files: serde defines a symbol called
-        # `deserialize` in 57 different files, `expecting` in 44, and the bodies
-        # are boilerplate trait impls, so an embedder has almost nothing to tell
-        # them apart. The sentence that actually distinguishes the file ("An
-        # efficient way to discard data from a deserializer") lives in its
-        # header, and previously reached only the single module chunk, which
-        # then lost to 57 identical-looking siblings.
-        #
-        # Comment lines only: code from the head is already in the module chunk,
-        # and repeating it here would drown the symbol's own body.
-        file_context = _file_header_comment(lines)
 
         # Computed once per file, attached to every chunk below - see
         # _is_declaration_only_file and the rank penalty in _rrf_fuse.
