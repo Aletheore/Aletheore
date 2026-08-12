@@ -3,6 +3,17 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.1 — 2026-08-12
+
+- **Ruby constants were never extracted.** The 0.8.0 module-constants extraction required
+  file scope (`is_top_level`), but Ruby constants are idiomatically declared inside a module
+  or class body, not at file scope - a real repo scan (`sinatra/sinatra`) found 10 constants
+  indented inside module/class bodies and 0 at true top level, so scanning all 147 modules
+  yielded a single constant, from a test file. Now accepts a capitalised assignment nested
+  directly in a `class`/`module` body (`Sinatra::Base::DROP_BODY_RESPONSES`) in addition to
+  true top level; a capitalised assignment inside a `def` body stays excluded as a
+  method-local.
+
 ## 0.8.0 — 2026-08-12
 
 Scanner coverage across every supported language, plus the retrieval and wiki work that

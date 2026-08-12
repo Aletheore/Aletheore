@@ -503,11 +503,28 @@ def _extract_module_constants(node: Node, source: bytes, language: str) -> list[
                         if nm is not None and nm.type == "identifier":
                             add(nm, child, public=has_modifier(n, "public"))
         elif language == "ruby":
-            # Ruby constants are capitalised assignments at top level.
-            if t == "assignment" and is_top_level(n):
+            # Ruby constants are capitalised assignments - idiomatically
+            # declared inside a module or class body (Sinatra::Base's
+            # DROP_BODY_RESPONSES, not top-level: a real repo scan found 10
+            # constants indented inside module/class bodies and 0 at file
+            # scope), not only at true top level. A constant assigned
+            # inside a def body is a method-local, not part of the type's
+            # API surface, and must stay excluded - confirmed empirically
+            # via spike that tree-sitter-ruby wraps both shapes the same
+            # way (assignment -> body_statement), so it's the
+            # body_statement's own parent that tells them apart: class or
+            # module for a type's own body, method for a def's.
+            if t == "assignment":
                 lhs = n.child_by_field_name("left")
                 if lhs is not None and lhs.type == "constant":
-                    add(lhs, n)
+                    in_type_body = (
+                        n.parent is not None
+                        and n.parent.type == "body_statement"
+                        and n.parent.parent is not None
+                        and n.parent.parent.type in ("class", "module")
+                    )
+                    if in_type_body or is_top_level(n):
+                        add(lhs, n)
         elif language == "php":
             if t == "const_declaration":
                 for child in n.named_children:
