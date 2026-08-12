@@ -26,6 +26,7 @@ from app_server.db import (
     get_installation,
     get_installation_by_account_login,
     get_latest_evidence,
+    get_public_status_enabled,
     get_recent_endpoint_health,
     get_recent_history,
     get_wiki_build_status,
@@ -535,7 +536,9 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
     # distinct status, so this doesn't itself disclose whether the repo
     # has simply never opted in vs never been scanned.
     installation = await get_installation_by_account_login(request.app.state.db_pool, org)
-    if installation is None or not installation["public_status_enabled"]:
+    if installation is None or not await get_public_status_enabled(
+        request.app.state.db_pool, installation["installation_id"], repo_full_name
+    ):
         raise HTTPException(
             status_code=404,
             detail="no health data for this repo",

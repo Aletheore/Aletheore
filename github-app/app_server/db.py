@@ -32,7 +32,7 @@ async def get_installation(pool: asyncpg.Pool, installation_id: int) -> dict | N
         """
         SELECT installation_id, account_login, plan, webhook_url, max_api_tokens,
                health_check_base_url, health_check_latency_threshold_ms,
-               paddle_subscription_id, paddle_customer_id, llm_suggestions_enabled, public_status_enabled
+               paddle_subscription_id, paddle_customer_id, llm_suggestions_enabled
         FROM installations
         WHERE installation_id = $1
         """,
@@ -49,7 +49,7 @@ async def get_installation_by_account_login(pool: asyncpg.Pool, account_login: s
         """
         SELECT installation_id, account_login, plan, webhook_url, max_api_tokens,
                health_check_base_url, health_check_latency_threshold_ms,
-               paddle_subscription_id, paddle_customer_id, llm_suggestions_enabled, public_status_enabled
+               paddle_subscription_id, paddle_customer_id, llm_suggestions_enabled
         FROM installations
         WHERE account_login = $1
         """,
@@ -110,17 +110,38 @@ async def delete_installation(pool: asyncpg.Pool, installation_id: int) -> None:
     await pool.execute("DELETE FROM installations WHERE installation_id = $1", installation_id)
 
 
-async def set_public_status_enabled(pool: asyncpg.Pool, installation_id: int, enabled: bool) -> None:
-    """Opts an installation's repos into (or out of) the public,
-    unauthenticated /v1/health/{org}/{repo} status API. Off by default
-    (see migration 043) - endpoint paths, reachability, and latency
-    derived from a customer's private repository must never be exposed
-    without an explicit choice to do so."""
+async def set_public_status_enabled(
+    pool: asyncpg.Pool, installation_id: int, repo_full_name: str, enabled: bool
+) -> None:
+    """Opts one specific repo into (or out of) the public, unauthenticated
+    /v1/health/{org}/{repo} status API. Off by default (see migration 043),
+    and scoped per repo (see migration 047) - endpoint paths, reachability,
+    and latency derived from a customer's private repository must never be
+    exposed without an explicit, repo-specific choice to do so. This must
+    stay per-repo: the admin route that calls this is repo-scoped
+    (/admin/{org}/{repo}/public-status), and an account-wide flag here
+    would silently expose every other repo in the installation the moment
+    one repo opted in (see F21)."""
     await pool.execute(
-        "UPDATE installations SET public_status_enabled = $2, updated_at = now() WHERE installation_id = $1",
+        """
+        INSERT INTO repo_public_status (installation_id, repo_full_name, enabled, updated_at)
+        VALUES ($1, $2, $3, now())
+        ON CONFLICT (installation_id, repo_full_name)
+        DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = now()
+        """,
         installation_id,
+        repo_full_name,
         enabled,
     )
+
+
+async def get_public_status_enabled(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> bool:
+    enabled = await pool.fetchval(
+        "SELECT enabled FROM repo_public_status WHERE installation_id = $1 AND repo_full_name = $2",
+        installation_id,
+        repo_full_name,
+    )
+    return bool(enabled)
 
 
 async def set_llm_suggestions_enabled(
