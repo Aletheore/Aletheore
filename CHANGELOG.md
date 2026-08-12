@@ -3,6 +3,24 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.3 — 2026-08-13
+
+- **Licence-banner text was leaking into `[file]` context, actively harming retrieval.**
+  `_LEGAL_NOISE` caught licence/copyright lines but not the project banner line that precedes
+  them (no legal keyword of its own), and `_file_header_comment` never stripped a trailing
+  comment terminator or a leftover bare doc tag. `slimphp/Slim`'s files all open with a banner
+  whose "Slim Framework (https://slimframework.com)" line survived the filter and whose
+  "@api */" line leaked both the tag and the comment closer. Measured: 372 of 455 chunks
+  carried a `[file]` context, but only 17 distinct strings across the whole repo - 121 chunks
+  shared the identical string, actively diluting every symbol's own body instead of
+  disambiguating it. Fixed in three layers: `_LEGAL_NOISE` widened to catch bare
+  `@author`/`@package`/`@link`/`@copyright`/`@api` tags and bare URL lines, plus a new
+  `_PROJECT_BANNER` regex for "name (https://...)" banners; a trailing comment terminator is
+  now stripped unconditionally from any C-style comment line; and, as the durable backstop,
+  `build_chunks` now tallies how often each distinct context string recurs across the repo and
+  drops any shared by more than `_BOILERPLATE_MIN_REPEAT_COUNT` files, whether or not any regex
+  anticipated its shape.
+
 ## 0.8.2 — 2026-08-12
 
 - **TypeScript type and interface declarations were never extracted.** `_extract_javascript`
