@@ -37,6 +37,7 @@ from app_server.db import (
     list_wiki_subsystems,
 )
 from app_server.github_auth import generate_app_jwt, get_installation_token
+from app_server.github_pagination import fetch_paginated_github_collection
 
 dashboard_router = APIRouter()
 MIN_CHECKS_FOR_STALE_CONFIDENCE = 5
@@ -68,15 +69,15 @@ def find_stale_endpoints(
 
 def _fetch_uninitialized_repos_sync(installation_id: int, app_jwt: str) -> list[dict]:
     token = get_installation_token(installation_id, app_jwt)
-    response = _github_http_client().get(
+    return fetch_paginated_github_collection(
+        _github_http_client(),
         "/installation/repositories",
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
         },
+        collection_key="repositories",
     )
-    response.raise_for_status()
-    return response.json().get("repositories", [])
 
 
 async def _uninitialized_repos_for_installation(
@@ -550,9 +551,10 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
         SELECT DISTINCT ON (endpoint_method, endpoint_path)
             endpoint_method, endpoint_path, reachable, status_code, latency_ms, checked_at
         FROM endpoint_health
-        WHERE repo_full_name = $1 AND checked_at >= $2
+        WHERE installation_id = $1 AND repo_full_name = $2 AND checked_at >= $3
         ORDER BY endpoint_method, endpoint_path, checked_at DESC, id DESC
         """,
+        installation["installation_id"],
         repo_full_name,
         datetime.now(timezone.utc) - PUBLIC_HEALTH_STALE_AFTER,
     )
@@ -568,7 +570,9 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
     # signal without handing out granular check-by-check timing data to
     # anyone who asks (the authenticated dashboard endpoint has that).
     since = datetime.now(timezone.utc) - timedelta(days=7)
-    uptime_by_endpoint = await get_endpoint_uptime_pct_since(request.app.state.db_pool, repo_full_name, since)
+    uptime_by_endpoint = await get_endpoint_uptime_pct_since(
+        request.app.state.db_pool, installation["installation_id"], repo_full_name, since
+    )
 
     return {
         "repo_full_name": repo_full_name,

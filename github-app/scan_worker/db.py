@@ -13,6 +13,13 @@ from app_server.llm_cost import WARN_FRACTION_OF_CAP, crossed_spend_warning_thre
 
 logger = logging.getLogger(__name__)
 
+# Advisory locks share one Postgres key space across app-server and
+# scan-worker. Keep namespace 1 identical to app_server.db; namespace 2 is
+# reserved for the session-scoped spend lock. The installation id is key 2.
+SCAN_SLOT_LOCK_NAMESPACE = 1
+SPEND_LOCK_NAMESPACE = 2
+ADVISORY_LOCK_TIMEOUT = "5s"
+
 
 @lru_cache(maxsize=None)
 def get_db_pool(dsn: str) -> ConnectionPool:
@@ -135,7 +142,12 @@ def check_and_reserve_monthly_repo_scan_slot(
     """
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_xact_lock(%s)", (installation_id,))
+            cur.execute("SELECT set_config('lock_timeout', %s, true)", (ADVISORY_LOCK_TIMEOUT,))
+            # Namespace 1 is reserved for monthly scan-slot reservations.
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s)",
+                (SCAN_SLOT_LOCK_NAMESPACE, installation_id),
+            )
             cur.execute(
                 """
                 SELECT 1 FROM monthly_scanned_repos
@@ -304,11 +316,19 @@ def installation_spend_lock(dsn: str, installation_id: int):
     conn = psycopg.connect(dsn, autocommit=True)
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_lock(%s)", (installation_id,))
+            cur.execute("SELECT set_config('lock_timeout', %s, false)", (ADVISORY_LOCK_TIMEOUT,))
+            # Namespace 2 is reserved for the session-scoped LLM spend lock.
+            cur.execute(
+                "SELECT pg_advisory_lock(%s, %s)",
+                (SPEND_LOCK_NAMESPACE, installation_id),
+            )
         yield
     finally:
         with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_unlock(%s)", (installation_id,))
+            cur.execute(
+                "SELECT pg_advisory_unlock(%s, %s)",
+                (SPEND_LOCK_NAMESPACE, installation_id),
+            )
         conn.close()
 
 
@@ -612,6 +632,20 @@ def delete_expired_sessions(dsn: str) -> int:
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM sessions WHERE expires_at < now()")
+            deleted = cur.rowcount
+        conn.commit()
+    return deleted
+
+
+def delete_expired_endpoint_health(dsn: str, retention_days: int = 30) -> int:
+    """Bound endpoint-health history after the public and dashboard windows."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM endpoint_health "
+                "WHERE checked_at < now() - make_interval(days => %s)",
+                (retention_days,),
+            )
             deleted = cur.rowcount
         conn.commit()
     return deleted

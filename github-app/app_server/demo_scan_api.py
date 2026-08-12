@@ -4,16 +4,20 @@ existence, license issues, endpoint mapping) - no LLM calls, no OSV.dev
 lookup, and the cloned source is never persisted (see scan_worker.demo_scan).
 """
 
+import asyncio
 import logging
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from app_server.config import get_settings
 from app_server.db import check_and_reserve_demo_scan
 from app_server.demo_scan_validation import MAX_REPO_SIZE_KB, normalized_clone_url, parse_github_repo_url
+from app_server.http_client import get_generic_http_client
+from app_server.rate_limit import is_rate_limited
+from app_server.redis_client import get_redis_client
 
 demo_scan_router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -24,10 +28,14 @@ DEMO_SCAN_COOLDOWN_SECONDS = 20 * 60  # ~3 runs/hour per visitor
 DEMO_SCAN_MAX_QUEUE_DEPTH = 4  # queued + running, ahead of the single demo-scan-worker
 DEMO_SCAN_JOB_TIMEOUT_SECONDS = 120
 DEMO_SCAN_RESULT_TTL_SECONDS = 900
+DEMO_SCAN_ABUSE_RATE_LIMIT = 60
+DEMO_SCAN_ABUSE_RATE_LIMIT_WINDOW_SECONDS = 3600
 
 
 class StartDemoScanRequest(BaseModel):
-    repo_url: str
+    model_config = ConfigDict(extra="forbid")
+
+    repo_url: str = Field(min_length=1, max_length=300)
 
 
 def _client_ip(request: Request) -> str:
@@ -85,10 +93,12 @@ async def _check_repo_size(owner: str, repo: str, token: str | None) -> None:
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"https://api.github.com/repos/{owner}/{repo}", headers=headers, timeout=10.0
-            )
+        response = await asyncio.to_thread(
+            get_generic_http_client().get,
+            f"https://api.github.com/repos/{owner}/{repo}",
+            headers=headers,
+            timeout=10.0,
+        )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="could not reach GitHub - try again shortly") from exc
 
@@ -112,6 +122,26 @@ async def _check_repo_size(owner: str, repo: str, token: str | None) -> None:
         )
 
 
+def _enforce_demo_scan_abuse_rate_limit(client_ip: str) -> None:
+    try:
+        rate_limited = is_rate_limited(
+            get_redis_client(),
+            f"ratelimit:demo-scan:{client_ip}",
+            DEMO_SCAN_ABUSE_RATE_LIMIT,
+            DEMO_SCAN_ABUSE_RATE_LIMIT_WINDOW_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("demo scan abuse rate limit check failed (%s); allowing request", exc)
+        rate_limited = False
+
+    if rate_limited:
+        raise HTTPException(
+            status_code=429,
+            detail="too many demo scan requests",
+            headers={"Retry-After": str(DEMO_SCAN_ABUSE_RATE_LIMIT_WINDOW_SECONDS)},
+        )
+
+
 @demo_scan_router.post("/v1/demo-scan")
 async def start_demo_scan(request: Request, body: StartDemoScanRequest):
     parsed = parse_github_repo_url(body.repo_url)
@@ -124,6 +154,9 @@ async def start_demo_scan(request: Request, body: StartDemoScanRequest):
 
     settings = get_settings()
     pool = request.app.state.db_pool
+    client_ip = _client_ip(request)
+
+    _enforce_demo_scan_abuse_rate_limit(client_ip)
 
     # Size (and existence) is checked before the rate-limit slot is
     # reserved - a repo that gets rejected here never reaches a worker, so
@@ -131,7 +164,7 @@ async def start_demo_scan(request: Request, body: StartDemoScanRequest):
     # request that's actually eligible to run consumes the cooldown.
     await _check_repo_size(owner, repo, settings.github_demo_readonly_token)
 
-    allowed = await check_and_reserve_demo_scan(pool, _client_ip(request), DEMO_SCAN_COOLDOWN_SECONDS)
+    allowed = await check_and_reserve_demo_scan(pool, client_ip, DEMO_SCAN_COOLDOWN_SECONDS)
     if not allowed:
         raise HTTPException(
             status_code=429,

@@ -71,8 +71,8 @@ async def add_paddle_ids_to_installation(
     installation_id: int,
     paddle_subscription_id: str,
     paddle_customer_id: str,
-) -> None:
-    await pool.execute(
+ ) -> int:
+    return await pool.fetchval(
         """
         UPDATE installations
         SET paddle_subscription_id = $2, paddle_customer_id = $3, updated_at = now()
@@ -420,6 +420,12 @@ async def insert_repo_history(
 # (async, genuinely concurrent HTTP callers via the managed-audit API)
 # enforce the same cap against the same monthly_scanned_repos table.
 MAX_SCANNED_REPOS_PER_MONTH = 10
+# Advisory locks use the same Postgres global key space across app-server and
+# scan-worker connections. Keep this namespace value identical in both files;
+# the second key is the installation id.
+SCAN_SLOT_LOCK_NAMESPACE = 1
+SEAT_LOCK_NAMESPACE = 3
+ADVISORY_LOCK_TIMEOUT = "5s"
 
 
 async def count_monthly_scanned_repos(pool: asyncpg.Pool, installation_id: int) -> int:
@@ -451,7 +457,13 @@ async def check_and_reserve_monthly_repo_scan_slot(
     """
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("SELECT pg_advisory_xact_lock($1)", installation_id)
+            await conn.execute("SELECT set_config('lock_timeout', $1, true)", ADVISORY_LOCK_TIMEOUT)
+            # Namespace 1 is reserved for monthly scan-slot reservations.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1, $2)",
+                SCAN_SLOT_LOCK_NAMESPACE,
+                installation_id,
+            )
 
             existing = await conn.fetchval(
                 """
@@ -632,6 +644,99 @@ async def add_installation_member(
         github_login,
         added_by_github_login,
     )
+
+
+async def add_installation_member_within_seat_limit(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    github_login: str,
+    added_by_github_login: str,
+    seat_limit: int,
+) -> tuple[bool, bool]:
+    """Atomically add github_login if the installation still has a seat.
+
+    The route-level read/count/insert sequence is race-prone: concurrent
+    requests for distinct logins can all read the same below-limit count
+    before any insert commits. A per-installation advisory transaction lock
+    serializes the count-bound insert, matching
+    check_and_reserve_monthly_repo_scan_slot's concurrency pattern.
+
+    Returns (allowed, inserted). Existing members are allowed but not newly
+    inserted; a full installation returns (False, False).
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('lock_timeout', $1, true)", ADVISORY_LOCK_TIMEOUT)
+            # Namespace 3 is reserved for installation seat admission.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1, $2)",
+                SEAT_LOCK_NAMESPACE,
+                installation_id,
+            )
+            row = await conn.fetchrow(
+                """
+                WITH existing AS (
+                    SELECT 1
+                    FROM installation_members
+                    WHERE installation_id = $1 AND github_login = $2
+                ),
+                inserted AS (
+                    INSERT INTO installation_members
+                        (installation_id, github_login, added_by_github_login)
+                    SELECT $1, $2, $3
+                    WHERE NOT EXISTS (SELECT 1 FROM existing)
+                      AND (
+                          SELECT count(*)
+                          FROM installation_members
+                          WHERE installation_id = $1
+                      ) < $4
+                    ON CONFLICT (installation_id, github_login) DO NOTHING
+                    RETURNING 1
+                )
+                SELECT
+                    EXISTS (SELECT 1 FROM existing) AS already_member,
+                    EXISTS (SELECT 1 FROM inserted) AS inserted
+                """,
+                installation_id,
+                github_login,
+                added_by_github_login,
+                seat_limit,
+            )
+    return row["already_member"] or row["inserted"], row["inserted"]
+
+
+async def add_initial_installation_member_if_empty(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    github_login: str,
+    added_by_github_login: str,
+) -> bool:
+    """Seat exactly one first admin for a paid installation with no members."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('lock_timeout', $1, true)", ADVISORY_LOCK_TIMEOUT)
+            # Namespace 3 is reserved for installation seat admission.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1, $2)",
+                SEAT_LOCK_NAMESPACE,
+                installation_id,
+            )
+            row = await conn.fetchrow(
+                """
+                INSERT INTO installation_members
+                    (installation_id, github_login, added_by_github_login)
+                SELECT $1, $2, $3
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM installation_members WHERE installation_id = $1
+                )
+                ON CONFLICT (installation_id, github_login) DO NOTHING
+                RETURNING 1
+                """,
+                installation_id,
+                github_login,
+                added_by_github_login,
+            )
+    return row is not None
 
 
 async def remove_installation_member(pool: asyncpg.Pool, installation_id: int, github_login: str) -> None:
@@ -888,6 +993,7 @@ async def get_endpoint_health_history(
 
 async def get_endpoint_uptime_pct_since(
     pool: asyncpg.Pool,
+    installation_id: int,
     repo_full_name: str,
     since: datetime,
 ) -> dict[tuple[str, str], float]:
@@ -901,9 +1007,10 @@ async def get_endpoint_uptime_pct_since(
         SELECT endpoint_method, endpoint_path,
                (count(*) FILTER (WHERE reachable))::float / count(*) AS uptime_pct
         FROM endpoint_health
-        WHERE repo_full_name = $1 AND checked_at >= $2
+        WHERE installation_id = $1 AND repo_full_name = $2 AND checked_at >= $3
         GROUP BY endpoint_method, endpoint_path
         """,
+        installation_id,
         repo_full_name,
         since,
     )
@@ -998,6 +1105,7 @@ async def create_deletion_otp_code(
         """
         INSERT INTO deletion_otp_codes (installation_id, requested_by, code_hash, expires_at)
         VALUES ($1, $2, $3, $4)
+        RETURNING id
         """,
         installation_id,
         requested_by,
@@ -1098,11 +1206,12 @@ async def create_api_token(
     token_hash: str,
     label: str,
     created_by_github_login: str,
-) -> None:
-    await pool.execute(
+) -> int:
+    return await pool.fetchval(
         """
         INSERT INTO api_tokens (installation_id, token_hash, label, created_by_github_login)
         VALUES ($1, $2, $3, $4)
+        RETURNING id
         """,
         installation_id,
         token_hash,

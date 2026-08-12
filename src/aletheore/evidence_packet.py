@@ -14,7 +14,15 @@ def build_evidence_packet(
     brief: dict,
     model_routing_reason: str,
     cache_eligible: bool = False,
+    prompt_version: str = "",
 ) -> dict:
+    """`prompt_version` is carried into the packet so it participates in the
+    cache key. Without it the key depends only on the scan, and editing a
+    writing prompt silently serves pages written by the previous prompt -
+    the cache cannot tell that what it stored is no longer what would be
+    generated. Callers that own a prompt should bump their version string
+    whenever they change it.
+    """
     modules_by_path = {m["path"]: m for m in evidence.get("repository", {}).get("modules", [])}
     changed_files = list(cluster.get("modules", []))
 
@@ -28,7 +36,7 @@ def build_evidence_packet(
             continue
         changed_dependencies.update(module.get("imports", []))
         symbols = module.get("symbols", {})
-        for group in ("functions", "classes"):
+        for group in ("functions", "classes", "constants"):
             for entry in symbols.get(group, []):
                 name = entry.get("name")
                 if not name:
@@ -63,4 +71,5 @@ def build_evidence_packet(
         "test_coverage": None,
         "model_routing_reason": model_routing_reason,
         "cache_eligible": cache_eligible,
+        "prompt_version": prompt_version,
     }

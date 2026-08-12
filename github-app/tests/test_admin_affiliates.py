@@ -51,6 +51,19 @@ async def test_create_affiliate_rejects_wrong_token(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_affiliate_rejects_non_ascii_token_without_500(pool, monkeypatch):
+    monkeypatch.setenv("AFFILIATE_ADMIN_TOKEN", ADMIN_TOKEN)
+    app.state.db_pool = pool
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/admin/affiliates",
+            json={"code": "SARAH10", "name": "Sarah"},
+            headers=[(b"authorization", b"Bearer caf\xe9")],
+        )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_create_affiliate_creates_paddle_discount_and_db_row(pool, monkeypatch):
     monkeypatch.setenv("AFFILIATE_ADMIN_TOKEN", ADMIN_TOKEN)
     app.state.db_pool = pool

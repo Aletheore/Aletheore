@@ -1,9 +1,11 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from app_server.evidence_limits import EvidenceTooLargeError, MAX_EVIDENCE_BYTES
 from app_server.db import (
+    add_installation_member_within_seat_limit,
     add_health_check_target,
     add_installation_member,
     check_and_reserve_managed_audit,
@@ -256,6 +258,44 @@ async def test_add_installation_member_is_idempotent(pool):
     await add_installation_member(pool, 600, "octocat", "octocat")
     await add_installation_member(pool, 600, "octocat", "octocat")
     assert await count_installation_members(pool, 600) == 1
+
+
+@pytest.mark.asyncio
+async def test_add_installation_member_within_seat_limit_is_concurrency_safe(pool):
+    await upsert_installation(pool, 610, "octocat")
+    await add_installation_member(pool, 610, "octocat", "octocat")
+
+    results = await asyncio.gather(
+        *(
+            add_installation_member_within_seat_limit(
+                pool, 610, f"member-{index}", "octocat", seat_limit=2
+            )
+            for index in range(10)
+        )
+    )
+
+    assert sum(inserted for allowed, inserted in results) == 1
+    assert sum(allowed for allowed, inserted in results) == 1
+    assert await count_installation_members(pool, 610) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_api_token_creation_returns_each_inserted_id(pool):
+    await upsert_installation(pool, 611, "octocat")
+    results = await asyncio.gather(
+        *(
+            create_api_token(pool, 611, f"hash-{index}", f"token-{index}", "octocat")
+            for index in range(10)
+        )
+    )
+
+    assert len(set(results)) == 10
+    rows = await pool.fetch(
+        "SELECT id, token_hash FROM api_tokens WHERE installation_id = $1",
+        611,
+    )
+    assert {row["id"] for row in rows} == set(results)
+    assert {row["token_hash"] for row in rows} == {f"hash-{index}" for index in range(10)}
 
 
 @pytest.mark.asyncio

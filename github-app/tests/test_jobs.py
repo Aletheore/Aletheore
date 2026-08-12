@@ -507,6 +507,24 @@ def test_run_job_temp_dir_cleanup_job_removes_only_old_job_dirs(tmp_path, monkey
     assert marker_file.exists()
 
 
+def test_run_endpoint_health_cleanup_job_removes_only_old_rows(monkeypatch):
+    from scan_worker.jobs import ENDPOINT_HEALTH_RETENTION_DAYS, run_endpoint_health_cleanup_job
+
+    deleted = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_settings",
+        lambda: type("Settings", (), {"database_url": "dsn"})(),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.delete_expired_endpoint_health",
+        lambda dsn, retention_days: deleted.append((dsn, retention_days)) or 7,
+    )
+
+    run_endpoint_health_cleanup_job()
+
+    assert deleted == [("dsn", ENDPOINT_HEALTH_RETENTION_DAYS)]
+
+
 def test_clone_failure_posts_failure_comment_and_cleans_up(monkeypatch):
     import scan_worker.jobs as jobs_module
 

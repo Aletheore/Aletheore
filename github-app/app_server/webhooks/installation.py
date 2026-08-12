@@ -1,11 +1,11 @@
 import asyncio
 import logging
 
-import httpx
-
 from app_server.config import get_settings
 from app_server.db import purge_installation_data, upsert_installation
 from app_server.github_auth import generate_app_jwt, get_installation_token
+from app_server.github_pagination import fetch_paginated_github_collection
+from app_server.http_client import get_github_api_client
 
 logger = logging.getLogger(__name__)
 
@@ -29,15 +29,17 @@ def _enqueue_checkout_purge(installation_id: int, redis_url: str, queue=None) ->
 
 def _fetch_installation_repos_sync(installation_id: int, app_jwt: str) -> list[str]:
     token = get_installation_token(installation_id, app_jwt)
-    response = httpx.Client(base_url="https://api.github.com").get(
+    repositories = fetch_paginated_github_collection(
+        get_github_api_client(),
         "/installation/repositories",
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
         },
+        collection_key="repositories",
+        require_total_count_match=True,
     )
-    response.raise_for_status()
-    return [repo["full_name"] for repo in response.json().get("repositories", [])]
+    return [repo["full_name"] for repo in repositories]
 
 
 async def _fetch_all_installation_repo_full_names(installation_id: int) -> list[str]:

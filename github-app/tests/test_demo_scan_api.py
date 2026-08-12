@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock
 
 import httpx
@@ -7,11 +8,22 @@ from httpx import ASGITransport, AsyncClient
 from app_server.main import app
 
 
-def _mock_github_response(monkeypatch, status_code: int, size_kb: int = 100):
-    async def fake_get(self, url, headers=None, timeout=None):
-        return httpx.Response(status_code, json={"size": size_kb}, request=httpx.Request("GET", url))
+@pytest.fixture(autouse=True)
+def _disable_demo_abuse_limit(monkeypatch):
+    monkeypatch.setattr("app_server.demo_scan_api.get_redis_client", lambda: object())
+    monkeypatch.setattr("app_server.demo_scan_api.is_rate_limited", lambda *a, **k: False)
 
-    monkeypatch.setattr("app_server.demo_scan_api.httpx.AsyncClient.get", fake_get)
+
+def _mock_github_response(monkeypatch, status_code: int, size_kb: int = 100):
+    fake_client = MagicMock()
+    fake_client.get.return_value = httpx.Response(
+        status_code,
+        json={"size": size_kb},
+        request=httpx.Request("GET", "https://api.github.com/repos/octocat/Hello-World"),
+    )
+
+    monkeypatch.setattr("app_server.demo_scan_api.get_generic_http_client", lambda: fake_client)
+    return fake_client
 
 
 def _mock_queue(monkeypatch, count: int = 0, started_count: int = 0, job_id: str = "demo-job-123"):
@@ -79,6 +91,95 @@ async def test_valid_request_enqueues_job_and_returns_202(pool, monkeypatch):
     args, kwargs = fake_queue.enqueue.call_args
     assert args[0] == "scan_worker.demo_scan.run_demo_scan_job"
     assert kwargs["repo_url"] == "https://github.com/octocat/Hello-World.git"
+
+
+@pytest.mark.asyncio
+async def test_demo_scan_abuse_limiter_runs_before_github_api_call(monkeypatch):
+    calls = {"rate_limit": 0, "github": 0}
+
+    def fake_is_rate_limited(redis_conn, key, limit, window_seconds):
+        calls["rate_limit"] += 1
+        assert key == "ratelimit:demo-scan:203.0.113.77"
+        return calls["rate_limit"] > 2
+
+    async def fake_check_repo_size(owner, repo, token):
+        calls["github"] += 1
+
+    async def fake_reserve(pool, client_ip, cooldown_seconds):
+        return True
+
+    monkeypatch.setattr("app_server.demo_scan_api.is_rate_limited", fake_is_rate_limited)
+    monkeypatch.setattr("app_server.demo_scan_api._check_repo_size", fake_check_repo_size)
+    monkeypatch.setattr("app_server.demo_scan_api.check_and_reserve_demo_scan", fake_reserve)
+    _mock_queue(monkeypatch)
+    app.state.db_pool = object()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"x-forwarded-for": "203.0.113.77"},
+    ) as client:
+        first = await client.post(
+            "/v1/demo-scan", json={"repo_url": "https://github.com/octocat/Hello-World"}
+        )
+        second = await client.post(
+            "/v1/demo-scan", json={"repo_url": "https://github.com/octocat/Spoon-Knife"}
+        )
+        limited = await client.post(
+            "/v1/demo-scan", json={"repo_url": "https://github.com/octocat/linguist"}
+        )
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert limited.status_code == 429
+    assert calls == {"rate_limit": 3, "github": 2}
+
+
+@pytest.mark.asyncio
+async def test_repo_size_check_uses_pooled_http_client(monkeypatch):
+    fake_client = _mock_github_response(monkeypatch, 200, size_kb=100)
+
+    from app_server.demo_scan_api import _check_repo_size
+
+    await _check_repo_size("octocat", "Hello-World", token="demo-token")
+
+    fake_client.get.assert_called_once()
+    _, kwargs = fake_client.get.call_args
+    assert kwargs["headers"]["Authorization"] == "Bearer demo-token"
+
+
+@pytest.mark.asyncio
+async def test_oversized_demo_scan_repo_url_is_rejected_before_github_call(monkeypatch):
+    check_repo_size = MagicMock()
+    monkeypatch.setattr("app_server.demo_scan_api._check_repo_size", check_repo_size)
+    app.state.db_pool = object()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/demo-scan",
+            json={"repo_url": "https://github.com/" + ("a" * 350)},
+        )
+
+    assert response.status_code == 422
+    check_repo_size.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_oversized_demo_scan_body_is_rejected_before_github_call(monkeypatch):
+    check_repo_size = MagicMock()
+    monkeypatch.setattr("app_server.demo_scan_api._check_repo_size", check_repo_size)
+    app.state.db_pool = object()
+    body = json.dumps(
+        {"repo_url": "https://github.com/octocat/Hello-World", "pad": "x" * 5000}
+    ).encode()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/demo-scan", content=body, headers={"Content-Type": "application/json"}
+        )
+
+    assert response.status_code == 413
+    check_repo_size.assert_not_called()
 
 
 @pytest.mark.asyncio

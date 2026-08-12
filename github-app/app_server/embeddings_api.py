@@ -19,6 +19,8 @@ your code": no retention policy to write, no deletion path to honour, and
 nothing here for a subpoena to reach.
 """
 
+import asyncio
+import functools
 import hashlib
 import logging
 import os
@@ -84,6 +86,11 @@ class EmbeddingsRequest(BaseModel):
     # just shares the coarser, installation-only bucket every caller used
     # to share (see the fallback in create_embeddings below).
     repo_id: str | None = Field(default=None, max_length=MAX_REPO_ID_LENGTH)
+
+
+@functools.lru_cache(maxsize=1)
+def get_openai_client() -> OpenAI:
+    return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
 async def _authenticated_installation(request: Request) -> dict:
@@ -182,9 +189,13 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
         logger.error("hosted embeddings requested but OPENAI_API_KEY is not configured")
         raise HTTPException(status_code=503, detail="hosted embeddings are not configured")
 
-    client = OpenAI(api_key=api_key)
+    client = get_openai_client()
     try:
-        response = client.embeddings.create(model=EMBEDDING_MODEL, input=body.texts)
+        response = await asyncio.to_thread(
+            client.embeddings.create,
+            model=EMBEDDING_MODEL,
+            input=body.texts,
+        )
     except Exception as exc:  # noqa: BLE001 - provider errors of any shape degrade to 502
         # The upstream message can quote the input back, which here is the
         # caller's own source code - logged, never returned.

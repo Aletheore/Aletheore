@@ -57,6 +57,7 @@ from scan_worker.db import (
     check_and_reserve_monthly_repo_scan_slot,
     count_repo_scans_since,
     delete_docs_symbols_not_in,
+    delete_expired_endpoint_health,
     delete_expired_sessions,
     delete_expired_telemetry_events,
     delete_expired_webhook_deliveries,
@@ -2190,6 +2191,18 @@ def run_session_cleanup_job() -> None:
     deleted = delete_expired_sessions(dsn)
     logging.getLogger("scan_worker.jobs").info(
         "session cleanup completed", extra={"deleted_count": deleted}
+    )
+
+
+ENDPOINT_HEALTH_RETENTION_DAYS = 30
+
+
+@log_job
+def run_endpoint_health_cleanup_job() -> None:
+    dsn = get_settings().database_url
+    deleted = delete_expired_endpoint_health(dsn, ENDPOINT_HEALTH_RETENTION_DAYS)
+    logging.getLogger("scan_worker.jobs").info(
+        "endpoint health cleanup completed", extra={"deleted_count": deleted}
     )
 
 

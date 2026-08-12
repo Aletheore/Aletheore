@@ -278,6 +278,21 @@ async def test_callback_rejects_mismatched_state(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_callback_rejects_non_ascii_state_without_500(monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    app.state.db_pool = object()
+    transport = ASGITransport(app=app)
+    signed_state = sign_oauth_state("expected-state", "test-session-secret")
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.get(
+            "/auth/callback?code=fake-code&state=caf%C3%A9",
+            headers={"cookie": f"oauth_state={signed_state}"},
+            follow_redirects=False,
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_callback_without_state_cookie_redirects_to_login_instead_of_trusting_the_code(pool, monkeypatch):
     # No oauth_state cookie means this request either came from GitHub's
     # direct "Install" redirect, or is a forged OAuth-login-CSRF link - the

@@ -32,6 +32,22 @@ async def test_webhook_rejects_invalid_signature():
 
 
 @pytest.mark.asyncio
+async def test_webhook_rejects_non_ascii_signature_without_500():
+    app.state.db_pool = object()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhook",
+            content=b"{}",
+            headers=[
+                (b"X-Hub-Signature-256", b"sha256=caf\xe9"),
+                (b"X-GitHub-Event", b"installation"),
+            ],
+        )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_webhook_dispatches_pull_request_enqueue(monkeypatch, pool):
     app.state.db_pool = pool
     payload = {

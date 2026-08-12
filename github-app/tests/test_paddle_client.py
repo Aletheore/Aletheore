@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import httpx
 import pytest
 
@@ -9,6 +11,13 @@ from app_server.paddle_client import (
     get_subscription,
     update_subscription_items,
 )
+
+
+def _patch_pooled_client(monkeypatch, handler):
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    factory = MagicMock(return_value=client)
+    monkeypatch.setattr("app_server.paddle_client.get_generic_http_client", factory)
+    return factory
 
 
 def test_get_subscription_requires_api_key():
@@ -27,24 +36,21 @@ def test_create_discount_sends_post_with_expected_body(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         captured["method"] = request.method
         captured["path"] = request.url.path
+        captured["timeout"] = request.extensions["timeout"]
         import json
 
         captured["body"] = json.loads(request.content)
         return httpx.Response(201, json={"data": {"id": "dsc_123", "code": "SARAH10"}})
 
-    monkeypatch.setattr(
-        httpx,
-        "post",
-        lambda url, headers, json: httpx.Client(transport=httpx.MockTransport(handler)).post(
-            url, headers=headers, json=json
-        ),
-    )
+    factory = _patch_pooled_client(monkeypatch, handler)
 
     result = create_discount("test_key", "SARAH10", "Affiliate: Sarah")
 
+    factory.assert_called_once_with()
     assert result == {"id": "dsc_123", "code": "SARAH10"}
     assert captured["method"] == "POST"
     assert captured["path"] == "/discounts"
+    assert set(captured["timeout"].values()) == {15.0}
     assert captured["body"] == {
         "description": "Affiliate: Sarah",
         "type": "percentage",
@@ -60,15 +66,19 @@ def test_create_discount_wraps_http_errors(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(409, json={"error": "code already exists"})
 
-    monkeypatch.setattr(
-        httpx,
-        "post",
-        lambda url, headers, json: httpx.Client(transport=httpx.MockTransport(handler)).post(
-            url, headers=headers, json=json
-        ),
-    )
+    _patch_pooled_client(monkeypatch, handler)
 
     with pytest.raises(PaddleAPIError):
+        create_discount("test_key", "SARAH10", "Affiliate: Sarah")
+
+
+def test_create_discount_wraps_unexpected_response_shape(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(201, json={"unexpected": {"id": "dsc_123"}})
+
+    _patch_pooled_client(monkeypatch, handler)
+
+    with pytest.raises(PaddleAPIError, match="unexpected Paddle response shape"):
         create_discount("test_key", "SARAH10", "Affiliate: Sarah")
 
 
@@ -91,16 +101,11 @@ def test_create_portal_session_sends_post_with_subscription_ids(monkeypatch):
             json={"data": {"id": "cpls_123", "customer_id": "ctm_123", "urls": {"general": {}}}},
         )
 
-    monkeypatch.setattr(
-        httpx,
-        "post",
-        lambda url, headers, json: httpx.Client(transport=httpx.MockTransport(handler)).post(
-            url, headers=headers, json=json
-        ),
-    )
+    factory = _patch_pooled_client(monkeypatch, handler)
 
     result = create_portal_session("test_key", "ctm_123", ["sub_123"])
 
+    factory.assert_called_once_with()
     assert result == {"id": "cpls_123", "customer_id": "ctm_123", "urls": {"general": {}}}
     assert captured["method"] == "POST"
     assert captured["path"] == "/customers/ctm_123/portal-sessions"
@@ -116,13 +121,7 @@ def test_create_portal_session_omits_subscription_ids_when_none_given(monkeypatc
         captured["body"] = json.loads(request.content)
         return httpx.Response(201, json={"data": {"id": "cpls_123", "urls": {"general": {}}}})
 
-    monkeypatch.setattr(
-        httpx,
-        "post",
-        lambda url, headers, json: httpx.Client(transport=httpx.MockTransport(handler)).post(
-            url, headers=headers, json=json
-        ),
-    )
+    _patch_pooled_client(monkeypatch, handler)
 
     create_portal_session("test_key", "ctm_123")
 
@@ -133,13 +132,7 @@ def test_create_portal_session_wraps_http_errors(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"error": "not found"})
 
-    monkeypatch.setattr(
-        httpx,
-        "post",
-        lambda url, headers, json: httpx.Client(transport=httpx.MockTransport(handler)).post(
-            url, headers=headers, json=json
-        ),
-    )
+    _patch_pooled_client(monkeypatch, handler)
 
     with pytest.raises(PaddleAPIError):
         create_portal_session("test_key", "ctm_123")
@@ -156,9 +149,10 @@ def test_get_subscription_returns_data_field(monkeypatch):
         assert request.headers["authorization"] == "Bearer test_key"
         return httpx.Response(200, json={"data": {"id": "sub_123", "status": "active"}})
 
-    monkeypatch.setattr(httpx, "get", lambda url, headers: httpx.Client(transport=httpx.MockTransport(handler)).get(url, headers=headers))
+    factory = _patch_pooled_client(monkeypatch, handler)
 
     result = get_subscription("test_key", "sub_123")
+    factory.assert_called_once_with()
     assert result == {"id": "sub_123", "status": "active"}
 
 
@@ -166,7 +160,7 @@ def test_get_subscription_wraps_http_errors(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"error": "not found"})
 
-    monkeypatch.setattr(httpx, "get", lambda url, headers: httpx.Client(transport=httpx.MockTransport(handler)).get(url, headers=headers))
+    _patch_pooled_client(monkeypatch, handler)
 
     with pytest.raises(PaddleAPIError):
         get_subscription("test_key", "sub_123")
@@ -183,17 +177,12 @@ def test_update_subscription_items_sends_patch_with_items_and_proration(monkeypa
         captured["body"] = json.loads(request.content)
         return httpx.Response(200, json={"data": {"id": "sub_123"}})
 
-    monkeypatch.setattr(
-        httpx,
-        "patch",
-        lambda url, headers, json: httpx.Client(transport=httpx.MockTransport(handler)).patch(
-            url, headers=headers, json=json
-        ),
-    )
+    factory = _patch_pooled_client(monkeypatch, handler)
 
     items = [{"price_id": "pri_base", "quantity": 1}, {"price_id": "pri_seat", "quantity": 2}]
     result = update_subscription_items("test_key", "sub_123", items, "prorated_immediately")
 
+    factory.assert_called_once_with()
     assert result == {"id": "sub_123"}
     assert captured["method"] == "PATCH"
     assert captured["path"] == "/subscriptions/sub_123"
@@ -205,13 +194,7 @@ def test_update_subscription_items_wraps_http_errors(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(400, json={"error": "bad request"})
 
-    monkeypatch.setattr(
-        httpx,
-        "patch",
-        lambda url, headers, json: httpx.Client(transport=httpx.MockTransport(handler)).patch(
-            url, headers=headers, json=json
-        ),
-    )
+    _patch_pooled_client(monkeypatch, handler)
 
     with pytest.raises(PaddleAPIError):
         update_subscription_items("test_key", "sub_123", [], "prorated_immediately")

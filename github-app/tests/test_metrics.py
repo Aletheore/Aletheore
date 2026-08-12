@@ -39,6 +39,19 @@ async def test_queue_stats_rejects_wrong_token(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_queue_stats_rejects_non_ascii_token_without_500(monkeypatch):
+    monkeypatch.setenv("INTERNAL_METRICS_TOKEN", "secret-token")
+    app.state.db_pool = object()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/internal/queue-stats",
+            headers=[(b"authorization", b"Bearer caf\xe9")],
+        )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_queue_stats_returns_counts_for_valid_token(monkeypatch):
     monkeypatch.setenv("INTERNAL_METRICS_TOKEN", "secret-token")
 
