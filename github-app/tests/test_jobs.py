@@ -1529,6 +1529,66 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     assert recorded_spend == [0.0]
 
 
+def test_flash_review_job_records_spend_and_count_while_the_lock_is_still_held(monkeypatch):
+    # F25: installation_spend_lock exists to make the check/run/record cycle
+    # atomic per installation - a prior version of this job read the cap
+    # inside the lock but recorded spend and incremented the review count
+    # after it had already been released, so two concurrent reviews for the
+    # same installation could both pass the cap check before either had
+    # recorded its cost. _noop_spend_lock (used by every other test in this
+    # file) can't catch that regression since it never tracks "held" at
+    # all - this test uses a real tracking fake instead.
+    from contextlib import contextmanager
+
+    lock_state = {"held": False, "observed_during_record": None, "observed_during_increment": None}
+
+    @contextmanager
+    def _tracking_spend_lock(*args, **kwargs):
+        lock_state["held"] = True
+        try:
+            yield
+        finally:
+            lock_state["held"] = False
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _tracking_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: [{"file": "app.py", "line": 1, "issue": "x"}],
+    )
+
+    def _record_llm_spend(dsn, iid, cost, **kwargs):
+        lock_state["observed_during_record"] = lock_state["held"]
+
+    def _increment_flash_review_count(dsn, iid):
+        lock_state["observed_during_increment"] = lock_state["held"]
+
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
+    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", _increment_flash_review_count)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert lock_state["observed_during_record"] is True
+    assert lock_state["observed_during_increment"] is True
+    assert lock_state["held"] is False  # released once the job actually finished
+
+
 def test_flash_review_job_posts_grounding_note_when_some_findings_are_dropped(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})

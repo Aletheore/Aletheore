@@ -26,6 +26,11 @@ def get_db_pool(dsn: str) -> ConnectionPool:
     return ConnectionPool(conninfo=dsn, min_size=0, max_size=4, open=True)
 
 
+@lru_cache(maxsize=None)
+def get_db_pool(dsn: str) -> ConnectionPool:
+    return ConnectionPool(conninfo=dsn, min_size=0, max_size=4, open=True)
+
+
 def insert_repo_history(
     dsn: str,
     installation_id: int,

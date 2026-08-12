@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 from datetime import datetime
 
 import pytest
@@ -258,10 +259,28 @@ def test_find_enclosing_symbol_returns_none_without_line_or_evidence():
 class FakeHealthSettings:
     github_app_id = "x"
     github_app_private_key = "y"
+    database_url = "postgresql://unused"
+
+
+@contextmanager
+def _noop_spend_lock(*args, **kwargs):
+    yield
+
+
+def _patch_fix_suggestion_spend_gate(monkeypatch, plan: str = "air") -> None:
+    # F7: _fix_suggestion_attachment now checks and records against the
+    # installation's monthly LLM spend cap like every other LLM call site -
+    # these were previously the only mocks these tests needed.
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": plan})
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
 
 
 def test_fix_suggestion_attachment_returns_none_when_file_content_unavailable(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.get_settings", lambda: FakeHealthSettings())
+    _patch_fix_suggestion_spend_gate(monkeypatch)
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "jwt")
     monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "token")
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
@@ -271,8 +290,26 @@ def test_fix_suggestion_attachment_returns_none_when_file_content_unavailable(mo
     assert result is None
 
 
+def test_fix_suggestion_attachment_skips_the_llm_call_when_spend_cap_reached(monkeypatch):
+    monkeypatch.setattr("scan_worker.jobs.get_settings", lambda: FakeHealthSettings())
+    _patch_fix_suggestion_spend_gate(monkeypatch)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "jwt")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "token")
+    llm_called = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_file_content", lambda *a, **k: llm_called.append(True) or None
+    )
+
+    result = _fix_suggestion_attachment(901, "org/repo", "app/handler.py", 15, "GET", "/v1/users", 500, None)
+
+    assert result is None
+    assert llm_called == []  # never even reached the file fetch - blocked at the cap check
+
+
 def test_fix_suggestion_attachment_returns_none_when_model_says_unknown(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.get_settings", lambda: FakeHealthSettings())
+    _patch_fix_suggestion_spend_gate(monkeypatch)
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "jwt")
     monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "token")
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "def do_login():\n    pass\n")
@@ -281,7 +318,7 @@ def test_fix_suggestion_attachment_returns_none_when_model_says_unknown(monkeypa
         def simple_completion(self, system_prompt, user_prompt, cwd):
             return "unknown"
 
-    monkeypatch.setattr("scan_worker.jobs._health_fix_suggestion_adapter", lambda: FakeAdapter())
+    monkeypatch.setattr("scan_worker.jobs._health_fix_suggestion_adapter", lambda **k: FakeAdapter())
 
     result = _fix_suggestion_attachment(901, "org/repo", "app/handler.py", 15, "GET", "/v1/users", 500, None)
 
@@ -290,6 +327,7 @@ def test_fix_suggestion_attachment_returns_none_when_model_says_unknown(monkeypa
 
 def test_fix_suggestion_attachment_returns_suggestion_when_model_succeeds(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.get_settings", lambda: FakeHealthSettings())
+    _patch_fix_suggestion_spend_gate(monkeypatch)
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "jwt")
     monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "token")
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "def do_login():\n    pass\n")
@@ -298,7 +336,7 @@ def test_fix_suggestion_attachment_returns_suggestion_when_model_succeeds(monkey
         def simple_completion(self, system_prompt, user_prompt, cwd):
             return "  The DB connection pool is exhausted; increase max_connections.  "
 
-    monkeypatch.setattr("scan_worker.jobs._health_fix_suggestion_adapter", lambda: FakeAdapter())
+    monkeypatch.setattr("scan_worker.jobs._health_fix_suggestion_adapter", lambda **k: FakeAdapter())
 
     result = _fix_suggestion_attachment(901, "org/repo", "app/handler.py", 15, "GET", "/v1/users", 500, None)
 
@@ -308,11 +346,43 @@ def test_fix_suggestion_attachment_returns_suggestion_when_model_succeeds(monkey
     assert result["suggestion_status"] == "available"
 
 
+def test_fix_suggestion_attachment_records_spend_when_model_succeeds(monkeypatch):
+    monkeypatch.setattr("scan_worker.jobs.get_settings", lambda: FakeHealthSettings())
+    _patch_fix_suggestion_spend_gate(monkeypatch)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "jwt")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "token")
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "def do_login():\n    pass\n")
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda model, prompt, completion: 0.0017)
+
+    class FakeAdapter:
+        def __init__(self, on_usage=None):
+            self._on_usage = on_usage
+
+        def simple_completion(self, system_prompt, user_prompt, cwd):
+            if self._on_usage is not None:
+                self._on_usage(80, 40)
+            return "increase the connection pool size"
+
+    monkeypatch.setattr(
+        "scan_worker.jobs._health_fix_suggestion_adapter", lambda on_usage=None: FakeAdapter(on_usage)
+    )
+    recorded = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_llm_spend", lambda dsn, iid, cost, **k: recorded.append(cost)
+    )
+
+    result = _fix_suggestion_attachment(901, "org/repo", "app/handler.py", 15, "GET", "/v1/users", 500, None)
+
+    assert result is not None
+    assert recorded == [pytest.approx(0.0017)]
+
+
 def test_fix_suggestion_attachment_degrades_gracefully_on_any_failure(monkeypatch):
     def _raise(*a, **k):
         raise RuntimeError("github app auth broken")
 
     monkeypatch.setattr("scan_worker.jobs.get_settings", lambda: FakeHealthSettings())
+    _patch_fix_suggestion_spend_gate(monkeypatch)
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", _raise)
 
     result = _fix_suggestion_attachment(901, "org/repo", "app/handler.py", 15, "GET", "/v1/users", 500, None)
