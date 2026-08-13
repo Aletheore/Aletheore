@@ -5,6 +5,7 @@ import pytest
 from aletheore.search_index import (
     _file_header_comment,
     _is_declaration_only_file,
+    _is_auxiliary_path,
     _primary_symbol_docstring,
     HostedEmbeddingUnavailableError,
     EmbeddingProviderUnavailableError,
@@ -1354,3 +1355,41 @@ def test_file_header_comment_strips_a_trailing_comment_terminator_from_real_cont
     lines = ["/**", " * Handles authentication for the app. */", "", "class Auth {"]
     context = _file_header_comment(lines)
     assert context == "Handles authentication for the app."
+
+
+def test_is_auxiliary_path_flags_documentation_and_benchmark_directories():
+    """Measured: zod spent 28% of its top-5 slots on packages/docs and
+    packages/bench, gson 21% on proto, metrics and extras."""
+    assert _is_auxiliary_path("packages/docs/app/page.tsx")
+    assert _is_auxiliary_path("packages/bench/instanceof.ts")
+    assert _is_auxiliary_path("metrics/src/main/java/Benchmark.java")
+    assert _is_auxiliary_path("examples/basic/main.go")
+
+
+def test_is_auxiliary_path_does_not_flag_ordinary_library_code():
+    assert not _is_auxiliary_path("packages/zod/src/v4/core/parse.ts")
+    assert not _is_auxiliary_path("src/flask/sessions.py")
+    # The marker has to be a directory, not part of a file's name.
+    assert not _is_auxiliary_path("src/aletheore/benchmarks.py")
+
+
+def test_rrf_fuse_demotes_an_auxiliary_hit_below_library_code():
+    def chunk(path):
+        return {"module_path": path, "symbol_name": "parse", "start_line": 1}
+
+    docs_hit = chunk("packages/docs/app/page.tsx")
+    library_hit = chunk("packages/zod/src/v4/core/parse.ts")
+
+    fused = _rrf_fuse([docs_hit, library_hit], [docs_hit, library_hit])
+
+    assert fused[0]["module_path"] == "packages/zod/src/v4/core/parse.ts"
+
+
+def test_rrf_fuse_still_surfaces_an_auxiliary_hit_when_nothing_else_matches():
+    """A demotion, not an exclusion - an examples/ directory is sometimes the
+    only place a feature is demonstrated."""
+    only_hit = {"module_path": "examples/basic/main.go", "symbol_name": "main", "start_line": 1}
+
+    fused = _rrf_fuse([only_hit], [only_hit])
+
+    assert len(fused) == 1

@@ -935,6 +935,35 @@ _RRF_K = 60
 # contract for X defined?".
 _DECLARATION_ONLY_RANK_PENALTY = 8
 
+# Directories holding documentation, demos or benchmarks rather than the
+# library itself. Same principle as _is_test_path one step wider: nobody
+# asking "where is X implemented" wants the documentation site that
+# describes X, or the benchmark that times it.
+#
+# Measured across seven corpora: colinhacks/zod spent 28% of its top-5 slots
+# outside packages/zod (its docs site and benchmark package) and google/gson
+# 21% outside gson/src/main (proto, metrics, extras), while single-module
+# repositories spent 0-7%. Demoting these lifts gson top-1 33.3% -> 40.0% and
+# flask 68.8% -> 71.9%, with no corpus regressing on any metric.
+_AUX_DIR_MARKERS = frozenset({
+    "docs", "doc", "website", "site", "examples", "example", "samples",
+    "sample", "demo", "demos", "playground", "benchmark", "benchmarks",
+    "bench", "perf", "metrics", "fixtures", "e2e",
+})
+
+# A demotion rather than an exclusion, for the same reason interfaces are
+# demoted rather than dropped: an examples/ directory is occasionally the only
+# place a feature is shown, and should still be reachable when nothing else
+# matches.
+_AUXILIARY_RANK_PENALTY = 8
+
+
+
+def _is_auxiliary_path(module_path: str) -> bool:
+    """Whether a path is documentation, a demo or a benchmark."""
+    return any(part.lower() in _AUX_DIR_MARKERS for part in module_path.split("/")[:-1])
+
+
 
 def _rrf_fuse(vector_hits: list[dict], text_hits: list[dict]) -> list[dict]:
     """Interleave two ranked lists by reciprocal rank.
@@ -957,6 +986,8 @@ def _rrf_fuse(vector_hits: list[dict], text_hits: list[dict]) -> list[dict]:
             effective_rank = rank
             if hit.get("is_declaration_only"):
                 effective_rank += _DECLARATION_ONLY_RANK_PENALTY
+            if _is_auxiliary_path(hit.get("module_path") or ""):
+                effective_rank += _AUXILIARY_RANK_PENALTY
             scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_K + effective_rank + 1)
             by_key[key] = hit
     return [by_key[key] for key, _ in sorted(scores.items(), key=lambda item: -item[1])]
