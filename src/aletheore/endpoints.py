@@ -189,11 +189,28 @@ def _extract_flask_fastapi_routes(
                     if router_object is not None and router_object.type == "identifier"
                     else None
                 )
-                prefixes = ([] if router_name is None else router_mount_prefixes.get(router_name, []))
-                if router_name is not None and router_name in router_prefixes:
-                    prefixes.insert(0, router_prefixes[router_name])
-                for prefix in prefixes:
-                    path = join_prefix(prefix, path)
+                # A router mounted at more than one prefix (include_router(router,
+                # prefix="/api") in one place, include_router(router, prefix="/admin")
+                # in another) is reachable at each mount separately - every route on it
+                # really exists at both "/api/..." and "/admin/...". Chaining the mount
+                # prefixes onto one path instead produced a single, wrong compound path
+                # ("/api/admin/...") and silently dropped the other mount's endpoint
+                # entirely. Each mount prefix now composes with the router's own
+                # constructor prefix (if any) into its own separate path.
+                constructor_prefix = router_prefixes.get(router_name) if router_name is not None else None
+                mount_prefixes = (
+                    router_mount_prefixes.get(router_name, []) if router_name is not None else []
+                )
+
+                def compose(mount_prefix: str | None, _path: str = path) -> str:
+                    composed = _path
+                    if constructor_prefix:
+                        composed = join_prefix(constructor_prefix, composed)
+                    if mount_prefix:
+                        composed = join_prefix(mount_prefix, composed)
+                    return composed
+
+                paths = [compose(mp) for mp in mount_prefixes] if mount_prefixes else [compose(None)]
                 line = decorator.start_point[0] + 1
 
                 if attribute_name == "route":
@@ -214,11 +231,26 @@ def _extract_flask_fastapi_routes(
                                 if item.type == "string"
                             ]
                     for method in methods:
+                        for entry_path in paths:
+                            entries.append(
+                                {
+                                    "method": method,
+                                    "path": entry_path,
+                                    "framework": "flask",
+                                    "file": rel_path,
+                                    "line": line,
+                                    "handler": handler,
+                                    "unresolved": False,
+                                    "note": None,
+                                }
+                            )
+                elif attribute_name in _ROUTE_VERB_METHODS:
+                    for entry_path in paths:
                         entries.append(
                             {
-                                "method": method,
-                                "path": path,
-                                "framework": "flask",
+                                "method": attribute_name.upper(),
+                                "path": entry_path,
+                                "framework": "flask_or_fastapi",
                                 "file": rel_path,
                                 "line": line,
                                 "handler": handler,
@@ -226,19 +258,6 @@ def _extract_flask_fastapi_routes(
                                 "note": None,
                             }
                         )
-                elif attribute_name in _ROUTE_VERB_METHODS:
-                    entries.append(
-                        {
-                            "method": attribute_name.upper(),
-                            "path": path,
-                            "framework": "flask_or_fastapi",
-                            "file": rel_path,
-                            "line": line,
-                            "handler": handler,
-                            "unresolved": False,
-                            "note": None,
-                        }
-                    )
         for child in n.children:
             walk(child)
 

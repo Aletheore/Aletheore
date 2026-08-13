@@ -184,6 +184,24 @@ def test_map_api_endpoints_does_not_double_count_a_same_file_include_router_pref
     assert route["path"] == "/internal/api/v1/users/{user_id}"
 
 
+def test_map_api_endpoints_fans_out_a_router_mounted_at_multiple_prefixes(tmp_path):
+    (tmp_path / "users.py").write_text(
+        'router = APIRouter()\n'
+        '@router.get("/{user_id}")\n'
+        'def get_user(user_id: int):\n    pass\n'
+    )
+    (tmp_path / "main.py").write_text(
+        'app.include_router(router, prefix="/api")\n'
+        'app.include_router(router, prefix="/admin")\n'
+    )
+
+    result = map_api_endpoints(tmp_path)
+
+    routes = [e for e in result["endpoints"] if e["file"] == "users.py"]
+    paths = {route["path"] for route in routes}
+    assert paths == {"/api/{user_id}", "/admin/{user_id}"}
+
+
 def test_extract_flask_fastapi_ignores_non_route_decorators():
     root, source = parse_python("@staticmethod\ndef helper():\n    pass\n")
 
