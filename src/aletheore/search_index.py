@@ -253,8 +253,19 @@ def _is_test_path(module_path: str) -> bool:
     excluded. Someone asking how something works wants the implementation;
     if they want the test, they ask for the test by name and grep finds it.
     """
-    parts = module_path.split("/")
+    parts = [part.lower() for part in module_path.split("/")]
     if any(part in {"tests", "test", "spec", "__tests__", "testing"} for part in parts):
+        return True
+    # .NET names test projects after the assembly they cover - "UnitTests",
+    # "IntegrationTests", "AutoMapper.DI.Tests" - none of which is an exact
+    # match for the segments above, and none of which was being excluded.
+    # Measured on AutoMapper/AutoMapper: every one of 15 questions returned
+    # src/UnitTests/ files ahead of the implementation, for 0.0% top-1.
+    #
+    # Matched on the "tests" plural only. "test" as a suffix would swallow
+    # ordinary words - "latest" ends with "test" - while no English word this
+    # matters for ends with "tests".
+    if any(part.endswith("tests") or part.endswith(".test") for part in parts):
         return True
     name = parts[-1]
     stem = name.rsplit(".", 1)[0]

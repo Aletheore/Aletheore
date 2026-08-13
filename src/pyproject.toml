@@ -1,6 +1,6 @@
 [project]
 name = "aletheore"
-version = "0.8.8"
+version = "0.8.9"
 description = "Evidence-grounded repository audit CLI: deterministic scanner, MCP server, live dashboard, and a GitHub Action that posts PR diffs."
 readme = "README.md"
 license = "Apache-2.0"

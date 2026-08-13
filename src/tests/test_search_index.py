@@ -6,6 +6,7 @@ from aletheore.search_index import (
     _file_header_comment,
     _is_declaration_only_file,
     _is_auxiliary_path,
+    _is_test_path,
     _primary_symbol_docstring,
     HostedEmbeddingUnavailableError,
     EmbeddingProviderUnavailableError,
@@ -1393,3 +1394,20 @@ def test_rrf_fuse_still_surfaces_an_auxiliary_hit_when_nothing_else_matches():
     fused = _rrf_fuse([only_hit], [only_hit])
 
     assert len(fused) == 1
+
+
+def test_is_test_path_excludes_dotnet_test_project_conventions():
+    """.NET names test projects after the assembly they cover, none of which
+    is an exact match for "tests". Measured on AutoMapper/AutoMapper: all 15
+    questions returned src/UnitTests/ files ahead of the implementation, for
+    0.0% top-1."""
+    assert _is_test_path("src/UnitTests/ForAllMembers.cs")
+    assert _is_test_path("src/AutoMapper.DI.Tests/Profiles.cs")
+    assert _is_test_path("src/IntegrationTests/Foo.java")
+
+
+def test_is_test_path_does_not_swallow_ordinary_words_ending_in_test():
+    """Matched on the plural only - "latest" ends with "test"."""
+    assert not _is_test_path("lib/latest/thing.js")
+    assert not _is_test_path("src/greatest.py")
+    assert not _is_test_path("src/AutoMapper/Mapper.cs")
