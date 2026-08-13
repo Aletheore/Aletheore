@@ -75,6 +75,7 @@
     "dotenv",
     "exploitability",
     "expressjs",
+    "gonic",
     "healthcheck",
     "healthchecks",
     "healthz",

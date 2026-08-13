@@ -3,6 +3,28 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.5 — 2026-08-13
+
+- **The `[file]` context was spent on every symbol, and mostly diluted them.** It exists to
+  break ties between near-identical chunks, but it was attached to every symbol in a file
+  whether or not that symbol had a tie to break — so the same sentence was repeated across
+  every chunk of the file, and each symbol's own text carried proportionally less weight.
+  It now goes only to symbols whose name is declared in more than one file, which is the
+  collision it was built for: `serde` declares `deserialize` in 57 files, `slimphp/Slim`
+  declares `__invoke` in four. Measured across four corpora and 77 questions, against 0.8.4:
+  `pallets/flask` top-1 65.6% → 68.8%, `serde-rs/serde` top-1 46.7% → 53.3%,
+  `gin-gonic/gin` top-3 93.3% → 100%, `slimphp/Slim` top-5 60.0% → 66.7%. No corpus
+  regressed on any metric; total top-1 across all 77 questions rose 57.1% → 59.7% and MRR
+  improved on all four.
+
+- **`aletheore --version` and `aletheore status` reported 0.7.2 on every 0.8.x release.**
+  Both read `importlib.metadata.version("aletheore")`, which comes from
+  `src/pyproject.toml`, and that file was never bumped past 0.7.2 while `__version__` moved
+  to 0.8.4 — so the metadata version and the declared version had drifted five releases
+  apart. It also meant no 0.8.x artefact could be published at all, since 0.7.2 was already
+  taken on PyPI, which is why `pip install aletheore==0.8.0` does not work today. Both are
+  now 0.8.5, and a test asserts they cannot drift again.
+
 ## 0.8.4 — 2026-08-13
 
 - **A header-less file lost retrieval ties it should have won.** `slimphp/Slim`'s
