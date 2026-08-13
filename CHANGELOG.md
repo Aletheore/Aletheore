@@ -14,6 +14,7 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
   case-insensitive and also covers a segment ending in `tests` or `.test`, which lifts
   AutoMapper to 6.7% top-1 and 33.3% top-5 with no change to any other corpus. Deliberately
   matched on the plural: a `test` suffix would swallow ordinary words like `latest`.
+
 ## 0.8.8 — 2026-08-13
 
 - **Java visibility ignored Java's own access modifiers.** `is_public` was computed as
