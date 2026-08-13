@@ -310,6 +310,31 @@ _TS_ASSIGNED_FUNCTION = re.compile(
     r"=\s*(?:async\s+)?(?:\([^()]*\)|\w+)\s*(?::[^=]+)?=>|=\s*(?:async\s+)?function\b"
 )
 
+_JAVA_CSHARP_CONCRETE_TYPE_DECL = re.compile(
+    r"^\s*(?:(?:public|private|protected|internal|abstract|sealed|static|final|partial|nested)\s+)*"
+    r"(?:class|struct|record|enum)\s+\w",
+    re.MULTILINE,
+)
+_JAVA_CSHARP_METHOD_BODY = re.compile(r"\)\s*(?:throws\s+[^\{]+)?\{")
+_JAVA_CSHARP_COMMENTS = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
+
+
+def _has_concrete_implementation(language: str, source: str) -> bool:
+    """Return whether a declaration-looking file also contains implementation.
+
+    Java and C# commonly colocate public interfaces with their concrete classes.
+    A declaration-only penalty must apply to the former, not to the whole file.
+    Interface default methods are implementation too, so a method body counts
+    even when no concrete type declaration is present.
+    """
+    if language in ("java", "csharp"):
+        source = _JAVA_CSHARP_COMMENTS.sub("\n", source)
+        return bool(
+            _JAVA_CSHARP_CONCRETE_TYPE_DECL.search(source)
+            or _JAVA_CSHARP_METHOD_BODY.search(source)
+        )
+    return False
+
 
 def _is_declaration_only_file(module_path: str, language: str, source: str) -> bool:
     """Whether a file is pure API surface with no implementation behind it.
@@ -333,15 +358,15 @@ def _is_declaration_only_file(module_path: str, language: str, source: str) -> b
     mixes abstract and fully-implemented methods in the same file).
     """
     parts = module_path.split("/")
-    if any(part.lower() in _INTERFACE_DIR_MARKERS for part in parts[:-1]):
-        return True
+    in_interface_dir = any(part.lower() in _INTERFACE_DIR_MARKERS for part in parts[:-1])
     name = parts[-1]
     if name.endswith(".d.ts"):
         return True
     if language == "php":
-        return bool(_PHP_INTERFACE_DECL.search(source))
+        return (in_interface_dir or bool(_PHP_INTERFACE_DECL.search(source))) and not _has_concrete_implementation(language, source)
     if language in ("java", "csharp"):
-        return bool(_JAVA_CSHARP_INTERFACE_DECL.search(source))
+        code = _JAVA_CSHARP_COMMENTS.sub("\n", source)
+        return (in_interface_dir or bool(_JAVA_CSHARP_INTERFACE_DECL.search(code))) and not _has_concrete_implementation(language, code)
     if language == "rust":
         return bool(_RUST_TRAIT_DECL.search(source)) and not _RUST_METHOD_WITH_BODY.search(source)
     if language == "cpp" and name.endswith((".h", ".hpp")):

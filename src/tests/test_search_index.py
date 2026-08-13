@@ -463,6 +463,23 @@ def test_is_declaration_only_file_does_not_flag_a_typescript_file_with_an_implem
     )
 
 
+@pytest.mark.parametrize("language, suffix", [("java", ".java"), ("csharp", ".cs")])
+def test_is_declaration_only_file_does_not_flag_mixed_interface_and_implementation(language, suffix):
+    assert not _is_declaration_only_file(
+        f"src/Mapper{suffix}", language,
+        "interface Contract { void map(); }\n"
+        "public class Mapper { public void map() {} }\n",
+    )
+
+
+@pytest.mark.parametrize("language, suffix", [("java", ".java"), ("csharp", ".cs")])
+def test_is_declaration_only_file_does_not_flag_default_interface_method(language, suffix):
+    assert not _is_declaration_only_file(
+        f"src/Contract{suffix}", language,
+        "interface Contract { default void map() {} }\n",
+    )
+
+
 def test_is_declaration_only_file_detects_a_rust_trait_with_no_default_bodies():
     assert _is_declaration_only_file(
         "resolver.rs", "rust", "pub trait Resolver {\n    fn resolve(&self) -> bool;\n}\n"
