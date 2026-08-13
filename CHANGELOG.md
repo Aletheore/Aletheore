@@ -3,6 +3,19 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.6 — 2026-08-13
+
+- **Documentation, demos and benchmarks competed with the library for answer slots.** Asked
+  where something is implemented, retrieval returned the docs site that describes it or the
+  benchmark that times it. Measured across eight corpora: `colinhacks/zod` spent 28% of its
+  top-5 slots outside `packages/zod` and `google/gson` 21% outside `gson/src/main`
+  (`proto/`, `metrics/`, `extras/`), against 0-7% for single-module repositories. Files under
+  a documentation, example, demo or benchmark directory are now demoted — a rank penalty, not
+  an exclusion, so an `examples/` directory is still reachable when it is the only match, the
+  same treatment interfaces already get. `google/gson` top-1 33.3% → 40.0%, top-5 66.7% →
+  80.0%; `pallets/flask` top-1 68.8% → 71.9%. No corpus regressed on any metric; across all
+  137 questions top-1 44.5% → 46.0% and top-5 73.7% → 75.2%.
+
 ## 0.8.5 — 2026-08-13
 
 - **The `[file]` context was spent on every symbol, and mostly diluted them.** It exists to
