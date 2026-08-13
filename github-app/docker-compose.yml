@@ -79,7 +79,7 @@ services:
         required: false
     environment:
       - GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem
-      - TEI_BASE_URL=http://tei:80
+      - OLLAMA_BASE_URL=http://ollama:11434
       - ALETHEORE_REPO_CHECKOUT_ROOT=/data/aletheore-repo-checkouts
       - ALETHEORE_APP_HEALTH_URL=http://app-server:8000/healthz
       - ALETHEORE_BACKUP_DIR=/app/backups
@@ -104,7 +104,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      tei:
+      ollama:
         condition: service_started
     cpus: "1.0"
     mem_limit: 1g
@@ -308,28 +308,32 @@ services:
     security_opt:
       - "no-new-privileges:true"
 
-  # Self-hosted nomic-embed-text-v1.5 via HuggingFace's Text Embeddings
-  # Inference, replacing Ollama - same model, real dynamic batching for
-  # concurrent embedding requests instead of a general-purpose LLM runtime.
-  # Model is downloaded and its config.json patched at BUILD time, not
-  # here (see Dockerfile.tei and tei/download_and_patch.py) - no network
-  # dependency or slow fallback path at container start.
-  tei:
-    build:
-      context: ..
-      dockerfile: github-app/Dockerfile.tei
+  ollama:
+    image: ollama/ollama:latest
     restart: unless-stopped
-    # Internal-only (80, never published to the host) - same reasoning as
-    # redis above.
+    # Internal-only (11434, never published to the host) - same reasoning
+    # as redis above.
     security_opt:
       - "no-new-privileges:true"
-    cpus: "2.0"
-    # Measured directly against the running production container: 2g
-    # OOM-killed it 9 times during warmup before it ever reached Ready,
-    # even natively (no emulation) - warmup briefly needs real headroom
-    # above the model's own steady-state footprint. Host has 15GB with
-    # ~14GB free, so this costs nothing the rest of the stack needs.
-    mem_limit: 4g
+    # Tried OLLAMA_CONTEXT_LENGTH=8192 here first, assuming nomic-embed-text
+    # supports an 8192-token context - it doesn't, not on the GGUF this
+    # pulls: confirmed directly against the running server that the model's
+    # own trained context is a hard 2048, and requesting more just logged
+    # "requested context size too large for model" and got silently
+    # clamped back down. The real fix is keeping input within that limit
+    # (see MAX_EMBEDDING_CHARS in scan_worker/embedding_client.py), not a
+    # server setting that can't raise a ceiling the model itself doesn't have.
+    volumes:
+      - aletheore_ollama_data:/root/.ollama
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        sleep 3
+        ollama pull nomic-embed-text
+        wait
+    cpus: "1.0"
+    mem_limit: 1g
 
   caddy:
     image: caddy:2-alpine
@@ -377,5 +381,6 @@ services:
 
 volumes:
   aletheore_postgres_data:
+  aletheore_ollama_data:
   aletheore_caddy_data:
   aletheore_caddy_config:
