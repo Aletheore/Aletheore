@@ -207,6 +207,34 @@ def _file_header_comment(lines: list[str]) -> str:
     return " ".join(collected)[:FILE_CONTEXT_MAX_CHARS]
 
 
+def _primary_symbol_docstring(module_path: str, classes: list[dict]) -> str:
+    """Fallback [file] context for a file with no leading comment of its
+    own: the docstring of the class/interface the file is named after -
+    its identity under PHP/Java/C#/TypeScript's one-type-per-file
+    convention.
+
+    Exists because a header-less file loses ties it should win.
+    slimphp/Slim's CallableResolver.php goes straight from
+    declare(strict_types=1) to namespace to use - no header at all - while
+    the four sibling __invoke methods that lexically collide with a
+    question about "something invokable" all sit in files with a header
+    docblock. _file_header_comment correctly returns "" for
+    CallableResolver.php; leaving it there means the file with no context
+    loses to files that have some, even when it's the right answer.
+
+    Matched by name against the file's own stem, not "the first symbol in
+    the file" - restricted this way so it can never re-introduce the bug
+    _DEFINITION_START exists to prevent (stapling one symbol's docstring
+    onto every other symbol in the file). A file with several classes and
+    none matching its own name gets no fallback, same as today.
+    """
+    stem = Path(module_path).stem
+    for cls in classes:
+        if cls.get("name") == stem:
+            return cls.get("docstring") or ""
+    return ""
+
+
 def _truncate_for_embedding(text: str) -> str:
     if len(text) <= MAX_EMBEDDING_CHARS:
         return text
@@ -345,6 +373,17 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
         except OSError:
             continue
         file_context = _file_header_comment(lines)
+        if not file_context:
+            # A header-less file loses ties it should win: slimphp/Slim's
+            # CallableResolver.php has no file-level comment at all, while
+            # the sibling __invoke methods it's competing against (a
+            # lexical match on a question about "something invokable") sit
+            # in files that do - so the actually-correct file was the only
+            # one of the two with no disambiguating context. See
+            # _primary_symbol_docstring.
+            file_context = _primary_symbol_docstring(
+                module_path, module["symbols"]["classes"]
+            )
         if file_context:
             context_counts[file_context] = context_counts.get(file_context, 0) + 1
         pending.append((module, lines, file_context))

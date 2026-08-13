@@ -3,6 +3,25 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.4 — 2026-08-13
+
+- **A header-less file lost retrieval ties it should have won.** `slimphp/Slim`'s
+  `CallableResolver.php` — the correct answer to "how is a callable given as a string turned
+  into something invokable?" — goes straight from `declare(strict_types=1)` to `namespace` to
+  `use`, with no header comment at all, while its four lexical competitors (`__invoke` methods
+  in sibling files, matching "invokable" on "`__invoke`") all sit in files with a header
+  docblock. The `[file]` context feature meant to disambiguate near-identical chunks was
+  disambiguating backwards: every wrong answer got a hint, the right one got none. Fixed with a
+  fallback, used only when a file has no header comment of its own: the docstring of the class
+  or interface the file is named after (PHP/Java/C#/TypeScript's one-type-per-file convention).
+  Matched by name against the file's own stem, not "the first symbol in the file," so it can't
+  reintroduce the bug the file-header comment logic already guards against (stapling one
+  symbol's docstring onto every other symbol in the file).
+- Correction to 0.8.3's licence-banner fix: it was real and worth keeping (it was wasting
+  embedding budget on 372 chunks), but it was not the cause of PHP's stuck 26.7% top-1 -
+  uniform noise across every chunk mostly cancels in relative ranking. This `__invoke`
+  collision is the actual cause.
+
 ## 0.8.3 — 2026-08-13
 
 - **Licence-banner text was leaking into `[file]` context, actively harming retrieval.**

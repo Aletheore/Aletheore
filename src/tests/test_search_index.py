@@ -5,6 +5,7 @@ import pytest
 from aletheore.search_index import (
     _file_header_comment,
     _is_declaration_only_file,
+    _primary_symbol_docstring,
     HostedEmbeddingUnavailableError,
     EmbeddingProviderUnavailableError,
     IndexNotFoundError,
@@ -572,6 +573,100 @@ def test_build_chunks_keeps_a_context_shared_by_only_a_couple_of_files(tmp_path)
     symbol_chunks = [c for c in chunks if c["symbol_name"] is not None]
     assert symbol_chunks
     assert all("Handles the request pipeline" in c["text"] for c in symbol_chunks)
+
+
+def test_primary_symbol_docstring_matches_the_class_named_after_the_file():
+    classes = [
+        {"name": "Unrelated", "docstring": "Not this one."},
+        {"name": "CallableResolver", "docstring": "Resolves a callable from any string form."},
+    ]
+    assert _primary_symbol_docstring("Handlers/CallableResolver.php", classes) == (
+        "Resolves a callable from any string form."
+    )
+
+
+def test_primary_symbol_docstring_returns_empty_when_no_class_matches_the_stem():
+    classes = [{"name": "Unrelated", "docstring": "Not this one."}]
+    assert _primary_symbol_docstring("Handlers/CallableResolver.php", classes) == ""
+
+
+def test_primary_symbol_docstring_returns_empty_when_the_matching_class_has_no_docstring():
+    classes = [{"name": "CallableResolver", "docstring": None}]
+    assert _primary_symbol_docstring("Handlers/CallableResolver.php", classes) == ""
+
+
+def test_build_chunks_falls_back_to_the_primary_symbols_docstring_when_the_file_has_no_header(
+    tmp_path,
+):
+    """slimphp/Slim's CallableResolver.php goes straight from
+    declare(strict_types=1) to namespace to use - no header comment at
+    all - while the four sibling __invoke methods it's competing against
+    for "something invokable" all sit in files WITH a header. The correct
+    answer must not be the only candidate with no [file] context."""
+    (tmp_path / "CallableResolver.php").write_text(
+        "<?php\ndeclare(strict_types=1);\n\nnamespace Slim\\Handlers;\n\nuse Closure;\n\n"
+        "class CallableResolver\n{\n    public function resolve($toResolve) {}\n}\n"
+    )
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "CallableResolver.php",
+                    "language": "php",
+                    "symbols": {
+                        "functions": [
+                            {"name": "resolve", "start_line": 9, "end_line": 9}
+                        ],
+                        "classes": [
+                            {
+                                "name": "CallableResolver",
+                                "start_line": 8, "end_line": 10,
+                                "docstring": "Resolves a callable given as a string into something invokable.",
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+    }
+
+    chunks = build_chunks(evidence, tmp_path)
+
+    resolve_chunk = next(c for c in chunks if c["symbol_name"] == "resolve")
+    assert "[file] Resolves a callable given as a string into something invokable." in resolve_chunk["text"]
+
+
+def test_build_chunks_does_not_use_the_fallback_when_the_file_already_has_a_header(tmp_path):
+    (tmp_path / "Strategy.php").write_text(
+        "<?php\n/** Default route callback strategy. */\n\nnamespace Slim;\n\n"
+        "class Strategy\n{\n    public function __invoke() {}\n}\n"
+    )
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "Strategy.php",
+                    "language": "php",
+                    "symbols": {
+                        "functions": [{"name": "__invoke", "start_line": 8, "end_line": 8}],
+                        "classes": [
+                            {
+                                "name": "Strategy",
+                                "start_line": 6, "end_line": 9,
+                                "docstring": "This docstring must not win - the file header wins.",
+                            }
+                        ],
+                    },
+                }
+            ]
+        }
+    }
+
+    chunks = build_chunks(evidence, tmp_path)
+
+    invoke_chunk = next(c for c in chunks if c["symbol_name"] == "__invoke")
+    assert "Default route callback strategy" in invoke_chunk["text"]
+    assert "must not win" not in invoke_chunk["text"]
 
 
 def test_fts_failure_degrades_to_vector_only(tmp_path):
