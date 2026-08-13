@@ -3,6 +3,19 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.7 — 2026-08-13
+
+- **A FastAPI router mounted at more than one prefix silently lost one of its mount points.**
+  `include_router(router, prefix="/api")` in one place and `include_router(router,
+  prefix="/admin")` in another are both real, independently reachable mount points for every
+  route on that router — but `_extract_flask_fastapi_routes` chained the two prefixes onto a
+  single path instead of emitting one endpoint per mount, producing a single wrong compound
+  path (`/api/admin/...`) and dropping the other mount's endpoint entirely. Each mount prefix
+  now composes independently with the router's own constructor prefix into its own endpoint.
+  Caught by Aletheore's own Flash review, running on `gpt-5.6-luna`, on the PR that introduced
+  the surrounding prefix-composition logic (#230) — verified against the real code before
+  fixing, not taken on faith.
+
 ## 0.8.6 — 2026-08-13
 
 - **Documentation, demos and benchmarks competed with the library for answer slots.** Asked
