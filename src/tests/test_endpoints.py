@@ -132,6 +132,58 @@ def test_extract_fastapi_verb_decorator_labeled_ambiguous():
     ]
 
 
+def test_extract_fastapi_composes_router_and_include_prefixes():
+    # include_router(...) prefixes are supplied via external_router_mount_prefixes
+    # here, not written inline - _extract_flask_fastapi_routes no longer collects
+    # them from its own source, since map_api_endpoints's cross-file pre-pass is
+    # now the single source of truth for that (see test below for why: collecting
+    # it both ways double-counted the prefix whenever include_router happened to
+    # be in the same file as the router it mounts).
+    root, source = parse_python(
+        'router = APIRouter(prefix="/api/v1/users")\n'
+        '@router.get("/{user_id}")\n'
+        'def get_user(user_id: int):\n    pass\n'
+    )
+
+    entries = _extract_flask_fastapi_routes(
+        root, source, "app/api.py", {"router": ["/internal"]}
+    )
+
+    assert entries[0]["method"] == "GET"
+    assert entries[0]["path"] == "/internal/api/v1/users/{user_id}"
+    assert entries[0]["unresolved"] is False
+
+
+def test_map_api_endpoints_composes_fastapi_prefix_from_another_file(tmp_path):
+    (tmp_path / "users.py").write_text(
+        'router = APIRouter(prefix="/users")\n'
+        '@router.get("/{user_id}")\n'
+        'def get_user(user_id: int):\n    pass\n'
+    )
+    (tmp_path / "main.py").write_text(
+        'app.include_router(router, prefix="/api/v1")\n'
+    )
+
+    result = map_api_endpoints(tmp_path)
+
+    route = next(endpoint for endpoint in result["endpoints"] if endpoint["file"] == "users.py")
+    assert route["path"] == "/api/v1/users/{user_id}"
+
+
+def test_map_api_endpoints_does_not_double_count_a_same_file_include_router_prefix(tmp_path):
+    (tmp_path / "api.py").write_text(
+        'router = APIRouter(prefix="/api/v1/users")\n'
+        '@router.get("/{user_id}")\n'
+        'def get_user(user_id: int):\n    pass\n'
+        'app.include_router(router, prefix="/internal")\n'
+    )
+
+    result = map_api_endpoints(tmp_path)
+
+    route = next(endpoint for endpoint in result["endpoints"] if endpoint["file"] == "api.py")
+    assert route["path"] == "/internal/api/v1/users/{user_id}"
+
+
 def test_extract_flask_fastapi_ignores_non_route_decorators():
     root, source = parse_python("@staticmethod\ndef helper():\n    pass\n")
 

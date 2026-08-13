@@ -623,6 +623,12 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
     functions: list[dict] = []
     classes: list[dict] = []
 
+    def string_literal(n: Node | None) -> str | None:
+        if n is None or n.type != "string":
+            return None
+        raw = source[n.start_byte:n.end_byte].decode()
+        return raw[1:-1] if len(raw) >= 2 and raw[0] in "'\"" else None
+
     def walk(root: Node):
         # Iterative, not recursive - see _extract_python's walk for why.
         stack = [root]
@@ -633,15 +639,33 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
                 if source_node is not None:
                     raw = source[source_node.start_byte:source_node.end_byte].decode()
                     imports.append(raw.strip("'\""))
+            elif n.type == "export_statement":
+                # Re-export barrels ("export { x } from './x'", "export * from
+                # './x'") get their own export_statement node type with a
+                # "source" field - a walk that only matches import_statement
+                # never sees them, so a file only ever referenced through one
+                # is invisible to imported_by/dead-code despite being live.
+                specifier = string_literal(n.child_by_field_name("source"))
+                if specifier is not None:
+                    imports.append(specifier)
             elif n.type == "call_expression":
-                # CommonJS `require('./x')`. Handling only ESM `import` left the
-                # dependency graph of every CommonJS codebase completely empty -
-                # measured on expressjs/express: 141 modules, 0 resolved imports,
-                # so community detection saw no edges and emitted one cluster per
-                # file. CommonJS is still most of npm, so this is not a legacy
-                # edge case.
+                # CommonJS `require('./x')` and dynamic `import('./x')`. Handling
+                # only ESM `import` left the dependency graph of every CommonJS
+                # codebase completely empty - measured on expressjs/express: 141
+                # modules, 0 resolved imports, so community detection saw no
+                # edges and emitted one cluster per file. CommonJS is still most
+                # of npm, so this is not a legacy edge case. Dynamic import()'s
+                # callee is its own "import" node type (not an identifier), same
+                # tree-sitter shape as the "import" keyword in a static
+                # import_statement.
                 fn = n.child_by_field_name("function")
-                if fn is not None and source[fn.start_byte:fn.end_byte] == b"require":
+                is_require = (
+                    fn is not None
+                    and fn.type == "identifier"
+                    and source[fn.start_byte:fn.end_byte] == b"require"
+                )
+                is_dynamic_import = fn is not None and fn.type == "import"
+                if is_require or is_dynamic_import:
                     args = n.child_by_field_name("arguments")
                     if args is not None:
                         for arg in args.named_children:

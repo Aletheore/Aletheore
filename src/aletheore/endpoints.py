@@ -56,8 +56,102 @@ def _string_literal_text(node: Node, source: bytes) -> str:
     return raw.strip("'\"")
 
 
-def _extract_flask_fastapi_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+def _collect_fastapi_include_prefixes(root: Node, source: bytes) -> dict[str, list[str]]:
+    prefixes: dict[str, list[str]] = {}
+    for n in _walk_tree(root):
+        if n.type != "call":
+            continue
+        function = n.child_by_field_name("function")
+        args = n.child_by_field_name("arguments")
+        if function is None or args is None or function.type != "attribute":
+            continue
+        name = function.child_by_field_name("attribute")
+        if name is None or source[name.start_byte:name.end_byte].decode() != "include_router":
+            continue
+        positional = [arg for arg in args.named_children if arg.type != "keyword_argument"]
+        if not positional or positional[0].type != "identifier":
+            continue
+        prefix_arg = next(
+            (arg for arg in args.named_children if arg.type == "keyword_argument"
+             and source[arg.child_by_field_name("name").start_byte:arg.child_by_field_name("name").end_byte].decode() == "prefix"),
+            None,
+        )
+        if prefix_arg is None:
+            continue
+        value = prefix_arg.child_by_field_name("value")
+        if value is None or value.type != "string":
+            continue
+        router = source[positional[0].start_byte:positional[0].end_byte].decode()
+        prefixes.setdefault(router, []).append(_string_literal_text(value, source))
+    return prefixes
+
+
+def _walk_tree(root: Node):
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(reversed(node.children))
+
+
+def _extract_flask_fastapi_routes(
+    root: Node,
+    source: bytes,
+    rel_path: str,
+    external_router_mount_prefixes: dict[str, list[str]] | None = None,
+) -> list[dict]:
     entries: list[dict] = []
+
+    def literal(node: Node | None) -> str | None:
+        if node is None or node.type != "string":
+            return None
+        return _string_literal_text(node, source)
+
+    def join_prefix(prefix: str, path: str) -> str:
+        if not prefix:
+            return path
+        if not path:
+            return prefix
+        return f"/{prefix.strip('/')}/{path.strip('/')}" if path != "/" else f"/{prefix.strip('/')}/"
+
+    router_prefixes: dict[str, str] = {}
+    router_mount_prefixes: dict[str, list[str]] = {
+        name: list(prefixes)
+        for name, prefixes in (external_router_mount_prefixes or {}).items()
+    }
+
+    def collect_static_prefixes(n: Node) -> None:
+        # include_router(...) prefixes are deliberately NOT collected here even
+        # when the call happens to live in this same file - map_api_endpoints's
+        # cross-file pre-pass (_collect_fastapi_include_prefixes) already scans
+        # every .py file, this one included, and hands the result in via
+        # external_router_mount_prefixes. Collecting it again here double-counted
+        # the prefix for any router mounted in the same file it's defined in
+        # (e.g. router = APIRouter(...); ...; app.include_router(router, prefix=...)
+        # all in one module) - confirmed via a real map_api_endpoints() run:
+        # "/internal" was applied twice, producing .../internal/internal/....
+        if n.type == "call":
+            function = n.child_by_field_name("function")
+            args = n.child_by_field_name("arguments")
+            if function is not None and args is not None:
+                function_text = source[function.start_byte:function.end_byte].decode()
+                if function.type == "identifier" and function_text == "APIRouter":
+                    parent = n.parent
+                    if parent is not None and parent.type == "assignment":
+                        left = parent.child_by_field_name("left")
+                        if left is not None and left.type == "identifier":
+                            prefix_arg = next(
+                                (arg for arg in args.named_children if arg.type == "keyword_argument"
+                                 and source[arg.child_by_field_name("name").start_byte:arg.child_by_field_name("name").end_byte].decode() == "prefix"),
+                                None,
+                            )
+                            prefix = literal(prefix_arg.child_by_field_name("value")) if prefix_arg else None
+                            if prefix is not None:
+                                router_prefixes[source[left.start_byte:left.end_byte].decode()] = prefix
+        for child in n.children:
+            collect_static_prefixes(child)
+
+    collect_static_prefixes(root)
 
     def walk(n: Node) -> None:
         if n.type == "decorated_definition":
@@ -89,6 +183,17 @@ def _extract_flask_fastapi_routes(root: Node, source: bytes, rel_path: str) -> l
                 if path_node is None:
                     continue
                 path = _string_literal_text(path_node, source)
+                router_object = func.child_by_field_name("object")
+                router_name = (
+                    source[router_object.start_byte:router_object.end_byte].decode()
+                    if router_object is not None and router_object.type == "identifier"
+                    else None
+                )
+                prefixes = ([] if router_name is None else router_mount_prefixes.get(router_name, []))
+                if router_name is not None and router_name in router_prefixes:
+                    prefixes.insert(0, router_prefixes[router_name])
+                for prefix in prefixes:
+                    path = join_prefix(prefix, path)
                 line = decorator.start_point[0] + 1
 
                 if attribute_name == "route":
@@ -1092,6 +1197,15 @@ def map_api_endpoints(
         parser.language = lang
         parsers[name] = parser
 
+    cross_file_router_mounts: dict[str, list[str]] = {}
+    for path in _iter_source_files(repo_path, ignored_paths):
+        if path.suffix != ".py":
+            continue
+        source = path.read_bytes()
+        tree = parsers["py"].parse(source)
+        for router, prefixes in _collect_fastapi_include_prefixes(tree.root_node, source).items():
+            cross_file_router_mounts.setdefault(router, []).extend(prefixes)
+
     for path in _iter_source_files(repo_path, ignored_paths):
         rel_path = _rel(repo_path, path)
 
@@ -1104,7 +1218,11 @@ def map_api_endpoints(
         if suffix == ".py":
             source = path.read_bytes()
             tree = parsers["py"].parse(source)
-            endpoints.extend(_extract_flask_fastapi_routes(tree.root_node, source, rel_path))
+            endpoints.extend(
+                _extract_flask_fastapi_routes(
+                    tree.root_node, source, rel_path, cross_file_router_mounts
+                )
+            )
             if path.name == "urls.py":
                 endpoints.extend(_extract_django_routes(tree.root_node, source, rel_path))
         elif suffix in (".js", ".jsx"):

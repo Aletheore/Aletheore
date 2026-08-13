@@ -437,6 +437,27 @@ def test_parse_pip_pins_reads_pep621_pyproject_dependencies(tmp_path):
     assert not any(pin[0] == "tzdata" for pin in pins)
 
 
+def test_parse_pip_pins_keeps_compound_compatible_and_unpinned_pep508_dependencies(tmp_path):
+    from aletheore.vulnerabilities import _parse_pip_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pyproject.toml").write_text(
+        "[project]\n"
+        "dependencies = [\n"
+        '  "tree-sitter>=0.24.0,<0.25.0",\n'
+        '  "openai~=1.0.0",\n'
+        '  "rich",\n'
+        "]\n"
+    )
+
+    pins = _parse_pip_pins(repo)
+
+    assert ("tree-sitter", "0.24.0", "PyPI") in pins
+    assert ("openai", "1.0.0", "PyPI") in pins
+    assert ("rich", "*", "PyPI") in pins
+
+
 def test_parse_pip_pins_reads_poetry_dependencies(tmp_path):
     from aletheore.vulnerabilities import _parse_pip_pins
 
