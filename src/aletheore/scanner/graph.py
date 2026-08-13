@@ -1762,6 +1762,32 @@ def _csharp_return_type(source: bytes, enclosing_node: Node) -> str | None:
     return source[node.start_byte:node.end_byte].decode().strip()
 
 
+def _csharp_is_public(node: Node, source: bytes, is_type: bool = False) -> bool:
+    """Read C# accessibility, including declarations with multiple modifiers."""
+    if _is_nested_in_function(node):
+        return False
+    modifiers = {
+        source[c.start_byte:c.end_byte].decode()
+        for c in node.children
+        if c.type == "modifier"
+    }
+    if "public" in modifiers:
+        return True
+    if modifiers & {"private", "protected", "internal"}:
+        return False
+    if is_type:
+        # Top-level types default to internal; nested types default to private.
+        return False
+    parent = node.parent
+    while parent is not None:
+        if parent.type == "interface_declaration":
+            return True
+        if parent.type in ("class_declaration", "struct_declaration", "record_declaration"):
+            return False
+        parent = parent.parent
+    return False
+
+
 def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
     imports: list[str] = []
     functions: list[dict] = []
@@ -1799,7 +1825,7 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
                     types.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_leading_csharp_xmldoc(source, n),
-                        is_public=not _is_nested_in_function(n),
+                        is_public=_csharp_is_public(n, source, is_type=True),
                     ))
             elif n.type in ("method_declaration", "constructor_declaration"):
                 name_node = n.child_by_field_name("name")
@@ -1808,7 +1834,7 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
                         source, name_node, n,
                         docstring=_leading_csharp_xmldoc(source, n),
                         return_type=_csharp_return_type(source, n),
-                        is_public=not _is_nested_in_function(n),
+                        is_public=_csharp_is_public(n, source),
                     ))
             stack.extend(reversed(n.children))
 

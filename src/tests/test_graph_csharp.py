@@ -251,6 +251,30 @@ def test_csharp_method_with_no_doc_comment_gets_none(tmp_path):
     assert func["return_type"] == "void"
 
 
+def test_csharp_visibility_reads_modifiers_and_interface_defaults(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "A.cs").write_text(
+        "public class A {\n"
+        "  public void Public() {}\n"
+        "  private void Private() {}\n"
+        "  protected internal void ProtectedInternal() {}\n"
+        "  void DefaultPrivate() {}\n"
+        "}\n"
+        "interface I { void InterfaceMember(); }\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    symbols = modules[0]["symbols"]
+    by_name = {s["name"]: s for s in symbols["functions"] + symbols["classes"]}
+    assert by_name["A"]["is_public"] is True
+    assert by_name["I"]["is_public"] is False
+    assert by_name["Public"]["is_public"] is True
+    assert by_name["Private"]["is_public"] is False
+    assert by_name["ProtectedInternal"]["is_public"] is False
+    assert by_name["DefaultPrivate"]["is_public"] is False
+    assert by_name["InterfaceMember"]["is_public"] is True
+
+
 # No C# equivalent of the JS/Java/Rust/PHP/C++ "named thing nested only in
 # an anonymous closure" test: confirmed empirically that _extract_csharp
 # only ever tracks method_declaration/constructor_declaration (functions)
