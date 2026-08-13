@@ -40,14 +40,21 @@ def _clean_range_version(version: str) -> str | None:
 
 
 def _parse_pep508_dependency(dependency: str) -> tuple[str, str, str] | None:
+    has_marker = ";" in dependency
     dependency = dependency.split(";", 1)[0].strip()
-    match = re.match(
-        r"^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?\s*(==|>=)\s*([0-9][^,\s]*)$",
-        dependency,
-    )
-    if not match:
+    name_match = re.match(r"^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?", dependency)
+    if not name_match:
         return None
-    return (match.group(1).lower().replace("_", "-"), match.group(3), "PyPI")
+    name = name_match.group(1).lower().replace("_", "-")
+    specifiers = dependency[name_match.end():]
+    version_match = re.search(r"(?:==|>=|~=)\s*([0-9][^,\s]*)", specifiers)
+    # A lower bound is the most useful stable approximation for a range. Keep
+    # unpinned declarations too: downstream checks can query the package as a
+    # whole instead of silently pretending the dependency was absent.
+    if version_match is None and has_marker:
+        return None
+    version = version_match.group(1) if version_match else "*"
+    return (name, version, "PyPI")
 
 
 def _parse_python_dependency_value(name: str, value: object) -> tuple[str, str, str] | None:
@@ -431,7 +438,10 @@ def _parse_nuget_pins(repo_path: Path) -> list[tuple[str, str, str]]:
 
 def _query_batch(pins: list[tuple[str, str, str]], timeout: int) -> list[dict]:
     queries = [
-        {"package": {"name": name, "ecosystem": ecosystem}, "version": version}
+        {
+            "package": {"name": name, "ecosystem": ecosystem},
+            **({} if version == "*" else {"version": version}),
+        }
         for name, version, ecosystem in pins
     ]
     body = json.dumps({"queries": queries}).encode("utf-8")

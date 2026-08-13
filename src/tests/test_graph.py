@@ -226,6 +226,29 @@ def test_build_module_graph_extracts_javascript_imports(tmp_path):
     assert unparseable == []
 
 
+def test_build_module_graph_extracts_commonjs_reexports_and_dynamic_imports(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "foo.js").write_text("export const foo = 1;\n")
+    (repo / "baz.js").write_text("export const baz = 2;\n")
+    (repo / "qux.js").write_text("export const qux = 3;\n")
+    (repo / "consumer.js").write_text(
+        "const foo = require('./foo');\n"
+        "export { baz } from './baz';\n"
+        "export * from './qux';\n"
+        "async function load() { return import('./foo'); }\n"
+    )
+
+    modules, dependency_graph, unparseable = build_module_graph(repo)
+    consumer = next(module for module in modules if module["path"] == "consumer.js")
+
+    assert consumer["imports"] == ["foo.js", "baz.js", "qux.js", "foo.js"]
+    assert ["consumer.js", "foo.js"] in dependency_graph["edges"]
+    assert ["consumer.js", "baz.js"] in dependency_graph["edges"]
+    assert ["consumer.js", "qux.js"] in dependency_graph["edges"]
+    assert unparseable == []
+
+
 def test_javascript_extracts_jsdoc_comment(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
