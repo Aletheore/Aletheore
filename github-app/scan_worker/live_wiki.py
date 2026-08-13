@@ -97,7 +97,7 @@ FILE_PAGE_WRITING_SYSTEM_PROMPT = (
     """You write the reference page for a single source file in a codebase wiki.
 You are given the file's path, its key functions/classes with line numbers, the subsystem it
 belongs to, and the files it imports and is imported by. Respond with ONLY a JSON object:
-{"detail": "<markdown, 250-400 words>"}
+{"detail": "<markdown, 500-800 words>"}
 
 Structure the markdown with these headings, in order:
 
@@ -144,7 +144,15 @@ what's given. No markdown fences."""
 # Bump whenever any prompt in this module changes. It rides in the evidence
 # packet, so a bump invalidates cached pages written by the previous prompt
 # instead of serving them forever.
-AIRVIEW_PROMPT_VERSION = "4"
+#
+# v5: raised FILE_PAGE_WRITING_SYSTEM_PROMPT from 250-400 to 500-800 words.
+# Measured at 250-400: actual output already overshot to ~3,454 chars against
+# RepoWise's ~5,188-char average page, and the comprehension benchmark's own
+# writeup (AIRVIEW_GAP.md in aletheore-benchmarks) named this the cheapest
+# unshipped lever toward the 2.13-vs-2.35 gap - flagged, never raised. This is
+# the first step, not a jump to parity: re-measure against that 2.13/0.22
+# baseline before deciding whether to raise it further.
+AIRVIEW_PROMPT_VERSION = "5"
 
 # How many files get their own reference page, at most. Deliberately far below
 # a page-per-file: the top of the importance ranking is where a reader spends
