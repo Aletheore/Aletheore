@@ -1032,9 +1032,73 @@ def _fts_candidates(
         return []
 
 
+# Language names as they appear in a question, mapped to the identifiers the
+# scanner assigns. Detection is deliberately conservative: a wrong pre-filter is
+# worse than none, because it removes the correct answer from the candidate pool
+# entirely rather than merely ranking it lower.
+#
+# Two shapes are handled separately. An unambiguous name ("golang", "typescript",
+# "c++") can be matched on its own. A name that is also an ordinary English word
+# or a prefix of another language ("go", "c", "java" inside "javascript") is only
+# accepted next to a cue that makes it a language reference - "the Go library",
+# "in C", "the Java implementation".
+_UNAMBIGUOUS_QUERY_LANGUAGES = (
+    (r"golang", "go"),
+    (r"c\+\+|cpp", "cpp"),
+    (r"c#|csharp|\.net", "csharp"),
+    (r"typescript", "typescript"),
+    (r"javascript", "javascript"),
+    (r"python", "python"),
+    (r"ruby", "ruby"),
+    (r"rust", "rust"),
+    (r"php", "php"),
+)
+
+# "library", "implementation", "side", "code", "binding", "port" - the words that
+# turn a bare "Go" or "C" into a language reference rather than a verb or a grade.
+_LANGUAGE_CUE = r"(?:library|implementation|impl|module|package|code|side|binding|bindings|port|client|version)"
+
+_CUED_QUERY_LANGUAGES = (
+    (rf"\bgo\s+{_LANGUAGE_CUE}\b|\bin\s+go\b", "go"),
+    (rf"\bjava\s+{_LANGUAGE_CUE}\b|\bin\s+java\b", "java"),
+    (rf"\bc\s+{_LANGUAGE_CUE}\b|\bin\s+c\b", "c"),
+)
+
+
+def _detect_query_language(query_text: str) -> str | None:
+    """The language a question explicitly asks about, or None.
+
+    A polyglot repository implements the same concept once per language -
+    apache/thrift defines TBinaryProtocol in C++, Java, Python, Ruby, PHP, Go and
+    C# - so "where is TBinaryProtocol implemented in the C++ library" has one
+    correct answer and seven near-identical wrong ones. Measured on that corpus,
+    five of six failures returned a different language's file entirely, because
+    the language named in the question was only ever competing as ordinary text.
+
+    Returns None unless exactly one language is named. A question mentioning two
+    is not a scoping request, and filtering to either would be a guess.
+    """
+    lowered = query_text.lower()
+    found = set()
+    for pattern, language in _UNAMBIGUOUS_QUERY_LANGUAGES:
+        if re.search(pattern, lowered):
+            found.add(language)
+    # "java" would otherwise match inside "javascript", so the cued forms run
+    # only after the unambiguous ones have claimed what they can.
+    for pattern, language in _CUED_QUERY_LANGUAGES:
+        if re.search(pattern, lowered):
+            found.add(language)
+    if len(found) != 1:
+        return None
+    return found.pop()
+
+
 def search_index(
     repo_path: Path, query_text: str, k: int = 10, language: str | None = None
 ) -> list[dict]:
+    if language is None:
+        # The question may name its own language - see _detect_query_language.
+        language = _detect_query_language(query_text)
     table = open_index(repo_path)
     query_vector = embed_texts([query_text])[0]
 
