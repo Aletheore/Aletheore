@@ -3,6 +3,18 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.9 — 2026-08-13
+
+- **.NET test projects were being indexed as implementation.** `_is_test_path` matched only
+  the exact lowercase segments `tests`, `test`, `spec`, `__tests__` and `testing`, so .NET's
+  universal conventions — `src/UnitTests/`, `AutoMapper.DI.Tests/`, `IntegrationTests/` —
+  were never excluded, and neither was any Java or C# project following the same naming.
+  Measured on `AutoMapper/AutoMapper`: every one of 15 location questions returned
+  `src/UnitTests/` files ahead of the implementation, for **0.0% top-1**. Matching is now
+  case-insensitive and also covers a segment ending in `tests` or `.test`, which lifts
+  AutoMapper to 6.7% top-1 and 33.3% top-5 with no change to any other corpus. Deliberately
+  matched on the plural: a `test` suffix would swallow ordinary words like `latest`.
+
 ## 0.8.8 — 2026-08-13
 
 - **Java visibility ignored Java's own access modifiers.** `is_public` was computed as
