@@ -3,6 +3,30 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.10 — 2026-08-13
+
+- **A file mixing an interface with its own concrete implementation was demoted wholesale
+  on the strength of the interface alone.** `_is_declaration_only_file` flagged an entire
+  Java or C# file as pure contract if it contained an `interface` line anywhere, with no
+  check for whether real implementation sat alongside it — AutoMapper's `Mapper.cs` and
+  `Configuration/MapperConfiguration.cs` each pair a small interface with the actual
+  concrete class, and gson's `internal/bind/TypeAdapters.java` trips the same rule on one
+  interface nested 900 lines deep inside an otherwise fully-implemented registry class. Now
+  a file is declaration-only only if it has no concrete class alongside the interface, and,
+  separately, an embedded interface's own chunk carries the demotion on its own terms even
+  in a file the file-level check no longer flags — the two AutoMapper files above still
+  correctly demote their one interface-shaped chunk apiece. Measured on all 12 benchmark
+  corpora, both regimes, master ef3b137, re-scanned and re-indexed from scratch: 10 of 12
+  are byte-identical, both regimes — no PHP, Go, Rust, Python, Ruby, TypeScript, JavaScript,
+  C or C++ side effects. AutoMapper top-3 gains 6.7 points (13.3% → 20.0%) with top-5 fully
+  recovered to baseline (26.7% → 33.3%) and nothing else moved, while gson top-3 gives back
+  the same 6.7 points (73.3% → 66.7%) it had gained from the same underlying misclassification
+  bug — not a defect in this fix: `TypeAdapters.java` is a genuine registry of real
+  `TypeAdapter` implementations, not a misclassified interface, and now legitimately competes
+  with `TypeAdapter.java` on lexical/topical grounds the same way Slim's PHP siblings already
+  do. That's the open follow-up — a separate, already-scoped near-duplicate-crowding problem
+  with its own baseline, not a next step on this branch.
+
 ## 0.8.9 — 2026-08-13
 
 - **.NET test projects were being indexed as implementation.** `_is_test_path` matched only

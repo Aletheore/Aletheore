@@ -61,6 +61,7 @@ def test_symbol_entry_always_includes_docstring_return_type_and_is_public_keys(t
     func = modules[0]["symbols"]["functions"][0]
     assert set(func) == {
         "name", "start_line", "end_line", "params", "docstring", "return_type", "is_public",
+        "is_pure_declaration",
     }
     assert func["docstring"] is None
     assert func["return_type"] is None
@@ -896,6 +897,32 @@ def test_build_module_graph_java_interface_members_are_implicitly_public(tmp_pat
     symbols = _java_symbols(repo)
 
     assert symbols["create"]["is_public"] is True
+
+
+def test_build_module_graph_java_interface_symbol_is_pure_declaration_but_class_is_not(tmp_path):
+    """AutoMapper's Mapper.cs shape: a file pairs a small interface with the
+    real concrete implementation. The file-level is_declaration_only check no
+    longer flags this file at all (see test_search_index.py), but the
+    interface's own chunk should still carry the demotion on its own terms -
+    is_pure_declaration is how build_chunks does that per-symbol instead of
+    per-file."""
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "Mapper.java").write_text(
+        "package com.example;\n"
+        "public interface IMapper {\n"
+        "  Object map();\n"
+        "}\n"
+        "public class Mapper implements IMapper {\n"
+        "  public Object map() { return doMap(); }\n"
+        "  private Object doMap() { return null; }\n"
+        "}\n"
+    )
+
+    symbols = _java_symbols(repo)
+
+    assert symbols["IMapper"]["is_pure_declaration"] is True
+    assert symbols["Mapper"]["is_pure_declaration"] is False
 
 
 def test_build_module_graph_java_package_private_class_is_not_public(tmp_path):

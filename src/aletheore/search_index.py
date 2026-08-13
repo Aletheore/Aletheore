@@ -285,6 +285,10 @@ _INTERFACE_DIR_MARKERS = frozenset({"interfaces", "contracts"})
 
 _PHP_INTERFACE_DECL = re.compile(r"^\s*interface\s+\w", re.MULTILINE)
 _JAVA_CSHARP_INTERFACE_DECL = re.compile(r"^\s*(?:public\s+|internal\s+)?interface\s+\w", re.MULTILINE)
+_JAVA_CSHARP_CLASS_DECL = re.compile(
+    r"^\s*(?:public\s+|internal\s+|private\s+|protected\s+|sealed\s+|abstract\s+|static\s+|partial\s+|final\s+)*class\s+\w",
+    re.MULTILINE,
+)
 _RUST_TRAIT_DECL = re.compile(r"^\s*(?:pub\s+)?trait\s+\w", re.MULTILINE)
 # A trait method WITH a default body reads `fn name(...) { ... }`; a bare
 # signature ends in `;`. One match anywhere in the file is enough to treat
@@ -341,7 +345,7 @@ def _is_declaration_only_file(module_path: str, language: str, source: str) -> b
     if language == "php":
         return bool(_PHP_INTERFACE_DECL.search(source))
     if language in ("java", "csharp"):
-        return bool(_JAVA_CSHARP_INTERFACE_DECL.search(source))
+        return bool(_JAVA_CSHARP_INTERFACE_DECL.search(source)) and not _JAVA_CSHARP_CLASS_DECL.search(source)
     if language == "rust":
         return bool(_RUST_TRAIT_DECL.search(source)) and not _RUST_METHOD_WITH_BODY.search(source)
     if language == "cpp" and name.endswith((".h", ".hpp")):
@@ -531,6 +535,11 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
             # context at all). No corpus measured regressed on any metric.
             if file_context and symbol_file_counts.get(symbol["name"], 0) > 1:
                 header = f"{header}\n[file] {file_context}"
+            # A symbol that is itself an interface/annotation-type is pure
+            # contract on its own terms even inside a file the file-level
+            # scan doesn't flag - see is_pure_declaration on _symbol_entry.
+            # OR, not replace: a genuinely declaration-only file must still
+            # demote every chunk it has, this only ever adds a penalty.
             chunks.append(
                 {
                     "module_path": module_path,
@@ -539,7 +548,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "end_line": end_line,
                     "language": language,
                     "imports": imports,
-                    "is_declaration_only": is_declaration_only,
+                    "is_declaration_only": is_declaration_only or symbol.get("is_pure_declaration", False),
                     "text": _truncate_for_embedding(f"{header}\n{source}"),
                 }
             )

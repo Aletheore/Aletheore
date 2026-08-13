@@ -243,6 +243,7 @@ def _symbol_entry(
     docstring: str | None = None,
     return_type: str | None = None,
     is_public: bool = True,
+    is_pure_declaration: bool = False,
 ) -> dict:
     return {
         "name": source[name_node.start_byte:name_node.end_byte].decode(),
@@ -252,6 +253,17 @@ def _symbol_entry(
         "docstring": docstring,
         "return_type": return_type,
         "is_public": is_public,
+        # True only for a symbol that is ITSELF an interface/annotation-type,
+        # regardless of what else lives in the same file. Separate from the
+        # file-level is_declaration_only in build_chunks: that flag answers
+        # "is this whole file pure contract", which is correctly False for a
+        # file like AutoMapper's MapperConfiguration.cs that pairs a small
+        # embedded interface with a large concrete class - but the embedded
+        # interface's OWN chunk is still pure contract on its own terms, and
+        # measured to independently attract abstractly-worded queries the
+        # same way a dedicated declaration-only file does (AutoMapper cs02/
+        # cs09/cs10, gson java06 - see build_chunks for the per-chunk use).
+        "is_pure_declaration": is_pure_declaration,
     }
 
 
@@ -486,6 +498,16 @@ def _extract_module_constants(node: Node, source: bytes, language: str) -> list[
         elif language in ("java", "csharp"):
             # Class members: `static final` / `const` are the module-constant
             # equivalent in languages with no file-level scope.
+            #
+            # Deliberately NOT every field: an earlier version of this branch
+            # extracted every Java field regardless of modifier (1,075 of them
+            # in google/gson) to give private/instance fields the same
+            # by-name lookup as constants get. Measured, not shipped: every
+            # one of those 1,075 chunks was provably unreachable anyway - see
+            # build_chunks below, "constants" are only chunked for a file with
+            # no functions or classes, and every real Java file with fields
+            # also has at least one method - so the change was pure dead
+            # weight with zero effect on the index, in either direction.
             if t == "field_declaration" and (
                 has_modifier(n, "static", "final") or has_modifier(n, "const")
             ):
@@ -1251,6 +1273,7 @@ def _extract_java(
                         source, name_node, n,
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
                         is_public=_java_is_public(n),
+                        is_pure_declaration=n.type == "interface_declaration",
                     ))
             stack.extend(reversed(n.children))
 
@@ -1800,6 +1823,7 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
                         source, name_node, n,
                         docstring=_leading_csharp_xmldoc(source, n),
                         is_public=not _is_nested_in_function(n),
+                        is_pure_declaration=n.type == "interface_declaration",
                     ))
             elif n.type in ("method_declaration", "constructor_declaration"):
                 name_node = n.child_by_field_name("name")

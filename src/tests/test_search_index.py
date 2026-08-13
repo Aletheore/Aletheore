@@ -434,6 +434,40 @@ def test_is_declaration_only_file_does_not_flag_a_php_class():
     )
 
 
+def test_is_declaration_only_file_detects_a_java_interface():
+    assert _is_declaration_only_file(
+        "src/RouteInterface.java", "java",
+        "public interface RouteInterface {\n    boolean match();\n}\n",
+    )
+
+
+def test_is_declaration_only_file_does_not_flag_a_java_file_mixing_interface_and_class():
+    """AutoMapper's Mapper.cs shape, reproduced in Java: a small interface
+    paired with the real concrete implementation in the same file. The old
+    whole-file regex flagged the file on the interface line alone, demoting
+    the concrete class's own chunks along with it - measured to cost
+    AutoMapper 6.7 points of top-5 (see CHANGELOG 0.8.10)."""
+    assert not _is_declaration_only_file(
+        "src/Mapper.java", "java",
+        "public interface IMapper {\n    Object map();\n}\n"
+        "public class Mapper implements IMapper {\n"
+        "    public Object map() { return doMap(); }\n"
+        "    private Object doMap() { return null; }\n"
+        "}\n",
+    )
+
+
+def test_is_declaration_only_file_does_not_flag_a_csharp_file_mixing_interface_and_class():
+    assert not _is_declaration_only_file(
+        "Mapper.cs", "csharp",
+        "public interface IMapper {\n    object Map();\n}\n"
+        "public class Mapper : IMapper {\n"
+        "    public object Map() { return DoMap(); }\n"
+        "    private object DoMap() { return null; }\n"
+        "}\n",
+    )
+
+
 def test_is_declaration_only_file_detects_path_under_an_interfaces_directory():
     # Path-level signal alone, regardless of language or content - a PHP,
     # Java, or C# codebase commonly puts every interface under one of these
