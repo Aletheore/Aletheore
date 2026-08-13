@@ -30,6 +30,8 @@ from scan_worker.db import (
     insert_endpoint_health,
     insert_repo_history,
     installation_spend_lock,
+    repo_checkout_lock,
+    REPO_CHECKOUT_LOCK_NAMESPACE,
     SCAN_SLOT_LOCK_NAMESPACE,
     SPEND_LOCK_NAMESPACE,
     list_health_check_targets_all,
@@ -731,6 +733,68 @@ async def test_installation_spend_lock_releases_after_context_exits(pool):
             acquired = cur.fetchone()[0]
             cur.execute("SELECT pg_advisory_unlock(%s, %s)", (SPEND_LOCK_NAMESPACE, 301))
     assert acquired is True
+
+
+@pytest.mark.asyncio
+async def test_repo_checkout_lock_blocks_concurrent_acquisition_for_same_repo(pool):
+    import psycopg
+
+    with repo_checkout_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+        with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_lock(%s, hashtext(%s))",
+                    (REPO_CHECKOUT_LOCK_NAMESPACE, "301:a/repo1"),
+                )
+                acquired = cur.fetchone()[0]
+        assert acquired is False
+
+
+@pytest.mark.asyncio
+async def test_repo_checkout_lock_releases_after_context_exits(pool):
+    import psycopg
+
+    with repo_checkout_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+        pass
+
+    with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_try_advisory_lock(%s, hashtext(%s))",
+                (REPO_CHECKOUT_LOCK_NAMESPACE, "301:a/repo1"),
+            )
+            acquired = cur.fetchone()[0]
+            cur.execute(
+                "SELECT pg_advisory_unlock(%s, hashtext(%s))",
+                (REPO_CHECKOUT_LOCK_NAMESPACE, "301:a/repo1"),
+            )
+    assert acquired is True
+
+
+@pytest.mark.asyncio
+async def test_repo_checkout_lock_does_not_block_a_different_repo(pool):
+    import psycopg
+
+    with repo_checkout_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+        with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_lock(%s, hashtext(%s))",
+                    (REPO_CHECKOUT_LOCK_NAMESPACE, "301:a/repo2"),
+                )
+                acquired = cur.fetchone()[0]
+                cur.execute(
+                    "SELECT pg_advisory_unlock(%s, hashtext(%s))",
+                    (REPO_CHECKOUT_LOCK_NAMESPACE, "301:a/repo2"),
+                )
+    assert acquired is True
+
+
+@pytest.mark.asyncio
+async def test_repo_checkout_lock_does_not_collide_with_spend_lock(pool):
+    with installation_spend_lock(TEST_DATABASE_URL, 301):
+        with repo_checkout_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+            pass
 
 
 @pytest.mark.asyncio

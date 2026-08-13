@@ -1,8 +1,14 @@
 import asyncio
+from contextlib import contextmanager
 
 from rq import Queue
 
 from app_server.webhooks.pull_request import handle_pull_request_event
+
+
+@contextmanager
+def _noop_repo_checkout_lock(*args, **kwargs):
+    yield
 
 
 def test_pull_request_webhook_to_pr_comment_end_to_end(
@@ -37,6 +43,10 @@ def test_pull_request_webhook_to_pr_comment_end_to_end(
     monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    # repo_checkout_lock opens a real psycopg connection to
+    # settings.database_url - the fake "postgresql://unused" DSN set above
+    # would hang or fail slowly rather than exercising the actual lock.
+    monkeypatch.setattr("scan_worker.jobs.repo_checkout_lock", _noop_repo_checkout_lock)
 
     payload = {
         "action": "opened",

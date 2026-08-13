@@ -95,6 +95,7 @@ from scan_worker.db import (
     record_llm_spend,
     record_sent_email,
     record_wiki_catchup_swept,
+    repo_checkout_lock,
     set_docs_build_status,
     set_last_reviewed_sha,
     set_wiki_build_status,
@@ -812,40 +813,50 @@ def run_pr_scan_job(
         clone_url = _clone_url(repo_full_name, token)
         base_dir = job_dir / "base"
         _clone_ref(clone_url, base_sha, base_dir)
-        head_dir = _prepare_head_checkout(clone_url, head_sha, installation_id, repo_full_name, job_dir / "head")
 
-        try:
-            previous_sha = CodeGraphStore(
-                settings.database_url, installation_id, repo_full_name
-            ).load_last_synced_sha(GRAPH_BRANCH)
-        except Exception:  # noqa: BLE001
-            previous_sha = None
-        unchanged_scan_cache_path = _build_unchanged_scan_cache(
-            installation_id, repo_full_name, head_dir, previous_sha, head_sha,
-            job_dir / "unchanged-scan-cache.json",
-        )
+        # Locked for the whole checkout-through-git-graph-sync span, not just
+        # the checkout call: _ensure_persistent_checkout has no filesystem
+        # locking of its own (see repo_checkout_lock's docstring), and
+        # _sync_persistent_git_graph also runs git commands against head_dir.
+        # A second scan-worker replica racing this same repo needs to wait
+        # for the whole thing, not just the initial checkout.
+        with repo_checkout_lock(settings.database_url, installation_id, repo_full_name):
+            head_dir = _prepare_head_checkout(
+                clone_url, head_sha, installation_id, repo_full_name, job_dir / "head"
+            )
 
-        base_evidence_path = _run_scan(base_dir)
-        head_evidence_path = _run_scan(head_dir, unchanged_scan_cache_path=unchanged_scan_cache_path)
-        old = json.loads(base_evidence_path.read_text())
-        new = json.loads(head_evidence_path.read_text())
-        diff = compute_diff(old, new, full=False)
-        dismissed = get_dismissed_identity_keys(settings.database_url, installation_id, repo_full_name)
-        # history_secrets shares the same (path, pattern, match_preview) identity
-        # space as secrets - accepted_secrets (.aletheore.json) already treats them
-        # as one baseline (secrets.py's _baseline_keys is shared by find_secrets and
-        # find_secrets_in_history), so a "secret" dismissal filters both here too.
-        diff["secrets"]["new"] = filter_dismissed(diff["secrets"]["new"], "secret", dismissed["secret"])
-        diff["history_secrets"]["new"] = filter_dismissed(
-            diff["history_secrets"]["new"], "secret", dismissed["secret"]
-        )
-        diff["vulnerabilities"]["new"] = filter_dismissed(
-            diff["vulnerabilities"]["new"], "vulnerability", dismissed["vulnerability"]
-        )
+            try:
+                previous_sha = CodeGraphStore(
+                    settings.database_url, installation_id, repo_full_name
+                ).load_last_synced_sha(GRAPH_BRANCH)
+            except Exception:  # noqa: BLE001
+                previous_sha = None
+            unchanged_scan_cache_path = _build_unchanged_scan_cache(
+                installation_id, repo_full_name, head_dir, previous_sha, head_sha,
+                job_dir / "unchanged-scan-cache.json",
+            )
 
-        client = get_github_api_client()
-        upsert_pr_comment(client, token, repo_full_name, pr_number, format_diff_comment(diff))
-        new = _sync_persistent_git_graph(installation_id, repo_full_name, head_dir, new)
+            base_evidence_path = _run_scan(base_dir)
+            head_evidence_path = _run_scan(head_dir, unchanged_scan_cache_path=unchanged_scan_cache_path)
+            old = json.loads(base_evidence_path.read_text())
+            new = json.loads(head_evidence_path.read_text())
+            diff = compute_diff(old, new, full=False)
+            dismissed = get_dismissed_identity_keys(settings.database_url, installation_id, repo_full_name)
+            # history_secrets shares the same (path, pattern, match_preview) identity
+            # space as secrets - accepted_secrets (.aletheore.json) already treats them
+            # as one baseline (secrets.py's _baseline_keys is shared by find_secrets and
+            # find_secrets_in_history), so a "secret" dismissal filters both here too.
+            diff["secrets"]["new"] = filter_dismissed(diff["secrets"]["new"], "secret", dismissed["secret"])
+            diff["history_secrets"]["new"] = filter_dismissed(
+                diff["history_secrets"]["new"], "secret", dismissed["secret"]
+            )
+            diff["vulnerabilities"]["new"] = filter_dismissed(
+                diff["vulnerabilities"]["new"], "vulnerability", dismissed["vulnerability"]
+            )
+
+            client = get_github_api_client()
+            upsert_pr_comment(client, token, repo_full_name, pr_number, format_diff_comment(diff))
+            new = _sync_persistent_git_graph(installation_id, repo_full_name, head_dir, new)
         _sync_code_graph(installation_id, repo_full_name, head_sha, new)
         _insert_history(installation_id, repo_full_name, new)
 
@@ -1021,11 +1032,17 @@ def run_push_scan_job(
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
         token = _token_sync(installation_id, app_jwt)
         clone_url = _clone_url(repo_full_name, token)
-        repo_dir = _prepare_head_checkout(clone_url, head_sha, installation_id, repo_full_name, job_dir / "repo")
 
-        evidence_path = _run_scan(repo_dir)
-        evidence = json.loads(evidence_path.read_text())
-        evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
+        # See run_pr_scan_job's identical lock for why this spans checkout
+        # through git-graph-sync rather than just the checkout call.
+        with repo_checkout_lock(settings.database_url, installation_id, repo_full_name):
+            repo_dir = _prepare_head_checkout(
+                clone_url, head_sha, installation_id, repo_full_name, job_dir / "repo"
+            )
+
+            evidence_path = _run_scan(repo_dir)
+            evidence = json.loads(evidence_path.read_text())
+            evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
         _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
         _insert_history(installation_id, repo_full_name, evidence)
 
