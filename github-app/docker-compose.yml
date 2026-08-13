@@ -324,12 +324,7 @@ services:
     security_opt:
       - "no-new-privileges:true"
     cpus: "2.0"
-    # Measured directly against the running production container: 2g
-    # OOM-killed it 9 times during warmup before it ever reached Ready,
-    # even natively (no emulation) - warmup briefly needs real headroom
-    # above the model's own steady-state footprint. Host has 15GB with
-    # ~14GB free, so this costs nothing the rest of the stack needs.
-    mem_limit: 4g
+    mem_limit: 2g
 
   caddy:
     image: caddy:2-alpine
