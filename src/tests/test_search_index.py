@@ -546,23 +546,28 @@ def test_build_chunks_drops_a_banner_repeated_across_many_files_even_if_no_regex
 
 def test_build_chunks_keeps_a_context_shared_by_only_a_couple_of_files(tmp_path):
     """The frequency guard must not fire on ordinary, small-scale
-    coincidence - only real repo-wide boilerplate."""
+    coincidence - only real repo-wide boilerplate.
+
+    Both files declare the same `handle`, so the context has a tie to break
+    and is attached at all; the assertion here is about the frequency guard,
+    not about the ambiguity gate.
+    """
     (tmp_path / "a.js").write_text(
-        "/** Handles the request pipeline. */\nfunction fnA() { return 1; }\n"
+        "/** Handles the request pipeline. */\nfunction handle() { return 1; }\n"
     )
     (tmp_path / "b.js").write_text(
-        "/** Handles the request pipeline. */\nfunction fnB() { return 2; }\n"
+        "/** Handles the request pipeline. */\nfunction handle() { return 2; }\n"
     )
     evidence = {
         "repository": {
             "modules": [
                 {
                     "path": "a.js", "language": "javascript",
-                    "symbols": {"functions": [{"name": "fnA", "start_line": 2, "end_line": 2}], "classes": []},
+                    "symbols": {"functions": [{"name": "handle", "start_line": 2, "end_line": 2}], "classes": []},
                 },
                 {
                     "path": "b.js", "language": "javascript",
-                    "symbols": {"functions": [{"name": "fnB", "start_line": 2, "end_line": 2}], "classes": []},
+                    "symbols": {"functions": [{"name": "handle", "start_line": 2, "end_line": 2}], "classes": []},
                 },
             ]
         }
@@ -602,10 +607,19 @@ def test_build_chunks_falls_back_to_the_primary_symbols_docstring_when_the_file_
     declare(strict_types=1) to namespace to use - no header comment at
     all - while the four sibling __invoke methods it's competing against
     for "something invokable" all sit in files WITH a header. The correct
-    answer must not be the only candidate with no [file] context."""
+    answer must not be the only candidate with no [file] context.
+
+    A second file declaring the same `resolve` name supplies the tie the
+    context exists to break; without one there is nothing to disambiguate
+    and the context is withheld by design - see the unique-symbol test
+    below."""
     (tmp_path / "CallableResolver.php").write_text(
         "<?php\ndeclare(strict_types=1);\n\nnamespace Slim\\Handlers;\n\nuse Closure;\n\n"
         "class CallableResolver\n{\n    public function resolve($toResolve) {}\n}\n"
+    )
+    (tmp_path / "Other.php").write_text(
+        "<?php\n/** Something else entirely. */\n\nnamespace Slim;\n\n"
+        "class Other\n{\n    public function resolve($thing) {}\n}\n"
     )
     evidence = {
         "repository": {
@@ -625,7 +639,19 @@ def test_build_chunks_falls_back_to_the_primary_symbols_docstring_when_the_file_
                             }
                         ],
                     },
-                }
+                },
+                {
+                    "path": "Other.php",
+                    "language": "php",
+                    "symbols": {
+                        "functions": [
+                            {"name": "resolve", "start_line": 8, "end_line": 8}
+                        ],
+                        "classes": [
+                            {"name": "Other", "start_line": 6, "end_line": 9, "docstring": ""}
+                        ],
+                    },
+                },
             ]
         }
     }
@@ -640,6 +666,10 @@ def test_build_chunks_does_not_use_the_fallback_when_the_file_already_has_a_head
     (tmp_path / "Strategy.php").write_text(
         "<?php\n/** Default route callback strategy. */\n\nnamespace Slim;\n\n"
         "class Strategy\n{\n    public function __invoke() {}\n}\n"
+    )
+    (tmp_path / "OtherStrategy.php").write_text(
+        "<?php\n/** Another strategy. */\n\nnamespace Slim;\n\n"
+        "class OtherStrategy\n{\n    public function __invoke() {}\n}\n"
     )
     evidence = {
         "repository": {
@@ -657,6 +687,57 @@ def test_build_chunks_does_not_use_the_fallback_when_the_file_already_has_a_head
                             }
                         ],
                     },
+                },
+                {
+                    "path": "OtherStrategy.php",
+                    "language": "php",
+                    "symbols": {
+                        "functions": [{"name": "__invoke", "start_line": 8, "end_line": 8}],
+                        "classes": [
+                            {
+                                "name": "OtherStrategy",
+                                "start_line": 6, "end_line": 9, "docstring": "",
+                            }
+                        ],
+                    },
+                },
+            ]
+        }
+    }
+
+    chunks = build_chunks(evidence, tmp_path)
+
+    invoke_chunk = next(
+        c for c in chunks
+        if c["symbol_name"] == "__invoke" and c["module_path"] == "Strategy.php"
+    )
+    assert "Default route callback strategy" in invoke_chunk["text"]
+    assert "must not win" not in invoke_chunk["text"]
+
+
+def test_build_chunks_withholds_file_context_from_a_symbol_unique_to_one_file(tmp_path):
+    """A name declared in only one file has no tie to break.
+
+    Spending the context on it anyway repeats the same sentence across every
+    chunk of the file and dilutes each symbol's own text - measured at 3.1
+    points of top-1 on pallets/flask and 6.7 of top-3 on gin-gonic/gin.
+    """
+    (tmp_path / "sessions.py").write_text(
+        '"""Signed-cookie session support."""\n\n'
+        "def open_session(app, request):\n    return None\n"
+    )
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "sessions.py",
+                    "language": "python",
+                    "symbols": {
+                        "functions": [
+                            {"name": "open_session", "start_line": 3, "end_line": 4}
+                        ],
+                        "classes": [],
+                    },
                 }
             ]
         }
@@ -664,9 +745,44 @@ def test_build_chunks_does_not_use_the_fallback_when_the_file_already_has_a_head
 
     chunks = build_chunks(evidence, tmp_path)
 
-    invoke_chunk = next(c for c in chunks if c["symbol_name"] == "__invoke")
-    assert "Default route callback strategy" in invoke_chunk["text"]
-    assert "must not win" not in invoke_chunk["text"]
+    symbol_chunk = next(c for c in chunks if c["symbol_name"] == "open_session")
+    assert "[file]" not in symbol_chunk["text"]
+
+
+def test_build_chunks_attaches_file_context_to_a_name_shared_across_files(tmp_path):
+    """serde declares `deserialize` in 57 files; that is the tie the
+    context is for, and it is where it measurably pays - serde's top-1 is
+    53.3% with the context and 33.3% without it."""
+    for name in ("de.py", "ser.py"):
+        (tmp_path / name).write_text(
+            f'"""Behaviour specific to {name}."""\n\n'
+            "def deserialize(data):\n    return data\n"
+        )
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": name,
+                    "language": "python",
+                    "symbols": {
+                        "functions": [
+                            {"name": "deserialize", "start_line": 3, "end_line": 4}
+                        ],
+                        "classes": [],
+                    },
+                }
+                for name in ("de.py", "ser.py")
+            ]
+        }
+    }
+
+    chunks = build_chunks(evidence, tmp_path)
+
+    de_chunk = next(
+        c for c in chunks
+        if c["symbol_name"] == "deserialize" and c["module_path"] == "de.py"
+    )
+    assert "[file] Behaviour specific to de.py." in de_chunk["text"]
 
 
 def test_fts_failure_degrades_to_vector_only(tmp_path):

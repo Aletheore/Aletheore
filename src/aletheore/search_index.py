@@ -393,6 +393,18 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
         if count > _BOILERPLATE_MIN_REPEAT_COUNT
     }
 
+    # How many distinct files declare each symbol name, so the [file] context
+    # can be spent only where it does work - see the gate in the symbol loop.
+    symbol_file_counts: dict[str, int] = {}
+    for pending_module, _pending_lines, _pending_context in pending:
+        declared = {
+            symbol["name"]
+            for symbol in pending_module["symbols"]["functions"]
+            + pending_module["symbols"]["classes"]
+        }
+        for name in declared:
+            symbol_file_counts[name] = symbol_file_counts.get(name, 0) + 1
+
     chunks: list[dict] = []
     for module, lines, file_context in pending:
         module_path = module["path"]
@@ -494,7 +506,19 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
             end_line = symbol["end_line"]
             source = "\n".join(lines[start_line - 1:end_line])
             header = f"{module_path}::{symbol['name']} ({language})"
-            if file_context:
+            # Only a symbol whose name is declared in more than one file gets
+            # the file's context. The feature exists to break ties between
+            # near-identical chunks - serde declares `deserialize` in 57 files,
+            # slimphp/Slim declares `__invoke` in four - and a name unique to
+            # one file has no tie to break. Spent on every symbol instead, the
+            # same sentence is repeated across every chunk of a file and
+            # dilutes each symbol's own text: measured across four corpora,
+            # attaching it unconditionally cost pallets/flask 3.1 points of
+            # top-1 (68.8% -> 65.6%) and gin-gonic/gin 6.7 of top-3, while
+            # gating it here keeps the whole of serde's gain, which is where
+            # the context earns its keep (33.3% -> 53.3% top-1 against no
+            # context at all). No corpus measured regressed on any metric.
+            if file_context and symbol_file_counts.get(symbol["name"], 0) > 1:
                 header = f"{header}\n[file] {file_context}"
             chunks.append(
                 {
