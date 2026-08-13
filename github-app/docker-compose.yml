@@ -323,13 +323,16 @@ services:
     # redis above.
     security_opt:
       - "no-new-privileges:true"
-    cpus: "2.0"
-    # Measured directly against the running production container: 2g
-    # OOM-killed it 9 times during warmup before it ever reached Ready,
-    # even natively (no emulation) - warmup briefly needs real headroom
-    # above the model's own steady-state footprint. Host has 15GB with
-    # ~14GB free, so this costs nothing the rest of the stack needs.
-    mem_limit: 4g
+    cpus: "1.0"
+    # Was nomic-embed-text-v1.5 at mem_limit 4g; that OOM-killed repeatedly
+    # in production even at 4g (dmesg: every kill landed at anon-rss
+    # ~4184-4185MB, right at the 4GB boundary, so the limit was censoring
+    # the real peak, not measuring it - the "sufficient at 4g" claim was
+    # never actually verified). Replaced with all-MiniLM-L6-v2 (22M params,
+    # 384-dim, ~90MB weights - see tei/download_and_patch.py). This value
+    # is set from a local `docker stats` warmup measurement with no limit
+    # imposed, plus margin - not a guess repeated a third time.
+    mem_limit: 1g
 
   caddy:
     image: caddy:2-alpine

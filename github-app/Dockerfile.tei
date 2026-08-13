@@ -1,10 +1,11 @@
-# Self-hosted nomic-embed-text-v1.5, replacing Ollama: same model, TEI's
-# dynamic batching gives real concurrent-request throughput instead of
-# Ollama's general-purpose LLM runtime. The model is downloaded and its
-# config.json patched at BUILD time (see tei/download_and_patch.py) - a
-# fresh deploy never depends on HuggingFace being reachable and never pays
-# the parse-fail-then-fallback cost this exact model triggers on a stock
-# TEI image.
+# Self-hosted all-MiniLM-L6-v2 (replacing Ollama, and before that
+# nomic-embed-text-v1.5 - nomic OOM-killed repeatedly on the real
+# production host even at a 4GB cgroup limit; see tei/download_and_patch.py
+# for the dmesg evidence). TEI's dynamic batching gives real
+# concurrent-request throughput instead of Ollama's general-purpose LLM
+# runtime. The model is downloaded at BUILD time (see
+# tei/download_and_patch.py) - a fresh deploy never depends on HuggingFace
+# being reachable at container start.
 
 FROM python:3.12-slim AS model
 COPY github-app/tei/download_and_patch.py /tmp/download_and_patch.py

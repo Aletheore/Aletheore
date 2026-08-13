@@ -1,34 +1,26 @@
-"""TEI (self-hosted nomic-embed-text-v1.5) embedding client for
-evidence-packet similarity caching. Was Ollama; replaced for real
-concurrent-request throughput (see Dockerfile.tei)."""
+"""TEI (self-hosted all-MiniLM-L6-v2) embedding client for evidence-packet
+similarity caching. Was Ollama, then nomic-embed-text-v1.5 (which
+repeatedly OOM-killed in production - see Dockerfile.tei); replaced with
+this much smaller model for real reliability on a resource-constrained
+host (see tei/download_and_patch.py)."""
 
 import logging
 import os
 
 import httpx
 
-EMBEDDING_MODEL = "nomic-embed-text-v1.5"
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
-# The model's own real, hard-trained context is 2048 tokens (confirmed
-# directly against the running Ollama server this replaced:
-# `nomic-bert.context_length = 2048`; requesting more there got silently
-# clamped with a warning). TEI's own self-reported max_input_length is NOT
-# trustworthy for this number - it comes from a legacy config field
-# (n_positions=8192) that Dockerfile.tei's build-time patch removes
-# specifically because it doesn't reflect the model's real trained limit.
-# The char-based truncation below is the real safety margin, independent
-# of whatever TEI reports.
-#
-# Empirically calibrated against the real running model with text shaped
-# like actual evidence packets (file paths, symbol names, short identifiers
-# - not plain prose, and not a pathological single repeated character
-# either): 6600 chars succeeded, 6990 failed. 5000 chars keeps a real
-# margin below that boundary for token-density variance in different
-# packets and the container being busier under real concurrent load than
-# this manual test. A truncated embedding is still useful for similarity
+# The model's own real, hard-trained context is 256 tokens
+# (sentence_bert_config.json's max_seq_length on the HF repo) - much
+# shorter than nomic's 2048, the trade this smaller/more-reliable model
+# makes. TEI's auto_truncate=true means it silently truncates past this
+# rather than erroring, so the char-based truncation below is a courtesy
+# (avoid sending obviously-wasted bytes over the wire), not the only line
+# of defense. A truncated embedding is still useful for similarity
 # matching; the exact text match isn't needed, and a cache hit is always
 # re-verified against current evidence regardless of how it was found.
-MAX_EMBEDDING_CHARS = 5000
+MAX_EMBEDDING_CHARS = 1000
 
 logger = logging.getLogger(__name__)
 

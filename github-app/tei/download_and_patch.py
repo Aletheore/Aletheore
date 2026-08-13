@@ -1,30 +1,32 @@
-"""Bakes nomic-embed-text-v1.5 into the TEI image at build time, patched.
+"""Bakes sentence-transformers/all-MiniLM-L6-v2 into the TEI image at build
+time.
 
-The model's config.json carries both GPT-2-style legacy field names (n_embd,
-n_head, n_inner, n_layer, n_positions) and their canonical BERT-style
-equivalents (hidden_size, num_attention_heads, intermediate_size,
-num_hidden_layers, max_position_embeddings) - same values, dual naming, a
-known pattern for NomicBert's GPT/BERT-compatible config. TEI's backend-init
-code flattens both into one struct and re-serializes it internally; with
-both spellings present this emits `hidden_size` twice and the ONNX loading
-path throws "duplicate field `hidden_size`" and falls back to a slower,
-more constrained path. n_positions=8192 also isn't a true duplicate value
-of max_position_embeddings=2048, and TEI reports IT (not 2048) as
-max_input_length - the model was only ever trained on 2048 tokens, so
-trusting that reported ceiling would silently produce degraded embeddings
-for longer input. All five legacy fields are dropped below; nothing here
-was needed for correctness, only for parsing and for TEI's own self-report.
+Replaced nomic-embed-text-v1.5 after it repeatedly OOM-killed on the real
+production host: dmesg showed every kill landing at anon-rss ~4184-4185MB,
+right at the 4GB cgroup boundary, to within 1MB every single time - the
+process was still climbing when killed, so no cgroup limit we tried was
+actually measuring its peak, only censoring it. MiniLM is a 22M-param,
+6-layer, 384-dim model (~90MB ONNX weights) built for exactly this
+resource-constrained use case; this component is a similarity CACHE for
+evidence packets, not the core relevance signal (see embedding_client.py -
+it already degrades to `None`/cache-miss on any failure), so the much
+smaller embedding space is a good trade for actually fitting on this host.
+
+Unlike nomic's NomicBert config, MiniLM's config.json is a plain
+single-named BERT config (hidden_size, num_attention_heads, etc, no GPT-2
+alias fields) - the LEGACY_ALIAS_KEYS removal below is a no-op for this
+model. Left in as a harmless safety net rather than deleted, in case we
+swap models again.
 
 Downloading and patching at build time, not at container startup, means a
-fresh deploy never depends on HuggingFace's availability and never repeats
-the parse-fail-then-slow-fallback dance in prod.
+fresh deploy never depends on HuggingFace's availability.
 """
 
 import json
 import urllib.request
 from pathlib import Path
 
-REPO = "nomic-ai/nomic-embed-text-v1.5"
+REPO = "sentence-transformers/all-MiniLM-L6-v2"
 REVISION = "main"
 OUT_DIR = Path("/model")
 
