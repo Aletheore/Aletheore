@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 # reserved for the session-scoped spend lock. The installation id is key 2.
 SCAN_SLOT_LOCK_NAMESPACE = 1
 SPEND_LOCK_NAMESPACE = 2
+# Namespace 3 is reserved for the per-repo checkout lock (see
+# repo_checkout_lock) - key 2 is hashtext(installation_id:repo_full_name)
+# rather than a bare int, since the resource being protected is a
+# composite (installation, repo) pair, not a single id.
+REPO_CHECKOUT_LOCK_NAMESPACE = 3
 ADVISORY_LOCK_TIMEOUT = "5s"
 
 
@@ -328,6 +333,45 @@ def installation_spend_lock(dsn: str, installation_id: int):
             cur.execute(
                 "SELECT pg_advisory_unlock(%s, %s)",
                 (SPEND_LOCK_NAMESPACE, installation_id),
+            )
+        conn.close()
+
+
+@contextmanager
+def repo_checkout_lock(dsn: str, installation_id: int, repo_full_name: str):
+    """Serializes concurrent scan-worker replicas' use of one repo's
+    persistent, reused-across-scans checkout (see _ensure_persistent_checkout
+    in jobs.py), which has no filesystem-level locking of its own: two
+    replicas racing `git checkout -f`/`git clean -fdx` against the same
+    working tree can corrupt it, and racing `git remote set-url` (which
+    briefly writes a live access token into .git/config, then resets it
+    back) can leave one replica's fetch using the other's credentials or
+    a URL with no credentials at all.
+
+    Deliberately blocking (no lock_timeout, unlike the quick check-then-write
+    locks above) - a second job for the same repo should wait its turn and
+    still run once the first finishes, not fail fast and drop a real PR
+    scan or push reconciliation. A crashed holder releases automatically:
+    Postgres advisory locks are tied to the session/connection, which
+    always closes (killed or not) before the lock could leak. Different
+    repos, and different installations, are completely unaffected and run
+    in true parallel across replicas - this only narrows the pre-existing
+    single-worker-wide serialization down to "same repo only".
+    """
+    key = f"{installation_id}:{repo_full_name}"
+    conn = psycopg.connect(dsn, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_lock(%s, hashtext(%s))",
+                (REPO_CHECKOUT_LOCK_NAMESPACE, key),
+            )
+        yield
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_unlock(%s, hashtext(%s))",
+                (REPO_CHECKOUT_LOCK_NAMESPACE, key),
             )
         conn.close()
 

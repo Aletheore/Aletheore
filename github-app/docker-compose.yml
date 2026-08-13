@@ -118,6 +118,60 @@ services:
       - ALL
     pids_limit: 1024
 
+  # Second replica of scan-worker, consuming the same "scans" queue. RQ's
+  # own job dequeue is already safe for multiple workers (atomic claim via
+  # Redis) - the one thing that WASN'T safe for two replicas was
+  # _ensure_persistent_checkout's unlocked use of the shared
+  # ./repo-checkouts bind mount (two replicas racing `git checkout -f`/
+  # `git clean -fdx` on the same working tree, or racing the live-token
+  # `git remote set-url` around it). repo_checkout_lock (scan_worker/db.py)
+  # closes that: same-repo jobs across replicas now serialize via a
+  # Postgres advisory lock instead of racing, while different repos (the
+  # actual point of a second replica) genuinely run in parallel. Otherwise
+  # identical to scan-worker above - keep both blocks in sync.
+  scan-worker-2:
+    build:
+      context: ..
+      dockerfile: github-app/Dockerfile.scan-worker
+    restart: unless-stopped
+    labels:
+      - autoheal=true
+    healthcheck:
+      test: ["CMD-SHELL", "find /tmp/heartbeat -mmin -2 | grep -q ."]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - ALETHEORE_REPO_CHECKOUT_ROOT=/data/aletheore-repo-checkouts
+      - ALETHEORE_APP_HEALTH_URL=http://app-server:8000/healthz
+      - ALETHEORE_BACKUP_DIR=/app/backups
+    volumes:
+      - ./app-private-key.pem:/run/secrets/github-app-key.pem:ro
+      - ./repo-checkouts:/data/aletheore-repo-checkouts
+      - ./backups:/app/backups:ro
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      ollama:
+        condition: service_started
+    cpus: "1.0"
+    mem_limit: 1g
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    pids_limit: 1024
+
   # Consumes the "health" and "email" queues (see scan_worker/scheduler.py
   # and health_worker.py) - a dedicated worker so a long-running AI job on
   # scan-worker's "scans" queue (Flash review, AIRview, managed audit) can

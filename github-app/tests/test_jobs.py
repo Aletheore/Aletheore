@@ -19,6 +19,18 @@ def _noop_spend_lock(*args, **kwargs):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _noop_repo_checkout_lock(monkeypatch):
+    # repo_checkout_lock (see scan_worker/db.py) opens a real psycopg
+    # connection to settings.database_url - most tests here run against a
+    # fake DSN (or no DSN at all), which would hang or fail slowly rather
+    # than exercising the actual lock. The lock's own correctness has its
+    # own real-Postgres tests in test_scan_worker_db.py; this file only
+    # needs run_pr_scan_job/run_push_scan_job's wiring around it to be a
+    # no-op, autoused so none of the 30+ existing tests need touching.
+    monkeypatch.setattr("scan_worker.jobs.repo_checkout_lock", _noop_spend_lock)
+
+
 def _patch_no_spend_cap(monkeypatch) -> None:
     """AIRview/Docs build jobs now gate on the same installation monthly
     LLM spend cap managed audits and flash review already used - real
