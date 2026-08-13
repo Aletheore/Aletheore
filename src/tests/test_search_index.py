@@ -5,6 +5,7 @@ import pytest
 from aletheore.search_index import (
     _file_header_comment,
     _is_declaration_only_file,
+    _detect_query_language,
     _is_auxiliary_path,
     _is_test_path,
     _primary_symbol_docstring,
@@ -1445,3 +1446,31 @@ def test_is_test_path_does_not_swallow_ordinary_words_ending_in_test():
     assert not _is_test_path("lib/latest/thing.js")
     assert not _is_test_path("src/greatest.py")
     assert not _is_test_path("src/AutoMapper/Mapper.cs")
+
+
+def test_detect_query_language_reads_an_explicit_language_mention():
+    """apache/thrift implements TBinaryProtocol in seven languages, so a question
+    naming one has a single correct answer and six near-identical wrong ones."""
+    assert _detect_query_language("Where is TBinaryProtocol in the C++ library?") == "cpp"
+    assert _detect_query_language("Where is TCompactProtocol in the Ruby library?") == "ruby"
+    assert _detect_query_language("Where is the binary protocol in the Go library?") == "go"
+    assert _detect_query_language("Where is TProtocol defined in the Java library?") == "java"
+    assert _detect_query_language("Where is the JavaScript entry point?") == "javascript"
+
+
+def test_detect_query_language_ignores_ordinary_english():
+    """A wrong pre-filter is worse than none - it removes the correct answer from
+    the candidate pool rather than merely ranking it lower. "go" is a verb far
+    more often than a language."""
+    assert _detect_query_language("Where do requests go before reaching the handler?") is None
+    assert _detect_query_language("Where does the router go to match a path?") is None
+    assert _detect_query_language("How is a session turned into a signed cookie?") is None
+
+
+def test_detect_query_language_declines_when_two_languages_are_named():
+    """Not a scoping request; filtering to either would be a guess."""
+    assert _detect_query_language("Where is the C++ and Java code compared?") is None
+
+
+def test_detect_query_language_does_not_confuse_java_with_javascript():
+    assert _detect_query_language("Where is the JavaScript adapter?") == "javascript"

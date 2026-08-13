@@ -3,6 +3,26 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.11 — 2026-08-13
+
+- **A question naming a language was answered in a different one.** In a polyglot
+  repository the same concept is implemented once per language — `apache/thrift` defines
+  `TBinaryProtocol` in C++, Java, Python, Ruby, PHP, Go and C# — so "where is
+  TBinaryProtocol implemented in the C++ library" has one correct answer and six
+  near-identical wrong ones. `search_index` already accepted a `language` pre-filter that
+  resolves this, but nothing ever populated it, so the language named in the question
+  competed only as ordinary text. Measured on thrift: five of six cross-language failures
+  returned a different language's file entirely, C++ missing all three of its questions.
+  The language named in a query is now detected and passed to that filter — cross-language
+  top-3 60.0% → 73.3% and top-5 60.0% → **93.3%**, general-regime top-5 40.0% → 53.3%.
+  Detection is deliberately conservative, because a wrong pre-filter removes the correct
+  answer from the candidate pool rather than merely ranking it lower: an unambiguous name
+  (`golang`, `typescript`, `c++`) matches alone, while a name that is also ordinary English
+  or a prefix of another language (`go`, `c`, `java` inside `javascript`) needs a cue such
+  as "library" or "in Go", and a query naming two languages is declined. Across the 356
+  single-language benchmark questions it fires on two, both in `pallets/flask` naming
+  Python, and flask's results are byte-identical to three decimal places of MRR.
+
 ## 0.8.10 — 2026-08-13
 
 - **A file mixing an interface with its own concrete implementation was demoted wholesale
