@@ -845,3 +845,66 @@ def test_build_module_graph_constants_key_always_present(tmp_path):
     (repo / "a.java").write_text("package a;\npublic class A { void f() {} }\n")
     modules, _graph, _unparseable = build_module_graph(repo)
     assert "constants" in modules[0]["symbols"]
+
+
+def _java_symbols(repo: Path):
+    """{name: entry} across functions and classes for the single Java module."""
+    modules, _graph, _unparseable = build_module_graph(repo)
+    module = next(m for m in modules if m["path"].endswith(".java"))
+    symbols = module["symbols"]
+    return {s["name"]: s for s in symbols["functions"] + symbols["classes"]}
+
+
+def test_build_module_graph_java_visibility_reads_java_modifiers(tmp_path):
+    """is_public was `not _is_nested_in_function(node)` - a fair proxy for
+    Python, which has no access modifiers, but wrong for Java.
+    docs_reference filters the generated API reference on this flag, so
+    private methods were being published as public API."""
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "Excluder.java").write_text(
+        "package com.example;\n"
+        "public final class Excluder {\n"
+        "  public void shown() { }\n"
+        "  private void hidden() { }\n"
+        "  protected void alsoHidden() { }\n"
+        "}\n"
+    )
+
+    symbols = _java_symbols(repo)
+
+    assert symbols["shown"]["is_public"] is True
+    assert symbols["hidden"]["is_public"] is False
+    assert symbols["alsoHidden"]["is_public"] is False
+
+
+def test_build_module_graph_java_interface_members_are_implicitly_public(tmp_path):
+    """The absent-modifier case, and the reason this is not just "look for the
+    public keyword": a member of an interface or annotation type carries no
+    `modifiers` node at all and is public by Java's own rules. Treating that as
+    private would hide google/gson's TypeAdapterFactory.create - a worse error
+    than the one being fixed."""
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "TypeAdapterFactory.java").write_text(
+        "package com.example;\n"
+        "public interface TypeAdapterFactory {\n"
+        "  TypeAdapter create(Gson gson, TypeToken type);\n"
+        "}\n"
+    )
+
+    symbols = _java_symbols(repo)
+
+    assert symbols["create"]["is_public"] is True
+
+
+def test_build_module_graph_java_package_private_class_is_not_public(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "Internal.java").write_text(
+        "package com.example;\nclass Internal {\n  void helper() { }\n}\n"
+    )
+
+    symbols = _java_symbols(repo)
+
+    assert symbols["Internal"]["is_public"] is False

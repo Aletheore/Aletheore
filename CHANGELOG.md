@@ -3,6 +3,21 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.8 — 2026-08-13
+
+- **Java visibility ignored Java's own access modifiers.** `is_public` was computed as
+  `not _is_nested_in_function(node)` — a fair proxy for Python, which has no access
+  modifiers, but simply wrong for Java, which states visibility in a `modifiers` node.
+  `docs_reference.py` filters the generated API reference on that flag, so every `private`
+  and `protected` Java method was being published as public API. Now read from the
+  modifiers, with the absent-modifier case handled correctly: a member of an interface or
+  annotation type carries no `modifiers` node at all and is implicitly public by Java's
+  rules, so treating "no `public` keyword" as private would have hidden `google/gson`'s
+  `TypeAdapterFactory.create` — a worse error than the one being fixed. Measured on
+  `google/gson`: 69% of extracted symbols are public, where previously 100% were reported
+  as such. Retrieval is unchanged on all eight benchmark corpora — this fixes generated
+  documentation, not search.
+
 ## 0.8.7 — 2026-08-13
 
 - **A FastAPI router mounted at more than one prefix silently lost one of its mount points.**

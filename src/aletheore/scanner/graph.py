@@ -1170,6 +1170,44 @@ def _java_return_type(source: bytes, enclosing_node: Node) -> str | None:
     return source[node.start_byte:node.end_byte].decode().strip()
 
 
+def _java_is_public(node: Node) -> bool:
+    """Java's real visibility, read from its own modifiers.
+
+    Previously computed as `not _is_nested_in_function(node)` - a fair proxy
+    for Python, which has no access modifiers, but simply wrong for Java,
+    which states visibility right there in a `modifiers` node. It matters
+    beyond cosmetics: docs_reference.py filters the generated API reference on
+    is_public, so every `private` method was being published as public API.
+
+    The subtlety is the *absent* modifier. A member of an interface or an
+    annotation type is implicitly public and carries no `modifiers` node at
+    all - `interface Bar { void f(); }` parses with none - so treating "no
+    public keyword" as "not public" would mark every interface method private,
+    which is a worse error than the one being fixed here (google/gson's
+    TypeAdapterFactory.create is exactly that shape). Absent a modifier,
+    visibility comes from the enclosing body: implicitly public inside an
+    interface or annotation, package-private inside a class or enum, and
+    package-private at file scope.
+    """
+    if _is_nested_in_function(node):
+        return False
+    modifiers = next((c for c in node.children if c.type == "modifiers"), None)
+    if modifiers is not None:
+        kinds = {c.type for c in modifiers.children}
+        if "public" in kinds:
+            return True
+        if "private" in kinds or "protected" in kinds:
+            return False
+    parent = node.parent
+    while parent is not None:
+        if parent.type in ("interface_body", "annotation_type_body"):
+            return True
+        if parent.type in ("class_body", "enum_body"):
+            return False
+        parent = parent.parent
+    return False
+
+
 def _extract_java(
     node: Node, source: bytes
 ) -> tuple[list[tuple[str, bool, bool]], list[dict], list[dict]]:
@@ -1201,7 +1239,7 @@ def _extract_java(
                         source, name_node, n,
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
                         return_type=_java_return_type(source, n),
-                        is_public=not _is_nested_in_function(n),
+                        is_public=_java_is_public(n),
                     ))
             elif n.type in (
                 "class_declaration", "interface_declaration", "enum_declaration", "record_declaration",
@@ -1212,7 +1250,7 @@ def _extract_java(
                     types.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
-                        is_public=not _is_nested_in_function(n),
+                        is_public=_java_is_public(n),
                     ))
             stack.extend(reversed(n.children))
 
