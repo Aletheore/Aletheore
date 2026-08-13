@@ -16,6 +16,22 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
   80.0%; `pallets/flask` top-1 68.8% → 71.9%. No corpus regressed on any metric; across all
   137 questions top-1 44.5% → 46.0% and top-5 73.7% → 75.2%.
 
+- **Dependency, secret and endpoint scanning missed real findings** (#230, released here — it
+  carried no changelog entry of its own). `_parse_pep508_dependency` silently dropped any
+  dependency using a compound PEP 440 range (`>=X,<Y`), the `~=` operator, or no version at
+  all — on this repository's own `pyproject.toml`, 15 of 17 runtime dependencies were
+  invisible to CVE scanning, licence checking and unused-dependency detection alike, since
+  all three share that parser. `_extract_javascript` matched only ES `import`, so CommonJS
+  `require()`, re-export barrels and dynamic `import()` were invisible to the dependency
+  graph, producing false dead-code positives. `generic_credential_assignment` required a
+  quoted value, missing unquoted `.env`, docker-compose, shell-export and YAML assignments,
+  and scanned each line with `search()` rather than `finditer()`, so a second match on the
+  same line was dropped; ASIA session tokens and `github_pat_` fine-grained PATs are now
+  covered. `_extract_flask_fastapi_routes` never composed `APIRouter(prefix=...)` or
+  `include_router(..., prefix=...)` into the extracted path, so FastAPI's standard
+  multi-file layout produced systematically prefix-less routes with no signal anything was
+  missing.
+
 ## 0.8.5 — 2026-08-13
 
 - **The `[file]` context was spent on every symbol, and mostly diluted them.** It exists to
