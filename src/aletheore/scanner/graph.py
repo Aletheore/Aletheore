@@ -3665,10 +3665,14 @@ def _csharp_is_public(node: Node, source: bytes, is_type: bool = False) -> bool:
     return False
 
 
-def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
+def _extract_csharp(
+    node: Node, source: bytes
+) -> tuple[list[str], list[dict], list[dict], list[dict], list[dict]]:
     imports: list[str] = []
     functions: list[dict] = []
     types: list[dict] = []
+    properties: list[dict] = []
+    fields: list[dict] = []
 
     def text(n: Node) -> str:
         return source[n.start_byte:n.end_byte].decode(errors="ignore")
@@ -3705,6 +3709,35 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
                         is_public=_csharp_is_public(n, source, is_type=True),
                         is_pure_declaration=n.type == "interface_declaration",
                     ))
+            elif n.type == "property_declaration":
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    properties.append(_symbol_entry(
+                        source, name_node, n,
+                        return_type=(
+                            text(n.child_by_field_name("type"))
+                            if n.child_by_field_name("type") is not None
+                            else None
+                        ),
+                        is_public=not _is_nested_in_function(n),
+                    ))
+            elif n.type == "field_declaration":
+                declaration = next(
+                    (c for c in n.named_children if c.type == "variable_declaration"),
+                    None,
+                )
+                if declaration is not None:
+                    field_type = declaration.child_by_field_name("type")
+                    for declarator in declaration.named_children:
+                        if declarator.type != "variable_declarator":
+                            continue
+                        name_node = declarator.child_by_field_name("name")
+                        if name_node is not None:
+                            fields.append(_symbol_entry(
+                                source, name_node, n,
+                                return_type=text(field_type) if field_type is not None else None,
+                                is_public=not _is_nested_in_function(n),
+                            ))
             elif n.type in ("method_declaration", "constructor_declaration"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
@@ -3717,7 +3750,7 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
             stack.extend(reversed(n.children))
 
     walk(node)
-    return imports, functions, types
+    return imports, functions, types, properties, fields
 
 
 _CSHARP_TYPE_DECLS = (
@@ -5444,6 +5477,8 @@ def _extract_module(
     import_confidence: dict[str, str] = {}
 
     constants: list[dict] = []
+    properties: list[dict] = []
+    fields: list[dict] = []
     if language_name != "python":
         # Python's bindings come out of _extract_python, which already has
         # the walk; every other language gets the shared pass.
@@ -5652,7 +5687,7 @@ def _extract_module(
                 if target is not None and target != rel_path:
                     resolved_imports.append(target)
     elif language_name == "csharp":
-        raw_imports, functions, classes = _extract_csharp(tree.root_node, source)
+        raw_imports, functions, classes, properties, fields = _extract_csharp(tree.root_node, source)
         raw_imports.extend((csharp_implicit_usings or {}).get(path, []))
         for dotted in raw_imports:
             if csharp_index is not None:
@@ -5721,6 +5756,9 @@ def _extract_module(
         "imported_by": [],
         "symbols": {"functions": functions, "classes": classes, "constants": constants},
     }
+    if properties or fields:
+        module["symbols"]["properties"] = properties
+        module["symbols"]["fields"] = fields
     if import_confidence:
         module["import_confidence"] = import_confidence
     if language_name == "python" and tree.root_node.has_error:
