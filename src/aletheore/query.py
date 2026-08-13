@@ -51,6 +51,8 @@ def find_symbol_source(
         module["symbols"]["functions"]
         + module["symbols"]["classes"]
         + module["symbols"].get("constants", [])
+        + module["symbols"].get("properties", [])
+        + module["symbols"].get("fields", [])
     )
     entry = next((symbol for symbol in symbols if symbol["name"] == symbol_name), None)
     if entry is None:

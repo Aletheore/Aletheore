@@ -1762,10 +1762,14 @@ def _csharp_return_type(source: bytes, enclosing_node: Node) -> str | None:
     return source[node.start_byte:node.end_byte].decode().strip()
 
 
-def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
+def _extract_csharp(
+    node: Node, source: bytes
+) -> tuple[list[str], list[dict], list[dict], list[dict], list[dict]]:
     imports: list[str] = []
     functions: list[dict] = []
     types: list[dict] = []
+    properties: list[dict] = []
+    fields: list[dict] = []
 
     def text(n: Node) -> str:
         return source[n.start_byte:n.end_byte].decode()
@@ -1801,6 +1805,35 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
                         docstring=_leading_csharp_xmldoc(source, n),
                         is_public=not _is_nested_in_function(n),
                     ))
+            elif n.type == "property_declaration":
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    properties.append(_symbol_entry(
+                        source, name_node, n,
+                        return_type=(
+                            text(n.child_by_field_name("type"))
+                            if n.child_by_field_name("type") is not None
+                            else None
+                        ),
+                        is_public=not _is_nested_in_function(n),
+                    ))
+            elif n.type == "field_declaration":
+                declaration = next(
+                    (c for c in n.named_children if c.type == "variable_declaration"),
+                    None,
+                )
+                if declaration is not None:
+                    field_type = declaration.child_by_field_name("type")
+                    for declarator in declaration.named_children:
+                        if declarator.type != "variable_declarator":
+                            continue
+                        name_node = declarator.child_by_field_name("name")
+                        if name_node is not None:
+                            fields.append(_symbol_entry(
+                                source, name_node, n,
+                                return_type=text(field_type) if field_type is not None else None,
+                                is_public=not _is_nested_in_function(n),
+                            ))
             elif n.type in ("method_declaration", "constructor_declaration"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
@@ -1813,7 +1846,7 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
             stack.extend(reversed(n.children))
 
     walk(node)
-    return imports, functions, types
+    return imports, functions, types, properties, fields
 
 
 def _csharp_prefix_and_root_for(file_path: Path, namespace: str | None) -> tuple[str, Path] | None:
@@ -2133,6 +2166,8 @@ def build_module_graph(
             tree = parser.parse(source)
 
         constants: list[dict] = []
+        properties: list[dict] = []
+        fields: list[dict] = []
         if language_name != "python":
             # Python's bindings come out of _extract_python, which already has
             # the walk; every other language gets the shared pass.
@@ -2238,7 +2273,9 @@ def build_module_graph(
                         edges.append([rel_path, target])
                         imported_by_map.setdefault(target, []).append(rel_path)
         elif language_name == "csharp":
-            raw_imports, functions, classes = _extract_csharp(tree.root_node, source)
+            raw_imports, functions, classes, properties, fields = _extract_csharp(
+                tree.root_node, source
+            )
             resolved_imports = []
             for dotted in raw_imports:
                 for target_path in _resolve_csharp_using(csharp_prefix_map, dotted):
@@ -2264,7 +2301,13 @@ def build_module_graph(
                 "language": language_name,
                 "imports": resolved_imports,
                 "imported_by": [],
-                "symbols": {"functions": functions, "classes": classes, "constants": constants},
+                "symbols": {
+                    "functions": functions,
+                    "classes": classes,
+                    "constants": constants,
+                    "properties": properties,
+                    "fields": fields,
+                },
             }
         )
 

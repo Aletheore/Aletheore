@@ -410,8 +410,12 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
     for pending_module, _pending_lines, _pending_context in pending:
         declared = {
             symbol["name"]
-            for symbol in pending_module["symbols"]["functions"]
-            + pending_module["symbols"]["classes"]
+            for symbol in (
+                pending_module["symbols"]["functions"]
+                + pending_module["symbols"]["classes"]
+                + pending_module["symbols"].get("properties", [])
+                + pending_module["symbols"].get("fields", [])
+            )
         }
         for name in declared:
             symbol_file_counts[name] = symbol_file_counts.get(name, 0) + 1
@@ -437,7 +441,12 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
         # _is_declaration_only_file and the rank penalty in _rrf_fuse.
         is_declaration_only = _is_declaration_only_file(module_path, language, "\n".join(lines))
 
-        code_symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
+        code_symbols = (
+            module["symbols"]["functions"]
+            + module["symbols"]["classes"]
+            + module["symbols"].get("properties", [])
+            + module["symbols"].get("fields", [])
+        )
         # Constants are indexed only for files that define nothing else.
         #
         # Measured both ways. Indexing them everywhere cost accuracy on files

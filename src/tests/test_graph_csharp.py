@@ -94,6 +94,25 @@ def test_build_module_graph_extracts_csharp_symbols(tmp_path):
     assert unparseable == []
 
 
+def test_build_module_graph_extracts_csharp_properties_and_fields(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "A.cs").write_text(
+        "public class A {\n"
+        "  public string Name { get; set; }\n"
+        "  private int _count;\n"
+        "  public static readonly int Limit = 10;\n"
+        "}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    symbols = modules[0]["symbols"]
+    properties = {s["name"]: s for s in symbols["properties"]}
+    fields = {s["name"]: s for s in symbols["fields"]}
+    assert properties["Name"]["return_type"] == "string"
+    assert fields["_count"]["return_type"] == "int"
+    assert fields["Limit"]["return_type"] == "int"
+
+
 def test_build_module_graph_csharp_using_resolves_despite_implicit_root_namespace(tmp_path):
     # The real bug this test exists to pin down: RootNamespace="App" prepends an
     # implicit prefix with no "App" folder anywhere on disk. Requiring the whole
