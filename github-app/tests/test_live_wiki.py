@@ -3,6 +3,7 @@ import logging
 from unittest.mock import MagicMock
 
 from scan_worker.live_wiki import (
+    AIRVIEW_PROMPT_VERSION,
     FLASH_MODEL,
     SUBSYSTEM_DESCRIPTION_UNAVAILABLE,
     UPDATE_MODEL,
@@ -10,7 +11,139 @@ from scan_worker.live_wiki import (
     generate_overview,
     generate_subsystems,
     propose_cluster_names,
+    _related_files,
+    attach_file_pages,
+    build_file_fallback_detail,
+    build_file_page_record,
+    generate_file_pages,
+    select_file_page_paths,
+    _drop_test_only_briefs,
+    _strip_unverified_lines,
 )
+
+
+def test_build_file_fallback_detail_uses_symbols_and_dependency_graph_without_llm():
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "src/auth.py",
+                    "language": "python",
+                    "imports": ["src/tokens.py"],
+                    "imported_by": ["src/app.py"],
+                    "symbols": {
+                        "functions": [{"name": "login", "start_line": 12}],
+                        "classes": [{"name": "Authenticator", "start_line": 4}],
+                    },
+                }
+            ]
+        }
+    }
+
+    detail = build_file_fallback_detail(
+        evidence,
+        "src/auth.py",
+        file_entry={"role": "Owns request authentication."},
+    )
+
+    assert detail is not None
+    assert "Owns request authentication." in detail
+    assert "`login` (line 12)" in detail
+    assert "`src/tokens.py`" in detail
+    assert "`src/app.py`" in detail
+
+
+def test_build_file_fallback_detail_supports_unindexed_file_from_bounded_source():
+    detail = build_file_fallback_detail(
+        {"repository": {"modules": []}},
+        "docs/config.rst",
+        source_text="Configuration\n=============\n\nSet the application options here.\n",
+    )
+
+    assert detail is not None
+    assert "docs/config.rst" in detail
+    assert "Set the application options here." in detail
+
+
+def test_build_file_fallback_detail_omits_scaffolding_for_no_module_files():
+    # Regression guard: measured on real flask workflow/config files, the
+    # "## Lightweight reference" / "Source excerpt:" / code-fence wrapper
+    # made the block ~8% *larger* than the source file itself for files
+    # with no symbols to report - pure overhead, zero information gain.
+    source = "name: pre-commit\non:\n  pull_request:\n"
+    detail = build_file_fallback_detail(
+        {"repository": {"modules": []}},
+        ".github/workflows/pre-commit.yaml",
+        source_text=source,
+    )
+
+    assert detail is not None
+    assert "## Lightweight reference" not in detail
+    assert "Source excerpt:" not in detail
+    assert "```" not in detail
+    assert source.strip() in detail
+    assert len(detail) < len(source) + 50  # header line only, not a multi-line wrapper
+
+
+def test_build_file_fallback_detail_extracts_lockfile_package_names():
+    # A blind character cutoff on a real 364KB uv.lock kept under 2% of the
+    # file and none of it was guaranteed to be package names - just
+    # whatever text happened to land in the first 5000 bytes (hashes, URLs).
+    source = (
+        'version = 1\n'
+        'revision = 3\n'
+        'requires-python = ">=3.10"\n'
+        '\n'
+        '[[package]]\n'
+        'name = "flask"\n'
+        'version = "3.2.0"\n'
+        '\n'
+        '[[package]]\n'
+        'name = "click"\n'
+        'version = "8.1.0"\n'
+    )
+    detail = build_file_fallback_detail(
+        {"repository": {"modules": []}},
+        "uv.lock",
+        source_text=source,
+    )
+
+    assert detail is not None
+    assert 'requires-python = ">=3.10"' in detail
+    assert "2 packages pinned:" in detail
+    assert "click" in detail
+    assert "flask" in detail
+    # The reduction is the point - no package version numbers or hashes,
+    # just what a "what does this project depend on" question needs.
+    assert "3.2.0" not in detail
+
+
+def test_build_file_fallback_detail_keeps_only_first_changelog_section():
+    source = (
+        "Version 3.2.0\n"
+        "-------------\n"
+        "\n"
+        "Unreleased\n"
+        "\n"
+        "-   Drop support for Python 3.9.\n"
+        "\n"
+        "Version 3.1.0\n"
+        "-------------\n"
+        "\n"
+        "Released 2024-01-01\n"
+        "\n"
+        "-   Some much older change nobody is asking about right now.\n"
+    )
+    detail = build_file_fallback_detail(
+        {"repository": {"modules": []}},
+        "CHANGES.rst",
+        source_text=source,
+    )
+
+    assert detail is not None
+    assert "Drop support for Python 3.9." in detail
+    assert "Version 3.1.0" not in detail
+    assert "much older change" not in detail
 
 
 def test_incremental_update_model_stays_on_flash():
@@ -167,7 +300,10 @@ def test_build_subsystem_record_keeps_deterministic_content_when_prose_fails():
     assert record["name"] == "Authentication"
     assert record["description"] == SUBSYSTEM_DESCRIPTION_UNAVAILABLE
     assert "totally/made/up.py" not in record["description"]
-    assert [f["path"] for f in record["files"]] == ["auth/login.py"]
+    # Every file from the scan survives even though the prose was rejected -
+    # the list never depended on the model, and now does not depend on it
+    # finishing either.
+    assert [f["path"] for f in record["files"]] == ["auth/login.py", "auth/tokens.py"]
     assert "flowchart TD" in record["diagram_mermaid"]
 
 
@@ -206,7 +342,12 @@ def test_build_subsystem_record_drops_hallucinated_file():
     record = build_subsystem_record(evidence, cluster, brief, "Authentication", adapter)
 
     paths = {f["path"] for f in record["files"]}
-    assert paths == {"auth/login.py"}
+    # The fabricated file is dropped; every real file in the brief is present
+    # whether or not the model mentioned it. The list is structural, built from
+    # the scan - making it depend on the model finishing its output silently
+    # shrank Flask's records from 83 files to 14 once the prompt grew.
+    assert "totally/made/up.py" not in paths
+    assert paths == {"auth/login.py", "auth/tokens.py"}
 
 
 def test_build_subsystem_record_drops_hallucinated_symbol():
@@ -498,3 +639,176 @@ def test_affected_cluster_ids_maps_changed_files_to_clusters():
     assert affected_cluster_ids(evidence, ["auth/login.py", "billing/charge.py"]) == {0, 1}
     assert affected_cluster_ids(evidence, ["unrelated/file.py"]) == set()
     assert affected_cluster_ids(evidence, []) == set()
+
+
+def test_select_file_page_paths_puts_important_files_first_and_respects_budget():
+    evidence = make_evidence()
+    evidence["repository"]["modules"][0]["imported_by"] = ["auth/tokens.py"]
+    paths = select_file_page_paths(evidence, max_files=1)
+    assert paths == ["auth/login.py"]
+
+
+def test_build_file_page_record_returns_detail_when_citations_verify():
+    evidence = make_evidence()
+    detail = "## Overview\nHandles login at auth/login.py:10."
+    record = build_file_page_record(evidence, "auth/login.py", _adapter(json.dumps({"detail": detail})))
+    assert record == detail
+
+
+def test_build_file_page_record_rejects_page_citing_a_file_not_in_the_scan():
+    evidence = make_evidence()
+    adapter = _adapter(json.dumps({"detail": "## Overview\nSee totally/made/up.py:4."}))
+    assert build_file_page_record(evidence, "auth/login.py", adapter) is None
+
+
+def test_build_file_page_record_skips_files_with_no_symbols():
+    """auth/tokens.py has no functions or classes, so a page would be padding -
+    and the call is skipped entirely rather than spent."""
+    adapter = _adapter(json.dumps({"detail": "## Overview\nAnything."}))
+    assert build_file_page_record(make_evidence(), "auth/tokens.py", adapter) is None
+    adapter.simple_completion.assert_not_called()
+
+
+def test_generate_file_pages_keys_pages_by_path():
+    detail = "## Overview\nLogin lives at auth/login.py:10."
+    pages = generate_file_pages(
+        make_evidence(), _adapter(json.dumps({"detail": detail})), paths=["auth/login.py"]
+    )
+    assert pages == {"auth/login.py": detail}
+
+
+def test_attach_file_pages_leaves_files_without_a_page_untouched():
+    records = [{"files": [{"path": "auth/login.py", "role": "r"}, {"path": "auth/tokens.py", "role": "r"}]}]
+    attach_file_pages(records, {"auth/login.py": "## Overview\nx"})
+    assert records[0]["files"][0]["detail"] == "## Overview\nx"
+    assert "detail" not in records[0]["files"][1]
+
+
+def test_related_files_offers_neighbours_outside_the_subsystem():
+    """The description prose is allowed to cross subsystem boundaries, so the
+    model has to be told which files those are - otherwise it can only cite
+    within the cluster and cannot explain a cross-cutting flow."""
+    evidence = make_evidence()
+    evidence["repository"]["modules"].append(
+        {"path": "web/app.py", "language": "python", "imports": ["auth/login.py"], "symbols": {}}
+    )
+    evidence["repository"]["modules"][0]["imported_by"] = ["web/app.py"]
+    brief = {"files": [{"path": "auth/login.py"}, {"path": "auth/tokens.py"}]}
+    assert _related_files(evidence, brief) == ["web/app.py"]
+
+
+def test_evidence_packet_carries_prompt_version_so_edits_invalidate_cache():
+    from aletheore.evidence_packet import build_evidence_packet
+
+    packet = build_evidence_packet({}, {"modules": []}, {}, "", prompt_version=AIRVIEW_PROMPT_VERSION)
+    assert packet["prompt_version"] == AIRVIEW_PROMPT_VERSION
+
+
+def test_select_file_page_paths_floor_is_not_anchored_to_an_outlier():
+    """One re-export hub used to set the floor: Flask's __init__.py scores 2.7x
+    the runner-up, which put the cutoff so high that max_files could never bind -
+    raising it from 22 to 83 selected the same 22 files. The floor is anchored to
+    the median instead, so the budget is the control."""
+    modules = [{"path": "hub.py", "imported_by": [f"m{i}.py" for i in range(79)], "symbols": {}}]
+    modules += [
+        {"path": f"m{i}.py", "imported_by": ["hub.py"], "symbols": {"functions": [{"name": "f"}]}}
+        for i in range(12)
+    ]
+    evidence = {"repository": {"modules": modules}}
+    assert len(select_file_page_paths(evidence, max_files=100)) > 1
+    assert len(select_file_page_paths(evidence, max_files=3)) == 3
+
+
+def _brief(cid, *paths):
+    return {"cluster_id": cid, "files": [{"path": p, "key_symbols": []} for p in paths],
+            "fallback_name": "x"}
+
+
+def test_generate_subsystems_skips_clusters_that_are_only_tests():
+    """Community detection groups by import topology and readily produces
+    clusters made entirely of test files - 7 of Flask's 12, 150 of serde's 208.
+    Each cost a naming call and a writing call for a page nobody opens."""
+    kept = _drop_test_only_briefs([
+        _brief(0, "src/app.py"),
+        _brief(1, "tests/test_app.py", "tests/conftest.py"),
+        _brief(2, "examples/demo/main.py"),
+    ])
+    assert [b["cluster_id"] for b in kept] == [0]
+
+
+def test_generate_subsystems_keeps_tests_when_the_repo_is_all_tests():
+    """A test-suite repository should still get a wiki rather than an empty one."""
+    briefs = [_brief(0, "tests/test_a.py"), _brief(1, "tests/test_b.py")]
+    assert _drop_test_only_briefs(briefs) == briefs
+
+
+def test_generate_subsystems_keeps_a_mixed_cluster():
+    briefs = [_brief(0, "src/app.py", "tests/test_app.py")]
+    assert _drop_test_only_briefs(briefs) == briefs
+
+
+def test_file_page_salvages_verified_prose_instead_of_discarding_the_page():
+    """Dropping a page over one bad citation threw away correct, verified prose:
+    on Flask that lost debughelpers.py - 7 functions, 4 classes - entirely.
+    Subsystems already degrade this way; file pages now match."""
+    evidence = make_evidence()
+    detail = (
+        "## Overview\nHandles login.\n"
+        "## How it works\nEntry at auth/login.py:10.\n"
+        "- `ghost` (auth/nowhere.py:99): does not exist.\n"
+        "## Gotchas\nNone.\n"
+    )
+    page = build_file_page_record(evidence, "auth/login.py", _adapter(json.dumps({"detail": detail})))
+    assert page is not None
+    assert "auth/nowhere.py:99" not in page
+    assert "auth/login.py:10" in page
+
+
+def test_file_page_salvage_gives_up_when_too_little_survives():
+    """A page that was mostly fabricated citations is not worth showing."""
+    evidence = make_evidence()
+    detail = "## Overview\nSee a/x.py:1.\nAnd b/y.py:2.\nAnd c/z.py:3.\n"
+    assert build_file_page_record(
+        evidence, "auth/login.py", _adapter(json.dumps({"detail": detail}))
+    ) is None
+
+
+def test_strip_unverified_lines_keeps_everything_when_nothing_failed():
+    assert _strip_unverified_lines("## A\nline\n", []) == "## A\nline\n"
+
+
+def test_strip_unverified_lines_does_not_strip_a_different_valid_line_number():
+    # A plain substring test would treat "app.py:1" as present inside
+    # "app.py:10" or "app.py:100", wrongly stripping those verified lines
+    # too - the bad citation's line number must not match as a prefix of a
+    # different, longer one.
+    detail = "Bad at app.py:1.\nGood at app.py:10.\nAlso good at app.py:100.\n"
+    result = _strip_unverified_lines(detail, [{"file": "app.py", "line": 1}])
+    assert "app.py:1." not in result
+    assert "app.py:10." in result
+    assert "app.py:100." in result
+
+
+def test_subsystem_files_survive_a_truncated_model_response():
+    """The file list is structural. When the prompt grows large enough that the
+    model stops finishing its output, the wiki must not silently lose files -
+    on Flask that took the records from 83 files to 14 and stranded 23
+    already-generated file pages, since a page can only attach to a file entry
+    that exists."""
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    # Model returns only the first file, as if it ran out of output budget.
+    adapter = _adapter(json.dumps({
+        "description": "Handles login.",
+        "files": [{"path": "auth/login.py", "role": "Entry point.", "key_symbols": []}],
+    }))
+
+    record = build_subsystem_record(evidence, cluster, brief, "Authentication", adapter)
+
+    paths = [f["path"] for f in record["files"]]
+    assert paths == ["auth/login.py", "auth/tokens.py"]
+    # The file the model did describe keeps its prose; the other is structural only.
+    by_path = {f["path"]: f for f in record["files"]}
+    assert by_path["auth/login.py"]["role"] == "Entry point."
+    assert by_path["auth/tokens.py"]["role"] == ""

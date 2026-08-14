@@ -63,15 +63,20 @@ class AnthropicAdapter(AgentAdapter):
         model: str = "claude-sonnet-5",
         credentials_path: Path | None = None,
         on_usage: Callable[[int, int], None] | None = None,
+        before_llm_call: Callable[[], bool] | None = None,
+        allow_partial_report: bool = False,
     ) -> None:
         self._model = model
         self._credentials_path = credentials_path or DEFAULT_CREDENTIALS_PATH
         self._on_usage = on_usage
+        self._before_llm_call = before_llm_call
+        self._allow_partial_report = allow_partial_report
 
     def is_available(self) -> bool:
         return has_api_key("ANTHROPIC_API_KEY", self.name, self._credentials_path)
 
     def simple_completion(self, system_prompt: str, user_prompt: str, cwd: str) -> str:
+        self._ensure_budget_for_next_call()
         api_key = get_api_key("ANTHROPIC_API_KEY", self.name, self._credentials_path)
         if not api_key:
             raise AdapterInvocationError("no API key available for anthropic")
@@ -116,6 +121,13 @@ class AnthropicAdapter(AgentAdapter):
         consecutive_no_tool_calls = 0
 
         for _round in range(MAX_TOOL_ROUNDS):
+            if not self._has_budget_for_next_call():
+                if self._allow_partial_report:
+                    return self._partial_report(sections)
+                raise AdapterInvocationError(
+                    "anthropic stopped before starting the next model call because "
+                    "the monthly LLM spend cap would be exceeded"
+                )
             try:
                 response = client.messages.create(
                     model=self._model,
@@ -190,6 +202,30 @@ class AnthropicAdapter(AgentAdapter):
             )
 
         return "\n\n".join(f"## {name}\n\n{sections[name]}" for name in REQUIRED_SECTIONS)
+
+    def _has_budget_for_next_call(self) -> bool:
+        return self._before_llm_call is None or self._before_llm_call()
+
+    def _ensure_budget_for_next_call(self) -> None:
+        if not self._has_budget_for_next_call():
+            raise AdapterInvocationError(
+                "anthropic stopped before starting the next model call because "
+                "the monthly LLM spend cap would be exceeded"
+            )
+
+    def _partial_report(self, sections: dict[str, str]) -> str:
+        lines = [
+            "> **Partial report:** Aletheore stopped before starting the next "
+            "LLM call because the monthly spend cap would be exceeded.",
+            "",
+            "---",
+        ]
+        for name in REQUIRED_SECTIONS:
+            if name in sections:
+                lines.extend(["", f"## {name}", "", sections[name]])
+        if not sections:
+            lines.extend(["", "_No report sections were generated before the budget stop._"])
+        return "\n".join(lines)
 
     def _read_evidence_tool(self, evidence, args: dict) -> str:
         path = args.get("path", "")

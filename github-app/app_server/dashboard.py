@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from aletheore.evidence_resolution import resolve_code_evidence
+from scan_worker.github_api import fetch_file_content
+from scan_worker.live_wiki import build_file_fallback_detail
 from app_server.admin import (
     _administered_installation_ids_for_session_or_401,
     _github_http_client,
@@ -26,6 +28,7 @@ from app_server.db import (
     get_installation,
     get_installation_by_account_login,
     get_latest_evidence,
+    get_public_status_enabled,
     get_recent_endpoint_health,
     get_recent_history,
     get_wiki_build_status,
@@ -36,6 +39,7 @@ from app_server.db import (
     list_wiki_subsystems,
 )
 from app_server.github_auth import generate_app_jwt, get_installation_token
+from app_server.github_pagination import fetch_paginated_github_collection
 
 dashboard_router = APIRouter()
 MIN_CHECKS_FOR_STALE_CONFIDENCE = 5
@@ -67,15 +71,15 @@ def find_stale_endpoints(
 
 def _fetch_uninitialized_repos_sync(installation_id: int, app_jwt: str) -> list[dict]:
     token = get_installation_token(installation_id, app_jwt)
-    response = _github_http_client().get(
+    return fetch_paginated_github_collection(
+        _github_http_client(),
         "/installation/repositories",
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
         },
+        collection_key="repositories",
     )
-    response.raise_for_status()
-    return response.json().get("repositories", [])
 
 
 async def _uninitialized_repos_for_installation(
@@ -384,8 +388,94 @@ async def get_dashboard_wiki_subsystem(org: str, repo: str, subsystem_id: str, r
     if subsystem is None:
         raise HTTPException(status_code=404, detail="subsystem not found")
 
+    evidence = await get_latest_evidence(pool, installation["installation_id"], repo_full_name)
+    if evidence is not None:
+        for file_entry in subsystem.get("files", []) or []:
+            if not isinstance(file_entry, dict) or file_entry.get("detail"):
+                continue
+            fallback = build_file_fallback_detail(
+                evidence, file_entry.get("path", ""), file_entry=file_entry
+            )
+            if fallback:
+                file_entry["detail"] = fallback
+                file_entry["detail_source"] = "fallback"
+
     subsystem["updated_at"] = subsystem["updated_at"].isoformat()
     return {"repo_full_name": repo_full_name, "subsystem": subsystem}
+
+
+def _valid_wiki_file_path(path: str) -> bool:
+    parts = path.split("/")
+    return bool(path and not path.startswith("/") and ".." not in parts)
+
+
+def _fetch_wiki_file_content_sync(
+    installation_id: int, repo_full_name: str, path: str
+) -> str | None:
+    settings = get_settings()
+    app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+    token = get_installation_token(installation_id, app_jwt)
+    return fetch_file_content(get_github_api_client(), token, repo_full_name, path)
+
+
+@dashboard_router.get("/app/{org}/{repo}/wiki/file/{file_path:path}")
+async def get_dashboard_wiki_file(org: str, repo: str, file_path: str, request: Request):
+    """Returns a generated file page or a cheap structural fallback.
+
+    AIRview intentionally writes pages for only the most important files.
+    Arbitrary-file reads must still be useful, so scanned modules use their
+    symbols and dependency graph immediately, while files outside the scan
+    (docs/config/workflow files) get one bounded GitHub Contents lookup.
+    Neither path invokes an LLM or changes the full-build page budget.
+    """
+    if not _valid_wiki_file_path(file_path):
+        raise HTTPException(status_code=400, detail="invalid file path")
+
+    installation = await _require_admin_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    installation_id = installation["installation_id"]
+    repo_full_name = f"{org}/{repo}"
+    evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
+    if evidence is None:
+        raise HTTPException(status_code=404, detail="no scan evidence")
+
+    file_entry = None
+    for subsystem in await list_wiki_subsystems(pool, installation_id, repo_full_name):
+        for candidate in subsystem.get("files", []) or []:
+            if isinstance(candidate, dict) and candidate.get("path") == file_path:
+                file_entry = candidate
+                break
+        if file_entry is not None:
+            break
+
+    if file_entry and file_entry.get("detail"):
+        return {
+            "repo_full_name": repo_full_name,
+            "file": {"path": file_path, "detail": file_entry["detail"], "detail_source": "generated"},
+        }
+
+    modules = evidence.get("repository", {}).get("modules", [])
+    module_exists = any(m.get("path") == file_path for m in modules)
+    source_text = None
+    if not module_exists:
+        try:
+            source_text = await asyncio.to_thread(
+                _fetch_wiki_file_content_sync, installation_id, repo_full_name, file_path
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).info(
+                "AIRview file fallback fetch failed for %s (%s)", file_path, type(exc).__name__
+            )
+
+    detail = build_file_fallback_detail(
+        evidence, file_path, file_entry=file_entry, source_text=source_text
+    )
+    if detail is None:
+        raise HTTPException(status_code=404, detail="file not found in scan or repository")
+    return {
+        "repo_full_name": repo_full_name,
+        "file": {"path": file_path, "detail": detail, "detail_source": "fallback"},
+    }
 
 
 async def _build_docs_modules(pool, installation_id: int, repo_full_name: str) -> dict[str, str]:
@@ -535,7 +625,9 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
     # distinct status, so this doesn't itself disclose whether the repo
     # has simply never opted in vs never been scanned.
     installation = await get_installation_by_account_login(request.app.state.db_pool, org)
-    if installation is None or not installation["public_status_enabled"]:
+    if installation is None or not await get_public_status_enabled(
+        request.app.state.db_pool, installation["installation_id"], repo_full_name
+    ):
         raise HTTPException(
             status_code=404,
             detail="no health data for this repo",
@@ -547,9 +639,10 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
         SELECT DISTINCT ON (endpoint_method, endpoint_path)
             endpoint_method, endpoint_path, reachable, status_code, latency_ms, checked_at
         FROM endpoint_health
-        WHERE repo_full_name = $1 AND checked_at >= $2
+        WHERE installation_id = $1 AND repo_full_name = $2 AND checked_at >= $3
         ORDER BY endpoint_method, endpoint_path, checked_at DESC, id DESC
         """,
+        installation["installation_id"],
         repo_full_name,
         datetime.now(timezone.utc) - PUBLIC_HEALTH_STALE_AFTER,
     )
@@ -565,7 +658,9 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
     # signal without handing out granular check-by-check timing data to
     # anyone who asks (the authenticated dashboard endpoint has that).
     since = datetime.now(timezone.utc) - timedelta(days=7)
-    uptime_by_endpoint = await get_endpoint_uptime_pct_since(request.app.state.db_pool, repo_full_name, since)
+    uptime_by_endpoint = await get_endpoint_uptime_pct_since(
+        request.app.state.db_pool, installation["installation_id"], repo_full_name, since
+    )
 
     return {
         "repo_full_name": repo_full_name,

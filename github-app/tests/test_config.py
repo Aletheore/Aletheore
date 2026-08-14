@@ -9,6 +9,7 @@ from app_server.config import get_settings
 def _clean_env(monkeypatch):
     for key in (
         "DATABASE_URL",
+        "GITHUB_APP_ID",
         "GITHUB_APP_PRIVATE_KEY",
         "GITHUB_APP_PRIVATE_KEY_PATH",
         "GITHUB_CLIENT_ID",
@@ -22,6 +23,8 @@ def _clean_env(monkeypatch):
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost/db")
+    monkeypatch.setenv("GITHUB_APP_ID", "12345")
+    monkeypatch.setenv("GITHUB_CLIENT_ID", "client-id")
     # Required secrets get a baseline value so tests that aren't specifically
     # exercising fail-closed behavior don't have to restate them.
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "webhook-secret")
@@ -73,6 +76,9 @@ def test_reads_paid_tier_settings(monkeypatch):
 @pytest.mark.parametrize(
     "missing_var",
     [
+        "DATABASE_URL",
+        "GITHUB_APP_ID",
+        "GITHUB_CLIENT_ID",
         "GITHUB_WEBHOOK_SECRET",
         "GITHUB_APP_SLUG",
         "GITHUB_CLIENT_SECRET",
@@ -91,6 +97,9 @@ def test_raises_when_required_secret_is_missing(missing_var, monkeypatch):
 @pytest.mark.parametrize(
     "missing_var",
     [
+        "DATABASE_URL",
+        "GITHUB_APP_ID",
+        "GITHUB_CLIENT_ID",
         "GITHUB_WEBHOOK_SECRET",
         "GITHUB_APP_SLUG",
         "GITHUB_CLIENT_SECRET",

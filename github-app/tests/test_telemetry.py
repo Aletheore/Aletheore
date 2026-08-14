@@ -62,6 +62,20 @@ async def test_telemetry_stats_requires_bearer_token(monkeypatch, pool):
 
 
 @pytest.mark.asyncio
+async def test_telemetry_stats_rejects_non_ascii_token_without_500(monkeypatch, pool):
+    monkeypatch.setenv("INTERNAL_METRICS_TOKEN", "secret-token")
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/internal/telemetry-stats",
+            headers=[(b"authorization", b"Bearer caf\xe9")],
+        )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_telemetry_stats_returns_real_counts_for_valid_token(monkeypatch, pool):
     monkeypatch.setenv("INTERNAL_METRICS_TOKEN", "secret-token")
     app.state.db_pool = pool

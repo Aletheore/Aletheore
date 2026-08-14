@@ -1,6 +1,9 @@
 import httpx
 
+from app_server.http_client import get_generic_http_client
+
 _PADDLE_API_BASE = "https://api.paddle.com"
+_PADDLE_TIMEOUT_SECONDS = 15.0
 
 
 class PaddleAPIError(Exception):
@@ -15,15 +18,26 @@ def _headers(api_key: str) -> dict:
     return {"Authorization": f"Bearer {api_key}"}
 
 
+def _data_or_raise(response: httpx.Response, context: str) -> dict:
+    try:
+        return response.json()["data"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PaddleAPIError(f"{context}: unexpected Paddle response shape") from exc
+
+
 def get_subscription(api_key: str | None, subscription_id: str) -> dict:
     if not api_key:
         raise PaddleAPINotConfigured("PADDLE_API_KEY is not configured")
     try:
-        response = httpx.get(f"{_PADDLE_API_BASE}/subscriptions/{subscription_id}", headers=_headers(api_key))
+        response = get_generic_http_client().get(
+            f"{_PADDLE_API_BASE}/subscriptions/{subscription_id}",
+            headers=_headers(api_key),
+            timeout=_PADDLE_TIMEOUT_SECONDS,
+        )
         response.raise_for_status()
     except httpx.HTTPError as exc:
         raise PaddleAPIError(f"could not fetch subscription {subscription_id}: {exc}") from exc
-    return response.json()["data"]
+    return _data_or_raise(response, f"could not fetch subscription {subscription_id}")
 
 
 def create_portal_session(
@@ -41,15 +55,16 @@ def create_portal_session(
         raise PaddleAPINotConfigured("PADDLE_API_KEY is not configured")
     payload = {"subscription_ids": subscription_ids} if subscription_ids else {}
     try:
-        response = httpx.post(
+        response = get_generic_http_client().post(
             f"{_PADDLE_API_BASE}/customers/{customer_id}/portal-sessions",
             headers=_headers(api_key),
             json=payload,
+            timeout=_PADDLE_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
     except httpx.HTTPError as exc:
         raise PaddleAPIError(f"could not create portal session for customer {customer_id}: {exc}") from exc
-    return response.json()["data"]
+    return _data_or_raise(response, f"could not create portal session for customer {customer_id}")
 
 
 def create_discount(api_key: str | None, code: str, description: str) -> dict:
@@ -70,11 +85,16 @@ def create_discount(api_key: str | None, code: str, description: str) -> dict:
         "enabled_for_checkout": True,
     }
     try:
-        response = httpx.post(f"{_PADDLE_API_BASE}/discounts", headers=_headers(api_key), json=payload)
+        response = get_generic_http_client().post(
+            f"{_PADDLE_API_BASE}/discounts",
+            headers=_headers(api_key),
+            json=payload,
+            timeout=_PADDLE_TIMEOUT_SECONDS,
+        )
         response.raise_for_status()
     except httpx.HTTPError as exc:
         raise PaddleAPIError(f"could not create discount {code}: {exc}") from exc
-    return response.json()["data"]
+    return _data_or_raise(response, f"could not create discount {code}")
 
 
 def update_subscription_items(
@@ -90,12 +110,13 @@ def update_subscription_items(
     # subscription. Callers must fetch the current subscription first and
     # build the full list; this function does not merge for them.
     try:
-        response = httpx.patch(
+        response = get_generic_http_client().patch(
             f"{_PADDLE_API_BASE}/subscriptions/{subscription_id}",
             headers=_headers(api_key),
             json={"items": items, "proration_billing_mode": proration_billing_mode},
+            timeout=_PADDLE_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
     except httpx.HTTPError as exc:
         raise PaddleAPIError(f"could not update subscription {subscription_id}: {exc}") from exc
-    return response.json()["data"]
+    return _data_or_raise(response, f"could not update subscription {subscription_id}")

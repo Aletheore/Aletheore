@@ -108,6 +108,33 @@ def test_find_secrets_detects_github_token_and_private_key_header(tmp_path):
     assert "private_key_header" in patterns_found
 
 
+def test_find_secrets_detects_unquoted_generic_credentials_and_multiple_matches(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".env").write_text(
+        "DB_PASSWORD=Tr0ub4dor4NoSpecialChars\n"
+        "export API_KEY=abcdefghijklmnopqrstuvwx1234\n"
+        "password: mysecretvalue1234567890\n"
+        "old_key=AKIA1234567890ABCDEF new_key=AKIAABCDEFGHIJKLMNOP\n"
+    )
+
+    findings = find_secrets(repo)["findings"]
+
+    assert sum(f["pattern"] == "generic_credential_assignment" for f in findings) == 3
+    assert sum(f["pattern"] == "aws_access_key_id" for f in findings) == 2
+
+
+def test_find_secrets_detects_fine_grained_github_and_sts_aws_tokens(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "tokens.txt").write_text(
+        "github_pat_1234567890abcdefghijkl\nASIA1234567890ABCDEF\n"
+    )
+
+    patterns = {finding["pattern"] for finding in find_secrets(repo)["findings"]}
+    assert patterns == {"github_token", "aws_access_key_id"}
+
+
 def test_find_secrets_ignores_ignored_dirs_and_binary_extensions(tmp_path):
     repo = tmp_path / "repo"
     (repo / "node_modules" / "pkg").mkdir(parents=True)

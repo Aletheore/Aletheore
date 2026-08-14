@@ -8,7 +8,10 @@ from app_server.auth import (
     encrypt_access_token,
     get_current_session,
     refresh_github_access_token,
+    sign_checkout_installation_id,
+    sign_oauth_state,
     sign_session_id,
+    unsign_checkout_installation_id,
     unsign_session_id,
     _derive_key,
     _fernet_key,
@@ -35,7 +38,13 @@ async def test_signin_page_is_not_cacheable(pool):
 async def test_get_session_returns_none_for_expired_session(pool):
     monkeypatch_secret = "test-session-secret"
     encrypted = encrypt_access_token("gho_realtoken", monkeypatch_secret)
-    already_expired = datetime.now(timezone.utc) - timedelta(seconds=1)
+    # get_session compares expires_at against the DB server's own now(), not
+    # the test runner's clock - a 1-second margin flakes under any real
+    # clock skew between the two (observed locally against a Docker
+    # Postgres container). 5 minutes is well past any skew worth worrying
+    # about while still clearly testing "already expired", not "expires
+    # soon".
+    already_expired = datetime.now(timezone.utc) - timedelta(minutes=5)
     await create_session(pool, "sess-expired", 42, "octocat", encrypted, already_expired)
 
     assert await get_session(pool, "sess-expired") is None
@@ -264,6 +273,21 @@ async def test_callback_rejects_mismatched_state(pool, monkeypatch):
         await client.get("/auth/login", follow_redirects=False)
         response = await client.get(
             "/auth/callback?code=fake-code&state=wrong-state", follow_redirects=False
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_callback_rejects_non_ascii_state_without_500(monkeypatch):
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    app.state.db_pool = object()
+    transport = ASGITransport(app=app)
+    signed_state = sign_oauth_state("expected-state", "test-session-secret")
+    async with AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.get(
+            "/auth/callback?code=fake-code&state=caf%C3%A9",
+            headers={"cookie": f"oauth_state={signed_state}"},
+            follow_redirects=False,
         )
     assert response.status_code == 400
 
@@ -672,3 +696,39 @@ async def test_login_fails_open_when_redis_is_unreachable(pool, monkeypatch):
         response = await client.get("/auth/login", follow_redirects=False)
 
     assert response.status_code == 307
+
+
+def test_checkout_installation_id_round_trips():
+    signed = sign_checkout_installation_id(12345, "a-secret")
+    assert unsign_checkout_installation_id(signed, "a-secret") == 12345
+
+
+def test_checkout_installation_id_rejects_tampering():
+    signed = sign_checkout_installation_id(12345, "a-secret")
+    # Flipped mid-string, not the trailing character: base64's own padding
+    # bits can leave the last character of a token free to change without
+    # altering the decoded bytes at all, which would make this assert
+    # nothing.
+    middle = len(signed) // 2
+    flipped = "x" if signed[middle] != "x" else "y"
+    tampered = signed[:middle] + flipped + signed[middle + 1 :]
+    assert unsign_checkout_installation_id(tampered, "a-secret") is None
+
+
+def test_checkout_installation_id_rejects_the_wrong_secret():
+    signed = sign_checkout_installation_id(12345, "a-secret")
+    assert unsign_checkout_installation_id(signed, "a-different-secret") is None
+
+
+def test_checkout_installation_id_rejects_garbage():
+    assert unsign_checkout_installation_id("not-a-real-token", "a-secret") is None
+
+
+def test_checkout_installation_id_and_oauth_state_do_not_cross_purposes():
+    """Both derive from the same secret via _signing_secret, but a distinct
+    salt per purpose means a token minted for one can't be replayed against
+    the other - an oauth_state token must not decode as an installation id,
+    even though it's a validly-signed itsdangerous payload from this same
+    server."""
+    oauth_token = sign_oauth_state("some-state-value", "a-secret")
+    assert unsign_checkout_installation_id(oauth_token, "a-secret") is None

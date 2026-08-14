@@ -163,7 +163,11 @@ def test_build_module_graph_rust_grouped_use_resolves_both_names(tmp_path):
     edges = {tuple(edge) for edge in dependency_graph["edges"]}
 
     assert ("src/main.rs", "src/foo.rs") in edges
-    assert len([e for e in dependency_graph["edges"] if e[0] == "src/main.rs"]) == 2
+    # Three, not two: one edge per name in the grouped use, plus one for the
+    # `mod foo;` declaration. `mod` is a genuine file dependency - it is how the
+    # module tree is declared - and counting only `use` left crates whose lib.rs
+    # is all `mod` statements with no edges at all.
+    assert len([e for e in dependency_graph["edges"] if e[0] == "src/main.rs"]) == 3
 
 
 def test_build_module_graph_rust_wildcard_use_resolves(tmp_path):
@@ -283,3 +287,46 @@ def test_rust_fn_nested_only_in_a_closure_is_not_public(tmp_path):
     by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
     assert by_name["inner"]["is_public"] is False
     assert by_name["top_level"]["is_public"] is True
+
+
+def test_build_module_graph_rust_workspace_member_resolves_crate_paths(tmp_path):
+    """Cargo workspaces put each crate in its own subdirectory with its own
+    Cargo.toml and src/, and `crate::` there means that crate, not the repo.
+    Resolving against a single repo-root src/ meant a workspace resolved nothing:
+    serde-rs/serde scanned as 208 modules with 0 edges and 208 one-file clusters."""
+    repo = tmp_path / "repo"
+    (repo / "member" / "src").mkdir(parents=True)
+    (repo / "Cargo.toml").write_text('[workspace]\nmembers = ["member"]\n')
+    (repo / "member" / "Cargo.toml").write_text('[package]\nname = "m"\nversion = "0.1.0"\n')
+    (repo / "member" / "src" / "helper.rs").write_text("pub struct Widget;\n")
+    (repo / "member" / "src" / "lib.rs").write_text(
+        "mod helper;\n\nuse crate::helper::Widget;\n"
+    )
+
+    _, dependency_graph, _ = build_module_graph(repo)
+    edges = {tuple(e) for e in dependency_graph["edges"]}
+    assert ("member/src/lib.rs", "member/src/helper.rs") in edges
+
+
+def test_build_module_graph_rust_bare_mod_declaration_is_an_edge(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "Cargo.toml").write_text('[package]\nname = "x"\nversion = "0.1.0"\n')
+    (repo / "src" / "thing.rs").write_text("pub const V: i32 = 1;\n")
+    (repo / "src" / "lib.rs").write_text("mod thing;\n")
+
+    _, dependency_graph, _ = build_module_graph(repo)
+    edges = {tuple(e) for e in dependency_graph["edges"]}
+    assert ("src/lib.rs", "src/thing.rs") in edges
+
+
+def test_build_module_graph_rust_inline_mod_body_is_not_an_edge(tmp_path):
+    """`mod foo { ... }` defines the module inline - there is no separate file
+    to depend on, so it must not manufacture an edge."""
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "Cargo.toml").write_text('[package]\nname = "x"\nversion = "0.1.0"\n')
+    (repo / "src" / "lib.rs").write_text("mod foo { pub fn f() {} }\n")
+
+    _, dependency_graph, _ = build_module_graph(repo)
+    assert dependency_graph["edges"] == []

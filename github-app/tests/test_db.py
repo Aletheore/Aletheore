@@ -1,9 +1,11 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from app_server.evidence_limits import EvidenceTooLargeError, MAX_EVIDENCE_BYTES
 from app_server.db import (
+    add_installation_member_within_seat_limit,
     add_health_check_target,
     add_installation_member,
     check_and_reserve_managed_audit,
@@ -196,6 +198,29 @@ async def test_record_llm_spend_is_independent_per_installation(pool):
 
 
 @pytest.mark.asyncio
+async def test_record_llm_spend_without_monthly_cap_never_warns(pool, caplog):
+    """Existing callers that predate the cap-warning parameter must keep
+    working unchanged - omitting monthly_cap skips the check entirely."""
+    await upsert_installation(pool, 500, "octocat")
+    with caplog.at_level("WARNING"):
+        await record_llm_spend(pool, 500, 10.00)
+    assert caplog.records == []
+
+
+@pytest.mark.asyncio
+async def test_record_llm_spend_warns_once_when_crossing_the_threshold(pool, caplog):
+    await upsert_installation(pool, 500, "octocat")
+    with caplog.at_level("WARNING"):
+        await record_llm_spend(pool, 500, 2.00, monthly_cap=15.00)  # under 30% ($4.50)
+        await record_llm_spend(pool, 500, 5.00, monthly_cap=15.00)  # $7 total - crosses it
+        await record_llm_spend(pool, 500, 1.00, monthly_cap=15.00)  # already over - no refire
+
+    warnings = [r for r in caplog.records if "installation=500" in r.message]
+    assert len(warnings) == 1
+    assert "30%" in warnings[0].message
+
+
+@pytest.mark.asyncio
 async def test_get_extra_seats_defaults_to_zero(pool):
     await upsert_installation(pool, 500, "octocat")
     assert await get_extra_seats(pool, 500) == 0
@@ -233,6 +258,44 @@ async def test_add_installation_member_is_idempotent(pool):
     await add_installation_member(pool, 600, "octocat", "octocat")
     await add_installation_member(pool, 600, "octocat", "octocat")
     assert await count_installation_members(pool, 600) == 1
+
+
+@pytest.mark.asyncio
+async def test_add_installation_member_within_seat_limit_is_concurrency_safe(pool):
+    await upsert_installation(pool, 610, "octocat")
+    await add_installation_member(pool, 610, "octocat", "octocat")
+
+    results = await asyncio.gather(
+        *(
+            add_installation_member_within_seat_limit(
+                pool, 610, f"member-{index}", "octocat", seat_limit=2
+            )
+            for index in range(10)
+        )
+    )
+
+    assert sum(inserted for allowed, inserted in results) == 1
+    assert sum(allowed for allowed, inserted in results) == 1
+    assert await count_installation_members(pool, 610) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_api_token_creation_returns_each_inserted_id(pool):
+    await upsert_installation(pool, 611, "octocat")
+    results = await asyncio.gather(
+        *(
+            create_api_token(pool, 611, f"hash-{index}", f"token-{index}", "octocat")
+            for index in range(10)
+        )
+    )
+
+    assert len(set(results)) == 10
+    rows = await pool.fetch(
+        "SELECT id, token_hash FROM api_tokens WHERE installation_id = $1",
+        611,
+    )
+    assert {row["id"] for row in rows} == set(results)
+    assert {row["token_hash"] for row in rows} == {f"hash-{index}" for index in range(10)}
 
 
 @pytest.mark.asyncio

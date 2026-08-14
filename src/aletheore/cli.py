@@ -63,6 +63,7 @@ from aletheore.report import (
     select_adapter,
 )
 from aletheore.toon_encoding import to_toon
+from aletheore.watch import DEBOUNCE_SECONDS as WATCH_DEBOUNCE_SECONDS
 
 KNOWN_ADAPTERS = [
     ClaudeCodeAdapter(),
@@ -251,6 +252,7 @@ _COMMAND_SUMMARIES = [
     ("mcp-install", "write MCP client config for Claude Code, Cursor, VS Code, Kiro, Opencode, or Codex CLI"),
     ("dashboard", "a live local web UI over the same evidence"),
     ("healthcheck", "GET-only live check of mapped API endpoints"),
+    ("watch", "re-scan and re-index automatically as files change"),
     ("init", "scaffold a repository-local .aletheore.json config file"),
     ("login", "authenticate and save a managed-audit API token"),
     ("logout", "clear the locally saved managed-audit API token"),
@@ -682,6 +684,7 @@ def _query(
     forced_agent: str | None = None,
     k: int = 10,
     symbol: str | None = None,
+    language: str | None = None,
 ) -> int:
     if kind not in QUERY_KIND_CHOICES:
         # Suggestion first, listing after: a typo ("secret", "hotspot") is the
@@ -710,7 +713,7 @@ def _query(
         from aletheore.search_index import IndexNotFoundError, search_index
 
         try:
-            result = search_index(Path(repo_path).resolve(), target, k=k)
+            result = search_index(Path(repo_path).resolve(), target, k=k, language=language)
         except IndexNotFoundError as exc:
             console.print(f"[bold red]error:[/bold red] {exc}")
             return 1
@@ -1102,6 +1105,24 @@ def _port_is_available(host: str, port: int) -> bool:
             return False
 
 
+def _watch(repo_path: str, debounce: float) -> int:
+    from aletheore.watch import watch as run_watch
+
+    repo = Path(repo_path).resolve()
+
+    def report(message: str) -> None:
+        console.print(f"[dim]{time.strftime('%H:%M:%S')}[/dim] {message}")
+
+    try:
+        run_watch(repo, report, debounce_seconds=debounce)
+    except KeyboardInterrupt:
+        # Ctrl-C is how this command is meant to end, so it exits 0 with a
+        # word rather than a traceback - the dashboard's own Ctrl-C handling
+        # was a bug worth not repeating.
+        console.print("stopped")
+    return 0
+
+
 def _dashboard(repo_path: str, port: int) -> int:
     from aletheore.dashboard import build_app
 
@@ -1296,6 +1317,22 @@ def scan(
     raise typer.Exit(code=exit_code)
 
 
+@app.command(
+    help="re-scan and re-index automatically whenever source files change"
+)
+def watch(
+    path: str = typer.Argument(".", help="repository path"),
+    path_option: Optional[str] = _PATH_OPTION,
+    debounce: float = typer.Option(
+        WATCH_DEBOUNCE_SECONDS,
+        "--debounce",
+        help="seconds of quiet before rebuilding, so one burst of saves is one rebuild",
+    ),
+) -> None:
+    path = _resolve_path(path, path_option)
+    raise typer.Exit(code=_watch(path, debounce))
+
+
 @app.command(help="scaffold a .aletheore.json config file in a repository")
 def init(
     path: str = typer.Argument(".", help="repository path"),
@@ -1385,11 +1422,14 @@ def query(
     ),
     agent: Optional[str] = typer.Option(None, "--agent", help="provider for 'answer'"),
     k: int = typer.Option(10, "--k", help="number of semantic search results"),
+    language: Optional[str] = typer.Option(
+        None, "--language", help="restrict 'search-codebase' to one language, e.g. python"
+    ),
 ) -> None:
     if kind is None:
         console.print(_query_kinds_panel())
         raise typer.Exit(code=0)
-    raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k, symbol))
+    raise typer.Exit(code=_query(kind, target, repo_path, full, agent, k, symbol, language))
 
 
 @app.command(help="compare two air.json files")
@@ -1538,8 +1578,14 @@ def login() -> None:
             console.print("Multiple paid installations found - pick one:")
             for index, candidate in enumerate(resolved, start=1):
                 console.print(f"  {index}. {candidate['account_login']}")
-            choice = int(input("Enter a number: "))
-            installation = resolved[choice - 1]
+            while True:
+                raw = input(f"Enter a number [1-{len(resolved)}]: ").strip()
+                if raw.isdigit() and 1 <= int(raw) <= len(resolved):
+                    installation = resolved[int(raw) - 1]
+                    break
+                console.print(
+                    f"[bold red]error:[/bold red] enter a number between 1 and {len(resolved)}"
+                )
 
         label = f"{socket.gethostname()} (device flow)"
         token = mint_cli_token(github_token, installation["installation_id"], label)

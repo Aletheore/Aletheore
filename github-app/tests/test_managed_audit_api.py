@@ -1,18 +1,32 @@
 import hashlib
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from aletheore.air_schema import AIR_JSON_SCHEMA
+from aletheore.evidence import EVIDENCE_VERSION
+from aletheore.toon_encoding import to_toon
 from app_server.db import create_api_token, set_installation_plan, upsert_installation
 from app_server.evidence_limits import MAX_EVIDENCE_BYTES
 from app_server.main import app
 from app_server.audit_signing import content_hash, public_key_hex_from_private, sign_report, verify_report
-from aletheore.toon_encoding import to_toon
+
+
+def _minimal_instance(schema: dict):
+    types = schema.get("type")
+    kind = types[0] if isinstance(types, list) else types
+    if kind == "object":
+        properties = schema.get("properties", {})
+        return {key: _minimal_instance(properties[key]) for key in schema.get("required", [])}
+    return {"array": [], "string": "", "integer": 0, "number": 0, "boolean": False}.get(kind)
 
 
 def _evidence_toon(total_loc: int = 100) -> str:
-    return to_toon({"repository": {"languages": [{"name": "Python", "files": 1, "lines": total_loc}]}})
+    evidence = _minimal_instance(AIR_JSON_SCHEMA)
+    evidence["aletheore_version"] = EVIDENCE_VERSION
+    evidence["repository"]["languages"] = [{"name": "Python", "file_count": 1, "loc": total_loc}]
+    return to_toon(evidence)
 
 
 @pytest.mark.asyncio
@@ -163,6 +177,38 @@ async def test_managed_audit_requires_repo_full_name(pool):
             headers={"Authorization": "Bearer real-token"},
         )
     assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_managed_audit_rejects_malformed_air_before_reserving_quota(monkeypatch):
+    async def fake_authenticate(_request):
+        return {"installation_id": 100, "plan": "indie"}, "token-hash"
+
+    reserve_repo_slot = AsyncMock()
+    reserve_audit = AsyncMock()
+    fake_queue = MagicMock()
+    monkeypatch.setattr("app_server.managed_audit_api._authenticate_token", fake_authenticate)
+    monkeypatch.setattr(
+        "app_server.managed_audit_api.check_and_reserve_monthly_repo_scan_slot", reserve_repo_slot
+    )
+    monkeypatch.setattr("app_server.managed_audit_api.check_and_reserve_managed_audit", reserve_audit)
+    monkeypatch.setattr("app_server.managed_audit_api._get_queue", lambda redis_url: fake_queue)
+
+    app.state.db_pool = object()
+    transport = ASGITransport(app=app)
+    malformed_evidence = to_toon({"repository": {"languages": []}})
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/v1/managed-audit",
+            json={"evidence": malformed_evidence, "repo_full_name": "octocat/widgets"},
+            headers={"Authorization": "Bearer real-token"},
+        )
+
+    assert response.status_code == 400
+    assert "job_id" not in response.json()
+    reserve_repo_slot.assert_not_awaited()
+    reserve_audit.assert_not_awaited()
+    fake_queue.enqueue.assert_not_called()
 
 
 @pytest.mark.asyncio

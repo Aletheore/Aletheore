@@ -1,10 +1,11 @@
+import re
 from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app_server.auth import encrypt_access_token, sign_session_id
+from app_server.auth import encrypt_access_token, sign_session_id, unsign_checkout_installation_id
 from app_server.db import add_paddle_ids_to_installation, create_session, upsert_installation
 from app_server.main import app
 
@@ -122,9 +123,17 @@ async def test_one_installation_shows_checkout_with_current_plan(pool, monkeypat
     assert response.status_code == 200
     assert "acme" in response.text
     assert "currently on Aletheore Community" in response.text
-    assert 'data-installation-id="2001"' in response.text
+    # A signed token, not the raw installation_id - the browser must never
+    # be handed something Paddle.Checkout.open() could forward for a
+    # different installation. Decoding it is what proves it's actually
+    # usable, not just present-and-opaque.
+    assert 'data-installation-id="2001"' not in response.text
+    match = re.search(r'data-installation-token="([^"]+)"', response.text)
+    assert match is not None
+    assert unsign_checkout_installation_id(match.group(1), "test-session-secret") == 2001
     assert "pri_01kyhevc8bkcghfpwjymz16y2h" in response.text  # air monthly price id
     assert "customData" in response.text
+    assert "installation_token" in response.text
     assert "successUrl" in response.text and "dashboard" in response.text
     assert 'href="/dashboard"' in response.text
     assert "pwCustomer" not in response.text
@@ -153,8 +162,13 @@ async def test_multiple_installations_shows_selection(pool, monkeypatch):
     async with client:
         response = await client.get("/subscribe?plan=air&interval=year")
     assert response.status_code == 200
-    assert 'value="2002"' in response.text
-    assert 'value="2003"' in response.text
+    # Radio values are signed tokens, not raw installation ids - same
+    # reasoning as the single-installation case above.
+    assert 'value="2002"' not in response.text
+    assert 'value="2003"' not in response.text
+    tokens = re.findall(r'name="installation_token" value="([^"]+)"', response.text)
+    decoded = {unsign_checkout_installation_id(token, "test-session-secret") for token in tokens}
+    assert decoded == {2002, 2003}
     assert "acme" in response.text
     assert "beta-corp" in response.text
     assert "pri_01kyhevc9xn6z2nghmy8057jvp" in response.text  # air yearly price id

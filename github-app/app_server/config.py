@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,7 @@ def _load_private_key() -> str:
     # parsing entirely).
     path = os.environ.get("GITHUB_APP_PRIVATE_KEY_PATH", "")
     if path:
-        value = open(path).read().strip()
+        value = Path(path).read_text().strip()
         if not value:
             raise RuntimeError("GITHUB_APP_PRIVATE_KEY_PATH points to an empty file")
         return value
@@ -88,12 +89,12 @@ def get_settings() -> Settings:
     # fixture for that.
     paddle_environment = _paddle_environment()
     return Settings(
-        database_url=os.environ["DATABASE_URL"],
+        database_url=_required_env("DATABASE_URL"),
         redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
-        github_app_id=os.environ.get("GITHUB_APP_ID", ""),
+        github_app_id=_required_env("GITHUB_APP_ID"),
         github_app_private_key=_load_private_key(),
         github_webhook_secret=_required_env("GITHUB_WEBHOOK_SECRET"),
-        github_client_id=os.environ.get("GITHUB_CLIENT_ID", ""),
+        github_client_id=_required_env("GITHUB_CLIENT_ID"),
         github_client_secret=_required_env("GITHUB_CLIENT_SECRET"),
         session_secret=_required_env("SESSION_SECRET"),
         public_base_url=os.environ.get("PUBLIC_BASE_URL", "https://aletheore.com"),

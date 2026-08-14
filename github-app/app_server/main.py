@@ -5,7 +5,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -23,6 +23,7 @@ from app_server.ingest_limits import (
     check_declared_body_size,
 )
 from app_server.logging_config import configure_json_logging
+from app_server.embeddings_api import embeddings_router
 from app_server.managed_audit_api import managed_audit_router
 from app_server.metrics import metrics_router
 from app_server.runtime_events import runtime_events_router
@@ -60,6 +61,7 @@ app.include_router(dashboard_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(managed_audit_router)
+app.include_router(embeddings_router)
 app.include_router(metrics_router)
 app.include_router(frontend_router)
 app.include_router(paddle_webhook_router)
@@ -175,7 +177,12 @@ async def webhook(request: Request):
         raise HTTPException(status_code=400, detail="missing X-GitHub-Delivery")
 
     event = request.headers.get("X-GitHub-Event", "")
-    payload = json.loads(body)
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return Response(status_code=401)
+    if not isinstance(payload, dict):
+        return Response(status_code=401)
     pool = request.app.state.db_pool
 
     # Claimed after the signature check, so an unauthenticated caller can't

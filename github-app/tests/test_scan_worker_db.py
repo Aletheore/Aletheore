@@ -14,6 +14,7 @@ from scan_worker.db import (
     check_and_reserve_monthly_repo_scan_slot,
     count_repo_scans_since,
     delete_docs_symbols_not_in,
+    delete_expired_endpoint_health,
     delete_expired_sessions,
     delete_expired_webhook_deliveries,
     delete_wiki_subsystems_not_in,
@@ -30,6 +31,10 @@ from scan_worker.db import (
     insert_endpoint_health,
     insert_repo_history,
     installation_spend_lock,
+    repo_checkout_lock,
+    REPO_CHECKOUT_LOCK_NAMESPACE,
+    SCAN_SLOT_LOCK_NAMESPACE,
+    SPEND_LOCK_NAMESPACE,
     list_health_check_targets_all,
     list_docs_symbols,
     list_installation_member_emails,
@@ -307,6 +312,30 @@ async def test_delete_expired_webhook_deliveries_keeps_rows_inside_the_window(po
     assert deleted == 1
     remaining = await pool.fetch("SELECT delivery_id FROM webhook_deliveries")
     assert {row["delivery_id"] for row in remaining} == {"recent-delivery"}
+
+
+@pytest.mark.asyncio
+async def test_delete_expired_endpoint_health_keeps_rows_inside_the_window(pool):
+    await _insert_installation(pool, 302, "health-org")
+    now = datetime.now(timezone.utc)
+    await pool.execute(
+        """
+        INSERT INTO endpoint_health
+            (installation_id, repo_full_name, endpoint_method, endpoint_path,
+             reachable, checked_at)
+        VALUES
+            (302, 'health-org/repo', 'GET', '/old', true, $1),
+            (302, 'health-org/repo', 'GET', '/recent', true, $2)
+        """,
+        now - timedelta(days=31),
+        now - timedelta(days=29),
+    )
+
+    deleted = delete_expired_endpoint_health(TEST_DATABASE_URL, 30)
+
+    assert deleted == 1
+    remaining = await pool.fetch("SELECT endpoint_path FROM endpoint_health")
+    assert {row["endpoint_path"] for row in remaining} == {"/recent"}
 
 
 @pytest.mark.asyncio
@@ -656,6 +685,27 @@ async def test_record_llm_spend_accumulates_sync(pool):
 
 
 @pytest.mark.asyncio
+async def test_record_llm_spend_sync_without_monthly_cap_never_warns(pool, caplog):
+    await _insert_installation(pool, 301, "a")
+    with caplog.at_level("WARNING"):
+        record_llm_spend(TEST_DATABASE_URL, 301, 10.00)
+    assert caplog.records == []
+
+
+@pytest.mark.asyncio
+async def test_record_llm_spend_sync_warns_once_when_crossing_the_threshold(pool, caplog):
+    await _insert_installation(pool, 301, "a")
+    with caplog.at_level("WARNING"):
+        record_llm_spend(TEST_DATABASE_URL, 301, 2.00, monthly_cap=15.00)  # under 30% ($4.50)
+        record_llm_spend(TEST_DATABASE_URL, 301, 5.00, monthly_cap=15.00)  # $7 total - crosses it
+        record_llm_spend(TEST_DATABASE_URL, 301, 1.00, monthly_cap=15.00)  # already over
+
+    warnings = [r for r in caplog.records if "installation=301" in r.message]
+    assert len(warnings) == 1
+    assert "30%" in warnings[0].message
+
+
+@pytest.mark.asyncio
 async def test_get_extra_seats_sync_defaults_to_zero(pool):
     await _insert_installation(pool, 301, "a")
     assert get_extra_seats(TEST_DATABASE_URL, 301) == 0
@@ -702,7 +752,7 @@ async def test_installation_spend_lock_blocks_concurrent_acquisition(pool):
     with installation_spend_lock(TEST_DATABASE_URL, 301):
         with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT pg_try_advisory_lock(301)")
+                cur.execute("SELECT pg_try_advisory_lock(%s, %s)", (SPEND_LOCK_NAMESPACE, 301))
                 acquired = cur.fetchone()[0]
         assert acquired is False
 
@@ -716,10 +766,99 @@ async def test_installation_spend_lock_releases_after_context_exits(pool):
 
     with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT pg_try_advisory_lock(301)")
+            cur.execute("SELECT pg_try_advisory_lock(%s, %s)", (SPEND_LOCK_NAMESPACE, 301))
             acquired = cur.fetchone()[0]
-            cur.execute("SELECT pg_advisory_unlock(301)")
+            cur.execute("SELECT pg_advisory_unlock(%s, %s)", (SPEND_LOCK_NAMESPACE, 301))
     assert acquired is True
+
+
+@pytest.mark.asyncio
+async def test_repo_checkout_lock_blocks_concurrent_acquisition_for_same_repo(pool):
+    import psycopg
+
+    with repo_checkout_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+        with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_lock(%s, hashtext(%s))",
+                    (REPO_CHECKOUT_LOCK_NAMESPACE, "301:a/repo1"),
+                )
+                acquired = cur.fetchone()[0]
+        assert acquired is False
+
+
+@pytest.mark.asyncio
+async def test_repo_checkout_lock_releases_after_context_exits(pool):
+    import psycopg
+
+    with repo_checkout_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+        pass
+
+    with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_try_advisory_lock(%s, hashtext(%s))",
+                (REPO_CHECKOUT_LOCK_NAMESPACE, "301:a/repo1"),
+            )
+            acquired = cur.fetchone()[0]
+            cur.execute(
+                "SELECT pg_advisory_unlock(%s, hashtext(%s))",
+                (REPO_CHECKOUT_LOCK_NAMESPACE, "301:a/repo1"),
+            )
+    assert acquired is True
+
+
+@pytest.mark.asyncio
+async def test_repo_checkout_lock_does_not_block_a_different_repo(pool):
+    import psycopg
+
+    with repo_checkout_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+        with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_lock(%s, hashtext(%s))",
+                    (REPO_CHECKOUT_LOCK_NAMESPACE, "301:a/repo2"),
+                )
+                acquired = cur.fetchone()[0]
+                cur.execute(
+                    "SELECT pg_advisory_unlock(%s, hashtext(%s))",
+                    (REPO_CHECKOUT_LOCK_NAMESPACE, "301:a/repo2"),
+                )
+    assert acquired is True
+
+
+@pytest.mark.asyncio
+async def test_repo_checkout_lock_does_not_collide_with_spend_lock(pool):
+    with installation_spend_lock(TEST_DATABASE_URL, 301):
+        with repo_checkout_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_scan_slot_lock_does_not_collide_with_spend_lock(pool):
+    await _insert_installation(pool, 307, "a")
+    with installation_spend_lock(TEST_DATABASE_URL, 307):
+        assert check_and_reserve_monthly_repo_scan_slot(
+            TEST_DATABASE_URL, 307, "a/repo", limit=1
+        ) is True
+
+
+@pytest.mark.asyncio
+async def test_scan_slot_lock_still_serializes_same_purpose(pool):
+    import psycopg
+    from psycopg.errors import LockNotAvailable
+
+    with psycopg.connect(TEST_DATABASE_URL, autocommit=False) as first:
+        with first.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(%s, %s)", (SCAN_SLOT_LOCK_NAMESPACE, 308))
+        with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as second:
+            with second.cursor() as cur:
+                cur.execute("SELECT set_config('lock_timeout', '100ms', false)")
+                with pytest.raises(LockNotAvailable):
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(%s, %s)",
+                        (SCAN_SLOT_LOCK_NAMESPACE, 308),
+                    )
 
 
 @pytest.mark.asyncio

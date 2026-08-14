@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app_server import paddle_ip_allowlist
 from app_server.affiliates import create_affiliate, get_referral, list_affiliates_with_totals, record_referral
+from app_server.auth import sign_checkout_installation_id
 from app_server.db import (
     add_installation_member,
     claim_webhook_delivery,
@@ -25,6 +26,11 @@ from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
 from app_server.webhooks.paddle import handle_paddle_webhook_event
 
 WEBHOOK_SECRET = "pdl_ntfset_test_secret"
+# Matches conftest.py's SESSION_SECRET default - the webhook handler
+# verifies custom_data.installation_token against this same secret via
+# get_settings().session_secret, so a test-built token has to be signed
+# with it to pass.
+SESSION_SECRET = "test-session-secret"
 
 
 def _sign(raw_body: bytes, secret: str = WEBHOOK_SECRET) -> str:
@@ -32,6 +38,10 @@ def _sign(raw_body: bytes, secret: str = WEBHOOK_SECRET) -> str:
     signed_payload = f"{ts}:{raw_body.decode()}"
     digest = hmac.new(secret.encode(), signed_payload.encode(), hashlib.sha256).hexdigest()
     return f"ts={ts};h1={digest}"
+
+
+def _installation_token(installation_id: int) -> str:
+    return sign_checkout_installation_id(installation_id, SESSION_SECRET)
 
 
 def _subscription_created_payload(
@@ -47,7 +57,7 @@ def _subscription_created_payload(
             "id": "sub_test_123",
             "customer_id": "ctm_test_456",
             "status": "active",
-            "custom_data": {"installation_id": str(installation_id)},
+            "custom_data": {"installation_token": _installation_token(installation_id)},
             "items": [{"price": {"id": price_id}}],
         },
     }
@@ -71,7 +81,7 @@ def _transaction_completed_payload(
         "event_type": "transaction.completed",
         "data": {
             "id": transaction_id,
-            "custom_data": {"installation_id": str(installation_id)},
+            "custom_data": {"installation_token": _installation_token(installation_id)},
             "details": {"totals": {"total": total_cents}},
             "billed_at": "2026-08-10T12:00:00Z",
         },
@@ -92,7 +102,7 @@ def _subscription_event_payload(
             "id": "sub_test_123",
             "customer_id": "ctm_test_456",
             "status": status,
-            "custom_data": {"installation_id": str(installation_id)},
+            "custom_data": {"installation_token": _installation_token(installation_id)},
             "items": [{"price": {"id": price_id}}] if price_id else [],
         },
     }
@@ -130,6 +140,20 @@ async def test_invalid_signature_rejected_with_no_write(pool, monkeypatch):
     assert response.status_code == 401
     installation = await get_installation(pool, 101)
     assert installation["plan"] == "free"
+
+
+@pytest.mark.asyncio
+async def test_non_ascii_paddle_signature_returns_401_not_500(pool, monkeypatch):
+    monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    app.state.db_pool = pool
+    body = b'{"event_type": "subscription.created"}'
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/webhooks/paddle",
+            content=body,
+            headers=[(b"paddle-signature", b"ts=1;h1=caf\xe9")],
+        )
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -251,11 +275,99 @@ async def test_missing_installation_id_returns_200_but_writes_nothing(pool, monk
     monkeypatch.setenv("PADDLE_WEBHOOK_SECRET", WEBHOOK_SECRET)
     app.state.db_pool = pool
     payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 104)
-    del payload["data"]["custom_data"]["installation_id"]
+    del payload["data"]["custom_data"]["installation_token"]
     body = json.dumps(payload).encode()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/webhooks/paddle", content=body, headers={"paddle-signature": _sign(body)})
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_a_raw_unsigned_installation_id_is_rejected_not_trusted(pool):
+    """The actual vulnerability this closes: custom_data is set by the
+    browser calling Paddle.Checkout.open(), which nothing stops from being
+    called directly with any value - a raw installation_id, spoofing a
+    victim's id, must not be trusted just because it looks like a valid
+    integer. Only a signed installation_token, minted server-side for a
+    session that was already verified to administer that installation, may
+    name one."""
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (950, 'victim-org', 'air')"
+    )
+    payload = _subscription_event_payload(
+        "subscription.canceled", "canceled", 950, event_id="evt_spoofed"
+    )
+    # Simulates an attacker calling Paddle.Checkout.open() from the browser
+    # console with a raw custom_data.installation_id naming a victim's
+    # installation - the exact shape this codebase used to accept.
+    payload["data"]["custom_data"] = {"installation_id": "950"}
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    installation = await get_installation(pool, 950)
+    assert installation["plan"] == "air", "a spoofed raw installation_id must not downgrade a real customer"
+
+
+@pytest.mark.asyncio
+async def test_a_tampered_installation_token_is_rejected(pool):
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (951, 'victim-org2', 'air')"
+    )
+    payload = _subscription_event_payload("subscription.canceled", "canceled", 951, event_id="evt_tampered")
+    # A token minted for a different installation, spliced onto this
+    # event - must not be accepted for 951 just because it's a
+    # well-formed, validly-signed token for *something*.
+    payload["data"]["custom_data"]["installation_token"] = _installation_token(952)
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    installation = await get_installation(pool, 951)
+    assert installation["plan"] == "air"
+
+
+@pytest.mark.asyncio
+async def test_a_forged_installation_token_is_rejected(pool):
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (953, 'victim-org3', 'air')"
+    )
+    payload = _subscription_event_payload("subscription.canceled", "canceled", 953, event_id="evt_forged")
+    real_token = payload["data"]["custom_data"]["installation_token"]
+    # Flipped mid-string, not the trailing character: base64's own padding
+    # bits can leave the last character of a token free to change without
+    # altering the decoded bytes at all, which would make this test pass
+    # for the wrong reason (or flake, since the token itself is timestamp-
+    # dependent and different on every run).
+    middle = len(real_token) // 2
+    flipped_char = "x" if real_token[middle] != "x" else "y"
+    payload["data"]["custom_data"]["installation_token"] = (
+        real_token[:middle] + flipped_char + real_token[middle + 1 :]
+    )
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    installation = await get_installation(pool, 953)
+    assert installation["plan"] == "air"
+
+
+@pytest.mark.asyncio
+async def test_customer_id_mismatch_is_rejected_even_with_a_valid_token(pool):
+    """Defense in depth beyond the signed token: once an installation has a
+    real Paddle customer on file, an event claiming a different customer_id
+    must not mutate it, even if it somehow carried a validly-signed token -
+    this is what closes the billing-portal-hijack path if a future change
+    ever reintroduced a spoofable identifier into custom_data."""
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, paddle_customer_id) "
+        "VALUES (954, 'victim-org4', 'air', 'ctm_real_customer')"
+    )
+    payload = _subscription_event_payload("subscription.canceled", "canceled", 954, event_id="evt_mismatch")
+    payload["data"]["customer_id"] = "ctm_attacker_customer"
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    installation = await get_installation(pool, 954)
+    assert installation["plan"] == "air"
+    assert installation["paddle_customer_id"] == "ctm_real_customer"
 
 
 @pytest.mark.asyncio
@@ -400,7 +512,7 @@ async def test_subscription_updated_reconciles_extra_seats_from_items(pool):
             "id": "sub_test_123",
             "customer_id": "ctm_test_456",
             "status": "active",
-            "custom_data": {"installation_id": "305"},
+            "custom_data": {"installation_token": _installation_token(305)},
             "items": [
                 {"price": {"id": "pri_01kyhevc8bkcghfpwjymz16y2h"}, "quantity": 1},
                 {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": 3},
@@ -864,7 +976,7 @@ async def test_repeated_transaction_completed_delivery_does_not_double_commissio
 @pytest.mark.asyncio
 async def test_transaction_completed_missing_installation_id_does_not_error(pool):
     payload = _transaction_completed_payload(913, "2699")
-    del payload["data"]["custom_data"]["installation_id"]
+    del payload["data"]["custom_data"]["installation_token"]
 
     # Must not raise.
     await handle_paddle_webhook_event(payload, pool, "redis://unused")

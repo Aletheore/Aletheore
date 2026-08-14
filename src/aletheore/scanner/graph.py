@@ -243,6 +243,7 @@ def _symbol_entry(
     docstring: str | None = None,
     return_type: str | None = None,
     is_public: bool = True,
+    is_pure_declaration: bool = False,
 ) -> dict:
     return {
         "name": source[name_node.start_byte:name_node.end_byte].decode(),
@@ -252,6 +253,17 @@ def _symbol_entry(
         "docstring": docstring,
         "return_type": return_type,
         "is_public": is_public,
+        # True only for a symbol that is ITSELF an interface/annotation-type,
+        # regardless of what else lives in the same file. Separate from the
+        # file-level is_declaration_only in build_chunks: that flag answers
+        # "is this whole file pure contract", which is correctly False for a
+        # file like AutoMapper's MapperConfiguration.cs that pairs a small
+        # embedded interface with a large concrete class - but the embedded
+        # interface's OWN chunk is still pure contract on its own terms, and
+        # measured to independently attract abstractly-worded queries the
+        # same way a dedicated declaration-only file does (AutoMapper cs02/
+        # cs09/cs10, gson java06 - see build_chunks for the per-chunk use).
+        "is_pure_declaration": is_pure_declaration,
     }
 
 
@@ -302,12 +314,23 @@ def _python_return_type(source: bytes, enclosing_node: Node) -> str | None:
 
 def _extract_python(
     node: Node, source: bytes
-) -> tuple[list[str], list[tuple[str, list[str]]], list[dict], list[dict]]:
-    """Return plain imports, from-imports, functions, and classes."""
+) -> tuple[list[str], list[tuple[str, list[str]]], list[dict], list[dict], list[dict]]:
+    """Return plain imports, from-imports, functions, classes, and constants.
+
+    "Constants" are module-level name bindings - `X = ...` and `X: T = ...` at
+    the top level of the file. They are extracted because a file can define a
+    substantial public API without a single `def` or `class`: Flask's
+    `signals.py` is 17 lines of `template_rendered = _signals.signal(...)`
+    exporting ten public names, and with only functions/classes recorded it
+    looked like an empty module to every consumer of this evidence - no wiki
+    page, and nothing for the search index to embed. The same shape covers
+    settings modules, registries, enums and route tables.
+    """
     plain_imports: list[str] = []
     from_imports: list[tuple[str, list[str]]] = []
     functions: list[dict] = []
     classes: list[dict] = []
+    constants: list[dict] = []
 
     def walk(root: Node):
         # Iterative, not recursive - a deeply-nested real-world AST (confirmed on
@@ -364,10 +387,193 @@ def _extract_python(
                         docstring=_python_docstring(source, n),
                         is_public=_is_public_symbol(name, "python") and not _is_nested_in_function(n),
                     ))
+            elif n.type == "expression_statement" and n.parent is not None and n.parent.type == "module":
+                # Module level only. An assignment inside a function or a class
+                # body is a local or an attribute, not a module export, and
+                # recording those would bury the real API in noise.
+                for child in n.named_children:
+                    if child.type != "assignment":
+                        continue
+                    target = child.child_by_field_name("left")
+                    # Only plain `NAME = ...`. Tuple unpacking and subscript or
+                    # attribute targets are deliberately skipped: their "name"
+                    # is not a single identifier a reader could look up.
+                    if target is None or target.type != "identifier":
+                        continue
+                    name = source[target.start_byte:target.end_byte].decode()
+                    constants.append(_symbol_entry(
+                        source, target, n,
+                        is_public=_is_public_symbol(name, "python"),
+                    ))
             stack.extend(reversed(n.children))
 
     walk(node)
-    return plain_imports, from_imports, functions, classes
+    return plain_imports, from_imports, functions, classes, constants
+
+
+def _extract_module_constants(node: Node, source: bytes, language: str) -> list[dict]:
+    """Top-level named constants, for every language except Python.
+
+    Python is handled inside `_extract_python`, which already had the walk.
+    This is a separate pass rather than a change to eight extractor signatures,
+    because the value is the same in each language and the risk of reworking
+    every extractor is not.
+
+    Why this exists: a file can export a substantial public API without a single
+    function or class. Flask's `signals.py` is ten module-level assignments and
+    was invisible to every consumer of the evidence. The same shape is
+    everywhere - `export const` in JS/TS, Go `const` blocks, Rust `pub const`,
+    Java `public static final`, C `#define`, C# `const`.
+
+    Only definitions a reader could look up by name are recorded: destructuring,
+    computed names and inline `mod`-style bodies are skipped.
+    """
+    out: list[dict] = []
+    seen: set[tuple[str, int]] = set()
+
+    def add(name_node: Node, enclosing: Node, public: bool = True) -> None:
+        name = source[name_node.start_byte:name_node.end_byte].decode(errors="ignore").strip()
+        if not name or not name.replace("_", "").replace("$", "").isalnum():
+            return
+        key = (name, name_node.start_point[0] + 1)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(_symbol_entry(source, name_node, enclosing, is_public=public))
+
+    def is_top_level(n: Node) -> bool:
+        """Module scope, allowing the wrappers each language puts around it."""
+        parent = n.parent
+        hops = 0
+        while parent is not None and hops < 4:
+            if parent.type in (
+                "source_file", "program", "translation_unit", "compilation_unit",
+                "module", "namespace_definition", "file_scoped_namespace_declaration",
+                "declaration_list", "namespace_declaration",
+            ):
+                return True
+            if parent.type in ("export_statement", "expression_statement", "const_block"):
+                parent = parent.parent
+                hops += 1
+                continue
+            return False
+        return parent is not None
+
+    def has_modifier(n: Node, *words: str) -> bool:
+        text = source[n.start_byte:min(n.end_byte, n.start_byte + 400)].decode(errors="ignore")
+        head = text.split("=")[0]
+        # Word-boundary match, not substring: plain `w in head` misclassifies
+        # any declaration whose identifier merely contains a modifier word,
+        # e.g. `int construct_id = 5;` or `Handler constants_registry = ...;`
+        # both false-positive on "const".
+        return all(re.search(rf"\b{re.escape(w)}\b", head) for w in words)
+
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        t = n.type
+
+        if language in ("javascript", "typescript"):
+            # `const X = ...` / `export const X = ...`
+            if t == "lexical_declaration" and is_top_level(n) and source[
+                n.start_byte:n.start_byte + 5
+            ] == b"const":
+                for child in n.named_children:
+                    if child.type == "variable_declarator":
+                        nm = child.child_by_field_name("name")
+                        if nm is not None and nm.type == "identifier":
+                            add(nm, child)
+        elif language == "go":
+            if t in ("const_declaration", "var_declaration") and is_top_level(n):
+                for spec in n.named_children:
+                    if spec.type in ("const_spec", "var_spec"):
+                        nm = spec.child_by_field_name("name")
+                        if nm is not None:
+                            add(nm, spec, public=nm.text[:1].isupper() if nm.text else True)
+        elif language == "rust":
+            if t in ("const_item", "static_item"):
+                nm = n.child_by_field_name("name")
+                if nm is not None:
+                    add(nm, n, public=any(c.type == "visibility_modifier" for c in n.children))
+        elif language in ("java", "csharp"):
+            # Class members: `static final` / `const` are the module-constant
+            # equivalent in languages with no file-level scope.
+            #
+            # Deliberately NOT every field: an earlier version of this branch
+            # extracted every Java field regardless of modifier (1,075 of them
+            # in google/gson) to give private/instance fields the same
+            # by-name lookup as constants get. Measured, not shipped: every
+            # one of those 1,075 chunks was provably unreachable anyway - see
+            # build_chunks below, "constants" are only chunked for a file with
+            # no functions or classes, and every real Java file with fields
+            # also has at least one method - so the change was pure dead
+            # weight with zero effect on the index, in either direction.
+            if t == "field_declaration" and (
+                has_modifier(n, "static", "final") or has_modifier(n, "const")
+            ):
+                # Java puts variable_declarator directly under field_declaration;
+                # C# wraps it in a variable_declaration first.
+                candidates = list(n.named_children)
+                for child in list(candidates):
+                    if child.type == "variable_declaration":
+                        candidates.extend(child.named_children)
+                for child in candidates:
+                    if child.type == "variable_declarator":
+                        nm = child.child_by_field_name("name") or (
+                            child.named_children[0] if child.named_children else None
+                        )
+                        if nm is not None and nm.type == "identifier":
+                            add(nm, child, public=has_modifier(n, "public"))
+        elif language == "ruby":
+            # Ruby constants are capitalised assignments - idiomatically
+            # declared inside a module or class body (Sinatra::Base's
+            # DROP_BODY_RESPONSES, not top-level: a real repo scan found 10
+            # constants indented inside module/class bodies and 0 at file
+            # scope), not only at true top level. A constant assigned
+            # inside a def body is a method-local, not part of the type's
+            # API surface, and must stay excluded - confirmed empirically
+            # via spike that tree-sitter-ruby wraps both shapes the same
+            # way (assignment -> body_statement), so it's the
+            # body_statement's own parent that tells them apart: class or
+            # module for a type's own body, method for a def's.
+            if t == "assignment":
+                lhs = n.child_by_field_name("left")
+                if lhs is not None and lhs.type == "constant":
+                    in_type_body = (
+                        n.parent is not None
+                        and n.parent.type == "body_statement"
+                        and n.parent.parent is not None
+                        and n.parent.parent.type in ("class", "module")
+                    )
+                    if in_type_body or is_top_level(n):
+                        add(lhs, n)
+        elif language == "php":
+            if t == "const_declaration":
+                for child in n.named_children:
+                    if child.type == "const_element":
+                        nm = child.named_children[0] if child.named_children else None
+                        if nm is not None:
+                            add(nm, child)
+        elif language in ("c", "cpp"):
+            if t == "preproc_def":
+                nm = n.child_by_field_name("name")
+                if nm is not None:
+                    add(nm, n)
+            elif t == "declaration" and is_top_level(n) and has_modifier(n, "const"):
+                # `const int X = 42;` at file scope - the C++ idiom that replaced
+                # #define, and the only constant form in a header-only library
+                # that avoids the preprocessor.
+                for child in n.named_children:
+                    target = child
+                    if child.type == "init_declarator":
+                        target = child.child_by_field_name("declarator") or child
+                    if target.type == "identifier":
+                        add(target, n)
+
+        stack.extend(reversed(n.children))
+
+    out.sort(key=lambda e: e["start_line"])
+    return out
 
 
 def _leading_block_comment(
@@ -439,6 +645,12 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
     functions: list[dict] = []
     classes: list[dict] = []
 
+    def string_literal(n: Node | None) -> str | None:
+        if n is None or n.type != "string":
+            return None
+        raw = source[n.start_byte:n.end_byte].decode()
+        return raw[1:-1] if len(raw) >= 2 and raw[0] in "'\"" else None
+
     def walk(root: Node):
         # Iterative, not recursive - see _extract_python's walk for why.
         stack = [root]
@@ -449,6 +661,41 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
                 if source_node is not None:
                     raw = source[source_node.start_byte:source_node.end_byte].decode()
                     imports.append(raw.strip("'\""))
+            elif n.type == "export_statement":
+                # Re-export barrels ("export { x } from './x'", "export * from
+                # './x'") get their own export_statement node type with a
+                # "source" field - a walk that only matches import_statement
+                # never sees them, so a file only ever referenced through one
+                # is invisible to imported_by/dead-code despite being live.
+                specifier = string_literal(n.child_by_field_name("source"))
+                if specifier is not None:
+                    imports.append(specifier)
+            elif n.type == "call_expression":
+                # CommonJS `require('./x')` and dynamic `import('./x')`. Handling
+                # only ESM `import` left the dependency graph of every CommonJS
+                # codebase completely empty - measured on expressjs/express: 141
+                # modules, 0 resolved imports, so community detection saw no
+                # edges and emitted one cluster per file. CommonJS is still most
+                # of npm, so this is not a legacy edge case. Dynamic import()'s
+                # callee is its own "import" node type (not an identifier), same
+                # tree-sitter shape as the "import" keyword in a static
+                # import_statement.
+                fn = n.child_by_field_name("function")
+                is_require = (
+                    fn is not None
+                    and fn.type == "identifier"
+                    and source[fn.start_byte:fn.end_byte] == b"require"
+                )
+                is_dynamic_import = fn is not None and fn.type == "import"
+                if is_require or is_dynamic_import:
+                    args = n.child_by_field_name("arguments")
+                    if args is not None:
+                        for arg in args.named_children:
+                            if arg.type == "string":
+                                spec = source[arg.start_byte:arg.end_byte].decode().strip("'\"`")
+                                if spec:
+                                    imports.append(spec)
+                                break
             elif n.type == "function_declaration":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
@@ -468,6 +715,57 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
                         is_public=not _is_nested_in_function(n),
                     ))
+            elif n.type in ("interface_declaration", "type_alias_declaration"):
+                # In TypeScript these ARE the public API surface, especially
+                # for a type-centric library: colinhacks/zod has 972
+                # `export type`/`export interface` declarations in its core
+                # src, and 39 files with zero other symbols contained 210 of
+                # them - entirely invisible to everything downstream before
+                # this. Folded into `classes` rather than a new symbol group,
+                # the same way Java's and C#'s own interface_declaration
+                # already is - a type declaration is structurally the same
+                # kind of thing as a class here. No special-casing needed for
+                # a namespace/module body (`export namespace Foo { ... }`):
+                # this walk is unconditional over every child, so a
+                # type_alias_declaration nested inside one is visited the
+                # same as a top-level one.
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    raw_doc = _leading_block_comment(n, source)
+                    classes.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        is_public=not _is_nested_in_function(n),
+                    ))
+            elif n.type in ("variable_declarator", "assignment_expression"):
+                # Functions assigned to a name rather than declared. Counting only
+                # `function f(){}` and `class C{}` left most of a real CommonJS
+                # codebase with no symbols at all: expressjs/express defines its
+                # whole surface as `app.use = function use(fn) {...}`, and 103 of
+                # its 141 files came out empty, so the search index had nothing to
+                # embed but a fallback chunk. Covers `const f = () => {}`,
+                # `exports.f = function(){}` and `Foo.prototype.bar = function(){}`.
+                value = n.child_by_field_name("value") if n.type == "variable_declarator" else n.child_by_field_name("right")
+                if value is not None and value.type in (
+                    "function_expression", "arrow_function", "function", "generator_function"
+                ):
+                    target = (
+                        n.child_by_field_name("name") if n.type == "variable_declarator"
+                        else n.child_by_field_name("left")
+                    )
+                    if target is not None:
+                        # `a.b.c = fn` is named by its last segment; a bare
+                        # identifier by itself.
+                        name_node = target
+                        if target.type == "member_expression":
+                            name_node = target.child_by_field_name("property") or target
+                        if name_node.type in ("identifier", "property_identifier"):
+                            functions.append(_symbol_entry(
+                                source, name_node, n,
+                                docstring=_strip_jsdoc_stars(_leading_block_comment(n, source) or "") or None,
+                                return_type=_ts_return_type(source, value),
+                                is_public=not _is_nested_in_function(n),
+                            ))
             stack.extend(reversed(n.children))
 
     walk(node)
@@ -696,6 +994,21 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
                     if child.type not in ("use", ";"):
                         imports.extend(_rust_use_paths(child, source))
                         break
+            elif n.type == "mod_item" and not any(
+                c.type == "declaration_list" for c in n.children
+            ):
+                # `mod foo;` (no inline body) is how a Rust crate declares its
+                # module tree, and it is a real file dependency: the module lives
+                # in foo.rs or foo/mod.rs beside this file. Extracting only `use`
+                # missed it entirely, so even a correct single-crate layout
+                # resolved zero edges from its lib.rs. Emitted as a self-relative
+                # path so the existing `self::` resolution handles the two
+                # possible on-disk shapes.
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    name = source[name_node.start_byte:name_node.end_byte].decode()
+                    if name:
+                        imports.append(f"self::{name}")
             elif n.type in ("function_item", "function_signature_item"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
@@ -730,13 +1043,50 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
 
 
 def _rust_crate_root(repo_path: Path) -> Path | None:
-    # Workspace repos (multiple crates, each with its own Cargo.toml + src/) aren't
-    # supported in this first pass - same documented scope limit as Go only looking
-    # at a repo-root go.mod, rather than every nested module.
     for candidate in (repo_path / "src" / "lib.rs", repo_path / "src" / "main.rs"):
         if candidate.exists():
             return candidate
     return None
+
+
+def _rust_crate_src_dir(repo_path: Path, from_file: Path) -> Path:
+    """The `src/` of the crate that owns `from_file`.
+
+    Cargo workspaces put each crate in its own subdirectory with its own
+    Cargo.toml and src/, and `crate::` inside one of them means *that* crate,
+    not the repo. Resolving against a single repo-root src/ meant every
+    workspace resolved nothing at all: serde-rs/serde scanned as 208 modules
+    with 0 import edges, so community detection produced 208 one-file
+    subsystems. Workspaces are the normal layout for large Rust projects
+    (serde, tokio, rust-analyzer), not an edge case.
+
+    Falls back to the repo-root src/ for a single-crate repo.
+    """
+    try:
+        current = from_file.parent.resolve()
+        root = repo_path.resolve()
+    except OSError:
+        return repo_path / "src"
+    while True:
+        if (current / "Cargo.toml").exists() and (current / "src").is_dir():
+            return current / "src"
+        if current == root or current.parent == current:
+            break
+        current = current.parent
+    return repo_path / "src"
+
+
+def _rust_has_any_crate_root(repo_path: Path) -> bool:
+    """True if the repo has at least one crate, workspace member or otherwise."""
+    if _rust_crate_root(repo_path) is not None:
+        return True
+    for cargo in repo_path.glob("*/Cargo.toml"):
+        if (cargo.parent / "src").is_dir():
+            return True
+    for cargo in repo_path.glob("*/*/Cargo.toml"):
+        if (cargo.parent / "src").is_dir():
+            return True
+    return False
 
 
 def _rust_module_search_dir(repo_path: Path, file_path: Path) -> Path:
@@ -749,8 +1099,12 @@ def _rust_module_search_dir(repo_path: Path, file_path: Path) -> Path:
     adjacent foo/ directory (the 2018-edition convention that doesn't require
     foo/mod.rs to exist just to hold further submodules).
     """
-    src_dir = repo_path / "src"
-    if file_path in (src_dir / "lib.rs", src_dir / "main.rs"):
+    # Resolved against the owning crate, not the repo root, so a workspace
+    # member's lib.rs is recognised as a crate root. Missing this meant serde's
+    # own `mod integer128;` looked like a submodule of a file named lib rather
+    # than a top-level module of the crate, and resolved to nothing.
+    src_dir = _rust_crate_src_dir(repo_path, file_path)
+    if file_path.name in ("lib.rs", "main.rs") and file_path.parent == src_dir:
         return src_dir
     if file_path.name == "mod.rs":
         return file_path.parent
@@ -792,7 +1146,7 @@ def _resolve_rust_path(repo_path: Path, from_file: Path, path: str) -> str | Non
     rest = segments[1:]
 
     if head == "crate":
-        target = _walk_rust_segments(repo_path / "src", rest)
+        target = _walk_rust_segments(_rust_crate_src_dir(repo_path, from_file), rest)
     elif head == "self":
         target = _walk_rust_segments(_rust_module_search_dir(repo_path, from_file), rest)
     elif head == "super":
@@ -838,6 +1192,44 @@ def _java_return_type(source: bytes, enclosing_node: Node) -> str | None:
     return source[node.start_byte:node.end_byte].decode().strip()
 
 
+def _java_is_public(node: Node) -> bool:
+    """Java's real visibility, read from its own modifiers.
+
+    Previously computed as `not _is_nested_in_function(node)` - a fair proxy
+    for Python, which has no access modifiers, but simply wrong for Java,
+    which states visibility right there in a `modifiers` node. It matters
+    beyond cosmetics: docs_reference.py filters the generated API reference on
+    is_public, so every `private` method was being published as public API.
+
+    The subtlety is the *absent* modifier. A member of an interface or an
+    annotation type is implicitly public and carries no `modifiers` node at
+    all - `interface Bar { void f(); }` parses with none - so treating "no
+    public keyword" as "not public" would mark every interface method private,
+    which is a worse error than the one being fixed here (google/gson's
+    TypeAdapterFactory.create is exactly that shape). Absent a modifier,
+    visibility comes from the enclosing body: implicitly public inside an
+    interface or annotation, package-private inside a class or enum, and
+    package-private at file scope.
+    """
+    if _is_nested_in_function(node):
+        return False
+    modifiers = next((c for c in node.children if c.type == "modifiers"), None)
+    if modifiers is not None:
+        kinds = {c.type for c in modifiers.children}
+        if "public" in kinds:
+            return True
+        if "private" in kinds or "protected" in kinds:
+            return False
+    parent = node.parent
+    while parent is not None:
+        if parent.type in ("interface_body", "annotation_type_body"):
+            return True
+        if parent.type in ("class_body", "enum_body"):
+            return False
+        parent = parent.parent
+    return False
+
+
 def _extract_java(
     node: Node, source: bytes
 ) -> tuple[list[tuple[str, bool, bool]], list[dict], list[dict]]:
@@ -869,7 +1261,7 @@ def _extract_java(
                         source, name_node, n,
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
                         return_type=_java_return_type(source, n),
-                        is_public=not _is_nested_in_function(n),
+                        is_public=_java_is_public(n),
                     ))
             elif n.type in (
                 "class_declaration", "interface_declaration", "enum_declaration", "record_declaration",
@@ -880,7 +1272,8 @@ def _extract_java(
                     types.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
-                        is_public=not _is_nested_in_function(n),
+                        is_public=_java_is_public(n),
+                        is_pure_declaration=n.type == "interface_declaration",
                     ))
             stack.extend(reversed(n.children))
 
@@ -1430,6 +1823,7 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
                         source, name_node, n,
                         docstring=_leading_csharp_xmldoc(source, n),
                         is_public=not _is_nested_in_function(n),
+                        is_pure_declaration=n.type == "interface_declaration",
                     ))
             elif n.type in ("method_declaration", "constructor_declaration"):
                 name_node = n.child_by_field_name("name")
@@ -1475,7 +1869,24 @@ def _csharp_prefix_and_root_for(file_path: Path, namespace: str | None) -> tuple
             prefix_segments = segments[: len(segments) - take]
             prefix = ".".join(prefix_segments) + "." if prefix_segments else ""
             return prefix, root
-    return None
+
+    # No trailing segment corresponds to a real directory - a flat project whose
+    # namespace comes entirely from <RootNamespace> with no mirroring folders at
+    # all. Returning None here meant such a file contributed nothing to the
+    # prefix map, so every `using` in a flat C# project resolved to nothing.
+    # Treat the whole namespace as the implicit prefix, rooted at the file's own
+    # directory: `using App.Lib;` then matches this file's namespace exactly and
+    # fans out to that directory, the same granularity a using operates at.
+    #
+    # Trailing "." matters here, not just cosmetically: without it, prefix
+    # matching in _resolve_csharp_using is a bare string startswith, so a
+    # namespace "App.Data" would also match an unrelated sibling namespace
+    # "App.DataAccess" (the same "." boundary every other return path in
+    # this function already enforces). This does mean a file can no longer
+    # self-match its own exact namespace via `using` with no further
+    # nesting - consistent with how a directory-mirrored prefix's own bare
+    # parent segment already never self-matches either.
+    return namespace + ".", file_path.parent
 
 
 def _resolve_csharp_using(prefix_map: dict[str, Path], dotted: str) -> list[Path]:
@@ -1664,7 +2075,7 @@ def build_module_graph(
     imported_by_map: dict[str, list[str]] = {}
     edges: list[list[str]] = []
     go_module_prefix = _load_go_module_prefix(repo_path)
-    has_rust_crate_root = _rust_crate_root(repo_path) is not None
+    has_rust_crate_root = _rust_has_any_crate_root(repo_path)
     python_source_roots = _python_source_roots(repo_path)
 
     # Java has no single repo-root config naming a module prefix (no go.mod, no
@@ -1745,8 +2156,13 @@ def build_module_graph(
             source = path.read_bytes()
             tree = parser.parse(source)
 
+        constants: list[dict] = []
+        if language_name != "python":
+            # Python's bindings come out of _extract_python, which already has
+            # the walk; every other language gets the shared pass.
+            constants = _extract_module_constants(tree.root_node, source, language_name)
         if language_name == "python":
-            plain_imports, from_imports, functions, classes = _extract_python(
+            plain_imports, from_imports, functions, classes, constants = _extract_python(
                 tree.root_node, source
             )
             resolved_imports: list[str] = []
@@ -1872,7 +2288,7 @@ def build_module_graph(
                 "language": language_name,
                 "imports": resolved_imports,
                 "imported_by": [],
-                "symbols": {"functions": functions, "classes": classes},
+                "symbols": {"functions": functions, "classes": classes, "constants": constants},
             }
         )
 

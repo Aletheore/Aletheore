@@ -12,6 +12,7 @@ from app_server.db import (
     set_public_status_enabled,
     upsert_installation,
 )
+from app_server.dashboard import _fetch_uninitialized_repos_sync
 from app_server.main import app
 
 
@@ -59,6 +60,31 @@ async def _seed_wiki_build_status(pool, installation_id, repo_full_name, status,
         status,
         error_message,
     )
+
+
+def test_fetch_uninitialized_repos_collects_paginated_results(monkeypatch):
+    repos = [{"full_name": f"some-user/repo-{i}"} for i in range(101)]
+    seen_params = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_params.append(dict(request.url.params))
+        page = int(request.url.params["page"])
+        assert request.url.params["per_page"] == "100"
+        start = (page - 1) * 100
+        return httpx.Response(
+            200,
+            json={"total_count": len(repos), "repositories": repos[start:start + 100]},
+            request=request,
+        )
+
+    monkeypatch.setattr("app_server.dashboard.get_installation_token", lambda *a, **k: "tok")
+    monkeypatch.setattr(
+        "app_server.dashboard._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    assert _fetch_uninitialized_repos_sync(801, "jwt") == repos
+    assert seen_params == [{"per_page": "100", "page": "1"}, {"per_page": "100", "page": "2"}]
 
 
 async def _seed_docs_symbol(
@@ -671,7 +697,7 @@ async def test_undismiss_finding_route_removes_it(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_public_health_returns_latest_per_endpoint(pool):
     await upsert_installation(pool, 500, "octocat")
-    await set_public_status_enabled(pool, 500, True)
+    await set_public_status_enabled(pool, 500, "octocat/hello-world", True)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -717,7 +743,7 @@ async def test_public_health_returns_latest_per_endpoint(pool):
 @pytest.mark.asyncio
 async def test_public_health_uptime_pct_excludes_checks_older_than_7_days(pool):
     await upsert_installation(pool, 507, "octocat")
-    await set_public_status_enabled(pool, 507, True)
+    await set_public_status_enabled(pool, 507, "octocat/hello-world", True)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -749,7 +775,7 @@ async def test_public_health_excludes_endpoints_not_checked_recently(pool):
     # sweep has stopped checking it, and this public API shouldn't keep
     # reporting it as "up" forever off one ancient row.
     await upsert_installation(pool, 508, "octocat")
-    await set_public_status_enabled(pool, 508, True)
+    await set_public_status_enabled(pool, 508, "octocat/hello-world", True)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -777,7 +803,7 @@ async def test_public_health_rate_limits_after_threshold(pool, monkeypatch, redi
     from app_server import dashboard
 
     await upsert_installation(pool, 508, "octocat")
-    await set_public_status_enabled(pool, 508, True)
+    await set_public_status_enabled(pool, 508, "octocat/hello-world", True)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -810,7 +836,7 @@ async def test_public_health_rate_limit_is_keyed_per_ip(pool, monkeypatch, redis
     from app_server import dashboard
 
     await upsert_installation(pool, 509, "octocat")
-    await set_public_status_enabled(pool, 509, True)
+    await set_public_status_enabled(pool, 509, "octocat/hello-world", True)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -844,7 +870,7 @@ async def test_public_health_rate_limit_is_keyed_per_ip(pool, monkeypatch, redis
 @pytest.mark.asyncio
 async def test_public_health_fails_open_when_redis_is_unreachable(pool, monkeypatch):
     await upsert_installation(pool, 510, "octocat")
-    await set_public_status_enabled(pool, 510, True)
+    await set_public_status_enabled(pool, 510, "octocat/hello-world", True)
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -903,6 +929,33 @@ async def test_public_health_404s_when_not_opted_in(pool):
 
 
 @pytest.mark.asyncio
+async def test_public_health_opt_in_does_not_leak_other_repos_in_the_account(pool):
+    # F21: public_status_enabled used to be a column on installations, so
+    # opting in one repo silently exposed every other repo's endpoint
+    # health under the same account, private repos included.
+    await upsert_installation(pool, 513, "octocat")
+    await set_public_status_enabled(pool, 513, "octocat/public-api", True)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+            VALUES (513, 'octocat/internal-billing', 'GET', '/api/invoices', true)
+            """
+        )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        opted_in_repo = await client.get("/v1/health/octocat/public-api")
+        other_repo = await client.get("/v1/health/octocat/internal-billing")
+
+    assert opted_in_repo.status_code == 404  # no endpoint_health rows for it, but opted in
+    assert other_repo.status_code == 404
+    assert other_repo.json()["detail"] == "no health data for this repo"
+
+
+@pytest.mark.asyncio
 async def test_public_health_opting_in_then_out_toggles_visibility(pool):
     await upsert_installation(pool, 512, "octocat")
     async with pool.acquire() as conn:
@@ -918,9 +971,9 @@ async def test_public_health_opting_in_then_out_toggles_visibility(pool):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         before = await client.get("/v1/health/octocat/hello-world")
-        await set_public_status_enabled(pool, 512, True)
+        await set_public_status_enabled(pool, 512, "octocat/hello-world", True)
         during = await client.get("/v1/health/octocat/hello-world")
-        await set_public_status_enabled(pool, 512, False)
+        await set_public_status_enabled(pool, 512, "octocat/hello-world", False)
         after = await client.get("/v1/health/octocat/hello-world")
 
     assert before.status_code == 404
@@ -1417,6 +1470,79 @@ async def test_dashboard_wiki_subsystem_returns_detail(pool, monkeypatch):
     assert subsystem["name"] == "Auth"
     assert subsystem["files"] == ["server/auth.py"]
     assert subsystem["description"] == "Handles authentication."
+
+
+@pytest.mark.asyncio
+async def test_dashboard_wiki_file_returns_structural_fallback_for_unpaged_module(pool, monkeypatch):
+    await upsert_installation(pool, 607, "octocat")
+    await set_installation_plan(pool, 607, "indie")
+    await insert_repo_history(
+        pool,
+        607,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {
+            "repository": {
+                "modules": [
+                    {
+                        "path": "src/auth.py",
+                        "language": "python",
+                        "imports": ["src/tokens.py"],
+                        "imported_by": ["src/app.py"],
+                        "symbols": {
+                            "functions": [{"name": "login", "start_line": 12}],
+                            "classes": [],
+                        },
+                    }
+                ]
+            }
+        },
+    )
+    await pool.execute(
+        """
+        INSERT INTO wiki_subsystems
+            (installation_id, repo_full_name, subsystem_id, name, description, files, diagram_mermaid, source_commit)
+        VALUES (607, 'octocat/hello-world', 'auth', 'Auth', 'Handles authentication.', $1::jsonb, 'graph TD; A-->B;', 'abc123')
+        """,
+        '[{"path":"src/auth.py","role":"Owns request authentication.","key_symbols":[]}]',
+    )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[607])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/wiki/file/src/auth.py")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["file"]["detail_source"] == "fallback"
+    assert "Owns request authentication." in body["file"]["detail"]
+    assert "`src/tokens.py`" in body["file"]["detail"]
+    assert "`login` (line 12)" in body["file"]["detail"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_wiki_file_fetches_unindexed_file_without_llm(pool, monkeypatch):
+    await upsert_installation(pool, 608, "octocat")
+    await set_installation_plan(pool, 608, "indie")
+    await insert_repo_history(
+        pool,
+        608,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {"repository": {"modules": []}},
+    )
+    monkeypatch.setattr(
+        "app_server.dashboard._fetch_wiki_file_content_sync",
+        lambda *args: "Config\n=====\n\nThe application configuration.\n",
+    )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[608])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/wiki/file/config.toml")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["file"]["detail_source"] == "fallback"
+    assert "The application configuration." in body["file"]["detail"]
 
 
 @pytest.mark.asyncio

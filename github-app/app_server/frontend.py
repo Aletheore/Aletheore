@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app_server.admin import _administered_installation_ids_for_session_or_401
-from app_server.auth import SESSION_COOKIE_NAME, get_current_session
+from app_server.auth import SESSION_COOKIE_NAME, get_current_session, sign_checkout_installation_id
 from app_server.config import get_settings
 from app_server.db import list_installations_for_ids
 from app_server.github_install import github_app_install_url
@@ -337,6 +337,14 @@ table.findings tr:last-child td { border-bottom: none; }
 .subsystem-detail-role { font-size: 12.5px; color: var(--slate-600); margin: 3px 0 6px; }
 .subsystem-detail-symbol { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-700); padding: 2px 0 2px 14px; }
 .subsystem-detail-symbol .line { color: var(--slate-400); }
+.wiki-md { margin-top: 9px; border-top: 1px solid var(--border); padding-top: 8px; }
+.wiki-md > summary { font-size: 11.5px; color: var(--accent-strong); cursor: pointer; font-family: var(--font-sans); }
+.wiki-md > summary:hover { text-decoration: underline; }
+.wiki-md-h { font-size: 11.5px; font-weight: 600; color: var(--ink-700); margin: 9px 0 3px; text-transform: uppercase; letter-spacing: 0.03em; }
+.wiki-md-p { font-size: 12.5px; color: var(--slate-600); line-height: 1.6; margin: 0 0 6px; }
+.wiki-md-list { margin: 0 0 6px; padding-left: 17px; }
+.wiki-md-list li { font-size: 12.5px; color: var(--slate-600); line-height: 1.6; margin-bottom: 3px; }
+.wiki-md code { font-family: var(--font-mono); font-size: 11.5px; background: var(--slate-100); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
 
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
 .settings-block { margin-bottom: 18px; }
@@ -442,6 +450,41 @@ function escapeHtml(s) {
 }
 function planDisplayName(plan) {
   return plan === 'free' ? 'Aletheore Community' : 'Aletheore AIR';
+}
+// Minimal markdown for AIRview file pages. The text is model-written from
+// repository content, so it is escaped FIRST and only then are a handful of
+// markdown tokens promoted to tags. Every angle bracket is already an entity
+// by that point, so nothing smuggled through a repo into the model's output
+// can become live HTML - promotion only ever adds tags this function wrote.
+function renderWikiMarkdown(src) {
+  function inline(text) {
+    return text
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
+  }
+  const out = [];
+  let inList = false;
+  function closeList() {
+    if (inList) { out.push('</ul>'); inList = false; }
+  }
+  escapeHtml(String(src || '')).split('\\n').forEach(function (raw) {
+    const line = raw.trim();
+    if (!line) { closeList(); return; }
+    if (line.slice(0, 3) === '## ') {
+      closeList();
+      out.push('<h5 class="wiki-md-h">' + inline(line.slice(3)) + '</h5>');
+      return;
+    }
+    if (line.slice(0, 2) === '- ' || line.slice(0, 2) === '* ') {
+      if (!inList) { out.push('<ul class="wiki-md-list">'); inList = true; }
+      out.push('<li>' + inline(line.slice(2)) + '</li>');
+      return;
+    }
+    closeList();
+    out.push('<p class="wiki-md-p">' + inline(line) + '</p>');
+  });
+  closeList();
+  return out.join('');
 }
 """
 
@@ -1110,7 +1153,7 @@ async function loadTargets() {{
 
   const origin = window.location.origin;
   const statusUrl = origin + data.public_status_url;
-  const publicStatusEnabled = data.installation.public_status_enabled === true;
+  const publicStatusEnabled = data.public_status_enabled === true;
   statusApiBody.innerHTML =
     '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;">' +
     '<input type="checkbox" id="public-status-toggle"' +
@@ -1452,8 +1495,15 @@ async function showSubsystem(subsystemId) {{
     (f.key_symbols || []).forEach(function (sym) {{
       symbolsHtml += '<div class="subsystem-detail-symbol"><span class="line">' + sym.line + '</span> ' + escapeHtml(sym.name) + ' &mdash; ' + escapeHtml(sym.explanation || '') + '</div>';
     }});
+    // The reference page is 250-400 words per file, so it starts collapsed -
+    // expanded by default it would bury the file list this view exists to show.
+    let detailHtml = '';
+    if (f.detail) {{
+      detailHtml = '<details class="wiki-md"><summary>Reference</summary>' +
+        renderWikiMarkdown(f.detail) + '</details>';
+    }}
     filesHtml += '<div class="subsystem-detail-file"><div class="subsystem-detail-path">' + escapeHtml(f.path) + '</div>' +
-      '<div class="subsystem-detail-role">' + escapeHtml(f.role) + '</div>' + symbolsHtml + '</div>';
+      '<div class="subsystem-detail-role">' + escapeHtml(f.role) + '</div>' + symbolsHtml + detailHtml + '</div>';
   }});
   detail.innerHTML = '<h3 style="font-size:14px;font-weight:500;margin:0 0 6px;">' + escapeHtml(s.name) + '</h3>' +
     '<p style="font-size:12.5px;color:var(--slate-600);margin:0 0 10px;">' + escapeHtml(s.description) + '</p>' +
@@ -2215,11 +2265,28 @@ def _subscribe_install_prompt_page(plan: str, next_path: str) -> str:
 
 
 def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]) -> str:
+    settings = get_settings()
+    # Signed here, not the raw installation_id: the browser fully controls
+    # what Paddle.Checkout.open() actually sends (devtools can call it
+    # directly with any custom_data), and the webhook has no other way to
+    # know the payer was authorized to name this installation - see
+    # sign_checkout_installation_id. Minted once per installation this
+    # session was already verified to administer
+    # (_administered_installation_ids_for_session_or_401, in the caller),
+    # so a token can only ever exist for an installation this user
+    # legitimately administers.
+    tokens = {
+        installation["installation_id"]: sign_checkout_installation_id(
+            installation["installation_id"], settings.session_secret
+        )
+        for installation in installations
+    }
+
     pw_customer_id: str | None = None
     if len(installations) == 1:
         installation = installations[0]
         pw_customer_id = installation.get("paddle_customer_id")
-        continue_attrs = f'data-installation-id="{installation["installation_id"]}"'
+        continue_attrs = f'data-installation-token="{tokens[installation["installation_id"]]}"'
         body = f"""
         <h1>Subscribe to {escape(_plan_display_name(plan))}</h1>
         <p>{escape(installation["account_login"])} is currently on {escape(_plan_display_name(installation["plan"]))}.</p>
@@ -2230,7 +2297,7 @@ def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]
         options = "\n".join(
             (
                 '<label class="claim-option">'
-                f'<input type="radio" name="installation_id" value="{installation["installation_id"]}"'
+                f'<input type="radio" name="installation_token" value="{tokens[installation["installation_id"]]}"'
                 f'{" checked" if index == 0 else ""}> '
                 f'{escape(installation["account_login"])} '
                 f'(currently {escape(_plan_display_name(installation["plan"]))})'
@@ -2246,7 +2313,6 @@ def _subscribe_checkout_page(plan: str, price_id: str, installations: list[dict]
         <p><a href="/dashboard">Cancel</a></p>
         """
 
-    settings = get_settings()
     # pwCustomer (Paddle Retain) only makes sense for a known, already-Paddle
     # customer - only wireable here when there's exactly one installation to
     # check out for, since Paddle.Initialize() runs once for the whole page,
@@ -2259,11 +2325,11 @@ Paddle.Environment.set("{settings.paddle_environment}");
 Paddle.Initialize({{ token: "{settings.paddle_client_token}"{pw_customer_config} }});
 document.getElementById("continue-checkout").addEventListener("click", (event) => {{
   const btn = event.currentTarget;
-  const selected = document.querySelector('input[name="installation_id"]:checked');
-  const installationId = selected ? selected.value : btn.dataset.installationId;
+  const selected = document.querySelector('input[name="installation_token"]:checked');
+  const installationToken = selected ? selected.value : btn.dataset.installationToken;
   Paddle.Checkout.open({{
     items: [{{ priceId: "{price_id}", quantity: 1 }}],
-    customData: {{ installation_id: installationId }},
+    customData: {{ installation_token: installationToken }},
     settings: {{
       displayMode: "overlay",
       variant: "one-page",

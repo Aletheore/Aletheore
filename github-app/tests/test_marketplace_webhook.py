@@ -2,7 +2,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app_server.db import get_installation, is_installation_member, set_installation_plan, upsert_installation
+from app_server.db import (
+    get_installation,
+    get_extra_seats,
+    is_installation_member,
+    set_extra_seats,
+    set_installation_plan,
+    upsert_installation,
+)
 from app_server.webhooks.marketplace import _normalize_marketplace_plan_name, handle_marketplace_event
 
 # account_id is deliberately never the same number as installation_id in
@@ -89,6 +96,7 @@ async def test_changed_updates_plan(pool):
 async def test_cancelled_resets_to_free(pool):
     fake_queue = MagicMock()
     await upsert_installation(pool, 777, "octocat")
+    await set_extra_seats(pool, 777, 3)
     await handle_marketplace_event(
         _payload("purchased", 999004, "octocat"), pool, "redis://unused", queue=fake_queue
     )
@@ -97,6 +105,7 @@ async def test_cancelled_resets_to_free(pool):
     )
     row = await get_installation(pool, 777)
     assert row["plan"] == "free"
+    assert await get_extra_seats(pool, 777) == 0
 
 
 @pytest.mark.asyncio

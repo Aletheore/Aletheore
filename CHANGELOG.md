@@ -3,6 +3,251 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.11 — 2026-08-13
+
+- **A question naming a language was answered in a different one.** In a polyglot
+  repository the same concept is implemented once per language — `apache/thrift` defines
+  `TBinaryProtocol` in C++, Java, Python, Ruby, PHP, Go and C# — so "where is
+  TBinaryProtocol implemented in the C++ library" has one correct answer and six
+  near-identical wrong ones. `search_index` already accepted a `language` pre-filter that
+  resolves this, but nothing ever populated it, so the language named in the question
+  competed only as ordinary text. Measured on thrift: five of six cross-language failures
+  returned a different language's file entirely, C++ missing all three of its questions.
+  The language named in a query is now detected and passed to that filter — cross-language
+  top-3 60.0% → 73.3% and top-5 60.0% → **93.3%**, general-regime top-5 40.0% → 53.3%.
+  Detection is deliberately conservative, because a wrong pre-filter removes the correct
+  answer from the candidate pool rather than merely ranking it lower: an unambiguous name
+  (`golang`, `typescript`, `c++`) matches alone, while a name that is also ordinary English
+  or a prefix of another language (`go`, `c`, `java` inside `javascript`) needs a cue such
+  as "library" or "in Go", and a query naming two languages is declined. Across the 356
+  single-language benchmark questions it fires on two, both in `pallets/flask` naming
+  Python, and flask's results are byte-identical to three decimal places of MRR.
+
+## 0.8.10 — 2026-08-13
+
+- **A file mixing an interface with its own concrete implementation was demoted wholesale
+  on the strength of the interface alone.** `_is_declaration_only_file` flagged an entire
+  Java or C# file as pure contract if it contained an `interface` line anywhere, with no
+  check for whether real implementation sat alongside it — AutoMapper's `Mapper.cs` and
+  `Configuration/MapperConfiguration.cs` each pair a small interface with the actual
+  concrete class, and gson's `internal/bind/TypeAdapters.java` trips the same rule on one
+  interface nested 900 lines deep inside an otherwise fully-implemented registry class. Now
+  a file is declaration-only only if it has no concrete class alongside the interface, and,
+  separately, an embedded interface's own chunk carries the demotion on its own terms even
+  in a file the file-level check no longer flags — the two AutoMapper files above still
+  correctly demote their one interface-shaped chunk apiece. Measured on all 12 benchmark
+  corpora, both regimes, master ef3b137, re-scanned and re-indexed from scratch: 10 of 12
+  are byte-identical, both regimes — no PHP, Go, Rust, Python, Ruby, TypeScript, JavaScript,
+  C or C++ side effects. AutoMapper top-3 gains 6.7 points (13.3% → 20.0%) with top-5 fully
+  recovered to baseline (26.7% → 33.3%) and nothing else moved, while gson top-3 gives back
+  the same 6.7 points (73.3% → 66.7%) it had gained from the same underlying misclassification
+  bug — not a defect in this fix: `TypeAdapters.java` is a genuine registry of real
+  `TypeAdapter` implementations, not a misclassified interface, and now legitimately competes
+  with `TypeAdapter.java` on lexical/topical grounds the same way Slim's PHP siblings already
+  do. That's the open follow-up — a separate, already-scoped near-duplicate-crowding problem
+  with its own baseline, not a next step on this branch.
+
+## 0.8.9 — 2026-08-13
+
+- **.NET test projects were being indexed as implementation.** `_is_test_path` matched only
+  the exact lowercase segments `tests`, `test`, `spec`, `__tests__` and `testing`, so .NET's
+  universal conventions — `src/UnitTests/`, `AutoMapper.DI.Tests/`, `IntegrationTests/` —
+  were never excluded, and neither was any Java or C# project following the same naming.
+  Measured on `AutoMapper/AutoMapper`: every one of 15 location questions returned
+  `src/UnitTests/` files ahead of the implementation, for **0.0% top-1**. Matching is now
+  case-insensitive and also covers a segment ending in `tests` or `.test`, which lifts
+  AutoMapper to 6.7% top-1 and 33.3% top-5 with no change to any other corpus. Deliberately
+  matched on the plural: a `test` suffix would swallow ordinary words like `latest`.
+
+## 0.8.8 — 2026-08-13
+
+- **Java visibility ignored Java's own access modifiers.** `is_public` was computed as
+  `not _is_nested_in_function(node)` — a fair proxy for Python, which has no access
+  modifiers, but simply wrong for Java, which states visibility in a `modifiers` node.
+  `docs_reference.py` filters the generated API reference on that flag, so every `private`
+  and `protected` Java method was being published as public API. Now read from the
+  modifiers, with the absent-modifier case handled correctly: a member of an interface or
+  annotation type carries no `modifiers` node at all and is implicitly public by Java's
+  rules, so treating "no `public` keyword" as private would have hidden `google/gson`'s
+  `TypeAdapterFactory.create` — a worse error than the one being fixed. Measured on
+  `google/gson`: 69% of extracted symbols are public, where previously 100% were reported
+  as such. Retrieval is unchanged on all eight benchmark corpora — this fixes generated
+  documentation, not search.
+
+## 0.8.7 — 2026-08-13
+
+- **A FastAPI router mounted at more than one prefix silently lost one of its mount points.**
+  `include_router(router, prefix="/api")` in one place and `include_router(router,
+  prefix="/admin")` in another are both real, independently reachable mount points for every
+  route on that router — but `_extract_flask_fastapi_routes` chained the two prefixes onto a
+  single path instead of emitting one endpoint per mount, producing a single wrong compound
+  path (`/api/admin/...`) and dropping the other mount's endpoint entirely. Each mount prefix
+  now composes independently with the router's own constructor prefix into its own endpoint.
+  Caught by Aletheore's own Flash review, running on `gpt-5.6-luna`, on the PR that introduced
+  the surrounding prefix-composition logic (#230) — verified against the real code before
+  fixing, not taken on faith.
+
+## 0.8.6 — 2026-08-13
+
+- **Documentation, demos and benchmarks competed with the library for answer slots.** Asked
+  where something is implemented, retrieval returned the docs site that describes it or the
+  benchmark that times it. Measured across eight corpora: `colinhacks/zod` spent 28% of its
+  top-5 slots outside `packages/zod` and `google/gson` 21% outside `gson/src/main`
+  (`proto/`, `metrics/`, `extras/`), against 0-7% for single-module repositories. Files under
+  a documentation, example, demo or benchmark directory are now demoted — a rank penalty, not
+  an exclusion, so an `examples/` directory is still reachable when it is the only match, the
+  same treatment interfaces already get. `google/gson` top-1 33.3% → 40.0%, top-5 66.7% →
+  80.0%; `pallets/flask` top-1 68.8% → 71.9%. No corpus regressed on any metric; across all
+  137 questions top-1 44.5% → 46.0% and top-5 73.7% → 75.2%.
+
+- **Dependency, secret and endpoint scanning missed real findings** (#230, released here — it
+  carried no changelog entry of its own). `_parse_pep508_dependency` silently dropped any
+  dependency using a compound PEP 440 range (`>=X,<Y`), the `~=` operator, or no version at
+  all — on this repository's own `pyproject.toml`, 15 of 17 runtime dependencies were
+  invisible to CVE scanning, licence checking and unused-dependency detection alike, since
+  all three share that parser. `_extract_javascript` matched only ES `import`, so CommonJS
+  `require()`, re-export barrels and dynamic `import()` were invisible to the dependency
+  graph, producing false dead-code positives. `generic_credential_assignment` required a
+  quoted value, missing unquoted `.env`, docker-compose, shell-export and YAML assignments,
+  and scanned each line with `search()` rather than `finditer()`, so a second match on the
+  same line was dropped; ASIA session tokens and `github_pat_` fine-grained PATs are now
+  covered. `_extract_flask_fastapi_routes` never composed `APIRouter(prefix=...)` or
+  `include_router(..., prefix=...)` into the extracted path, so FastAPI's standard
+  multi-file layout produced systematically prefix-less routes with no signal anything was
+  missing.
+
+## 0.8.5 — 2026-08-13
+
+- **The `[file]` context was spent on every symbol, and mostly diluted them.** It exists to
+  break ties between near-identical chunks, but it was attached to every symbol in a file
+  whether or not that symbol had a tie to break — so the same sentence was repeated across
+  every chunk of the file, and each symbol's own text carried proportionally less weight.
+  It now goes only to symbols whose name is declared in more than one file, which is the
+  collision it was built for: `serde` declares `deserialize` in 57 files, `slimphp/Slim`
+  declares `__invoke` in four. Measured across four corpora and 77 questions, against 0.8.4:
+  `pallets/flask` top-1 65.6% → 68.8%, `serde-rs/serde` top-1 46.7% → 53.3%,
+  `gin-gonic/gin` top-3 93.3% → 100%, `slimphp/Slim` top-5 60.0% → 66.7%. No corpus
+  regressed on any metric; total top-1 across all 77 questions rose 57.1% → 59.7% and MRR
+  improved on all four.
+
+- **`aletheore --version` and `aletheore status` reported 0.7.2 on every 0.8.x release.**
+  Both read `importlib.metadata.version("aletheore")`, which comes from
+  `src/pyproject.toml`, and that file was never bumped past 0.7.2 while `__version__` moved
+  to 0.8.4 — so the metadata version and the declared version had drifted five releases
+  apart. It also meant no 0.8.x artefact could be published at all, since 0.7.2 was already
+  taken on PyPI, which is why `pip install aletheore==0.8.0` does not work today. Both are
+  now 0.8.5, and a test asserts they cannot drift again.
+
+## 0.8.4 — 2026-08-13
+
+- **A header-less file lost retrieval ties it should have won.** `slimphp/Slim`'s
+  `CallableResolver.php` — the correct answer to "how is a callable given as a string turned
+  into something invokable?" — goes straight from `declare(strict_types=1)` to `namespace` to
+  `use`, with no header comment at all, while its four lexical competitors (`__invoke` methods
+  in sibling files, matching "invokable" on "`__invoke`") all sit in files with a header
+  docblock. The `[file]` context feature meant to disambiguate near-identical chunks was
+  disambiguating backwards: every wrong answer got a hint, the right one got none. Fixed with a
+  fallback, used only when a file has no header comment of its own: the docstring of the class
+  or interface the file is named after (PHP/Java/C#/TypeScript's one-type-per-file convention).
+  Matched by name against the file's own stem, not "the first symbol in the file," so it can't
+  reintroduce the bug the file-header comment logic already guards against (stapling one
+  symbol's docstring onto every other symbol in the file).
+- Correction to 0.8.3's licence-banner fix: it was real and worth keeping (it was wasting
+  embedding budget on 372 chunks), but it was not the cause of PHP's stuck 26.7% top-1 -
+  uniform noise across every chunk mostly cancels in relative ranking. This `__invoke`
+  collision is the actual cause.
+
+## 0.8.3 — 2026-08-13
+
+- **Licence-banner text was leaking into `[file]` context, actively harming retrieval.**
+  `_LEGAL_NOISE` caught licence/copyright lines but not the project banner line that precedes
+  them (no legal keyword of its own), and `_file_header_comment` never stripped a trailing
+  comment terminator or a leftover bare doc tag. `slimphp/Slim`'s files all open with a banner
+  whose `"Slim Framework (https://slimframework.com)"` line survived the filter and whose
+  "@api */" line leaked both the tag and the comment closer. Measured: 372 of 455 chunks
+  carried a `[file]` context, but only 17 distinct strings across the whole repo - 121 chunks
+  shared the identical string, actively diluting every symbol's own body instead of
+  disambiguating it. Fixed in three layers: `_LEGAL_NOISE` widened to catch bare
+  `@author`/`@package`/`@link`/`@copyright`/`@api` tags and bare URL lines, plus a new
+  `_PROJECT_BANNER` regex for "name (https://...)" banners; a trailing comment terminator is
+  now stripped unconditionally from any C-style comment line; and, as the durable backstop,
+  `build_chunks` now tallies how often each distinct context string recurs across the repo and
+  drops any shared by more than `_BOILERPLATE_MIN_REPEAT_COUNT` files, whether or not any regex
+  anticipated its shape.
+
+## 0.8.2 — 2026-08-12
+
+- **TypeScript type and interface declarations were never extracted.** `_extract_javascript`
+  handled function/class declarations and assigned function expressions, but not
+  `type_alias_declaration` or `interface_declaration` - in TypeScript those ARE the public API
+  surface, especially for a type-centric library. `colinhacks/zod` has 972 `export type`/
+  `export interface` declarations in its core src; 39 files with zero other symbols contained
+  210 of them, entirely invisible to the index (`enumUtil.ts`, for example, is entirely type
+  declarations inside a namespace). Now extracted into `classes`, the same way Java's and C#'s
+  own `interface_declaration` already was - including declarations nested inside a
+  `namespace`/`module` body, which zod uses.
+- **Declaration-only files (interfaces, `.d.ts`, headers with only prototypes) were crowding
+  out implementations in retrieval.** A pure-contract file has rich doc-comments describing
+  behaviour with no implementation to dilute them, which makes it unusually attractive to an
+  embedder for "how does X work" - measured on `slimphp/Slim`: interfaces were 17 of 72 PHP
+  files (24%) and took 18 of 75 top-5 slots (24%), displacing the correct answer on 4 of 6
+  misses. Fixed as a demotion, not an exclusion - unlike a test path, an interface is
+  legitimately the answer to "where is the contract for X defined?" - via a rank penalty in
+  the retriever's reciprocal-rank fusion, detected by path convention (`Interfaces/`,
+  `Contracts/`) or per-language content (PHP `interface`, Java/C# `interface`, a Rust `trait`
+  with no default bodies, a C/C++ header with only prototypes, a TypeScript file with type/
+  interface declarations and no implementation). These two had to ship together: extracting
+  TypeScript types without demoting them would have made the crowding-out problem worse.
+
+## 0.8.1 — 2026-08-12
+
+- **Ruby constants were never extracted.** The 0.8.0 module-constants extraction required
+  file scope (`is_top_level`), but Ruby constants are idiomatically declared inside a module
+  or class body, not at file scope - a real repo scan (`sinatra/sinatra`) found 10 constants
+  indented inside module/class bodies and 0 at true top level, so scanning all 147 modules
+  yielded a single constant, from a test file. Now accepts a capitalised assignment nested
+  directly in a `class`/`module` body (`Sinatra::Base::DROP_BODY_RESPONSES`) in addition to
+  true top level; a capitalised assignment inside a `def` body stays excluded as a
+  method-local.
+
+## 0.8.0 — 2026-08-12
+
+Scanner coverage across every supported language, plus the retrieval and wiki work that
+depends on it. Measured, with the harness and raw results published at
+[Aletheore/aletheore-benchmarks](https://github.com/Aletheore/aletheore-benchmarks).
+
+**Three languages had no working dependency graph.** Everything downstream — clustering,
+subsystem naming, importance ranking, AIRview, layer violations — consumes that graph, so
+their output was structurally wrong while looking normal.
+
+- **CommonJS produced an empty graph.** Only ESM `import` was extracted, never `require()`.
+  `expressjs/express` scanned as 141 modules with 0 resolved imports, so community detection
+  emitted one cluster per file. Now 125/141 modules, 159 edges, 27 clusters.
+- **Rust failed two ways, silently.** `serde-rs/serde` scanned as 208 modules with 0 edges:
+  Cargo workspaces were unsupported (only `<repo>/src/lib.rs` was checked), and `mod foo;` —
+  how a crate declares its module tree — was not treated as an edge.
+- **C#** resolved nothing for flat projects whose namespace comes from `<RootNamespace>`
+  with no mirroring directories.
+- **JavaScript missed assigned function expressions.** Express defines its whole surface as
+  `app.use = function use(fn) {...}`; 102 of its 141 files had no symbols at all.
+- **Module-level constants are now extracted in all 11 languages**, not just Python. A file
+  can export a public API with no function or class — Flask's `signals.py` is ten
+  assignments exporting ten public signals, and was invisible to every consumer of the
+  evidence. `symbols.constants` is present on every module.
+
+**Retrieval.** Each symbol chunk now carries its file's header comment, which disambiguates
+near-identical symbols in trait-heavy code — serde defines `deserialize` in 57 different
+files. Rust top-5 went 60.0% → 73.3%, Python top-3 93.8% → 96.9%. Constants are indexed only
+for files that define nothing else, so declaration-only files become findable without
+diluting files that already have code.
+
+**Ranking.** File importance now counts symbol size and public-API surface, not just
+in-degree — entry points sit at the top of the import tree so almost nothing imports them,
+which had `requests`' `api.py` (its entire public API) ranked 17th behind `compat.py`, a
+compatibility shim. Symbols shown to a writing model are ordered public-first by source span
+rather than concatenated by kind and truncated, which had left Flask's `app.py` showing 15
+symbols, all functions, with the `Flask` class itself invisible.
+
 ## 0.7.1 — 2026-08-07
 
 - Closed 3 known vulnerabilities (PYSEC-2026-3552/3553/3554) by bumping the `cryptography`

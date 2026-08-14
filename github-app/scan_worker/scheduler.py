@@ -24,6 +24,11 @@ SESSION_CLEANUP_JOB_TIMEOUT_SECONDS = 60
 WEBHOOK_DELIVERY_CLEANUP_JOB_TIMEOUT_SECONDS = 60
 # Same shape again: one range DELETE over an indexed timestamp column.
 TELEMETRY_CLEANUP_JOB_TIMEOUT_SECONDS = 60
+# Local orphaned per-job repo clones live under scan_worker.jobs.JOBS_ROOT
+# and can survive worker SIGKILLs; this is a bounded age-based filesystem
+# sweep over direct children only.
+JOB_TEMP_DIR_CLEANUP_JOB_TIMEOUT_SECONDS = 60
+ENDPOINT_HEALTH_CLEANUP_JOB_TIMEOUT_SECONDS = 60
 # The sweep itself only calls run_live_docs_full_build_job for repos that
 # list_paid_repos_due_for_docs_catchup already filtered to "genuinely due"
 # (48h+ since last sweep, real activity since then) - most ticks this
@@ -43,6 +48,10 @@ WEEKLY_DIGEST_SWEEP_JOB_TIMEOUT_SECONDS = 300
 # A single max(checked_at) query plus, on the rare stale tick, one email -
 # nothing here can run long.
 HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS = 60
+# App health, queue-depth/failed-job counters, and backup freshness checks.
+# Each is bounded to a short HTTP request, Redis reads, or local filesystem
+# metadata, with email alerting only on threshold breach.
+OPS_MONITOR_JOB_TIMEOUT_SECONDS = 60
 
 SCANS_QUEUE_NAME = "scans"
 # The health sweep gets its own queue, consumed by a dedicated worker (see
@@ -84,6 +93,14 @@ def run_forever(
             job_timeout=TELEMETRY_CLEANUP_JOB_TIMEOUT_SECONDS,
         )
         scans_queue.enqueue(
+            "scan_worker.jobs.run_job_temp_dir_cleanup_job",
+            job_timeout=JOB_TEMP_DIR_CLEANUP_JOB_TIMEOUT_SECONDS,
+        )
+        scans_queue.enqueue(
+            "scan_worker.jobs.run_endpoint_health_cleanup_job",
+            job_timeout=ENDPOINT_HEALTH_CLEANUP_JOB_TIMEOUT_SECONDS,
+        )
+        scans_queue.enqueue(
             "scan_worker.jobs.run_live_docs_catchup_sweep_job",
             job_timeout=DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS,
         )
@@ -101,6 +118,10 @@ def run_forever(
         scans_queue.enqueue(
             "scan_worker.jobs.run_health_sweep_staleness_check_job",
             job_timeout=HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS,
+        )
+        scans_queue.enqueue(
+            "scan_worker.jobs.run_ops_monitor_job",
+            job_timeout=OPS_MONITOR_JOB_TIMEOUT_SECONDS,
         )
         # Touched only after every enqueue call above succeeds - a hang on
         # any one of them (e.g. Redis unreachable) means this loop is stuck

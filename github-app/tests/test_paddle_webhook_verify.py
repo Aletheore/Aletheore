@@ -42,6 +42,12 @@ def test_malformed_header_rejected():
     assert verify_paddle_signature(body, "", SECRET) is False
 
 
+def test_non_ascii_signature_header_rejected_not_raised():
+    body = b'{"event_type": "subscription.created"}'
+    header = f"ts={int(time.time())};h1=café"
+    assert verify_paddle_signature(body, header, SECRET) is False
+
+
 def test_non_utf8_body_rejected_not_raised():
     # Before this fix, raw_body.decode('utf-8') raised UnicodeDecodeError
     # uncaught - any body containing invalid UTF-8 bytes crashed the whole

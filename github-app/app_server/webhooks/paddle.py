@@ -5,6 +5,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from fastapi import APIRouter, Request, Response
 
 from app_server.affiliates import get_affiliate_by_discount_id, get_referral, record_commission, record_referral
+from app_server.auth import unsign_checkout_installation_id
 from app_server.config import get_settings
 from app_server.db import (
     add_paddle_ids_to_installation,
@@ -59,15 +60,23 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
         return
 
     data = payload.get("data") or {}
-    installation_id_raw = (data.get("custom_data") or {}).get("installation_id")
-    installation_id = None
-    if installation_id_raw is not None:
-        try:
-            installation_id = int(installation_id_raw)
-        except (TypeError, ValueError):
-            installation_id = None
+    # Signed, not a raw integer: custom_data is set by the browser calling
+    # Paddle.Checkout.open(), which nothing stops from being called directly
+    # with any custom_data - the Paddle signature on this webhook proves
+    # only "Paddle sent this event", never "the payer was authorized to
+    # name this installation". unsign_checkout_installation_id verifies the
+    # token was minted server-side, for this exact installation, to a
+    # session that was already checked against
+    # _administered_installation_ids_for_session_or_401 - see
+    # sign_checkout_installation_id and frontend.py's checkout page.
+    installation_token = (data.get("custom_data") or {}).get("installation_token")
+    installation_id = (
+        unsign_checkout_installation_id(installation_token, get_settings().session_secret)
+        if installation_token
+        else None
+    )
     if installation_id is None:
-        logger.warning("%s missing installation_id in custom_data", event_type)
+        logger.warning("%s missing or invalid installation_token in custom_data", event_type)
         return
 
     items = data.get("items") or []
@@ -93,6 +102,22 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
 
     previous = await get_installation(pool, installation_id)
     previous_plan = previous["plan"] if previous is not None else "free"
+
+    # Defense in depth beyond the signed token above: once an installation
+    # has a Paddle customer on file, only that same customer's events may
+    # mutate it. Never blocks the first subscription.created for a fresh
+    # installation (nothing stored yet to mismatch against), but closes the
+    # billing-portal-hijack path even if a future change ever reintroduced
+    # a spoofable identifier into custom_data.
+    previous_customer_id = previous.get("paddle_customer_id") if previous is not None else None
+    event_customer_id = data.get("customer_id")
+    if previous_customer_id and event_customer_id and previous_customer_id != event_customer_id:
+        logger.warning(
+            "%s customer_id mismatch for installation=%s - ignoring",
+            event_type,
+            installation_id,
+        )
+        return
 
     await set_installation_plan(pool, installation_id, plan)
     if "id" in data and "customer_id" in data:
@@ -194,14 +219,19 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
     string - matches the "15% of everything Paddle actually collects"
     scope decision for both a discounted first month and every undiscounted
     month after it, without special-casing either.
+
+    installation_id comes from the same signed custom_data.installation_token
+    as the subscription handlers above, for the same reason: an unsigned,
+    caller-supplied installation_id here would let anyone checking out for
+    themselves name a different, referred installation and misattribute the
+    resulting commission to that installation's affiliate.
     """
-    installation_id_raw = (data.get("custom_data") or {}).get("installation_id")
-    installation_id = None
-    if installation_id_raw is not None:
-        try:
-            installation_id = int(installation_id_raw)
-        except (TypeError, ValueError):
-            installation_id = None
+    installation_token = (data.get("custom_data") or {}).get("installation_token")
+    installation_id = (
+        unsign_checkout_installation_id(installation_token, get_settings().session_secret)
+        if installation_token
+        else None
+    )
     if installation_id is None:
         return
 

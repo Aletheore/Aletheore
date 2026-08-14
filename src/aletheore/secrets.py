@@ -66,15 +66,18 @@ _LOW_ENTROPY_THRESHOLD = 3.0
 # overlaps the real value, meaning a naive redact(group(0)) leaks trailing characters of the
 # actual secret. Group 2 isolates just the captured value.
 SECRET_PATTERNS = [
-    ("aws_access_key_id", re.compile(r"AKIA[0-9A-Z]{16}"), 0),
-    ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}"), 0),
+    ("aws_access_key_id", re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}"), 0),
+    ("github_token", re.compile(r"(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{20,})"), 0),
     ("stripe_key", re.compile(r"(sk|pk)_(live|test)_[A-Za-z0-9]{16,}"), 0),
     ("private_key_header", re.compile(r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----"), 0),
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"), 0),
     ("google_api_key", re.compile(r"AIza[0-9A-Za-z_-]{35}"), 0),
     (
         "generic_credential_assignment",
-        re.compile(r"(?i)\b(PASSWORD|SECRET|API_KEY)\s*[:=]\s*['\"]([A-Za-z0-9+/=_-]{16,})['\"]"),
+        re.compile(
+            r"(?i)(?:^|[\s_-])(PASSWORD|SECRET|API_KEY)\s*[:=]\s*"
+            r"['\"]?([A-Za-z0-9+/=_-]{16,})['\"]?(?=\s|$|[,#;)])"
+        ),
         2,
     ),
 ]
@@ -208,8 +211,7 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
         rel_path = path.relative_to(repo_path).as_posix()
         for line_no, line in enumerate(text.splitlines(), start=1):
             for pattern_name, pattern, value_group in SECRET_PATTERNS:
-                match = pattern.search(line)
-                if match:
+                for match in pattern.finditer(line):
                     value = match.group(value_group)
                     match_preview = _redact(value, f"{rel_path}:{pattern_name}")
                     findings.append(
@@ -306,8 +308,7 @@ def find_secrets_in_history(
 
             content = line[1:]
             for pattern_name, pattern, value_group in SECRET_PATTERNS:
-                match = pattern.search(content)
-                if match:
+                for match in pattern.finditer(content):
                     value = match.group(value_group)
                     match_preview = _redact(value, f"{current_file}:{pattern_name}")
                     findings.append(

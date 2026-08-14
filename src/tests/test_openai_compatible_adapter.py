@@ -164,6 +164,37 @@ def test_invoke_calls_on_usage_once_per_round_with_real_totals(mock_openai_class
 
 
 @patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_returns_partial_report_when_budget_stops_between_rounds(
+    mock_openai_class, tmp_path
+):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.return_value = _mock_response(
+        tool_calls=[
+            _mock_tool_call(
+                "write_report_section",
+                {"name": "Summary", "content": "partial summary"},
+            )
+        ]
+    )
+    budget_checks = iter([True, False])
+
+    adapter = _adapter(
+        tmp_path,
+        before_llm_call=lambda: next(budget_checks),
+        allow_partial_report=True,
+    )
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        result = adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert "Partial report" in result
+    assert "partial summary" in result
+    assert "Repository Intelligence" not in result
+    assert mock_client.chat.completions.create.call_count == 1
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
 def test_invoke_raises_if_finish_called_before_all_sections_written(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
     mock_client = MagicMock()

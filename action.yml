@@ -161,6 +161,13 @@ runs:
             pattern = finding.get("pattern", "secret")
             message = f"New secret detected ({pattern}). Rotate it and remove it from source."
             message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            path = (
+                path.replace("%", "%25")
+                .replace("\r", "%0D")
+                .replace("\n", "%0A")
+                .replace(",", "%2C")
+                .replace(":", "%3A")
+            )
             print(f"::error file={path},line={line}::{message}")
         PYEOF
 

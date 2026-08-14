@@ -2,7 +2,7 @@ import socket
 
 import pytest
 
-from app_server.url_validation import UnsafeURLError, validate_external_https_url
+from app_server.url_validation import UnsafeURLError, validate_and_pin_https_url, validate_external_https_url
 
 
 def _fake_addrinfo(ip: str):
@@ -33,12 +33,14 @@ def test_rejects_when_dns_resolution_fails(monkeypatch):
     "ip",
     [
         "10.0.0.5",
+        "100.64.1.1",
         "172.16.0.5",
         "192.168.1.5",
         "127.0.0.1",
         "169.254.169.254",
         "0.0.0.0",
         "::1",
+        "::ffff:100.64.1.1",
         "fe80::1",
     ],
 )
@@ -57,3 +59,27 @@ def test_allows_public_address(monkeypatch):
         lambda *a, **k: _fake_addrinfo("93.184.216.34"),
     )
     assert validate_external_https_url("https://api.example.com") == "https://api.example.com"
+
+
+def test_validate_and_pin_returns_the_resolved_ip_alongside_the_url(monkeypatch):
+    monkeypatch.setattr(
+        "app_server.url_validation.socket.getaddrinfo",
+        lambda *a, **k: _fake_addrinfo("93.184.216.34"),
+    )
+    url, pinned_ip = validate_and_pin_https_url("https://api.example.com")
+    assert url == "https://api.example.com"
+    assert pinned_ip == "93.184.216.34"
+
+
+def test_validate_and_pin_rejects_internal_addresses_same_as_validate(monkeypatch):
+    monkeypatch.setattr(
+        "app_server.url_validation.socket.getaddrinfo",
+        lambda *a, **k: _fake_addrinfo("169.254.169.254"),
+    )
+    with pytest.raises(UnsafeURLError, match="disallowed"):
+        validate_and_pin_https_url("https://internal.example.com")
+
+
+def test_validate_and_pin_rejects_non_https_scheme():
+    with pytest.raises(UnsafeURLError, match="https"):
+        validate_and_pin_https_url("http://api.example.com")

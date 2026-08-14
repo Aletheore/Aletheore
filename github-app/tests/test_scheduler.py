@@ -3,9 +3,12 @@ from unittest.mock import MagicMock
 
 from scan_worker.scheduler import (
     DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS,
+    ENDPOINT_HEALTH_CLEANUP_JOB_TIMEOUT_SECONDS,
     HEALTH_QUEUE_NAME,
     HEALTH_SWEEP_JOB_TIMEOUT_SECONDS,
     HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS,
+    JOB_TEMP_DIR_CLEANUP_JOB_TIMEOUT_SECONDS,
+    OPS_MONITOR_JOB_TIMEOUT_SECONDS,
     SCANS_QUEUE_NAME,
     SESSION_CLEANUP_JOB_TIMEOUT_SECONDS,
     TELEMETRY_CLEANUP_JOB_TIMEOUT_SECONDS,
@@ -56,7 +59,7 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         assert call.args == ("scan_worker.jobs.run_health_check_sweep_job",)
         assert call.kwargs == {"job_timeout": HEALTH_SWEEP_JOB_TIMEOUT_SECONDS}
 
-    assert scans_queue.enqueue.call_count == 21
+    assert scans_queue.enqueue.call_count == 30
     session_cleanup_calls = [
         c for c in scans_queue.enqueue.call_args_list
         if c.args == ("scan_worker.jobs.run_session_cleanup_job",)
@@ -85,6 +88,18 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         c for c in scans_queue.enqueue.call_args_list
         if c.args == ("scan_worker.jobs.run_telemetry_cleanup_job",)
     ]
+    job_temp_dir_cleanup_calls = [
+        c for c in scans_queue.enqueue.call_args_list
+        if c.args == ("scan_worker.jobs.run_job_temp_dir_cleanup_job",)
+    ]
+    endpoint_health_cleanup_calls = [
+        c for c in scans_queue.enqueue.call_args_list
+        if c.args == ("scan_worker.jobs.run_endpoint_health_cleanup_job",)
+    ]
+    ops_monitor_calls = [
+        c for c in scans_queue.enqueue.call_args_list
+        if c.args == ("scan_worker.jobs.run_ops_monitor_job",)
+    ]
     assert len(session_cleanup_calls) == 3
     assert len(docs_catchup_calls) == 3
     assert len(wiki_catchup_calls) == 3
@@ -92,6 +107,11 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
     assert len(staleness_check_calls) == 3
     assert len(webhook_cleanup_calls) == 3
     assert len(telemetry_cleanup_calls) == 3
+    assert len(job_temp_dir_cleanup_calls) == 3
+    assert len(endpoint_health_cleanup_calls) == 3
+    assert len(ops_monitor_calls) == 3
+    for call in endpoint_health_cleanup_calls:
+        assert call.kwargs == {"job_timeout": ENDPOINT_HEALTH_CLEANUP_JOB_TIMEOUT_SECONDS}
     for call in session_cleanup_calls:
         assert call.kwargs == {"job_timeout": SESSION_CLEANUP_JOB_TIMEOUT_SECONDS}
     for call in docs_catchup_calls:
@@ -106,6 +126,10 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         assert call.kwargs == {"job_timeout": WEBHOOK_DELIVERY_CLEANUP_JOB_TIMEOUT_SECONDS}
     for call in telemetry_cleanup_calls:
         assert call.kwargs == {"job_timeout": TELEMETRY_CLEANUP_JOB_TIMEOUT_SECONDS}
+    for call in job_temp_dir_cleanup_calls:
+        assert call.kwargs == {"job_timeout": JOB_TEMP_DIR_CLEANUP_JOB_TIMEOUT_SECONDS}
+    for call in ops_monitor_calls:
+        assert call.kwargs == {"job_timeout": OPS_MONITOR_JOB_TIMEOUT_SECONDS}
     # Sleeps between iterations, not after the last one.
     assert sleeps == [42, 42]
 

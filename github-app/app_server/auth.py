@@ -35,6 +35,12 @@ OAUTH_STATE_COOKIE_NAME = "oauth_state"
 OAUTH_STATE_TTL = timedelta(minutes=10)
 NEXT_COOKIE_NAME = "aletheore_oauth_next"
 
+# How long a signed checkout token is good for - see sign_checkout_installation_id.
+# Long enough to sit on the /subscribe page and complete a Paddle Checkout
+# overlay; short enough that a leaked token (a shared screenshot, a proxy
+# log) isn't a standing bearer credential for someone else's installation.
+CHECKOUT_TOKEN_TTL = timedelta(minutes=30)
+
 # GitHub's own OAuth flow already gates against credential brute-forcing
 # (there's no password here to guess), but neither /auth/login nor
 # /auth/callback had any rate limiting at all - the latter makes two real
@@ -231,6 +237,37 @@ def unsign_oauth_state(signed: str, secret: str) -> str | None:
         return None
 
 
+def sign_checkout_installation_id(installation_id: int, secret: str) -> str:
+    """Binds a Paddle checkout's custom_data to one installation without
+    trusting the browser to name it.
+
+    The subscribe page renders one token per installation the current
+    session was already verified to administer
+    (_administered_installation_ids_for_session_or_401); the raw integer
+    never reaches the client. Paddle's webhook only ever proves "Paddle
+    sent this event", never "the payer was authorized to name this
+    installation" - a plain custom_data.installation_id lets anyone open
+    Paddle.Checkout.open() from the browser console with any id and have
+    the webhook act on it unconditionally. A distinct salt from
+    sign_oauth_state's, so a token minted for one purpose can't be replayed
+    against the other even though both derive from the same SESSION_SECRET.
+    """
+    return URLSafeTimedSerializer(_signing_secret(secret), salt="checkout-installation-id").dumps(
+        str(installation_id)
+    )
+
+
+def unsign_checkout_installation_id(signed: str, secret: str) -> int | None:
+    try:
+        value = URLSafeTimedSerializer(_signing_secret(secret), salt="checkout-installation-id").loads(
+            signed,
+            max_age=int(CHECKOUT_TOKEN_TTL.total_seconds()),
+        )
+        return int(value)
+    except (BadSignature, ValueError, TypeError):
+        return None
+
+
 async def get_current_session(request: Request) -> dict | None:
     signed = request.cookies.get(SESSION_COOKIE_NAME)
     if not signed:
@@ -351,7 +388,11 @@ async def callback(code: str, request: Request, state: str | None = None, instal
         return RedirectResponse(url=login_url, status_code=307)
 
     expected_state = unsign_oauth_state(signed_state, settings.session_secret)
-    if not expected_state or not state or not hmac.compare_digest(expected_state, state):
+    if (
+        not expected_state
+        or not state
+        or not hmac.compare_digest(expected_state.encode(), state.encode())
+    ):
         raise HTTPException(status_code=400, detail="invalid oauth state")
 
     access_token, refresh_token, user, email = await asyncio.to_thread(
@@ -405,15 +446,11 @@ async def callback(code: str, request: Request, state: str | None = None, instal
         except Exception:
             logger.warning("failed to synchronously upsert installation %s", installation_id, exc_info=True)
 
-    if signed_state is None and state:
-        # A direct "Install" click on GitHub's own App page never goes through
-        # /auth/login, so there's no next-cookie - but github_app_install_url()
-        # puts our own next_path in `state` for exactly this entry point (it's
-        # not a CSRF nonce here, since signed_state is absent and nothing was
-        # verified above).
-        next_path = _is_safe_next_path(state)
-    else:
-        next_path = _is_safe_next_path(request.cookies.get(NEXT_COOKIE_NAME))
+    # The `signed_state is None` case (a direct "Install" click on GitHub's
+    # own App page, which never goes through /auth/login) already returned
+    # via the /auth/login redirect above - by this point signed_state is
+    # always set, so next_path always comes from the login-set cookie.
+    next_path = _is_safe_next_path(request.cookies.get(NEXT_COOKIE_NAME))
     response = RedirectResponse(url=next_path, status_code=307)
     response.set_cookie(
         SESSION_COOKIE_NAME,

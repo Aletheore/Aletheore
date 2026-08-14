@@ -61,6 +61,7 @@ def test_symbol_entry_always_includes_docstring_return_type_and_is_public_keys(t
     func = modules[0]["symbols"]["functions"][0]
     assert set(func) == {
         "name", "start_line", "end_line", "params", "docstring", "return_type", "is_public",
+        "is_pure_declaration",
     }
     assert func["docstring"] is None
     assert func["return_type"] is None
@@ -223,6 +224,29 @@ def test_build_module_graph_extracts_javascript_imports(tmp_path):
     assert "utils.js" in by_path["index.js"]["imports"]
     add_fn = next(f for f in by_path["utils.js"]["symbols"]["functions"] if f["name"] == "add")
     assert add_fn["params"] == "(a, b)"
+    assert unparseable == []
+
+
+def test_build_module_graph_extracts_commonjs_reexports_and_dynamic_imports(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "foo.js").write_text("export const foo = 1;\n")
+    (repo / "baz.js").write_text("export const baz = 2;\n")
+    (repo / "qux.js").write_text("export const qux = 3;\n")
+    (repo / "consumer.js").write_text(
+        "const foo = require('./foo');\n"
+        "export { baz } from './baz';\n"
+        "export * from './qux';\n"
+        "async function load() { return import('./foo'); }\n"
+    )
+
+    modules, dependency_graph, unparseable = build_module_graph(repo)
+    consumer = next(module for module in modules if module["path"] == "consumer.js")
+
+    assert consumer["imports"] == ["foo.js", "baz.js", "qux.js", "foo.js"]
+    assert ["consumer.js", "foo.js"] in dependency_graph["edges"]
+    assert ["consumer.js", "baz.js"] in dependency_graph["edges"]
+    assert ["consumer.js", "qux.js"] in dependency_graph["edges"]
     assert unparseable == []
 
 
@@ -612,3 +636,302 @@ def test_build_module_graph_without_unchanged_modules_is_unchanged(tmp_path):
     without_param = build_module_graph(repo)
 
     assert with_none == without_param
+
+
+def test_build_module_graph_records_module_level_constants(tmp_path):
+    """A file can export a whole public API without a def or a class.
+    Flask's signals.py is ten `x = _signals.signal(...)` assignments; on
+    functions+classes alone it looked like an empty module, so it got no wiki
+    page and produced no chunk the search index could retrieve."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "signals.py").write_text(
+        "from blinker import Namespace\n\n"
+        "_signals = Namespace()\n"
+        "template_rendered = _signals.signal('template-rendered')\n"
+        "request_started = _signals.signal('request-started')\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    constants = next(m for m in modules if m["path"] == "signals.py")["symbols"]["constants"]
+    names = {c["name"] for c in constants}
+    assert {"template_rendered", "request_started"} <= names
+    assert next(c for c in constants if c["name"] == "template_rendered")["is_public"] is True
+    assert next(c for c in constants if c["name"] == "_signals")["is_public"] is False
+
+
+def test_build_module_graph_constants_are_module_level_only(tmp_path):
+    """Locals and class attributes are not module exports; recording them
+    would bury the real API in noise."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "m.py").write_text(
+        "TOP = 1\n"
+        "TYPED: int = 2\n"
+        "def f():\n    local_only = 3\n    return local_only\n"
+        "class C:\n    class_attr = 4\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    names = {c["name"] for c in next(m for m in modules if m["path"] == "m.py")["symbols"]["constants"]}
+    assert names == {"TOP", "TYPED"}
+
+
+def test_build_module_graph_constants_skip_non_identifier_targets(tmp_path):
+    """Tuple unpacking and attribute/subscript targets have no single name a
+    reader could look up, so they are deliberately not recorded."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "m.py").write_text("import os\nKEEP = 1\na, b = 2, 3\nos.environ['X'] = '1'\n")
+    modules, _graph, _unparseable = build_module_graph(repo)
+    names = {c["name"] for c in next(m for m in modules if m["path"] == "m.py")["symbols"]["constants"]}
+    assert names == {"KEEP"}
+
+
+def test_build_module_graph_constants_key_present_for_non_python(tmp_path):
+    """Only the Python extractor records bindings so far; every other language
+    must still emit the key so consumers can read it unconditionally."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.js").write_text("export function f() { return 1; }\n")
+    modules, _graph, _unparseable = build_module_graph(repo)
+    assert next(m for m in modules if m["path"] == "a.js")["symbols"]["constants"] == []
+
+
+def test_build_module_graph_javascript_commonjs_require_is_an_edge(tmp_path):
+    """Handling only ESM `import` left every CommonJS codebase with an empty
+    dependency graph: expressjs/express scanned as 141 modules with 0 resolved
+    imports, so community detection emitted one cluster per file."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mod.js").write_text("function helper() { return 1; }\nmodule.exports = { helper };\n")
+    (repo / "main.js").write_text("const { helper } = require('./mod');\nfunction run() { return helper(); }\n")
+
+    _modules, dependency_graph, _unparseable = build_module_graph(repo)
+    assert ("main.js", "mod.js") in {tuple(e) for e in dependency_graph["edges"]}
+
+
+def test_build_module_graph_javascript_assigned_function_expressions_are_symbols(tmp_path):
+    """Express defines its whole surface as `app.use = function use(fn) {...}`.
+    Counting only `function f(){}` left 103 of its 141 files with no symbols at
+    all, so the search index had nothing but a fallback chunk to embed."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.js").write_text(
+        "const app = {};\n"
+        "app.use = function use(fn) { return fn; };\n"
+        "app.route = (path) => path;\n"
+        "exports.init = function init() {};\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    names = symbol_names(modules[0]["symbols"]["functions"])
+    assert {"use", "route", "init"} <= set(names)
+
+
+def test_build_module_graph_typescript_extracts_interfaces_and_type_aliases(tmp_path):
+    """colinhacks/zod has 972 `export type`/`export interface` declarations in
+    its core src - extracting only function/class declarations left 39 files
+    with zero other symbols and 210 of these invisible to the index."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "types.ts").write_text(
+        "export interface Foo {\n  bar(): void;\n}\n\n"
+        "export type Baz = { x: number };\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    names = symbol_names(modules[0]["symbols"]["classes"])
+    assert {"Foo", "Baz"} <= set(names)
+
+
+def test_build_module_graph_typescript_extracts_types_nested_in_a_namespace(tmp_path):
+    """zod nests types inside `export namespace EnumUtil { ... }` -
+    enumUtil.ts is entirely declarations like this and produced no symbols
+    at all before this, since only top-level shapes were ever checked."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "enumUtil.ts").write_text(
+        "export namespace EnumUtil {\n"
+        "  export type Values<T> = T[keyof T];\n"
+        "  export interface Inner {\n"
+        "    y: string;\n"
+        "  }\n"
+        "}\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    names = symbol_names(modules[0]["symbols"]["classes"])
+    assert {"Values", "Inner"} <= set(names)
+
+
+def test_build_module_graph_constants_extracted_for_every_language(tmp_path):
+    """A file can export a public API with no function or class - Flask's
+    signals.py is ten assignments. That shape exists in every language, and
+    only Python was recording it."""
+    cases = {
+        "a.js": ("javascript", "export const API_KEY = 'x';\n", "API_KEY"),
+        "a.ts": ("typescript", "export const API_KEY: string = 'x';\n", "API_KEY"),
+        "a.go": ("go", "package a\n\nconst MaxRetries = 3\n", "MaxRetries"),
+        "a.rs": ("rust", "pub const MAX_RETRIES: i32 = 3;\n", "MAX_RETRIES"),
+        "a.rb": ("ruby", "MAX_RETRIES = 3\n", "MAX_RETRIES"),
+        "a.c": ("c", "#define MAX_RETRIES 3\n", "MAX_RETRIES"),
+    }
+    for filename, (_lang, body, expected) in cases.items():
+        repo = tmp_path / filename.replace(".", "_")
+        repo.mkdir()
+        (repo / filename).write_text(body)
+        modules, _graph, _unparseable = build_module_graph(repo)
+        found = symbol_names(modules[0]["symbols"]["constants"])
+        assert expected in found, f"{filename}: expected {expected}, got {found}"
+
+
+def test_build_module_graph_has_modifier_does_not_false_positive_on_substring(tmp_path):
+    """has_modifier used to check `w in head` (plain substring), so a
+    declaration whose identifier merely contained a modifier word - e.g.
+    "construct_id" containing "const" - was misclassified as a constant.
+    An ordinary, non-const/non-static declaration with such a name must not
+    be extracted."""
+    cases = {
+        "a.c": ("c", "int construct_id = 5;\n"),
+        "a.java": ("java", "package a;\npublic class A { Object constants_registry = null; }\n"),
+    }
+    for filename, (_lang, body) in cases.items():
+        repo = tmp_path / filename.replace(".", "_")
+        repo.mkdir()
+        (repo / filename).write_text(body)
+        modules, _graph, _unparseable = build_module_graph(repo)
+        found = symbol_names(modules[0]["symbols"]["constants"])
+        assert found == [], f"{filename}: expected no constants, got {found}"
+
+
+def test_build_module_graph_ruby_extracts_constants_declared_inside_class_or_module(tmp_path):
+    """Ruby constants are idiomatically declared inside a module or class
+    body, not at file scope - a real repo scan (sinatra/sinatra) found 10
+    constants indented inside module/class bodies and 0 at true top level.
+    Sinatra::Base::DROP_BODY_RESPONSES is exactly the API surface this
+    feature exists to capture."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "base.rb").write_text(
+        "module Sinatra\n"
+        "  class Base\n"
+        "    DROP_BODY = [204].freeze\n"
+        "  end\n"
+        "end\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    assert symbol_names(modules[0]["symbols"]["constants"]) == ["DROP_BODY"]
+
+
+def test_build_module_graph_ruby_does_not_extract_a_constant_assigned_inside_a_method(tmp_path):
+    """A capitalised assignment inside a def body is a method-local, not
+    part of the type's public API - must stay excluded even though it sits
+    inside a class body the same as a real constant does."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "base.rb").write_text(
+        "module Sinatra\n"
+        "  class Base\n"
+        "    def foo\n"
+        "      CONST = 1\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    assert symbol_names(modules[0]["symbols"]["constants"]) == []
+
+
+def test_build_module_graph_constants_key_always_present(tmp_path):
+    """Consumers read symbols["constants"] unconditionally, so it must exist
+    even for a language whose extractor records none."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.java").write_text("package a;\npublic class A { void f() {} }\n")
+    modules, _graph, _unparseable = build_module_graph(repo)
+    assert "constants" in modules[0]["symbols"]
+
+
+def _java_symbols(repo: Path):
+    """{name: entry} across functions and classes for the single Java module."""
+    modules, _graph, _unparseable = build_module_graph(repo)
+    module = next(m for m in modules if m["path"].endswith(".java"))
+    symbols = module["symbols"]
+    return {s["name"]: s for s in symbols["functions"] + symbols["classes"]}
+
+
+def test_build_module_graph_java_visibility_reads_java_modifiers(tmp_path):
+    """is_public was `not _is_nested_in_function(node)` - a fair proxy for
+    Python, which has no access modifiers, but wrong for Java.
+    docs_reference filters the generated API reference on this flag, so
+    private methods were being published as public API."""
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "Excluder.java").write_text(
+        "package com.example;\n"
+        "public final class Excluder {\n"
+        "  public void shown() { }\n"
+        "  private void hidden() { }\n"
+        "  protected void alsoHidden() { }\n"
+        "}\n"
+    )
+
+    symbols = _java_symbols(repo)
+
+    assert symbols["shown"]["is_public"] is True
+    assert symbols["hidden"]["is_public"] is False
+    assert symbols["alsoHidden"]["is_public"] is False
+
+
+def test_build_module_graph_java_interface_members_are_implicitly_public(tmp_path):
+    """The absent-modifier case, and the reason this is not just "look for the
+    public keyword": a member of an interface or annotation type carries no
+    `modifiers` node at all and is public by Java's own rules. Treating that as
+    private would hide google/gson's TypeAdapterFactory.create - a worse error
+    than the one being fixed."""
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "TypeAdapterFactory.java").write_text(
+        "package com.example;\n"
+        "public interface TypeAdapterFactory {\n"
+        "  TypeAdapter create(Gson gson, TypeToken type);\n"
+        "}\n"
+    )
+
+    symbols = _java_symbols(repo)
+
+    assert symbols["create"]["is_public"] is True
+
+
+def test_build_module_graph_java_interface_symbol_is_pure_declaration_but_class_is_not(tmp_path):
+    """AutoMapper's Mapper.cs shape: a file pairs a small interface with the
+    real concrete implementation. The file-level is_declaration_only check no
+    longer flags this file at all (see test_search_index.py), but the
+    interface's own chunk should still carry the demotion on its own terms -
+    is_pure_declaration is how build_chunks does that per-symbol instead of
+    per-file."""
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "Mapper.java").write_text(
+        "package com.example;\n"
+        "public interface IMapper {\n"
+        "  Object map();\n"
+        "}\n"
+        "public class Mapper implements IMapper {\n"
+        "  public Object map() { return doMap(); }\n"
+        "  private Object doMap() { return null; }\n"
+        "}\n"
+    )
+
+    symbols = _java_symbols(repo)
+
+    assert symbols["IMapper"]["is_pure_declaration"] is True
+    assert symbols["Mapper"]["is_pure_declaration"] is False
+
+
+def test_build_module_graph_java_package_private_class_is_not_public(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "Internal.java").write_text(
+        "package com.example;\nclass Internal {\n  void helper() { }\n}\n"
+    )
+
+    symbols = _java_symbols(repo)
+
+    assert symbols["Internal"]["is_public"] is False

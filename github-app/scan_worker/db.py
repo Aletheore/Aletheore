@@ -1,9 +1,35 @@
 import logging
 import json
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import lru_cache
+
+import psycopg
+import psycopg.rows
+from psycopg_pool import ConnectionPool
 
 from app_server.evidence_limits import check_evidence_size
+from app_server.llm_cost import WARN_FRACTION_OF_CAP, crossed_spend_warning_threshold
+
+logger = logging.getLogger(__name__)
+
+# Advisory locks share one Postgres key space across app-server and
+# scan-worker. Keep namespace 1 identical to app_server.db; namespace 2 is
+# reserved for the session-scoped spend lock. The installation id is key 2.
+SCAN_SLOT_LOCK_NAMESPACE = 1
+SPEND_LOCK_NAMESPACE = 2
+# Namespace 3 is reserved for the per-repo checkout lock (see
+# repo_checkout_lock) - key 2 is hashtext(installation_id:repo_full_name)
+# rather than a bare int, since the resource being protected is a
+# composite (installation, repo) pair, not a single id.
+REPO_CHECKOUT_LOCK_NAMESPACE = 3
+ADVISORY_LOCK_TIMEOUT = "5s"
+
+
+@lru_cache(maxsize=None)
+def get_db_pool(dsn: str) -> ConnectionPool:
+    return ConnectionPool(conninfo=dsn, min_size=0, max_size=4, open=True)
 
 from aletheore.evidence import is_evidence_version_compatible
 
@@ -16,12 +42,10 @@ def insert_repo_history(
     evidence: dict,
     keep: int = 20,
 ) -> None:
-    import psycopg
-
     encoded = json.dumps(evidence)
     check_evidence_size(encoded)
 
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -64,9 +88,7 @@ def managed_audit_definitely_still_cooling_down(
     scan) - this only ever turns away requests that would certainly have
     been rejected anyway, so it can't produce a false rejection.
     """
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -85,13 +107,11 @@ def check_and_reserve_managed_audit(
     repo_full_name: str,
     cooldown_seconds: int,
 ) -> bool:
-    import psycopg
-
     # Mirrors app_server.db.check_and_reserve_managed_audit's atomic
     # INSERT .. ON CONFLICT .. WHERE - the RETURNING row only appears when the
     # cooldown has actually elapsed, so a single round trip both checks and
     # records the attempt with no race window for concurrent callers.
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -128,11 +148,14 @@ def check_and_reserve_monthly_repo_scan_slot(
     racy read-then-write, matching check_and_reserve_managed_audit's
     atomicity elsewhere in this module.
     """
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_xact_lock(%s)", (installation_id,))
+            cur.execute("SELECT set_config('lock_timeout', %s, true)", (ADVISORY_LOCK_TIMEOUT,))
+            # Namespace 1 is reserved for monthly scan-slot reservations.
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s)",
+                (SCAN_SLOT_LOCK_NAMESPACE, installation_id),
+            )
             cur.execute(
                 """
                 SELECT 1 FROM monthly_scanned_repos
@@ -169,9 +192,7 @@ def check_and_reserve_monthly_repo_scan_slot(
 
 
 def get_llm_spend_this_month(dsn: str, installation_id: int) -> float:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -184,10 +205,15 @@ def get_llm_spend_this_month(dsn: str, installation_id: int) -> float:
             return float(row[0]) if row else 0.0
 
 
-def record_llm_spend(dsn: str, installation_id: int, cost_usd: float) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+def record_llm_spend(
+    dsn: str, installation_id: int, cost_usd: float, monthly_cap: float | None = None
+) -> None:
+    """monthly_cap: when given, logs a one-time warning if this call is the
+    one that pushes the installation's spend this month past
+    WARN_FRACTION_OF_CAP of it - see llm_cost.crossed_spend_warning_threshold.
+    Omit it (as existing callers that predate this did) to skip the check
+    entirely; it has no effect on what gets recorded."""
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -195,16 +221,28 @@ def record_llm_spend(dsn: str, installation_id: int, cost_usd: float) -> None:
                 VALUES (%s, date_trunc('month', now())::date, %s)
                 ON CONFLICT (installation_id, month) DO UPDATE
                 SET total_cost_usd = llm_spend.total_cost_usd + EXCLUDED.total_cost_usd
+                RETURNING total_cost_usd
                 """,
                 (installation_id, cost_usd),
             )
+            row = cur.fetchone()
         conn.commit()
+
+    if monthly_cap is not None and row is not None:
+        new_total = float(row[0])
+        previous_total = new_total - cost_usd
+        if crossed_spend_warning_threshold(previous_total, new_total, monthly_cap):
+            logger.warning(
+                "llm spend crossed %.0f%% of monthly cap: installation=%s $%.2f of $%.2f",
+                WARN_FRACTION_OF_CAP * 100,
+                installation_id,
+                new_total,
+                monthly_cap,
+            )
 
 
 def get_flash_review_count_this_month(dsn: str, installation_id: int) -> int:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -218,9 +256,7 @@ def get_flash_review_count_this_month(dsn: str, installation_id: int) -> int:
 
 
 def increment_flash_review_count(dsn: str, installation_id: int) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -244,9 +280,7 @@ def insert_audit_report(
     signature: str,
     signing_public_key: str,
 ) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -269,9 +303,7 @@ def insert_audit_report(
 
 
 def get_extra_seats(dsn: str, installation_id: int) -> int:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT extra_seats FROM installations WHERE installation_id = %s",
@@ -289,16 +321,61 @@ def installation_spend_lock(dsn: str, installation_id: int):
     # per installation so scaling scan-worker to multiple replicas later
     # can't let concurrent jobs for the same installation both pass the
     # cap check before either has recorded its cost.
-    import psycopg
-
     conn = psycopg.connect(dsn, autocommit=True)
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_lock(%s)", (installation_id,))
+            cur.execute("SELECT set_config('lock_timeout', %s, false)", (ADVISORY_LOCK_TIMEOUT,))
+            # Namespace 2 is reserved for the session-scoped LLM spend lock.
+            cur.execute(
+                "SELECT pg_advisory_lock(%s, %s)",
+                (SPEND_LOCK_NAMESPACE, installation_id),
+            )
         yield
     finally:
         with conn.cursor() as cur:
-            cur.execute("SELECT pg_advisory_unlock(%s)", (installation_id,))
+            cur.execute(
+                "SELECT pg_advisory_unlock(%s, %s)",
+                (SPEND_LOCK_NAMESPACE, installation_id),
+            )
+        conn.close()
+
+
+@contextmanager
+def repo_checkout_lock(dsn: str, installation_id: int, repo_full_name: str):
+    """Serializes concurrent scan-worker replicas' use of one repo's
+    persistent, reused-across-scans checkout (see _ensure_persistent_checkout
+    in jobs.py), which has no filesystem-level locking of its own: two
+    replicas racing `git checkout -f`/`git clean -fdx` against the same
+    working tree can corrupt it, and racing `git remote set-url` (which
+    briefly writes a live access token into .git/config, then resets it
+    back) can leave one replica's fetch using the other's credentials or
+    a URL with no credentials at all.
+
+    Deliberately blocking (no lock_timeout, unlike the quick check-then-write
+    locks above) - a second job for the same repo should wait its turn and
+    still run once the first finishes, not fail fast and drop a real PR
+    scan or push reconciliation. A crashed holder releases automatically:
+    Postgres advisory locks are tied to the session/connection, which
+    always closes (killed or not) before the lock could leak. Different
+    repos, and different installations, are completely unaffected and run
+    in true parallel across replicas - this only narrows the pre-existing
+    single-worker-wide serialization down to "same repo only".
+    """
+    key = f"{installation_id}:{repo_full_name}"
+    conn = psycopg.connect(dsn, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_lock(%s, hashtext(%s))",
+                (REPO_CHECKOUT_LOCK_NAMESPACE, key),
+            )
+        yield
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_unlock(%s, hashtext(%s))",
+                (REPO_CHECKOUT_LOCK_NAMESPACE, key),
+            )
         conn.close()
 
 
@@ -309,9 +386,7 @@ def check_and_reserve_flash_review_attempt(
     pr_number: int,
     debounce_seconds: int = 120,
 ) -> bool:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -333,9 +408,7 @@ def check_and_reserve_flash_review_attempt(
 def get_last_reviewed_sha(
     dsn: str, installation_id: int, repo_full_name: str, pr_number: int
 ) -> str | None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -351,9 +424,7 @@ def get_last_reviewed_sha(
 def set_last_reviewed_sha(
     dsn: str, installation_id: int, repo_full_name: str, pr_number: int, sha: str
 ) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -366,9 +437,7 @@ def set_last_reviewed_sha(
 
 
 def get_installation(dsn: str, installation_id: int) -> dict | None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -393,9 +462,7 @@ def get_dismissed_identity_keys(dsn: str, installation_id: int, repo_full_name: 
     on the app_server's asyncpg pool). Used by the PR-scan job to filter
     already-dismissed findings out of a diff before posting a PR comment -
     see app_server/dismissed_findings.py's filter_dismissed()."""
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -416,9 +483,7 @@ def list_health_check_targets_all(dsn: str) -> list[dict]:
     installation, since an installation's repos can each have their own
     monitored URL(s) now instead of a single shared one.
     """
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -434,9 +499,7 @@ def list_health_check_targets_all(dsn: str) -> list[dict]:
 
 
 def list_repos_for_installation(dsn: str, installation_id: int) -> list[str]:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT DISTINCT repo_full_name FROM repo_history WHERE installation_id = %s",
@@ -446,9 +509,7 @@ def list_repos_for_installation(dsn: str, installation_id: int) -> list[str]:
 
 
 def get_latest_evidence(dsn: str, installation_id: int, repo_full_name: str) -> dict | None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -499,9 +560,7 @@ def get_last_endpoint_health(
     path: str,
     target_id: int | None = None,
 ) -> dict | None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -533,10 +592,7 @@ def list_recent_endpoint_incidents(
     repo_full_name: str,
     since: datetime,
 ) -> list[dict]:
-    import psycopg
-    import psycopg.rows
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
                 """
@@ -563,9 +619,7 @@ def insert_endpoint_health(
     target_id: int | None = None,
     keep: int = 20,
 ) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -614,9 +668,7 @@ def delete_expired_telemetry_events(dsn: str, retention_days: int) -> int:
     with no per-user value once they age out - count_telemetry_events reports
     totals and unique machines, neither of which needs multi-year history.
     """
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "DELETE FROM cli_telemetry_events "
@@ -637,9 +689,7 @@ def delete_expired_webhook_deliveries(dsn: str, retention_days: int) -> int:
     as new. GitHub keeps delivery logs for roughly 30 days, so the default
     matches that rather than the ~3-day automatic retry window.
     """
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "DELETE FROM webhook_deliveries WHERE received_at < now() - make_interval(days => %s)",
@@ -651,11 +701,23 @@ def delete_expired_webhook_deliveries(dsn: str, retention_days: int) -> int:
 
 
 def delete_expired_sessions(dsn: str) -> int:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM sessions WHERE expires_at < now()")
+            deleted = cur.rowcount
+        conn.commit()
+    return deleted
+
+
+def delete_expired_endpoint_health(dsn: str, retention_days: int = 30) -> int:
+    """Bound endpoint-health history after the public and dashboard windows."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM endpoint_health "
+                "WHERE checked_at < now() - make_interval(days => %s)",
+                (retention_days,),
+            )
             deleted = cur.rowcount
         conn.commit()
     return deleted
@@ -669,9 +731,7 @@ def upsert_wiki_overview(
     diagram_mermaid: str,
     source_commit: str | None = None,
 ) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -690,10 +750,7 @@ def upsert_wiki_overview(
 
 
 def get_wiki_overview(dsn: str, installation_id: int, repo_full_name: str) -> dict | None:
-    import psycopg
-    import psycopg.rows
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
                 """
@@ -717,9 +774,7 @@ def upsert_wiki_subsystem(
     diagram_mermaid: str,
     source_commit: str | None = None,
 ) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -750,9 +805,7 @@ def upsert_wiki_subsystem(
 
 
 def list_wiki_subsystems(dsn: str, installation_id: int, repo_full_name: str) -> list[dict]:
-    import psycopg.rows
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
                 """
@@ -773,9 +826,7 @@ def delete_wiki_subsystems_not_in(
     merged into another cluster, or its files were deleted). Passing an
     empty keep list removes every subsystem page for the repo.
     """
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -795,9 +846,7 @@ def set_wiki_build_status(
     status: str,
     error_message: str | None = None,
 ) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -824,9 +873,7 @@ def upsert_docs_symbol(
     mode: str,
     source_commit: str | None = None,
 ) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -854,9 +901,7 @@ def upsert_docs_symbol(
 
 
 def list_docs_symbols(dsn: str, installation_id: int, repo_full_name: str) -> list[dict]:
-    import psycopg.rows
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
                 """
@@ -878,9 +923,7 @@ def delete_docs_symbols_not_in(
     AI-generated one) shouldn't leave its old generated text behind.
     Passing an empty keep list removes every description for that module.
     """
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -900,9 +943,7 @@ def set_docs_build_status(
     status: str,
     error_message: str | None = None,
 ) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -920,9 +961,7 @@ def set_docs_build_status(
 
 
 def get_docs_repo_commit_settings(dsn: str, installation_id: int, repo_full_name: str) -> dict | None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
                 """
@@ -943,9 +982,7 @@ def record_docs_repo_commit(
     content_hash: str,
     pr_number: int,
 ) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -971,10 +1008,7 @@ def list_paid_repos_due_for_docs_catchup(dsn: str, interval_seconds: int) -> lis
     real LLM spend every 48h for zero new information - nothing changed,
     so there's nothing new to describe.
     """
-    import psycopg
-    import psycopg.rows
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
             cur.execute(
                 """
@@ -999,9 +1033,7 @@ def list_paid_repos_due_for_docs_catchup(dsn: str, interval_seconds: int) -> lis
 
 
 def record_docs_catchup_swept(dsn: str, installation_id: int, repo_full_name: str) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1021,10 +1053,7 @@ def list_paid_repos_due_for_wiki_catchup(dsn: str, interval_seconds: int) -> lis
     that last sweep), against wiki_catchup_sweeps instead of
     docs_catchup_sweeps.
     """
-    import psycopg
-    import psycopg.rows
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
             cur.execute(
                 """
@@ -1049,9 +1078,7 @@ def list_paid_repos_due_for_wiki_catchup(dsn: str, interval_seconds: int) -> lis
 
 
 def record_wiki_catchup_swept(dsn: str, installation_id: int, repo_full_name: str) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1074,9 +1101,7 @@ def insert_evidence_packet_cache_row(
     model_output: dict,
     model_used: str,
 ) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1101,9 +1126,7 @@ def insert_evidence_packet_cache_row(
 def list_recent_evidence_packet_cache_rows(
     dsn: str, installation_id: int, repo_full_name: str, limit: int = 200
 ) -> list[dict]:
-    import psycopg.rows
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
                 """
@@ -1119,9 +1142,7 @@ def list_recent_evidence_packet_cache_rows(
 
 
 def record_evidence_packet_cache_hit(dsn: str, row_id: int) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1144,9 +1165,7 @@ def insert_flash_review_cache_row(
     findings: list[dict],
     model_used: str,
 ) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1171,9 +1190,7 @@ def insert_flash_review_cache_row(
 def list_recent_flash_review_cache_rows(
     dsn: str, installation_id: int, repo_full_name: str, limit: int = 200
 ) -> list[dict]:
-    import psycopg.rows
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
                 """
@@ -1189,9 +1206,7 @@ def list_recent_flash_review_cache_rows(
 
 
 def record_flash_review_cache_hit(dsn: str, row_id: int) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1205,9 +1220,7 @@ def record_flash_review_cache_hit(dsn: str, row_id: int) -> None:
 
 
 def email_already_sent(dsn: str, dedupe_key: str) -> bool:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM sent_emails WHERE dedupe_key = %s", (dedupe_key,))
             return cur.fetchone() is not None
@@ -1225,9 +1238,7 @@ def record_sent_email(
     # send_transactional_email_job) - inserting this as a "claim" before
     # sending would let a transient send failure permanently block a
     # legitimate future retry, since dedupe_key is UNIQUE.
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1249,10 +1260,7 @@ def list_paid_installations_due_for_digest(dsn: str, interval_seconds: int) -> l
     digest, just one that gently prompts re-engagement instead of listing
     numbers.
     """
-    import psycopg
-    import psycopg.rows
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
             cur.execute(
                 """
@@ -1268,9 +1276,7 @@ def list_paid_installations_due_for_digest(dsn: str, interval_seconds: int) -> l
 
 
 def record_digest_sent(dsn: str, installation_id: int) -> None:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1284,9 +1290,7 @@ def record_digest_sent(dsn: str, installation_id: int) -> None:
 
 
 def count_repo_scans_since(dsn: str, installation_id: int, since: datetime) -> int:
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT count(*) FROM repo_history WHERE installation_id = %s AND scanned_at >= %s",
@@ -1301,9 +1305,7 @@ def get_endpoint_health_summary(dsn: str, installation_id: int, stale_after_seco
     (dashboard.py's PUBLIC_HEALTH_STALE_AFTER), so the digest and the
     status page never disagree about what's currently "up".
     """
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1326,9 +1328,7 @@ def get_seconds_since_last_health_check(dsn: str) -> float | None:
     Returns None if the table has no rows at all (a fresh install, not a
     failure - the caller should not alert on that).
     """
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT max(checked_at) FROM endpoint_health")
             row = cur.fetchone()
@@ -1344,9 +1344,7 @@ def list_installation_member_emails(dsn: str, installation_id: int) -> list[str]
     share that pool. Same semantics: only members who've logged in at
     least once (and so have a row in github_user_emails) get an email.
     """
-    import psycopg
-
-    with psycopg.connect(dsn) as conn:
+    with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """

@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import time
 from contextlib import contextmanager
 
 import pytest
@@ -16,6 +17,30 @@ TEST_DATABASE_URL = os.environ.get(
 @contextmanager
 def _noop_spend_lock(*args, **kwargs):
     yield
+
+
+@pytest.fixture(autouse=True)
+def _noop_repo_checkout_lock(monkeypatch):
+    # repo_checkout_lock (see scan_worker/db.py) opens a real psycopg
+    # connection to settings.database_url - most tests here run against a
+    # fake DSN (or no DSN at all), which would hang or fail slowly rather
+    # than exercising the actual lock. The lock's own correctness has its
+    # own real-Postgres tests in test_scan_worker_db.py; this file only
+    # needs run_pr_scan_job/run_push_scan_job's wiring around it to be a
+    # no-op, autoused so none of the 30+ existing tests need touching.
+    monkeypatch.setattr("scan_worker.jobs.repo_checkout_lock", _noop_spend_lock)
+
+
+def _patch_no_spend_cap(monkeypatch) -> None:
+    """AIRview/Docs build jobs now gate on the same installation monthly
+    LLM spend cap managed audits and flash review already used - real
+    DB-backed functions the rest of this file's tests never had to mock
+    before this. Well under any cap, so the gate is always a no-op here;
+    the cap-reached path gets its own dedicated tests."""
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
 
 
 class _FakeCodeGraphStore:
@@ -257,6 +282,10 @@ def test_run_pr_scan_job_uses_persistent_checkout_and_unchanged_cache_for_head(
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
@@ -431,6 +460,10 @@ def test_temp_dir_cleaned_up_on_success(bare_repo_with_two_commits, monkeypatch)
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
@@ -462,6 +495,48 @@ def test_temp_dir_cleaned_up_on_success(bare_repo_with_two_commits, monkeypatch)
     assert not seen_job_dirs[0].exists()
 
 
+def test_run_job_temp_dir_cleanup_job_removes_only_old_job_dirs(tmp_path, monkeypatch):
+    from scan_worker.jobs import JOB_TEMP_DIR_MAX_AGE_SECONDS, run_job_temp_dir_cleanup_job
+
+    old_dir = tmp_path / "old"
+    old_dir.mkdir()
+    (old_dir / "repo.py").write_text("source")
+    fresh_dir = tmp_path / "fresh"
+    fresh_dir.mkdir()
+    marker_file = tmp_path / "not-a-dir"
+    marker_file.write_text("ignore me")
+
+    now = time.time()
+    old_mtime = now - JOB_TEMP_DIR_MAX_AGE_SECONDS - 60
+    os.utime(old_dir, (old_mtime, old_mtime))
+
+    monkeypatch.setattr("scan_worker.jobs.JOBS_ROOT", tmp_path)
+
+    run_job_temp_dir_cleanup_job()
+
+    assert not old_dir.exists()
+    assert fresh_dir.exists()
+    assert marker_file.exists()
+
+
+def test_run_endpoint_health_cleanup_job_removes_only_old_rows(monkeypatch):
+    from scan_worker.jobs import ENDPOINT_HEALTH_RETENTION_DAYS, run_endpoint_health_cleanup_job
+
+    deleted = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_settings",
+        lambda: type("Settings", (), {"database_url": "dsn"})(),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.delete_expired_endpoint_health",
+        lambda dsn, retention_days: deleted.append((dsn, retention_days)) or 7,
+    )
+
+    run_endpoint_health_cleanup_job()
+
+    assert deleted == [("dsn", ENDPOINT_HEALTH_RETENTION_DAYS)]
+
+
 def test_clone_failure_posts_failure_comment_and_cleans_up(monkeypatch):
     import scan_worker.jobs as jobs_module
 
@@ -487,13 +562,14 @@ def test_clone_failure_posts_failure_comment_and_cleans_up(monkeypatch):
 
     monkeypatch.setattr("scan_worker.jobs._job_temp_dir", spy)
 
-    run_pr_scan_job(
-        installation_id=1,
-        repo_full_name="octocat/hello-world",
-        pr_number=7,
-        base_sha="deadbeef",
-        head_sha="deadbeef",
-    )
+    with pytest.raises(subprocess.CalledProcessError):
+        run_pr_scan_job(
+            installation_id=1,
+            repo_full_name="octocat/hello-world",
+            pr_number=7,
+            base_sha="deadbeef",
+            head_sha="deadbeef",
+        )
 
     assert "couldn't complete this scan" in posted["body"]
     assert not seen_job_dirs[0].exists()
@@ -885,6 +961,47 @@ def test_managed_audit_api_job_raises_when_spend_cap_reached(monkeypatch):
             repo_full_name="octocat/widgets",
         )
     assert llm_called == []
+
+
+def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeypatch):
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+    )
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.0012)
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.0006)
+    recorded_spend = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_llm_spend",
+        lambda dsn, iid, cost: recorded_spend.append(cost),
+    )
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.insert_audit_report", lambda *a, **k: None)
+
+    budget_checks = []
+
+    def fake_run_managed_audit(repo_dir, *, on_usage, before_llm_call, allow_partial_report, **kwargs):
+        budget_checks.append(before_llm_call())
+        on_usage(1, 1)
+        budget_checks.append(before_llm_call())
+        assert allow_partial_report is True
+        return "# Partial managed audit"
+
+    monkeypatch.setattr("scan_worker.jobs.run_managed_audit", fake_run_managed_audit)
+
+    from scan_worker.jobs import run_managed_audit_api_job
+
+    result = run_managed_audit_api_job(
+        installation_id=100,
+        evidence={"scanned_at": "2026-01-01"},
+        repo_full_name="octocat/widgets",
+    )
+
+    assert "Partial managed audit" in result
+    assert recorded_spend == [0.0006]
+    assert budget_checks == [True, False]
 
 
 def test_managed_audit_pr_job_clones_pr_head_runs_audit_and_replies(monkeypatch, tmp_path):
@@ -1397,7 +1514,8 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     )
     recorded_spend = []
     monkeypatch.setattr(
-        "scan_worker.jobs.record_llm_spend", lambda dsn, iid, cost: recorded_spend.append(cost)
+        "scan_worker.jobs.record_llm_spend",
+        lambda dsn, iid, cost, **kwargs: recorded_spend.append(cost),
     )
     monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
     set_sha_calls = []
@@ -1421,6 +1539,66 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     assert posted["marker"] == FLASH_REVIEW_MARKER
     assert set_sha_calls == ["bbb"]
     assert recorded_spend == [0.0]
+
+
+def test_flash_review_job_records_spend_and_count_while_the_lock_is_still_held(monkeypatch):
+    # F25: installation_spend_lock exists to make the check/run/record cycle
+    # atomic per installation - a prior version of this job read the cap
+    # inside the lock but recorded spend and incremented the review count
+    # after it had already been released, so two concurrent reviews for the
+    # same installation could both pass the cap check before either had
+    # recorded its cost. _noop_spend_lock (used by every other test in this
+    # file) can't catch that regression since it never tracks "held" at
+    # all - this test uses a real tracking fake instead.
+    from contextlib import contextmanager
+
+    lock_state = {"held": False, "observed_during_record": None, "observed_during_increment": None}
+
+    @contextmanager
+    def _tracking_spend_lock(*args, **kwargs):
+        lock_state["held"] = True
+        try:
+            yield
+        finally:
+            lock_state["held"] = False
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _tracking_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: [{"file": "app.py", "line": 1, "issue": "x"}],
+    )
+
+    def _record_llm_spend(dsn, iid, cost, **kwargs):
+        lock_state["observed_during_record"] = lock_state["held"]
+
+    def _increment_flash_review_count(dsn, iid):
+        lock_state["observed_during_increment"] = lock_state["held"]
+
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
+    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", _increment_flash_review_count)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert lock_state["observed_during_record"] is True
+    assert lock_state["observed_during_increment"] is True
+    assert lock_state["held"] is False  # released once the job actually finished
 
 
 def test_flash_review_job_posts_grounding_note_when_some_findings_are_dropped(monkeypatch):
@@ -1827,6 +2005,7 @@ def _wiki_evidence():
 
 
 def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_wiki_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -1854,8 +2033,10 @@ def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch)
         def simple_completion(self, *a, **k):
             return json.dumps({"0": "Auth"})
 
-    monkeypatch.setattr("scan_worker.jobs._live_wiki_full_build_writing_adapter", lambda plan: _SpyAdapter())
-    monkeypatch.setattr("scan_worker.jobs._live_wiki_naming_adapter", lambda: _NamingAdapter())
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_wiki_full_build_writing_adapter", lambda plan, on_usage=None: _SpyAdapter()
+    )
+    monkeypatch.setattr("scan_worker.jobs._live_wiki_naming_adapter", lambda on_usage=None: _NamingAdapter())
     monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
 
@@ -1878,7 +2059,9 @@ def _patch_sweep(
     monkeypatch.setattr("scan_worker.jobs.time.sleep", lambda *a, **k: None)
     # Real DNS resolution has no place in a unit test - SSRF re-validation
     # itself is covered by its own dedicated tests below.
-    monkeypatch.setattr("scan_worker.jobs.validate_external_https_url", lambda url: url)
+    monkeypatch.setattr(
+        "scan_worker.jobs.validate_and_pin_https_url", lambda url: (url, "93.184.216.34")
+    )
     monkeypatch.setattr(
         "scan_worker.jobs.list_health_check_targets_all",
         lambda dsn: [
@@ -1908,13 +2091,14 @@ def _patch_sweep(
     }
     calls = {"count": 0}
 
-    def fake_healthcheck(endpoints, base_url):
+    def fake_healthcheck(endpoints, base_url, pinned_ip=None):
         calls["count"] += 1
         if calls["count"] == 1 or retry_result_entry is None:
             return {"results": [default_first]}
         return {"results": [retry_result_entry]}
 
     monkeypatch.setattr("scan_worker.jobs.run_healthcheck", fake_healthcheck)
+    monkeypatch.setattr("scan_worker.jobs._enqueue_health_down_retry", lambda *a, **k: False)
     monkeypatch.setattr(
         "scan_worker.jobs.get_last_endpoint_health", lambda dsn, iid, repo, method, path, target_id=None: prior
     )
@@ -1960,10 +2144,21 @@ def test_sweep_retries_before_confirming_down_and_recovers_silently(monkeypatch)
             "response_shape": None,
         },
     )
+    enqueued = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._enqueue_health_down_retry",
+        lambda target, entry, attempt: enqueued.append((target, entry, attempt)) or True,
+    )
 
-    from scan_worker.jobs import run_health_check_sweep_job
+    from scan_worker.jobs import run_health_check_down_retry_job, run_health_check_sweep_job
 
     run_health_check_sweep_job()
+
+    assert len(enqueued) == 1
+    assert sent == []
+
+    target, entry, attempt = enqueued[0]
+    run_health_check_down_retry_job(target, entry, attempt)
 
     assert sent == []
 
@@ -2006,7 +2201,7 @@ def test_sweep_does_not_retry_a_recovery_flip(monkeypatch):
     )
     monkeypatch.setattr(
         "scan_worker.jobs.run_healthcheck",
-        lambda endpoints, base_url: healthcheck_calls.append(True)
+        lambda endpoints, base_url, pinned_ip=None: healthcheck_calls.append(True)
         or {
             "results": [
                 {
@@ -2291,7 +2486,9 @@ def test_sweep_isolates_one_targets_failure_from_others(monkeypatch):
     # take down the sweep for every other installation - this job runs
     # every HEALTH_SWEEP_INTERVAL_SECONDS for the whole customer base.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.validate_external_https_url", lambda url: url)
+    monkeypatch.setattr(
+        "scan_worker.jobs.validate_and_pin_https_url", lambda url: (url, "93.184.216.34")
+    )
     monkeypatch.setattr(
         "scan_worker.jobs.list_health_check_targets_all",
         lambda dsn: [
@@ -2324,7 +2521,7 @@ def test_sweep_isolates_one_targets_failure_from_others(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", fake_get_latest_evidence)
     monkeypatch.setattr(
         "scan_worker.jobs.run_healthcheck",
-        lambda endpoints, base_url: {
+        lambda endpoints, base_url, pinned_ip=None: {
             "results": [{"method": "GET", "path": "/x", "reachable": True, "status_code": 200, "latency_ms": 90.0}]
         },
     )
@@ -2371,7 +2568,7 @@ def test_sweep_revalidates_target_url_before_every_fetch_and_skips_on_ssrf_failu
     def fake_validate(url):
         raise UnsafeURLError(f"'{url}' now resolves to a disallowed address")
 
-    monkeypatch.setattr("scan_worker.jobs.validate_external_https_url", fake_validate)
+    monkeypatch.setattr("scan_worker.jobs.validate_and_pin_https_url", fake_validate)
 
     evidence_calls = []
     monkeypatch.setattr(
@@ -2382,7 +2579,7 @@ def test_sweep_revalidates_target_url_before_every_fetch_and_skips_on_ssrf_failu
     fetch_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs.run_healthcheck",
-        lambda endpoints, base_url: fetch_calls.append(True)
+        lambda endpoints, base_url, pinned_ip=None: fetch_calls.append(True)
         or {"results": [{"method": "GET", "path": "/x", "reachable": True, "status_code": 200, "latency_ms": 1.0}]},
     )
     monkeypatch.setattr("scan_worker.jobs.insert_endpoint_health", lambda *a, **k: None)
@@ -2416,8 +2613,8 @@ def test_sweep_proceeds_when_target_url_still_passes_validation(monkeypatch):
 
     validated_urls = []
     monkeypatch.setattr(
-        "scan_worker.jobs.validate_external_https_url",
-        lambda url: validated_urls.append(url) or url,
+        "scan_worker.jobs.validate_and_pin_https_url",
+        lambda url: validated_urls.append(url) or (url, "93.184.216.34"),
     )
     monkeypatch.setattr(
         "scan_worker.jobs.get_latest_evidence",
@@ -2425,7 +2622,7 @@ def test_sweep_proceeds_when_target_url_still_passes_validation(monkeypatch):
     )
     monkeypatch.setattr(
         "scan_worker.jobs.run_healthcheck",
-        lambda endpoints, base_url: {
+        lambda endpoints, base_url, pinned_ip=None: {
             "results": [{"method": "GET", "path": "/x", "reachable": True, "status_code": 200, "latency_ms": 1.0}]
         },
     )
@@ -2515,7 +2712,9 @@ def test_sweep_checks_every_target_independently(monkeypatch):
     # one up - must each be checked and alerted on their own, not merged or
     # short-circuited after the first.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.validate_external_https_url", lambda url: url)
+    monkeypatch.setattr(
+        "scan_worker.jobs.validate_and_pin_https_url", lambda url: (url, "93.184.216.34")
+    )
     monkeypatch.setattr(
         "scan_worker.jobs.list_health_check_targets_all",
         lambda dsn: [
@@ -2545,7 +2744,7 @@ def test_sweep_checks_every_target_independently(monkeypatch):
         lambda dsn, iid, repo: {"repository": {"api_endpoints": {"endpoints": [{"method": "GET", "path": "/x"}]}}},
     )
 
-    def fake_healthcheck(endpoints, base_url):
+    def fake_healthcheck(endpoints, base_url, pinned_ip=None):
         reachable = base_url == "https://staging.example.com"
         return {
             "results": [
@@ -2565,6 +2764,14 @@ def test_sweep_checks_every_target_independently(monkeypatch):
         "scan_worker.jobs.get_last_endpoint_health",
         lambda dsn, iid, repo, method, path, target_id=None: {"reachable": True, "latency_ms": 50.0},
     )
+    # F28: a fresh down-flip is now deferred to a follow-up job instead of
+    # being recorded/alerted synchronously (see
+    # test_sweep_schedules_down_retries_without_blocking_later_targets for
+    # that path). Force the graceful-degradation fallback here (as if
+    # enqueueing the retry failed) so this test can keep asserting the
+    # thing it's actually about: target 1 and target 2 are each checked on
+    # their own, not merged or short-circuited after the first.
+    monkeypatch.setattr("scan_worker.jobs._enqueue_health_down_retry", lambda *a, **k: False)
     recorded = []
     monkeypatch.setattr(
         "scan_worker.jobs.insert_endpoint_health",
@@ -2582,6 +2789,134 @@ def test_sweep_checks_every_target_independently(monkeypatch):
     assert set(recorded) == {(1, True), (2, False)}
     assert len(sent) == 1
     assert "down" in sent[0]["text"]
+
+
+def test_sweep_schedules_down_retries_without_blocking_later_targets(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    targets = [
+        {
+            "target_id": 1,
+            "installation_id": 1,
+            "repo_full_name": "octocat/slow",
+            "label": "Primary",
+            "base_url": "https://slow.example.com",
+            "latency_threshold_ms": None,
+            "webhook_url": "https://hooks.slack.com/health",
+        },
+        {
+            "target_id": 2,
+            "installation_id": 2,
+            "repo_full_name": "octocat/later",
+            "label": "Primary",
+            "base_url": "https://later.example.com",
+            "latency_threshold_ms": None,
+            "webhook_url": "https://hooks.slack.com/health",
+        },
+    ]
+    monkeypatch.setattr("scan_worker.jobs._rotated_health_check_targets", lambda dsn: targets)
+    monkeypatch.setattr(
+        "scan_worker.jobs.validate_and_pin_https_url", lambda url: (url, "93.184.216.34")
+    )
+    monkeypatch.setattr("scan_worker.jobs.time.sleep", lambda *a, **k: pytest.fail("sweep blocked on retry sleep"))
+
+    def fake_evidence(dsn, installation_id, repo_full_name):
+        endpoint_count = 12 if installation_id == 1 else 1
+        return {
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {"method": "GET", "path": f"/endpoint-{index}"}
+                        for index in range(endpoint_count)
+                    ]
+                }
+            }
+        }
+
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", fake_evidence)
+
+    def fake_healthcheck(endpoints, base_url, pinned_ip=None):
+        if base_url == "https://slow.example.com":
+            return {
+                "results": [
+                    {
+                        "method": "GET",
+                        "path": endpoint["path"],
+                        "reachable": index >= 6,
+                        "status_code": 200 if index >= 6 else None,
+                        "latency_ms": 50.0,
+                        "response_shape": None,
+                    }
+                    for index, endpoint in enumerate(endpoints)
+                ]
+            }
+        return {
+            "results": [
+                {
+                    "method": "GET",
+                    "path": "/endpoint-0",
+                    "reachable": True,
+                    "status_code": 200,
+                    "latency_ms": 50.0,
+                    "response_shape": None,
+                }
+            ]
+        }
+
+    monkeypatch.setattr("scan_worker.jobs.run_healthcheck", fake_healthcheck)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_last_endpoint_health",
+        lambda dsn, iid, repo, method, path, target_id=None: {"reachable": True, "latency_ms": 50.0},
+    )
+    enqueued_retries = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._enqueue_health_down_retry",
+        lambda target, entry, attempt: enqueued_retries.append((target["target_id"], entry["path"], attempt))
+        or True,
+    )
+    recorded = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.insert_endpoint_health",
+        lambda dsn, iid, repo, method, path, reachable, status_code, latency_ms, response_shape=None, target_id=None, keep=20: recorded.append(
+            (target_id, path, reachable)
+        ),
+    )
+    sent = []
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: sent.append(msg))
+
+    from scan_worker.jobs import run_health_check_sweep_job
+
+    start = time.monotonic()
+    run_health_check_sweep_job()
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 1.0
+    assert len(enqueued_retries) == 6
+    assert any(target_id == 2 for target_id, _path, _reachable in recorded)
+    assert sent == []
+
+
+def test_health_sweep_rotates_target_order_between_ticks(monkeypatch):
+    targets = [{"target_id": 1}, {"target_id": 2}, {"target_id": 3}]
+    monkeypatch.setattr("scan_worker.jobs.list_health_check_targets_all", lambda dsn: targets)
+
+    class FakeRedis:
+        def __init__(self):
+            self.count = 0
+
+        def incr(self, key):
+            self.count += 1
+            return self.count
+
+    redis_conn = FakeRedis()
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
+
+    from scan_worker.jobs import _rotated_health_check_targets
+
+    first = _rotated_health_check_targets("postgresql://unused")
+    second = _rotated_health_check_targets("postgresql://unused")
+
+    assert [target["target_id"] for target in first] == [1, 2, 3]
+    assert [target["target_id"] for target in second] == [2, 3, 1]
 
 
 def _wiki_evidence() -> dict:
@@ -2632,6 +2967,7 @@ def test_maybe_update_live_wiki_skips_when_no_clusters_affected(monkeypatch):
 
 
 def test_maybe_update_live_wiki_generates_and_stores_for_affected_clusters(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -2669,6 +3005,7 @@ def test_maybe_update_live_wiki_generates_and_stores_for_affected_clusters(monke
 
 
 def test_maybe_update_live_wiki_records_failure_status_on_exception(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -2690,6 +3027,32 @@ def test_maybe_update_live_wiki_records_failure_status_on_exception(monkeypatch)
     _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["auth/login.py"], "sha1")
 
     assert status_calls == [("failed", "LLM API unavailable")]
+
+
+def test_maybe_update_live_wiki_skips_llm_call_when_spend_cap_reached(monkeypatch):
+    from scan_worker.jobs import _maybe_update_live_wiki
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+
+    llm_called = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems", lambda *a, **k: llm_called.append(True)
+    )
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error_message=None: status_calls.append((status, error_message)),
+    )
+
+    _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["auth/login.py"], "sha1")
+
+    assert llm_called == []
+    assert status_calls[0][0] == "failed"
+    assert "spend cap" in status_calls[0][1]
 
 
 def test_run_pr_scan_job_wires_changed_files_into_live_wiki_update(bare_repo_with_two_commits, monkeypatch):
@@ -2856,7 +3219,27 @@ def test_run_push_scan_job_skips_paid_repo_past_monthly_scan_cap(bare_repo_with_
     assert cloned == []
 
 
-def test_run_push_scan_job_logs_and_does_not_raise_on_scan_failure(bare_repo_with_two_commits, monkeypatch, caplog):
+def test_run_initial_scan_job_logs_and_reraises_on_inner_failure(monkeypatch, caplog):
+    from scan_worker.jobs import run_initial_scan_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda *a, **k: object())
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_default_branch_head_sha",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("default branch unavailable")),
+    )
+
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        with pytest.raises(RuntimeError, match="default branch unavailable"):
+            run_initial_scan_job(1, "octocat/hello-world")
+
+    assert any("initial scan job failed" in record.message for record in caplog.records)
+
+
+def test_run_push_scan_job_logs_and_reraises_on_scan_failure(bare_repo_with_two_commits, monkeypatch, caplog):
     from scan_worker.jobs import run_push_scan_job
 
     _bare_path, _base_sha, head_sha = bare_repo_with_two_commits
@@ -2872,12 +3255,13 @@ def test_run_push_scan_job_logs_and_does_not_raise_on_scan_failure(bare_repo_wit
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
 
     with caplog.at_level("WARNING", logger="scan_worker.jobs"):
-        run_push_scan_job(
-            installation_id=1,
-            repo_full_name="octocat/hello-world",
-            head_sha=head_sha,
-            changed_files=["app.py"],
-        )
+        with pytest.raises(RuntimeError, match="clone failed"):
+            run_push_scan_job(
+                installation_id=1,
+                repo_full_name="octocat/hello-world",
+                head_sha=head_sha,
+                changed_files=["app.py"],
+            )
 
     assert any("push scan job failed" in record.message for record in caplog.records)
 
@@ -2979,6 +3363,30 @@ def test_managed_audit_pr_job_skips_paid_repo_past_monthly_scan_cap(monkeypatch)
     assert posted == []
 
 
+def test_managed_audit_pr_job_posts_failure_comment_and_reraises(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    monkeypatch.setattr("scan_worker.jobs.managed_audit_definitely_still_cooling_down", lambda *a, **k: False)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr(
+        "scan_worker.jobs._clone_pr_head",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("clone failed")),
+    )
+    posted = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo_full_name, pr_number, body: posted.update(body=body),
+    )
+
+    from scan_worker.jobs import run_managed_audit_pr_job
+
+    with pytest.raises(RuntimeError, match="clone failed"):
+        run_managed_audit_pr_job(1, "octocat/hello-world", 42)
+
+    assert "couldn't complete this scan" in posted["body"]
+
+
 def test_run_live_wiki_full_build_job_skips_without_evidence(monkeypatch):
     from scan_worker.jobs import run_live_wiki_full_build_job
 
@@ -2995,6 +3403,7 @@ def test_run_live_wiki_full_build_job_skips_without_evidence(monkeypatch):
 
 
 def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_wiki_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3036,6 +3445,7 @@ def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
 
 
 def test_run_live_wiki_full_build_job_records_failed_status_on_error(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_wiki_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3056,6 +3466,37 @@ def test_run_live_wiki_full_build_job_records_failed_status_on_error(monkeypatch
     run_live_wiki_full_build_job(1, "octocat/hello-world")
 
     assert build_status_calls == [("failed", "model provider unavailable")]
+
+
+def test_run_live_wiki_full_build_job_skips_llm_call_when_spend_cap_reached(monkeypatch):
+    # H-4: AIRview/Docs builds had no dollar spend cap at all, unlike
+    # managed audits and flash review - this is the same gate those
+    # already had, now closing that gap.
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+
+    llm_called = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems", lambda *a, **k: llm_called.append(True)
+    )
+    build_status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error=None: build_status_calls.append((status, error)),
+    )
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert llm_called == []
+    assert build_status_calls[0][0] == "failed"
+    assert "spend cap" in build_status_calls[0][1]
 
 
 def test_real_line_count_fetcher_returns_none_when_token_setup_fails(monkeypatch):
@@ -3087,6 +3528,7 @@ def test_real_line_count_fetcher_returns_real_line_count(monkeypatch):
 
 
 def test_run_live_wiki_full_build_job_passes_fetch_line_count_through(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_wiki_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3168,6 +3610,7 @@ def test_clusters_with_uncovered_wiki_work_empty_when_everything_covered():
 
 
 def test_run_live_wiki_full_build_job_only_requests_uncovered_clusters(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_wiki_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3272,6 +3715,7 @@ def test_live_wiki_catchup_sweep_job_survives_one_repo_failing(monkeypatch):
 
 
 def test_maybe_update_live_wiki_passes_fetch_line_count_through(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3484,7 +3928,41 @@ def test_run_live_docs_full_build_job_excludes_test_files_from_candidate_modules
     assert status_calls == [("ready", None)]
 
 
+def test_run_live_docs_full_build_job_skips_llm_call_when_spend_cap_reached(monkeypatch):
+    from scan_worker.jobs import run_live_docs_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    module = _docs_module(functions=[{"name": "f", "is_public": True, "docstring": None}])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([module]))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
+    )
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+
+    adapter_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_docs_full_build_writing_adapter",
+        lambda plan, on_usage=None: adapter_calls.append(True),
+    )
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+
+    run_live_docs_full_build_job(1, "octocat/hello-world")
+
+    assert adapter_calls == []
+    assert status_calls[0][0] == "failed"
+    assert "spend cap" in status_calls[0][1]
+
+
 def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_docs_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3499,7 +3977,7 @@ def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
     )
 
     def fake_fetch(client, token, repo, path, ref):
@@ -3532,7 +4010,65 @@ def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
     assert "model provider unavailable" in status_calls[0][1]
 
 
+def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(monkeypatch):
+    from scan_worker.jobs import run_live_docs_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    modules = [
+        _docs_module(f"m{i}.py", functions=[{"name": f"f{i}", "is_public": True, "docstring": None}])
+        for i in range(3)
+    ]
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence(modules))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
+    )
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.0012)
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.0006)
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
+
+    class FakeAdapter:
+        def __init__(self, on_usage):
+            self.on_usage = on_usage
+
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_docs_full_build_writing_adapter",
+        lambda plan, on_usage=None: FakeAdapter(on_usage),
+    )
+    stored_for = []
+
+    def fake_store(dsn, iid, repo, module, adapter, source_lines, commit):
+        stored_for.append(module["path"])
+        adapter.on_usage(1, 1)
+
+    monkeypatch.setattr("scan_worker.jobs._store_docs_generation_for_module", fake_store)
+    recorded_spend = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_llm_spend",
+        lambda dsn, iid, cost: recorded_spend.append(cost),
+    )
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_docs_repo_commit_settings", lambda *a, **k: None)
+
+    run_live_docs_full_build_job(1, "octocat/hello-world")
+
+    assert stored_for == ["m0.py"]
+    assert recorded_spend == [0.0006]
+    assert status_calls[0][0] == "ready"
+    assert "1/3 files processed" in status_calls[0][1]
+    assert "spend cap" in status_calls[0][1]
+
+
 def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import run_live_docs_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3544,7 +4080,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(mon
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
@@ -3563,7 +4099,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(mon
     assert status_calls == [("failed", "model provider unavailable")]
 
 
-def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
+def test_maybe_update_live_docs_skips_llm_call_when_spend_cap_reached(monkeypatch):
     from scan_worker.jobs import _maybe_update_live_docs
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3571,7 +4107,40 @@ def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
-    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda: object())
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+
+    adapter_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_docs_update_writing_adapter",
+        lambda on_usage=None: adapter_calls.append(True),
+    )
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+
+    evidence = _docs_evidence([_docs_module("good.py")])
+
+    _maybe_update_live_docs(1, "octocat/hello-world", evidence, ["good.py"], "sha1")
+
+    assert adapter_calls == []
+    assert status_calls[0][0] == "failed"
+    assert "spend cap" in status_calls[0][1]
+
+
+def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
+    from scan_worker.jobs import _maybe_update_live_docs
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
+    )
+    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None: object())
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
     def fake_store(dsn, iid, repo, module, adapter, source_lines, commit):
@@ -3598,6 +4167,7 @@ def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
 
 
 def test_maybe_update_live_docs_excludes_test_files_from_changed_modules(monkeypatch):
+    _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import _maybe_update_live_docs
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -3605,7 +4175,7 @@ def test_maybe_update_live_docs_excludes_test_files_from_changed_modules(monkeyp
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
-    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda: object())
+    monkeypatch.setattr("scan_worker.jobs._live_docs_update_writing_adapter", lambda on_usage=None: object())
 
     fetched_for = []
     monkeypatch.setattr(
@@ -3836,6 +4406,142 @@ def test_run_health_sweep_staleness_check_job_does_not_alert_when_no_data_yet(mo
     run_health_sweep_staleness_check_job()
 
     assert alerts == []
+
+
+class _FakeRedis:
+    def __init__(self):
+        self.data = {}
+
+    def get(self, key):
+        return self.data.get(key)
+
+    def set(self, key, value, ex=None):
+        self.data[key] = str(value)
+
+    def delete(self, key):
+        self.data.pop(key, None)
+
+    def incr(self, key):
+        value = int(self.data.get(key, "0")) + 1
+        self.data[key] = str(value)
+        return value
+
+    def expire(self, key, seconds):
+        return True
+
+
+def test_run_ops_monitor_job_alerts_on_second_app_health_failure(monkeypatch):
+    from scan_worker.jobs import run_ops_monitor_job
+
+    redis_conn = _FakeRedis()
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
+    monkeypatch.setattr("scan_worker.jobs._fetch_app_health", lambda url: (False, "broken"))
+    monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda now: None)
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+    monkeypatch.setenv("ALETHEORE_APP_HEALTH_URL", "http://bad-health.local/healthz")
+
+    run_ops_monitor_job()
+
+    assert alerts == []
+
+    run_ops_monitor_job()
+
+    assert len(alerts) == 1
+    assert alerts[0][0][0] == "ops_monitor.app_health"
+    assert "bad-health.local" in alerts[0][0][2]
+
+
+def test_run_ops_monitor_job_broken_app_health_sends_ops_email(monkeypatch):
+    from app_server import error_alerts
+    from app_server.config import get_settings
+    from scan_worker.jobs import run_ops_monitor_job
+
+    redis_conn = _FakeRedis()
+    sent = []
+    monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
+    monkeypatch.setenv("EMAIL_REPLY_TO_ADDRESS", "ops@example.com")
+    get_settings.cache_clear()
+    monkeypatch.setattr(error_alerts, "_last_alert_at", {})
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
+    monkeypatch.setattr("scan_worker.jobs._fetch_app_health", lambda url: (False, "broken"))
+    monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda now: None)
+    monkeypatch.setattr(
+        error_alerts,
+        "send_transactional_email",
+        lambda api_key, from_addr, reply_to, to, subject, html, text: sent.append(
+            {"api_key": api_key, "reply_to": reply_to, "to": to, "subject": subject, "text": text}
+        ),
+    )
+
+    run_ops_monitor_job()
+    run_ops_monitor_job()
+
+    assert len(sent) == 1
+    assert sent[0]["api_key"] == "re_test_key"
+    assert sent[0]["reply_to"] == "ops@example.com"
+    assert sent[0]["to"] == "ops@example.com"
+    assert "ops_monitor.app_health" in sent[0]["subject"]
+    assert "broken" in sent[0]["text"]
+
+
+def test_run_ops_monitor_job_alerts_when_queue_depth_stays_high(monkeypatch):
+    from scan_worker import jobs
+    from scan_worker.jobs import OPS_THRESHOLD_DURATION_SECONDS, run_ops_monitor_job
+
+    redis_conn = _FakeRedis()
+    alerts = []
+
+    class FakeQueue:
+        def __init__(self, name, connection):
+            self.name = name
+            self.count = 26 if name == "scans" else 0
+
+    class FakeFailedRegistry:
+        def __init__(self, queue):
+            self.count = 0
+
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
+    monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
+    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda now: None)
+    monkeypatch.setattr("scan_worker.jobs.Queue", FakeQueue)
+    monkeypatch.setattr("scan_worker.jobs.FailedJobRegistry", FakeFailedRegistry)
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+    monkeypatch.setenv("ALETHEORE_OPS_QUEUE_DEPTH_THRESHOLD", "25")
+    monkeypatch.setattr(jobs.time, "time", lambda: 1000.0)
+
+    run_ops_monitor_job()
+
+    assert alerts == []
+
+    monkeypatch.setattr(jobs.time, "time", lambda: 1000.0 + OPS_THRESHOLD_DURATION_SECONDS + 1)
+
+    run_ops_monitor_job()
+
+    assert len(alerts) == 1
+    assert alerts[0][0][0] == "ops_monitor.queue_depth.scans"
+    assert "scans queue depth=26" in alerts[0][0][2]
+
+
+def test_run_ops_monitor_job_alerts_when_backup_missing(monkeypatch, tmp_path):
+    from scan_worker.jobs import run_ops_monitor_job
+
+    redis_conn = _FakeRedis()
+    alerts = []
+    missing_dir = tmp_path / "backups"
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
+    monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
+    monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+    monkeypatch.setenv("ALETHEORE_BACKUP_DIR", str(missing_dir))
+
+    run_ops_monitor_job()
+
+    assert len(alerts) == 1
+    assert alerts[0][0][0] == "ops_monitor.backup_freshness"
+    assert str(missing_dir) in alerts[0][0][2]
 
 
 def test_run_git_scrubs_credentialed_url_from_a_failed_clone_error(tmp_path):

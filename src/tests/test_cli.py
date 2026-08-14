@@ -1159,14 +1159,16 @@ def test_login_prompts_when_installation_ambiguous(tmp_path, monkeypatch):
         mock_resolve.return_value = [
             {"installation_id": 100, "account_login": "acme"},
             {"installation_id": 200, "account_login": "other"},
+            {"installation_id": 300, "account_login": "third"},
         ]
         mock_mint.return_value = "aletheore-tok-xyz"
 
-        result = runner.invoke(app, ["login"], input="2\n")
+        result = runner.invoke(app, ["login"], input="0\n-1\n4\nabc\n\n2\n")
 
     assert result.exit_code == 0
     called_installation_id = mock_mint.call_args[0][1]
     assert called_installation_id == 200
+    assert result.output.count("enter a number between 1 and 3") == 5
 
 
 def test_login_prints_error_and_exits_nonzero_on_device_flow_error():

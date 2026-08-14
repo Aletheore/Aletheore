@@ -33,3 +33,7 @@ def test_missing_header_fails():
 
 def test_malformed_header_fails():
     assert verify_signature(b"{}", "not-a-real-signature", SECRET) is False
+
+
+def test_non_ascii_signature_header_fails_without_raising():
+    assert verify_signature(b"{}", "sha256=café", SECRET) is False

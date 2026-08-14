@@ -1,7 +1,24 @@
--- GET /v1/health/{org}/{repo} (dashboard.py) was unauthenticated,
--- CORS *, and gated on nothing but "does this repo have any health-check
--- data" - any repo a customer monitors was publicly exposed (endpoint
--- paths, status, latency) by default, with no way to turn it off.
--- Defaults to false: existing installations must explicitly opt in.
-ALTER TABLE installations
-    ADD COLUMN IF NOT EXISTS public_status_enabled BOOLEAN NOT NULL DEFAULT false;
+-- Originally added installations.public_status_enabled as an account-wide
+-- opt-in for GET /v1/health/{org}/{repo}. Superseded by migration 047,
+-- which replaced it with per-repo scoping (repo_public_status) and drops
+-- this column - see 047 for why (F21: the account-wide flag let opting in
+-- one public repo silently expose every other repo on the installation).
+--
+-- This file is intentionally inert now. scripts/migrate.py tracks applied
+-- migrations by filename in schema_migrations, so every real environment
+-- already has this recorded as applied and will never re-run it - leaving
+-- the original ADD COLUMN here would be harmless there. It is NOT harmless
+-- against tests/conftest.py's pool fixture, which re-executes every file
+-- in migrations/ on every single test (by design, for a fresh-state
+-- simulation, not through the tracked runner): ADD COLUMN IF NOT EXISTS
+-- would re-add the column after 047 drops it on every replay, and Postgres
+-- DROP COLUMN never frees the underlying physical column slot - it just
+-- marks it dropped. A few hundred replay cycles across a test session was
+-- enough to exhaust the 1600-column-per-table hard limit on installations.
+--
+-- SELECT 1 rather than leaving this file comment-only: asyncpg's
+-- conn.execute() errors on a query string with no actual statement in it
+-- (AttributeError on a None command-complete tag), which the comment-only
+-- version of this file hit immediately in tests/conftest.py's pool
+-- fixture.
+SELECT 1;

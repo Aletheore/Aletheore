@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from app_server.admin import (
+    _fetch_administered_installation_ids,
     _administered_installation_ids_for_session_or_401,
     _build_updated_seat_items,
     _repo_installation_id,
@@ -107,6 +108,33 @@ async def _create_session_with_tokens(
         "github_access_token": access_token,
         "github_refresh_token": refresh_token,
     }
+
+
+def test_fetch_administered_installation_ids_collects_paginated_results(monkeypatch):
+    installation_ids = list(range(1000, 1101))
+    seen_params = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_params.append(dict(request.url.params))
+        page = int(request.url.params["page"])
+        assert request.url.params["per_page"] == "100"
+        start = (page - 1) * 100
+        return httpx.Response(
+            200,
+            json={
+                "total_count": len(installation_ids),
+                "installations": [{"id": installation_id} for installation_id in installation_ids[start:start + 100]],
+            },
+            request=request,
+        )
+
+    monkeypatch.setattr(
+        "app_server.admin._github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    assert _fetch_administered_installation_ids("gho_many") == set(installation_ids)
+    assert seen_params == [{"per_page": "100", "page": "1"}, {"per_page": "100", "page": "2"}]
 
 
 @pytest.mark.asyncio
@@ -485,7 +513,19 @@ async def test_set_public_status_route_toggles_the_flag(pool, monkeypatch):
         dashboard_response = await client.get("/admin/octocat/hello-world")
     assert on_response.status_code == 200
     assert on_response.json()["public_status_enabled"] is True
-    assert dashboard_response.json()["installation"]["public_status_enabled"] is True
+    assert dashboard_response.json()["public_status_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_set_public_status_route_does_not_leak_to_other_repos(pool, monkeypatch):
+    # F21: this route is repo-scoped in its URL and docstring, but used to
+    # write an account-wide column - enabling it on one repo silently
+    # exposed every other repo in the account, including private ones.
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        await client.put("/admin/octocat/hello-world/public-status", json={"enabled": True})
+        other_repo_settings = await client.get("/admin/octocat/internal-billing")
+    assert other_repo_settings.json()["public_status_enabled"] is False
 
 
 @pytest.mark.asyncio

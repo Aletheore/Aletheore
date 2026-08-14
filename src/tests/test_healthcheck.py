@@ -1,3 +1,6 @@
+import http.server
+import threading
+import time
 import urllib.error
 
 import pytest
@@ -38,6 +41,26 @@ def test_run_healthcheck_reports_reachable_get_endpoint():
     assert entry["status_code"] == 200
     assert entry["reachable"] is True
     assert entry["note"] is None
+
+
+def test_run_healthcheck_checks_endpoints_concurrently():
+    endpoints = [
+        {"method": "GET", "path": f"/health/{index}", "unresolved": False}
+        for index in range(8)
+    ]
+
+    def slow_open(*args, **kwargs):
+        time.sleep(0.05)
+        return _mock_response(200)
+
+    start = time.monotonic()
+    with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", side_effect=slow_open):
+        result = run_healthcheck(endpoints, "http://localhost:5000")
+    elapsed = time.monotonic() - start
+
+    assert len(result["results"]) == len(endpoints)
+    assert all(entry["reachable"] is True for entry in result["results"])
+    assert elapsed < 0.25
 
 
 def test_run_healthcheck_substitutes_path_params_and_notes_it():
@@ -411,6 +434,62 @@ def test_run_healthcheck_accepts_https():
     with patch("aletheore.healthcheck._NO_REDIRECT_OPENER.open", return_value=_mock_response(200)):
         result = run_healthcheck([], "https://example.com")
     assert result["base_url"] == "https://example.com"
+
+
+class _OKHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, *args):  # quiet test output
+        pass
+
+
+@pytest.fixture
+def local_http_server():
+    server = http.server.HTTPServer(("127.0.0.1", 0), _OKHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_port
+    finally:
+        server.shutdown()
+        thread.join()
+
+
+# ".invalid" is reserved by RFC 2606 to never resolve - the strongest
+# available guarantee that a real network DNS lookup for this hostname
+# fails, which is exactly what these tests need to prove: with pinning, the
+# request must succeed anyway (proving the connection never asked the
+# resolver about the hostname at all); without it, the request must fail
+# with the resolver's own error (proving these aren't accidentally passing
+# for some unrelated reason).
+_UNRESOLVABLE_HOSTNAME = "this-host-does-not-exist.invalid"
+
+
+def test_run_healthcheck_with_pinned_ip_never_resolves_the_hostname(local_http_server):
+    endpoints = [{"method": "GET", "path": "/health", "unresolved": False}]
+    base_url = f"http://{_UNRESOLVABLE_HOSTNAME}:{local_http_server}"
+
+    result = run_healthcheck(endpoints, base_url, pinned_ip="127.0.0.1")
+
+    entry = result["results"][0]
+    assert entry["reachable"] is True
+    assert entry["status_code"] == 200
+
+
+def test_run_healthcheck_without_pinning_still_resolves_the_hostname_normally(local_http_server):
+    # Baseline for the test above: without pinned_ip, the same unresolvable
+    # hostname fails exactly as a real DNS-dependent connection should -
+    # proving the prior test's success came from pinning, not from
+    # something incidental (e.g. the request never actually going out).
+    endpoints = [{"method": "GET", "path": "/health", "unresolved": False}]
+    base_url = f"http://{_UNRESOLVABLE_HOSTNAME}:{local_http_server}"
+
+    result = run_healthcheck(endpoints, base_url)
+
+    entry = result["results"][0]
+    assert entry["reachable"] is False
 
 
 def test_save_healthcheck_rotates_at_21st_save_keeping_20_newest(tmp_path):
