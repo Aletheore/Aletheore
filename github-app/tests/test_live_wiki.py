@@ -1,6 +1,10 @@
 import json
 import logging
+import threading
+import time
 from unittest.mock import MagicMock
+
+import pytest
 
 from scan_worker.live_wiki import (
     AIRVIEW_PROMPT_VERSION,
@@ -18,6 +22,7 @@ from scan_worker.live_wiki import (
     generate_file_pages,
     select_file_page_paths,
     _drop_test_only_briefs,
+    _run_concurrently,
     _strip_unverified_lines,
 )
 
@@ -570,6 +575,82 @@ def test_generate_subsystems_incremental_filters_to_given_clusters():
     naming_adapter.simple_completion.assert_not_called()
 
 
+def _two_cluster_evidence() -> dict:
+    return {
+        "repository": {
+            "modules": [
+                {"path": "auth/login.py", "language": "python", "imports": [],
+                 "symbols": {"functions": [{"name": "do_login", "start_line": 10, "end_line": 20}], "classes": []}},
+                {"path": "billing/charge.py", "language": "python", "imports": [],
+                 "symbols": {"functions": [{"name": "do_charge", "start_line": 1, "end_line": 9}], "classes": []}},
+            ],
+            "dependency_graph": {"nodes": [], "edges": []},
+        },
+        "architecture": {
+            "clusters": [
+                {"id": 0, "modules": ["auth/login.py"], "internal_edges": 0},
+                {"id": 1, "modules": ["billing/charge.py"], "internal_edges": 0},
+            ]
+        },
+    }
+
+
+def test_generate_subsystems_preserves_cluster_order_under_concurrency():
+    # Cluster 0's write is the slow one, so a naive implementation that just
+    # ran things concurrently and appended results in completion order would
+    # put cluster 1 first - order must come from the input, not the race.
+    evidence = _two_cluster_evidence()
+    naming_adapter = _adapter(json.dumps({"0": "Auth", "1": "Billing"}))
+
+    def _respond(_system_prompt, user_prompt, cwd):
+        payload = json.loads(user_prompt)
+        if payload["name"] == "Auth":
+            time.sleep(0.15)
+        return json.dumps({"description": f"{payload['name']} stuff.", "files": []})
+
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = _respond
+
+    records = generate_subsystems(evidence, naming_adapter, writing_adapter)
+
+    assert [r["name"] for r in records] == ["Auth", "Billing"]
+
+
+def test_generate_subsystems_overlaps_writing_calls_instead_of_serializing():
+    # Real regression this guards: before bounding concurrency, a full build
+    # paid full LLM round-trip latency per subsystem in strict sequence,
+    # measured at ~20-30 min total for one medium repo. Two 150ms calls
+    # finishing in well under their combined 300ms proves they overlapped.
+    evidence = _two_cluster_evidence()
+    naming_adapter = _adapter(json.dumps({"0": "Auth", "1": "Billing"}))
+
+    def _slow_response(_system_prompt, user_prompt, cwd):
+        time.sleep(0.15)
+        return json.dumps({"description": "stuff.", "files": []})
+
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = _slow_response
+
+    started = time.monotonic()
+    generate_subsystems(evidence, naming_adapter, writing_adapter)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.28
+
+
+def test_generate_subsystems_propagates_a_write_failure_instead_of_swallowing_it():
+    # Matches the prior fully-serial behavior: one subsystem's LLM call
+    # raising aborted the whole build rather than silently continuing to
+    # spend budget on the rest. Concurrency must not change that contract.
+    evidence = _two_cluster_evidence()
+    naming_adapter = _adapter(json.dumps({"0": "Auth", "1": "Billing"}))
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = RuntimeError("model call failed")
+
+    with pytest.raises(RuntimeError, match="model call failed"):
+        generate_subsystems(evidence, naming_adapter, writing_adapter)
+
+
 def test_generate_overview_happy_path():
     evidence = make_evidence()
     subsystem_records = [{"subsystem_id": "0", "name": "Authentication", "description": "Handles login."}]
@@ -706,6 +787,87 @@ def test_generate_file_pages_keys_pages_by_path():
         make_evidence(), _adapter(json.dumps({"detail": detail})), paths=["auth/login.py"]
     )
     assert pages == {"auth/login.py": detail}
+
+
+def test_generate_file_pages_overlaps_writing_calls_instead_of_serializing():
+    # Same regression as generate_subsystems: up to DEFAULT_MAX_FILE_PAGES
+    # (40) file pages were written one full LLM round-trip at a time.
+    evidence = _two_cluster_evidence()
+
+    def _slow_response(_system_prompt, user_prompt, cwd):
+        time.sleep(0.15)
+        payload = json.loads(user_prompt)
+        return json.dumps({"detail": f"## Overview\nSee {payload['path']}:1."})
+
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = _slow_response
+
+    started = time.monotonic()
+    pages = generate_file_pages(
+        evidence, writing_adapter, paths=["auth/login.py", "billing/charge.py"]
+    )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.28
+    assert set(pages) == {"auth/login.py", "billing/charge.py"}
+
+
+def test_generate_file_pages_keeps_path_to_detail_mapping_correct_under_concurrency():
+    # A naive zip(targets, completion_order) would cross-wire pages across
+    # files whenever a later file's call happens to finish first.
+    evidence = _two_cluster_evidence()
+
+    def _respond(_system_prompt, user_prompt, cwd):
+        payload = json.loads(user_prompt)
+        if payload["path"] == "auth/login.py":
+            time.sleep(0.1)
+        return json.dumps({"detail": f"## Overview\nSee {payload['path']}:1."})
+
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = _respond
+
+    pages = generate_file_pages(
+        evidence, writing_adapter, paths=["auth/login.py", "billing/charge.py"]
+    )
+
+    assert pages["auth/login.py"] == "## Overview\nSee auth/login.py:1."
+    assert pages["billing/charge.py"] == "## Overview\nSee billing/charge.py:1."
+
+
+def test_run_concurrently_preserves_input_order_regardless_of_completion_order():
+    def _slow():
+        time.sleep(0.1)
+        return "slow"
+
+    results = _run_concurrently([_slow, lambda: "fast"])
+
+    assert results == ["slow", "fast"]
+
+
+def test_run_concurrently_reraises_the_first_exception():
+    def _boom():
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError, match="boom"):
+        _run_concurrently([_boom, lambda: "unaffected"])
+
+
+def test_run_concurrently_handles_empty_and_singleton_input():
+    assert _run_concurrently([]) == []
+    assert _run_concurrently([lambda: "only"]) == ["only"]
+
+
+def test_run_concurrently_actually_uses_multiple_threads():
+    # Guards against a regression to a fake pool that just calls thunks
+    # inline - two thunks that block on each other's start can only both
+    # finish if they truly ran on separate threads.
+    barrier = threading.Barrier(2, timeout=2)
+
+    def _wait_for_both():
+        barrier.wait()
+        return "ok"
+
+    assert _run_concurrently([_wait_for_both, _wait_for_both]) == ["ok", "ok"]
 
 
 def test_attach_file_pages_leaves_files_without_a_page_untouched():
