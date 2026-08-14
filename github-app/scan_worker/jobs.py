@@ -6,6 +6,7 @@ import os
 import secrets
 import shutil
 import subprocess
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -2915,9 +2916,16 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
             return
 
         spend_accumulator = {"total": 0.0}
+        spend_lock = threading.Lock()
 
         def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-            spend_accumulator["total"] += cost_for_usage(model_used, prompt_tokens, completion_tokens)
+            # live_wiki.generate_subsystems/generate_file_pages now run their
+            # per-item writing calls on a bounded thread pool, so this fires
+            # from multiple worker threads concurrently - += on a shared dict
+            # value is a read-modify-write race without the lock.
+            cost = cost_for_usage(model_used, prompt_tokens, completion_tokens)
+            with spend_lock:
+                spend_accumulator["total"] += cost
 
         try:
             naming_adapter = _live_wiki_naming_adapter(on_usage=_on_usage)
@@ -3048,9 +3056,15 @@ def _maybe_update_live_wiki(
 
         update_model = resolve_model(live_wiki.UPDATE_MODEL)
         spend_accumulator = {"total": 0.0}
+        spend_lock = threading.Lock()
 
         def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-            spend_accumulator["total"] += cost_for_usage(update_model, prompt_tokens, completion_tokens)
+            # See matching comment in run_live_wiki_full_build_job: generation
+            # now runs on a bounded thread pool, so this callback is no
+            # longer single-threaded.
+            cost = cost_for_usage(update_model, prompt_tokens, completion_tokens)
+            with spend_lock:
+                spend_accumulator["total"] += cost
 
         try:
             naming_adapter = _live_wiki_naming_adapter(on_usage=_on_usage)

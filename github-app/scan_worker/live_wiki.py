@@ -21,7 +21,8 @@ import json
 import logging
 import re
 import statistics
-from typing import Callable
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
+from typing import Callable, TypeVar
 
 from aletheore.citation_verifier import verify_citations
 from aletheore.evidence_packet import build_evidence_packet
@@ -36,6 +37,48 @@ UPDATE_MODEL = "deepseek-v4-flash"
 # only ever happens on a citation failure, which is rare, so this does not
 # meaningfully move per-push AIRview cost.
 SUBSYSTEM_WRITE_ATTEMPTS = 2
+
+# Subsystem and file-page writing calls are independent - no subsystem's
+# prose depends on another's, and file pages don't depend on each other
+# (only on the subsystem names, which are already resolved by the time this
+# runs). Each one is a synchronous, network-bound LLM call, so a full build
+# paid full round-trip latency per item in strict sequence: measured at
+# ~20-30 min for a single medium repo (~40 file pages + a dozen subsystems).
+# A small thread pool overlaps that latency instead of serializing it.
+# Kept modest rather than "as many as there are items": callers' on_usage/
+# before_llm_call/cache_lookup/cache_write closures may not be written to
+# tolerate unbounded concurrent invocation, and this is a single tenant's
+# build sharing one API key, not a place to maximize provider QPS.
+MAX_GENERATION_WORKERS = 6
+
+_T = TypeVar("_T")
+
+
+def _run_concurrently(thunks: list[Callable[[], _T]], max_workers: int = MAX_GENERATION_WORKERS) -> list[_T]:
+    """Runs each zero-arg callable in a bounded thread pool, in order.
+
+    Results are returned in the same order as `thunks`, regardless of
+    completion order - callers that zip results back against their inputs
+    do not need to track indices themselves. On the first exception, the
+    remaining not-yet-started work is cancelled and that exception is
+    re-raised once every already-started thunk has finished - matching the
+    prior fully-serial behavior, where one failure aborted the whole build
+    without silently continuing to spend budget on the rest.
+    """
+    if not thunks:
+        return []
+    if len(thunks) == 1:
+        return [thunks[0]()]
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(thunks))) as pool:
+        futures = [pool.submit(thunk) for thunk in thunks]
+        done, not_done = wait(futures, return_when=FIRST_EXCEPTION)
+        first_exception = next((f.exception() for f in done if f.exception() is not None), None)
+        if first_exception is not None:
+            for f in not_done:
+                f.cancel()
+            raise first_exception
+        return [f.result() for f in futures]
 
 SUBSYSTEM_DESCRIPTION_UNAVAILABLE = (
     "_Description withheld: the generated summary for this subsystem cited code that "
@@ -583,26 +626,28 @@ def generate_subsystems(
     names = propose_cluster_names(briefs, naming_adapter)
     clusters_by_id = {c["id"]: c for c in evidence.get("architecture", {}).get("clusters", [])}
 
-    records = []
-    for brief in briefs:
-        cid = brief["cluster_id"]
-        cluster = clusters_by_id.get(cid)
-        if cluster is None:
-            continue
-        record = build_subsystem_record(
+    def _thunk(brief: dict, cluster: dict) -> Callable[[], dict]:
+        return lambda: build_subsystem_record(
             evidence,
             cluster,
             brief,
-            names[cid],
+            names[brief["cluster_id"]],
             writing_adapter,
             cache_lookup=cache_lookup,
             cache_write=cache_write,
             model_used=model_used,
             fetch_line_count=fetch_line_count,
         )
-        if record is not None:
-            records.append(record)
-    return records
+
+    thunks = []
+    for brief in briefs:
+        cluster = clusters_by_id.get(brief["cluster_id"])
+        if cluster is None:
+            continue
+        thunks.append(_thunk(brief, cluster))
+
+    records = _run_concurrently(thunks)
+    return [r for r in records if r is not None]
 
 
 def select_file_page_paths(
@@ -772,17 +817,19 @@ def generate_file_pages(
     targets = paths if paths is not None else select_file_page_paths(evidence, max_files=max_files)
     subsystem_by_path = subsystem_by_path or {}
 
-    pages: dict[str, str] = {}
-    for path in targets:
-        detail = build_file_page_record(
+    def _thunk(path: str) -> Callable[[], str | None]:
+        return lambda: build_file_page_record(
             evidence,
             path,
             writing_adapter,
             subsystem_name=subsystem_by_path.get(path, ""),
             fetch_line_count=fetch_line_count,
         )
-        if detail:
-            pages[path] = detail
+
+    details = _run_concurrently([_thunk(path) for path in targets])
+    pages: dict[str, str] = {
+        path: detail for path, detail in zip(targets, details) if detail
+    }
     logger.info("AIRview generated %d/%d file pages", len(pages), len(targets))
     return pages
 
