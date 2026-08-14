@@ -10,6 +10,7 @@ COPY github-app/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY github-app/app_server ./app_server
+COPY github-app/scan_worker ./scan_worker
 COPY github-app/scripts ./scripts
 COPY github-app/migrations ./migrations
 

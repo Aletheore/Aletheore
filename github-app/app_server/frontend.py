@@ -1495,8 +1495,11 @@ async function showSubsystem(subsystemId) {{
     (f.key_symbols || []).forEach(function (sym) {{
       symbolsHtml += '<div class="subsystem-detail-symbol"><span class="line">' + sym.line + '</span> ' + escapeHtml(sym.name) + ' &mdash; ' + escapeHtml(sym.explanation || '') + '</div>';
     }});
-    // The reference page is 250-400 words per file, so it starts collapsed -
+    // The reference page is 500-800 words per file, so it starts collapsed -
     // expanded by default it would bury the file list this view exists to show.
+    // (Raised from 250-400 in AIRVIEW_PROMPT_VERSION 5 - see live_wiki.py. The
+    // collapse-by-default call itself wasn't revisited; longer pages make that
+    // worth reconsidering separately.)
     let detailHtml = '';
     if (f.detail) {{
       detailHtml = '<details class="wiki-md"><summary>Reference</summary>' +

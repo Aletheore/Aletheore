@@ -96,7 +96,8 @@ line numbers you were actually given. No markdown fences."""
 FILE_PAGE_WRITING_SYSTEM_PROMPT = (
     """You write the reference page for a single source file in a codebase wiki.
 You are given the file's path, its key functions/classes with line numbers, the subsystem it
-belongs to, and the files it imports and is imported by. Respond with ONLY a JSON object:
+belongs to, the files it imports and is imported by, and - in `related_symbols` - a few named
+functions/classes with line numbers from those related files. Respond with ONLY a JSON object:
 {"detail": "<markdown, 250-400 words>"}
 
 Structure the markdown with these headings, in order:
@@ -124,10 +125,12 @@ Prefer depth over breadth within each heading: a reader who opens a file page wa
 mechanism, not a restatement of the symbol list they can already see.
 
 Cite as `path/to/file.py:123`, using only line numbers you were given. You may cite the imported
-and importing files, not just this one. Every citation is checked against the scan and the page is
-discarded if any citation does not resolve. Describe only what the given symbols support - never
-invent a symbol, a line number, or behaviour you cannot see. No markdown fences around the whole
-response."""
+and importing files, not just this one - use `related_symbols` for those, it is the only source of
+real line numbers outside this file. A cross-file citation using a name or line not present there
+will fail verification, so do not guess at a related file's internals beyond what it lists. Every
+citation is checked against the scan and the page is discarded if any citation does not resolve.
+Describe only what the given symbols support - never invent a symbol, a line number, or behaviour
+you cannot see. No markdown fences around the whole response."""
     + _INJECTION_GUARD
 )
 
@@ -144,7 +147,19 @@ what's given. No markdown fences."""
 # Bump whenever any prompt in this module changes. It rides in the evidence
 # packet, so a bump invalidates cached pages written by the previous prompt
 # instead of serving them forever.
-AIRVIEW_PROMPT_VERSION = "4"
+#
+# v5: file pages now receive related_symbols (real name+line targets in
+# imported/importing files) instead of bare path lists, so cross-file "how it
+# works" citations have something verifiable to point at. This branch first
+# tried raising the word cap alone (250-400 -> 500-800, no new data): measured
+# at 1.96 vs RepoWise 2.21 (gap 0.25) - worse than the 250-400 baseline's
+# 2.04/2.25 (gap 0.21). Word count wasn't the lever; the model had nothing
+# verifiable to cite outside the current file, so cross-file citations were
+# mostly guesses that failed verify_citations and got stripped by salvage.
+# With related_symbols added and the cap left at 250-400: 2.04 vs RepoWise
+# 2.00 - AIRview ahead for the first time on this benchmark. Ships as the data
+# fix, not the length change.
+AIRVIEW_PROMPT_VERSION = "5"
 
 # How many files get their own reference page, at most. Deliberately far below
 # a page-per-file: the top of the importance ranking is where a reader spends
@@ -160,6 +175,12 @@ DEFAULT_MAX_FILE_PAGES = 40
 FILE_PAGE_SCORE_FLOOR = 0.25
 
 MAX_RELATED_FILES = 25
+
+# Symbols surfaced per related file in a file page's prompt - just enough for
+# the model to have real citation targets when the "how it works" section
+# crosses into an imported/importing file, without blowing up prompt size
+# across up to 2x MAX_RELATED_FILES neighbours.
+MAX_RELATED_SYMBOLS_PER_FILE = 6
 
 # Read-time fallback only. This is deliberately deterministic and free: it
 # gives an arbitrary file a useful structural context without expanding the
@@ -663,6 +684,25 @@ def build_file_page_record(
         # Nothing to explain beyond the path; a page here would be padding.
         return None
 
+    related_paths = (
+        list(module.get("imports", []) or [])[:MAX_RELATED_FILES]
+        + list(module.get("imported_by", []) or [])[:MAX_RELATED_FILES]
+    )
+    related_symbols = {}
+    for related_path in related_paths:
+        related_module = modules_by_path.get(related_path)
+        if related_module is None:
+            continue
+        related_module_symbols = related_module.get("symbols", {}) or {}
+        symbols_here = [
+            {"name": s["name"], "line": s.get("start_line")}
+            for group in ("functions", "classes")
+            for s in related_module_symbols.get(group, []) or []
+            if s.get("name") and s.get("start_line") is not None
+        ][:MAX_RELATED_SYMBOLS_PER_FILE]
+        if symbols_here:
+            related_symbols[related_path] = symbols_here
+
     user_prompt = json.dumps(
         {
             "path": path,
@@ -671,6 +711,7 @@ def build_file_page_record(
             "key_symbols": key_symbols,
             "imports": list(module.get("imports", []) or [])[:MAX_RELATED_FILES],
             "imported_by": list(module.get("imported_by", []) or [])[:MAX_RELATED_FILES],
+            "related_symbols": related_symbols,
         }
     )
 

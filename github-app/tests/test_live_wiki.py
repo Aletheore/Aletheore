@@ -669,6 +669,37 @@ def test_build_file_page_record_skips_files_with_no_symbols():
     adapter.simple_completion.assert_not_called()
 
 
+def test_build_file_page_record_sends_real_symbols_for_related_files():
+    """The prompt tells the model it may cite imported/importing files, so it
+    needs real (name, line) targets there - a bare path list gives it nothing
+    to cite but a guess, which fails verify_citations and gets stripped by
+    salvage. Measured: this is why raising the word cap alone (v6) didn't
+    close the AIRview gap - the extra words had nowhere safe to go."""
+    evidence = make_evidence()
+    evidence["repository"]["modules"][0]["imports"] = ["auth/tokens.py"]
+    evidence["repository"]["modules"][1]["symbols"] = {
+        "functions": [{"name": "issue_token", "start_line": 5, "end_line": 9}],
+        "classes": [],
+    }
+    adapter = _adapter(json.dumps({"detail": "## Overview\nSee auth/login.py:10."}))
+
+    build_file_page_record(evidence, "auth/login.py", adapter)
+
+    sent = json.loads(adapter.simple_completion.call_args[0][1])
+    assert sent["related_symbols"] == {"auth/tokens.py": [{"name": "issue_token", "line": 5}]}
+
+
+def test_build_file_page_record_omits_related_files_with_no_symbols():
+    evidence = make_evidence()
+    evidence["repository"]["modules"][0]["imports"] = ["auth/tokens.py"]
+    adapter = _adapter(json.dumps({"detail": "## Overview\nSee auth/login.py:10."}))
+
+    build_file_page_record(evidence, "auth/login.py", adapter)
+
+    sent = json.loads(adapter.simple_completion.call_args[0][1])
+    assert sent["related_symbols"] == {}
+
+
 def test_generate_file_pages_keys_pages_by_path():
     detail = "## Overview\nLogin lives at auth/login.py:10."
     pages = generate_file_pages(
