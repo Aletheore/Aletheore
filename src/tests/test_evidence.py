@@ -36,8 +36,8 @@ def run(repo: Path, *args: str):
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
 
-def test_evidence_version_is_0_2_0():
-    assert EVIDENCE_VERSION == "0.2.0"
+def test_evidence_version_is_0_3_0():
+    assert EVIDENCE_VERSION == "0.3.0"
 
 
 def make_repo(tmp_path: Path) -> Path:

@@ -58,6 +58,36 @@ def _arr(items: dict | None = None) -> dict:
 # here would turn a harmless additive change into a CI failure.
 _SECRET_FINDING = _obj({"path": _STR, "line": _INT, "pattern": _STR})
 _ENDPOINT = _obj({"file": _STR, "line": _INT, "method": _STR, "path": _STR})
+
+# Same "only what consumers read" discipline as the findings arrays above.
+# The extractor emits more per column (unique, default); those stay
+# unspecified so a later ORM or Prisma source can add its own keys without a
+# version bump. `schema` itself is gated - see schema_map.skipped_schema -
+# but the section is always present with these keys, so `checked` is the
+# only thing a consumer ever branches on.
+_SCHEMA_COLUMN = _obj({"name": _STR, "type": _STR, "primary_key": _BOOL, "nullable": _BOOL})
+_SCHEMA_TABLE = _obj({"name": _STR, "columns": _arr(_SCHEMA_COLUMN), "file": _STR, "line": _INT})
+_SCHEMA_RELATION = _obj(
+    {
+        "from_table": _STR,
+        "from_column": _STR,
+        "to_table": _STR,
+        "to_column": _STR,
+        "file": _STR,
+        "line": _INT,
+    }
+)
+_SCHEMA_INDEX = _obj({"name": _STR, "table": _STR, "columns": _ANY_LIST, "unique": _BOOL})
+_SCHEMA_MAP = _obj(
+    {
+        "checked": _BOOL,
+        "tables": _arr(_SCHEMA_TABLE),
+        "relations": _arr(_SCHEMA_RELATION),
+        "indexes": _arr(_SCHEMA_INDEX),
+        "unsupported": _ANY_LIST,
+        "sources": _ANY_LIST,
+    }
+)
 _MODULE = _obj({"path": _STR, "language": _STR, "imports": _ANY_LIST, "imported_by": _ANY_LIST})
 _LANGUAGE = _obj({"name": _STR, "file_count": _INT, "loc": _INT})
 _OWNERSHIP = _obj({"email": _STR, "commit_count": _INT, "percent": _NUM})
@@ -104,6 +134,7 @@ AIR_JSON_SCHEMA: dict = {
                         "orm_frameworks": _ANY_LIST,
                         "migration_directories": _ANY_LIST,
                         "schema_files": _ANY_LIST,
+                        "schema": _SCHEMA_MAP,
                     }
                 ),
                 "infrastructure": _obj(

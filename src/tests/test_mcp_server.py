@@ -9,6 +9,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from aletheore.mcp_server import build_server
 from aletheore.search_index import IndexNotFoundError
+from aletheore.schema_map import skipped_schema
 from tests.air_fixtures import minimal_air_evidence
 
 
@@ -77,6 +78,11 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
                 "orm_frameworks": [],
                 "migration_directories": [{"path": "migrations", "file_count": 4}],
                 "schema_files": [],
+                # Unchecked rather than omitted: this override replaces the
+                # whole `database` object, so it has to restate every key
+                # minimal_air_evidence() would have supplied - and the gated
+                # shape is what an unentitled scan actually writes.
+                "schema": skipped_schema("requires a paid plan"),
             },
             "infrastructure": {
                 "docker_compose_services": [{"file": "docker-compose.yml", "services": ["web"]}],
