@@ -396,7 +396,11 @@ services:
       # a busy host doesn't get flagged unhealthy before it's had a chance.
       start_period: 60s
     cpus: "1.0"
-    mem_limit: 1500m
+    # Bumped from 1500m: was already sitting at 84% of that cap after a
+    # single warm-up request (model-load baseline, not a leak), leaving
+    # almost no headroom for concurrent traffic before the cgroup OOM-kills
+    # it. Host has 12GB+ free, so this is cheap insurance.
+    mem_limit: 2500m
 
   caddy:
     image: caddy:2-alpine
