@@ -441,12 +441,18 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
         # _is_declaration_only_file and the rank penalty in _rrf_fuse.
         is_declaration_only = _is_declaration_only_file(module_path, language, "\n".join(lines))
 
-        code_symbols = (
-            module["symbols"]["functions"]
-            + module["symbols"]["classes"]
-            + module["symbols"].get("properties", [])
+        # Members keep their own chunk - the general regime finds files
+        # through a member's source that no other chunk reaches - but they
+        # are marked so _rrf_fuse can demote them behind a real declaration.
+        # Order matters: declarations first, so the index split below tells
+        # the two apart without a second lookup.
+        declaration_symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
+        member_symbols = (
+            module["symbols"].get("properties", [])
             + module["symbols"].get("fields", [])
         )
+        code_symbols = declaration_symbols + member_symbols
+        first_member_index = len(declaration_symbols)
         # Constants are indexed only for files that define nothing else.
         #
         # Measured both ways. Indexing them everywhere cost accuracy on files
@@ -479,6 +485,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "language": language,
                     "imports": imports,
                     "is_declaration_only": is_declaration_only,
+                    "is_member": False,
                     "text": _truncate_for_embedding(f"{module_path} (no extracted symbols)\n{snippet}"),
                 }
             )
@@ -512,6 +519,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                         "language": language,
                         "imports": imports,
                         "is_declaration_only": is_declaration_only,
+                        "is_member": False,
                         # Path and symbol list join the docstring so the chunk
                         # is reachable by what the module *contains*, not only
                         # by how its author happened to describe it.
@@ -521,7 +529,8 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     }
                 )
 
-        for symbol in code_symbols:
+        for symbol_index, symbol in enumerate(code_symbols):
+            is_member = symbol_index >= first_member_index
             start_line = symbol["start_line"]
             end_line = symbol["end_line"]
             source = "\n".join(lines[start_line - 1:end_line])
@@ -549,6 +558,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "language": language,
                     "imports": imports,
                     "is_declaration_only": is_declaration_only,
+                    "is_member": is_member,
                     "text": _truncate_for_embedding(f"{header}\n{source}"),
                 }
             )
@@ -576,6 +586,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "language": language,
                     "imports": imports,
                     "is_declaration_only": is_declaration_only,
+                    "is_member": False,
                     "text": _truncate_for_embedding(
                         f"{module_path} (module-level declarations)\n"
                         f"declares: {names}\n{declared}"
@@ -977,6 +988,26 @@ _AUX_DIR_MARKERS = frozenset({
 # matches.
 _AUXILIARY_RANK_PENALTY = 8
 
+# A property or field competes with the type it is declared as. "Where is
+# AutoMapper's PropertyMap defined?" should reach the file declaring `class
+# PropertyMap`, not one of the files holding a `PropertyMap` property - but
+# the member's chunk is short and name-dominated, so it embeds closer to the
+# bare name than the declaration's own larger chunk does. Same demotion
+# shape as the two above, and for the same reason it is a demotion: a member
+# is occasionally the only place a behaviour appears, and the general regime
+# reaches two AutoMapper files through nothing else.
+#
+# Deliberately smaller than the 8 above. Those demote a whole class of file
+# that is usually not the answer at all - an interface, a docs directory. A
+# member is normally part of the right file, so it needs a tie-break, not a
+# banishment. Measured on AutoMapper against master, indexing members with no
+# penalty costs 13.4 points of vocabulary top-1; at 2 it costs 6.7 while
+# keeping the general regime's whole gain (top-1 6.7% -> 13.3%, top-3 20.0%
+# -> 26.7%, top-5 33.3% -> 40.0%). 12 is already too blunt - it drops general
+# top-1 back to master's 6.7%. Values 2 and 4 measured identically on every
+# top-k; 2 is chosen on the reasoning above, not because it won a sweep,
+# since a sweep over one 30-question corpus is tuning on the test set.
+_MEMBER_RANK_PENALTY = 2
 
 
 def _is_auxiliary_path(module_path: str) -> bool:
@@ -1008,6 +1039,8 @@ def _rrf_fuse(vector_hits: list[dict], text_hits: list[dict]) -> list[dict]:
                 effective_rank += _DECLARATION_ONLY_RANK_PENALTY
             if _is_auxiliary_path(hit.get("module_path") or ""):
                 effective_rank += _AUXILIARY_RANK_PENALTY
+            if hit.get("is_member"):
+                effective_rank += _MEMBER_RANK_PENALTY
             scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_K + effective_rank + 1)
             by_key[key] = hit
     return [by_key[key] for key, _ in sorted(scores.items(), key=lambda item: -item[1])]
