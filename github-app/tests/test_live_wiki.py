@@ -13,12 +13,137 @@ from scan_worker.live_wiki import (
     propose_cluster_names,
     _related_files,
     attach_file_pages,
+    build_file_fallback_detail,
     build_file_page_record,
     generate_file_pages,
     select_file_page_paths,
     _drop_test_only_briefs,
     _strip_unverified_lines,
 )
+
+
+def test_build_file_fallback_detail_uses_symbols_and_dependency_graph_without_llm():
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "src/auth.py",
+                    "language": "python",
+                    "imports": ["src/tokens.py"],
+                    "imported_by": ["src/app.py"],
+                    "symbols": {
+                        "functions": [{"name": "login", "start_line": 12}],
+                        "classes": [{"name": "Authenticator", "start_line": 4}],
+                    },
+                }
+            ]
+        }
+    }
+
+    detail = build_file_fallback_detail(
+        evidence,
+        "src/auth.py",
+        file_entry={"role": "Owns request authentication."},
+    )
+
+    assert detail is not None
+    assert "Owns request authentication." in detail
+    assert "`login` (line 12)" in detail
+    assert "`src/tokens.py`" in detail
+    assert "`src/app.py`" in detail
+
+
+def test_build_file_fallback_detail_supports_unindexed_file_from_bounded_source():
+    detail = build_file_fallback_detail(
+        {"repository": {"modules": []}},
+        "docs/config.rst",
+        source_text="Configuration\n=============\n\nSet the application options here.\n",
+    )
+
+    assert detail is not None
+    assert "docs/config.rst" in detail
+    assert "Set the application options here." in detail
+
+
+def test_build_file_fallback_detail_omits_scaffolding_for_no_module_files():
+    # Regression guard: measured on real flask workflow/config files, the
+    # "## Lightweight reference" / "Source excerpt:" / code-fence wrapper
+    # made the block ~8% *larger* than the source file itself for files
+    # with no symbols to report - pure overhead, zero information gain.
+    source = "name: pre-commit\non:\n  pull_request:\n"
+    detail = build_file_fallback_detail(
+        {"repository": {"modules": []}},
+        ".github/workflows/pre-commit.yaml",
+        source_text=source,
+    )
+
+    assert detail is not None
+    assert "## Lightweight reference" not in detail
+    assert "Source excerpt:" not in detail
+    assert "```" not in detail
+    assert source.strip() in detail
+    assert len(detail) < len(source) + 50  # header line only, not a multi-line wrapper
+
+
+def test_build_file_fallback_detail_extracts_lockfile_package_names():
+    # A blind character cutoff on a real 364KB uv.lock kept under 2% of the
+    # file and none of it was guaranteed to be package names - just
+    # whatever text happened to land in the first 5000 bytes (hashes, URLs).
+    source = (
+        'version = 1\n'
+        'revision = 3\n'
+        'requires-python = ">=3.10"\n'
+        '\n'
+        '[[package]]\n'
+        'name = "flask"\n'
+        'version = "3.2.0"\n'
+        '\n'
+        '[[package]]\n'
+        'name = "click"\n'
+        'version = "8.1.0"\n'
+    )
+    detail = build_file_fallback_detail(
+        {"repository": {"modules": []}},
+        "uv.lock",
+        source_text=source,
+    )
+
+    assert detail is not None
+    assert 'requires-python = ">=3.10"' in detail
+    assert "2 packages pinned:" in detail
+    assert "click" in detail
+    assert "flask" in detail
+    # The reduction is the point - no package version numbers or hashes,
+    # just what a "what does this project depend on" question needs.
+    assert "3.2.0" not in detail
+
+
+def test_build_file_fallback_detail_keeps_only_first_changelog_section():
+    source = (
+        "Version 3.2.0\n"
+        "-------------\n"
+        "\n"
+        "Unreleased\n"
+        "\n"
+        "-   Drop support for Python 3.9.\n"
+        "\n"
+        "Version 3.1.0\n"
+        "-------------\n"
+        "\n"
+        "Released 2024-01-01\n"
+        "\n"
+        "-   Some much older change nobody is asking about right now.\n"
+    )
+    detail = build_file_fallback_detail(
+        {"repository": {"modules": []}},
+        "CHANGES.rst",
+        source_text=source,
+    )
+
+    assert detail is not None
+    assert "Drop support for Python 3.9." in detail
+    assert "Version 3.1.0" not in detail
+    assert "much older change" not in detail
 
 
 def test_incremental_update_model_stays_on_flash():

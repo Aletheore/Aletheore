@@ -161,6 +161,61 @@ FILE_PAGE_SCORE_FLOOR = 0.25
 
 MAX_RELATED_FILES = 25
 
+# Read-time fallback only. This is deliberately deterministic and free: it
+# gives an arbitrary file a useful structural context without expanding the
+# set of files sent through the paid AIRview writing pipeline.
+FALLBACK_FILE_CONTEXT_MAX_CHARS = 5000
+
+_LOCKFILE_NAMES = {"uv.lock", "poetry.lock", "Cargo.lock", "package-lock.json", "Gemfile.lock", "yarn.lock"}
+_CHANGELOG_NAMES = {"CHANGES.rst", "CHANGELOG.md", "CHANGELOG.rst", "HISTORY.rst"}
+
+# TOML lockfiles (uv.lock, poetry.lock, Cargo.lock) all use `name = "..."`
+# inside `[[package]]`/`[[dependencies]]` blocks - this doesn't need a TOML
+# parser dependency, just enough regex to pull the field real lockfiles
+# actually use it for.
+_LOCK_PACKAGE_NAME_RE = re.compile(r'^name\s*=\s*"([^"]+)"', re.MULTILINE)
+# Top-level scalar fields (requires-python, version, revision - not inside
+# any [[package]] block) that answer real questions on their own ("what
+# Python version does this project require") - lost entirely by extracting
+# package names alone. Regex-only match at the top of the file, before the
+# first `[[` block starts, so it never picks up a per-package field of the
+# same name.
+_LOCK_TOP_LEVEL_RE = re.compile(r'^([\w-]+)\s*=\s*(".*?"|\d+)\s*$', re.MULTILINE)
+
+
+def _reduce_source_text(path: str, source_text: str) -> str:
+    """Structured reduction for file types where a blind character cutoff
+    throws away almost everything useful. Measured on real flask data: a
+    364KB uv.lock and a 74KB CHANGES.rst both got cut to the same 5000-char
+    ceiling as everything else - under 2% and 7% of the original
+    respectively, and what survived was an arbitrary byte offset, not
+    necessarily the most useful part. Falls through to the caller's own
+    truncation for every other file type unchanged - this is deliberately
+    narrow (lockfiles and changelogs have a knowable structure a regex can
+    exploit for free; a random doc page's "most useful section" does not,
+    and guessing at that is a real summarization problem, not this one).
+    """
+    filename = path.rsplit("/", 1)[-1]
+    if filename in _LOCKFILE_NAMES:
+        names = _LOCK_PACKAGE_NAME_RE.findall(source_text)
+        if names:
+            header_text = source_text.split("\n[[", 1)[0]  # before the first [[package]] block
+            top_level = [f"{k} = {v}" for k, v in _LOCK_TOP_LEVEL_RE.findall(header_text)]
+            parts = []
+            if top_level:
+                parts.append("\n".join(top_level))
+            parts.append(f"{len(names)} packages pinned: " + ", ".join(sorted(set(names))))
+            return "\n\n".join(parts)
+    elif filename in _CHANGELOG_NAMES:
+        # Keep only the first (most recent/unreleased) section: RST/MD
+        # changelogs conventionally put a version heading, then an
+        # underline of -/= directly below it, marking the next entry.
+        lines = source_text.splitlines()
+        for i in range(2, len(lines)):
+            if re.fullmatch(r"[-=]{3,}", lines[i].strip()) and lines[i - 1].strip():
+                return "\n".join(lines[: i - 1]).strip()
+    return source_text
+
 
 def _related_files(evidence: dict, brief: dict) -> list[str]:
     """Files outside this subsystem that its members import or are imported by.
@@ -181,6 +236,85 @@ def _related_files(evidence: dict, brief: dict) -> list[str]:
             if neighbour not in own and neighbour in modules_by_path:
                 related.add(neighbour)
     return sorted(related)[:MAX_RELATED_FILES]
+
+
+def build_file_fallback_detail(
+    evidence: dict,
+    path: str,
+    *,
+    file_entry: dict | None = None,
+    source_text: str | None = None,
+) -> str | None:
+    """Builds a cheap context block for a file without an AIRview page.
+
+    The scanner's module record is the primary source: symbols plus direct
+    imports/importers are enough to make a file addressable even when the
+    LLM-selected page set omitted it. ``source_text`` is an optional bounded
+    fallback for files outside the scanner's module set (docs, config, and
+    workflow files) and is supplied only by the on-demand dashboard route.
+    This function never calls a model and is not used by generation.
+    """
+    modules = evidence.get("repository", {}).get("modules", [])
+    module = next((m for m in modules if m.get("path") == path), None)
+    if module is None and not source_text:
+        return None
+
+    entry = file_entry if isinstance(file_entry, dict) else {}
+    role = entry.get("role")
+
+    if module is None:
+        # No symbols/imports to report - the "## Lightweight reference" /
+        # "Source excerpt:" / code-fence scaffolding below is pure overhead
+        # for this case (measured: made the block ~8% *larger* than the raw
+        # file on real flask workflow/config files, for zero information
+        # gain). Keep only the one line genuinely needed downstream - a path
+        # header, since fallback blocks for multiple files get concatenated
+        # without any other separator - plus role if the caller supplied one.
+        lines = [f"# {path}", ""]
+        if isinstance(role, str) and role.strip():
+            lines.extend([role.strip(), ""])
+        excerpt = _reduce_source_text(path, source_text or "")[:FALLBACK_FILE_CONTEXT_MAX_CHARS]
+        lines.append(excerpt)
+        return "\n".join(lines)[:FALLBACK_FILE_CONTEXT_MAX_CHARS].strip()
+
+    lines = [f"# {path}", "", "## Lightweight reference", ""]
+    if isinstance(role, str) and role.strip():
+        lines.extend([role.strip(), ""])
+
+    if module is not None:
+        language = module.get("language") or "unknown"
+        lines.append(f"Language: {language}")
+        symbols = module.get("symbols", {}) or {}
+        symbol_rows = []
+        for kind, group in (
+            ("class", "classes"),
+            ("function", "functions"),
+            ("property", "properties"),
+            ("field", "fields"),
+            ("constant", "constants"),
+        ):
+            for symbol in symbols.get(group, []) or []:
+                name = symbol.get("name")
+                if name:
+                    line = symbol.get("start_line")
+                    symbol_rows.append(f"- {kind} `{name}`" + (f" (line {line})" if line else ""))
+        if symbol_rows:
+            lines.extend(["", "Symbols:", *symbol_rows[:60]])
+
+        imports = sorted(set(module.get("imports", []) or []))
+        imported_by = sorted(set(module.get("imported_by", []) or []))
+        if imports:
+            lines.extend(["", "Imports:", *[f"- `{p}`" for p in imports[:MAX_RELATED_FILES]]])
+        if imported_by:
+            lines.extend(["", "Imported by:", *[f"- `{p}`" for p in imported_by[:MAX_RELATED_FILES]]])
+
+    if source_text:
+        # Keep the source excerpt useful for arbitrary non-module files while
+        # bounding response size and avoiding a second full-file materialization.
+        excerpt = _reduce_source_text(path, source_text)[:FALLBACK_FILE_CONTEXT_MAX_CHARS]
+        lines.extend(["", "Source excerpt:", "```", excerpt, "```"])
+
+    return "\n".join(lines)[:FALLBACK_FILE_CONTEXT_MAX_CHARS].strip()
 
 
 def _parse_json_object(raw: str) -> dict | None:

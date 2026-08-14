@@ -1473,6 +1473,79 @@ async def test_dashboard_wiki_subsystem_returns_detail(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_wiki_file_returns_structural_fallback_for_unpaged_module(pool, monkeypatch):
+    await upsert_installation(pool, 607, "octocat")
+    await set_installation_plan(pool, 607, "indie")
+    await insert_repo_history(
+        pool,
+        607,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {
+            "repository": {
+                "modules": [
+                    {
+                        "path": "src/auth.py",
+                        "language": "python",
+                        "imports": ["src/tokens.py"],
+                        "imported_by": ["src/app.py"],
+                        "symbols": {
+                            "functions": [{"name": "login", "start_line": 12}],
+                            "classes": [],
+                        },
+                    }
+                ]
+            }
+        },
+    )
+    await pool.execute(
+        """
+        INSERT INTO wiki_subsystems
+            (installation_id, repo_full_name, subsystem_id, name, description, files, diagram_mermaid, source_commit)
+        VALUES (607, 'octocat/hello-world', 'auth', 'Auth', 'Handles authentication.', $1::jsonb, 'graph TD; A-->B;', 'abc123')
+        """,
+        '[{"path":"src/auth.py","role":"Owns request authentication.","key_symbols":[]}]',
+    )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[607])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/wiki/file/src/auth.py")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["file"]["detail_source"] == "fallback"
+    assert "Owns request authentication." in body["file"]["detail"]
+    assert "`src/tokens.py`" in body["file"]["detail"]
+    assert "`login` (line 12)" in body["file"]["detail"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_wiki_file_fetches_unindexed_file_without_llm(pool, monkeypatch):
+    await upsert_installation(pool, 608, "octocat")
+    await set_installation_plan(pool, 608, "indie")
+    await insert_repo_history(
+        pool,
+        608,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {"repository": {"modules": []}},
+    )
+    monkeypatch.setattr(
+        "app_server.dashboard._fetch_wiki_file_content_sync",
+        lambda *args: "Config\n=====\n\nThe application configuration.\n",
+    )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[608])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/wiki/file/config.toml")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["file"]["detail_source"] == "fallback"
+    assert "The application configuration." in body["file"]["detail"]
+
+
+@pytest.mark.asyncio
 async def test_dashboard_wiki_subsystem_404s_for_unknown_id(pool, monkeypatch):
     await upsert_installation(pool, 605, "octocat")
     await set_installation_plan(pool, 605, "indie")
