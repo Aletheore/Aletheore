@@ -1,0 +1,19 @@
+# CVE-2026-4372 and CVE-2026-5241 (transformers, jina-embed image only):
+# both are fixed only in transformers>=5.3.0/5.5.0. Verified empirically
+# that transformers v5 breaks jina-embeddings-v2-base-code's vendored
+# remote code beyond a single importable function (find_pruneable_heads_
+# and_indices can be shimmed back in, but a v5 config attribute-access
+# change then fails deeper inside modeling_bert.py's JinaBertSelfAttention
+# init - fixing that would mean forking and maintaining someone else's
+# HuggingFace model code). Pinned to transformers==4.48.0 instead, which
+# closes the other 3 transformers CVEs this same scan found (all fixed at
+# 4.48.0) and is the newest version confirmed compatible.
+#
+# Accepted for jina-embed specifically because both CVEs concern loading
+# untrusted/attacker-supplied model files at runtime: this image only
+# ever loads one fixed model (jinaai/jina-embeddings-v2-base-code), baked
+# into the image at build time from HuggingFace's own hosted weights, and
+# takes no model input from any caller at runtime - there is no code path
+# for a caller to supply a different model to load.
+CVE-2026-4372
+CVE-2026-5241

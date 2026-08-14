@@ -5,7 +5,7 @@ WORKDIR /app
 COPY github-app/requirements-jina-embed.txt .
 # CPU-only torch wheel - these hosts have no GPU, and the default PyPI
 # wheel pulls CUDA libraries that roughly double image size for nothing.
-RUN pip install --no-cache-dir torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu \
+RUN pip install --no-cache-dir torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu \
     && pip install --no-cache-dir -r requirements-jina-embed.txt \
     # torch's CPU wheel pulls setuptools 78.1.0, which carries CVE-2025-47273
     # (path traversal) - fixed in 78.1.1. Upgraded explicitly since torch
