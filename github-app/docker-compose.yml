@@ -79,7 +79,7 @@ services:
         required: false
     environment:
       - GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem
-      - OLLAMA_BASE_URL=http://ollama:11434
+      - JINA_EMBED_BASE_URL=http://jina-embed:80
       - ALETHEORE_REPO_CHECKOUT_ROOT=/data/aletheore-repo-checkouts
       - ALETHEORE_APP_HEALTH_URL=http://app-server:8000/healthz
       - ALETHEORE_BACKUP_DIR=/app/backups
@@ -104,8 +104,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      ollama:
-        condition: service_started
+      jina-embed:
+        condition: service_healthy
     cpus: "1.0"
     mem_limit: 1g
     # See app-server's identical block above for the reasoning. Higher
@@ -147,7 +147,7 @@ services:
         required: false
     environment:
       - GITHUB_APP_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem
-      - OLLAMA_BASE_URL=http://ollama:11434
+      - JINA_EMBED_BASE_URL=http://jina-embed:80
       - ALETHEORE_REPO_CHECKOUT_ROOT=/data/aletheore-repo-checkouts
       - ALETHEORE_APP_HEALTH_URL=http://app-server:8000/healthz
       - ALETHEORE_BACKUP_DIR=/app/backups
@@ -162,8 +162,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      ollama:
-        condition: service_started
+      jina-embed:
+        condition: service_healthy
     cpus: "1.0"
     mem_limit: 1g
     security_opt:
@@ -179,7 +179,7 @@ services:
   # transactional email, behind it. Same image as scan-worker since
   # run_health_check_sweep_job's failure-alert enrichment needs the same
   # GitHub App credentials and LLM keys; RESEND_API_KEY comes from the
-  # same env_file. No Ollama or persistent repo-checkout volume since
+  # same env_file. No jina-embed or persistent repo-checkout volume since
   # neither health checks nor email sends do embeddings or local git work.
   health-worker:
     build:
@@ -362,32 +362,41 @@ services:
     security_opt:
       - "no-new-privileges:true"
 
-  ollama:
-    image: ollama/ollama:latest
+  # Replaced Ollama+nomic-embed-text here (see PR history) after a real,
+  # corrected 6-language retrieval benchmark showed jina-embeddings-v2-
+  # base-code beating nomic on every metric (75.0/93.1/95.8% vs
+  # 73.6/87.5/91.7% top-1/3/5 pooled) while bge-m3 actually underperformed
+  # nomic - jina was the only code-specific model tested, which tracks.
+  # Model weights are baked into the image at build time (see
+  # Dockerfile.jina-embed), so no persistent volume is needed here the way
+  # Ollama needed one for its pulled model - a fresh container already has
+  # the weights.
+  jina-embed:
+    build:
+      context: ..
+      dockerfile: github-app/Dockerfile.jina-embed
     restart: unless-stopped
-    # Internal-only (11434, never published to the host) - same reasoning
-    # as redis above.
+    # Internal-only (port 80, never published to the host) - same
+    # reasoning as redis above.
     security_opt:
       - "no-new-privileges:true"
-    # Tried OLLAMA_CONTEXT_LENGTH=8192 here first, assuming nomic-embed-text
-    # supports an 8192-token context - it doesn't, not on the GGUF this
-    # pulls: confirmed directly against the running server that the model's
-    # own trained context is a hard 2048, and requesting more just logged
-    # "requested context size too large for model" and got silently
-    # clamped back down. The real fix is keeping input within that limit
-    # (see MAX_EMBEDDING_CHARS in scan_worker/embedding_client.py), not a
-    # server setting that can't raise a ceiling the model itself doesn't have.
-    volumes:
-      - aletheore_ollama_data:/root/.ollama
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        ollama serve &
-        sleep 3
-        ollama pull nomic-embed-text
-        wait
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:80/healthz', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      # Model load happens at import time, before uvicorn starts accepting
+      # connections at all - generous start_period so a slow cold start on
+      # a busy host doesn't get flagged unhealthy before it's had a chance.
+      start_period: 60s
     cpus: "1.0"
-    mem_limit: 1g
+    mem_limit: 1500m
 
   caddy:
     image: caddy:2-alpine
@@ -429,12 +438,11 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     # No published port, no privileged-port binding - safe for the same
-    # reason as redis/ollama above.
+    # reason as redis/jina-embed above.
     security_opt:
       - "no-new-privileges:true"
 
 volumes:
   aletheore_postgres_data:
-  aletheore_ollama_data:
   aletheore_caddy_data:
   aletheore_caddy_config:

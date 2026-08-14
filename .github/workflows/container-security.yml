@@ -24,6 +24,9 @@ jobs:
           - image: scan-worker
             dockerfile: github-app/Dockerfile.scan-worker
             tag: aletheore-scan-worker:ci
+          - image: jina-embed
+            dockerfile: github-app/Dockerfile.jina-embed
+            tag: aletheore-jina-embed:ci
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -70,6 +73,9 @@ jobs:
           - image: scan-worker
             dockerfile: github-app/Dockerfile.scan-worker
             tag: aletheore-scan-worker:ci
+          - image: jina-embed
+            dockerfile: github-app/Dockerfile.jina-embed
+            tag: aletheore-jina-embed:ci
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

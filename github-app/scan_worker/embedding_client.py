@@ -1,39 +1,31 @@
-"""Ollama embedding client for evidence-packet similarity caching."""
+"""jina-embed client for evidence-packet and flash-review similarity caching.
+
+Replaced Ollama+nomic-embed-text after a real, corrected 6-language
+retrieval benchmark showed jina-embeddings-v2-base-code beating nomic on
+every metric (75.0/93.1/95.8% vs 73.6/87.5/91.7% top-1/3/5 pooled), while
+bge-m3 actually underperformed nomic. See jina_embed/server.py, which
+serves this model behind a plain /embed endpoint.
+"""
 
 import logging
 import os
 
 import httpx
 
-EMBEDDING_MODEL = "nomic-embed-text"
-
-# The pulled nomic-embed-text GGUF's own metadata caps it at a real,
-# hard 2048-token training context (confirmed directly against the running
-# server: `nomic-bert.context_length = 2048`, and requesting num_ctx=8192
-# just produced "requested context size too large for model" and got
-# silently clamped back to 2048 - the model was never going to accept more,
-# regardless of server or per-request settings). Every real embedding call
-# failed until input was kept under this real limit; the cache had a 0%
-# hit rate for the 38 hours it ran before this was caught.
-EMBEDDING_NUM_CTX = 2048
-
-# Empirically calibrated against the real running model with text shaped
-# like actual evidence packets (file paths, symbol names, short identifiers
-# - not plain prose, and not a pathological single repeated character
-# either): 6600 chars succeeded, 6990 failed. 5000 chars keeps a real
-# margin below that boundary for token-density variance in different
-# packets and the single-CPU container being busier under real concurrent
-# load than this manual test. A truncated embedding is still useful for
-# similarity matching; the exact text match isn't needed, and a cache hit
-# is always re-verified against current evidence regardless of how it was
-# found.
+# jina-embeddings-v2-base-code supports an 8192-token context (vs nomic's
+# hard 2048), but this cap is kept conservative rather than re-tuned
+# against the new model's real limit: it was already comfortably safe for
+# real evidence-packet sizes under nomic, and a truncated embedding is
+# still useful for similarity matching - the exact text match isn't
+# needed, and a cache hit is always re-verified against current evidence
+# regardless of how it was found.
 MAX_EMBEDDING_CHARS = 5000
 
 logger = logging.getLogger(__name__)
 
 
 def _client(base_url: str | None = None) -> httpx.Client:
-    return httpx.Client(base_url=base_url or os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434"))
+    return httpx.Client(base_url=base_url or os.environ.get("JINA_EMBED_BASE_URL", "http://jina-embed:80"))
 
 
 def embed_text(text: str, base_url: str | None = None, timeout_seconds: float = 10.0) -> list[float] | None:
@@ -47,12 +39,8 @@ def embed_text(text: str, base_url: str | None = None, timeout_seconds: float = 
     try:
         with _client(base_url) as client:
             response = client.post(
-                "/api/embeddings",
-                json={
-                    "model": EMBEDDING_MODEL,
-                    "prompt": text,
-                    "options": {"num_ctx": EMBEDDING_NUM_CTX},
-                },
+                "/embed",
+                json={"text": text},
                 timeout=timeout_seconds,
             )
             response.raise_for_status()
