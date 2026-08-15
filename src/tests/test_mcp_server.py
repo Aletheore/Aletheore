@@ -800,6 +800,23 @@ async def test_aletheore_search_caps_at_200_and_flags_truncated(tmp_path):
     assert result_body["truncated"] is True
 
 
+@pytest.mark.asyncio
+async def test_aletheore_search_respects_repo_config_ignored_paths(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    (repo / "vendor").mkdir()
+    (repo / "vendor" / "bundle.js").write_text("needle in a vendored file")
+    (repo / "real.py").write_text("needle in a real file")
+    (repo / ".aletheore.json").write_text(json.dumps({"ignored_paths": ["vendor/**"]}))
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_search", {"pattern": "needle"})
+
+    matches = tool_result_body(result)["result"]["matches"]
+    matched_paths = {m["path"] for m in matches}
+    assert "real.py" in matched_paths
+    assert "vendor/bundle.js" not in matched_paths
+
+
 def make_git_repo_with_source(tmp_path: Path) -> Path:
     repo = tmp_path / "git_repo"
     repo.mkdir()

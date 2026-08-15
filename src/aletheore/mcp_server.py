@@ -33,6 +33,7 @@ from aletheore.query import (
     find_imports,
     find_symbol_source,
 )
+from aletheore.repo_config import load_repo_config
 from aletheore.secrets import iter_all_files
 from aletheore.search_index import IndexDimensionMismatchError, IndexNotFoundError, search_index
 from aletheore.toon_encoding import to_toon
@@ -162,8 +163,9 @@ def _search_files(repo_path: Path, pattern: str, regex: bool, path_glob: str | N
     compiled = re.compile(pattern) if regex else None
     matches: list[dict] = []
     truncated = False
+    ignored_paths = load_repo_config(repo_path)["ignored_paths"]
 
-    for path in iter_all_files(repo_path):
+    for path in iter_all_files(repo_path, ignored_paths):
         rel_path = path.relative_to(repo_path).as_posix()
         if path_glob is not None and not PurePath(rel_path).match(path_glob):
             continue
