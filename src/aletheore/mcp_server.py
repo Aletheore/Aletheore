@@ -485,25 +485,28 @@ def _register_healthcheck_tool(mcp_instance: MCPServer, repo_path: Path) -> None
         return _toon_result(result)
 
 
-def _register_index_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+def _register_index_tool(mcp_instance: MCPServer, repo_path: Path, effects: frozenset[str]) -> None:
     @mcp_instance.tool(
         name="aletheore_index",
         # Writes the vector index and sends code chunks to the embedding
-        # provider - local Ollama when it is up, OpenAI on fallback.
+        # provider - Aletheore's hosted endpoint if entitled and permitted,
+        # else local Ollama, else OpenAI on fallback.
         annotations=ToolAnnotations(
             readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True
         ),
     )
     def aletheore_index() -> str:
-        """Build the semantic search index this repo's evidence, required
+        """Build the semantic search index for this repo's evidence, required
         before aletheore_search_codebase or aletheore_answer can be used.
-        Embeds via a local Ollama instance, falling back to OpenAI if
-        unavailable."""
+        Embeds via Aletheore's hosted endpoint if this session has permission
+        to transmit evidence externally and a token is available, else a
+        local Ollama instance, falling back to OpenAI if that's unavailable
+        too."""
         from aletheore.search_index import build_index
 
         evidence = read_evidence(repo_path)
         try:
-            count = build_index(repo_path, evidence)
+            count = build_index(repo_path, evidence, allow_hosted=EFFECT_EXTERNAL in effects)
         except Exception as exc:  # noqa: BLE001
             return _toon_result({"error": str(exc)})
         return _toon_result({"indexed_chunks": count})
@@ -632,7 +635,7 @@ def build_server(
     if permitted("aletheore_healthcheck"):
         _register_healthcheck_tool(mcp_instance, repo_path)
     if permitted("aletheore_index"):
-        _register_index_tool(mcp_instance, repo_path)
+        _register_index_tool(mcp_instance, repo_path, effects)
     if permitted("aletheore_search_codebase"):
         _register_search_codebase_tool(mcp_instance, repo_path)
     if permitted("aletheore_managed_audit"):

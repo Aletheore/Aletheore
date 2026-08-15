@@ -732,7 +732,10 @@ EMBED_BATCH_SIZE = 200
 
 
 def _embed_in_batches(
-    texts: list[str], batch_size: int = EMBED_BATCH_SIZE, repo_id: str | None = None
+    texts: list[str],
+    batch_size: int = EMBED_BATCH_SIZE,
+    repo_id: str | None = None,
+    allow_hosted: bool = True,
 ) -> list[list[float]]:
     """Embed everything, preferring Aletheore's endpoint when entitled.
 
@@ -749,11 +752,25 @@ def _embed_in_batches(
 
     repo_id: forwarded to embed_texts_hosted so the hosted rate limit can be
     keyed per repo rather than per installation - see _repo_id.
+
+    allow_hosted: the caller's consent to transmit this repository's code to
+    Aletheore's hosted embedding endpoint. Defaults to True to preserve the
+    CLI's existing interactive behavior. MCP's aletheore_index tool passes
+    False unless the operator has explicitly permitted EFFECT_EXTERNAL (see
+    mcp_server.py's consent model) - MCP tool calls are always
+    non-interactive, so there is no equivalent of embed_texts's isatty()
+    prompt available to ask for consent in the moment.
     """
     token = get_api_key(
         "ALETHEORE_API_TOKEN", "aletheore-managed-audit", prompt_fn=lambda _: ""
     )
-    use_hosted = bool(token)
+    use_hosted = bool(token) and allow_hosted
+    if token and not allow_hosted:
+        print(
+            "aletheore: hosted embeddings available but not permitted in this "
+            "context; using local provider",
+            file=sys.stderr,
+        )
     vectors: list[list[float]] = []
 
     for start in range(0, len(texts), batch_size):
@@ -811,16 +828,20 @@ def _reusable_vectors(index_path: Path) -> dict[str, list[float]]:
         return {}
 
 
-def _embed_stale_by_hash(stale: list[dict], repo_id: str | None = None) -> dict[str, list[float]]:
+def _embed_stale_by_hash(
+    stale: list[dict], repo_id: str | None = None, allow_hosted: bool = True
+) -> dict[str, list[float]]:
     stale_by_hash = {chunk["chunk_hash"]: chunk["text"] for chunk in stale}
     stale_hashes = list(stale_by_hash)
     fresh_vectors = _embed_in_batches(
-        [stale_by_hash[chunk_hash] for chunk_hash in stale_hashes], repo_id=repo_id
+        [stale_by_hash[chunk_hash] for chunk_hash in stale_hashes],
+        repo_id=repo_id,
+        allow_hosted=allow_hosted,
     )
     return dict(zip(stale_hashes, fresh_vectors))
 
 
-def build_index(repo_path: Path, evidence: dict) -> int:
+def build_index(repo_path: Path, evidence: dict, allow_hosted: bool = True) -> int:
     chunks = build_chunks(evidence, repo_path)
     if not chunks:
         return 0
@@ -842,7 +863,7 @@ def build_index(repo_path: Path, evidence: dict) -> int:
     reusable = _reusable_vectors(index_path)
     stale = [chunk for chunk in chunks if chunk["chunk_hash"] not in reusable]
     repo = _repo_id(repo_path)
-    fresh = _embed_stale_by_hash(stale, repo_id=repo)
+    fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted)
     fresh_vectors = list(fresh.values())
 
     # Vectors from two different embedding models cannot share an index -
@@ -878,13 +899,13 @@ def build_index(repo_path: Path, evidence: dict) -> int:
         current_dimension = (
             len(fresh_vectors[0])
             if fresh_vectors
-            else len(_embed_in_batches([chunks[0]["text"]], repo_id=repo)[0])
+            else len(_embed_in_batches([chunks[0]["text"]], repo_id=repo, allow_hosted=allow_hosted)[0])
         )
         reused_dimensions = {len(vector) for vector in reusable.values()}
         if reused_dimensions != {current_dimension}:
             reusable = {}
             stale = chunks
-            fresh = _embed_stale_by_hash(stale, repo_id=repo)
+            fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted)
 
     rows = [
         {**chunk, "vector": reusable.get(chunk["chunk_hash"]) or fresh[chunk["chunk_hash"]]}

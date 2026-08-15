@@ -1278,6 +1278,29 @@ def test_no_token_means_no_hosted_call_at_all():
     http.post.assert_not_called()
 
 
+def test_allow_hosted_false_skips_hosted_call_even_with_a_token(capsys):
+    http = MagicMock()
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), \
+         patch("aletheore.search_index.httpx.Client", return_value=http), \
+         patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.0] * 768] * len(t)):
+        vectors = _embed_in_batches(["chunk"], allow_hosted=False)
+
+    http.post.assert_not_called()
+    assert len(vectors[0]) == 768
+    assert "not permitted in this context" in capsys.readouterr().err
+
+
+def test_allow_hosted_true_is_the_default_and_preserves_existing_behavior():
+    http = MagicMock()
+    http.post.return_value = _hosted_response(200, {"vectors": [[0.1] * 1536]})
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), \
+         patch("aletheore.search_index.httpx.Client", return_value=http):
+        vectors = _embed_in_batches(["chunk"])  # no allow_hosted kwarg at all
+
+    http.post.assert_called_once()
+    assert len(vectors[0]) == 1536
+
+
 def test_file_header_comment_stops_at_the_first_definition():
     """Skipping past code to find a comment does not find the file header - it
     finds the first class or function docstring, and then staples that one

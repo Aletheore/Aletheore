@@ -384,6 +384,33 @@ async def test_aletheore_index_tool_builds_the_search_index(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_aletheore_index_tool_forbids_hosted_embeddings_by_default(tmp_path):
+    # Default MCP posture is EFFECT_WRITE + EFFECT_NETWORK only (mcp_server.py's
+    # _DEFAULT_ALLOWED_EFFECTS) - EFFECT_EXTERNAL is off, so a logged-in user's
+    # code must not silently reach the hosted embedding endpoint through MCP.
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)  # default effects, no `allow=` override
+
+    with patch("aletheore.search_index.build_index", return_value=3) as mock_build_index:
+        await server.call_tool("aletheore_index", {})
+
+    _, kwargs = mock_build_index.call_args
+    assert kwargs["allow_hosted"] is False
+
+
+@pytest.mark.asyncio
+async def test_aletheore_index_tool_permits_hosted_embeddings_when_external_is_allowed(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, allow=frozenset({"write", "network", "external"}))
+
+    with patch("aletheore.search_index.build_index", return_value=3) as mock_build_index:
+        await server.call_tool("aletheore_index", {})
+
+    _, kwargs = mock_build_index.call_args
+    assert kwargs["allow_hosted"] is True
+
+
+@pytest.mark.asyncio
 async def test_aletheore_index_tool_returns_error_instead_of_raising(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo)
