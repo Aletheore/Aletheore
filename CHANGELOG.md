@@ -3,6 +3,34 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.12 — 2026-08-15
+
+- **C# repositories had almost no dependency graph, because C# does not need
+  imports.** Measured on `AutoMapper/AutoMapper`: 512 `.cs` files, 11 of them
+  (2%) with any recorded dependency, 187 edges, and community detection
+  returning **474 clusters for 513 modules** — one per file, which makes the
+  generated wiki's subsystem pages meaningless and leaves `rank_files_by_importance`
+  with no in-degree signal. This was not a parsing bug: the `using` resolver is
+  correct, 507 of 512 files declare a namespace, and all 74 internal `using`
+  directives resolve. The cause is that **419 of 512 files contain no `using` at
+  all** — a type in the same namespace needs no import, and AutoMapper puts most
+  of its files in `namespace AutoMapper`. There was nothing to parse; the
+  dependency lives in the body, where a type is named. Edges are now also derived
+  from type references: a type declared in exactly one file in the repository and
+  named as a whole word in another. Deliberately conservative, because a false
+  edge invents a relationship the wiki then explains — ambiguous names contribute
+  nothing, names under four characters are ignored, a file's own types are
+  excluded, and edges are capped at 40 per file. Result on AutoMapper: **2% → 77%**
+  of files with dependencies, 187 → **2,140** edges, 0.36 → **4.18** edges per
+  module (flask is 3.80), clusters **474 → 120**, and the top of the importance
+  ranking becomes `MapperConfiguration.cs` and `Mapper.cs` — the actual core.
+  Scan cost is +1.6s on 513 files. Downstream on the comprehension benchmark:
+  subsystems 473 → 119, generation output tokens 2.56M → 1.15M (~55% cheaper),
+  and file-page selection improves from 59% to 40% test/spec files. The judged
+  comprehension score itself is flat (+0.04, p=0.88) — this ships for the graph,
+  the cost and the ranking, not for the score. No other language is affected:
+  the change is inside the C# branch of the extractor.
+
 ## 0.8.11 — 2026-08-13
 
 - **A question naming a language was answered in a different one.** In a polyglot

@@ -262,3 +262,81 @@ def test_csharp_method_with_no_doc_comment_gets_none(tmp_path):
 # anonymous_method_expression stay in the shared node-type set anyway
 # (real, reachable fix for Java/C++, which do allow this), they're just
 # inert for C# - there's no valid C# code that would ever need them here.
+
+
+def make_same_namespace_repo(tmp_path: Path) -> Path:
+    """The AutoMapper shape: everything in one namespace, so nothing needs a
+    `using` and an import-derived graph sees no dependencies at all.
+
+    Measured on AutoMapper/AutoMapper: 512 .cs files, 230 `using` directives
+    repo-wide, 156 of them System.* - 419 of 512 files declared nothing, and
+    clustering returned 474 communities for 513 modules.
+    """
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "Registry.cs").write_text(
+        "namespace App;\n"
+        "public class TypeMapRegistry\n"
+        "{\n"
+        "    public object Resolve(object s) => s;\n"
+        "}\n"
+    )
+    (repo / "src" / "Mapper.cs").write_text(
+        "namespace App;\n"
+        "public class Mapper\n"
+        "{\n"
+        "    private readonly TypeMapRegistry _registry = new TypeMapRegistry();\n"
+        "    public object Map(object src) => _registry.Resolve(src);\n"
+        "}\n"
+    )
+    (repo / "src" / "Loner.cs").write_text(
+        "namespace App;\npublic class Loner { public int Id => 1; }\n"
+    )
+    return repo
+
+
+def test_csharp_type_reference_creates_an_edge_without_any_using(tmp_path):
+    repo = make_same_namespace_repo(tmp_path)
+    modules, _edges = build_module_graph(repo)[:2]
+    by_path = {m["path"]: m for m in modules}
+    # Mapper names TypeMapRegistry in its body; C# needs no `using` for that.
+    assert "src/Registry.cs" in by_path["src/Mapper.cs"]["imports"]
+
+
+def test_csharp_type_reference_does_not_invent_edges_for_unrelated_files(tmp_path):
+    repo = make_same_namespace_repo(tmp_path)
+    modules, _edges = build_module_graph(repo)[:2]
+    by_path = {m["path"]: m for m in modules}
+    assert by_path["src/Loner.cs"]["imports"] == []
+    assert "src/Loner.cs" not in by_path["src/Mapper.cs"]["imports"]
+
+
+def test_csharp_ambiguous_type_name_declared_twice_creates_no_edge(tmp_path):
+    """A false edge invents a dependency the wiki then explains, so a name that
+    two files declare must contribute nothing rather than guess."""
+    repo = tmp_path / "repo"
+    (repo / "a").mkdir(parents=True)
+    (repo / "b").mkdir(parents=True)
+    for sub in ("a", "b"):
+        (repo / sub / "Duplicate.cs").write_text(
+            f"namespace App.{sub};\npublic class Duplicated {{ public int X => 1; }}\n"
+        )
+    (repo / "user.cs").write_text(
+        "namespace App;\npublic class User { private Duplicated d; }\n"
+    )
+    modules, _edges = build_module_graph(repo)[:2]
+    by_path = {m["path"]: m for m in modules}
+    assert by_path["user.cs"]["imports"] == []
+
+
+def test_csharp_short_type_names_are_not_matched(tmp_path):
+    """Names under four characters collide with locals and generics."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Id.cs").write_text("namespace App;\npublic class Id { public int V => 1; }\n")
+    (repo / "Consumer.cs").write_text(
+        "namespace App;\npublic class Consumer { public int Id = 3; }\n"
+    )
+    modules, _edges = build_module_graph(repo)[:2]
+    by_path = {m["path"]: m for m in modules}
+    assert by_path["Consumer.cs"]["imports"] == []

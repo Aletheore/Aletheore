@@ -22,6 +22,7 @@ price entry from the start.)
 """
 
 import logging
+import os
 from typing import Callable
 
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
@@ -29,6 +30,41 @@ from aletheore.credentials import has_api_key
 
 LUNA_MODEL = "gpt-5.6-luna"
 PRO_MODEL = "deepseek-v4-pro"
+
+# Every model we write with is a reasoning model, and reasoning tokens are
+# billed as output tokens - the most expensive kind. Nothing was switching them
+# off, so AIRview has been paying for discarded chain-of-thought on every page.
+# Measured on deepseek-v4-flash: a 40-page build emitted 1.93M output tokens
+# across ~50 calls, ~38,000 per call, for pages the prompt caps at 250-400 words
+# (~600 tokens). A probe asking only for the word "ok" returned 17 completion
+# tokens of which 15 were reasoning_tokens.
+#
+# The parameter differs per provider and the intuitive value is wrong on
+# DeepSeek: reasoning_effort "minimal" and "low" measured WORSE than the default
+# (45 and 64 reasoning tokens against 13). Only the explicit disable reaches
+# zero, verified against the live API for both spellings below.
+#
+# NOT enabled by default, because it was measured and it costs quality. On the
+# AutoMapper comprehension arm, disabling thinking scored 1.15 against 1.50 with
+# it on (-0.35, at the judge's 0.38 noise floor), corroborated by two mechanical
+# signals: pages came back 46% shorter (3,491 vs 5,104 chars) and one fewer page
+# survived citation verification. The saving is real - ~10x cheaper, ~6x faster -
+# but AIRview quality is the product, so this is a deliberate trade, not a free
+# win, and it is off until someone chooses it.
+#
+# Measured on DeepSeek only. OpenAI exposes a 7-rung ladder (none/minimal/low/
+# medium/high/xhigh/max) where DeepSeek is effectively binary, so an intermediate
+# rung on Luna - the model production actually writes with - may keep the quality
+# and most of the saving. That experiment is the reason this stays wired up.
+#
+# Set AIRVIEW_REASONING=off to apply it.
+NO_THINKING_OPENAI = {"reasoning_effort": "none"}
+NO_THINKING_DEEPSEEK = {"thinking": {"type": "disabled"}}
+
+
+def _reasoning_body(disabled_value: dict) -> dict | None:
+    """The extra_body for this provider, or None to leave the model's default."""
+    return disabled_value if os.environ.get("AIRVIEW_REASONING") == "off" else None
 
 
 def _openai_available() -> bool:
@@ -56,6 +92,7 @@ def writing_adapter_for(
             base_url="https://api.openai.com/v1",
             api_key_env_var="OPENAI_API_KEY",
             model=LUNA_MODEL,
+            extra_body=_reasoning_body(NO_THINKING_OPENAI),
             on_usage=on_usage,
             before_llm_call=before_llm_call,
             allow_partial_report=allow_partial_report,
@@ -73,6 +110,7 @@ def writing_adapter_for(
         # the same unforced tool-choice path used for Ollama. Harmless for
         # callers that only use simple_completion(), which never sets this.
         supports_tool_choice=False,
+        extra_body=_reasoning_body(NO_THINKING_DEEPSEEK),
         on_usage=on_usage,
         before_llm_call=before_llm_call,
         allow_partial_report=allow_partial_report,

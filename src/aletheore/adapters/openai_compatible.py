@@ -274,7 +274,16 @@ class OpenAICompatibleAdapter(AgentAdapter):
         on_usage: Callable[[int, int], None] | None = None,
         before_llm_call: Callable[[], bool] | None = None,
         allow_partial_report: bool = False,
+        extra_body: dict | None = None,
     ) -> None:
+        # Provider-specific request fields the OpenAI schema has no slot for.
+        # Exists for one measured reason: every model we write with is a
+        # reasoning model, reasoning tokens are billed as output tokens, and
+        # nothing was ever switching them off. Measured on deepseek-v4-flash,
+        # a 40-page AIRview build emitted 1.93M output tokens across ~50 calls
+        # - roughly 38,000 per call for pages the prompt caps at 250-400 words.
+        # See model_tiers.NO_THINKING_BODY for the per-provider values.
+        self._extra_body = extra_body or {}
         self.name = name
         self.requires_consent = requires_consent
         self._base_url = base_url
@@ -311,6 +320,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
                         {"role": "user", "content": user_prompt},
                     ],
                     timeout=REQUEST_TIMEOUT_SECONDS,
+                    **({"extra_body": self._extra_body} if self._extra_body else {}),
                 )
             )
         except Exception as exc:
