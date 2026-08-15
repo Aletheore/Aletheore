@@ -1,0 +1,24 @@
+diff --git a/django/contrib/admin/options.py b/django/contrib/admin/options.py
+index d64a2e9a28..5e7b23f9a0 100644
+--- a/django/contrib/admin/options.py
++++ b/django/contrib/admin/options.py
+@@ -327,10 +327,6 @@ class BaseModelAdmin(metaclass=forms.MediaDefiningClass):
+             return self.fieldsets
+         return [(None, {'fields': self.get_fields(request, obj)})]
+ 
+-    def get_inlines(self, request, obj):
+-        """Hook for specifying custom inlines."""
+-        return self.inlines
+-
+     def get_ordering(self, request):
+         """
+         Hook for specifying field ordering.
+@@ -586,7 +582,7 @@ class ModelAdmin(BaseModelAdmin):
+ 
+     def get_inline_instances(self, request, obj=None):
+         inline_instances = []
+-        for inline_class in self.get_inlines(request, obj):
++        for inline_class in self.inlines:
+             inline = inline_class(self.model, self.admin_site)
+             if request:
+                 if not (inline.has_view_or_change_permission(request, obj) or

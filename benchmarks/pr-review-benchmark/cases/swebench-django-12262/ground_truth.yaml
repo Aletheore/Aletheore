@@ -1,0 +1,12 @@
+case_id: swebench-django-12262
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: django/template/library.py
+expected_line: 261
+fix_reference: 'SWE-bench Verified instance: django__django-12262 (https://www.swebench.com/)'
+description: "Custom template tags raise TemplateSyntaxError when keyword-only arguments with defaults\
+  \ are provided. Description \t  \t\t(last modified by P-Seebauer) \t  When creating simple tags without\
+  \ variable keyword args, but an keyword argument with a default value. It's not possible to supply any\
+  \ other variable. @register.simple_tag def hello(*, greeting='hello'): \treturn f'{greeting} world'\
+  \ {% hello greeti"

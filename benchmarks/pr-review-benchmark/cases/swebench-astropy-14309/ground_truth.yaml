@@ -1,0 +1,11 @@
+case_id: swebench-astropy-14309
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: astropy/io/fits/connect.py
+expected_line: 65
+fix_reference: 'SWE-bench Verified instance: astropy__astropy-14309 (https://www.swebench.com/)'
+description: "IndexError: tuple index out of range in identify_format (io.registry) <!-- This comments\
+  \ are hidden when you submit the issue,\r so you do not need to remove them! -->\r \r <!-- Please be\
+  \ sure to check out our contributing guidelines,\r https://github.com/astropy/astropy/blob/main/CONTRIBUTING.md\
+  \ .\r Please be sure to check out our code of conduct,\r https://github.com/astropy/astropy/blob/main/CODE_OF_"

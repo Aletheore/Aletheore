@@ -1,0 +1,12 @@
+case_id: swebench-scikit-learn-13439
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: sklearn/pipeline.py
+expected_line: 199
+fix_reference: 'SWE-bench Verified instance: scikit-learn__scikit-learn-13439 (https://www.swebench.com/)'
+description: "Pipeline should implement __len__ #### Description\r \r With the new indexing support `pipe[:len(pipe)]`\
+  \ raises an error.\r \r #### Steps/Code to Reproduce\r \r ```python\r from sklearn import svm\r from\
+  \ sklearn.datasets import samples_generator\r from sklearn.feature_selection import SelectKBest\r from\
+  \ sklearn.feature_selection import f_regression\r from sklearn.pipeline import Pipeline\r \r # generate\
+  \ some d"

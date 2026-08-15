@@ -1,0 +1,12 @@
+case_id: swebench-django-15503
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: django/db/models/fields/json.py
+expected_line: 172
+fix_reference: 'SWE-bench Verified instance: django__django-15503 (https://www.swebench.com/)'
+description: "has_key, has_keys, and has_any_keys JSONField() lookups don't handle numeric keys on SQLite,\
+  \ MySQL, and Oracle. Description \t  \t\t(last modified by TheTerrasque) \t  Problem When using models.\u200B\
+  JSONField() \u200Bhas_key lookup with numerical keys on SQLite database it fails to find the keys. Versions:\
+  \ Django: 4.0.3 Python: 3.9.6 (tags/v3.9.6:db3ff76, Jun 28 2021, 15:26:21) [MSC v.1929 64 bit (AMD64)]\
+  \ on w"

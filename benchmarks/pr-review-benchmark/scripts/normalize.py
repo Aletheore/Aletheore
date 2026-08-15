@@ -17,7 +17,7 @@ def normalize_aletheore(raw_comments: list[dict]) -> list[dict]:
                 findings.append({
                     "file": citation["file"],
                     "line": citation["line"],
-                    "message": paragraph.strip(),
+                    "message": paragraph.split("```", 1)[0].strip(),
                     "severity": None,
                 })
     return findings

@@ -1,0 +1,12 @@
+case_id: swebench-django-12155
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: django/contrib/admindocs/utils.py
+expected_line: 3
+fix_reference: 'SWE-bench Verified instance: django__django-12155 (https://www.swebench.com/)'
+description: "docutils reports an error rendering view docstring when the first line is not empty Description\
+  \ \t Currently admindoc works correctly only with docstrings where the first line is empty, and all\
+  \ Django docstrings are formatted in this way. However usually the docstring text starts at the first\
+  \ line, e.g.: def test(): \t\"\"\"test tests something. \t\"\"\" and this cause an error: Error in \"\
+  default-role\" dir"

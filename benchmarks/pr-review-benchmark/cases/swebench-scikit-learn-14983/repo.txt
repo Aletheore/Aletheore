@@ -1,0 +1,2 @@
+repo_url=https://github.com/Aletheore/scikit-learn.git
+base_commit=bb966db623c9762b1bf3ce30eadf57834f3b0810

@@ -1,0 +1,11 @@
+case_id: swebench-sphinx-11510
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: sphinx/directives/other.py
+expected_line: 8
+fix_reference: 'SWE-bench Verified instance: sphinx-doc__sphinx-11510 (https://www.swebench.com/)'
+description: "source-read event does not modify include'd files source ### Describe the bug  In [Yocto\
+  \ documentation](https://git.yoctoproject.org/yocto-docs), we use a custom extension to do some search\
+  \ and replace in literal blocks, see https://git.yoctoproject.org/yocto-docs/tree/documentation/sphinx/yocto-vars.py.\r\
+  \ \r We discovered (https://git.yoctoproject.org/yocto-docs/commit/?id=b7375ea4380e716a02c736e42"

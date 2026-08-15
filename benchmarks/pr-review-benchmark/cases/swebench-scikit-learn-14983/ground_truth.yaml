@@ -1,0 +1,12 @@
+case_id: swebench-scikit-learn-14983
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: sklearn/model_selection/_split.py
+expected_line: 1163
+fix_reference: 'SWE-bench Verified instance: scikit-learn__scikit-learn-14983 (https://www.swebench.com/)'
+description: "RepeatedKFold and RepeatedStratifiedKFold do not show correct __repr__ string #### Description\r\
+  \ \r `RepeatedKFold` and `RepeatedStratifiedKFold` do not show correct \\_\\_repr\\_\\_ string.\r \r\
+  \ #### Steps/Code to Reproduce\r \r ```python\r >>> from sklearn.model_selection import RepeatedKFold,\
+  \ RepeatedStratifiedKFold\r >>> repr(RepeatedKFold())\r >>> repr(RepeatedStratifiedKFold())\r ```\r\
+  \ \r #### Expected Resu"

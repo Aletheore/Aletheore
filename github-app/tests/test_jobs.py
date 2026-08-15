@@ -1601,6 +1601,64 @@ def test_flash_review_job_records_spend_and_count_while_the_lock_is_still_held(m
     assert lock_state["held"] is False  # released once the job actually finished
 
 
+def test_flash_review_job_releases_lock_during_the_review_itself(monkeypatch):
+    # Real production bug, found while opening 25 PRs on one installation
+    # in a benchmark run: the lock used to wrap the ENTIRE review (a real
+    # LLM call plus several GitHub API round-trips, measured up to 5m50s
+    # in production - see FLASH_REVIEW_JOB_TIMEOUT_SECONDS in
+    # app_server/webhooks/pull_request.py), not just the check-then-record
+    # spend bookkeeping it exists to protect (see installation_spend_lock's
+    # docstring). ADVISORY_LOCK_TIMEOUT is 5s, far shorter than a real
+    # review, so any review queued behind another for the same
+    # installation reliably failed with psycopg.errors.LockNotAvailable
+    # instead of just waiting its turn - confirmed in production logs.
+    # This asserts the lock is free during the expensive part, which the
+    # F25 test above doesn't check (it only checks record/increment).
+    from contextlib import contextmanager
+
+    lock_state = {"held": False, "observed_during_review": None}
+
+    @contextmanager
+    def _tracking_spend_lock(*args, **kwargs):
+        lock_state["held"] = True
+        try:
+            yield
+        finally:
+            lock_state["held"] = False
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _tracking_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+
+    def _review_diff(diff_text, file_context="", **kwargs):
+        lock_state["observed_during_review"] = lock_state["held"]
+        return [{"file": "app.py", "line": 1, "issue": "x"}]
+
+    monkeypatch.setattr("scan_worker.jobs.review_diff", _review_diff)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert lock_state["observed_during_review"] is False
+    assert lock_state["held"] is False
+
+
 def test_flash_review_job_posts_grounding_note_when_some_findings_are_dropped(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})

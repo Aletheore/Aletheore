@@ -1376,6 +1376,21 @@ def run_flash_review_job(
     ):
         return
 
+    # The advisory lock only needs to guard the quick check-then-write
+    # spend bookkeeping (see installation_spend_lock's docstring) - NOT
+    # the review itself, which does a real LLM call plus several GitHub
+    # API round-trips and has been measured at up to 5m50s in production
+    # (see FLASH_REVIEW_JOB_TIMEOUT_SECONDS in
+    # app_server/webhooks/pull_request.py). Holding the lock for that
+    # whole duration serialized every Flash Review for one installation
+    # to run strictly one at a time, and ADVISORY_LOCK_TIMEOUT (5s) is far
+    # shorter than that review time, so any review queued behind another
+    # for the same installation reliably failed outright with
+    # psycopg.errors.LockNotAvailable instead of just waiting its turn -
+    # confirmed in production logs while opening 25 PRs on one
+    # installation in quick succession. The lock is now acquired twice,
+    # briefly, around the check and (inside _run_flash_review) around the
+    # final spend record - never around the expensive work in between.
     with installation_spend_lock(settings.database_url, installation_id):
         extra_seats = get_extra_seats(settings.database_url, installation_id)
         monthly_cap = monthly_cap_for_installation(base_cap_for_plan(installation["plan"]), extra_seats)
@@ -1385,17 +1400,17 @@ def run_flash_review_job(
         if get_flash_review_count_this_month(settings.database_url, installation_id) >= MAX_FLASH_REVIEWS_PER_MONTH:
             return
 
+    try:
+        _run_flash_review(
+            settings, installation_id, repo_full_name, pr_number, base_sha, head_sha, monthly_cap
+        )
+    except Exception as exc:  # noqa: BLE001
         try:
-            _run_flash_review(
-                settings, installation_id, repo_full_name, pr_number, base_sha, head_sha, monthly_cap
+            _post_flash_review_failure_comment(
+                settings, installation_id, repo_full_name, pr_number, exc
             )
-        except Exception as exc:  # noqa: BLE001
-            try:
-                _post_flash_review_failure_comment(
-                    settings, installation_id, repo_full_name, pr_number, exc
-                )
-            except Exception:  # noqa: BLE001
-                pass
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _run_flash_review(
@@ -1493,10 +1508,14 @@ def _run_flash_review(
                 file_contents=file_contents,
                 on_grounding_result=_on_grounding_result,
             )
-    record_llm_spend(
-        settings.database_url, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap
-    )
-    increment_flash_review_count(settings.database_url, installation_id)
+    # Briefly re-acquire the lock just for the write, now that the
+    # expensive review work above is done - see run_flash_review_job's
+    # comment on why the lock no longer wraps this whole function.
+    with installation_spend_lock(settings.database_url, installation_id):
+        record_llm_spend(
+            settings.database_url, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap
+        )
+        increment_flash_review_count(settings.database_url, installation_id)
 
     proposed = grounding_result.get("proposed", 0)
     kept = grounding_result.get("kept", 0)

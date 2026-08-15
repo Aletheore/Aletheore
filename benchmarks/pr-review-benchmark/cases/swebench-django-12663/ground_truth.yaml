@@ -1,0 +1,12 @@
+case_id: swebench-django-12663
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: django/db/models/sql/query.py
+expected_line: 233
+fix_reference: 'SWE-bench Verified instance: django__django-12663 (https://www.swebench.com/)'
+description: "Using SimpleLazyObject with a nested subquery annotation fails. Description \t  \t\t(last\
+  \ modified by Jordan Ephron) \t  Prior to 35431298226165986ad07e91f9d3aca721ff38ec it was possible to\
+  \ use a SimpleLazyObject in a queryset as demonstrated below. This new behavior appears to be a regression.\
+  \ Models from django.contrib.auth.models import User from django.db import models class A(models.Model):\
+  \ \tpass"

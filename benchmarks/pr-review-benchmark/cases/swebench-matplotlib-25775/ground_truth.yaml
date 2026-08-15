@@ -1,0 +1,11 @@
+case_id: swebench-matplotlib-25775
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: lib/matplotlib/backends/backend_agg.py
+expected_line: 206
+fix_reference: 'SWE-bench Verified instance: matplotlib__matplotlib-25775 (https://www.swebench.com/)'
+description: '[ENH]: Add get/set_antialiased to Text objects ### Problem  Currently, Text objects always
+  retrieve their antialiasing state via the global rcParams["text.antialias"], unlike other artists for
+  which this can be configured on a per-artist basis via `set_antialiased` (and read via `set_antialiased`).  ###
+  Proposed solution  Add similar getters/setters on Text objects (also adjusting Annotations acco'
