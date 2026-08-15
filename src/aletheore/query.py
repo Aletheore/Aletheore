@@ -164,7 +164,15 @@ def list_clusters(evidence: dict) -> list[dict]:
 
 
 def list_branches(evidence: dict) -> list[str]:
-    return [branch["name"] for branch in evidence["git"]["branches"]]
+    # A repo with no commits yields git == {"available": False} - see
+    # air_schema.py's git section docstring. There are no branches to list
+    # in that case, but that's honestly indistinguishable from "no branches
+    # were found" via a plain list return; callers that need to tell those
+    # apart should use aletheore_overview's git.available instead.
+    git = evidence["git"]
+    if git.get("available") is False:
+        return []
+    return [branch["name"] for branch in git["branches"]]
 
 
 def find_repo_overview(evidence: dict) -> dict:
@@ -172,6 +180,20 @@ def find_repo_overview(evidence: dict) -> dict:
     git = evidence["git"]
     arch = evidence["architecture"]
     dependency_graph = repo["dependency_graph"]
+    # A repo with no commits yields git == {"available": False} and nothing
+    # else (see air_schema.py). Only `available` is safe to read
+    # unconditionally there - signal that honestly instead of indexing into
+    # keys that don't exist or silently reporting zero commits, which would
+    # be indistinguishable from a repo that genuinely has zero commits.
+    if git.get("available") is False:
+        git_summary: dict = {"available": False}
+    else:
+        git_summary = {
+            "repo_age_days": git["repo_age_days"],
+            "total_commits": git["total_commits"],
+            "commit_cadence": git["commit_cadence"],
+            "branch_count": len(git["branches"]),
+        }
     return {
         "languages": repo["languages"],
         "frameworks": repo["frameworks"],
@@ -183,12 +205,7 @@ def find_repo_overview(evidence: dict) -> dict:
         "module_count": len(repo["modules"]),
         "cluster_count": len(arch["clusters"]),
         "cross_cluster_edge_count": len(arch["cross_cluster_edges"]),
-        "git": {
-            "repo_age_days": git["repo_age_days"],
-            "total_commits": git["total_commits"],
-            "commit_cadence": git["commit_cadence"],
-            "branch_count": len(git["branches"]),
-        },
+        "git": git_summary,
     }
 
 

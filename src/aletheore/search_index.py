@@ -1138,11 +1138,21 @@ def search_index(
     # do about it.
     table_dimension = table.schema.field("vector").type.list_size
     if len(query_vector) != table_dimension:
+        # Query embeddings are always local (Ollama, or OpenAI as a fallback -
+        # see embed_texts above); they never consult ALETHEORE_API_TOKEN. So
+        # this mismatch is typically an index built with hosted embeddings
+        # (_embed_in_batches, which does use that token) while queries embed
+        # locally at a different dimension. Telling the user to just re-run
+        # 'aletheore index' is bad advice here: with the token still set,
+        # the rebuild uses hosted again, reproduces the same dimension, and
+        # the mismatch recurs forever. Point at what actually fixes it.
         raise IndexDimensionMismatchError(
             f"the index at {_index_path(repo_path)} holds {table_dimension}-dimension "
-            f"vectors but the query embedded to {len(query_vector)} dimensions with the "
-            f"embedding provider available right now - re-run 'aletheore index {repo_path}' "
-            "to rebuild the index with the current provider"
+            f"vectors but the query embedded to {len(query_vector)} dimensions - search "
+            "always embeds queries with the local embedding provider, never the hosted "
+            "one, so this index was likely built with hosted embeddings (ALETHEORE_API_TOKEN "
+            f"set). Unset ALETHEORE_API_TOKEN and re-run 'aletheore index {repo_path}' to "
+            "rebuild the index with the local provider that queries actually use"
         )
 
     # Over-fetch, then thin by file: the chunks displaced by the per-file cap

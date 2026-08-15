@@ -389,6 +389,27 @@ async def test_aletheore_answer_returns_friendly_error_when_index_not_built(tmp_
 
 
 @pytest.mark.asyncio
+async def test_aletheore_answer_returns_friendly_error_on_dimension_mismatch(tmp_path):
+    # Same class of bug as aletheore_search_codebase above: answer_question
+    # calls search_index too (see aletheore/answer.py), so it can raise the
+    # same IndexDimensionMismatchError. Before this fix, aletheore_answer
+    # only caught IndexNotFoundError and let this one escape as a raw
+    # traceback.
+    from aletheore.mcp_server import IndexDimensionMismatchError
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, answer_adapter=MagicMock())
+
+    with patch(
+        "aletheore.mcp_server.answer_question",
+        side_effect=IndexDimensionMismatchError("the index at ... holds 1536-dimension vectors ..."),
+    ):
+        result = await server.call_tool("aletheore_answer", {"question": "what does foo do"})
+
+    assert "1536-dimension" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
 async def test_aletheore_index_tool_builds_the_search_index(tmp_path):
     # Before this fix, aletheore_search_codebase/aletheore_answer required
     # .aletheore/index.lancedb, buildable only via the CLI's `aletheore

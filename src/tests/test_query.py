@@ -418,3 +418,60 @@ def test_find_repo_overview_summarizes_the_real_evidence_shape():
             "branch_count": 2,
         },
     }
+
+
+def test_list_branches_returns_empty_list_when_git_unavailable():
+    """A repo with no commits yields git == {"available": False} and
+    nothing else (see air_schema.py). list_branches must not raise a
+    KeyError trying to index into a "branches" key that doesn't exist."""
+    from aletheore.query import list_branches
+
+    evidence = {"git": {"available": False}}
+    assert list_branches(evidence) == []
+
+
+def test_find_repo_overview_signals_unavailable_git_instead_of_crashing():
+    """Same no-commits repo shape as above. find_repo_overview must not
+    raise, and must honestly report git as unavailable rather than
+    defaulting numeric fields to 0 - which would be indistinguishable from
+    a repo that genuinely has zero commits."""
+    from aletheore.query import find_repo_overview
+
+    evidence = {
+        "repository": {
+            "languages": [{"name": "python", "file_count": 10, "loc": 500}],
+            "frameworks": [],
+            "monorepo": {"detected": False, "workspaces": []},
+            "dependency_graph": {"nodes": [], "edges": []},
+            "modules": [],
+        },
+        "architecture": {
+            "clusters": [],
+            "cross_cluster_edges": [],
+        },
+        "git": {"available": False},
+    }
+
+    overview = find_repo_overview(evidence)
+
+    assert overview["git"] == {"available": False}
+
+
+def test_list_modules_does_not_depend_on_git_and_is_unaffected_by_unavailable_git():
+    from aletheore.query import list_modules
+
+    evidence = {
+        "repository": {"modules": [{"path": "a.py"}]},
+        "git": {"available": False},
+    }
+    assert list_modules(evidence) == ["a.py"]
+
+
+def test_list_clusters_does_not_depend_on_git_and_is_unaffected_by_unavailable_git():
+    from aletheore.query import list_clusters
+
+    evidence = {
+        "architecture": {"clusters": [{"id": 0, "modules": ["a.py"], "internal_edges": 0}]},
+        "git": {"available": False},
+    }
+    assert list_clusters(evidence) == [{"id": 0, "module_count": 1}]

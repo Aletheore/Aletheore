@@ -617,6 +617,8 @@ def _register_answer_tool(
             return _toon_result(answer_question(repo_path, question, answer_adapter, k=k))
         except IndexNotFoundError:
             return _toon_result(_NO_INDEX_ERROR)
+        except IndexDimensionMismatchError as exc:
+            return _toon_result({"error": str(exc)})
 
 
 def _register_managed_audit_tool(mcp_instance: MCPServer, repo_path: Path) -> None:

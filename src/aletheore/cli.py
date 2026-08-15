@@ -710,11 +710,18 @@ def _query(
         if target is None:
             print("error: query type 'search-codebase' requires a natural-language query")
             return 1
-        from aletheore.search_index import IndexNotFoundError, search_index
+        from aletheore.search_index import (
+            IndexDimensionMismatchError,
+            IndexNotFoundError,
+            search_index,
+        )
 
         try:
             result = search_index(Path(repo_path).resolve(), target, k=k, language=language)
         except IndexNotFoundError as exc:
+            console.print(f"[bold red]error:[/bold red] {exc}")
+            return 1
+        except IndexDimensionMismatchError as exc:
             console.print(f"[bold red]error:[/bold red] {exc}")
             return 1
         print(to_toon({"result": result}))
@@ -740,11 +747,14 @@ def _query(
                 console.print("Cancelled - no data was sent.")
                 return 0
         from aletheore.answer import answer_question
-        from aletheore.search_index import IndexNotFoundError
+        from aletheore.search_index import IndexDimensionMismatchError, IndexNotFoundError
 
         try:
             result = answer_question(Path(repo_path).resolve(), target, adapter, k=k)
         except IndexNotFoundError as exc:
+            console.print(f"[bold red]error:[/bold red] {exc}")
+            return 1
+        except IndexDimensionMismatchError as exc:
             console.print(f"[bold red]error:[/bold red] {exc}")
             return 1
         print(to_toon({"result": result}))
