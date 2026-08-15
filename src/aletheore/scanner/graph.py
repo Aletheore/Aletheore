@@ -1840,6 +1840,79 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
     return imports, functions, types
 
 
+_CSHARP_TYPE_DECLS = (
+    "class_declaration", "interface_declaration", "struct_declaration",
+    "record_declaration", "enum_declaration", "delegate_declaration",
+)
+
+# Short names collide with locals, parameters and generic placeholders far too
+# often to be worth an edge ("Map", "Id", "T"). Four is where real C# type names
+# start in practice, and a wrong edge is worse than a missing one: it invents a
+# dependency the wiki will then explain.
+_CSHARP_MIN_TYPE_NAME = 4
+
+# Bounded so one file referencing hundreds of types cannot dominate the graph or
+# the importance ranking. Ordered by first appearance, so what survives the cap
+# is what the file leads with.
+_CSHARP_MAX_TYPE_EDGES = 40
+
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _csharp_declared_type_names(node: Node, source: bytes) -> list[str]:
+    """Type names this file declares - the index for type-reference edges."""
+    names: list[str] = []
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if n.type in _CSHARP_TYPE_DECLS:
+            name_node = n.child_by_field_name("name")
+            if name_node is not None:
+                names.append(source[name_node.start_byte:name_node.end_byte].decode())
+        stack.extend(n.children)
+    return names
+
+
+def _csharp_type_reference_targets(
+    source: bytes,
+    own_types: set[str],
+    type_owners: dict[str, set[Path]],
+) -> list[Path]:
+    """Files this one depends on by *naming their types*, not by importing them.
+
+    C# needs no `using` to reference a type in the same namespace, so an
+    import-derived graph is near-empty for the language. Measured on
+    AutoMapper/AutoMapper: 512 .cs files, 230 `using` directives in the entire
+    repository, 156 of them `System.*` - so 419 of 512 files declared no
+    dependency at all and community detection returned 474 clusters for 513
+    modules, one per file. That is not a parsing bug; there is genuinely nothing
+    to parse. The dependency exists in the body, where a type is named.
+
+    Deliberately conservative, because a false edge invents a relationship the
+    wiki will then confidently explain: only names declared in exactly ONE file
+    in the repository count, so an ambiguous name contributes nothing.
+    """
+    referenced: list[Path] = []
+    seen: set[str] = set()
+    for match in _IDENTIFIER_RE.finditer(source.decode("utf-8", "ignore")):
+        name = match.group(0)
+        if (
+            name in seen
+            or name in own_types
+            or len(name) < _CSHARP_MIN_TYPE_NAME
+        ):
+            continue
+        owners = type_owners.get(name)
+        # Exactly one declaring file, or we cannot say which one is meant.
+        if owners is None or len(owners) != 1:
+            continue
+        seen.add(name)
+        referenced.append(next(iter(owners)))
+        if len(referenced) >= _CSHARP_MAX_TYPE_EDGES:
+            break
+    return referenced
+
+
 def _csharp_prefix_and_root_for(file_path: Path, namespace: str | None) -> tuple[str, Path] | None:
     """Returns (implicit prefix ending in "." or "", the root that prefix resolves
     against) for this one file - discovered per-file the same way Java's source
@@ -2111,6 +2184,8 @@ def build_module_graph(
     # <RootNamespace>'s implicit prefix (see _csharp_prefix_and_root_for).
     csharp_prefix_map: dict[str, Path] = {}
     csharp_pre_parsed: dict[Path, tuple[bytes, Tree]] = {}
+    # Which file declares each type name, for the type-reference edges below.
+    csharp_type_owners: dict[str, set[Path]] = {}
     cs_pre_parser = Parser()
     cs_pre_parser.language = CSHARP_LANGUAGE
     for path in _iter_source_files(repo_path, ignored_paths):
@@ -2124,6 +2199,8 @@ def build_module_graph(
         if result is not None:
             prefix, root = result
             csharp_prefix_map.setdefault(prefix, root)
+        for declared in _csharp_declared_type_names(tree.root_node, pre_source):
+            csharp_type_owners.setdefault(declared, set()).add(path)
 
     parser = Parser()
 
@@ -2272,6 +2349,20 @@ def build_module_graph(
                     resolved_imports.append(target)
                     edges.append([rel_path, target])
                     imported_by_map.setdefault(target, []).append(rel_path)
+            # Same-namespace references need no `using`, so usings alone leave
+            # the graph near-empty - see _csharp_type_reference_targets.
+            own_type_names = {c["name"] for c in classes if c.get("name")}
+            already = set(resolved_imports)
+            for target_path in _csharp_type_reference_targets(
+                source, own_type_names, csharp_type_owners
+            ):
+                target = _rel(repo_path, target_path)
+                if target is None or target == rel_path or target in already:
+                    continue
+                already.add(target)
+                resolved_imports.append(target)
+                edges.append([rel_path, target])
+                imported_by_map.setdefault(target, []).append(rel_path)
         else:
             raw_imports, functions, classes = _extract_javascript(tree.root_node, source)
             resolved_imports = []
