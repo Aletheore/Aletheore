@@ -70,7 +70,15 @@ def find_symbol_source(
 
 
 def find_branch(evidence: dict, target: str | None) -> dict:
-    for branch in evidence["git"]["branches"]:
+    # A repo with no commits yields git == {"available": False} - see
+    # air_schema.py's git section docstring and list_branches' matching
+    # guard. No branch named `target` can exist there, so this is a normal
+    # not-found rather than a special case: same exception as any other
+    # missing branch name, not a raw KeyError on a missing "branches" key.
+    git = evidence["git"]
+    if git.get("available") is False:
+        raise BranchNotFoundInEvidenceError(target)
+    for branch in git["branches"]:
         if branch["name"] == target:
             return branch
     raise BranchNotFoundInEvidenceError(target)

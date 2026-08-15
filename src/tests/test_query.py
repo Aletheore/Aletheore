@@ -197,6 +197,15 @@ def test_find_branch_raises_for_unknown_branch():
         find_branch(make_evidence(), "does-not-exist")
 
 
+def test_find_branch_raises_not_found_instead_of_crashing_when_git_unavailable():
+    """A repo with no commits yields git == {"available": False} and
+    nothing else (see air_schema.py). No branch can exist there, so this
+    is a normal not-found - not a raw KeyError on a missing "branches" key."""
+    evidence = {"git": {"available": False}}
+    with pytest.raises(BranchNotFoundInEvidenceError):
+        find_branch(evidence, "main")
+
+
 def test_find_ownership_returns_the_whole_list_ignoring_target():
     result = find_ownership(make_evidence(), None)
     assert result == make_evidence()["git"]["ownership"]
