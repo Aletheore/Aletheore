@@ -1,0 +1,7009 @@
+[
+  {
+    "email": "davidism@gmail.com",
+    "names": [
+      "David Lord"
+    ],
+    "commit_count": 1854,
+    "percent": 0.3338
+  },
+  {
+    "email": "armin.ronacher@active-4.com",
+    "names": [
+      "Armin Ronacher"
+    ],
+    "commit_count": 1189,
+    "percent": 0.214
+  },
+  {
+    "email": "markus@unterwaditzer.net",
+    "names": [
+      "Markus Unterwaditzer"
+    ],
+    "commit_count": 274,
+    "percent": 0.0493
+  },
+  {
+    "email": "ron.duplain@gmail.com",
+    "names": [
+      "Ron DuPlain"
+    ],
+    "commit_count": 122,
+    "percent": 0.022
+  },
+  {
+    "email": "withlihui@gmail.com",
+    "names": [
+      "Grey Li"
+    ],
+    "commit_count": 105,
+    "percent": 0.0189
+  },
+  {
+    "email": "27856297+dependabot-preview[bot]@users.noreply.github.com",
+    "names": [
+      "dependabot-preview[bot]"
+    ],
+    "commit_count": 91,
+    "percent": 0.0164
+  },
+  {
+    "email": "dasdasich@gmail.com",
+    "names": [
+      "Daniel Neuha\u0308user",
+      "Daniel Neuh\u00e4user"
+    ],
+    "commit_count": 86,
+    "percent": 0.0155
+  },
+  {
+    "email": "49699333+dependabot[bot]@users.noreply.github.com",
+    "names": [
+      "dependabot[bot]"
+    ],
+    "commit_count": 61,
+    "percent": 0.011
+  },
+  {
+    "email": "me@kennethreitz.org",
+    "names": [
+      "Kenneth Reitz"
+    ],
+    "commit_count": 59,
+    "percent": 0.0106
+  },
+  {
+    "email": "me@kennethreitz.com",
+    "names": [
+      "Kenneth Reitz"
+    ],
+    "commit_count": 57,
+    "percent": 0.0103
+  },
+  {
+    "email": "philip.graham.jones@googlemail.com",
+    "names": [
+      "Phil Jones",
+      "pgjones"
+    ],
+    "commit_count": 50,
+    "percent": 0.009
+  },
+  {
+    "email": "66853113+pre-commit-ci[bot]@users.noreply.github.com",
+    "names": [
+      "pre-commit-ci[bot]"
+    ],
+    "commit_count": 39,
+    "percent": 0.007
+  },
+  {
+    "email": "kpishdadian@gmail.com",
+    "names": [
+      "Keyan Pishdadian"
+    ],
+    "commit_count": 36,
+    "percent": 0.0065
+  },
+  {
+    "email": "ich@danielneuhaeuser.de",
+    "names": [
+      "Daniel Neuh\u00e4user"
+    ],
+    "commit_count": 32,
+    "percent": 0.0058
+  },
+  {
+    "email": "adrian@planetcoding.net",
+    "names": [
+      "Adrian",
+      "Adrian Moennich",
+      "ThiefMaster"
+    ],
+    "commit_count": 28,
+    "percent": 0.005
+  },
+  {
+    "email": "defuz.net@gmail.com",
+    "names": [
+      "Ivan Ivaschenko",
+      "defuz"
+    ],
+    "commit_count": 26,
+    "percent": 0.0047
+  },
+  {
+    "email": "tw@waldmann-edv.de",
+    "names": [
+      "Thomas Waldmann"
+    ],
+    "commit_count": 23,
+    "percent": 0.0041
+  },
+  {
+    "email": "jeff@jeffwidman.com",
+    "names": [
+      "Jeff Widman"
+    ],
+    "commit_count": 22,
+    "percent": 0.004
+  },
+  {
+    "email": "me@lepture.com",
+    "names": [
+      "Hsiaoming Yang"
+    ],
+    "commit_count": 22,
+    "percent": 0.004
+  },
+  {
+    "email": "jab@users.noreply.github.com",
+    "names": [
+      "Joshua Bronson",
+      "jab"
+    ],
+    "commit_count": 21,
+    "percent": 0.0038
+  },
+  {
+    "email": "simon.sapin@exyr.org",
+    "names": [
+      "Simon Sapin"
+    ],
+    "commit_count": 18,
+    "percent": 0.0032
+  },
+  {
+    "email": "florent.xicluna@gmail.com",
+    "names": [
+      "Florent Xicluna",
+      "florentx"
+    ],
+    "commit_count": 17,
+    "percent": 0.0031
+  },
+  {
+    "email": "lord63.j@gmail.com",
+    "names": [
+      "lord63"
+    ],
+    "commit_count": 17,
+    "percent": 0.0031
+  },
+  {
+    "email": "adambyrtek@gmail.com",
+    "names": [
+      "Adam Byrtek"
+    ],
+    "commit_count": 13,
+    "percent": 0.0023
+  },
+  {
+    "email": "dag.odenhall@gmail.com",
+    "names": [
+      "Dag Odenhall"
+    ],
+    "commit_count": 13,
+    "percent": 0.0023
+  },
+  {
+    "email": "flying-sheep@web.de",
+    "names": [
+      "Phil Schaf"
+    ],
+    "commit_count": 12,
+    "percent": 0.0022
+  },
+  {
+    "email": "s3rvac@gmail.com",
+    "names": [
+      "Petr Zemek"
+    ],
+    "commit_count": 12,
+    "percent": 0.0022
+  },
+  {
+    "email": "dawran6@gmail.com",
+    "names": [
+      "Randy Liou",
+      "dawran6"
+    ],
+    "commit_count": 10,
+    "percent": 0.0018
+  },
+  {
+    "email": "1412950785@qq.com",
+    "names": [
+      "chengkang",
+      "garenchan"
+    ],
+    "commit_count": 9,
+    "percent": 0.0016
+  },
+  {
+    "email": "plaes@plaes.org",
+    "names": [
+      "Priit Laes"
+    ],
+    "commit_count": 9,
+    "percent": 0.0016
+  },
+  {
+    "email": "eugene.kim@ntti3.com",
+    "names": [
+      "Eugene M. Kim"
+    ],
+    "commit_count": 8,
+    "percent": 0.0014
+  },
+  {
+    "email": "mattc@xbox.com",
+    "names": [
+      "Matt Cooper"
+    ],
+    "commit_count": 8,
+    "percent": 0.0014
+  },
+  {
+    "email": "klawlor419@gmail.com",
+    "names": [
+      "Kyle Lawlor",
+      "wgwz"
+    ],
+    "commit_count": 7,
+    "percent": 0.0013
+  },
+  {
+    "email": "tullyrankin@gmail.com",
+    "names": [
+      "Tully Rankin"
+    ],
+    "commit_count": 7,
+    "percent": 0.0013
+  },
+  {
+    "email": "akavlie@gmail.com",
+    "names": [
+      "Aaron Kavlie"
+    ],
+    "commit_count": 6,
+    "percent": 0.0011
+  },
+  {
+    "email": "apantykhin@gmail.com",
+    "names": [
+      "Alexander Pantyukhin"
+    ],
+    "commit_count": 6,
+    "percent": 0.0011
+  },
+  {
+    "email": "code@ant.sr",
+    "names": [
+      "Anton Sarukhanov"
+    ],
+    "commit_count": 6,
+    "percent": 0.0011
+  },
+  {
+    "email": "david@davidbaumgold.com",
+    "names": [
+      "David Baumgold"
+    ],
+    "commit_count": 6,
+    "percent": 0.0011
+  },
+  {
+    "email": "hendrik.makait@googlemail.com",
+    "names": [
+      "Hendrik Makait"
+    ],
+    "commit_count": 6,
+    "percent": 0.0011
+  },
+  {
+    "email": "lowell.abbott@gmail.com",
+    "names": [
+      "Lowell Abbott"
+    ],
+    "commit_count": 6,
+    "percent": 0.0011
+  },
+  {
+    "email": "mauve@mauveweb.co.uk",
+    "names": [
+      "Daniel Pope"
+    ],
+    "commit_count": 6,
+    "percent": 0.0011
+  },
+  {
+    "email": "mdswanson@sep.com",
+    "names": [
+      "matt swanson"
+    ],
+    "commit_count": 6,
+    "percent": 0.0011
+  },
+  {
+    "email": "mieszko.chowaniec@gmail.com",
+    "names": [
+      "Mieszko"
+    ],
+    "commit_count": 6,
+    "percent": 0.0011
+  },
+  {
+    "email": "sh@lutzhaase.com",
+    "names": [
+      "Sven-Hendrik Haase"
+    ],
+    "commit_count": 6,
+    "percent": 0.0011
+  },
+  {
+    "email": "wgwz@users.noreply.github.com",
+    "names": [
+      "Kyle Lawlor"
+    ],
+    "commit_count": 6,
+    "percent": 0.0011
+  },
+  {
+    "email": "withyuxiaoy@gmail.com",
+    "names": [
+      "Frank Yu"
+    ],
+    "commit_count": 6,
+    "percent": 0.0011
+  },
+  {
+    "email": "adamzap@gmail.com",
+    "names": [
+      "Adam Zapletal"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "anthony@thefort.org",
+    "names": [
+      "Anthony Plunkett"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "code@rebertia.com",
+    "names": [
+      "Chris Rebert"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "d.haaker@gmail.com",
+    "names": [
+      "Daniel Haaker"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "homework@nwsnet.de",
+    "names": [
+      "Jochen Kupperschmidt"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "ivanovmg@gmail.com",
+    "names": [
+      "Maxim G. Ivanov"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "james.mccarthy@corvisa.com",
+    "names": [
+      "Jimmy McCarthy"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "jeffrey.finkelstein@gmail.com",
+    "names": [
+      "Jeffrey Finkelstein",
+      "jfinkels"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "justquick@gmail.com",
+    "names": [
+      "Justin Quick"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "matt@nobien.net",
+    "names": [
+      "Matt Wright"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "mattcampbell@pobox.com",
+    "names": [
+      "Matt Campbell"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "methane@users.noreply.github.com",
+    "names": [
+      "INADA Naoki"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "mikar@gmx.de",
+    "names": [
+      "max demian"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "ori.livneh@gmail.com",
+    "names": [
+      "Ori Livneh"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "pedro@algarvio.me",
+    "names": [
+      "Pedro Algarvio"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "svenstaro@gmail.com",
+    "names": [
+      "Sven-Hendrik Haase"
+    ],
+    "commit_count": 5,
+    "percent": 0.0009
+  },
+  {
+    "email": "ahedges@isi.edu",
+    "names": [
+      "Alex Hedges"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "akasurde@redhat.com",
+    "names": [
+      "Abhijeet Kasurde"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "alex.couper@glassesdirect.com",
+    "names": [
+      "Alex Couper"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "basicsafty@gmail.com",
+    "names": [
+      "cerickson"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "bruces1@gmail.com",
+    "names": [
+      "Bruce Sutherland"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "diggsey@googlemail.com",
+    "names": [
+      "Diggory Blake"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "dmishe@gmail.com",
+    "names": [
+      "Dmitry Shevchenko"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "etpelletier93@hotmail.com",
+    "names": [
+      "EtiennePelletier"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "fnd@fnd-oda.(none)",
+    "names": [
+      "FND"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "garbados@gmail.com",
+    "names": [
+      "Max"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "giordani.leonardo@gmail.com",
+    "names": [
+      "Leonardo Giordani"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "kevin@twilio.com",
+    "names": [
+      "Kevin Burke"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "larrosa@kde.org",
+    "names": [
+      "Antonio Larrosa"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "miguel.grinberg@gmail.com",
+    "names": [
+      "Miguel Grinberg"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "mlundin617@gmail.com",
+    "names": [
+      "MikeTheReader"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "njl@njl.us",
+    "names": [
+      "Ned Jackson Lovely"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "pedrotorcattsoto@gmail.com",
+    "names": [
+      "Pedro Torcatt"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "rami.chousein@gmail.com",
+    "names": [
+      "RamiC"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "wilson.andrew.j+github@gmail.com",
+    "names": [
+      "wilsaj"
+    ],
+    "commit_count": 4,
+    "percent": 0.0007
+  },
+  {
+    "email": "accraze@gmail.com",
+    "names": [
+      "Andy Craze",
+      "accraze"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "alekzvik@gmail.com",
+    "names": [
+      "Alex Vykalyuk"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "andrewarendt@gmail.com",
+    "names": [
+      "Andrew Arendt"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "candleindark@users.noreply.github.com",
+    "names": [
+      "Isaac To"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "cg@webshox.org",
+    "names": [
+      "Christopher Grebs"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "christian@dabecka.de",
+    "names": [
+      "Christian Becker",
+      "lobeck"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "comrad.awsum@gmail.com",
+    "names": [
+      "awsum"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "daveshawley@gmail.com",
+    "names": [
+      "Dave Shawley"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "david@dbark.co.uk",
+    "names": [
+      "Dave Barker"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "dilanarma@hotmail.com",
+    "names": [
+      "Dilan Coss"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "finbarr.ocallaghan@gmail.com",
+    "names": [
+      "Finbarr O'Callaghan"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "gabrielcrsaldanha@gmail.com",
+    "names": [
+      "Gabriel Saldanha"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "georg@python.org",
+    "names": [
+      "Georg Brandl"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "jackwardell@me.com",
+    "names": [
+      "jackwardell"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "jarek@piorkowski.ca",
+    "names": [
+      "Jarek Pi\u00f3rkowski"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "jgraeme+git@gmail.com",
+    "names": [
+      "jgraeme"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "kevin.kirsche@one.verizon.com",
+    "names": [
+      "Kevin Kirsche"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "kissgyorgy@me.com",
+    "names": [
+      "Kiss Gy\u00f6rgy"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "marc@marc-abramowitz.com",
+    "names": [
+      "Marc Abramowitz"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "maxc@me.com",
+    "names": [
+      "Max Countryman"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "mbartoszkiewicz@gmail.com",
+    "names": [
+      "Micha\u0142 Bartoszkiewicz"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "michaelvantellingen@gmail.com",
+    "names": [
+      "mvantellingen"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "miguelgrinberg50@gmail.com",
+    "names": [
+      "Miguel Grinberg"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "mrluanma@gmail.com",
+    "names": [
+      "Zhao Xiaohong"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "neil.grey@shotgunsoftware.com",
+    "names": [
+      "Neil Grey"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "p.bu@tmg.nl",
+    "names": [
+      "Paulo Bu"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "paul.mcmillan@nebula.com",
+    "names": [
+      "Paul McMillan"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "rene.zelaya.f@gmail.com",
+    "names": [
+      "Rene A. Zelaya"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "sebastien.estienne@dailymotion.com",
+    "names": [
+      "Sebastien Estienne"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "shkrobov.yura@mail.ru",
+    "names": [
+      "Yourun-Proger"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "sopheryoung@gmail.com",
+    "names": [
+      "Hsiaoming Yang"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "souryavatsyayan@gmail.com",
+    "names": [
+      "Sourya Vatsyayan"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "tir.karthi@gmail.com",
+    "names": [
+      "Karthikeyan Singaravelan",
+      "xtreak"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "tony@git-pull.com",
+    "names": [
+      "Tony Narlock"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "tw-public@gmx.de",
+    "names": [
+      "ThomasWaldmann"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "wim.glenn@gmail.com",
+    "names": [
+      "wim glenn"
+    ],
+    "commit_count": 3,
+    "percent": 0.0005
+  },
+  {
+    "email": "53710895+ongopongo@users.noreply.github.com",
+    "names": [
+      "ongopongo"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "57943791+resistor-git@users.noreply.github.com",
+    "names": [
+      "Resistor-git"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "aaronchall@yahoo.com",
+    "names": [
+      "Aaron Hall, MBA"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "aku@hibana.net",
+    "names": [
+      "Aku Kotkavuo"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "alan.hamlett@gmail.com",
+    "names": [
+      "Alan Hamlett"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "alex@zerofox.com",
+    "names": [
+      "Alex Kahan"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "alexander.pantyukhin@fastdev.se",
+    "names": [
+      "Alexander Pantyukhin"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "asottile@umich.edu",
+    "names": [
+      "Anthony Sottile"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "avivcohn123@yahoo.com",
+    "names": [
+      "Aviv Cohn",
+      "AvivC"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "b.dopplinger@gmail.com",
+    "names": [
+      "Benjamin Dopplinger"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "baiju.m.mail@gmail.com",
+    "names": [
+      "Baiju M",
+      "Baiju Muthukadan"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "bill.mill@gmail.com",
+    "names": [
+      "Bill Mill"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "bovarysme@users.noreply.github.com",
+    "names": [
+      "bovarysme"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "brandon@pingswept.org",
+    "names": [
+      "Brandon Stafford"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "brousch@gmail.com",
+    "names": [
+      "Ben Rousch"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "bryan@stitthappens.com",
+    "names": [
+      "Bryan Stitt"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "c:\\users\\cgrinds\\appdata\\roaming\\the bat!",
+    "names": [
+      "unknown"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "camilo.jimenezc@gmail.com",
+    "names": [
+      "Camilo"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "carlos@cgarcia.org",
+    "names": [
+      "Carlos E. Garcia",
+      "cgar"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "cclauss@me.com",
+    "names": [
+      "Christian Clauss",
+      "cclauss"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "cgrinds@gmail.com",
+    "names": [
+      "cgrinds"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "christophersu9@gmail.com",
+    "names": [
+      "Christopher Su"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "clenimar.filemon@gmail.com",
+    "names": [
+      "Clenimar Filemon"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "code@tristanfisher.com",
+    "names": [
+      "tristan fisher"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "cryptolabour@gmail.com",
+    "names": [
+      "Abdur-Rahmaan Janhangeer"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "daniel.opitz@mailbox.org",
+    "names": [
+      "Daniel Opitz"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "danielquinn@users.noreply.github.com",
+    "names": [
+      "Daniel Quinn"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "decaz89@gmail.com",
+    "names": [
+      "Marat Sharafutdinov"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "eburnett@gmail.com",
+    "names": [
+      "Ed Burnett"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "fadhel.chaabane@hmhco.com",
+    "names": [
+      "Fadhel_Chaabane"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "fchapoton2@gmail.com",
+    "names": [
+      "Fr\u00e9d\u00e9ric Chapoton"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "florianlap2@gmail.com",
+    "names": [
+      "MeViMo"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "fsp261@gmail.com",
+    "names": [
+      "Shipeng Feng"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "gennady@kovshenin.com",
+    "names": [
+      "Gennady Kovshenin",
+      "soulseekah"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "giampaolo.eusebi@gmail.com",
+    "names": [
+      "Giampaolo Eusebi"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "git@jwf.io",
+    "names": [
+      "Justin W. Flory"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "henry.kobin@gmail.com",
+    "names": [
+      "Henry Kobin"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "hwwangwang@gmail.com",
+    "names": [
+      "Wang Haowei"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "hyunchelkim@utexas.edu",
+    "names": [
+      "Hyunchel Kim"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "ian@connolly.io",
+    "names": [
+      "Ian Connolly"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "inada-n@klab.com",
+    "names": [
+      "INADA Naoki"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "james@agentultra.com",
+    "names": [
+      "agentultra"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "jannis@leidel.info",
+    "names": [
+      "Jannis Leidel"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "jg2moutafis@gmail.com",
+    "names": [
+      "John Moutafis"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "jim@jimrollenhagen.com",
+    "names": [
+      "Jim Rollenhagen"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "jls.npi@gmail.com",
+    "names": [
+      "James Saryerwinnie"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "jon.stumpf@gmail.com",
+    "names": [
+      "Jon S. Stumpf"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "jonah@freshidea.com",
+    "names": [
+      "Jonah Lawrence"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "jonas.groeger@gmail.com",
+    "names": [
+      "Jonas Gr\u00f6ger"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "jonathan.como@gmail.com",
+    "names": [
+      "Jonathan Como"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "jphilipsen@georgefox.edu",
+    "names": [
+      "jphilipsen05"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "kumabotz@users.noreply.github.com",
+    "names": [
+      "Tery Lim"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "kuyanatan.nlao@gmail.com",
+    "names": [
+      "Natan",
+      "Natan L"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "kwinston05@gmail.com",
+    "names": [
+      "Winston Kouch"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "kyle@kylewild.com",
+    "names": [
+      "Kyle Wild"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "laggardkernel@gmail.com",
+    "names": [
+      "laggardkernel"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "leandro.colombo@mercadolibre.com",
+    "names": [
+      "lecovi"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "lukaszlapinski7@gmail.com",
+    "names": [
+      "lkk7"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "m.a.hankinson@gmail.com",
+    "names": [
+      "hankhank10"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "m.heidelberg@cab.de",
+    "names": [
+      "Markus Heidelberg"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "mariansigler@gmail.com",
+    "names": [
+      "Marian Sigler"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "mark.slater@gmail.com",
+    "names": [
+      "Mark Slater"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "mathias@adblockplus.org",
+    "names": [
+      "Mathias J. Hennig"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "matt@ydekproductions.com",
+    "names": [
+      "Matt Robenolt"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "mattc41190@gmail.com",
+    "names": [
+      "mattc41190"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "matthewtdawson@gmail.com",
+    "names": [
+      "Matt Dawson"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "me@aadibajpai.me",
+    "names": [
+      "Aadi Bajpai"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "me@adamj.eu",
+    "names": [
+      "Adam Chainz",
+      "Adam Johnson"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "me@kevinyap.ca",
+    "names": [
+      "Kevin Yap"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "me@mihirsingh.com",
+    "names": [
+      "Mihir Singh"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "mgr3yp@virginia.edu",
+    "names": [
+      "Michael Recachinas"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "mikael.ahlen@gmail.com",
+    "names": [
+      "Mikael \u00c5hl\u00e9n"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "mitchell.peabody@qrclab.com",
+    "names": [
+      "Mitchell Peabody"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "mitsuhiko@nausicaa.local",
+    "names": [
+      "Armin Ronacher"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "mj@zopatista.com",
+    "names": [
+      "Martijn Pieters"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "moshe.biko@gmail.com",
+    "names": [
+      "Michael Bikovitsky"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "ngalim.siregar@gmail.com",
+    "names": [
+      "Ngalim Siregar"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "nick.pope@flightdataservices.com",
+    "names": [
+      "Nick Pope"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "nluchs@users.noreply.github.com",
+    "names": [
+      "Nick Luchsinger"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "oliver@obeattie.com",
+    "names": [
+      "Oliver Beattie"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "ondrej.novy@firma.seznam.cz",
+    "names": [
+      "Ond\u0159ej Nov\u00fd"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "pamela.fox@gmail.com",
+    "names": [
+      "Pamela Fox"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "pascal@bayesimpact.org",
+    "names": [
+      "Pascal Corpet"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "paul90brown@gmail.com",
+    "names": [
+      "Paul Brown"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "plummer574@gmail.com",
+    "names": [
+      "Andrew Plummer"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "pskhadke@us.ibm.com",
+    "names": [
+      "Prachi Shirish Khadke"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "pub@loomchild.net",
+    "names": [
+      "Jarek Lipski"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "raphael.deem@gmail.com",
+    "names": [
+      "Raphael Deem"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "rochacbruno@gmail.com",
+    "names": [
+      "Bruno Rocha"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "ronny.pfannschmidt@gmx.de",
+    "names": [
+      "Ronny Pfannschmidt"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "rpstevens@gmail.com",
+    "names": [
+      "BobStevens"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "ryan@ryanbackman.net",
+    "names": [
+      "Ryan Backman"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "stephane@wirtel.be",
+    "names": [
+      "Stephane Wirtel",
+      "St\u00e9phane Wirtel"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "tafkasorg@yahoo.de",
+    "names": [
+      "Christian Stade-Schuldt"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "tbm@cyrius.com",
+    "names": [
+      "Martin Michlmayr"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "teh.ivo@gmail.com",
+    "names": [
+      "Matt Iversen"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "thelastfool@gmail.com",
+    "names": [
+      "Sean Vieira"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "tomallevi@gmail.com",
+    "names": [
+      "Tommaso Allevi"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "torstein.k.johansen@gmail.com",
+    "names": [
+      "Torstein Krause Johansen"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "tuxtimo@gmail.com",
+    "names": [
+      "Timo Furrer"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "v1k@protonmail.com",
+    "names": [
+      "Vik"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "venus@venusworld.cn",
+    "names": [
+      "venus"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "verysimple@gmail.com",
+    "names": [
+      "ekoka"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "web@ramiro.org",
+    "names": [
+      "Ramiro Gomez",
+      "Ramiro G\u00f3mez"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "wouter-github@publica.duodecim.org",
+    "names": [
+      "Wouter Van Hemel"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "zev@averba.ch",
+    "names": [
+      "Zev Averbach"
+    ],
+    "commit_count": 2,
+    "percent": 0.0004
+  },
+  {
+    "email": "1032897296@qq.com",
+    "names": [
+      "Frank Yu"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "105151517+jamesmramm@users.noreply.github.com",
+    "names": [
+      "JamesMRamm"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "119289623+toolmoney@users.noreply.github.com",
+    "names": [
+      "ToolMoney"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "1325200471@qq.com",
+    "names": [
+      "CasterWx"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "134919531+adityasah104@users.noreply.github.com",
+    "names": [
+      "ADITYA SAH"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "15948170+bebleo@users.noreply.github.com",
+    "names": [
+      "James Warne"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "2715782+bartbroere@users.noreply.github.com",
+    "names": [
+      "Bart Broere"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "306741005@qq.com",
+    "names": [
+      "linchiwei123"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "30845198+roysc2@users.noreply.github.com",
+    "names": [
+      "Roy Crihfield"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "31620258+mrnom@users.noreply.github.com",
+    "names": [
+      "Mrn Om"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "32250137+tehbrian@users.noreply.github.com",
+    "names": [
+      "TehBrian"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "32316796+mhsmathew@users.noreply.github.com",
+    "names": [
+      "Mat Steininger"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "36949679+awijaya22@users.noreply.github.com",
+    "names": [
+      "Angeline"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "39418842+cheesecake87@users.noreply.github.com",
+    "names": [
+      "David"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "3nc0m0s12@gmail.com",
+    "names": [
+      "kurtatter"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "40603139+abhinavsagar@users.noreply.github.com",
+    "names": [
+      "Abhinav Sagar"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "41950283+miquelvir@users.noreply.github.com",
+    "names": [
+      "miquelvir"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "42198955+nick2202@users.noreply.github.com",
+    "names": [
+      "nick2202"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "425026+bre-17387639@users.noreply.github.com",
+    "names": [
+      "bre-17387639"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "42730922+ebonnecab@users.noreply.github.com",
+    "names": [
+      "Ebonne Cabarrus"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "44526468+oleksis@users.noreply.github.com",
+    "names": [
+      "Oleksis Fraga Men\u00e9ndez"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "45117218+amrear@users.noreply.github.com",
+    "names": [
+      "Amirreza A"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "46051127+kaushikk25@users.noreply.github.com",
+    "names": [
+      "kaushik kothiya"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "47253116+isaacwoodruff@users.noreply.github.com",
+    "names": [
+      "Isaac Woodruff"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "50306448+bhushan-mohanraj@users.noreply.github.com",
+    "names": [
+      "Bhushan Mohanraj"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "52022020+coolcat467@users.noreply.github.com",
+    "names": [
+      "CoolCat467"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "54625981+uedvt359@users.noreply.github.com",
+    "names": [
+      "uedvt359"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "54715852+default-303@users.noreply.github.com",
+    "names": [
+      "default-303"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "55098699+emisargent@users.noreply.github.com",
+    "names": [
+      "emisargent"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "5958168+waffle-stomper@users.noreply.github.com",
+    "names": [
+      "waffle-stomper"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "60752171+tautv@users.noreply.github.com",
+    "names": [
+      "tautv"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "60991609+moondial-pal@users.noreply.github.com",
+    "names": [
+      "Luis Palacios"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "61205582+mindiell@users.noreply.github.com",
+    "names": [
+      "Mindiell"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "61922615+makonede@users.noreply.github.com",
+    "names": [
+      "Makonede"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "65047028+jaketanis@users.noreply.github.com",
+    "names": [
+      "Jake Tanis"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "685486+gultas@users.noreply.github.com",
+    "names": [
+      "martinamca"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "84430900+abhiramk6@users.noreply.github.com",
+    "names": [
+      "abhiram kamini"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "8884571+elliott-king@users.noreply.github.com",
+    "names": [
+      "Elliott King"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "9089037+dzcode@users.noreply.github.com",
+    "names": [
+      "dzcode"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "9142081+stat1c-void@users.noreply.github.com",
+    "names": [
+      "Sergei"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "=",
+    "names": [
+      "="
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "_@lvh.cc",
+    "names": [
+      "Laurens Van Houtven"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "a18768195675@gmail.com",
+    "names": [
+      "dayiguizhen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "aafshar@gmail.com",
+    "names": [
+      "Ali Afshar"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "aayush.kasurde@gmail.com",
+    "names": [
+      "Aayush Kasurde"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "abhinav.sagar2016@vitstudent.ac.in",
+    "names": [
+      "Abhinav"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ac@figo.io",
+    "names": [
+      "Antoine Catton"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "adamdangoor@gmail.com",
+    "names": [
+      "Adam Dangoor"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "adamscolinc@gmail.com",
+    "names": [
+      "Colin Adams"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "adamtwalsh@gmail.com",
+    "names": [
+      "Adam Walsh"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "aemed.akef.1@gmail.com",
+    "names": [
+      "ahmedakef"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "afonso.queiros@deliveryhero.com",
+    "names": [
+      "Afonso Queir\u00f3s"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ageitgey@gmail.com",
+    "names": [
+      "Adam Geitgey"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "aisipos@gmail.com",
+    "names": [
+      "Anton I. Sipos"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ajayds2001@gmail.com",
+    "names": [
+      "default-303"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ajschumacher@gmail.com",
+    "names": [
+      "Aaron Schumacher"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "akinolaemmanuel49@gmail.com",
+    "names": [
+      "Akinola Abiodun Emmanuel"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "akshar@agiliq.com",
+    "names": [
+      "Akshar Raaj"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "alan@alanswenson.dev",
+    "names": [
+      "Alan Swenson"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "alatar@alatar.eu",
+    "names": [
+      "alatar-"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "alemangui@gmail.com",
+    "names": [
+      "Alejandro Mantecon Guillen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "alex.t@gmx.at",
+    "names": [
+      "Alexander Thaller"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "alex@alexpearce.me",
+    "names": [
+      "Alex Pearce"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "alex@alexwlchan.net",
+    "names": [
+      "Alex Chan"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "alex@grep.ro",
+    "names": [
+      "Alex Morega"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "alex@strugee.net",
+    "names": [
+      "AJ Jordan"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "alexis-benoist@users.noreply.github.com",
+    "names": [
+      "Alexis Benoist"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "alimirmohammad.1386@gmail.com",
+    "names": [
+      "Heisenberg"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "alysivji@gmail.com",
+    "names": [
+      "Aly Sivji"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "amcrouse@data-get.org",
+    "names": [
+      "Andrew Crouse"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ametaireau@gmail.com",
+    "names": [
+      "Alexis Metaireau"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ameya-pandilwar@users.noreply.github.com",
+    "names": [
+      "Ameya Pandilwar"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "andrew.brown.martin@gmail.com",
+    "names": [
+      "Andrew"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "andrew@andrewjroth.com",
+    "names": [
+      "Andrew J Roth"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "andreyk.mad@gmail.com",
+    "names": [
+      "Andrii Kolomoiets"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "anowlcalledjosh@gmail.com",
+    "names": [
+      "Josh Holland"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "anthomelanous@hotmail.com",
+    "names": [
+      "teichopsia-"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "antoine.mathu@gmail.com",
+    "names": [
+      "AntoineMath"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "aphex@aphex.cx",
+    "names": [
+      "Afik"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "archroller@users.noreply.github.com",
+    "names": [
+      "Archie Roller"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "arnavborborah11@gmail.com",
+    "names": [
+      "Arnav Borborah"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "arnout@bzzt.net",
+    "names": [
+      "Arnout Engelen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "arthur.bressan@adroll.com",
+    "names": [
+      "Catarina Bressan"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ash211@gmail.com",
+    "names": [
+      "Andrew Ash"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ashdeepode@gmail.com",
+    "names": [
+      "Deep R. Ode"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "asilvers@empirical.com",
+    "names": [
+      "asilversempirical"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "asmith26@users.noreply.github.com",
+    "names": [
+      "asmith26"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "asvinartchouk@20minutes.fr",
+    "names": [
+      "Alexis Svinartchouk"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "atupalykl@gmail.com",
+    "names": [
+      "atupal"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "augiwan@users.noreply.github.com",
+    "names": [
+      "Augustus D'Souza"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "augustus.dsouza@gmail.com",
+    "names": [
+      "augustusdsouza"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "austendsouza@users.noreply.github.com",
+    "names": [
+      "Austen D'Souza"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "auvipy@gmail.com",
+    "names": [
+      "Asif Saif Uddin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "b11.chris@gmail.com",
+    "names": [
+      "Christopher Bunn"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "b@ptistefontaine.fr",
+    "names": [
+      "Baptiste Fontaine"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bagratte@live.com",
+    "names": [
+      "bagratte"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "barracks510@gmail.com",
+    "names": [
+      "Dennis Chen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bast@users.noreply.github.com",
+    "names": [
+      "Radovan Bast"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "batman.xx@gmail.com",
+    "names": [
+      "Steve Leonard"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bbayles@gmail.com",
+    "names": [
+      "Bo Bayles"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bdh931101@gmail.com",
+    "names": [
+      "whiteUnicorn"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ben@bendarnell.com",
+    "names": [
+      "Ben Darnell"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ben@hubtech.tv",
+    "names": [
+      "Ben Huebscher"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "benjaminliebald@gmail.com",
+    "names": [
+      "Benjamin Liebald"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "benruns@users.noreply.github.com",
+    "names": [
+      "Ben"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bepox0531@gmail.com",
+    "names": [
+      "Caratpine"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "beverly.a.lau@gmail.com",
+    "names": [
+      "bev-a-tron"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bijan.vakili@cloverhealth.com",
+    "names": [
+      "Bijan Vakili"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "billfienberg@users.noreply.github.com",
+    "names": [
+      "Bill Fienberg"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bjones@dresourcesgroup.com",
+    "names": [
+      "Ben Jones"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bjorn.h.madsen@gmail.com",
+    "names": [
+      "root-11"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bogdan@opanchuk.net",
+    "names": [
+      "Bogdan Opanchuk"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bogdanmarginean@ymail.com",
+    "names": [
+      "Bogdan Alexandru Marginean"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bojan@delic.rs",
+    "names": [
+      "Bojan Deli\u0107"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bool.dev@gmail.com",
+    "names": [
+      "bool-dev"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "boreq@sourcedrops.com",
+    "names": [
+      "boreq"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "boyerchen@gmail.com",
+    "names": [
+      "Pascal Hartig"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "brandon@sandrowicz.org",
+    "names": [
+      "Brandon Sandrowicz"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "brannerchinese@gmail.com",
+    "names": [
+      "David Branner"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "brennanv03@gmail.com",
+    "names": [
+      "Brennan Vincello"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "brett.langdon@datadoghq.com",
+    "names": [
+      "brettlangdon"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "brettgerry@gmail.com",
+    "names": [
+      "Brett Gerry"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "brettj@google.com",
+    "names": [
+      "Brett Johnson"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "briehan.lombaard@gmail.com",
+    "names": [
+      "Briehan Lombaard"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "brunoaiss@gmail.com",
+    "names": [
+      "brunoais"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bryce.paul.guinta@gmail.com",
+    "names": [
+      "Bryce Guinta"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bulat@bochkariov.com",
+    "names": [
+      "Bulat Bochkariov"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "bussonniermatthias@gmail.com",
+    "names": [
+      "Matthias Bussonnier"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ca@d3in.org",
+    "names": [
+      "Charles-Axel Dein"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "cameronlecrone@gmail.com",
+    "names": [
+      "cslecrone"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "camnooten@gmail.com",
+    "names": [
+      "Cameron Dahl"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "carsonip@users.noreply.github.com",
+    "names": [
+      "Carson Ip"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "cbron@azcentral.com",
+    "names": [
+      "Caleb Bron"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "cchaffin@mediatemple.net",
+    "names": [
+      "Chason Chaffin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "cenkalti@gmail.com",
+    "names": [
+      "Cenk Alt\u0131"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "cerivera@fastmail.fm",
+    "names": [
+      "Carlos Eduardo Rivera"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "cgoldberg@gmail.com",
+    "names": [
+      "Corey Goldberg"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "chanvinxiao@163.com",
+    "names": [
+      "Chenwei Xiao"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "charleswhchan@users.noreply.github.com",
+    "names": [
+      "Charles Chan"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "cheekuantan@yahoo.com",
+    "names": [
+      "cktan98"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "chen.bill.bill@gmail.com",
+    "names": [
+      "zcchen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "chevell@gmail.com",
+    "names": [
+      "Dave Chevell"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "chivalry@mac.com",
+    "names": [
+      "Charles Ross"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "chris-zimmerman@live.com",
+    "names": [
+      "Chris Zimmerman"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "chris.roberts@dataforge.com",
+    "names": [
+      "dataforger"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "chrisedgemon@pegasusnews.com",
+    "names": [
+      "Chris Edgemon"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "chrisngyn99@gmail.com",
+    "names": [
+      "Christopher Nguyen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "christoph.heer@gmail.com",
+    "names": [
+      "Christoph Heer"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "christopher@currie.com",
+    "names": [
+      "Christopher Currie"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "chuan.ma@rubylife.com",
+    "names": [
+      "Chuan Ma"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ciici123@hotmail.com",
+    "names": [
+      "\u5c0f\u660e"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "citramon88@gmail.com",
+    "names": [
+      "Stanislav Bushuev"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "coarse.sand@gmail.com",
+    "names": [
+      "Sam Anderson"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "code.aditya@gmail.com",
+    "names": [
+      "Aditya"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "code@ares-macrotechnology.com",
+    "names": [
+      "black"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "cody.j.b.scott@gmail.com",
+    "names": [
+      "Cody Scott"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "colin@recidiviz.org",
+    "names": [
+      "Colin Adams"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "combinatorist@users.noreply.github.com",
+    "names": [
+      "Timothy John Perisho Eccleston"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "corey.goldberg@lookout.com",
+    "names": [
+      "Corey Goldberg"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "coryli@mit.edu",
+    "names": [
+      "Cory Li"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "coutinhotiago@gmail.com",
+    "names": [
+      "Tiago Coutinho"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "craig@idealist.org",
+    "names": [
+      "Craig Dennis"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "csirmazbendeguz@gmail.com",
+    "names": [
+      "Csirmaz Bendeg\u00faz"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "cybertoast@gmail.com",
+    "names": [
+      "Sundar Raman"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "cykerway@gmail.com",
+    "names": [
+      "Cyker Way"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "d1fffuz0r@gmail.com",
+    "names": [
+      "d1ffuz0r"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "d4d3vd4v3@users.noreply.github.com",
+    "names": [
+      "Dave"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "dafire@gmail.com",
+    "names": [
+      "Bastian Hoyer"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "daiana.marasquin@gmail.com",
+    "names": [
+      "Daiana Marasquin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "damian.piotr.skrzypczak@gmail.com",
+    "names": [
+      "DamianSkrzypczak"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "dan.callahan@gmail.com",
+    "names": [
+      "Dan Callahan"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "daniel.g.gerber@gmail.com",
+    "names": [
+      "Daniel Gerber"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "daniel.thul@gmail.com",
+    "names": [
+      "Daniel Thul"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "danielbcbs2@gmail.com",
+    "names": [
+      "Daniel Isaac"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "dannysepler@gmail.com",
+    "names": [
+      "Danny Sepler"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "darcatron@gmail.com",
+    "names": [
+      "Mathurshan Vimalesvaran"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "darren.fix@gmail.com",
+    "names": [
+      "dcfix"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "dav.ceretti@gmail.com",
+    "names": [
+      "Davide Ceretti"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "david.cole@sohonet.com",
+    "names": [
+      "David Cole"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "david.hou314@gmail.com",
+    "names": [
+      "David Hou"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "dev@devon.so",
+    "names": [
+      "Devon Mizelle"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "dev@erfan.io",
+    "names": [
+      "erfanio"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "dhenken@gmail.com",
+    "names": [
+      "consigliere"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "diana.mackinnon@gmail.com",
+    "names": [
+      "dmackinnon"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "diegoalbertotorres@gmail.com",
+    "names": [
+      "Diego Alberto Torres Quintanilla"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "dillonb07dev@gmail.com",
+    "names": [
+      "Dillon Barnes"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "dobbybabee@gmail.com",
+    "names": [
+      "avborhanian"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "doobeh@thefort.org",
+    "names": [
+      "doobeh"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "doron@milktek.com",
+    "names": [
+      "Doron Horwitz"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "doug.thor@gmail.com",
+    "names": [
+      "Douglas Thor"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "dougal@dougalmatthews.com",
+    "names": [
+      "Dougal Matthews"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "dougthor42@users.noreply.github.com",
+    "names": [
+      "Douglas Thor"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "drmegahertz@gmail.com",
+    "names": [
+      "Marcus Fredriksson"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "dsully@linkedin.com",
+    "names": [
+      "Dan Sully"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "dvogel@lukahn.sidejump.net",
+    "names": [
+      "Drew Vogel"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "earlruby@users.noreply.github.com",
+    "names": [
+      "Earl C. Ruby III"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ebram96@gmail.com",
+    "names": [
+      "Ebram Shehata"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ed.brannin@thomsonreuters.com",
+    "names": [
+      "Ed Brannin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "edbrannin@gmail.com",
+    "names": [
+      "Ed Brannin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "edill@bnl.gov",
+    "names": [
+      "Eric Dill"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "eido95@users.noreply.github.com",
+    "names": [
+      "Eido95"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "eladm26@gmail.com",
+    "names": [
+      "Elad Moshe"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "elijahshellsanchez@outlook.com",
+    "names": [
+      "Elahi-cs"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "eloi@yaal.coop",
+    "names": [
+      "\u00c9loi Rivard"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "eltonlaw296@gmail.com",
+    "names": [
+      "Elton Law"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "emlyn.je.price@gmail.com",
+    "names": [
+      "Emlyn Price"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "eprigorodov@gmail.com",
+    "names": [
+      "Evgeny Prigorodov"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ericshane@eradman.com",
+    "names": [
+      "Eric Radman"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "erik@mozilla.com",
+    "names": [
+      "Erik Rose"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "erogers6264@gmail.com",
+    "names": [
+      "Ethan Rogers"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "esadek@hotmail.com",
+    "names": [
+      "Emil Sadek"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ezra.morris@smartcomptech.com",
+    "names": [
+      "ezramorris"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ezyang@cs.stanford.edu",
+    "names": [
+      "Edward Z. Yang"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "fantix@uchicago.edu",
+    "names": [
+      "Fantix King"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "fernandaguimaraes28@gmail.com",
+    "names": [
+      "Fernanda Guimar\u00e3es"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "filip@brdo.org",
+    "names": [
+      "Filip Risti\u0107"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "filipefilardi@hotmail.com",
+    "names": [
+      "Filipe Filardi"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "florian.sachs@gmx.at",
+    "names": [
+      "Florian Sachs"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "fmw@vix.io",
+    "names": [
+      "fmw"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ford.hurley@gmail.com",
+    "names": [
+      "Ford Hurley"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "francisco@franciscosouza.net",
+    "names": [
+      "Francisco Souza"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "frankieliu@doordash.com",
+    "names": [
+      "Frankie Liu"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "frostming@tencent.com",
+    "names": [
+      "frostming"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "gaitan@gmail.com",
+    "names": [
+      "Mart\u00edn Gait\u00e1n"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "geoffrey.bauduin@corp.ovh.com",
+    "names": [
+      "Geoffrey Bauduin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "giles@giles.net",
+    "names": [
+      "Giles Thomas"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "gilman.callsen@gmail.com",
+    "names": [
+      "Gilman Callsen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "girst@users.noreply.github.com",
+    "names": [
+      "girst"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "git@felixhummel.de",
+    "names": [
+      "Felix Hummel"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "git@gsch.ch",
+    "names": [
+      "georgschoelly"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "git@maximilianhils.com",
+    "names": [
+      "Maximilian Hils"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "git@zr40.nl",
+    "names": [
+      "Matthijs van der Vleuten"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "github.com@daybarr.com",
+    "names": [
+      "Day Barr"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "github.com@zopatista.com",
+    "names": [
+      "Martijn Pieters"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "github@binaryeagle.com",
+    "names": [
+      "Adam Obeng"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "github@ezide.com",
+    "names": [
+      "Shandy Brown"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "github@pheanex.de",
+    "names": [
+      "PHeanEX"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "github@rebertia.com",
+    "names": [
+      "Chris Rebert"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "github@yoavram.com",
+    "names": [
+      "Yoav Ram"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "gliptak@gmail.com",
+    "names": [
+      "G\u00e1bor Lipt\u00e1k"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "gokcegrbl@hotmail.com",
+    "names": [
+      "gokcegrbl"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "goren.ali@yandex.com",
+    "names": [
+      "aligoren"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "graham.lutz@gmail.com",
+    "names": [
+      "grahamlutz"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "grant.birkinbine@gmail.com",
+    "names": [
+      "Grant Birkinbine"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "grantwwu@gmail.com",
+    "names": [
+      "Grant Wu"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "gregory.pakosz@gmail.com",
+    "names": [
+      "Gregory Pakosz"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "grinch@grinchcentral.com",
+    "names": [
+      "Erik Rose"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "gruentee@users.noreply.github.com",
+    "names": [
+      "Constantin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "guirec.corbel@gmail.com",
+    "names": [
+      "Guriec Corbel"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "gunbei@10xengineers.org",
+    "names": [
+      "gunbei"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "gutianci@pwrd.com",
+    "names": [
+      "gutianci"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "gwatersdev@gmail.com",
+    "names": [
+      "George Waters"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hads@nice.net.nz",
+    "names": [
+      "Hadley Rich"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hallacy@openai.com",
+    "names": [
+      "Chris Hallacy"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hallazzang@gmail.com",
+    "names": [
+      "hallazzang"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hampus@dunstrom.com",
+    "names": [
+      "Hampus Dunstr\u00f6m"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hardtack@users.noreply.github.com",
+    "names": [
+      "GunWoo Choi"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hassamuddin20@gmail.com",
+    "names": [
+      "Hassam"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hauntsaninja@gmail.com",
+    "names": [
+      "hauntsaninja"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hdformat@gmail.com",
+    "names": [
+      "EJ Lee"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hello@marksteve.com",
+    "names": [
+      "Mark Steve Samson"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hello@tiesjan.com",
+    "names": [
+      "Ties Jan Hefting"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "henri@workforpizza.com",
+    "names": [
+      "iammookli"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "henrik.harutyunyan@vxsoft.com",
+    "names": [
+      "hharutyunyan"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "henrycjc@users.noreply.github.com",
+    "names": [
+      "Henry Chladil"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hidavy@users.noreply.github.com",
+    "names": [
+      "hidavy"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hopsken@users.noreply.github.com",
+    "names": [
+      "Hopsken"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hs@ox.cx",
+    "names": [
+      "Hynek Schlawack"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hugo_montenegro@g.harvard.edu",
+    "names": [
+      "Hugo Montenegro"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hugouf@hotmail.fr",
+    "names": [
+      "octopoulpe"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hugovk@users.noreply.github.com",
+    "names": [
+      "hugovk"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "huimingz12@outlook.com",
+    "names": [
+      "huimingz"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hvn@familug.org",
+    "names": [
+      "Viet Hung Nguyen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hyunchel.inbox@gmail.com",
+    "names": [
+      "Hyunchel Kim"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "hyunchel@fashionmetric.com",
+    "names": [
+      "Hyunchel Kim"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "iakbar@gmail.com",
+    "names": [
+      "Akbar Ibrahim"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "iamparkayun@gmail.com",
+    "names": [
+      "Parkayun"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "idris.raja@gmail.com",
+    "names": [
+      "Idris Raja"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ifiokotung@gmail.com",
+    "names": [
+      "Ifiok Jr."
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "igor@esss.com.br",
+    "names": [
+      "Igor Ghisi"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "imgbothelp@gmail.com",
+    "names": [
+      "ImgBotApp"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "info@martin-thoma.de",
+    "names": [
+      "Martin Thoma"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "info@sebastian-hoeffner.de",
+    "names": [
+      "Sebastian H\u00f6ffner"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "io@mintz.cc",
+    "names": [
+      "iomintz"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ionut@vioan.ro",
+    "names": [
+      "Ioan Vancea"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "iraklisivsivadze@gmail.com",
+    "names": [
+      "SaturnR"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ivan.sushkov91@gmail.com",
+    "names": [
+      "Ivan Sushkov"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ivo@danihelka.net",
+    "names": [
+      "Ivo Danihelka"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "iyra72@gmail.com",
+    "names": [
+      "Iyra Gaura"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "iztok@iztok-jr-fister.eu",
+    "names": [
+      "Iztok Fister Jr"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "j_seldess@hotmail.com",
+    "names": [
+      "Jesse Seldess"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jabronson@gmail.com",
+    "names": [
+      "Joshua Bronson"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jafo@tummy.com",
+    "names": [
+      "Sean Reifschneider"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jakseb.dev@gmail.com",
+    "names": [
+      "Sebastian Jakubiak"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jakub@stasiak.at",
+    "names": [
+      "Jakub Stasiak"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "james@brwr.org",
+    "names": [
+      "James Brewer"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "james@localhost.localdomain",
+    "names": [
+      "James Farrington"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "james@reciperadar.com",
+    "names": [
+      "James Addison"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jamestfarrington@gmail.com",
+    "names": [
+      "James Farrington"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jamiegrove@gmail.com",
+    "names": [
+      "Jamie Grove"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jamsoftgamedev@gmail.com",
+    "names": [
+      "Sven Slootweg"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jangjunha113@gmail.com",
+    "names": [
+      "jangjunha"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jason@jasondavies.com",
+    "names": [
+      "Jason Davies"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jayrey.go@gmail.com",
+    "names": [
+      "jaydarius"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jdxlark@gmail.com",
+    "names": [
+      "Ionu\u021b Cioc\u00eerlan"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jeenuv@gmail.com",
+    "names": [
+      "Jeenu Viswambharan"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jeroendevries@runbox.eu",
+    "names": [
+      "Jeroendevr"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jerr0328@gmail.com",
+    "names": [
+      "Jeremy Mayeres"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jerry.baker@simpledove.com",
+    "names": [
+      "Jerry Baker"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jesse@clearwateranalytics.com",
+    "names": [
+      "Jesse Roberts"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jesse@thefortytwo.net",
+    "names": [
+      "Jesse Dubay"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jet.joins.sun@gmail.com",
+    "names": [
+      "Jet Sun"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jevgenij.tsoi@gmail.com",
+    "names": [
+      "jtsoi"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jiri.kuncar@gmail.com",
+    "names": [
+      "Jiri Kuncar"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jjz@twosigma.com",
+    "names": [
+      "John Zeringue"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jm.carp@gmail.com",
+    "names": [
+      "Joshua Carp"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "joe.esposito@snapretail.com",
+    "names": [
+      "Joe Esposito"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "joel.charles91@gmail.com",
+    "names": [
+      "Jo\u00ebl Charles"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "joel.perras@gmail.com",
+    "names": [
+      "Joel Perras"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "john@jmsdvl.com",
+    "names": [
+      "John Still"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "john@velvetcache.org",
+    "names": [
+      "John Hobbs"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "johnbodley@users.noreply.github.com",
+    "names": [
+      "John Bodley"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jon@heartly.com",
+    "names": [
+      "Jon Parise"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jon@jonafato.com",
+    "names": [
+      "Jon Banafato"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jonathan@jonathanstreet.com",
+    "names": [
+      "streety"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jonathanglopez@gmail.com",
+    "names": [
+      "otherJL0"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jordan_bonser@live.co.uk",
+    "names": [
+      "jordan bonser"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jordivandooren@gmail.com",
+    "names": [
+      "jordivandooren"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jose.j.p.oliveira.96@gmail.com",
+    "names": [
+      "Jos\u00e9 Oliveira"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "josh@s-block.com",
+    "names": [
+      "Josh Rowe"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jowillia@gmail.com",
+    "names": [
+      "Josh"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jphilipsen05@gmail.com",
+    "names": [
+      "Josiah Philipsen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jrltechwriting@gmail.com",
+    "names": [
+      "Juan Lara"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jsnmoon@me.com",
+    "names": [
+      "Jason Moon"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jsonbrazeal@users.noreply.github.com",
+    "names": [
+      "Jason Brazeal"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jsoref@users.noreply.github.com",
+    "names": [
+      "Josh Soref"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "juergen.gmach@googlemail.com",
+    "names": [
+      "J\u00fcrgen Gmach"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "julenx@gmail.com",
+    "names": [
+      "Julen Ruiz Aizpuru"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "julia@flowerhack.com",
+    "names": [
+      "flowerhack"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "julyloov@gmail.com",
+    "names": [
+      "Jan Ferko"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "juniorbaez01@gmail.com",
+    "names": [
+      "Junior B\u00e1ez"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "justin.poehnelt@gmail.com",
+    "names": [
+      "Justin Poehnelt"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "justin@wealthsimple.com",
+    "names": [
+      "Justin Bull"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "jweber@cofront.net",
+    "names": [
+      "Jeff Weber"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "k-funk@users.noreply.github.com",
+    "names": [
+      "Kevin Funk"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "k@efir.uz",
+    "names": [
+      "Shuhrat Dehkanov"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ka7@la-evento.com",
+    "names": [
+      "ka7"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kadai0308@gmail.com",
+    "names": [
+      "kadai0308"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kaichen120@gmail.com",
+    "names": [
+      "Kai Chen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kamil.wargula@allegro.pl",
+    "names": [
+      "Kamil Wargula"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kamil@kamilkisiel.net",
+    "names": [
+      "Kamil Kisiel"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kanakkshetri@fastmail.fm",
+    "names": [
+      "Kanak Kshetri"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kangetsu121@gmail.com",
+    "names": [
+      "kangetsu121"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "karintou8710@gmail.com",
+    "names": [
+      "karintou8710"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "karol.kuczmarski@gmail.com",
+    "names": [
+      "Karol Kuczmarski"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "karunatata63@gmail.com",
+    "names": [
+      "Karuna Tata"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kasianov.igor@jiji.ng",
+    "names": [
+      "Igor Kasianov"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kaveh.ka@consbio.org",
+    "names": [
+      "kaveh"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kblomqvist@iki.fi",
+    "names": [
+      "Kim Blomqvist"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kekumu@users.noreply.github.com",
+    "names": [
+      "kekumu"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kelvintaywl@gmail.com",
+    "names": [
+      "tay-k"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kev.kirsche+github@gmail.com",
+    "names": [
+      "Kevin Kirsche"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kevinanew@gmail.com",
+    "names": [
+      "kevinanew"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kim@hyunjun.kr",
+    "names": [
+      "Hyunjun Kim"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kislyuk@gmail.com",
+    "names": [
+      "Andrey Kislyuk"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kot-b-kbahte@yandex.ru",
+    "names": [
+      "kotvkvante"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kplauritzen@users.noreply.github.com",
+    "names": [
+      "Kasper Primdal Lauritzen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kracethekingmaker@gmail.com",
+    "names": [
+      "kracekumar"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kwinston@users.noreply.github.com",
+    "names": [
+      "Winston Kouch"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kyle.stevenson94@gmail.com",
+    "names": [
+      "Kyle Stevenson"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kyle@kyle-p-johnson.com",
+    "names": [
+      "Kyle P. Johnson"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "kylepollina@protonmail.com",
+    "names": [
+      "kylepollina"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "lambdadi@gmail.com",
+    "names": [
+      "lambdadi"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "lamby@debian.org",
+    "names": [
+      "Chris Lamb"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "larivact@users.noreply.github.com",
+    "names": [
+      "Larivact"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "lars.moons@student.uantwerpen.be",
+    "names": [
+      "LarsMoons"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "latham@growers.ag",
+    "names": [
+      "Latham Fell"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "lblauvel@ucsc.edu",
+    "names": [
+      "DailyDreaming"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "lee@heungsub.net",
+    "names": [
+      "Heungsub Lee"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "leonardo_s@yeah.net",
+    "names": [
+      "Yao Long"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "lettow@humain-labs.com",
+    "names": [
+      "lettow-humain"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "levimroth@gmail.com",
+    "names": [
+      "Levi Roth"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "lfstindall@gmail.com",
+    "names": [
+      "Leo Tindall"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "lindsay.n.young@gmail.com",
+    "names": [
+      "Lindsay Young"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "literallyelvis@gmail.com",
+    "names": [
+      "Jeffrey D"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "lizardwine@hotmail.com",
+    "names": [
+      "lizard"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "longlyshidenggui@gmail.com",
+    "names": [
+      "shidenggui"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "lwright.js@gmail.com",
+    "names": [
+      "Logan Wright"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "m@sad.bz",
+    "names": [
+      "Dosenpfand"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "maic@siemering.tech",
+    "names": [
+      "Eruvanos"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mail4ostrovski@gmail.com",
+    "names": [
+      "Ivan Velichko"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mail@jaapbroekhuizen.nl",
+    "names": [
+      "Jaap Broekhuizen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mail@lucaswerkmeister.de",
+    "names": [
+      "Lucas Werkmeister"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mail@petermanser.ch",
+    "names": [
+      "Peter Manser"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mail@robert.io",
+    "names": [
+      "Robert Picard"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mail@sobolevn.me",
+    "names": [
+      "Sobolev Nikita"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "main@danielrichman.co.uk",
+    "names": [
+      "Daniel Richman"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "makdon@makdon.me",
+    "names": [
+      "makdon"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "maksim.salau@gmail.com",
+    "names": [
+      "Maksim Salau"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "manders.emily@gmail.com",
+    "names": [
+      "Emily Manders"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mannavard1611@gmail.com",
+    "names": [
+      "Olexander Yermakov"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mapleoin@users.noreply.github.com",
+    "names": [
+      "Ionu\u021b Ar\u021b\u0103ri\u0219i"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "marc.schlaich@googlemail.com",
+    "names": [
+      "Marc Schlaich"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "marina.nunamaker@gmail.com",
+    "names": [
+      "bearnun"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mark.k.hildreth@gmail.com",
+    "names": [
+      "Mark Hildreth"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mark@hotpy.org",
+    "names": [
+      "Mark Shannon"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "markamery@btinternet.com",
+    "names": [
+      "Mark Amery"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "martin.j.froehlich@googlemail.com",
+    "names": [
+      "mjfroehlich"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "martin.polden@bouvet.no",
+    "names": [
+      "Martin Polden"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mat.volfik@gmail.com",
+    "names": [
+      "Mat\u011bj Volf"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "matt.cooper@microsoft.com",
+    "names": [
+      "Matt Cooper"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "matt.skone@gmail.com",
+    "names": [
+      "Matt Skone"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "matt@theory.org",
+    "names": [
+      "Matt Chisholm"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "matthias@mp42.de",
+    "names": [
+      "Matthias Paulsen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mavignau@gmail.com",
+    "names": [
+      "Maria Andrea Vignau"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "max.countryman@gmail.com",
+    "names": [
+      "Max Countryman"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "maxim.suraev@here.com",
+    "names": [
+      "Max"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mdw1980@gmail.com",
+    "names": [
+      "Matt Wright"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "me@0upti.me",
+    "names": [
+      "K900"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "me@danieldbeck.com",
+    "names": [
+      "Daniel D. Beck"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "me@ignasibosch.com",
+    "names": [
+      "Ignasi Bosch"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "me@limeburst.net",
+    "names": [
+      "Jihyeok Seo"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "me@lord63.com",
+    "names": [
+      "lord63"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "me@luitvd.net",
+    "names": [
+      "Luit van Drongelen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "me@nvie.com",
+    "names": [
+      "Vincent Driessen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "me@rdil.rocks",
+    "names": [
+      "Reece Dunham"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "me@tobias.ws",
+    "names": [
+      "Tobias Sette"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mellcap@163.com",
+    "names": [
+      "Mellcap Zhao"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "menghan412@gmail.com",
+    "names": [
+      "Menghan"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "merlin@merlinsbox.net",
+    "names": [
+      "Merlin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "merlin@movieclips.com",
+    "names": [
+      "Merlin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "metallourlante@gmail.com",
+    "names": [
+      "esaurito"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mgorny@gentoo.org",
+    "names": [
+      "Micha\u0142 G\u00f3rny"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mhall1@ualberta.ca",
+    "names": [
+      "Michael Hall"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mianghong@gmail.com",
+    "names": [
+      "Frost Ming"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "michael.karpeles@gmail.com",
+    "names": [
+      "Michael E. Karpeles"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "michael@confuzeus.com",
+    "names": [
+      "Josh Michael Karamuth"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "michal@michalklich.com",
+    "names": [
+      "Michael Klich"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mickael.guerin@getalma.eu",
+    "names": [
+      "Micka\u00ebl Gu\u00e9rin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mikegagnon@gmail.com",
+    "names": [
+      "Michael N. Gagnon"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "milesrichardson@gmail.com",
+    "names": [
+      "Miles Richardson"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mim@mim.pw",
+    "names": [
+      "Aliaksei Urbanski"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mirskiy@gmail.com",
+    "names": [
+      "Dan Mirsky"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mitch@directangular.com",
+    "names": [
+      "Mitchel Humpherys"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mmmoniri77@gmail.com",
+    "names": [
+      "mohammad m. moniri"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "moraes@moraes.(none)",
+    "names": [
+      "moraes"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "morenoh149@gmail.com",
+    "names": [
+      "Harry Moreno"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mostawesomedude@gmail.com",
+    "names": [
+      "Corbin Simpson"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "moyo@grit.systems",
+    "names": [
+      "moyosore"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mozhaevevgeny@gmail.com",
+    "names": [
+      "Evgeny Mozhaev"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mpreble@indeed.com",
+    "names": [
+      "Matthew Preble"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "mr.thalmann@gmail.com",
+    "names": [
+      "Bruno Thalmann"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "msiyaj@gmail.com",
+    "names": [
+      "msiyaj"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "n@bbisen.com",
+    "names": [
+      "nabbisen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nadav.geva4@gmail.com",
+    "names": [
+      "Nadav Geva"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nagafeltf7@gmail.com",
+    "names": [
+      "na2shell"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nateprewitt@users.noreply.github.com",
+    "names": [
+      "Nate Prewitt"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nathan.brown@annalect.com",
+    "names": [
+      "Nathan Brown"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nathanbegbie@gmail.com",
+    "names": [
+      "nathanbegbie"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "neikokz@gmail.com",
+    "names": [
+      "wodim"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nficano@gmail.com",
+    "names": [
+      "Nick Ficano"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nicholas.zaccardi@gmail.com",
+    "names": [
+      "Nicholas Zaccardi"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nicholas.zaccardi@ndus.edu",
+    "names": [
+      "Nick Zaccardi"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nick.janetakis@gmail.com",
+    "names": [
+      "Nick Janetakis"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nick@kocharhook.com",
+    "names": [
+      "Nick Kocharhook"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nick@subtlepath.org",
+    "names": [
+      "Nick Walker"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nickle87@gmail.com",
+    "names": [
+      "Nickatak"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nicola@nicolaiarocci.com",
+    "names": [
+      "Nicola Iarocci"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nils@redhat.com",
+    "names": [
+      "Nils Philippsen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ning.xie@qunar.com",
+    "names": [
+      "ning.xie"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "niv@emedgene.com",
+    "names": [
+      "nivm"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nland@dyn.com",
+    "names": [
+      "Nathan Land"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nmckinl3@gmu.edu",
+    "names": [
+      "Nathan McKinley-Pace"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "noufal@nibrahim.net.in",
+    "names": [
+      "Noufal Ibrahim"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "noviluni@gmail.com",
+    "names": [
+      "Marc Hernandez Cabot"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nryoung@gmail.com",
+    "names": [
+      "Nic Young"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "numerlor@gmail.com",
+    "names": [
+      "Numerlor"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "nzakharenko@gmail.com",
+    "names": [
+      "Nina Zakharenko"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "oguzhancelikarslan@gmail.com",
+    "names": [
+      "O\u011fuzhan \u00c7elikarslan"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "oleksis.fraga@gmail.com",
+    "names": [
+      "oleksis"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "oliver.margetts@gmail.com",
+    "names": [
+      "olliemath"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "oliver@bestwalter.de",
+    "names": [
+      "Oliver Bestwalter"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "oliversong@tumblr.com",
+    "names": [
+      "oliversong"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "olokki@gmail.com",
+    "names": [
+      "RamiC"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "open.standards.needed@gmail.com",
+    "names": [
+      "Akai Kitsune"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "openmorse@users.noreply.github.com",
+    "names": [
+      "Dave Morse"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "opensource@ronnypfannschmidt.de",
+    "names": [
+      "Ronny Pfannschmidt"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "orangetux24@gmail.com",
+    "names": [
+      "OrangeTux"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "orangetux@users.noreply.github.com",
+    "names": [
+      "Auke Willem Oosterhoff"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ortwang@googlemail.com",
+    "names": [
+      "raimu"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "osborn.steven@gmail.com",
+    "names": [
+      "Steven Osborn"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "oss@senarclens.eu",
+    "names": [
+      "Gerald Senarclens de Grancy"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "pablo@albanta.eu",
+    "names": [
+      "Pablo Marti"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "paul.butler@twosigma.com",
+    "names": [
+      "Paul Butler"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "paulogpoiati@gmail.com",
+    "names": [
+      "Paulo Poiati"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "pavithra.25cs@licet.ac.in",
+    "names": [
+      "pavithra"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "pedroob221@gmail.com",
+    "names": [
+      "Pedro Louren\u00e7o"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "pengphy@gmail.com",
+    "names": [
+      "Pengfei Xue"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "per@permortensen.com",
+    "names": [
+      "Per Mortensen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "pete.beardmore@msn.com",
+    "names": [
+      "Pete Beardmore"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "petergeorgekritikos@gmail.com",
+    "names": [
+      "Peter G Kritikos"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "petit.gaetan@gmail.com",
+    "names": [
+      "Ga\u00ebtan Petit"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "pg1992@users.noreply.github.com",
+    "names": [
+      "Pedro Guilherme S. Moreira"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "philiphouse2015@u.northwestern.edu",
+    "names": [
+      "Philip House"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "philipp.rohde@tib.eu",
+    "names": [
+      "Philipp Rohde"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "pierluc.boudreau@gmail.com",
+    "names": [
+      "icreatedanaccount"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ping_hu@brown.edu",
+    "names": [
+      "Ping Hu"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "piotrjerzydomanski@gmail.com",
+    "names": [
+      "domandinho"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "pombredanne@gmail.com",
+    "names": [
+      "Philippe Ombredanne"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "prakashpp.pandey@gmail.com",
+    "names": [
+      "Prakash Pandey"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "prayag.verma@gmail.com",
+    "names": [
+      "Prayag Verma"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "psanders1@gmail.com",
+    "names": [
+      "Paul Sanders"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "public@enkore.de",
+    "names": [
+      "enkore"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "public@plourenco.com",
+    "names": [
+      "Pedro Louren\u00e7o"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "purring@users.noreply.github.com",
+    "names": [
+      "Cody"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "pwlandoll@gmail.com",
+    "names": [
+      "Peter Landoll"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "qingpeng9802@gmail.com",
+    "names": [
+      "Qingpeng Li"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "quobit@users.noreply.github.com",
+    "names": [
+      "Jos\u00e9 Carlos Garc\u00eda"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "r.tilky@gmail.com",
+    "names": [
+      "Ryan Thielke"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "r.y.t@yandex.ru",
+    "names": [
+      "Roman"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "r04922101@ntu.edu.tw",
+    "names": [
+      "Tony Huang"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "rafa.vfierro@outlook.com",
+    "names": [
+      "Rafael Aviles"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "rao@grandperspective.de",
+    "names": [
+      "Badhreesh"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "rayanth@gmail.com",
+    "names": [
+      "rayanth"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "raymond.l.devries@gmail.com",
+    "names": [
+      "raymond-devries"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "rbean@redhat.com",
+    "names": [
+      "Ralph Bean"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "rdegges@gmail.com",
+    "names": [
+      "Randall Degges"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "redian@dred.com",
+    "names": [
+      "Redian Ibra"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "redian@users.noreply.github.com",
+    "names": [
+      "Redian"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "reetta@reetta-satellite-pro-c660.(none)",
+    "names": [
+      "Reetta Vaahtoranta"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "reisen@hellokitty.com",
+    "names": [
+      "Reisen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "remyroy@remyroy.com",
+    "names": [
+      "R\u00e9my Roy"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "reuvenpe2005@gmail.com",
+    "names": [
+      "Reuven"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "rgerganov@gmail.com",
+    "names": [
+      "Radoslav Gerganov"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "richard.schneeman@gmail.com",
+    "names": [
+      "schneems"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "rnevius@users.noreply.github.com",
+    "names": [
+      "Ryan Nevius"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "rocambolesquedev@gmail.com",
+    "names": [
+      "rocambolesque"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "rohansalwan23@gmail.com",
+    "names": [
+      "Rohan salwan"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "rohantalip@users.noreply.github.com",
+    "names": [
+      "Rohan Talip"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "roskoff@gmail.com",
+    "names": [
+      "Eliseo Ocampos"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ross.lawley@gmail.com",
+    "names": [
+      "Ross Lawley"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "royque@gmail.com",
+    "names": [
+      "Quentin Roy"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "rsyring@gmail.com",
+    "names": [
+      "rsyring"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "runartrollet@me.com",
+    "names": [
+      "Runar Trollet Kristoffersen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ryan@bitrot.io",
+    "names": [
+      "Ryan Macy"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ryucrosskey@gmail.com",
+    "names": [
+      "Ryuichi Watanabe"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "rzimmerdev@gmail.com",
+    "names": [
+      "Rafael Zimmer"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "s.bushuev@semrush.com",
+    "names": [
+      "Stanislav Bushuev"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "salimonjamiu@yahoo.com",
+    "names": [
+      "Jamiu Salimon"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sanderl@mediamonks.com",
+    "names": [
+      "sanderl-mediamonks"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sangmin.park@gmail.com",
+    "names": [
+      "Sang Min Park"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sanjurjo7@gmail.com",
+    "names": [
+      "Thomas Sanjurjo"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "santini@dsi.unimi.it",
+    "names": [
+      "Massimo Santini"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sarthakchaudhary13@gmail.com",
+    "names": [
+      "Sarthak Vineet Kumar"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sateeshkumarb@yahoo.com",
+    "names": [
+      "Sateesh"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "satoshi.14ym@gmail.com",
+    "names": [
+      "owgreen"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "saulurias08@gmail.com",
+    "names": [
+      "Saul  Urias"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sblondon@users.noreply.github.com",
+    "names": [
+      "sblondon"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "scrosby@twosigma.com",
+    "names": [
+      "Scott Crosby"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "seancron@gmail.com",
+    "names": [
+      "Sean Cronin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sebastian@kalinowski.eu",
+    "names": [
+      "Sebastian Kalinowski"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "seeksort@gmail.com",
+    "names": [
+      "Kristin Faner"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "serge.koval+github@gmail.com",
+    "names": [
+      "Serge S. Koval"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sergio.diazbcn@gmail.com",
+    "names": [
+      "Sergio Di\u0301az Sa\u0301nchez"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sf@abilian.com",
+    "names": [
+      "Stefane Fermigier"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "shakib609@users.noreply.github.com",
+    "names": [
+      "Shakib Hossain"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "shalabh.aggarwal@openlabs.co.in",
+    "names": [
+      "Shalabh Aggarwal"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "shamrin@gmail.com",
+    "names": [
+      "Alexey Shamrin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "shanavas.m2@gmail.com",
+    "names": [
+      "Shanavas M"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sharmaadarsh563@gmail.com",
+    "names": [
+      "Adarsh Sharma"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sharoon.thomas@openlabs.co.in",
+    "names": [
+      "Sharoon Thomas"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "shawn@skift.io",
+    "names": [
+      "Shawn McElroy"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "skeuomorf@gmail.com",
+    "names": [
+      "skeuomorf"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "slestak989@gmail.com",
+    "names": [
+      "Steve Romanow"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sloria1@gmail.com",
+    "names": [
+      "Steven Loria"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "songofacandy@gmail.com",
+    "names": [
+      "INADA Naoki"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sorech02@gmail.com",
+    "names": [
+      "Christopher Sorenson"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "spappier@gmail.com",
+    "names": [
+      "pinchsp"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "spittie@users.noreply.github.com",
+    "names": [
+      "Spittie"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sprutner@gmail.com",
+    "names": [
+      "Seth Rutner"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "staticfox@staticfox.net",
+    "names": [
+      "Static"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "steelywing@users.noreply.github.com",
+    "names": [
+      "Wing"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "steffen@sprin.io",
+    "names": [
+      "Steffen Prince"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "steko@iosa.it",
+    "names": [
+      "Stefano Costa"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "stephane.raimbault@gmail.com",
+    "names": [
+      "St\u00e9phane Raimbault"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "stephane.wirtel@gmail.com",
+    "names": [
+      "Stephane Wirtel"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "stuff@joefriedl.net",
+    "names": [
+      "Joe Friedl"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "subhajitsaha.formal@gmail.com",
+    "names": [
+      "subhajitsaha01"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "sudheer.zzz@sudheer.net",
+    "names": [
+      "Sudheer Satyanarayana"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "surajchafale@gmail.com",
+    "names": [
+      "Suraj Chafle"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "swanhtet1992@users.noreply.github.com",
+    "names": [
+      "Swan Htet Aung"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "talam@users.noreply.github.com",
+    "names": [
+      "talam"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "teebes@gmail.com",
+    "names": [
+      "Thibaud Morel"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "tero.vuotila@falcony.io",
+    "names": [
+      "Tero Vuotila"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "tesrin@gmail.com",
+    "names": [
+      "Jimmy Jia"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "thedb317@hotmail.com",
+    "names": [
+      "d3spis3d"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "theonestep4@gmail.com",
+    "names": [
+      "Stephon Harris"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "thewhitetulip@users.noreply.github.com",
+    "names": [
+      "Suraj Patil"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "thiagojobson@users.noreply.github.com",
+    "names": [
+      "Thiago J. Barbalho"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "thomasoflight@lightfaced.org",
+    "names": [
+      "Arie Marie 'Thomas' Dalleis"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "tim.hoagalnd@gmail.com",
+    "names": [
+      "Tim Hoagland"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "tjrhines@gmail.com",
+    "names": [
+      "Thomas Rhines"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "tobias.bieniek@gmx.de",
+    "names": [
+      "Tobias Bieniek"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "tom@busby.ninja",
+    "names": [
+      "Tom Busby"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "tomasz.kalkosinski@gmail.com",
+    "names": [
+      "Tomasz Kalkosi\u0144ski"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "tommcdonald955@gmail.com",
+    "names": [
+      "Tom-McDonald"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "tony.delanuez@gmail.com",
+    "names": [
+      "Tony De La Nuez"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "tosh@deck.cc",
+    "names": [
+      "Thomas Schranz"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "tpadilha84@gmail.com",
+    "names": [
+      "Thiago de Arruda"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "trey@ktrl.com",
+    "names": [
+      "Trey Long"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "tristan.trouwen@gmail.com",
+    "names": [
+      "trirpi"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "trungly@gmail.com",
+    "names": [
+      "Trung Ly"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "tushar.sadhwani000@gmail.com",
+    "names": [
+      "Tushar Sadhwani"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ultimecia7@gmail.com",
+    "names": [
+      "ultimecia7"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "unix.nb@gmail.com",
+    "names": [
+      "Igor Mozharovsky"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "ustunozgur@gmail.com",
+    "names": [
+      "Ustun Ozgur"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "vadim.pestovnikov@gmail.com",
+    "names": [
+      "Vadim Pestovnikov"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "vampas@lgl.(none)",
+    "names": [
+      "Pedro Algarvio"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "vandor2012@gmail.com",
+    "names": [
+      "RyanSquared"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "vdanain@student.42.fr",
+    "names": [
+      "vdanain"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "vkroz@users.noreply.github.com",
+    "names": [
+      "Vladimir Kroz"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "vojtekb@gmail.com",
+    "names": [
+      "vojtekb"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "vorelq@gmail.com",
+    "names": [
+      "vorelq"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "vorobiov@gmail.com",
+    "names": [
+      "Sergey"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "wangbing@youzan.com",
+    "names": [
+      "wangbing"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "wangxulin108@gmail.com",
+    "names": [
+      "fphonor"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "wbowlin@gmail.com",
+    "names": [
+      "Will Bowlin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "wdscxsj@gmail.com",
+    "names": [
+      "Yang Yang"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "wdt.horton@gmail.com",
+    "names": [
+      "William Horton"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "webknjaz@redhat.com",
+    "names": [
+      "Sviatoslav Sydorenko (\u0421\u0432\u044f\u0442\u043e\u0441\u043b\u0430\u0432 \u0421\u0438\u0434\u043e\u0440\u0435\u043d\u043a\u043e)"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "wei.ye@autodesk.com",
+    "names": [
+      "Wayne Ye"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "weilee.rx@gmail.com",
+    "names": [
+      "LeeW"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "welch18@vt.edu",
+    "names": [
+      "Brian Welch"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "whois@nicorevin.ru",
+    "names": [
+      "Nico Revin"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "windfarer@gmail.com",
+    "names": [
+      "Eric Yang"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "wldtyp@users.noreply.github.com",
+    "names": [
+      "wldtyp"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "wobsta@users.sourceforge.net",
+    "names": [
+      "Andre Wobst"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "wojcikstefan@gmail.com",
+    "names": [
+      "Stefan W\u00f3jcik"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "wxcafe@wxcafe.net",
+    "names": [
+      "Wxcaf\u00e9 (Cl\u00e9ment Hertling)"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "xephyr826@gmail.com",
+    "names": [
+      "Xephyr826"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "xiaowangzi61@gmail.com",
+    "names": [
+      "pkuphy"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "yingshaoxo@users.noreply.github.com",
+    "names": [
+      "yingshaoxo"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "yk396@cornell.edu",
+    "names": [
+      "yk396"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "yyanchiy@gmail.com",
+    "names": [
+      "WolframAlph"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "zab1000+github@gmail.com",
+    "names": [
+      "A Brooks"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "zack@uber.com",
+    "names": [
+      "Zachary Wright Heller"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "zakj@nox.cx",
+    "names": [
+      "Zak Johnson"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "zeb@zebpalmer.com",
+    "names": [
+      "Zeb Palmer"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "zev@avtranscription.com",
+    "names": [
+      "Zev Averbach"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  },
+  {
+    "email": "zhuangzhuang1988@gmail.com",
+    "names": [
+      "zhuangzhuang"
+    ],
+    "commit_count": 1,
+    "percent": 0.0002
+  }
+]

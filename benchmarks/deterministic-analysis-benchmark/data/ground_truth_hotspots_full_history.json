@@ -1,0 +1,812 @@
+[
+  {
+    "path": "flask/app.py",
+    "churn_count": 354,
+    "co_change_partners": [
+      {
+        "path": "CHANGES",
+        "co_occurrences": 87
+      },
+      {
+        "path": "flask/helpers.py",
+        "co_occurrences": 58
+      },
+      {
+        "path": "tests/flask_tests.py",
+        "co_occurrences": 41
+      },
+      {
+        "path": "docs/config.rst",
+        "co_occurrences": 36
+      },
+      {
+        "path": "flask/ctx.py",
+        "co_occurrences": 33
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "CHANGES.rst",
+    "churn_count": 342,
+    "co_change_partners": [
+      {
+        "path": "src/flask/app.py",
+        "co_occurrences": 61
+      },
+      {
+        "path": "src/flask/__init__.py",
+        "co_occurrences": 57
+      },
+      {
+        "path": "src/flask/helpers.py",
+        "co_occurrences": 42
+      },
+      {
+        "path": "tests/test_basic.py",
+        "co_occurrences": 38
+      },
+      {
+        "path": "src/flask/cli.py",
+        "co_occurrences": 36
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "CHANGES",
+    "churn_count": 317,
+    "co_change_partners": [
+      {
+        "path": "flask/app.py",
+        "co_occurrences": 87
+      },
+      {
+        "path": "tests/flask_tests.py",
+        "co_occurrences": 40
+      },
+      {
+        "path": "flask/helpers.py",
+        "co_occurrences": 38
+      },
+      {
+        "path": "docs/api.rst",
+        "co_occurrences": 31
+      },
+      {
+        "path": "docs/config.rst",
+        "co_occurrences": 27
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "flask/helpers.py",
+    "churn_count": 204,
+    "co_change_partners": [
+      {
+        "path": "flask/app.py",
+        "co_occurrences": 58
+      },
+      {
+        "path": "CHANGES",
+        "co_occurrences": 38
+      },
+      {
+        "path": "tests/test_helpers.py",
+        "co_occurrences": 29
+      },
+      {
+        "path": "flask/wrappers.py",
+        "co_occurrences": 20
+      },
+      {
+        "path": "flask/__init__.py",
+        "co_occurrences": 18
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "docs/quickstart.rst",
+    "churn_count": 185,
+    "co_change_partners": [
+      {
+        "path": "docs/config.rst",
+        "co_occurrences": 20
+      },
+      {
+        "path": "docs/cli.rst",
+        "co_occurrences": 19
+      },
+      {
+        "path": "docs/installation.rst",
+        "co_occurrences": 17
+      },
+      {
+        "path": "docs/server.rst",
+        "co_occurrences": 15
+      },
+      {
+        "path": "flask/app.py",
+        "co_occurrences": 15
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "docs/api.rst",
+    "churn_count": 156,
+    "co_change_partners": [
+      {
+        "path": "CHANGES",
+        "co_occurrences": 31
+      },
+      {
+        "path": "flask/app.py",
+        "co_occurrences": 23
+      },
+      {
+        "path": "flask.py",
+        "co_occurrences": 17
+      },
+      {
+        "path": "CHANGES.rst",
+        "co_occurrences": 16
+      },
+      {
+        "path": "tests/flask_tests.py",
+        "co_occurrences": 16
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "src/flask/app.py",
+    "churn_count": 136,
+    "co_change_partners": [
+      {
+        "path": "CHANGES.rst",
+        "co_occurrences": 61
+      },
+      {
+        "path": "src/flask/helpers.py",
+        "co_occurrences": 42
+      },
+      {
+        "path": "src/flask/blueprints.py",
+        "co_occurrences": 35
+      },
+      {
+        "path": "src/flask/scaffold.py",
+        "co_occurrences": 27
+      },
+      {
+        "path": "tests/test_basic.py",
+        "co_occurrences": 25
+      }
+    ],
+    "dependents_count": 6
+  },
+  {
+    "path": "tests/test_basic.py",
+    "churn_count": 135,
+    "co_change_partners": [
+      {
+        "path": "CHANGES.rst",
+        "co_occurrences": 38
+      },
+      {
+        "path": "flask/app.py",
+        "co_occurrences": 32
+      },
+      {
+        "path": "tests/test_testing.py",
+        "co_occurrences": 26
+      },
+      {
+        "path": "src/flask/app.py",
+        "co_occurrences": 25
+      },
+      {
+        "path": "tests/test_helpers.py",
+        "co_occurrences": 23
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "docs/config.rst",
+    "churn_count": 134,
+    "co_change_partners": [
+      {
+        "path": "flask/app.py",
+        "co_occurrences": 36
+      },
+      {
+        "path": "CHANGES",
+        "co_occurrences": 27
+      },
+      {
+        "path": "docs/quickstart.rst",
+        "co_occurrences": 20
+      },
+      {
+        "path": "CHANGES.rst",
+        "co_occurrences": 18
+      },
+      {
+        "path": "tests/test_basic.py",
+        "co_occurrences": 18
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "requirements/dev.txt",
+    "churn_count": 130,
+    "co_change_partners": [
+      {
+        "path": "requirements/tests.txt",
+        "co_occurrences": 66
+      },
+      {
+        "path": "requirements/docs.txt",
+        "co_occurrences": 65
+      },
+      {
+        "path": "requirements/typing.txt",
+        "co_occurrences": 52
+      },
+      {
+        "path": ".pre-commit-config.yaml",
+        "co_occurrences": 30
+      },
+      {
+        "path": "requirements/build.txt",
+        "co_occurrences": 13
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "tests/flask_tests.py",
+    "churn_count": 127,
+    "co_change_partners": [
+      {
+        "path": "flask/app.py",
+        "co_occurrences": 41
+      },
+      {
+        "path": "CHANGES",
+        "co_occurrences": 40
+      },
+      {
+        "path": "flask.py",
+        "co_occurrences": 39
+      },
+      {
+        "path": "docs/api.rst",
+        "co_occurrences": 16
+      },
+      {
+        "path": "flask/helpers.py",
+        "co_occurrences": 13
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "setup.py",
+    "churn_count": 122,
+    "co_change_partners": [
+      {
+        "path": "flask/__init__.py",
+        "co_occurrences": 19
+      },
+      {
+        "path": "CHANGES.rst",
+        "co_occurrences": 18
+      },
+      {
+        "path": "CHANGES",
+        "co_occurrences": 15
+      },
+      {
+        "path": "tox.ini",
+        "co_occurrences": 15
+      },
+      {
+        "path": "setup.cfg",
+        "co_occurrences": 9
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "flask/cli.py",
+    "churn_count": 117,
+    "co_change_partners": [
+      {
+        "path": "tests/test_cli.py",
+        "co_occurrences": 28
+      },
+      {
+        "path": "flask/app.py",
+        "co_occurrences": 17
+      },
+      {
+        "path": "docs/cli.rst",
+        "co_occurrences": 14
+      },
+      {
+        "path": "CHANGES",
+        "co_occurrences": 10
+      },
+      {
+        "path": "CHANGES.rst",
+        "co_occurrences": 9
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "tests/test_helpers.py",
+    "churn_count": 108,
+    "co_change_partners": [
+      {
+        "path": "flask/helpers.py",
+        "co_occurrences": 29
+      },
+      {
+        "path": "tests/test_basic.py",
+        "co_occurrences": 23
+      },
+      {
+        "path": "CHANGES.rst",
+        "co_occurrences": 21
+      },
+      {
+        "path": "tests/test_blueprints.py",
+        "co_occurrences": 16
+      },
+      {
+        "path": "tests/test_testing.py",
+        "co_occurrences": 16
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "tox.ini",
+    "churn_count": 108,
+    "co_change_partners": [
+      {
+        "path": ".github/workflows/tests.yaml",
+        "co_occurrences": 20
+      },
+      {
+        "path": "setup.py",
+        "co_occurrences": 15
+      },
+      {
+        "path": ".travis.yml",
+        "co_occurrences": 12
+      },
+      {
+        "path": "requirements/tests.txt",
+        "co_occurrences": 11
+      },
+      {
+        "path": "requirements/dev.txt",
+        "co_occurrences": 10
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "flask.py",
+    "churn_count": 104,
+    "co_change_partners": [
+      {
+        "path": "tests/flask_tests.py",
+        "co_occurrences": 39
+      },
+      {
+        "path": "docs/api.rst",
+        "co_occurrences": 17
+      },
+      {
+        "path": "CHANGES",
+        "co_occurrences": 13
+      },
+      {
+        "path": "docs/index.rst",
+        "co_occurrences": 9
+      },
+      {
+        "path": "docs/quickstart.rst",
+        "co_occurrences": 9
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": ".pre-commit-config.yaml",
+    "churn_count": 100,
+    "co_change_partners": [
+      {
+        "path": "requirements/dev.txt",
+        "co_occurrences": 30
+      },
+      {
+        "path": "requirements/docs.txt",
+        "co_occurrences": 27
+      },
+      {
+        "path": "requirements/typing.txt",
+        "co_occurrences": 27
+      },
+      {
+        "path": "requirements/tests.txt",
+        "co_occurrences": 25
+      },
+      {
+        "path": ".github/workflows/publish.yaml",
+        "co_occurrences": 19
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "src/flask/helpers.py",
+    "churn_count": 88,
+    "co_change_partners": [
+      {
+        "path": "CHANGES.rst",
+        "co_occurrences": 42
+      },
+      {
+        "path": "src/flask/app.py",
+        "co_occurrences": 42
+      },
+      {
+        "path": "src/flask/ctx.py",
+        "co_occurrences": 19
+      },
+      {
+        "path": "src/flask/scaffold.py",
+        "co_occurrences": 16
+      },
+      {
+        "path": "src/flask/cli.py",
+        "co_occurrences": 15
+      }
+    ],
+    "dependents_count": 25
+  },
+  {
+    "path": "flask/__init__.py",
+    "churn_count": 87,
+    "co_change_partners": [
+      {
+        "path": "flask/app.py",
+        "co_occurrences": 21
+      },
+      {
+        "path": "setup.py",
+        "co_occurrences": 19
+      },
+      {
+        "path": "flask/helpers.py",
+        "co_occurrences": 18
+      },
+      {
+        "path": "CHANGES",
+        "co_occurrences": 16
+      },
+      {
+        "path": "flask/ctx.py",
+        "co_occurrences": 16
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "docs/testing.rst",
+    "churn_count": 83,
+    "co_change_partners": [
+      {
+        "path": "docs/quickstart.rst",
+        "co_occurrences": 12
+      },
+      {
+        "path": "docs/api.rst",
+        "co_occurrences": 11
+      },
+      {
+        "path": "docs/deploying/mod_wsgi.rst",
+        "co_occurrences": 8
+      },
+      {
+        "path": "docs/patterns/jquery.rst",
+        "co_occurrences": 8
+      },
+      {
+        "path": "docs/installation.rst",
+        "co_occurrences": 7
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "tests/test_cli.py",
+    "churn_count": 82,
+    "co_change_partners": [
+      {
+        "path": "flask/cli.py",
+        "co_occurrences": 28
+      },
+      {
+        "path": "src/flask/cli.py",
+        "co_occurrences": 25
+      },
+      {
+        "path": "CHANGES.rst",
+        "co_occurrences": 24
+      },
+      {
+        "path": "tests/test_basic.py",
+        "co_occurrences": 9
+      },
+      {
+        "path": "tests/test_helpers.py",
+        "co_occurrences": 8
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": ".github/workflows/tests.yaml",
+    "churn_count": 79,
+    "co_change_partners": [
+      {
+        "path": ".github/workflows/publish.yaml",
+        "co_occurrences": 38
+      },
+      {
+        "path": "tox.ini",
+        "co_occurrences": 20
+      },
+      {
+        "path": ".pre-commit-config.yaml",
+        "co_occurrences": 19
+      },
+      {
+        "path": ".github/workflows/pre-commit.yaml",
+        "co_occurrences": 15
+      },
+      {
+        "path": "uv.lock",
+        "co_occurrences": 12
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "flask/wrappers.py",
+    "churn_count": 79,
+    "co_change_partners": [
+      {
+        "path": "flask/app.py",
+        "co_occurrences": 24
+      },
+      {
+        "path": "flask/helpers.py",
+        "co_occurrences": 20
+      },
+      {
+        "path": "CHANGES",
+        "co_occurrences": 16
+      },
+      {
+        "path": "flask/ctx.py",
+        "co_occurrences": 13
+      },
+      {
+        "path": "flask/__init__.py",
+        "co_occurrences": 11
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "docs/conf.py",
+    "churn_count": 78,
+    "co_change_partners": [
+      {
+        "path": "docs/index.rst",
+        "co_occurrences": 15
+      },
+      {
+        "path": "docs/quickstart.rst",
+        "co_occurrences": 6
+      },
+      {
+        "path": "README.rst",
+        "co_occurrences": 5
+      },
+      {
+        "path": "docs/Makefile",
+        "co_occurrences": 5
+      },
+      {
+        "path": "docs/_templates/sidebarintro.html",
+        "co_occurrences": 5
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "docs/installation.rst",
+    "churn_count": 78,
+    "co_change_partners": [
+      {
+        "path": "docs/quickstart.rst",
+        "co_occurrences": 17
+      },
+      {
+        "path": "docs/cli.rst",
+        "co_occurrences": 10
+      },
+      {
+        "path": "docs/extensiondev.rst",
+        "co_occurrences": 10
+      },
+      {
+        "path": "docs/deploying/mod_wsgi.rst",
+        "co_occurrences": 9
+      },
+      {
+        "path": "docs/api.rst",
+        "co_occurrences": 8
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "flask/ctx.py",
+    "churn_count": 70,
+    "co_change_partners": [
+      {
+        "path": "flask/app.py",
+        "co_occurrences": 33
+      },
+      {
+        "path": "CHANGES",
+        "co_occurrences": 22
+      },
+      {
+        "path": "flask/helpers.py",
+        "co_occurrences": 17
+      },
+      {
+        "path": "flask/__init__.py",
+        "co_occurrences": 16
+      },
+      {
+        "path": "docs/api.rst",
+        "co_occurrences": 14
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "requirements/tests.txt",
+    "churn_count": 70,
+    "co_change_partners": [
+      {
+        "path": "requirements/dev.txt",
+        "co_occurrences": 66
+      },
+      {
+        "path": "requirements/docs.txt",
+        "co_occurrences": 40
+      },
+      {
+        "path": "requirements/typing.txt",
+        "co_occurrences": 39
+      },
+      {
+        "path": ".pre-commit-config.yaml",
+        "co_occurrences": 25
+      },
+      {
+        "path": "requirements/build.txt",
+        "co_occurrences": 15
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "src/flask/__init__.py",
+    "churn_count": 70,
+    "co_change_partners": [
+      {
+        "path": "CHANGES.rst",
+        "co_occurrences": 57
+      },
+      {
+        "path": "src/flask/app.py",
+        "co_occurrences": 8
+      },
+      {
+        "path": "src/flask/helpers.py",
+        "co_occurrences": 8
+      },
+      {
+        "path": "docs/api.rst",
+        "co_occurrences": 6
+      },
+      {
+        "path": "setup.py",
+        "co_occurrences": 5
+      }
+    ],
+    "dependents_count": 79
+  },
+  {
+    "path": "docs/extensiondev.rst",
+    "churn_count": 68,
+    "co_change_partners": [
+      {
+        "path": "docs/installation.rst",
+        "co_occurrences": 10
+      },
+      {
+        "path": "docs/quickstart.rst",
+        "co_occurrences": 9
+      },
+      {
+        "path": "docs/upgrading.rst",
+        "co_occurrences": 9
+      },
+      {
+        "path": "docs/api.rst",
+        "co_occurrences": 8
+      },
+      {
+        "path": "docs/extensions.rst",
+        "co_occurrences": 8
+      }
+    ],
+    "dependents_count": 0
+  },
+  {
+    "path": "requirements/docs.txt",
+    "churn_count": 68,
+    "co_change_partners": [
+      {
+        "path": "requirements/dev.txt",
+        "co_occurrences": 65
+      },
+      {
+        "path": "requirements/tests.txt",
+        "co_occurrences": 40
+      },
+      {
+        "path": "requirements/typing.txt",
+        "co_occurrences": 39
+      },
+      {
+        "path": ".pre-commit-config.yaml",
+        "co_occurrences": 27
+      },
+      {
+        "path": "requirements/build.txt",
+        "co_occurrences": 13
+      }
+    ],
+    "dependents_count": 0
+  }
+]

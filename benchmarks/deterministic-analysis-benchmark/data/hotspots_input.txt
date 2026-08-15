@@ -1,0 +1,4849 @@
+COMMIT 2a8a38b051fc248865730bf3511bf2e2ea325e81
+src/flask/views.py
+
+COMMIT d8eaaba824655046958d1a97f11780de460c3271
+COMMIT 89992954ec71b594b1b911f98977cdc8ad46a057
+CHANGES.rst
+src/flask/sansio/scaffold.py
+tests/test_basic.py
+
+COMMIT 3596b1ab61cea85edb8970e83ff61daa073facf8
+CHANGES.rst
+
+COMMIT 05e9c6bd630ecf4ec0ec884b1fc7901663737bc7
+COMMIT 7203feabf723edae0286ae5dc64fec8ac4c91735
+src/flask/app.py
+tests/test_basic.py
+
+COMMIT de8429ffda8cfb54db175529e2bae72a24e1fa7e
+src/flask/testing.py
+tests/test_testing.py
+
+COMMIT 514fc6b3e8402e4c646d5284e97a4f0ab50a7c4b
+COMMIT 81798b406f97ffe4795d2c9fc18db7db744a96dc
+CHANGES.rst
+docs/blueprints.rst
+docs/errorhandling.rst
+src/flask/app.py
+src/flask/sansio/README.md
+
+COMMIT 8b4fd5d18611e63080b826ecfefe8659dba7d2e4
+tests/test_blueprints.py
+tests/test_views.py
+
+COMMIT 6a2f545bfd8ed31e19066a299296917e034aca58
+COMMIT 30d1c5d6fcbd62d9e902209d7a207f7510e9f5dc
+.github/workflows/tests.yaml
+pyproject.toml
+
+COMMIT ff6fa22f4d961a28567db11430208b964620f511
+.github/workflows/lock.yaml
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.github/workflows/zizmor.yaml
+.pre-commit-config.yaml
+examples/celery/pyproject.toml
+examples/celery/src/task_app/__init__.py
+examples/javascript/js_example/__init__.py
+examples/javascript/pyproject.toml
+examples/tutorial/pyproject.toml
+uv.lock
+
+COMMIT 548994ea0c61465574cbfdd636a894a692f54b94
+COMMIT 5ce121dd841e2dc2594d0ed3954278f4101d3521
+tests/conftest.py
+tests/test_cli.py
+
+COMMIT 8285adf5a4f572dbf7a0a3b8f3a96ca0b19c50a4
+.github/workflows/lock.yaml
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.github/workflows/zizmor.yaml
+.pre-commit-config.yaml
+src/flask/cli.py
+src/flask/json/provider.py
+uv.lock
+
+COMMIT 36e4a824f340fdee7ed50937ba8e7f6bc7d17f81
+src/flask/cli.py
+
+COMMIT 954f5684e4841aad84a8eec7ace7b81a0d3f6831
+.pre-commit-config.yaml
+src/flask/cli.py
+uv.lock
+
+COMMIT 9fcd34c9f3065640bd1cd86234216ca068633fb9
+COMMIT 1d49747264554dee31f5627d4249d09aaaeced39
+docs/patterns/mongoengine.rst
+
+COMMIT 7374c85ddefc3f4b177a698ab9f0cbb6a5c0b392
+docs/tutorial/layout.rst
+
+COMMIT dcbede0cb00df32e7f1895e19e37d5f40a75d1f6
+COMMIT 9368fb3f3c52d74534d14c1bef03c79c103356cd
+CHANGES.rst
+src/flask/sansio/app.py
+
+COMMIT 06ea505ce2b2042af26e96d35ebf159af7c0869d
+pyproject.toml
+src/flask/ctx.py
+tests/test_reqctx.py
+uv.lock
+
+COMMIT 2ac89889f4cc330eabd50f295dcef02828522c69
+COMMIT 689362089edd09b6d68f7cfe99075e1345e0fede
+docs/config.rst
+
+COMMIT 258d68b6ff5e2244386540f48b48bab90d6ab827
+COMMIT a31e6b73469cb2bf7eb8f70b5ff21f710fd2e23c
+tests/test_reqctx.py
+
+COMMIT e4e4bf6543ac1f132afddb1ffd0bf02bea4c93f7
+COMMIT b21425d6df207fec0c47e9563faa10a2819984ca
+.github/workflows/pre-commit.yaml
+.github/workflows/tests.yaml
+
+COMMIT 83dbcb222a65a87741c9d96bb183f34528149269
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.github/workflows/zizmor.yaml
+.pre-commit-config.yaml
+uv.lock
+
+COMMIT 7ef2946fb5151b745df30201b8c27790cac53875
+COMMIT 91c6b3fecf36b1f04554e57cc4060ccb737a445d
+tests/test_reqctx.py
+
+COMMIT 4cae5d8e411b1e69949d8fae669afeacbd3e5908
+COMMIT a197702e2cbcdd43c0d09296b3cea02efe16e407
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.github/workflows/zizmor.yaml
+.pre-commit-config.yaml
+uv.lock
+
+COMMIT 4774385abdc04d3b0d02dcbed6543bc100f23f6e
+COMMIT 560c119e3dc33b35b9c57172fae521d99c2a1421
+.github/workflows/lock.yaml
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.github/workflows/zizmor.yaml
+
+COMMIT 3a9d54f3da1de540adfdf6f1e2dea6fc0006e15d
+COMMIT a29f88ce6f2f9843bd6fcbbfce1390a2071965d6
+docs/patterns/streaming.rst
+docs/templating.rst
+src/flask/ctx.py
+src/flask/helpers.py
+
+COMMIT c34d6e81fd8e405e6d4178bf24b364918811ef17
+COMMIT fbb6f0bc4c60a0bada0e03c3480d0ccf30a3c1df
+CHANGES.rst
+docs/appcontext.rst
+src/flask/app.py
+src/flask/ctx.py
+src/flask/helpers.py
+tests/test_appctx.py
+tests/test_basic.py
+tests/test_blueprints.py
+tests/test_helpers.py
+tests/test_testing.py
+
+COMMIT 7b0088693ece1bd3a9238a6fdf56ed8df7a4d43b
+src/flask/app.py
+
+COMMIT a411a2434b09d9cbaa4074232b2c247d591bb655
+src/flask/ctx.py
+
+COMMIT daca74d93a0edc458e618136de7d14803f06bc28
+COMMIT f00ad424ee3b050d382cc5b4aabb18afbb5e4ae7
+COMMIT 22d924701a6ae2e4cd01e9a15bbaf3946094af65
+CHANGES.rst
+pyproject.toml
+uv.lock
+
+COMMIT 089cb86dd22bff589a4eafb7ab8e42dc357623b4
+COMMIT c17f379390731543eea33a570a47bd4ef76a54fa
+CHANGES.rst
+src/flask/app.py
+src/flask/ctx.py
+src/flask/sessions.py
+src/flask/templating.py
+tests/test_basic.py
+
+COMMIT 27be9338405382445a7cb01151e084559b98d602
+CHANGES.rst
+pyproject.toml
+uv.lock
+
+COMMIT d98eb69a354158252854ed4a5c9778e03d089191
+tests/test_cli.py
+
+COMMIT 12e95c93b488725f80753f34b2e0d24838ca4646
+COMMIT e82db2ca3a22c9614c1987392c9cfaa8c6ce99ad
+CHANGES.rst
+docs/config.rst
+src/flask/sansio/app.py
+tests/test_basic.py
+tests/test_blueprints.py
+tests/test_cli.py
+tests/test_views.py
+
+COMMIT d3b78fd18a8d9e224cb9ef58a23cec9b1ffc9ce9
+COMMIT 663198d7b453ffdbe86d0e0238b1feafde6ce569
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.pre-commit-config.yaml
+uv.lock
+
+COMMIT 976459f7cb35c8c3abc3a6e6a2728d76d1a0a5f2
+pyproject.toml
+uv.lock
+
+COMMIT 5e621a2801daf95be6d208da9dcc287bb251f63c
+pyproject.toml
+tests/test_basic.py
+uv.lock
+
+COMMIT 4e652d3f68b90d50aa2301d3b7e68c3fafd9251d
+COMMIT 3d03098a97ddc6a908aa4a50c2ef7381f8297d0a
+docs/tutorial/factory.rst
+examples/tutorial/flaskr/__init__.py
+
+COMMIT 798e006f435887adceb6aab9b57cde8e20276793
+COMMIT 407eb76b27884848383a37c7274654f0271e4bc4
+COMMIT ac5664d2281533eacafd64f5cc7d5edcdaccab60
+docs/async-await.rst
+docs/deploying/eventlet.rst
+docs/deploying/gevent.rst
+docs/deploying/gunicorn.rst
+docs/deploying/index.rst
+docs/deploying/uwsgi.rst
+docs/gevent.rst
+docs/index.rst
+docs/installation.rst
+
+COMMIT 23df07d799f0bed3feb5beb9e5633651687da92b
+COMMIT 4b8bde97d4fa3486e18dce21c3c5f75570d50164
+COMMIT 0292047b22c82921dcf165322d93a0b988328c2e
+pyproject.toml
+
+COMMIT c77a5203438fe772d41f6a47303ad3f57a4efe6d
+CHANGES.rst
+src/flask/app.py
+src/flask/sansio/app.py
+
+COMMIT 9b74a90dd3c47f792734823e8793ac36f38bc4dd
+.pre-commit-config.yaml
+docs/appcontext.rst
+docs/quickstart.rst
+docs/templating.rst
+
+COMMIT 5880befcd22490c40f3c63d6178427f7753672c1
+COMMIT 4f79d5b59a56bc4356a97f2e81a35f98cb18d7b3
+COMMIT fe3b215d3ade4db68262dae1a3cdc464a1fc524f
+pyproject.toml
+
+COMMIT 5559ef42b5334075cbde82b2870ca725ac606fa4
+COMMIT 3709c4a9a87e6ce8c26dc4a951e1df52ac9ecad0
+.pre-commit-config.yaml
+src/flask/app.py
+src/flask/sessions.py
+
+COMMIT 709f83f6a32da8cdaec196d7b785ab6827322008
+.pre-commit-config.yaml
+pyproject.toml
+
+COMMIT 30da640ffe23b6e461fa91d387ffea6b9d9fa847
+docs/patterns/javascript.rst
+
+COMMIT 25642fd1fd65985fc98f95e64bc2c7ff353d6c2b
+COMMIT 809d5a8869d4ffe8656680b2438b10f7c8845613
+COMMIT eca5fd1dfdc614c2df876cc32018a7d71f84ea82
+CHANGES.rst
+docs/api.rst
+src/flask/helpers.py
+src/flask/sansio/app.py
+
+COMMIT eb58d862cc4a8f31a369b6e9ad1724e9e642f13f
+COMMIT 64dd0809c2fc732ed30539235232a268f9bd96ac
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.pre-commit-config.yaml
+uv.lock
+
+COMMIT 97bddc1f61a59522386d36ec37b2b220a01de262
+.github/workflows/lock.yaml
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.pre-commit-config.yaml
+pyproject.toml
+uv.lock
+
+COMMIT ad68a12645d96fe51558da13e18544ba458d7af0
+.github/workflows/tests.yaml
+pyproject.toml
+
+COMMIT 2579ce9f18e67ec3213c6eceb5240310ccd46af8
+COMMIT 607d1948b8747776f4a45d5b7c7eaeb57b6b9f80
+.github/workflows/tests.yaml
+
+COMMIT 218880c7fdedee139ac09caaf93da469b4dba14c
+COMMIT 917000097fc17875104176e2c71318ab25c508c3
+.github/workflows/tests.yaml
+pyproject.toml
+
+COMMIT 96a01e420b741c59af59301f15612fde39bfb39d
+COMMIT da6d075dfde71b2e2a64f39b29ba957d5ffb00b0
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.pre-commit-config.yaml
+src/flask/sessions.py
+uv.lock
+
+COMMIT 70d04b5a2620705011e65f79ccfd52caa86f5d6a
+COMMIT 88a65bb374e87a18816a780dbd4ae69d307aa85c
+docs/appcontext.rst
+docs/design.rst
+
+COMMIT 6a64969009bf1898bd302e6a9633f71942523f7f
+CHANGES.rst
+src/flask/app.py
+src/flask/ctx.py
+src/flask/templating.py
+tests/test_reqctx.py
+tests/test_subclassing.py
+
+COMMIT adf363679da2d9a5ddc564bb2da563c7ca083916
+COMMIT c2705ffd9ce1dc8476cb29eaf5ff5d4c719852d9
+CHANGES.rst
+docs/api.rst
+docs/appcontext.rst
+docs/design.rst
+docs/extensiondev.rst
+docs/index.rst
+docs/lifecycle.rst
+docs/patterns/sqlalchemy.rst
+docs/patterns/sqlite3.rst
+docs/patterns/streaming.rst
+docs/quickstart.rst
+docs/reqcontext.rst
+docs/shell.rst
+docs/signals.rst
+docs/testing.rst
+docs/tutorial/blog.rst
+docs/tutorial/database.rst
+docs/tutorial/templates.rst
+docs/tutorial/tests.rst
+docs/tutorial/views.rst
+src/flask/app.py
+src/flask/cli.py
+src/flask/ctx.py
+src/flask/debughelpers.py
+src/flask/globals.py
+src/flask/helpers.py
+src/flask/json/__init__.py
+src/flask/sansio/app.py
+src/flask/sansio/scaffold.py
+src/flask/templating.py
+src/flask/testing.py
+tests/conftest.py
+tests/test_appctx.py
+tests/test_reqctx.py
+tests/test_session_interface.py
+tests/test_testing.py
+
+COMMIT dbd4c2882593f6118103120aa96fa9acdf7deedb
+src/flask/sansio/app.py
+
+COMMIT 330123258e8c3dc391cbe55ab1ed94891ca83af3
+COMMIT 85793d6c223dd845e8f218403a5ced83041d37e1
+COMMIT 2c1b30d0503cfb064f1cb252e6614a06915a362a
+CHANGES.rst
+pyproject.toml
+uv.lock
+
+COMMIT 1292419ddfc6a14fc7f85b5ed7efcc2d215f1ad3
+COMMIT 4dd52ca9c768c9b6d04180f0547d6f4b6e34f211
+.github/workflows/publish.yaml
+
+COMMIT 55c62556571ee46a94da174643b50ece06edead4
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.pre-commit-config.yaml
+uv.lock
+
+COMMIT ed1c9e953e2d67c0994e32e6c8d878291e36d4f7
+COMMIT edebd3704437f19b5b137eaffe97130fe817d144
+docs/templating.rst
+src/flask/sansio/app.py
+src/flask/sansio/blueprints.py
+
+COMMIT daf1510a4bda652ac2cfca03ec5567b03ddf8bf1
+CHANGES.rst
+docs/templating.rst
+src/flask/sansio/app.py
+src/flask/sansio/blueprints.py
+tests/test_blueprints.py
+tests/test_templating.py
+
+COMMIT d8259eb11900285af9b80b0fa47f841174c054e3
+CHANGES.rst
+docs/design.rst
+docs/patterns/streaming.rst
+docs/patterns/wtforms.rst
+docs/quickstart.rst
+docs/templating.rst
+docs/web-security.rst
+src/flask/sansio/app.py
+src/flask/templating.py
+
+COMMIT 38b4c1e19b50494cfcdc9332899e09b7fed34979
+COMMIT 9822a0351574790cb66c652fcc396ad7aa2b09d8
+CHANGES.rst
+src/flask/helpers.py
+tests/test_helpers.py
+
+COMMIT 49b7e7bc8fb69d605719991d1c0a99fcee689053
+COMMIT b228ca3d87745b746d904a2108429617a814ffda
+docs/web-security.rst
+
+COMMIT ff64079a516c269f171ababf3d92b86886a62ffd
+docs/web-security.rst
+
+COMMIT 1dfd7cd5555d9e62a2e198a131c366242e724b35
+COMMIT d44f1c65239c3e33509224aa1931631243dbfa7f
+CHANGES.rst
+src/flask/helpers.py
+
+COMMIT c56c5ec7c41e6ffd02516bf7cb80dd2ba9ba7aa3
+COMMIT 0f83958247e9eab1c7f62903601dfd5fe10c640f
+docs/quickstart.rst
+
+COMMIT 7fea7cf15688b2a2712b01c45c9e3385ea382e67
+COMMIT 24824ff666e096c4c07d0b75a889088571afe4a6
+COMMIT 53b8f08218796d95764c5252bccd8a50a173a6fb
+CHANGES.rst
+src/flask/testing.py
+tests/test_testing.py
+
+COMMIT 5addaf833b2e8c7a616f89dd8ad5a44b07d7c000
+CHANGES.rst
+pyproject.toml
+uv.lock
+
+COMMIT 85c5d93cbd049c4bd0679c36fd1ddcae8c37b642
+COMMIT 85cc71046475f9cb3efd17d496356795961249f9
+README.md
+docs/_static/flask-horizontal.svg
+docs/_static/flask-icon.svg
+docs/_static/flask-logo.svg
+docs/_static/flask-name.svg
+docs/_static/flask-vertical.svg
+docs/conf.py
+docs/index.rst
+
+COMMIT 284273e3c5d8005bbb4b43c4d934409a5215886e
+COMMIT f17d9869489aea57d3fa05d5a3f1504fcf8e588c
+docs/_static/flask-horizontal.svg
+docs/_static/flask-icon.svg
+docs/_static/flask-vertical.svg
+
+COMMIT d6009c0aeb3c7fe3a841733e9dbdfbbb63b9bfd1
+COMMIT 2b42a803a25e56a3a0e2af939ee5be4dcc3f29c8
+docs/_static/flask-horizontal.svg
+docs/_static/flask-icon.svg
+docs/_static/flask-vertical.svg
+
+COMMIT 211cce038ab6354a15a76b2c7f98fa98bfc9e6a3
+COMMIT a7b67c99f922f26b1071a90994e14261dc0a6df2
+COMMIT a758915893352f5986c6ee101cdf7e3b7a64fa28
+README.md
+docs/_static/flask-horizontal.png
+docs/_static/flask-horizontal.svg
+docs/_static/flask-icon.svg
+docs/_static/flask-vertical.png
+docs/_static/flask-vertical.svg
+docs/_static/shortcut-icon.png
+docs/conf.py
+docs/index.rst
+
+COMMIT e9741288637e0d9abe95311247b4842a017f7d5c
+COMMIT f04c5e696400badaa52b3450ded53e9091c2078a
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.pre-commit-config.yaml
+src/flask/ctx.py
+src/flask/helpers.py
+src/flask/sansio/app.py
+src/flask/sansio/scaffold.py
+src/flask/sessions.py
+src/flask/testing.py
+uv.lock
+
+COMMIT c07b201ce336c3e49ae3b6fa81aaf4fb871d90ba
+COMMIT adeea0070700671230733879846417c80f4e62b1
+.github/workflows/publish.yaml
+pyproject.toml
+
+COMMIT 7bf3be8dfa5832ef03a3fd8f07f6736e770440e4
+docs/server.rst
+
+COMMIT a42c4d54a3e5cd56c0700479ede75157a748acd6
+COMMIT 184ec3c5453e1156372085df35e8d922ce7e3559
+docs/contributing.rst
+
+COMMIT a5f9742398c9429ef84ac8a57b0f3eb418394d9e
+COMMIT 52df9eed45d0b19c588662ed8492d8fbaa0e7098
+.github/workflows/tests.yaml
+CHANGES.rst
+docs/extensiondev.rst
+docs/installation.rst
+pyproject.toml
+src/flask/cli.py
+src/flask/json/provider.py
+src/flask/sansio/app.py
+src/flask/typing.py
+tests/test_cli.py
+uv.lock
+
+COMMIT e7e53807766ef1470bce546716a675ded4b08597
+COMMIT bbaf13333fd00644313488243cfe547b13dcae78
+CHANGES.rst
+
+COMMIT 57e72869486e89b45f6fd0a07cdd0adf80f5db1b
+COMMIT 7fff56f5172c48b6f3aedf17ee14ef5c2533dfd1
+CHANGES.rst
+pyproject.toml
+uv.lock
+
+COMMIT 73d6504063bfa00666a92b07a28aaf906c532f09
+COMMIT cbb6c36692f7d882e9026597624c0eb38e01f9cb
+docs/config.rst
+
+COMMIT fb54159861708558b5f5658ebdc14709d984361c
+CHANGES.rst
+src/flask/sessions.py
+tests/test_basic.py
+
+COMMIT bc143499cf1137a271a7cf75bdd3e16e43ede2f0
+COMMIT 941efd4a36ed0f27e13758874f95e3aa1d3ee163
+COMMIT 0109e496f6ca68de29480fe6413e81b1d3f86aa9
+.github/workflows/lock.yaml
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.gitignore
+.pre-commit-config.yaml
+.readthedocs.yaml
+pyproject.toml
+requirements/build.in
+requirements/build.txt
+requirements/dev.in
+requirements/dev.txt
+requirements/docs.in
+requirements/docs.txt
+requirements/tests-dev.txt
+requirements/tests-min.in
+requirements/tests-min.txt
+requirements/tests.in
+requirements/tests.txt
+requirements/typing.in
+requirements/typing.txt
+src/flask/app.py
+tox.ini
+uv.lock
+
+COMMIT 11c45eeba3b5bcf06b84f4e864862f1019a3faa3
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.pre-commit-config.yaml
+requirements/build.txt
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+src/flask/app.py
+tox.ini
+
+COMMIT b78b5a210bde49e7e04b62a2a4f453ca10e0048c
+COMMIT e7851665071cb93b3c70b1e7103f82d1e6d01f5d
+COMMIT 410e5ab7ed0ef326fa8b5164a633863f137ffff5
+CHANGES.rst
+src/flask/typing.py
+
+COMMIT bfffe87d4c2ea255b9a51432bebb3d28741245c4
+CHANGES.rst
+docs/conf.py
+
+COMMIT 73ce26c3e822cdc2ccf99625619a50c91f163f8d
+COMMIT 41ec5760a2c55a099c3a1733fdd36fbb1258a02b
+tests/conftest.py
+tests/test_instance_config.py
+
+COMMIT 2732c4db66763462c2795d2287b61d4f77031342
+COMMIT c94d2a77db0102a7cf8ceec7804f366f180c373f
+docs/patterns/favicon.rst
+
+COMMIT 315ebc11765ed3b9da8b5271602e89a403376c24
+COMMIT 7d5d1874581209f66ad7bcdfb7f85b2b9a7ca471
+src/flask/__init__.py
+
+COMMIT c7c8dc38ea2890d62b7aaff7e4c016e4b98101b0
+COMMIT 2ae36c8dd5c9d24578d9fca85f8c351290d0de04
+docs/web-security.rst
+
+COMMIT 5ea0ab8ea21b0c11ee6098e6b052463687af602a
+COMMIT da600394865c06a4772c433c1a560453dcf4f868
+CHANGES.rst
+src/flask/cli.py
+
+COMMIT 08c480b3b31e896698bb773069026a61eb53d158
+COMMIT f51a23839aa55aee2f2a9196c344df6eecd854d7
+docs/patterns/appfactories.rst
+
+COMMIT 04b070fa26b346b48bd66d317e72de75e001a2e7
+COMMIT 75a8327cfd6eb912e469a8a613151d7ee50a1c1c
+docs/patterns/mongoengine.rst
+
+COMMIT 165af0a090e229e94ccd93896efc15b9fe0488da
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+src/flask/app.py
+src/flask/testing.py
+
+COMMIT 235c52fa10094135746d04a5b6a7bea8125357f0
+.readthedocs.yaml
+
+COMMIT f61172b8dd3f962d33f25c50b2f5405e90ceffa5
+COMMIT 959052fb8d49c4473f6d8a928d745ae7c38c7e95
+.github/ISSUE_TEMPLATE/config.yml
+CODE_OF_CONDUCT.md
+CONTRIBUTING.rst
+README.md
+docs/contributing.rst
+
+COMMIT 5b525e97970b1b9706b4415de79abfe33e5955fc
+README.md
+
+COMMIT 60a11a730e8aa2450115385798ab8710804c6409
+.github/ISSUE_TEMPLATE/config.yml
+CODE_OF_CONDUCT.md
+CONTRIBUTING.rst
+README.md
+docs/contributing.rst
+
+COMMIT 6b361ce06b08454329286214072139228e8c2f33
+README.md
+
+COMMIT 6b054f8f3876ff4c31580b014d344c4cf491059d
+COMMIT f2674c5bb4f7a79f836069859a346b81771eeee5
+COMMIT 54c3f87af9f6c0d6622cec2c3d9695b0229fb8fa
+CHANGES.rst
+src/flask/testing.py
+
+COMMIT ea08f155d8d37d515559534bbe0f80ef5185466c
+COMMIT b394a994e6d632643d0061e0e67772f076925951
+src/flask/__init__.py
+
+COMMIT dcbe86bd1577bad9a1356acca5fced7d3fb3a0c3
+CHANGES.rst
+pyproject.toml
+
+COMMIT d5b7a05ab2a053c617149cfd4f7e3379bfd279e5
+COMMIT d22bfcd4cfe3b93daddfce8521f77447ca8d6b84
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 4fec712f329ceecd38729af6404a2c32aed83648
+CHANGES.rst
+pyproject.toml
+
+COMMIT 18ffe1eaf6c2eeffc898f4e8a590c062c40b30dc
+docs/conf.py
+
+COMMIT bc098406af9537aacc436cb2ea777fbc9ff4c5aa
+COMMIT ab8149664182b662453a563161aa89013c806dc9
+CHANGES.rst
+pyproject.toml
+
+COMMIT 70602a196a6da90eb0d34cdfe5d4d16a99606279
+.github/workflows/publish.yaml
+
+COMMIT 6748a09341deeac16acb33996df95a31fae0c545
+.github/workflows/publish.yaml
+.pre-commit-config.yaml
+requirements/build.txt
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 22c48a738b5fb5b5cf09fb77270139f116069748
+COMMIT 2eab96a32a92ceb4b6947102626f896816a0291d
+COMMIT f49dbfd3e451006a485e81ebce030495131c4454
+src/flask/sessions.py
+
+COMMIT 7b21d43d4c763b874bc86d4c2d69a48ee492dc22
+COMMIT 4f7156f2c3271613b34d04040b502b9d7ae35eb9
+CHANGES.rst
+docs/config.rst
+src/flask/app.py
+tests/test_request.py
+
+COMMIT 10bdf61a0f751f3cb000f8f8ac5ac5b4bb535677
+COMMIT 4995a775df21a206b529403bc30d71795a994fd4
+CHANGES.rst
+docs/config.rst
+src/flask/app.py
+tests/test_basic.py
+tests/test_blueprints.py
+
+COMMIT 07c7d5730a2685ef2281cc635e289685e5c3d478
+COMMIT 470e2b8d17fd0032271b21f1d6775d48c3855a79
+CHANGES.rst
+pyproject.toml
+requirements/tests-min.in
+requirements/tests-min.txt
+
+COMMIT a20bcff8dc4e263312cfd74c11e432bfe8c194c1
+COMMIT e13373f838ab34027c5a80e16a6cb8262d41eab7
+CHANGES.rst
+docs/config.rst
+pyproject.toml
+src/flask/app.py
+src/flask/sessions.py
+tests/test_basic.py
+tests/type_check/typing_app_decorators.py
+tests/type_check/typing_error_handler.py
+tests/type_check/typing_route.py
+
+COMMIT 7522c4bcdb10449dc919e0ffbdebb92fe66822b5
+COMMIT 2c3160304278d323da8485057770926d1b582579
+CHANGES.rst
+src/flask/cli.py
+tests/test_cli.py
+
+COMMIT 6c44dd4bb8e4f2ca5f135f172de4725b2cada155
+src/flask/helpers.py
+
+COMMIT 98ae71897600a3162f529b1b30c70b8abdf0961b
+src/flask/app.py
+
+COMMIT c62b03bcfd6e6440f8195e02f4678488e16121ac
+COMMIT a9b99b3489cc24b5bed99fbadbd91f598a5a1420
+examples/celery/pyproject.toml
+examples/javascript/LICENSE.txt
+examples/javascript/pyproject.toml
+examples/tutorial/LICENSE.txt
+examples/tutorial/pyproject.toml
+
+COMMIT 8aa161a43731795841fa2678d3dff0559cee527e
+docs/tutorial/database.rst
+examples/tutorial/flaskr/db.py
+
+COMMIT df201ed152b61c439ea1ace179f35b424594ba6c
+examples/javascript/tests/test_js_example.py
+
+COMMIT ce08bc704e24c01582052f5c544fae181d08386f
+COMMIT 9efc1ebeeb431769897798cdf8de2c67dcbbc9c0
+CHANGES.rst
+docs/config.rst
+src/flask/app.py
+src/flask/sessions.py
+tests/test_basic.py
+
+COMMIT 6f2014d353d514e404c1f40e8f0a24e2bf62b941
+COMMIT c7a53888a1a514619b0611fd8b7928592f4ed612
+CHANGES.rst
+docs/config.rst
+docs/web-security.rst
+src/flask/app.py
+src/flask/wrappers.py
+tests/test_basic.py
+tests/test_request.py
+
+COMMIT 62c56e08c43f5eb174d15dd050591cfba9aed548
+COMMIT 8f37c82f6144fffc2ed30e49ee81a54702a0f317
+CHANGES.rst
+pyproject.toml
+requirements/tests-min.in
+requirements/tests-min.txt
+tox.ini
+
+COMMIT 39e7208366bcf549fd7a2678a6d815dfe39196c5
+.github/workflows/pre-commit.yaml
+.github/workflows/publish.yaml
+requirements/dev.txt
+requirements/tests-min.txt
+requirements/typing.txt
+tox.ini
+
+COMMIT 227838c4727ba780e6fb4a7c372ae62357cac4c6
+requirements-skip/README.md
+requirements/tests-dev.txt
+requirements/tests-min.in
+requirements/tests-min.txt
+tox.ini
+
+COMMIT 99ce7ed0e40686ec2583f90bd1cca37a207b4ea7
+COMMIT 1d610e44b396d11113bb6a5d168cc5e996a6dfb9
+.github/workflows/tests.yaml
+CHANGES.rst
+docs/async-await.rst
+docs/extensiondev.rst
+docs/installation.rst
+pyproject.toml
+src/flask/app.py
+src/flask/config.py
+src/flask/helpers.py
+src/flask/sansio/scaffold.py
+src/flask/typing.py
+tox.ini
+
+COMMIT e8b91cd38aadafdf733558bbcea4810fa65bb849
+COMMIT 9e831e915fa875423af0c0de8f53a3780055919e
+pyproject.toml
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/cli.py
+src/flask/helpers.py
+src/flask/sansio/app.py
+src/flask/testing.py
+src/flask/views.py
+src/flask/wrappers.py
+tox.ini
+
+COMMIT 5e8cb740187c0561b36323dfc8510e58c3066838
+.github/workflows/pre-commit.yaml
+
+COMMIT 2778b7c23f37d4f3cfed4cadac4bc9c90e098c50
+COMMIT 96800fb673cb7b2d75476096798e701e3e6d26bc
+.github/workflows/tests.yaml
+
+COMMIT 8f2bc008ad724a52f3669ecb2de59c98deb69ce1
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/typing.txt
+
+COMMIT 9b5549313e98044b89edb7078641d1d729b4a6c2
+COMMIT 68150d4cafc796dba2b595c320a09222394bfc1a
+COMMIT 74721b48f0347f19f134f386fab3421e5132fb53
+CHANGES.rst
+
+COMMIT d273f87a41e72db8ef1387f469ffa1c6eed39730
+COMMIT 52ccd66735ba1f6e67d06e747d6a641980b788a3
+.github/workflows/tests.yaml
+tox.ini
+
+COMMIT dffe3034825edc4f84aded013fc9c6590e545ed5
+src/flask/helpers.py
+
+COMMIT 52c060f718e0f07e9d982d2d97973ead0f4d55ca
+COMMIT c5a5576522273ff028018c4e13d1fc4d0260495b
+CHANGES.rst
+
+COMMIT bca18041b055102857a7e8a12f8694fddda9571b
+COMMIT b337d210583a3f5f84d0f70b56ae9a82b029dab5
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.pre-commit-config.yaml
+requirements/build.txt
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+src/flask/json/provider.py
+
+COMMIT e63ead4208c1e56723532878728ef9c2eb197b01
+CHANGES.rst
+
+COMMIT 2fec0b206c6e83ea813ab26597e15c96fab08be7
+.github/workflows/pre-commit.yaml
+
+COMMIT 111e5bd3129deee54ff62b0d13ed7e5739c27108
+.github/workflows/pre-commit.yaml
+
+COMMIT db49548d7168bba319fdba400bc201528cb1d3cd
+pre-commit.yaml
+
+COMMIT f93dd6e826a9bf00bf9e08d9bb3a03abcb1e974c
+.pre-commit-config.yaml
+
+COMMIT 7e5307030743b1f198da38c36f83fd279bad4529
+COMMIT c77b099cbb979269d45df06753cadd8abc662e23
+requirements/build.txt
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+tox.ini
+
+COMMIT eeb5f95a0f24abc5207159cc922cdda8d779f4f6
+COMMIT 40b78fa2ea9095197608287de9f0d902d2763b00
+requirements/build.txt
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+tox.ini
+
+COMMIT 4e6384da325f5c328526b998d199c6f957f90ea8
+COMMIT 2c5d652493b79eecadd4407f24f2249948bd6ff2
+pyproject.toml
+
+COMMIT 176fdfa0002360670f698d3828cfff11f97349f0
+src/flask/helpers.py
+src/flask/json/provider.py
+
+COMMIT 2d31dce8262a68875c177645fa0c7585a45ac447
+.github/dependabot.yml
+
+COMMIT 29a94bd102805eafcea94a185808cd878cd3f5ad
+.github/workflows/lock.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.pre-commit-config.yaml
+requirements/build.txt
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 0f2ae2b9330604247f553f41d310e7c0191275ef
+pyproject.toml
+tox.ini
+
+COMMIT 8a6cdf1e2a5efa81c30f6166602064ceefb0a35b
+COMMIT 326ad3f43c63f84a69d6d08af276cbdf653efc51
+.pre-commit-config.yaml
+
+COMMIT a791997041b94b8a5effebc296cb427fde8e0ee5
+COMMIT 4fe0aebab79a092615f5f86a24b91bac07fb2ef2
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT a8956feba1e40105e7bc78fa62ce36c58d1c91e1
+COMMIT 28d5a4d71824ff5823ae310e3fd014b48b33d583
+CHANGES.rst
+src/flask/app.py
+src/flask/blueprints.py
+tests/test_helpers.py
+
+COMMIT 5353f306fe0c64ffa9e73f256ba3cb200652354d
+COMMIT 321bd74b954156553db3dca8f43b45cdd5a88f76
+docs/deploying/waitress.rst
+
+COMMIT 66af0e55ef6631d05c691707da19d0f1c46921ea
+COMMIT 3d357273b50ed9c8ca660f60fde255c26ff7a228
+.pre-commit-config.yaml
+
+COMMIT 926ab92118006c74a0a33bcb8f770522d007349a
+COMMIT 088b58dbceb09b3234926af8488c016227bd7c0e
+COMMIT 7621b3d96ac2d53846c4df211bc05c5e13420028
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT e165f3aef4dbede5d7e3f71c336c89a268753ae9
+requirements/dev.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT d718ecf6d3dfc4656d262154c59672437c1ea075
+CHANGES.rst
+docs/config.rst
+src/flask/app.py
+src/flask/sansio/app.py
+
+COMMIT 0ce27278d234c13ce00019540ff8e9891542d1f2
+COMMIT 07c8f19bfd6128c7cbb9c61c41b43a9eeca1b435
+.pre-commit-config.yaml
+
+COMMIT 0d2100ed17d24b2a30594729b99feebe76839bc5
+COMMIT e3535f99717bdf3882c0b48bff3e3eb244454e34
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT 422e05e28dbae9fdcbca855e6727738f57cfccfe
+COMMIT f567ab90681235f38bdeaeda004d89e85b8627d9
+requirements/dev.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 6d126e1013dd9966dc510612a4b97f8f15fca2c4
+COMMIT c7da8c2aa3a923fc620ad480a8831a8a0f21ab37
+src/flask/sansio/app.py
+
+COMMIT bb16048ad74dfd07364226d02ab656f5a5cf6730
+COMMIT 767ad19b10c64af1fa328383713ea97e23cc0080
+docs/quickstart.rst
+
+COMMIT a2f495b9ff26c84e0ac35dcd957718e2d3f53afe
+COMMIT 4a1766c252bac0de1368cc4eaefba1299f77d546
+docs/config.rst
+
+COMMIT 255c8d66af6daff3eaa063ea0819e185d4d1e214
+COMMIT bea5876e46144080a06170222396b953a361af48
+COMMIT 9101439d7b7e21d5cf8a4a2a3dc92b9980539c6b
+.github/workflows/tests.yaml
+tox.ini
+
+COMMIT 67ed36910ddb974a3e98939c55ba0fde1636e426
+COMMIT 4e894892bc0230c46e998b6ea82b5b07b9943a39
+.pre-commit-config.yaml
+
+COMMIT d64ecfb244d38b5f31d6dd8f6a9f55731038c093
+COMMIT 860a25c390eba8e6c089a818b02800dd9d789864
+src/flask/helpers.py
+
+COMMIT 273123f6b8fc0d871553f707e515816777c60e24
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT fc605b575bc454bb89f7f878692970f3bd4b1011
+COMMIT a936b0c610ba86f542eb3855de2be674a7b9310b
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT 4f42c642036e6fdd915dd492b263c3b887cdb2d9
+COMMIT eb1182a10e757b5e76009c69fdf3a88a5afc6840
+src/flask/sessions.py
+
+COMMIT a363642a32880114c7944b1017f2f69bd4cc00eb
+src/flask/wrappers.py
+
+COMMIT 57add386c9d3aa5717bb25ed3e216a9538f086fd
+COMMIT 823e279e0dd40d8818a8d58c12a7df22caae1c04
+examples/javascript/pyproject.toml
+
+COMMIT 11c15ddfeb6edcb0978d3407ed972ae441013177
+COMMIT 224c639bf9f37b99bc66a879fbbc516f59857967
+requirements/dev.txt
+requirements/docs.txt
+requirements/typing.txt
+
+COMMIT f48802acbb2d9f29ed3e1bcc5206bd00176cc1e3
+COMMIT b7278186c4e16c58a4dbd439eedf716146c19f53
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT ccf125bf30102beedafb3ecef72376bfb6c90a4d
+src/flask/sessions.py
+
+COMMIT db0fe9436e9da7f7bd14683542bbf33ba3c6d5e4
+.github/dependabot.yml
+
+COMMIT 2c7f57ad5bd19743312eb34ea5fb838a1349474e
+COMMIT f958b6500b2aeb8edc578a07f00546becdad4c80
+tox.ini
+
+COMMIT 346d1abaff0270104ffa3a0e8bee7de279a1cee7
+README.md
+
+COMMIT 19610a9e46e0989054ecd0f6be2fcb981013d8eb
+CHANGES.rst
+pyproject.toml
+
+COMMIT aee16df63bbd7f6a7479fcd01b509f5ebaca3a0d
+COMMIT 61182249cb3ec5c69a2b91928829f33ccca6c7bc
+COMMIT c12a5d874c5a014495eb2db8a73f40037bc813ac
+CHANGES.rst
+
+COMMIT 5e22cc9eec0d1da2da706ccf724fde702b30d5f2
+COMMIT 5fdce4c331ac530280cc941179d364a07f4a1088
+CHANGES.rst
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/sansio/app.py
+src/flask/sansio/scaffold.py
+
+COMMIT adb7dd99c295a28726c8d818fba54c7b3f958ecc
+docs/logging.rst
+
+COMMIT b73939095564ec5c088c53e7595b00d174a018f5
+COMMIT db461112c70d5f2bf93c7a6ac27eeb665c232dd0
+CHANGES.rst
+src/flask/sessions.py
+
+COMMIT 7320e311a0a3f190351173f8be90cab31dadbf73
+CHANGES.rst
+pyproject.toml
+
+COMMIT a85575601758b3fd8d1379aa2e16bf1c24ab06f3
+COMMIT be508c618411d72281672980abb19b2150581943
+.github/workflows/lock.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT 6ab71ed7cf92a2dea7c18ddc9c2b4f3e685ea1fb
+COMMIT 87d5f5b9a9697434e6d972b021201105eabb54e6
+.devcontainer/on-create-command.sh
+.editorconfig
+.github/ISSUE_TEMPLATE/bug-report.md
+.github/ISSUE_TEMPLATE/config.yml
+.github/SECURITY.md
+.github/dependabot.yml
+.github/pull_request_template.md
+.github/workflows/lock.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.gitignore
+.pre-commit-config.yaml
+.readthedocs.yaml
+LICENSE.txt
+README.md
+README.rst
+docs/conf.py
+docs/index.rst
+docs/license.rst
+docs/web-security.rst
+pyproject.toml
+requirements/build.txt
+requirements/dev.in
+requirements/dev.txt
+requirements/docs.in
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.in
+requirements/typing.txt
+src/flask/cli.py
+src/flask/config.py
+src/flask/json/tag.py
+tests/test_json.py
+tests/typing/typing_app_decorators.py
+tox.ini
+
+COMMIT 98a7f9fcf09fce5d32bf25e7f917c1c3026719d1
+COMMIT 0e59442f6cce9442c1dcaf8515df7182312fa6cd
+.github/workflows/publish.yaml
+
+COMMIT b90a4f1f4a370e92054b9cc9db0efcb864f87ebe
+COMMIT ad36383951c130f16e02b5f61b1161da99bc1ca4
+.pre-commit-config.yaml
+
+COMMIT 6b422a05f37641ca0b84422f2436e9d4bd144376
+COMMIT d5e321b792cd6f3cd7b072d175f47eacbd5ee14f
+COMMIT d2030595dcdc8ca5701504f00255360fb12a3a2b
+CHANGES.rst
+pyproject.toml
+
+COMMIT d7209a957004d4758f32fd8b2f89da11f5fe5718
+COMMIT 1af8f95785b85d0937153ee63d504c0b51934d80
+CHANGES.rst
+src/flask/cli.py
+tests/test_cli.py
+
+COMMIT 3435d2ff1589eb0c1a85cc294a20985910a1a606
+COMMIT ecc057dd4857e655f0844b781899a917852042a4
+CHANGES.rst
+src/flask/sansio/scaffold.py
+
+COMMIT 3207af8827d4162ef5841249c46fbb9da043c551
+CHANGES.rst
+pyproject.toml
+
+COMMIT 94e80b3da9048372ed857f6175a4d5fd1ca8913b
+COMMIT f32dddc71c8538d7d9cf51bf82716b3dfadbc9ec
+COMMIT 484a7cc9a7ba2540ab2af5141196f5ab5809df33
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT a4bada52d0c5442011665eb1ad4bdb61c06d28fe
+.github/workflows/lock.yaml
+.github/workflows/publish.yaml
+
+COMMIT 4df377cfbfc1d15e962a61c18920b22aebc9aa41
+COMMIT 233be7a0fa8b2a77189ae9a2fc47c579245a2f3d
+COMMIT f622b1cadea2bed4ea4cc476695e9c181ec5da11
+CHANGES.rst
+pyproject.toml
+
+COMMIT 5fcc999b7df0f5cc71cfd9b74ea494b96486f84f
+.github/workflows/publish.yaml
+
+COMMIT da3a0ddfe2de5be718a2d7cb3021f350bf04c402
+.github/workflows/publish.yaml
+
+COMMIT 5e059be1b327f2f2f64115d2897c5864eff69b7d
+.github/workflows/lock.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT bae6ee888f647f15fabb91d21bf28314737be1c6
+COMMIT 81b3c85f51834a06bc8fbecf350bc20d756d8026
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+
+COMMIT 08d3185e87cfeccc4bf4d26ee5c4c0dfd4ec8564
+.pre-commit-config.yaml
+src/flask/ctx.py
+src/flask/helpers.py
+
+COMMIT 6000e80acf931b05b4911c3fa7f3ba33e2b80e64
+CHANGES.rst
+pyproject.toml
+requirements/typing.in
+requirements/typing.txt
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/cli.py
+src/flask/config.py
+src/flask/ctx.py
+src/flask/debughelpers.py
+src/flask/helpers.py
+src/flask/json/__init__.py
+src/flask/json/provider.py
+src/flask/json/tag.py
+src/flask/logging.py
+src/flask/sansio/app.py
+src/flask/sansio/blueprints.py
+src/flask/sansio/scaffold.py
+src/flask/sessions.py
+src/flask/templating.py
+src/flask/testing.py
+src/flask/typing.py
+src/flask/views.py
+src/flask/wrappers.py
+
+COMMIT 7b5e176d1ab23e183d0403573358299ed6562dce
+COMMIT 5a48a0fe6b02f62f9a0d90257c6a14d280bc9d23
+COMMIT 700fc7d928b7a625b04e6865b3eb282043e90f7d
+CHANGES.rst
+src/flask/json/tag.py
+
+COMMIT 8fdab74cc80c39f45aa65da5dd029c8d262756c3
+src/flask/helpers.py
+
+COMMIT 24ec38d6a0686f1a147420ebf4b31f5243e1cb42
+.pre-commit-config.yaml
+
+COMMIT c2f65dd1cfff0672b902fd5b30815f0b4137214c
+COMMIT 63ff4185f9d1306c3bd54489f1adb88e7b48e588
+requirements/dev.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 708d62d7172a30c5b0ace1d212c5a3bc2b53b98c
+COMMIT c275573147b426fbe1a37c6bce143f7895b603b2
+pyproject.toml
+
+COMMIT 12a1c4940d3fe2fc68a7ca68df48c3f04941c53c
+COMMIT 77f6c72cf930ae2e3c5d4dd63e7cbc4699382916
+COMMIT 8a66990c6161b30422359244a052805dc98a5059
+docs/server.rst
+
+COMMIT 05eebe36abe923d065133792f14d4ab6c07336a0
+COMMIT 1d5abfadd7132c9a78e14e5ba6c07aed47115280
+CHANGES.rst
+src/flask/cli.py
+
+COMMIT 399aa8531c60faee26333bcdae5a70b01bae2d54
+COMMIT b55ccae72aba110ae08e8ef0a9cfb8649750594a
+requirements/dev.txt
+requirements/typing.txt
+src/flask/helpers.py
+
+COMMIT 089f6a1c50ea2b18287106ecd357522bab200510
+COMMIT b64f848d2c1f8fe9aed3acb10f68f6c8bb1271f1
+COMMIT 452b78f24331c9805075cc0572128a91f4345e32
+.pre-commit-config.yaml
+
+COMMIT 78ced0093ade22a5de43ce3da98a4c2526022fbf
+.github/workflows/lock.yaml
+.github/workflows/publish.yaml
+
+COMMIT d61198941adcb191ddb591f08d7d912e40bde8bc
+COMMIT b97165db75c6f4e99c3307b4a5a1f3b0d9f4de25
+COMMIT 4104f29956b16f3e351462651ec3c6cc5a0dd069
+CHANGES.rst
+src/flask/helpers.py
+
+COMMIT 66743d4f9d865775258c845db339d3fcccd016b5
+CHANGES.rst
+pyproject.toml
+
+COMMIT 258311d09891c9d72fedee39cde2564cfefdc55d
+COMMIT 5308db0637dcc4592286ab0e6accbdd0604db494
+.pre-commit-config.yaml
+
+COMMIT 59fd6aa1049808f2bf2c6b3bd309ddfe9d9f6809
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+requirements-skip/README.md
+requirements-skip/tests-dev.txt
+requirements-skip/tests-min.in
+requirements-skip/tests-min.txt
+requirements/build.txt
+requirements/dev.in
+requirements/dev.txt
+requirements/docs.in
+requirements/docs.txt
+requirements/tests-pallets-min.txt
+requirements/tests.txt
+requirements/typing.txt
+tox.ini
+
+COMMIT 560383fe14b29d05e62d1242fd2713a3b7f84c8e
+.github/workflows/tests.yaml
+
+COMMIT 627703656714c7011a5c7b65214cbf6ee07e3c23
+.readthedocs.yaml
+
+COMMIT ce27ddeba1d4dec15758bc9d660316a6060bc7f3
+COMMIT 54e05a282428e9a44dbd414ca70231a83ebd710d
+.flake8
+.gitignore
+.pre-commit-config.yaml
+examples/celery/pyproject.toml
+examples/javascript/js_example/views.py
+examples/javascript/pyproject.toml
+examples/tutorial/flaskr/__init__.py
+examples/tutorial/flaskr/auth.py
+examples/tutorial/flaskr/blog.py
+examples/tutorial/pyproject.toml
+pyproject.toml
+src/flask/app.py
+src/flask/helpers.py
+src/flask/json/provider.py
+src/flask/sansio/app.py
+src/flask/sessions.py
+src/flask/views.py
+tests/test_appctx.py
+tests/test_apps/subdomaintestmodule/__init__.py
+tests/test_basic.py
+tests/test_blueprints.py
+tests/test_signals.py
+tests/test_testing.py
+tests/test_views.py
+tests/typing/typing_app_decorators.py
+tests/typing/typing_route.py
+
+COMMIT 9a12f34bbee68a14301bc234f50c4a9fea9003fd
+COMMIT 54ff9b297276a3add08c8faf1557b5e359b3ab99
+.flake8
+.gitignore
+.pre-commit-config.yaml
+examples/celery/pyproject.toml
+examples/javascript/js_example/views.py
+examples/javascript/pyproject.toml
+examples/tutorial/flaskr/__init__.py
+examples/tutorial/flaskr/auth.py
+examples/tutorial/flaskr/blog.py
+examples/tutorial/pyproject.toml
+pyproject.toml
+src/flask/app.py
+src/flask/helpers.py
+src/flask/json/provider.py
+src/flask/sansio/app.py
+src/flask/sessions.py
+src/flask/views.py
+tests/test_appctx.py
+tests/test_apps/subdomaintestmodule/__init__.py
+tests/test_basic.py
+tests/test_blueprints.py
+tests/test_signals.py
+tests/test_testing.py
+tests/test_views.py
+tests/typing/typing_app_decorators.py
+tests/typing/typing_route.py
+
+COMMIT 6edfd78c9ff1fc349bcf5356097fe9453e3c7551
+COMMIT 4431ada1a2615c30fedf200b28cbb80c38250e7c
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT 24653528ccb2b5ff017dd9b0d4afabfe93e2ea43
+COMMIT 33d888622676073a5cd9d5f268933de82a0345c0
+.github/dependabot.yml
+
+COMMIT 04920b30765a5884c5b6516c66feea6df0b5282f
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+.pre-commit-config.yaml
+requirements-skip/README.md
+requirements-skip/tests-dev.txt
+requirements-skip/tests-min.in
+requirements-skip/tests-min.txt
+requirements/build.txt
+requirements/dev.in
+requirements/dev.txt
+requirements/docs.in
+requirements/docs.txt
+requirements/tests-pallets-min.txt
+requirements/tests.txt
+requirements/typing.txt
+tox.ini
+
+COMMIT 6ee5dcc0ec93e8c11e5362f1e151d99168d6d2e6
+.github/workflows/tests.yaml
+
+COMMIT c4bfd367e2f1f26838de46d0cfa2d512985f42a3
+.github/workflows/lock.yaml
+
+COMMIT 29f1bd22d75cab1b0433339425fabd21b8229228
+.readthedocs.yaml
+
+COMMIT 8d9519df093864ff90ca446d4af2dc8facd3c542
+COMMIT 7af0271f4703a71beef8e26d1f5f6f8da04100e6
+COMMIT be6ec06894b55b1b5a360ce3f8178c7963332ccd
+docs/deploying/asgi.rst
+
+COMMIT beedaa4eff3919f250fad49a5092cf07c4d638e1
+COMMIT bb9937593de3917d17c2da1fc55489f10bb3c8b2
+docs/testing.rst
+
+COMMIT 541bc8dfc2263cfa1ab2f209ce6132e1835cac9b
+examples/javascript/README.rst
+
+COMMIT 3652ecd9e0a3aa6595a559e2a231b11ead8a156c
+docs/index.rst
+
+COMMIT 14232513fd618be02e0ab4b223f3105fcdde3cfe
+CHANGES.rst
+pyproject.toml
+
+COMMIT 3252f2bc546759a94f7a4c4938ef561d7bb6a6ec
+CHANGES.rst
+pyproject.toml
+requirements/tests-pallets-min.in
+requirements/tests-pallets-min.txt
+
+COMMIT 438edcdf01c392619449a6bdbb18f6cf72ef7bb9
+CHANGES.rst
+src/flask/app.py
+tests/test_helpers.py
+
+COMMIT b7c1290528f907c9f41afcdfd33a2227c73e26d3
+docs/patterns/javascript.rst
+
+COMMIT 8037487165a196015a646de25cbce6d0351c8fc4
+COMMIT e8076d911490870a27122e4b34230090e6d1fc10
+COMMIT ecc4a38b7cf95bcf8dfd9e4e6f77492977e255d3
+COMMIT 24c6508d39ad7fabd4c017b9a47d12539ea6b708
+.github/workflows/publish.yaml
+
+COMMIT 98cef9fcca23677f436b2d6d7297d14bb93b59fc
+.github/workflows/publish.yaml
+
+COMMIT 0c97a411b430f96694e9980515b5e253ad999327
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT faef9a0fcef307f1a1c380a477b392fa4371d83d
+COMMIT 293041a290178dc1d526075372960c3ca589d366
+CHANGES.rst
+pyproject.toml
+src/flask/__init__.py
+
+COMMIT 153433f612585409f3494a3c44160d888c02612d
+COMMIT 65271c105f7c247ecffc9a7121815276e092bd10
+src/flask/app.py
+
+COMMIT a6007373b5c521297e2ec24f820b9c7c32659af8
+COMMIT 3205b53c7cf69d17fee49cac6b84978175b7dd73
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 9f9550247a2798b9dcc28081c15e266442f4e28a
+CHANGES.rst
+pyproject.toml
+requirements/tests-pallets-min.in
+requirements/tests-pallets-min.txt
+src/flask/cli.py
+src/flask/testing.py
+tests/test_cli.py
+tests/test_testing.py
+
+COMMIT 90967ccb9ab1f757c2637a68ea2e16b8da2605f4
+COMMIT 5bb30270d2e68d8d9278ac6f5abf67049acba662
+CHANGES.rst
+pyproject.toml
+requirements/tests-pallets-min.in
+requirements/tests-pallets-min.txt
+src/flask/cli.py
+src/flask/testing.py
+tests/test_cli.py
+tests/test_testing.py
+
+COMMIT 1d8b53f782570b56296d7682cbbf104b6737e805
+COMMIT bc5dd3894b4b19e07abfe6a23d87d66c02e4061f
+CHANGES.rst
+
+COMMIT 318592511c9c7156599fd02e3edf625097ecb434
+src/flask/sansio/README.md
+
+COMMIT 80cf589a26d792820f135591eb8007bca891bf4f
+src/flask/typing.py
+
+COMMIT cc80a47f5be6c60e53c42ef9378e6db3b0e183b1
+src/flask/typing.py
+
+COMMIT 3f6b243cec6859185ea4064e84b33c07cc7febf6
+src/flask/app.py
+src/flask/typing.py
+
+COMMIT 72c85e80c8ef9e6d5b5644f7bb23cdc175ca3873
+src/flask/sansio/blueprints.py
+
+COMMIT 0ec7f713d679ceed2c605e62ac5d38d579f29fa0
+src/flask/__init__.py
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/debughelpers.py
+src/flask/json/provider.py
+src/flask/logging.py
+src/flask/sansio/app.py
+src/flask/sansio/blueprints.py
+src/flask/sansio/scaffold.py
+src/flask/templating.py
+
+COMMIT a64588f87a2bd7ba557814ec039e3b2af2ce842d
+src/flask/sansio/app.py
+src/flask/sansio/blueprints.py
+src/flask/sansio/scaffold.py
+
+COMMIT 0e0e8ddcdc2bd572cdecd371bc0f309ac62ee9c4
+COMMIT 04994df59f2f642e52ba46ca656088bcdb931262
+CHANGES.rst
+docs/api.rst
+src/flask/__init__.py
+src/flask/app.py
+src/flask/globals.py
+src/flask/helpers.py
+src/flask/signals.py
+
+COMMIT 6a12b191f7058a179237b4b3dfc146e559777d9b
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 9e9acfb3fe5cf33549da1a8324b395e1fb4145b0
+COMMIT 02736640095ed6d5a4a409a9658eaca373fd1d48
+COMMIT a887e179b8af6a9c582a7918f9f8499ab58032cc
+docs/patterns/appdispatch.rst
+
+COMMIT aa6d4c3e92bd11a7d449f49f524e54bbb88b89c0
+docs/patterns/appdispatch.rst
+
+COMMIT 6d49a1e4b74fe4361cc8ab58767effece56c1f0c
+COMMIT 826514b8eb18f6c314cf566630253d35c89e42c3
+tests/test_basic.py
+
+COMMIT c49ce2e1eb8b598e724388bead0943837bab8027
+tests/test_basic.py
+
+COMMIT 3237fff4b86227a84913d3885b600738bb9479a0
+COMMIT 6d266f63633f5f127165d4ef836db14a59bbc106
+COMMIT 17e146ad949b3d80438faf95e81b53c543cb50f5
+src/flask/cli.py
+
+COMMIT 80ae10f402facf375be30eb62fdaf0d34d57a66d
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/typing.txt
+
+COMMIT 7d399e80c34df8daff66f45b74fdde0edd58d63c
+COMMIT b1385919bea3238d49a6e2cfc8261771775cd6e9
+COMMIT 6a5277d3417b30d6e7f5c93745e8a445dcb02b1c
+COMMIT dcc86ebfce71bf2829bce429134d6424355f159a
+.github/workflows/publish.yaml
+
+COMMIT 180ff8853c69240a3d214734da8d78f8d4d6f0bc
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT 8a72b741616556b4f739ea79ab502c2d2038844a
+COMMIT 7255be9626ab56d81bc0ab86db939fcc1da9bca1
+.pre-commit-config.yaml
+
+COMMIT f215de030e4bb66205e39c786437b41aa86a5dd6
+COMMIT 65bc7636348a9ca32ccafb9f685ab4377e1e446d
+.pre-commit-config.yaml
+
+COMMIT a0db8908530769e83f388d6b61438a6a2ee0bded
+COMMIT 11da927fd993c941618a67b443cc0649402f4de0
+docs/tutorial/install.rst
+
+COMMIT cb825687a592709f902f3d320d93987a0546fd28
+COMMIT 51bf0fdd9018d63b7bc09db52a66b726c2c4bad8
+COMMIT 0da5788efbda92b6b6239352c2b9a835efe0888f
+COMMIT 326484a8d107c3af490d7d294c17832afabae785
+COMMIT 1ce4d95de92fdd9423c295bf9b63117817fab3bf
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT 1fb188636e6a21e9c1fefdf4dd8c671dd3f332d6
+.github/workflows/publish.yaml
+
+COMMIT f62580b947e3be4d8b5ef5fa486d1472884aacd5
+.github/workflows/lock.yaml
+
+COMMIT 47a89da558e240148ced28ddcc4e709a4be4955a
+.github/workflows/publish.yaml
+
+COMMIT 09789f2a34633be446f7fa04955e55a373b36302
+COMMIT aea13d5a100b03758fecb88a34daeab4f8aa8426
+docs/errorhandling.rst
+
+COMMIT 15a0d4afd481a7f8f7dcf3b45da7175ed14226c5
+COMMIT f39c71609e9372bec8beb01c5aea3957ec2d1a9b
+MANIFEST.in
+
+COMMIT 3c85ec953f15fe3be339a136181fa1483320f65a
+COMMIT 6b9acd565cded9c805760037b69754c11749c830
+.devcontainer/on-create-command.sh
+CHANGES.rst
+CONTRIBUTING.rst
+docs/patterns/packages.rst
+docs/tutorial/install.rst
+requirements/typing.in
+requirements/typing.txt
+
+COMMIT 46b328854a1ec1e892da02f523b2ed0745fe69e2
+examples/celery/pyproject.toml
+examples/javascript/MANIFEST.in
+examples/javascript/pyproject.toml
+examples/tutorial/MANIFEST.in
+examples/tutorial/pyproject.toml
+
+COMMIT f38f3a745ab2f90084f495403ed28d4fc27e4b50
+CHANGES.rst
+pyproject.toml
+
+COMMIT b1bdd9756478f178680fa119514a58b4b48efc38
+COMMIT d67c47b81f4cbfda79f108a8ee4a183855127efb
+tox.ini
+
+COMMIT 7bfbcfab8725a5e469acf2b84f6061d6afb2f649
+COMMIT 8933d7544395aeaa91c66d9f26d10b4fe2e92d7b
+.github/workflows/tests.yaml
+tox.ini
+
+COMMIT cc55d7b3cfb816575beef1011693f5cae6c2d3b5
+COMMIT aca7d5637d0c1c95b961e3396039869c6e981e23
+.pre-commit-config.yaml
+pyproject.toml
+requirements/dev.txt
+requirements/tests-pallets-min.in
+requirements/tests-pallets-min.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT ec2b2394dccb02dac919b024608e9980f16459f6
+COMMIT a7ae372f2f58343a7eb56209f29eb9879e171b58
+docs/patterns/sqlalchemy.rst
+
+COMMIT 4bcd4be6b7d69521115ef695a379361732bcaea6
+COMMIT 8e33b7b3e254f2a93101bcce21f85ff203831a4c
+CHANGES.rst
+pyproject.toml
+
+COMMIT 4be9f521425b7ad659b182c319dc3afb8fe64f53
+COMMIT bda295d37fa3809c95a93d01dd605d0222109889
+CHANGES.rst
+src/flask/helpers.py
+src/flask/scaffold.py
+
+COMMIT 4d6ae8273a54e3407ab5046fc0856a9d40097e74
+COMMIT c8cf4694c60f0d81809468a1b45ec730496cc546
+requirements/docs.in
+requirements/docs.txt
+
+COMMIT 935ee742b49cfcda876eaf366d53bf150bcafd44
+COMMIT 9930b0fe8e739ceb312f9554f9d41b73c2aaa733
+COMMIT ed8ddb6a3a14ae332823b0a266b02a5ef024cbb3
+CHANGES.rst
+pyproject.toml
+requirements/tests-pallets-min.in
+requirements/tests-pallets-min.txt
+
+COMMIT 84e11a1e827c0f55f9b9ee15952eddcf8a6492e0
+CHANGES.rst
+src/flask/helpers.py
+src/flask/scaffold.py
+
+COMMIT 367e1df785a71e9004d9a87a221652bfc5a964ac
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 2be71d323d87ec5e9f269666f8d08ec5af77eeb8
+COMMIT d614d6bf8c7b6db6f817648836f9044b13dc42b4
+pyproject.toml
+
+COMMIT 32d2f47ed1bf3f27fd46e1a54dd136688de9ab81
+.pre-commit-config.yaml
+
+COMMIT c9b6110dec52ff483b42b1428221f903bf143788
+COMMIT 7dbb2f7e05d2c0963e90016b1f7a3a45e98a865a
+.pre-commit-config.yaml
+
+COMMIT a3e4013f893831adb8c9f2947c29dfeeb47d2145
+COMMIT fb20cbbf1efbf7dd384171b9cd2587c234f15ddf
+COMMIT c49757a4592f2fbd7ecfa4daccbfe8a4ec14c1e6
+COMMIT 18e703bc9341b8066e2b277af5d37b13f5bd3aef
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT fc74a114b3afe87284467f2ccdbeb7a4a8badbc4
+.github/workflows/publish.yaml
+
+COMMIT 40f31c307848e560336fc8b336fbc2fdc1a478ee
+.github/workflows/publish.yaml
+
+COMMIT 31fd9c87912a7020a00d83d2135559433173708c
+COMMIT 38f02e04f4765a2820a2ed4f63ac757598cb02e4
+pyproject.toml
+
+COMMIT e7264776bd1373e6283407a75f287b309eeebbae
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT ae07dead24d5aa81b4ee9e3f0550eabb173f5455
+COMMIT 0f477df86a8c953cb5e4df0bd90266345140b114
+docs/config.rst
+
+COMMIT 55332be325a9f1a5882a309951f1f7db510036dd
+docs/patterns/javascript.rst
+
+COMMIT b80baaf35985a9a48f2db903a21b6ee7e7cc7340
+COMMIT 2abb7513dc52e9d9f2c73dde91f3b89d8f9492e4
+src/flask/config.py
+
+COMMIT d0bf462866289ad8bfe29b6e4e1e0f531003ab34
+COMMIT 4911012cf426af25668e5d9beb756a732ca1a4f4
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT 57e926c7916ef5fd7d4abac965273ea185e497d2
+COMMIT 859d63902e5c9549fda4c167e9787a42c0136413
+COMMIT 0a00e1b6085f62fb776a95ef676ea661bff565f6
+tests/conftest.py
+tests/test_config.py
+tests/test_helpers.py
+tests/test_instance_config.py
+
+COMMIT 1d7281fe0770a97229a2a75189a712cff866b448
+src/flask/scaffold.py
+tests/conftest.py
+tests/test_instance_config.py
+
+COMMIT e374853c75e49c950195a57de8e19308db5bf902
+COMMIT 97c830190ff839b89b85c93781f3603f95365384
+COMMIT bda08b11c692a5c94124b11749c1af6fa5c0e003
+COMMIT 47af817c8fe01045c641b97f8fb784c7ad864eee
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT afd63b16170b7c047f5758eb910c416511e9c965
+COMMIT ca12e8ebb7753d4a982584c2909ad9c7e5c2b029
+examples/celery/requirements.txt
+requirements/dev.txt
+requirements/docs.txt
+requirements/typing.txt
+
+COMMIT 8646edca6f47e2cd57464081b3911218d4734f8d
+CHANGES.rst
+src/flask/sessions.py
+tests/test_basic.py
+
+COMMIT a6367dac747c1e149c60767eee7e8aa9c281c58e
+COMMIT 3fbfbad79fe294918459b70eb409d555b20de2c8
+CHANGES.rst
+src/flask/testing.py
+
+COMMIT 726d3f4fa9e8a2960541debc2d2713571da54441
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 7b31099252cca1d7a5fab121cb646f78538ad7bb
+COMMIT 723091b903c0a355bbb67778b3236317e5aff3f7
+COMMIT dcd25d8f07be14508c7f8182d9f9cc4365eb96fe
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT 1e160c199bc5e76133e77f7cf0a16d21ae956078
+COMMIT ec8ca69195174a6526a6006d804841c0124eeccf
+.github/workflows/publish.yaml
+
+COMMIT b7b753b96c36f0704c7c2729f6564aa6c34797a6
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT 0afeb1d11cad9aa42ef25cc20b10dcd67c8cf3c9
+CHANGES.rst
+
+COMMIT 4cf8b78c6c674048a393acf0280f08761a5cb2a5
+COMMIT f3b8f570545200c87465d18386f3fc9f2258307a
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT c990bba94ab9bc81adf2d33e83c9a9628a2098f2
+requirements/tests-pallets-min.in
+requirements/tests-pallets-min.txt
+
+COMMIT adedb2a64ea7703369bc89021710b439ee79f8dc
+COMMIT e1aedecdc689cc9a79131851dbdabf6c3bc49c9e
+CHANGES.rst
+pyproject.toml
+src/flask/testing.py
+
+COMMIT 37badc3ce8b0665e3454547839196a676729309f
+CHANGES.rst
+
+COMMIT 70f906c51ce49c485f1d355703e9cc3386b1cc2b
+COMMIT 8705dd39c4fa563ea0fe0bf84c85da8fcc98b88d
+src/flask/sessions.py
+tests/test_basic.py
+
+COMMIT 9532cba45d2339e90ebf04f178b1e4f2064e7328
+src/flask/app.py
+
+COMMIT 0bc7356ce1ae11e633426902aba76d525f4523da
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT f07fb2b607c1eaa724ca9bfe43e2dc20d97d34de
+COMMIT 721abdc3810057269503a72d2db80fb826f3c85c
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 0867dce42c1a193bfe7fb5f92f0ccaa622643f48
+COMMIT 0ec9192cf25f5187d6521f2539489fa8d55336bb
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 345f18442ceb29f9e365af99fc85bdc5986323d2
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 5f4072423ec6ee0c71d5995bec41e59d044e7737
+COMMIT 8728c3e4cd4e929a4327d917acd4b96c75f963d0
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT eb33b8c8096322becac743fb6eb466aebf7af6b9
+COMMIT 79ebf6c39cba01b240a926b899b7d0828e63fc4b
+CHANGES.rst
+pyproject.toml
+requirements/tests-pallets-min.in
+requirements/tests-pallets-min.txt
+src/flask/app.py
+
+COMMIT 73739a29f4c16cf539b57e711a4ea2a686cd707a
+COMMIT ddc7accaa2e83b328f969c120af2ce0804876b4a
+COMMIT cd1b68cf6ebb214bfc8cf9bc233c593f15580172
+COMMIT 74e03298200e33951ca350a35aa3a8c0b4ff8177
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 2d460685b1b3d66c713739ee91183c22fb2e5dc8
+.github/workflows/tests.yaml
+
+COMMIT 64bc45874daf4b9828830ea0037a19beb8364ee3
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/typing.txt
+
+COMMIT 427e5dc4f3d82b67a75f4be21360818fd4fbf05e
+tox.ini
+
+COMMIT 0c5f18ab9168f9b7a8f3a6fa6509c8b20ac8720d
+COMMIT d48deba27331f11e19599af2a5b6e64476fd90da
+docs/signals.rst
+
+COMMIT 2b2a7641430bc7d40dba3c8d701636fc9b16530c
+COMMIT 83d777bebfb3031de51d458b47d06e8e612f3a3d
+artwork/LICENSE.rst
+artwork/logo-full.svg
+artwork/logo-lineart.svg
+docs/_static/flask-horizontal.png
+docs/_static/flask-icon.png
+docs/_static/flask-logo.png
+docs/_static/flask-vertical.png
+docs/_static/no.png
+docs/_static/shortcut-icon.png
+docs/_static/yes.png
+docs/conf.py
+docs/index.rst
+docs/license.rst
+
+COMMIT b4345cb4eb692c58d00579543228946ee5ad7510
+COMMIT 2e8fe7b2f2b541a60c90c625446647b22c5cacc2
+.github/workflows/tests.yaml
+.pre-commit-config.yaml
+CHANGES.rst
+docs/extensiondev.rst
+docs/installation.rst
+examples/celery/pyproject.toml
+pyproject.toml
+requirements/tests.in
+requirements/tests.txt
+src/flask/app.py
+src/flask/helpers.py
+src/flask/sessions.py
+tests/typing/typing_route.py
+tox.ini
+
+COMMIT 9659b11a45281662c6aa1194dc95b46b1f566ba6
+.github/workflows/tests.yaml
+tox.ini
+
+COMMIT f139024b1ca637cc6df694f49817bdb8ec294561
+README.rst
+docs/conf.py
+pyproject.toml
+
+COMMIT a4ea5df5d565128118b6ceaaf372233eef23e238
+COMMIT 44ffe6c6d6c90a414de32db1b03d5978f8770271
+CHANGES.rst
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/cli.py
+src/flask/config.py
+src/flask/ctx.py
+src/flask/debughelpers.py
+src/flask/globals.py
+src/flask/helpers.py
+src/flask/json/provider.py
+src/flask/json/tag.py
+src/flask/logging.py
+src/flask/scaffold.py
+src/flask/sessions.py
+src/flask/templating.py
+src/flask/testing.py
+src/flask/typing.py
+src/flask/views.py
+src/flask/wrappers.py
+
+COMMIT cfa863c357c4a40cfc11fe1b9a4f36d8e75cf52f
+COMMIT db7d2d2d685c004ea8da6cbcc7c56ecc36276632
+COMMIT a67195e0598f7fa4481e366527600cf0b46ae78e
+requirements/build.txt
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 7e6e68aed91c4c36142f6f1d32c0d74ac75e65be
+requirements/build.txt
+requirements/tests-pallets-min.in
+requirements/tests-pallets-min.txt
+requirements/tests.txt
+requirements/typing.txt
+tox.ini
+
+COMMIT a1d0eda7891917fdea272ac06a85cc2903824d17
+COMMIT 5bba529dfc9021a3df8fba96658a05f605e20afe
+docs/debugging.rst
+
+COMMIT 9a4d370ea221b13d7fff5e2120007986c08f85fb
+CONTRIBUTING.rst
+
+COMMIT 6931b252935188744415b301ab2e3d3bd5ee5498
+COMMIT 84c007d34f7f0b8737310fe4d67be12c463e0130
+CHANGES.rst
+src/flask/cli.py
+tests/test_cli.py
+
+COMMIT 182ce3dd15dfa3537391c3efaf9c3ff407d134d4
+.devcontainer/devcontainer.json
+.devcontainer/on-create-command.sh
+CONTRIBUTING.rst
+
+COMMIT 49498a323b8f5d5399a18dedacdc28d88cc78b83
+COMMIT f7d9956c0f0e9a80b1d345adac191f6ebd0ffee4
+.github/workflows/publish.yaml
+
+COMMIT 59f81950fe4fb059ad58b8b8c171831ae5214460
+COMMIT 8239765a4410d13d489e299a99e4a4c6951e190b
+CHANGES.rst
+src/flask/app.py
+src/flask/ctx.py
+src/flask/helpers.py
+src/flask/templating.py
+
+COMMIT a05c0c6b7232aac38899234a6c4f071f9005a502
+COMMIT 9cb1a7a52d7927071e2b737d52f902f006969e82
+CHANGES.rst
+docs/api.rst
+docs/appcontext.rst
+docs/installation.rst
+docs/reqcontext.rst
+docs/signals.rst
+examples/javascript/pyproject.toml
+pyproject.toml
+requirements/build.txt
+requirements/tests-pallets-min.in
+requirements/tests-pallets-min.txt
+requirements/tests.in
+requirements/tests.txt
+requirements/typing.txt
+src/flask/__init__.py
+src/flask/signals.py
+tests/test_signals.py
+tests/test_testing.py
+
+COMMIT e1e4e82096efbf25aa3c65b706aec60f1b00dec7
+COMMIT b626a9387900a9f717eb42765275adc0bf0875e3
+src/flask/wrappers.py
+
+COMMIT 87698a2d5d67bfd828e268f01884bcbbe33d2076
+COMMIT c67bfe551d016b15d0a2df89c985d8030387bf1e
+docs/deploying/eventlet.rst
+
+COMMIT c9a5660cfd0be150b598325697f6f19019af0ef8
+COMMIT c24f8c8199f8ceda7a7cfb5e91773eba595f5b67
+CHANGES.rst
+docs/config.rst
+src/flask/helpers.py
+src/flask/sessions.py
+tests/test_basic.py
+
+COMMIT fa0ceb62f26579c3c7d9e18926af3e6f3e6e425c
+COMMIT 694183ce22a0f63f5e5020dd799c2bd4dd5272a1
+COMMIT 04c21387dbc454fb59cae9c9bb21a13358cb5a34
+src/flask/testing.py
+tests/test_basic.py
+tests/test_json.py
+tests/test_testing.py
+
+COMMIT 67c4c7bac2fcd582ebb3474284a7c8a1e737c878
+pyproject.toml
+
+COMMIT e39d78a0ad544ac0b518ed85fc40c7a92833dee4
+COMMIT a30b6e723c4b58356176cc3f6cf63ce7320250e2
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT daf6966c89b280725439d2951beb88640c473154
+COMMIT c4f754cda37af2af272497000517288a5207e433
+COMMIT d2a6f5c572f5275bb8c91286cfd24c2c504cc243
+.pre-commit-config.yaml
+
+COMMIT a361ef6368a27a8fccad2da227089fc1d05f5678
+COMMIT c2688e4f06074a9c6785d26679270718cdef5b03
+COMMIT e8178f7bfa14ebb02418aa27c6437df19b81b911
+COMMIT 4909e8ff86508c87ba9a77a4adc602e9288c5141
+.github/workflows/tests.yaml
+
+COMMIT 6a6c83789f88715329a79d9cb887e25f8e472e94
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT 29676a273a5b9dc99268850c4fa534f78884cdd3
+.github/workflows/publish.yaml
+
+COMMIT 15f2ca2c24c63533219312600942248d3513a670
+docs/patterns/appfactories.rst
+
+COMMIT 7ed89d3f9d2207c9a607f5dcdce106c0278e1332
+COMMIT b8b410014d85f9861acc87c5f21c9a55a42d09c9
+CHANGES.rst
+src/flask/blueprints.py
+tests/test_blueprints.py
+
+COMMIT 7ee9ceb71e868944a46e1ff00b506772a53a4f1d
+COMMIT cac56a2b537d9ea4f4766d686f6a2f7639ad737a
+COMMIT c4b39ba2f3fede0555f18fc03b0f2499bb0d424b
+CHANGES.rst
+src/flask/app.py
+src/flask/testing.py
+
+COMMIT e7f8ae016696a6224d1db5c121bcf0282d528da8
+COMMIT 1432cddb139fc3cb64b990b8672d245d805e97d0
+requirements/build.txt
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.in
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT c83f661427a43cef50e202bcc61ced709248791e
+COMMIT 31022056aee5ab24cf485e31a0b48bbd52d96a04
+docs/errorhandling.rst
+
+COMMIT a5f30b157df2c62415a2d22758a1e4141ecdc9ed
+COMMIT 0bc6be604d465406c5909b13162e7097ab0ea2f8
+docs/installation.rst
+
+COMMIT 2f67e0fe4aca8a8d6998b3022150f1e6d6738214
+COMMIT bc3ec352f0b41ff1123de3f2816c657012d7071f
+COMMIT b8eb83940cc46e1499f8e4194f688f193232eedb
+.github/workflows/tests.yaml
+
+COMMIT 3cdcc729a73766bdb071b8b43a1d60971994db07
+.github/workflows/publish.yaml
+
+COMMIT 5cdfeae2e82541577e17f5179d91775550e34ebd
+COMMIT 736b5f9ff8564dee7e953987c7ef10c58146afa1
+.pre-commit-config.yaml
+examples/celery/requirements.txt
+requirements/dev.txt
+requirements/typing.txt
+
+COMMIT 2ad4d8d717dfe1e15b8205a825a5d3a8cb106acc
+COMMIT b10b6d4af1127fdfb0a74221af0c020ced71fece
+CHANGES.rst
+src/flask/config.py
+tests/static/config.toml
+tests/test_config.py
+
+COMMIT 4c288bc97ea371817199908d0d9b12de9dae327e
+COMMIT 4256fc63044fa0d9c2135443461689b1adaf386d
+CHANGES.rst
+src/flask/app.py
+src/flask/helpers.py
+src/flask/scaffold.py
+
+COMMIT c690f529f28a8fd7ecdac90939944475613760a5
+COMMIT fc03d0dfab64945169e1114cdc1fb39519a1e0c1
+CHANGES.rst
+src/flask/blueprints.py
+
+COMMIT 2a33c1785412075c09f9f55b3e25f2bc995ca461
+CHANGES.rst
+src/flask/app.py
+tests/test_basic.py
+
+COMMIT 704b68948f7bb94a3a4fa15e99243d4ed82081c5
+COMMIT 9c02f07f9bb4c88207c2a6860742c452c35d2948
+CHANGES.rst
+docs/api.rst
+docs/security.rst
+docs/templating.rst
+src/flask/__init__.py
+tests/test_basic.py
+tests/test_json_tag.py
+tests/test_templating.py
+
+COMMIT 1ee22e1736ffd12c2222cd6215ed04ec1592adaa
+COMMIT 6650764e9719402de2aaa6f321bdec587699c6b2
+CHANGES.rst
+docs/api.rst
+docs/config.rst
+src/flask/__init__.py
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/globals.py
+src/flask/helpers.py
+src/flask/json/__init__.py
+src/flask/json/provider.py
+src/flask/scaffold.py
+tests/conftest.py
+tests/test_async.py
+tests/test_basic.py
+tests/test_blueprints.py
+tests/test_helpers.py
+
+COMMIT 604de4b1dc0729233704a08c32612c6f1221cccb
+COMMIT c4c7f504be222c3aca9062656498ec3c72e2b2ad
+requirements/build.txt
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+src/flask/app.py
+
+COMMIT ed5b240417414cbd0322efa95c91f759928ba154
+COMMIT 6a392afbb6404236897ce7c0d02ac78b199e31bb
+COMMIT 41d4f62909bb426c84e9d057151f7d734695320a
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 24df8fc89d5659d041b91b30a2ada9de49ec2264
+docs/cli.rst
+docs/config.rst
+docs/debugging.rst
+docs/quickstart.rst
+docs/server.rst
+docs/tutorial/factory.rst
+examples/celery/README.md
+examples/tutorial/README.rst
+
+COMMIT aa040c085c8c560616069f06c34cf796c10b05f1
+src/flask/templating.py
+
+COMMIT a18ae3d75271ead93d779f4c950ad5750684c0a0
+COMMIT b945f988f94fd6f84fef31bd0bb668d71780f78b
+COMMIT a6cd8f212e762b8f70e00f3341b27799c0fb657a
+docs/index.rst
+docs/lifecycle.rst
+docs/reqcontext.rst
+
+COMMIT f425c117e2a0309da7faa149090936733a65c57c
+COMMIT ba2b3094d1a8177059ea68853a48fcd5e90920fe
+docs/reqcontext.rst
+
+COMMIT 129568f7f4197bdcec9b8eb96f1f4d55f9519c83
+COMMIT ab93222bd6d4ea26e3aa832a0409489530f3f5e0
+src/flask/blueprints.py
+src/flask/scaffold.py
+
+COMMIT d5527264f0506504fd2fd400192c8f696ce6d979
+COMMIT 3f195248dcd59f8eb08e282b7980dc04b97d7391
+docs/patterns/celery.rst
+examples/celery/README.md
+examples/celery/make_celery.py
+examples/celery/pyproject.toml
+examples/celery/requirements.txt
+examples/celery/src/task_app/__init__.py
+examples/celery/src/task_app/tasks.py
+examples/celery/src/task_app/templates/index.html
+examples/celery/src/task_app/views.py
+
+COMMIT dca8cf013b2c0086539697ae6e4515a1c819092c
+docs/patterns/celery.rst
+
+COMMIT 761e02ef67f9c689d899325dbafb7afdf6e495c6
+COMMIT 428d9430bc69031150a8d50ac8af17cc8082ea4e
+docs/patterns/packages.rst
+
+COMMIT 4ddb3f73baa5b60ed83d6bb48d0d447a0d8ab492
+COMMIT dd2423ebdec3b58db0dea58897d321c7c629c1b3
+COMMIT a15da89dbb4be39be09ed7e5b57a22acfb117e6d
+tests/test_reqctx.py
+
+COMMIT c1d01f69994e87489d04c3218a417f517ab6c88e
+.pre-commit-config.yaml
+
+COMMIT 3502cc951bc8b16ffb7fc90d8cecf059b214a167
+COMMIT f45bc5995cb33cb47afcd5f2683924e84ef01516
+COMMIT 9abe28130d4f0aff48b4f9931ebc15bd7617f19f
+docs/patterns/appfactories.rst
+
+COMMIT 88069bd417f5fd0e271a83768391a280267d2994
+COMMIT f8228910657f964f15f771e297be37e5a4c0a7b3
+COMMIT 74c256872b5f0be65e9f71b91a73ac4b02647298
+.github/workflows/tests.yaml
+
+COMMIT 94a23a3e24b6736ca3b54773de0ce384270c457a
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+
+COMMIT d93760d8bd6e367faefe9ad550f753e32ef9a12d
+docs/views.rst
+
+COMMIT ef85270d9ada6d9b25beabb4602047fc91eef2f9
+COMMIT 39fc0c6badd3e9d2537c7baa765d9cc80a8a8d47
+COMMIT 0b4b61146ffca0f7dfc25f1b245df89442293335
+.github/workflows/lock.yaml
+.github/workflows/publish.yaml
+.github/workflows/tests.yaml
+requirements/build.in
+requirements/build.txt
+
+COMMIT 99b34f7148b77d4b1311593590629c2bc8e8e772
+.flake8
+examples/javascript/js_example/__init__.py
+setup.cfg
+tests/test_appctx.py
+tests/test_apps/blueprintapp/__init__.py
+tests/test_basic.py
+
+COMMIT 3a35977d5fbcc424688d32154d250bc0bae918d6
+.flake8
+examples/javascript/js_example/__init__.py
+tests/test_apps/blueprintapp/__init__.py
+
+COMMIT 78b42b9ac288c20c107a3b6779c322acb45be3d4
+COMMIT 261e4a6cf287180b69c4db407791e43ce90e50ad
+.flake8
+tests/test_appctx.py
+tests/test_basic.py
+
+COMMIT 8f13f5b6d672f1ba434f9c8ebe2c1b1dd385962e
+CONTRIBUTING.rst
+docs/cli.rst
+docs/deploying/eventlet.rst
+docs/deploying/gevent.rst
+docs/deploying/gunicorn.rst
+docs/deploying/mod_wsgi.rst
+docs/deploying/uwsgi.rst
+docs/deploying/waitress.rst
+docs/installation.rst
+docs/patterns/packages.rst
+docs/tutorial/deploy.rst
+docs/tutorial/install.rst
+docs/tutorial/layout.rst
+docs/tutorial/tests.rst
+examples/javascript/.gitignore
+examples/javascript/README.rst
+examples/javascript/pyproject.toml
+examples/javascript/setup.cfg
+examples/javascript/setup.py
+examples/tutorial/.gitignore
+examples/tutorial/README.rst
+examples/tutorial/pyproject.toml
+examples/tutorial/setup.cfg
+examples/tutorial/setup.py
+
+COMMIT 6d6d986fc502c2c24fe3db0ec0dbb062d053e068
+.flake8
+.github/workflows/tests.yaml
+CHANGES.rst
+pyproject.toml
+setup.cfg
+setup.py
+
+COMMIT 9da947a279d5ed5958609e0b6ec690160c496480
+.github/workflows/lock.yaml
+
+COMMIT 3812a52e96d8dd0630eb3263485bce6da5cda07c
+COMMIT 8bfc0581e7b81240b3d672da73e9a0a2e848c3b3
+COMMIT a7487701999fee55bb76a393e72c96ac8e277fcf
+src/flask/views.py
+
+COMMIT 4a0f658897dfcb86fad09d0411e74f0658ae72f1
+COMMIT 2a9d16d01189249749324141f0c294b31bf7ba6b
+.github/workflows/tests.yaml
+requirements/tests-pallets-dev.in
+requirements/tests-pallets-dev.txt
+tox.ini
+
+COMMIT 836866dc19218832cf02f8b04911060ac92bfc0b
+COMMIT cabda5935322d75e7aedb3ee6d59fb7ab62bd674
+CHANGES.rst
+docs/blueprints.rst
+src/flask/blueprints.py
+tests/test_blueprints.py
+
+COMMIT d7b6c1f6703df405c69da45e7e0ba3d1aed512ce
+src/flask/blueprints.py
+tests/test_blueprints.py
+
+COMMIT fa1ee7066807c21256e90089731c548b313394d2
+COMMIT bb1f83c26586f1aa254d67a67e6b692034b4cb4a
+.github/workflows/lock.yaml
+
+COMMIT 74e5263c88e51bb442879ab863a5d03292fc0a33
+docs/cli.rst
+docs/config.rst
+docs/debugging.rst
+docs/quickstart.rst
+docs/server.rst
+docs/tutorial/factory.rst
+examples/tutorial/README.rst
+
+COMMIT eeebb5adc7bc30c79975dece8119b82ddc063130
+COMMIT 4d69165ab6e17fa754139d348cdfd9edacbcb999
+docs/cli.rst
+docs/config.rst
+docs/debugging.rst
+docs/quickstart.rst
+docs/server.rst
+docs/tutorial/factory.rst
+examples/tutorial/README.rst
+
+COMMIT 910179f9b0999685f5594284f0dc1577392034bd
+COMMIT 229dcbb5ce3fd935974d923be84ad1bf9efb61e8
+COMMIT bd26928fdb2476fca62f0e621e8f2870250ac2bc
+docs/_static/pycharm-run-config.png
+docs/cli.rst
+docs/config.rst
+docs/debugging.rst
+docs/quickstart.rst
+docs/server.rst
+docs/tutorial/factory.rst
+examples/tutorial/README.rst
+src/flask/cli.py
+
+COMMIT 4bc0e4943dfa637361aec2bb18dc9e1fabeaad12
+CHANGES.rst
+src/flask/cli.py
+
+COMMIT 79032ca5f1c4747e5aeaa193bdeb2e4eae410ea6
+CHANGES.rst
+docs/templating.rst
+src/flask/app.py
+
+COMMIT 7464e17c5e61a480b65ecff611cd7bb16f80266b
+COMMIT 631b6dd54619f5e71134297e3daa9bdbd1bc123b
+COMMIT 09112cfc477a270f4b2990e1daf39db1dbe30e98
+CHANGES.rst
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/scaffold.py
+
+COMMIT d9e56c7f4b04b050b28cf90778f44dcb2e0287f4
+COMMIT 677a0468481a0f620bdb217e8f1a24ebe94681e5
+CONTRIBUTING.rst
+
+COMMIT d8fe178aa635c8cc584fae86435824bd97595100
+COMMIT 6fcf6d00bd36f7c3c51115199615dc93c4a3007a
+CONTRIBUTING.rst
+
+COMMIT 55cdb420a02e6d58386f37c748794e05aec0f2d2
+COMMIT 1a68768e6b0aa19bd670ca050ad81adff55ba479
+docs/patterns/appdispatch.rst
+
+COMMIT 1373f70dc648f9f16032ea1e9b13f3fb59a8f612
+COMMIT 8e3128b9893ba4ec8d120e1c2f479f61bd10a476
+setup.cfg
+
+COMMIT 43bc7330cece1dbe75e7d6c326a0dea8d5652699
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT d36a379a0fa1f83e539da6f305c7fbaa9122e886
+COMMIT 43ef559de3ecb1915aabe8156f357d7ac4cd22b3
+docs/views.rst
+
+COMMIT dcdcac2f3a48d992a94dcc4598dccbd612dae099
+COMMIT 95b666871c7a89f2793952ea06d1c45e0ae5a38a
+docs/api.rst
+
+COMMIT 3d4acf0ca07b8c513bac1f43c25b870ff6c071c9
+COMMIT 3e932aa103661e78a0946e15f35b9f4da3908d39
+.pre-commit-config.yaml
+
+COMMIT b5ec83b6970fe94450310d8fecd811a22d6287a7
+COMMIT 29697fffb4cf4d2f2eafae8ca6c049d530cde1a1
+COMMIT 9a294a640141ea8ab108e5c0964d75d91a636c0a
+docs/extensiondev.rst
+
+COMMIT d951a763fb90ff3edb5aede5198198ee5d30d44e
+docs/config.rst
+
+COMMIT 066a35dd322f689ec07d7c0e82b19eacadac3c6b
+COMMIT 618fdc86000d161d29bd8de70f998780474cfa28
+COMMIT d178653b5f7a5ee2ba15e215ce60caeeb9ed82e1
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/ctx.py
+src/flask/helpers.py
+src/flask/testing.py
+src/flask/wrappers.py
+tests/typing/typing_app_decorators.py
+
+COMMIT 9f99425aaf3433c892d0aeb941427f0766b02e2d
+.pre-commit-config.yaml
+
+COMMIT 35c6595202c7b46a7d2a082e44250e3bfbe1aa41
+COMMIT 9daddd12719a098ff33556fcc34c0b7cf33120ca
+.pre-commit-config.yaml
+
+COMMIT 2a54cfa5cecf4dd9f17525bf3ebae4d33a155776
+COMMIT cc66213e579d6b35d9951c21b685d0078f373c44
+CHANGES.rst
+docs/templating.rst
+src/flask/app.py
+
+COMMIT 5dfd2126a6d5210096ec6ba1ead471b79dc8bd17
+docs/api.rst
+
+COMMIT e7c82f9c47083b513b1f1b4cbc383c82c3084669
+COMMIT 3dc6db9d0cfddcfb971c382b014bb56ac3761d3c
+COMMIT 75e92090ee43642ad0608edc8bc5d4dc5e84dec8
+docs/quickstart.rst
+
+COMMIT c7da6d74a89753405203e2ee7d19dda74b38b493
+.pre-commit-config.yaml
+
+COMMIT 0d8c8ba71bc6362e6ea9af08146dc97e1a0a8abc
+src/flask/app.py
+
+COMMIT 9c3deeee963e62dfb60c9343fad4ec2ec752fdba
+docs/views.rst
+
+COMMIT 2c7877123880d44f5d964c7370ed5dd4dbc45ad2
+docs/views.rst
+
+COMMIT c34c84b69085e6bce67d0701b8f8ba3145f42ff2
+COMMIT 7c01fbcd06c5d86c20bdc893a8caaba7ccb888f9
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 8811ae037a70621fdca8b109d155ff4aed0eb662
+.pre-commit-config.yaml
+
+COMMIT 00be8d24ac3a2a68f35011001e3b0b0550501afd
+COMMIT e7b2ce9a50c4a3a1ff5d032f201ed43d8cd39f17
+src/flask/__init__.py
+
+COMMIT 73b9bacbf7e7440e5a8a65e61fecfe3d0ce75579
+COMMIT ce6ad90ecf79daf759e177e0403f27c469c7f6a8
+docs/deploying/index.rst
+
+COMMIT 00bdc2b448a10c690b159d778391fe23852cfc08
+docs/tutorial/install.rst
+
+COMMIT 212b72a1feeae69739fb50fc5ab11d1c025350bc
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 56a95f6ff6b14d26a8aad124bf08484e2b4be21f
+COMMIT 746455d1038fd5479f396cbf2d19b48edfeb8290
+src/flask/config.py
+
+COMMIT e0c157f7ee99bde3376e456a914bb07260eb6017
+COMMIT 86bf3f205feaa86e149674cd0f23a14f3e5c2e22
+docs/deploying/waitress.rst
+
+COMMIT 2d3f72574dcb9026c3fed6b68568351a4b18a69a
+docs/extensiondev.rst
+
+COMMIT d94634b1beaf81afea662692874fdaa4c8a6bd89
+docs/views.rst
+
+COMMIT 1d07857b1ddd2c0aef6d09436b307eb7abfdbd39
+docs/patterns/streaming.rst
+
+COMMIT b0b27785ae2a94bb41a9750ae9a0aaea8ae2dc35
+COMMIT 77cdefcceeb90e261977493318bc8e71c5b15c33
+docs/quickstart.rst
+
+COMMIT 062a096f4056c78956a6d12d2a04f2cef5180af6
+COMMIT 5b2e9e946bd1e024795d54b9daa489ead6b7a995
+COMMIT 22b6296830113827810d4e89c634f8153020f097
+docs/patterns/javascript.rst
+
+COMMIT 00b07c863ec147256b68f71c3fe9b6b2f9dbe6bc
+src/flask/globals.py
+
+COMMIT 36af821edf741562cdcb6c60d63f23fa9a1d8776
+COMMIT a1c478bc93d3dc018a6e7a1ba3cf5409553c9df3
+COMMIT 43d2fff317aec64a000604a764b8ab2dc751c753
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT e9af7c23ae19fcc50781b7711f4672c113636892
+COMMIT de16718b39e3544688130339a0813997e3790c48
+CHANGES.rst
+setup.py
+src/flask/cli.py
+
+COMMIT c779ac4f5f9046ce614c7ea30dee4838541b84b5
+COMMIT 6ab3cb8d0cb1fa28dd2e0118c07e481720bd684a
+CHANGES.rst
+
+COMMIT 87584e89fe65dfb76654ba65360d0b3ce32d44e2
+COMMIT e3eaafb56e3914676755fce6f67256599fb3fc64
+COMMIT e3df23374cdb9342a823556170c53c9d987d0d33
+src/flask/cli.py
+
+COMMIT a0458efef6c8a5669bb6e78044a290bf560f962b
+docs/advanced_foreword.rst
+docs/config.rst
+docs/design.rst
+docs/foreword.rst
+docs/htmlfaq.rst
+docs/index.rst
+docs/patterns/distribute.rst
+docs/patterns/fabric.rst
+docs/patterns/index.rst
+docs/quickstart.rst
+
+COMMIT 795d3e25aae40031ec9021f08aba54fe7a5b5e5a
+COMMIT 45b2c99c1f6a884376d54bbb25223edad65596c5
+COMMIT a6a7a57380cd8f7410753c3b819ba6d09198d8c9
+CHANGES.rst
+src/flask/app.py
+
+COMMIT 4984753dbf5a247f46e2903011c981d0709973ff
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 21aaf0ef9a21bfb8f27fdc74072a09803d9ab6fd
+COMMIT 85f79e1a2360c3589b228410c39e208b8514b5b9
+COMMIT 52c54b2ce1e392c5d5cd9339a4a069e91edd1d01
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 0d87b22314d7d0f1a0aa6c3be340095412f6637e
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 723a3a6ffdb2c84eb7883d0852ec7d41fed751c0
+COMMIT 714ccefeca33db9e87e8ef4abd0008af05c32a4d
+CHANGES.rst
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/json/provider.py
+src/flask/scaffold.py
+
+COMMIT 9a1b25fce4ddd553d7cba01bab3df5841a24aeff
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT cb4ee201179f7c414fbcd02145a1147f2793fa46
+.pre-commit-config.yaml
+
+COMMIT 01dec1889127a3fc09eaa0dac905559740842992
+CHANGES.rst
+
+COMMIT b17bb9ed563ab2857c0db9a07ec4e6407404c7be
+COMMIT 292c7e5c5db14824a23bbd6fdfe69f62015aee20
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT f3bb9b25665d5d141d899979116ad62d771815cc
+COMMIT ac1bb97679f2b778bd89580fac2f461ff77c716a
+COMMIT cfd5783a984c81828e79641b5d761a56633fa0e8
+COMMIT bfdd37110c67ebeb42061fb43cf684b05291241f
+CHANGES.rst
+docs/api.rst
+src/flask/app.py
+src/flask/helpers.py
+src/flask/scaffold.py
+src/flask/sessions.py
+tests/test_config.py
+tests/test_templating.py
+
+COMMIT 6f9ef112865eae12684aa74924ee08504044a62d
+.pre-commit-config.yaml
+
+COMMIT 98ca00d54532bfdf858fe663f8fb3cc260c2048b
+COMMIT 30427a209043bfb9730904e0c34b0dbc40bd21f4
+docs/cli.rst
+docs/config.rst
+docs/debugging.rst
+docs/quickstart.rst
+docs/server.rst
+docs/tutorial/factory.rst
+examples/tutorial/README.rst
+
+COMMIT ef95998d79eed3b8350d8db825e3d98f25c179f2
+CHANGES.rst
+src/flask/app.py
+src/flask/cli.py
+src/flask/helpers.py
+tests/test_helpers.py
+
+COMMIT 4c08e3a2ba3d42fbee63577bceedfe325f51b81d
+docs/_static/pycharm-run-config.png
+docs/_static/pycharm-runconfig.png
+docs/cli.rst
+
+COMMIT 3e5ca2902e1de0ceb8dc83d087274db61070b17d
+COMMIT 7d53a129cf1b28f1a88491ae50877473b68bdb54
+src/flask/cli.py
+
+COMMIT 633f421031c9c18b56177b0d42adcb505b4627b1
+COMMIT 5d8e35653fca0d7ee01519d556c7851089de82ea
+CHANGES.rst
+docs/quickstart.rst
+docs/server.rst
+src/flask/app.py
+src/flask/cli.py
+tests/test_cli.py
+
+COMMIT 095651be9eec58ddb0c2eb6158318b1c703c67c5
+src/flask/ctx.py
+
+COMMIT 02a08512527f997e43d1c01d03d4d473cab3b239
+COMMIT 363be75e8401350d4f1b131723991d382fce83c6
+CHANGES.rst
+
+COMMIT 2869ddf50ce8dbf590a5a6992ffc7bbd096884a3
+docs/conf.py
+
+COMMIT add53e190cf90b01b37914f810a370a0cd681800
+CHANGES.rst
+setup.py
+
+COMMIT 900e11850a201717599fb12fb7cd76c37078206d
+COMMIT 4bf7415a9692b0c1a69cd50a17c1cbda4a75931b
+CHANGES.rst
+src/flask/typing.py
+tests/typing/typing_route.py
+
+COMMIT 76a6b4f2b56bebf1262377ba5b39b7951155b54d
+COMMIT 4f01c68a4bcabf7dde010b7c602f2811aa89a852
+CHANGES.rst
+
+COMMIT 48fe96588c5318be34c843233ada92c7787e720d
+COMMIT 187d7179f605d28c3d24e9f4d65d3295fb099afe
+COMMIT 134aebe60115716b962a95a0dd31bf72c5417941
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT a7859c6947ffc3e74007c23646cf74518230f0fb
+COMMIT 58f3536a8f5dfc18e559c518ae38cba52bec90a9
+CHANGES.rst
+src/flask/templating.py
+
+COMMIT 7096b2c4b13660998ad9a7bc845c3e6c5779afaa
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.in
+requirements/docs.txt
+requirements/tests-pallets-dev.txt
+requirements/typing.txt
+
+COMMIT 67310ab49613be97a121053dfbbced14657b96eb
+COMMIT 69f9845ef2da3051d74d4dade3e88ccf5b2ee3de
+CHANGES.rst
+docs/api.rst
+docs/config.rst
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/ctx.py
+src/flask/json/__init__.py
+src/flask/json/provider.py
+src/flask/scaffold.py
+src/flask/testing.py
+tests/test_basic.py
+tests/test_json.py
+tests/test_testing.py
+
+COMMIT c356c6da5f25ba70bd53448ff1d1bf6ad6967fd5
+COMMIT 03b410066b96f63ba2a215750f881d5bebb78a29
+CHANGES.rst
+
+COMMIT 4696156278c5d3f05fb09d1a605b6866b49ffbcb
+COMMIT 58ecacd271c2a07018cb6f65da164d4bed1e14ea
+CHANGES.rst
+
+COMMIT 5775d1e9b1a031c7bc3bf1463acb3289594ab3e4
+COMMIT 91044c4d769efa7f20455e1b70457a7da95c26d8
+src/flask/app.py
+src/flask/ctx.py
+src/flask/globals.py
+src/flask/helpers.py
+src/flask/templating.py
+src/flask/testing.py
+tests/test_testing.py
+
+COMMIT 979e0adbacfb3c5cc1ac678b4ef5373dadde83d3
+CHANGES.rst
+
+COMMIT cbebdae698272eeea2739988ccce54b1f14a1a67
+COMMIT e0dad454810dd081947d3ca2ff376c5096185698
+docs/api.rst
+docs/appcontext.rst
+docs/extensiondev.rst
+docs/patterns/sqlite3.rst
+docs/reqcontext.rst
+src/flask/app.py
+src/flask/ctx.py
+src/flask/scaffold.py
+src/flask/testing.py
+
+COMMIT 82c2e0366ce6b74a3786a64631ce58b85b3a7d4e
+src/flask/app.py
+src/flask/cli.py
+src/flask/ctx.py
+src/flask/debughelpers.py
+src/flask/helpers.py
+src/flask/templating.py
+src/flask/testing.py
+tests/conftest.py
+tests/test_appctx.py
+tests/test_basic.py
+tests/test_reqctx.py
+tests/test_session_interface.py
+tests/test_testing.py
+
+COMMIT d597db67ded68d4aedf42b9d1d4570573fb79cd6
+CHANGES.rst
+src/flask/__init__.py
+src/flask/ctx.py
+src/flask/globals.py
+src/flask/testing.py
+
+COMMIT 0b2f809f9b56861dae3ae5154d73b4afaf632a0a
+src/flask/globals.py
+
+COMMIT 89463cb77c7f3830c308cdfcc250255fd7377d01
+setup.py
+
+COMMIT 94233fc8c07fdd11cf6b3309de8bb12368aa802a
+COMMIT 6751f68560bfa7c51133d2712830645ed551ace8
+docs/async-await.rst
+
+COMMIT c757882808a7e4e29636e433463435a7eed5b952
+COMMIT 2f1d1d625697b9eca82dc8b2f46fff24dace63b1
+tests/typing/typing_app_decorators.py
+
+COMMIT 9b44bf2818d8e3cde422ad7f43fb33dfc6737289
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/scaffold.py
+src/flask/typing.py
+src/flask/views.py
+tests/typing/typing_route.py
+
+COMMIT cafe68e1edb8902f2dab977af9d848928ce1ecc6
+COMMIT 9dfcb90c92e13f2d92cb723cb834b5e0d666a2f5
+docs/api.rst
+src/flask/json/__init__.py
+
+COMMIT d7482cd765351e7495bfce45f9fb55732e91ab3a
+COMMIT e4c4fd57710097c7405f7b185b9048c1c8c72d3e
+COMMIT e9d0000fc152108948144def06b2ac84524bffcc
+.pre-commit-config.yaml
+
+COMMIT 50df54e4c7fb06df51a89d8f363e2997d2310449
+.github/workflows/lock.yaml
+
+COMMIT 559a8458c4187b3cc12b1ea5a92a393c7fbdc765
+COMMIT 60b845ebabeb77e401186f4b83de21d3f9c6a9d7
+src/flask/typing.py
+tests/typing/typing_route.py
+
+COMMIT f8cb0b0dd5ea30729db6b131aeeb30915ea4860b
+CHANGES.rst
+docs/quickstart.rst
+src/flask/app.py
+
+COMMIT ca2bfbb0ac66fbbeeedbf6bbe317bee45cb23d29
+src/flask/app.py
+src/flask/typing.py
+tests/test_basic.py
+
+COMMIT 1626aff602e3316642e69927333041370095c321
+COMMIT ab6a8b0330845c80d661a748314691302ea7d8f7
+tests/test_cli.py
+
+COMMIT c99f07d3e4b463174d1b25cc813e2df76c182773
+COMMIT c2810ffdd2f2becbc37d35f63b69034b8b9ed5b8
+CHANGES.rst
+src/flask/helpers.py
+
+COMMIT 9e686d93b69f0e73f801cc11a57839f4dfe2ca1a
+CHANGES.rst
+src/flask/ctx.py
+
+COMMIT 96d39c87a803e3a92152787a12d09bbc149556ec
+COMMIT 6916697a982df775a66a1ac9971985e5fa213f2b
+COMMIT 84c722044ad03f7f5384f5314c8350b3a13d8dfa
+CHANGES.rst
+docs/config.rst
+docs/reqcontext.rst
+src/flask/app.py
+src/flask/ctx.py
+src/flask/scaffold.py
+src/flask/testing.py
+tests/test_basic.py
+tests/test_signals.py
+tests/test_testing.py
+
+COMMIT 57a95e82b7194f1809ac9f626140ab1e497e121f
+COMMIT 2589328485f51ad17afda682dd84a83da4e4e38e
+.github/workflows/tests.yaml
+
+COMMIT 3635583ce27f70a3d9efd1e2212d5efc1d256333
+COMMIT 5544d09477af3221d988ec18b086930c2d9e67cd
+src/flask/app.py
+src/flask/cli.py
+tests/test_cli.py
+
+COMMIT 12d3f4fdf0b91a1b367dcda0421dfcd0774b6dd2
+COMMIT b46bfcfa63e3c7b32b66dd4870f1c8c17fe1cb46
+docs/extensiondev.rst
+docs/extensions.rst
+
+COMMIT 0a01248b5cee9d47363207687660708d5ba3ee4b
+COMMIT 64ab59817dedd7959b4b38d47403c86415f4a322
+docs/quickstart.rst
+
+COMMIT f6be300c4284527f76f910fe0d6f07d72a10a52b
+COMMIT abcb6c96777794da1142b0117f8c57f95cba65b7
+docs/patterns/javascript.rst
+
+COMMIT ab36542260c61f178b6e8f61312b706ac4c5f73e
+COMMIT 46433e9807a1c960d6b2bb0e125cf16a90167d97
+CHANGES.rst
+docs/api.rst
+docs/patterns/streaming.rst
+docs/templating.rst
+src/flask/__init__.py
+src/flask/templating.py
+tests/test_templating.py
+
+COMMIT 762382e436062183b1e1fa6f3bda594090a452e7
+CHANGES.rst
+src/flask/app.py
+src/flask/typing.py
+tests/test_basic.py
+tests/typing/typing_route.py
+
+COMMIT 7f2a0f4806e40fb5c139b5b20ca443948ce1f4dd
+COMMIT ed42e9292811a95f2a68e06a9ae50cb5872216a3
+CHANGES.rst
+src/flask/sessions.py
+tests/test_basic.py
+
+COMMIT cec5f74110a7369992be1651c24b695d9fe55ab3
+COMMIT c9e000b9cea2e117218d460874d86301fbb43c43
+CHANGES.rst
+docs/cli.rst
+docs/tutorial/database.rst
+examples/tutorial/flaskr/db.py
+src/flask/cli.py
+tests/test_cli.py
+
+COMMIT ae547270e935b08d4deada9e28b049ff53debefe
+COMMIT ab1fbef29a073fe5950ea2357f6a3a0d280eb506
+docs/cli.rst
+docs/config.rst
+docs/debugging.rst
+docs/patterns/appfactories.rst
+docs/patterns/packages.rst
+docs/quickstart.rst
+docs/reqcontext.rst
+docs/server.rst
+docs/tutorial/database.rst
+docs/tutorial/deploy.rst
+docs/tutorial/factory.rst
+docs/tutorial/install.rst
+examples/javascript/README.rst
+examples/tutorial/README.rst
+tests/conftest.py
+
+COMMIT 99fa3c36abc03cd5b3407df34dce74e879ea377a
+CHANGES.rst
+src/flask/cli.py
+src/flask/helpers.py
+
+COMMIT fe4003b3c998fde4c9ad8b2340f773f50079ede1
+COMMIT aa801c431ad1f979bce3ea1afbd88e7796ebfd7e
+CHANGES.rst
+src/flask/cli.py
+tests/test_cli.py
+
+COMMIT 4f03a769d44f6740490dd4ddf70e094c12a6090c
+src/flask/app.py
+src/flask/cli.py
+src/flask/debughelpers.py
+
+COMMIT 9c50b8fc1ca160803f7368fc44f12591da856fd4
+docs/deploying/eventlet.rst
+
+COMMIT 97298e06fe19298c3ff9d2e0ed9ba70bb3fda2c8
+COMMIT a9878c018bdecc377788204a3bc93497ec1f050a
+docs/deploying/mod_wsgi.rst
+
+COMMIT 9139af1c62a171555213c07fe41a2b8a7c2b26fc
+COMMIT b0a144d0c0acacab9d6cc7ced256d0e841ec8009
+COMMIT 2ea77c278282f04a8a18c3ced88ef1e048f8ed4a
+docs/async-await.rst
+docs/deploying/apache-httpd.rst
+docs/deploying/asgi.rst
+docs/deploying/cgi.rst
+docs/deploying/eventlet.rst
+docs/deploying/fastcgi.rst
+docs/deploying/gevent.rst
+docs/deploying/gunicorn.rst
+docs/deploying/index.rst
+docs/deploying/mod_wsgi.rst
+docs/deploying/nginx.rst
+docs/deploying/proxy_fix.rst
+docs/deploying/uwsgi.rst
+docs/deploying/waitress.rst
+docs/deploying/wsgi-standalone.rst
+
+COMMIT dcd1a1e0b67cefc5e41d363dad5f57ef9668e965
+COMMIT 9398630a8f002b2d1729246846b167eaf1090b92
+COMMIT 2f3c87dcb8492f082a2f3ece444773d9db30171b
+docs/patterns/index.rst
+docs/patterns/javascript.rst
+docs/patterns/jquery.rst
+
+COMMIT ebc0d30dd1cf21b13569d65e4337d4706e3fd17e
+COMMIT 9934528c8f7e3aa6f4a1c800cba439e5425a5093
+src/flask/helpers.py
+
+COMMIT 6f6e3289da182593fb296da072049ade729adeea
+examples/javascript/README.rst
+examples/javascript/js_example/templates/base.html
+examples/javascript/js_example/templates/fetch.html
+examples/javascript/js_example/templates/xhr.html
+examples/javascript/js_example/views.py
+examples/javascript/setup.cfg
+examples/javascript/tests/test_js_example.py
+
+COMMIT db3187fd7ab324d9175d8a1dd8c3919cec58d3b9
+COMMIT 45174bf9a1e96e51ce589c7aa2c151249d1fdf11
+src/flask/views.py
+
+COMMIT bab5a65e6eaee20ac1706fc9439ee538f59e652f
+docs/views.rst
+src/flask/views.py
+
+COMMIT 6e23239567efde1c2e272db87c53444d6c22a1bb
+CHANGES.rst
+src/flask/views.py
+tests/test_views.py
+
+COMMIT aab1d9935e17e40104a28c89d4c669f7ab3cc579
+COMMIT 96c97dec095f204b8a557c5ea804afdd329e3c43
+CHANGES.rst
+src/flask/app.py
+src/flask/blueprints.py
+tests/test_async.py
+tests/test_basic.py
+tests/test_blueprints.py
+
+COMMIT 7a2d5fb6df1f2c066b94dd88686137353ada9cc6
+COMMIT c7f2ab8e7a512bd643bc640ce015bbe48e74e16e
+COMMIT b06df0a792ceb5506da47e0c8fea09902c1058f9
+tests/test_instance_config.py
+
+COMMIT 3ba37d2afe6511c3f3153248f7342174bea5b131
+src/flask/scaffold.py
+tests/test_instance_config.py
+tox.ini
+
+COMMIT 88bcf78439b66b5fcba9f4d3a1c56307f98dbf1d
+CHANGES.rst
+src/flask/scaffold.py
+tests/test_instance_config.py
+
+COMMIT fb89745408cc02515815c792355c7e883b2d08a4
+COMMIT 48766754b8e8a16bfb075229eaaf88643c958c4e
+setup.cfg
+
+COMMIT 5e40aa22afb7d3809f9d9559edd9d152b7f7d025
+COMMIT 3351a8677e5bd1e1b8cfe2860b73b3422cde4f31
+src/flask/blueprints.py
+src/flask/scaffold.py
+src/flask/typing.py
+tests/typing/typing_error_handler.py
+
+COMMIT 81be290ec8889c157c84bc7ce857f883396c5daf
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/scaffold.py
+src/flask/typing.py
+tests/typing/typing_route.py
+
+COMMIT 72cae9ce2b6a5a296b7328df8dd73240e14718e6
+src/flask/scaffold.py
+
+COMMIT 696d7c620d97e78ea9ed8870380b5b302d9f9a01
+COMMIT 5d31ce1031e8ca24dc908c319567a76110edd87e
+docs/testing.rst
+
+COMMIT 8c6f1d96ded2a22429b1ee7da6c3870cb140b587
+tests/typing/typing_route.py
+
+COMMIT 9e2e1de2fcf185ee9ebe9a546f830792403c9160
+COMMIT 21d32ee0672c69573303ac78ff308109b06c9c91
+requirements/dev.txt
+requirements/typing.txt
+
+COMMIT c6e3fc8072cc33b5f2c67ddbb723e71f67c5e9a7
+COMMIT 3ecebcdf8de02818cd409afd6edd39a09248b3ef
+tests/test_config.py
+
+COMMIT 83e96806492bd90c1f866617ec56b07f2a6691c0
+COMMIT 61f62e6005f72c44a90026e2589b6bc5234f2f24
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/ctx.py
+src/flask/scaffold.py
+src/flask/views.py
+
+COMMIT 8cb950671f39c64707b6aaebfc60d7a8f1157da5
+CHANGES.rst
+src/flask/typing.py
+
+COMMIT a4f63e0390e4f9aba543514d16479ce6f40e46be
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 60ac0c509202b99ca9a5e3ea04addd93194ca5d0
+COMMIT c45c81938a1715eb4bdf9eaf6ac9d75becb8c191
+docs/tutorial/install.rst
+
+COMMIT ab76703532939d0bbb6257abb9284eb229ed01d4
+COMMIT 9252be9c9ebe46dd6415b24999a869ed87eace57
+docs/patterns/celery.rst
+
+COMMIT 1888df34405d46ac0e7524d0de9408e37449feaa
+COMMIT d506af1b1f27877f2101a20c6826e99f30427348
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 31aad113ff59337436e0308d467da31872f58f0a
+COMMIT 1232d698600e11dcb83bb5dc349ca785eae02d2f
+setup.cfg
+src/flask/cli.py
+tests/test_cli.py
+
+COMMIT a52a7db6c9760adba6ceefa038b6ab69c207d7f9
+COMMIT e044b00047da9bf94e7eb88049a17fe1dcf78f4e
+tests/test_basic.py
+
+COMMIT a406c297aafa28074d11ec6fd27c246c70418cb4
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/scaffold.py
+
+COMMIT eb36135cfe6a17350617e47b70b9ad383206eded
+CHANGES.rst
+src/flask/blueprints.py
+src/flask/scaffold.py
+
+COMMIT ca8e6217fe450435e024bcff3082d2a37445f7e1
+COMMIT 69e2300608497bba103fd05735c878c0d642dd68
+CHANGES.rst
+src/flask/app.py
+
+COMMIT 00e2aac9371d94011279a6340ec3e7ecc86f097e
+COMMIT 39f93632964ecabfcb9c1980e2add922098aad80
+src/flask/app.py
+src/flask/helpers.py
+tests/test_helpers.py
+
+COMMIT 92acd05d9bd33419ab885e4472b28a1d5cc15d2e
+src/flask/app.py
+src/flask/helpers.py
+
+COMMIT fac630379d31baaa1667894c2b5613304285a4bb
+CHANGES.rst
+src/flask/app.py
+src/flask/helpers.py
+
+COMMIT 5512a6688193758a24ef0b6825217030da9fed21
+COMMIT eb5dd9f5ef255c578cbbe13c1cb4dd11389d5519
+CHANGES.rst
+src/flask/__init__.py
+src/flask/app.py
+src/flask/helpers.py
+tests/test_helpers.py
+
+COMMIT a25d234cdddf584528dd6af21db736b6faad27af
+COMMIT 542cf30e48881e9e206ec03c507335e5806d127d
+COMMIT fdab801fbbd9de5adbdb3320ca4a1cb116c892f5
+CHANGES.rst
+src/flask/__init__.py
+src/flask/app.py
+src/flask/helpers.py
+tests/test_helpers.py
+
+COMMIT e322f32e94ac97981cfc441cb1ae187580b41d37
+COMMIT 2381044d04cdb058a526c0e27163b4d891d851ed
+.gitignore
+CONTRIBUTING.rst
+docs/extensiondev.rst
+
+COMMIT b5c1a4f1f0507d41eff84e1083e61ed85a037e47
+COMMIT 410a324ec43ca2793a0413d3cd32ca45311e3ff5
+docs/becomingbig.rst
+docs/design.rst
+docs/foreword.rst
+docs/index.rst
+docs/patterns/packages.rst
+
+COMMIT 587a49c1bfbe54deb8b0f3324f43c626e537c471
+COMMIT 11195f10838d84df0c5ab7158a99bbb94e34fc5a
+docs/cli.rst
+
+COMMIT bd56d19b167822a9a23e2e9e2a07ccccc36baa8d
+COMMIT a74e266474f0981e9fc0d54d5dc430386823e4d7
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/ctx.py
+src/flask/globals.py
+src/flask/helpers.py
+src/flask/json/__init__.py
+src/flask/logging.py
+src/flask/scaffold.py
+src/flask/sessions.py
+src/flask/templating.py
+src/flask/testing.py
+src/flask/typing.py
+src/flask/wrappers.py
+
+COMMIT 127df57a06ec7b1a8b698206b1bdefc93248de5a
+COMMIT 1e5dd430223369d13ea94ffffe22bca53a98e730
+CHANGES.rst
+src/flask/scaffold.py
+tests/test_basic.py
+tests/test_user_error_handler.py
+
+COMMIT 2482cd4f53985436936b13533c1bcd0b09930768
+COMMIT 9158d3b0b8c282e6d8580b76fb5098002d4ec0d4
+CONTRIBUTING.rst
+
+COMMIT a0aa8de6bc0d6da74707cb4d0c89bfc99e20c98f
+COMMIT 8ddbad9ccdc176b9d57a4aff0076c1c58c455318
+src/flask/cli.py
+
+COMMIT f976d5bb88216e921a96998f767df31d7039e4ef
+COMMIT 50374e3cfe815acd24fd390c861561a0dd17bfbb
+COMMIT 7b28a9057d6925ae408ef73a9f28e9906d9300b3
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT a0bb10b8d299c446559b6f95dd599230edc457ac
+COMMIT ef6c2b9e4aee74098a1208b42ce432d7c82fc0d3
+tests/test_appctx.py
+tests/test_basic.py
+tests/test_cli.py
+tests/test_config.py
+
+COMMIT 918fc07dd95224f990c2f01ea301e8e581fefc7f
+COMMIT ef7d01f0a03be512b22d2a28b5a4229fdc87ea9a
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/typing.txt
+
+COMMIT ff6290d4c75d4d295a0ba28f2f0c417f7374eb0c
+COMMIT 3fd24c1f6fa2b3a5b68fb87b0fc3453a352340e5
+docs/deploying/wsgi-standalone.rst
+
+COMMIT 2b0b77cc1acb7381e990b17c881cb426c9ac75f5
+COMMIT c395b13f9e9a691c6b23c68d5687ff052b7ada7e
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT cb4f7425435c39a85c3ed17e395677597d9aaf31
+COMMIT 2ec11930951d91dfa9cf02ad80a7da33b9b919b6
+COMMIT 5050a18a0057df4cda6f6b00483d12d29cb59239
+CHANGES.rst
+src/flask/cli.py
+tests/test_cli.py
+
+COMMIT dba2be9311d2abfd1b973c6bb578f416ee771fda
+COMMIT eede1a3685e21deaeb6686e9de9b76a73b6a510c
+CHANGES.rst
+src/flask/json/__init__.py
+
+COMMIT 69f71b4d94006678a2463f76a4504208d195c367
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 2b8b47817a981b97a233420b5214f6ff9e771c35
+COMMIT 4dd14ed039aaab5edb50758edeaf0aacab3d1e5b
+docs/testing.rst
+
+COMMIT 411dbb37e2e37943b6282365049c2a8cee4ac9e6
+tests/test_cli.py
+
+COMMIT a03719b01076a5bfdc2c8f4024eda7b874614bc1
+COMMIT 5334e28f6e107e1b021bc9655e9a308c80826593
+COMMIT 19d7a0ef78f1f8a05f7be5f0e8d2192fd1d5e5e8
+docs/testing.rst
+
+COMMIT 5c0b9a6af334dcbb2814f4e004be2b2c8a389363
+COMMIT e3c014f9aa566c83efd482ce1cd0e5e25cdb6cf2
+docs/errorhandling.rst
+
+COMMIT b9729a08796eebc57ed658c9c05ea8b6374fc2c2
+COMMIT 56414782ca6c109f4c7c9d26418bf444468316db
+.pre-commit-config.yaml
+
+COMMIT 50bf3bba7354275bbfe3f8a4fc9ce1fec3b71404
+.pre-commit-config.yaml
+
+COMMIT f59574f61198f139616868393db8785bcf9e0fdf
+COMMIT 0d4e71bfe127707ce8a3ede976a637db1cee74b0
+COMMIT 26555a85f188e5557897b08c8421706084843088
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT f70abe634a7a058ce35b11893002a97085515b6f
+COMMIT 9f4f559f5946306b190a0195baf2700851a9eb36
+.github/workflows/tests.yaml
+
+COMMIT 45fc77d9266cd8101b2ab1e0487053db27b57ec2
+COMMIT 188bd17ff1f3e1d9c9ddd015c8765280e95ffb83
+COMMIT c6f297719e43380011e76ad6d070b7a27d4d1dce
+src/flask/__init__.py
+
+COMMIT a8f4ee1b66cfede1e596aef089850fad073e1775
+COMMIT c419931f555c80b07b518944fc7004f6cb75b8e1
+CHANGES.rst
+
+COMMIT c3d0880e72dfda76734bfddadf20cfee94b148c2
+COMMIT d023d943715f193e78413280e10d101f39501748
+CHANGES.rst
+setup.py
+
+COMMIT 5589915b383a6f53e92f3822c982cce3c4083456
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT b109b092a95036de875246f05cdc377a2c7faab8
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 65b0eef303dfec6b7baa66ff34253e0285e1c3bf
+COMMIT 7d264d7dc5b3e057319d43ef0897709f4c78f1ef
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT f5ed54b0318815e4500e72a56173c3b14a532a41
+tox.ini
+
+COMMIT cd4ab005a92ff996e9104c92017fe1e6daeccd46
+src/flask/wrappers.py
+
+COMMIT 41aaaf7fa07f28ef15fd1d343142e96440889a8b
+src/flask/config.py
+
+COMMIT 2f5a2ab82ee17f5e14b8ecf0a4b3b07ceafeee98
+COMMIT e75d575361841404e0b1f89c19dc7de6b325cc67
+docs/config.rst
+tests/test_config.py
+
+COMMIT 4eb5e9455b2a8f15f3dc5065a47f8e43ac47e539
+CHANGES.rst
+docs/config.rst
+src/flask/config.py
+tests/test_config.py
+
+COMMIT 08a283af5efc999d4f1e29275317a5c0c05c6f7b
+docs/config.rst
+src/flask/config.py
+tests/test_config.py
+
+COMMIT 425a62686f094de236a5a9eb1d6885de4730efa5
+COMMIT 81c7ff7f8db09b5d609a09722785f70ec6f7af68
+CHANGES.rst
+docs/tutorial/tests.rst
+examples/tutorial/tests/test_auth.py
+examples/tutorial/tests/test_blog.py
+src/flask/wrappers.py
+tests/test_regression.py
+
+COMMIT ce7b884b73621b59ba184aa89b67d5c5780f50eb
+COMMIT 6578b493c8c8d5d9b4135cb964dbbc43318cfb12
+src/flask/wrappers.py
+
+COMMIT 0a300d007d3a5ef902e0b3c91f6189267fbed182
+src/flask/debughelpers.py
+src/flask/wrappers.py
+
+COMMIT c9a1f7ad6545c9cc27c41c385f1d4cd9c7cf1a98
+src/flask/app.py
+src/flask/debughelpers.py
+tests/test_basic.py
+
+COMMIT 598afa0083add33a088c58183924a370be6635d5
+COMMIT d80f41f57dbae28c784fde0fc829807cc2ab4a76
+docs/errorhandling.rst
+
+COMMIT 7abcf57f544e3bd29c4f22a10907f976f7e056ea
+COMMIT faaa5594b2406260c3e4197fa6e80c3d19b6ab23
+CHANGES.rst
+src/flask/ctx.py
+src/flask/testing.py
+
+COMMIT cb7cd1e79b280d3fd80978ca82ae52881525a476
+COMMIT 190dd4df86874495f56bb088fbd0cb1d9f0e77a0
+src/flask/app.py
+src/flask/helpers.py
+src/flask/typing.py
+
+COMMIT 88863288225d5ee13a79c463f2a39391b6a52c61
+CHANGES.rst
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/scaffold.py
+src/flask/typing.py
+
+COMMIT 0ef1e65f6ab0da680d171d49e1a56a2b0ecee05d
+COMMIT b707bf443afe856b77e09b7a41592f10d46e02df
+CHANGES.rst
+src/flask/sessions.py
+
+COMMIT b655a9db30d8e78d2fe1044d6301a432f214a16b
+COMMIT af34b8c9e7adbf0b060738fee12f04c1e46a98fd
+src/flask/scaffold.py
+
+COMMIT 8122973f8a04976bd7f9104eee5d8d36c0d02038
+COMMIT 7dc26a1f4188f6cb410fb1335cc933cc8f3c9943
+.github/workflows/tests.yaml
+
+COMMIT 4843590c4a7f2225fd18bd10963139a6f29a2a59
+COMMIT aa13521d42bfdb66bb0d89005cbe54a84eaa4fda
+CHANGES.rst
+src/flask/cli.py
+
+COMMIT 3897a518014931a82c77a353e1e9c2248529b856
+COMMIT 642ca6ea687d8631eac8dce9e060e41d2738ca48
+COMMIT ad13dbc826a23d3ce53e50944a15b1e2bc168abd
+.pre-commit-config.yaml
+
+COMMIT 6f79cb8a23467aa01f94f6ad53790f468ba77c76
+src/flask/app.py
+
+COMMIT b6a8ccd2cf65939401fe4ccb6b550d2b19423b06
+COMMIT ef557b3ff2602b9956a2f3ac02c6e134c529fccc
+COMMIT 702d973b1f55326526d764e3668900383ad8f4ef
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT c15f74cea6ff2ab09881fea4118709ecda11972c
+COMMIT 761d7e165244709221888827cec764d8f3a3d21a
+docs/api.rst
+docs/testing.rst
+
+COMMIT 48ee204dd5bdc47f397553fb45b5fe37003c07d1
+COMMIT beae1249f7e580779ae18d2d831f7ec51e5aff98
+CHANGES.rst
+docs/cli.rst
+src/flask/cli.py
+
+COMMIT e06dad62f6b49dff935f241114b3590774e2786a
+COMMIT 1be65b1b699b0512e3b38e3e05d42d083cfd12f1
+CHANGES.rst
+src/flask/testing.py
+
+COMMIT 7c5f17a55e8cd233db17f4944a482cc497a6e7c6
+requirements/dev.txt
+requirements/tests.in
+requirements/tests.txt
+
+COMMIT e37e87140e29b4ae5bc4024bd0305541e0ed9457
+COMMIT d6496c8e290adfded887e72083817de2693cdbe2
+COMMIT 1fd86547193a1ed39bb0cabb927fc1a719ce3009
+.github/dependabot.yml
+
+COMMIT 925674761e9893dae96d8c2ff226a4cf47a21ba8
+.github/workflows/tests.yaml
+
+COMMIT 426a1e25b77e760b4f54bf94aee3e3617850569f
+tests/test_basic.py
+tests/test_reqctx.py
+
+COMMIT 6f7d99ce4b7dc2bad52683e64fec7008dd0b580f
+.pre-commit-config.yaml
+requirements/dev.in
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests-pallets-dev.txt
+requirements/tests-pallets-min.txt
+requirements/tests.in
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT bc094dbe6a15eebec6d1704fb16c6c74d0250b0e
+COMMIT 694eb84f414436fc88f2ef757aea8ed8360500f3
+CHANGES.rst
+
+COMMIT 17c46b2ddd8b5111369cdc68d5e0e46e9aa46ade
+COMMIT 528db86f8555a8404bf2db72fa4275449a3cd6b4
+COMMIT 436c7afc83845ce18d2a8e1bda8f4f48917584a2
+.pre-commit-config.yaml
+
+COMMIT 9a134da31bafc12d31f75474a4b354c80545b9b5
+src/flask/templating.py
+
+COMMIT 751d85f3de3f726446bb12e4ddfae885a6645ba1
+CHANGES.rst
+setup.py
+src/flask/cli.py
+
+COMMIT fdac8a5404e3e3a316568107a293f134707c75bb
+COMMIT aab064fee164aa9f0ee35ba3065b031655888ce5
+CHANGES.rst
+src/flask/testing.py
+
+COMMIT de4b2807d3269e780b77e73e05dfa27121994f40
+COMMIT 08ad8aabfea88c1c3367c1c1ba6b97aa40faf18c
+docs/security.rst
+
+COMMIT 981a94df68b3e35c2541a8ba19c361e88299e3ee
+COMMIT afe77feef351c2752bb9d4a93b65e11215633e06
+docs/cli.rst
+docs/config.rst
+docs/debugging.rst
+docs/patterns/appfactories.rst
+docs/patterns/packages.rst
+docs/quickstart.rst
+docs/server.rst
+docs/tutorial/deploy.rst
+docs/tutorial/factory.rst
+
+COMMIT d03df1fff396052d55bedbfc10cbe41a98caad14
+COMMIT 66f2ac669610accd76395a98b623a21b1f15a9c8
+.github/dependabot.yml
+.github/workflows/lock.yaml
+.pre-commit-config.yaml
+setup.cfg
+
+COMMIT e103747c544494d67aad64ec2da668d2d69493c3
+COMMIT a025ee3f25044145a38e650aaf097f32bc5b2e83
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 660994efc761efdfd49ca442b73f6712dc77b6cf
+COMMIT 9e50ad55ae6c3938c2ffd0cad89942c12fca865c
+.readthedocs.yaml
+
+COMMIT 0fb5c2f034fc2f4cfe920408bb97c9d07ef0995e
+COMMIT 1a1c7ea61860ad97a998b24532f0a89a5aee7914
+.readthedocs.yaml
+
+COMMIT 93a7f08bbca37de2ef73cc21ebfcb6e446087616
+.readthedocs.yaml
+
+COMMIT 990a95fbcaaeafdc4bedc793352deb999f2b6be4
+COMMIT 0122a4f34f2d4f68fc64ca14532f2fbaed5c302f
+docs/server.rst
+
+COMMIT 6389c07530fe53f64e4c8de8dfdfceb4f088d197
+COMMIT b1a00ebc4c6f15055ddf15ecb17243a089f52a60
+CHANGES.rst
+src/flask/ctx.py
+
+COMMIT 633449a36c959d25577799eb3da76005a803d5cd
+CHANGES.rst
+src/flask/ctx.py
+
+COMMIT 7b0c82dfdc867641dd6e1b200f735bffd66e4c12
+COMMIT a841cfabb58d3c1ac1d11b09353f458e759a63c2
+CHANGES.rst
+src/flask/json/__init__.py
+
+COMMIT 9504de9dd00a7c94f37eb5225588cfb952a37d7f
+COMMIT 9e00becf3a7a710ab06379f8d7aee1547a4dd332
+.github/workflows/lock.yaml
+
+COMMIT 79b3cecc3db0ca8efe2ba1eb43b7d7572811cdfc
+.pre-commit-config.yaml
+
+COMMIT a65683a65cbbe176ef6e061812618a507a071106
+.github/workflows/lock.yaml
+
+COMMIT 2952e6a323e085d1547461b89184e2239090fe1a
+.github/dependabot.yml
+
+COMMIT c627b5e77310e67bc6a7e789f8ec5ea368f1c88c
+.github/dependabot.yml
+
+COMMIT edac7e3a560d93ac9f13bf162e677413b03a27e1
+COMMIT c5ca175004f1a153aff914eb14404973be05fb9b
+COMMIT 9d36623db1e9535eae7243a807079a54897efcc9
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+src/flask/helpers.py
+
+COMMIT 624ed4de72e144ceeb422c8bae1cafffd7edcc73
+COMMIT f16524ea1de682db50ee18a91b5204a834995b2e
+docs/server.rst
+
+COMMIT 776bf09fdf1e617d86103bbfb40efbe2682c41a3
+COMMIT 2e10fc24a13f16e6fb07edc61c8398f74ace2492
+docs/cli.rst
+docs/quickstart.rst
+docs/server.rst
+docs/tutorial/factory.rst
+
+COMMIT 9fe21310bb3ccac70c4de8a7bc48d1dd69611ece
+docs/tutorial/layout.rst
+
+COMMIT 9486b6cf57bd6a8a261f67091aca8ca78eeec1e3
+COMMIT c8ddb948f6af35998f99521627396c0ea7fa62c1
+CHANGES.rst
+src/flask/ctx.py
+
+COMMIT 04c6a85518c600fc34705dee30dd17c188ef1aaa
+COMMIT 47e4bd5059fbe1e7f39b56f52c821ba0b39ded1c
+CHANGES.rst
+src/flask/ctx.py
+
+COMMIT 6b0c8cdac1fb9bbec88de3a514907c19e372c72a
+COMMIT d086a512d7c07fc68e328b2c8b628937dbd309a2
+COMMIT 282d8621dd4bdc3ee74e0d67b180e03f5f23899f
+src/flask/sessions.py
+
+COMMIT c8bf420483469ad9aa11f617188637445daf80ea
+COMMIT e679a85b80df354f8632f8ab3e40135f16f5e6d0
+CHANGES.rst
+src/flask/cli.py
+
+COMMIT b831e8507c8849899ea3b30eb4b6af19de2bf06a
+COMMIT 46b39e2698697408c6f8f8693e526cd1bb085684
+CHANGES.rst
+src/flask/typing.py
+
+COMMIT ea66c685537c437e38b2ff3627fb7733e37fa4cd
+COMMIT 372066983fb206d4871a4a98c8db8b3953ce4394
+COMMIT 564bb27efa8638c40e1dcfdccda5832ba42e9929
+CHANGES.rst
+src/flask/testing.py
+
+COMMIT a2258dd05d60b0d4fb4fef1d63dfe0ce489fd240
+requirements/dev.txt
+requirements/tests.in
+requirements/tests.txt
+
+COMMIT 4e8787b915dec0f6861292b2fccba640c632a46e
+.github/workflows/tests.yaml
+requirements/tests-pallets-dev.in
+requirements/tests-pallets-dev.txt
+requirements/tests-pallets-min.in
+requirements/tests-pallets-min.txt
+tox.ini
+
+COMMIT 7860c1de87400ab8e43a2b4dada7d8b8f0eb51ab
+tox.ini
+
+COMMIT 7620cb70dbcbf71bca651e6f2eef3cbb05999272
+COMMIT 15a3e82823c894185771486510027a65295bcf94
+CHANGES.rst
+src/flask/helpers.py
+
+COMMIT 48f2afbf900560af061d50c73e4d3f9422ce4dbe
+CHANGES.rst
+src/flask/blueprints.py
+tests/test_blueprints.py
+
+COMMIT f8cdc78ce10f32a46390799e7ac16d231fb35803
+CHANGES.rst
+src/flask/helpers.py
+
+COMMIT b7501776a12c15e64b6cdac1e3b903a00df7d285
+CHANGES.rst
+docs/api.rst
+src/flask/__init__.py
+src/flask/helpers.py
+
+COMMIT 218534a9f20c98600e7c41321edb4063a8e158ca
+CHANGES.rst
+src/flask/json/__init__.py
+
+COMMIT 2bd7aed1a4e257b00df4282b96e7e96edc4567f6
+CHANGES.rst
+src/flask/config.py
+
+COMMIT e21e003f62b57c35e1832c0bf14e9cd27f4e5bea
+CHANGES.rst
+src/flask/cli.py
+tests/test_cli.py
+
+COMMIT ea93a52d7d94ba093bbce4680c622cc4fc9771d8
+COMMIT df806c80359461fda0354460a46645d619e00942
+docs/deploying/wsgi-standalone.rst
+
+COMMIT 1b552d0b0163e1c1ae3d4895438a9ce2b2bc098e
+docs/async-await.rst
+docs/installation.rst
+requirements/dev.txt
+requirements/tests.in
+requirements/tests.txt
+src/flask/app.py
+
+COMMIT e609dddd604bd8c808145973d91dcb8bb56a9906
+.github/workflows/tests.yaml
+docs/cli.rst
+docs/extensiondev.rst
+docs/installation.rst
+setup.cfg
+src/flask/json/__init__.py
+tests/test_async.py
+tests/test_basic.py
+tox.ini
+
+COMMIT 86009452fb764a76966d07c9b5bdc6077b301668
+COMMIT a2e79eefc9e13c48e5c44f1eb0c1d69b55bbf79a
+docs/quickstart.rst
+
+COMMIT 3c36d043e578e9e5d5653893103105d1e201ea03
+COMMIT 7a5aa570c09cb573b440c089d73a5f1e9cfcf179
+COMMIT 1f40c77f1d9ad65911eb6716525de6aa302eda4c
+.github/workflows/tests.yaml
+requirements/dev.txt
+requirements/tests.txt
+tox.ini
+
+COMMIT 0ae0f5957fde73c4824ae2d7080351f2c52bf260
+COMMIT 303a1e6c411318a3e812ac65311c44aa332c00b2
+COMMIT 860431f7e0a212fbdb5de61164f5b8a8d288de7d
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 225ff3ea6c260e17a15a896d272eaba259777ba3
+docs/config.rst
+
+COMMIT ded812b0cd7c9cc71346c43ebadaccd6140f4c5f
+COMMIT 21def4e05c0efd7286bf120fb748b5605cdd0d6b
+docs/patterns/sqlite3.rst
+docs/signals.rst
+
+COMMIT c5ed6c5e77cdf05740e9beb97ab7841abdb8f703
+COMMIT 58a08a1d7326b9ef744c0f41b9e8c5505dd3d924
+docs/config.rst
+docs/quickstart.rst
+docs/tutorial/deploy.rst
+
+COMMIT 44bc286c03ff3f8e783b4f79f75eb3a464940ca0
+COMMIT 8ddf80c3eaec171429b6ebd014e3a0af1f14e58f
+COMMIT b2b60450f7b9fae08bbd22f771f7b973aee6a135
+tests/test_cli.py
+
+COMMIT fb82e3cba6646241a45882a15625eaf4601a9e45
+COMMIT 5a1c5eb5c040506fcb99eb10558c12b6e9f6c027
+COMMIT 6d65595a3c0a02d098c36f7d337e053e07975316
+tests/test_cli.py
+
+COMMIT 1cf43e08e3211e7ff21005dd778613e39b20a449
+COMMIT 6f7762538bffe3ce9d03508ecab230bfff3e3dcd
+COMMIT 174fe4453a1a52069d31c9ff4e24f3ef4aa6913e
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 5684f48f7037f33312a1c6b2a4c6d877f66685cd
+COMMIT 6d637f0fdb0e18b2722ab2b19b79a5c954d22637
+COMMIT 3f6cdbd8b35f2b887dddbdac5ef6461833b6dd3b
+src/flask/app.py
+
+COMMIT 166a2a6207027bff07fdfc5590ce04f9b37e9e8f
+CHANGES.rst
+src/flask/app.py
+tests/test_blueprints.py
+
+COMMIT 4346498c85848c53843b810537b83a8f6124c9d3
+COMMIT 76858515944121ae3faf699f85ab2c4b7806d3d1
+artwork/LICENSE.rst
+
+COMMIT f8c881b887bf97930700f79fc91a729b018959d0
+COMMIT 1a40d9b9761b304150c3b82c656dbb0e425e8e2e
+docs/appcontext.rst
+docs/reqcontext.rst
+docs/shell.rst
+
+COMMIT b4094b35ef76e471bccf22c459104547f61f1a46
+COMMIT 22933a8cb424ffd65f2bec5bbfdbfa7e42105470
+src/flask/app.py
+
+COMMIT 56c8bddf6b3daea411dde9917a3cc47edcc5a61e
+COMMIT 3a78f501e9eadd9225a00194aefc54dbdca1df74
+docs/patterns/wtforms.rst
+
+COMMIT f4a2c35691e6d1e263ef78de1d6fc2f79f38b096
+COMMIT 3b83d0c75b3cc473260d2ca43c36bd2fd57b1abf
+COMMIT 42a6da2da38af65a0f097bb88e3e2bee8f137222
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 34ff7d73a76ddbd1a6bafc7842589dd532c950f4
+COMMIT 6a4bf9eec13e035cf10ecc16e462049b4c967e41
+src/flask/app.py
+src/flask/cli.py
+src/flask/debughelpers.py
+src/flask/scaffold.py
+src/flask/signals.py
+
+COMMIT aa1d34dc51fc63dabc46f388822ba73b15d3ef97
+src/flask/scaffold.py
+
+COMMIT ca0033c11a1c325944b1c6abf4e18e8831326d27
+COMMIT 9d9108fe25600c566643f902255d74ff68d88967
+docs/debugging.rst
+
+COMMIT 24aab7a08d0b3f40d9fc9e49706854ef8be7a05f
+COMMIT 313a70da6ef4b265f9334f909d946b2d9bbae701
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 7c7b583603f85b3253b6d531d7f8e8d29060ddc7
+.pre-commit-config.yaml
+
+COMMIT e1dce5c39ac093915a34bac99c37402245fd52f4
+docs/deploying/uwsgi.rst
+
+COMMIT 6f852d0d22a9be486f3881d500ae83292a76cd46
+COMMIT 4a37b627aef7019d3da84fd0a62fd8581ede6543
+.pre-commit-config.yaml
+
+COMMIT d01d26e5210e3ee4cbbdef12f05c886e08e92852
+COMMIT c58ff55e19f4098998d8af0bbe9e91235da58025
+requirements/dev.txt
+requirements/tests.txt
+
+COMMIT 048709c8e7d4d3916193bd2c735ee93c073ab686
+COMMIT d7199c87854c574f46288fd1086fa31fb42c1446
+COMMIT e4373eba1cdd4b288b9d37e784bd26e0ca32056c
+COMMIT 6d32d342336f528934829ed7a034a29af66c2822
+requirements/dev.txt
+
+COMMIT f6e4e8ab9d44cb916e71976d48671a70ca59a692
+requirements/dev.txt
+
+COMMIT b5bdcb460215b6234292eb6c0bd63abee5d5f64f
+requirements/dev.txt
+requirements/typing.txt
+
+COMMIT fafc132dcb0597b40ae836d737e24a24035dc756
+docs/deploying/fastcgi.rst
+docs/deploying/uwsgi.rst
+
+COMMIT 53eef278efd59222be406ff5be737f48c92f8313
+COMMIT 3261a9451aba86853e2d89e51722380558fb6e27
+COMMIT 84aa8706c0cdf28fe5de1b9170a8b686699fb0e5
+docs/patterns/fileuploads.rst
+
+COMMIT a430c43736ab029b472c9641aa0b6203638391c2
+COMMIT ae5ad9e1ae7307b21d301c446addcacc536f80a5
+requirements/dev.txt
+requirements/typing.in
+requirements/typing.txt
+
+COMMIT d4b540eb7d1f1b18ed516a0dd4e7d1ac5e537f38
+tox.ini
+
+COMMIT 13c0eef54c53be6c9c5c78626004b6a63ec09cc3
+COMMIT 482073718863d0e47b211bd3adbc4e28fd1b643c
+COMMIT 31ce7d61cd184f377203dca8081becde1a50c730
+requirements/dev.txt
+requirements/typing.in
+requirements/typing.txt
+
+COMMIT 78e82a3ef74e433ac4e0bda521877cbb60bc77ba
+.pre-commit-config.yaml
+
+COMMIT d9133e9369eb03886dc1a847c4b96d826ebbf398
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 7e40882e02c466448e01611d03c5d46e56c5eab4
+COMMIT 9c91bb3ce2965174bca5ae080a62912f964ebcd6
+COMMIT 9830fd8a806d677a279ed60bf3fa33ebb5691a5f
+README.rst
+
+COMMIT afc13b9390ae2e40f4731e815b49edc9ef52ed4b
+COMMIT ef3a82a2820082f7d9f2ca963c9dff7eb1ea9687
+COMMIT 9f0da9b770abfe3376ca0bbb09c535b42071feeb
+CHANGES.rst
+src/flask/cli.py
+tests/test_cli.py
+
+COMMIT c3f923d0e0aba3ed5b6013c5d022021e4ae059cf
+COMMIT 2305b056c3a3161c92ea61e6fceb67262766bc40
+tests/test_cli.py
+
+COMMIT aa6dd09c2cab5eb15a45d73b5ade24b7b4131c5a
+CHANGES.rst
+src/flask/cli.py
+tests/test_cli.py
+
+COMMIT 66d9d4fa8d07dd50e4cb3036a9ae5f92c4693b84
+COMMIT 892ae955093cc3b7925230ff7bc346a6afb14f5d
+CHANGES.rst
+src/flask/json/__init__.py
+tests/test_json.py
+
+COMMIT 06cf349bb8b69d9946c3a6a64d32eb552cc7c28b
+COMMIT 9a2adfba4d4310b005c222fcdfb85e96e3e6661d
+CHANGES.rst
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/scaffold.py
+
+COMMIT 187f6ce4096222119b8490d7e3c671e4e41f64b6
+COMMIT 51196575479e34c3ea43612e1eb770db3aa5d114
+docs/tutorial/views.rst
+examples/tutorial/flaskr/auth.py
+
+COMMIT 50b7dcbab343c93bb6738bbf116a177e72b1d9ec
+COMMIT e18ed45c8863ac645f3ce17a155034b8384e726f
+src/flask/config.py
+
+COMMIT a0afb6f37558261acb914b3c6afd04d918016cfb
+COMMIT 5dfa67ed5ac4a541fc4a52efc1cb5f92aa97ab5f
+COMMIT 858cc9cace5c13941495d8a789668523e1ae87c7
+docs/quickstart.rst
+
+COMMIT 0826be48ed50c9ac73160ba7225715659961a992
+COMMIT f2b1dc45bd0baf5a5302893bc068e37b4c4d4575
+.pre-commit-config.yaml
+
+COMMIT e248e09399b21b0d21d3c8005a30c4dc4d430faa
+COMMIT 625595cb1a0a70c34a82b5c151d02e6359d5e191
+COMMIT 4550beb695e9090259957d4ea1a7a8af9d7b2802
+COMMIT f5f51cd09c094cc15e7e6385cf27564bedc30b1b
+COMMIT c0f583fdc1f9153020e05321f4444a2e2d541c2d
+requirements/dev.txt
+requirements/tests.txt
+
+COMMIT 3e507a70cafd5bab0acd570ee8ca06d46063b543
+requirements/dev.txt
+requirements/tests.txt
+
+COMMIT 7a3b8bbb897991a791ce51a870866648577054b9
+requirements/dev.txt
+requirements/docs.txt
+
+COMMIT bb3217b35017f269e3ce411bf070904e3858d307
+requirements/dev.txt
+
+COMMIT e7b16b5ef2b22e2f4e76dc1be5747e21196fcbc5
+COMMIT 3127c304ecbc54387792c9ddff3c266645b67b8a
+docs/tutorial/tests.rst
+examples/tutorial/tests/test_auth.py
+
+COMMIT 85c35bd6155e14f5c0829a88533d13321408bda5
+docs/deploying/asgi.rst
+
+COMMIT 29c09a92c45bc0120331dd22f7079f9161d72ab7
+docs/patterns/jquery.rst
+
+COMMIT 922e91b278c19bee1154ea32a7c0c99f87d4d9b6
+docs/api.rst
+
+COMMIT 7a73171edc3bcffef96ef6367977ab3ae9af9350
+COMMIT 6e1b72096d5ae1e2cc4d8592ff8271b62548d9cf
+src/flask/app.py
+
+COMMIT 8e62bf6b17238bc09e6ad01eae64d5c2d559aad8
+COMMIT f9ccca97e476a9ffc1fcdf081f9f083a119c5ce2
+.pre-commit-config.yaml
+
+COMMIT 28507154fa5fa6f4ec32b3e7d205a9a6fc8cf8de
+COMMIT 9fa8b0f7ad64c0cb3729978f88b5ebdc296ba750
+setup.cfg
+tox.ini
+
+COMMIT 7b3bb7b13f2717b8c738e0f7a34c7521d7080559
+COMMIT c6d8beeb9ed8839d43dfc2979acb28152be85fff
+COMMIT 72078148c017e2e3e6d6b6716aa8f9f16e0bf2f5
+requirements/dev.txt
+requirements/typing.txt
+
+COMMIT c9796f85c787b5d01417a50ba25354be3b620afc
+requirements/dev.txt
+requirements/tests.txt
+
+COMMIT ae53c32048dbef4ce1aaf9ecb86925e507118a38
+requirements/dev.txt
+
+COMMIT e145f9c6ecc27f771db1b202518f6aa5e7ae7762
+COMMIT d0f19f790520293c2c40207d492695e582347b1a
+requirements/dev.txt
+requirements/tests.txt
+
+COMMIT 01e804a6e1207410042edddf4c6b8d75b5fe4b63
+COMMIT 6fe9235f866fdc9a76cc086bea1512b6825713e8
+requirements/dev.txt
+requirements/docs.txt
+
+COMMIT 7023145f797573b2386de90bd81ac67eced93b47
+COMMIT ba6db2e30783f81673bb8a6b5218f7bb8efa8f27
+COMMIT c224832acccbb9b16485c7adeb7714c71fce1ea8
+docs/views.rst
+
+COMMIT 49cbb77528f6b806c69af55a37affd33d7dc8143
+COMMIT 35eb582bf3ddbe995681363167eb3233f539ef8b
+docs/testing.rst
+
+COMMIT d426b58e5748239c3403502acfd73aa6f382c64a
+COMMIT 5261aeb7c7b4a4ace4427352e39cb78d9bb2fc5d
+COMMIT 7b696e076a8ebf22e8ad096b7278051d475c88be
+docs/testing.rst
+
+COMMIT 5fa7d2efe757e028a734d3dc56e9f13bb812a92a
+docs/templating.rst
+
+COMMIT f353d126d199071c7933e2f62409e5532333bec5
+docs/quickstart.rst
+
+COMMIT f8ca80ce8912cc5b9e6379e26cac34121207f4de
+COMMIT a44c7228600044f530856a33c7da147c528644ff
+CHANGES.rst
+src/flask/blueprints.py
+tests/test_blueprints.py
+
+COMMIT 34027d8d876c140f84e18d6b56c0aecc5481874c
+CONTRIBUTING.rst
+
+COMMIT 399b851ed78ed985a222822114a01961c087f8fd
+COMMIT 92bed6619459da93f79e85ec674b24cb6fa322f6
+docs/patterns/celery.rst
+
+COMMIT 63893a427bd022d192febadad0b31ae06fa80776
+CHANGES.rst
+
+COMMIT aac67289e517bda4ef488819edab74539ef8e9b9
+COMMIT 1b10e085d821e37b7f7162307046649a721e5587
+requirements/dev.txt
+requirements/docs.txt
+
+COMMIT 6a4e7e948d7e5bd5b2b76c1b7f1a0392644bee1e
+CHANGES.rst
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/scaffold.py
+src/flask/typing.py
+
+COMMIT 5205cd4ea979f6c322e4e6a256a72e7808592818
+tests/test_async.py
+
+COMMIT 270eb2df2a1606383f50ff079a32240966b43fbc
+CHANGES.rst
+docs/async-await.rst
+src/flask/views.py
+tests/test_async.py
+
+COMMIT 491ea32803cb05fb8fc4dfb81ec6c96f94529eb0
+src/flask/app.py
+
+COMMIT cd0086bc4b6fc4720b921b85eb9050c681ca601b
+COMMIT 5d0104f67e6e465e5416803062ed53add1e8d333
+requirements/dev.txt
+
+COMMIT 0ce270d1f3615f222226fb316e505a60c1e3baab
+docs/async-await.rst
+docs/installation.rst
+
+COMMIT 6f5870a791a91b726272413c5e2c563a6b2a9c2f
+COMMIT 8e589daaf2cec6a10262b8ff88801127f2fa14fd
+CHANGES.rst
+src/flask/typing.py
+
+COMMIT a960236117442bec67f89c30dfa014e05483da5a
+CHANGES.rst
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/typing.py
+
+COMMIT f7adb2c813c5c10dcab5bc81ee173a6f9fbd406a
+CHANGES.rst
+src/flask/typing.py
+
+COMMIT d81aa70106877b38673275e4539ab1f3232c4fea
+COMMIT aa6fbf2f5a6265dd0ecaaca03e646c3c2a8f58d2
+docs/tutorial/index.rst
+
+COMMIT 7161776824734fc2797fe2b4fc974d183487ebf8
+COMMIT e22021d531499af87f65d75f1e37e6329e7385ed
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT bc90801c2ada42d3cf112a3b5701bfdbb8b6211c
+COMMIT fe2d744b530283094dd0a2ffa4a9d86f1029b2cd
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 9f606a8cbb8755eaa4664ce7a4f892204f140410
+COMMIT 7ab934f6bc2380a322c77d92c0b6cfd10b7de991
+CHANGES.rst
+src/flask/helpers.py
+
+COMMIT 6b1c4e9769cbe72d6f5665a8081a98e5a671a8d8
+COMMIT 255461d8950fab51a44c84f33cfba1e4fb239a7d
+COMMIT 3257b7574e7f010686a617197e0fb4596986f7f7
+src/flask/blueprints.py
+tests/test_blueprints.py
+
+COMMIT 714b0a467acab54091d8aeb73403d808abfbcf5b
+src/flask/blueprints.py
+tests/test_blueprints.py
+
+COMMIT 9409be6e34e153bfdb0aac2c9eb7f60110109172
+CHANGES.rst
+src/flask/blueprints.py
+tests/test_blueprints.py
+
+COMMIT 63b306743fccdd52079034e82cbbeee182a4361d
+CHANGES.rst
+src/flask/app.py
+src/flask/blueprints.py
+
+COMMIT 67b0b7e30d2304f628e966896748032022ac0257
+src/flask/app.py
+src/flask/helpers.py
+src/flask/wrappers.py
+
+COMMIT c2920e2bd98cdb3dcccc2868c25b695d4780c620
+src/flask/blueprints.py
+tests/test_blueprints.py
+
+COMMIT 141fde1d8ec8663b4be98777750d2f58c6fe44ad
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/wrappers.py
+
+COMMIT 99afbb277d25d3b052e00b9a8da216054d51d62a
+src/flask/blueprints.py
+tests/test_blueprints.py
+
+COMMIT a541c2ac8b05c2b23e11bd8540088fce1abc2373
+docs/patterns/viewdecorators.rst
+
+COMMIT 36872e7bd45162dc78e789f45e026932a4687434
+.gitignore
+
+COMMIT a82cc31af847de7250cd489f6080802ce3f5236e
+CHANGES.rst
+
+COMMIT 10a36cb60e10594aa5dbf3c5aba6abbd5f6fcd70
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/scaffold.py
+
+COMMIT 8796b2a784bc45fcc6865cd80b2cba0601448727
+src/flask/scaffold.py
+
+COMMIT bf982718cf30615f2dd17fa71fe17d565ebb1d3e
+src/flask/blueprints.py
+src/flask/scaffold.py
+
+COMMIT 0d594b8c0f13c70507aa61a7666c844c5e2aeda0
+CONTRIBUTING.rst
+
+COMMIT 83f7efa04708a22c9701488f0f29b59c2b756bef
+COMMIT 0cfce9a0ec62795091af6f548cf3ca45f0dac448
+COMMIT 9889ca8bcabbb1b1290ca4403b0242e01bae4c47
+requirements/dev.txt
+requirements/docs.in
+requirements/docs.txt
+
+COMMIT cfda27089932a102953da73fdab17cf9814334e4
+docs/conf.py
+requirements/dev.txt
+requirements/docs.txt
+
+COMMIT 69e6d59ac8dd5ba6a5242acafa5b50c7b56c84d1
+COMMIT 10425fb9b13d977128f18c1051fb93edc9aee2de
+CHANGES.rst
+src/flask/config.py
+
+COMMIT b5518e23f5b85ba6e069a8151ed42209947f3849
+COMMIT afc907fd0d4a4e96398829d75ded9711a3046070
+src/flask/typing.py
+
+COMMIT 19b905eeef7e47841318ec9e455c9369770f22e2
+COMMIT 1b5f21e015e2c4f36fcdb34a09ce93787d59e181
+tests/test_cli.py
+
+COMMIT 1c3052377b18055cbfbbbdd297dd19a5c43c55a6
+COMMIT 6fbdeb80c76b8a698ab366d21ccd786731b17361
+src/flask/blueprints.py
+tests/test_blueprints.py
+
+COMMIT f64fff64762c96b4ec1752f9a4e261fdc2ba4e33
+COMMIT 9c186ccfe8fa4156123e9252a6e8a9cc68bfecab
+docs/quickstart.rst
+
+COMMIT 6e0fb117171ff3e57cf536952991f9ce01d130a5
+COMMIT 9039534eee6a87da98a1dee9e4338d1b73e861f8
+COMMIT a7b02b3a07ae292ce376df2459eae3ffb4c06d52
+CHANGES.rst
+src/flask/ctx.py
+tests/test_converters.py
+tests/test_session_interface.py
+
+COMMIT 636f195bb538864053bd0cc8b37844818a1fcd3d
+COMMIT 864875099762fd0209bacbb26985ce2bcd7f2ec0
+COMMIT 1ca199f9b38b70a4e97cb47a4252ffd7fccc008c
+COMMIT 64a5d7a018aadcb5d7d868a782a04d1b599ef89b
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 5f8d3ea2fcb4a17373653d900b060259fefb11bb
+COMMIT 3ace642ef32eae3fa096bef85a87545eba3f53fc
+CHANGES.rst
+src/flask/__init__.py
+src/flask/helpers.py
+tests/test_basic.py
+
+COMMIT 1ce0f774c947ee39924cf6604e444b23c51e4cec
+COMMIT 5bd959fbec98cb14c785868e8890d6850971038e
+COMMIT c04b0de558fe8e1ccb8edb4525d40e725ae9a24d
+COMMIT 661bbcdb90ee82baded66ae0733cb87ea5f464ef
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT ae647b5750192c7590f176ab4d7e16b44bb50ea6
+COMMIT 6d8b4ce9d037937ef8694067ab5754666240d097
+CHANGES.rst
+setup.py
+src/flask/__init__.py
+
+COMMIT 4240ace59710d86c478111affd4ad6fb4c8cad9e
+COMMIT f3551c8b907d468b6dc8a11a14384333d6126014
+COMMIT e93704fbfd5f40e48f8fe9034b6b0fe420d28fb3
+CHANGES.rst
+src/flask/blueprints.py
+tests/test_blueprints.py
+
+COMMIT 08e459e823235eecd86c635653f4bd6d6003c2b3
+COMMIT 7c5261407dae61679c268b44c63d73909c3fe652
+CHANGES.rst
+src/flask/blueprints.py
+tests/test_basic.py
+tests/test_blueprints.py
+
+COMMIT d8c37f43724cd9fb0870f77877b7c4c7e38a19e0
+COMMIT d5aadba4d34f6070377e88429b178ba08eea5349
+CHANGES.rst
+src/flask/helpers.py
+src/flask/scaffold.py
+
+COMMIT 6414df97562e623221c1ee2072d38e84f87b02d9
+COMMIT 25884c433f1eddf4537694d4c5f9f78cd9a14955
+CHANGES.rst
+src/flask/app.py
+src/flask/sessions.py
+src/flask/wrappers.py
+
+COMMIT 6fe7f45725dd0fc94fb3ce7ab3b3ff477b10401a
+CHANGES.rst
+src/flask/ctx.py
+
+COMMIT 2baaa8fd8ebdd0f7bf7a24bff4855ef53476c92d
+src/flask/globals.py
+
+COMMIT 89475e5d1e3e25ce56c9d9411496528f4a1ba82b
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT c121e8cea7624a764e7cfa97cc9e94f261050e10
+COMMIT 14921608871f15f8c34d48026473293e225ad608
+CONTRIBUTING.rst
+
+COMMIT d906c71e99b0d6004490b4c68d249dade898e9c5
+COMMIT fc82dd50e39700b14799df17578e2497b8f0248c
+CHANGES.rst
+src/flask/helpers.py
+
+COMMIT 80d9519a9c6f6e84d93432a675326da0a983bd46
+COMMIT 2889ea4dd9bfee0d4b63a435c5a8d20337770f9c
+docs/deploying/index.rst
+
+COMMIT d575de5159a6e40944275763c9ada2801214058b
+docs/blueprints.rst
+
+COMMIT 57b19fda540b596cd211ac864362485e09be203b
+docs/blueprints.rst
+
+COMMIT 22d82e70b3647ed16c7d959a939daf533377382b
+COMMIT 48325dbfb8a3d38966c62c17ba05882f28070981
+COMMIT 2ddbceeaa91b77cd6b837035c5697ac5b94fafab
+requirements/dev.txt
+requirements/docs.in
+requirements/docs.txt
+
+COMMIT 19f458f9cd6c56c6d07c1020e1e4ba32b31edc86
+COMMIT 15b2241b5173833bc0c9cadaaff9a05fd4e064e2
+COMMIT 52adf2ec219a0cb9abcfd116ec104c9a362c602a
+.github/workflows/tests.yaml
+CONTRIBUTING.rst
+README.rst
+docs/conf.py
+examples/tutorial/README.rst
+
+COMMIT 905e5c23e8c5f6362b38ec1b5526fe999f491229
+COMMIT 80a4e62096f4010235823180462b4d6e058d025a
+CHANGES.rst
+setup.py
+
+COMMIT 2846abaefed01f1da0d58ca3a83a2a09bea71e9c
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 6fb1101f7075b4ff8197f3ef3b9fecfa41dc34ee
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 2f0c62f5e6e290843f03c1fa70817c7a3c7fd661
+COMMIT f8e63d39913f9a7bb887066025724569aa3423a6
+CHANGES.rst
+src/flask/__init__.py
+
+COMMIT 1403d35e2a107e0fc693a09898cf605bb18989ad
+src/flask/app.py
+src/flask/json/__init__.py
+src/flask/templating.py
+
+COMMIT 3a5532b4ed0db5cfd826e7fd2006ede6e873b028
+setup.py
+tox.ini
+
+COMMIT f8f0caf5c6e560b8e7fd322cbfd140c2bf7aa61b
+requirements/dev.in
+requirements/dev.txt
+requirements/docs.in
+requirements/docs.txt
+requirements/tests.txt
+requirements/typing.txt
+
+COMMIT 9c1e7f6cdc6916d268aa9c44d46c06f5769fdcf0
+COMMIT 8b72f6abd72b32225299c57c981180df35a89547
+.pre-commit-config.yaml
+
+COMMIT 28262c34c67eb1adeefb847c27b8cefa090970fa
+COMMIT 531671c9c5177f24e79a3062e2dc5d0aa60c29af
+docs/cli.rst
+docs/quickstart.rst
+
+COMMIT 2c88e8a0aa7ee724b844cbe48013a1e7314e9049
+COMMIT 79ac96f1239601eb12f6f69fcb3ce6cb269ac5fb
+docs/conf.py
+
+COMMIT e1b3a053ba426e5b1aa7bd2af138e03c7f303592
+COMMIT 95e5843ad51b025098ee33acbf273bafef26a1d8
+.pre-commit-config.yaml
+
+COMMIT 3c9b85469ef4abda1e996a5ec0e7bef0f1a0b394
+COMMIT c93a2d76d5874f2cb175b7e91407dc6c877e0139
+.pre-commit-config.yaml
+
+COMMIT d7ac6f5bcf324e7fc588e501b2f18669efd5a12a
+COMMIT e2b7d1056c6c8f6f26a4b9dfcc5dc4b2ef87f573
+src/flask/__init__.py
+
+COMMIT 47f0e799db8d8e379a1fd9bf48ce3a8b7d5bfe73
+COMMIT 2889da67cb15ac6d5d882781d54014286d9ae010
+src/flask/app.py
+src/flask/helpers.py
+tests/test_async.py
+
+COMMIT 7f87f3dd93baf45d5f69f02a2dcf4493dfc4a1be
+docs/async-await.rst
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/helpers.py
+src/flask/scaffold.py
+tests/test_async.py
+
+COMMIT cb13128cf03b2f1b3c5b48eab518e57e7b5f6516
+src/flask/helpers.py
+
+COMMIT 188f4785adc4eddd0b185f33b400c2812915624f
+COMMIT 8bfce88e39dd427dc1258a04c6b0cafa9667ff3e
+docs/async-await.rst
+
+COMMIT 98fbb6a3a722b7e3b6fd7152a15f4f234651a821
+COMMIT 467d2e2a437c73fc8eabdd887efe0453663939c3
+requirements/dev.txt
+requirements/tests.txt
+
+COMMIT 0c198dffc34f30883d9056c4e42e9858edd06e96
+COMMIT ec044a24e10d2bd3c730f69909cd44639b469fd0
+docs/async-await.rst
+
+COMMIT 83b2f8f0f15053561c08c93ffe0de4a8a5adf829
+COMMIT 36e6ec45a9885fb1a6a22b0eb15b8810a8712418
+requirements/dev.txt
+
+COMMIT 0d63f1021d3608580f86e82448922922bf6300e5
+COMMIT d124214129fd76cd620736f9dadc5e726eb8f34f
+.github/dependabot.yml
+
+COMMIT 9be01564f28ed49cbf55049265bd578c7a7257e1
+CHANGES.rst
+
+COMMIT 77db3d5ede84bfdc6973154426973886b979f870
+COMMIT 1ccf063f80a7f104d6f7ee62fc9bedb4b94b249c
+COMMIT 26a6cc0f94dd25390e2b2d7462bb4a414a862b16
+CHANGES.rst
+setup.py
+src/flask/cli.py
+tests/test_cli.py
+tox.ini
+
+COMMIT 10b0d6b33f7a4414fd3f4474c0deceed2e40117e
+src/flask/helpers.py
+src/flask/scaffold.py
+
+COMMIT 1a8549debb914eecc85cf63034093b55792c7e8f
+COMMIT b8ddd52a0dffe33d7a083cd949479835d6ae2787
+COMMIT b373e7a456f1be4efb6f27c4a21af0dd04260229
+.pre-commit-config.yaml
+
+COMMIT 77237093da25438c88b0a74c374a397d4bf823eb
+CHANGES.rst
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/cli.py
+src/flask/config.py
+src/flask/ctx.py
+src/flask/debughelpers.py
+src/flask/globals.py
+src/flask/helpers.py
+src/flask/json/__init__.py
+src/flask/json/tag.py
+src/flask/logging.py
+src/flask/scaffold.py
+src/flask/sessions.py
+src/flask/signals.py
+src/flask/templating.py
+src/flask/testing.py
+src/flask/typing.py
+src/flask/views.py
+src/flask/wrappers.py
+
+COMMIT f405c6f19e002ae13708cb33f6d48257cc1ea37a
+.github/workflows/tests.yaml
+MANIFEST.in
+requirements/typing.in
+requirements/typing.txt
+setup.cfg
+src/flask/py.typed
+tox.ini
+
+COMMIT e6e75e55470a0682ee8370e6d68062e515a248b9
+CHANGES.rst
+
+COMMIT c791f6312b092678c2a152d0605e49c26831cb05
+.github/ISSUE_TEMPLATE/feature-request.md
+
+COMMIT 03db9194d8d229d04e6a37b14bbe2499d23922d5
+COMMIT f74cce164e2065a866bf6d89e53fa5a4b4840cf2
+docs/async-await.rst
+docs/deploying/asgi.rst
+
+COMMIT 1c3b53c5db3c9c0f7a1f1650b020e6302705395b
+docs/deploying/asgi.rst
+docs/deploying/index.rst
+
+COMMIT 34eb0dad154177825885d0b9d895538f26a8aee8
+COMMIT 7df5db7b0c78b0588f82f2148b51461f94320b90
+src/flask/__init__.py
+
+COMMIT 07000942dacaeffa84d9db57ea42570fcfb0395e
+setup.py
+
+COMMIT afda0ed9f2e8e45b152919573858627a1cc86d3a
+.pre-commit-config.yaml
+
+COMMIT 078a3c3631b43e3c85123d7fc44270be6c05a4db
+.pre-commit-config.yaml
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+
+COMMIT e00a4a4b445b07a10ad79b4bfef78d1f57bb3b66
+requirements/dev.txt
+requirements/docs.in
+requirements/docs.txt
+
+COMMIT 6f09b4b5ed9cb63aacd57606159c0dae0c015ae0
+COMMIT 39887ee4dfafb172312ba7db8c60728dd7181f9f
+COMMIT 5c6a0f0c121297362b4c78e4240dd8445b9d9f12
+src/flask/app.py
+src/flask/helpers.py
+tests/test_async.py
+
+COMMIT fab26dcbe9215492420d28c47d50167716faaf4f
+COMMIT ec27677f956859fb91c87c4ec7e2766873e67bc0
+src/flask/helpers.py
+
+COMMIT 85b430a3669191ee0d092393f98c0dae47218cab
+CHANGES.rst
+src/flask/helpers.py
+src/flask/sessions.py
+
+COMMIT f3ed1322a6d28470c259d6948906acd93bddb78b
+COMMIT 5a7a4ab4c5eed63a23762e09b7e6a739375ad0f0
+src/flask/helpers.py
+
+COMMIT 8ab4967703c2f5c500174f46b672d80e32f55d85
+src/flask/cli.py
+src/flask/helpers.py
+src/flask/json/__init__.py
+src/flask/scaffold.py
+
+COMMIT 16f51ef79989e5d7677e8241a438fe37836a994d
+COMMIT 32272da9ac6e16fa22d3401b2d995d5bf3db9492
+CHANGES.rst
+src/flask/cli.py
+
+COMMIT 64213fc0214c1044fa2c9e60d0e2683e75d125c0
+COMMIT f92e820b4bf357e9792d08ce398802715a63eafe
+CHANGES.rst
+docs/blueprints.rst
+src/flask/app.py
+src/flask/blueprints.py
+tests/test_blueprints.py
+
+COMMIT 85dce2c836fe03aefc07b7f4e0aec575e170f1cd
+COMMIT 6d5ccdefe29292974d0bb8e1d80dcd1a06f28368
+src/flask/app.py
+
+COMMIT 5f03ad3004c41f2e0356f0332ea09e67192c5fab
+COMMIT 08693ae91783bef4f13346d73472b45a40f26c6c
+.pre-commit-config.yaml
+
+COMMIT 1a79d2d235e11d5c2284c8ecfffb9cd192ac769e
+COMMIT dc3e9c0cc36b7945431454ea1543da4e33023bb2
+docs/async-await.rst
+docs/async_await.rst
+docs/design.rst
+docs/index.rst
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/helpers.py
+
+COMMIT 61fbae866478c19ea5f5c3b9b571a4fad0ba7e5c
+tests/test_async.py
+
+COMMIT 00f5a3e55ca3b6dd4e98044ab76f055dc74997ac
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/helpers.py
+src/flask/scaffold.py
+tests/test_async.py
+
+COMMIT 9ddef0144ff47c74addb87433edb776219eb09da
+COMMIT 285a873ce921c1f2c52f15e1f58bcd3eae39596e
+requirements/dev.txt
+requirements/docs.txt
+
+COMMIT c6c6408c3fb96245a2e2afc4b754cdf065fdad47
+src/flask/helpers.py
+tests/test_async.py
+tox.ini
+
+COMMIT 6979265fa643ed982d062f38d386c37bbbef0d9b
+CHANGES.rst
+docs/async_await.rst
+docs/design.rst
+docs/index.rst
+requirements/tests.in
+requirements/tests.txt
+setup.py
+src/flask/app.py
+src/flask/helpers.py
+src/flask/scaffold.py
+tests/test_async.py
+
+COMMIT 85b8fab268cda37c18cf77b6de3129da28adeb87
+COMMIT 70b58c82d9d19932ea3049415a785718e07c830e
+.pre-commit-config.yaml
+
+COMMIT ecb3450f19d3d817b4b857bb5831b309131b37e1
+COMMIT 06fd6aca27cca6eae7ab00379f5ad9300e339d11
+.pre-commit-config.yaml
+
+COMMIT 1672c5f565c9bba0269e2c5ef3f2cc7038551641
+COMMIT 6eeaa2e50d2e3ff776085d0b28d58d1db65a0538
+docs/quickstart.rst
+
+COMMIT 020331522be03389004e012e008ad7db81ef8116
+COMMIT 46d8e90f29d5363239ad02446eaf535c2a6b2308
+.pre-commit-config.yaml
+
+COMMIT 510c38cc63fd1d88772d6680713c38dd83e277b4
+COMMIT 3dfc12e8d82a66c4041783fcaec58a7a24dbe348
+src/flask/blueprints.py
+
+COMMIT ef52e3e4a379b16a8b906ff101c6edae71d80dc9
+src/flask/scaffold.py
+
+COMMIT 25ab05e6a2ae248ab76002807d47c23952492f17
+src/flask/app.py
+
+COMMIT 7029674775023c076a1dc03367214d178423809a
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/scaffold.py
+
+COMMIT 9f7c602a84faa8371be4ece23e4405282d1283d2
+src/flask/app.py
+src/flask/helpers.py
+src/flask/scaffold.py
+
+COMMIT 3316604822644889a373018490f2534a1dafd9aa
+COMMIT 33145c36991c503aeb1e5870c27b720ec80d5079
+src/flask/cli.py
+tests/test_apps/.env
+tests/test_cli.py
+
+COMMIT 6d9d79c70da0104474564dfed510fc74eef1cb85
+COMMIT 83d358d2c43c79b7d7fe5365e079447296c65eaf
+src/flask/app.py
+
+COMMIT fd62210f583e90764be6e8d9f295f37f33a65e48
+src/flask/app.py
+src/flask/blueprints.py
+src/flask/scaffold.py
+
+COMMIT 5fea7caba29b872e5b2e3511d1c1732d0fe1ba3e
+COMMIT 705e52684a9063889c16a289695a2e4429df6887
+CHANGES.rst
+src/flask/scaffold.py
+tests/test_basic.py
+
+COMMIT 82d69cd06c7ff738774c5ab7ef48bc6251f5c014
+COMMIT e4e66186c319481a162236777b41e52fe269d5ff
+COMMIT 1748bb02eb29760796c2e6f59e7c9d77ccaeda2e
+requirements/dev.txt
+requirements/docs.txt
+
+COMMIT 6e7869ec49a42c1d7964fb8a62eded25b0321970
+requirements/dev.txt
+
+COMMIT 4846e25e92638a1db5aa2b41f65eed7585366109
+COMMIT 49b7341a491e01cd6a08238ca63bd46ae53a009f
+src/flask/json/__init__.py
+tests/test_json.py
+tests/test_json_tag.py
+
+COMMIT dcd3b5c8f86c70c34a4487a943300cbf6adce9aa
+COMMIT 0c7cbe2d1186f53efcd0da0589a2eaf0382e4d39
+setup.cfg
+setup.py
+
+COMMIT 9e7d3a6b694b27f997266889ae463e06dd83a189
+MANIFEST.in
+docs/changes.rst
+docs/index.rst
+docs/license.rst
+
+COMMIT 3cd615a1d6db7e319c27bca2499ab7390065f090
+README.rst
+docs/conf.py
+setup.cfg
+
+COMMIT aee3f3fee974ffb8e2ed7848c9e5744df5d7a5de
+COMMIT 76abbe9062ee6752d94003c9ca72fe2db5caf100
+docs/extensiondev.rst
+
+COMMIT 8d9501598ff066706c1300a9f6f5193912f2cb4d
+.github/workflows/tests.yaml
+.readthedocs.yaml
+
+COMMIT adeaf27e767f7bd37996d999eba135d63e890408
+COMMIT b496d8b7cb72f29dc91d2859829caedae25d62ea
+CONTRIBUTING.rst
+
+COMMIT 3c00658772983f95016d300a87951da45e8d0701
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+
+COMMIT dbe76bb75d597401d33ef428d79540797e9297b3
+.github/SECURITY.md
+
+COMMIT 571e638e2accf8cff6682227a564ffd5deac7e67
+.github/ISSUE_TEMPLATE.md
+.github/ISSUE_TEMPLATE/bug-report.md
+.github/ISSUE_TEMPLATE/config.yml
+.github/ISSUE_TEMPLATE/feature-request.md
+.github/PULL_REQUEST_TEMPLATE.md
+.github/pull_request_template.md
+
+COMMIT bfd4dc6d3065b87130b246f377cfc250fecec58b
+.github/workflows/tests.yaml
+tox.ini
+
+COMMIT ee089488ad948dfeac4cddd53ae0f07935ed2ab5
+COMMIT 3fe23bf899d3454eb7e7fd1eb0b7a812497cd365
+.pre-commit-config.yaml
+
+COMMIT ff3fb96896ef2814b695c0689009434368ca9ca3
+COMMIT 0ee1b0b5d9712b6cf2f22429db98549e1a0c8cb8
+tests/test_regression.py
+
+COMMIT 192f4ae0b2a4e7d73c0b0472e53e33250175d786
+COMMIT b473e7c97c7c557e64fb84236c7d346b6ad16736
+CHANGES.rst
+docs/api.rst
+docs/patterns/jquery.rst
+docs/templating.rst
+src/flask/app.py
+src/flask/json/__init__.py
+tests/test_json.py
+
+COMMIT fdf5d11b515aa2d0937ccc31ef7f20b94d3a8794
+COMMIT 01621485fdad733b0886117d59bea1adac8d4fcc
+CHANGES.rst
+src/flask/ctx.py
+tests/test_session_interface.py
+
+COMMIT 15f0fc2d24a6e5cc35216b81b360be6ab89a7a4c
+COMMIT 451c1f87f39253c35360f3e9e004df19e0c74638
+docs/api.rst
+
+COMMIT 6355f121761a79e878d3b96b82d097196341271a
+COMMIT d55ee5b91759c411d90ebb2046466fb27640d5ff
+.pre-commit-config.yaml
+
+COMMIT 93261454e6d0bc1c3c7bea5c69a3cbd2846984b6
+COMMIT fb5f04a8c71499391bab37aa4004ecc652724e0d
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+
+COMMIT 8b28c218c93a79780b5d6182ca8433da2f2fac7f
+COMMIT 6c828c3bbae18d10844524046f63fb3a26807dea
+COMMIT e783424fbb207a7ea1656cb906e02e1185d7883a
+COMMIT 510268e91415aa2e759436eb148bfd5e12f313e5
+requirements/dev.txt
+requirements/tests.txt
+
+COMMIT 096ac67b97f5ca5f3ccd44f45847cf341a3e1c32
+COMMIT 296bd2f4cc0141db11629d1339359771cc4eba38
+requirements/dev.txt
+requirements/docs.txt
+
+COMMIT 7eebe22cf517702cd26a18ae95e75e83ec587cc5
+requirements/dev.txt
+requirements/docs.txt
+
+COMMIT d1b36ced14f15747554594567f133b8fad28ceac
+COMMIT 963f68abf43a4dc22aae2e6cededc216feaa4366
+COMMIT c52ffa8ae7252a45b14e8cfa53b0fe5988210388
+requirements/dev.txt
+requirements/docs.txt
+
+COMMIT 5ecbf1e3337e7622b6508791b6c095cf91b7c544
+requirements/dev.txt
+requirements/tests.txt
+
+COMMIT b379bd4a781ed09c8f2d8d0756fb4bed1cc598a8
+requirements/dev.txt
+
+COMMIT 557e2147dd9c61a4f8ee5cab1d51c1bc355bc5f3
+COMMIT 78bcf1d8c6e9a63ea818d2febaa56c4878e90db6
+requirements/dev.txt
+
+COMMIT 9f7ac04aaf008305770b04ec64b671e916994749
+COMMIT 81ba6c24efea58dd00c093448fa2e529c0cda507
+src/flask/app.py
+
+COMMIT 055cdc2625c0cdf8cea87524f5c6bcf07f7e5005
+src/flask/__main__.py
+src/flask/cli.py
+
+COMMIT 64206c13c2bff0220328845db0995f451cefd3b1
+docs/errorhandling.rst
+src/flask/app.py
+
+COMMIT eb42655c46f8a598f2e0ead624ba5a65a8a66e90
+src/flask/app.py
+
+COMMIT 14f56363a4992506f2b3670985fca4f0a29e5176
+CHANGES.rst
+src/flask/helpers.py
+
+COMMIT 1936ca8a2e1789efd6169a901a8b60ec62ceb578
+docs/testing.rst
+docs/tutorial/tests.rst
+src/flask/app.py
+src/flask/testing.py
+src/flask/wrappers.py
+
+COMMIT fdba0d2526347786c05c15027e183a5ba4d81114
+docs/api.rst
+src/flask/wrappers.py
+
+COMMIT d887d32f4d0effedb6bf40f3d2ad790036934387
+COMMIT 7068d0983a29eb411bcd361ef8b764a8d10684ed
+docs/blueprints.rst
+
+COMMIT 7f206913e1ec078cebaa590f66c6d137d15bdca9
+COMMIT c676c2c4f381e8eec3932d8bd53fdbafda70aef7
+COMMIT 54ae1cb0e902aac1bce44e2a315650d395c710b5
+README.rst
+
+COMMIT 2fab8a31ae2639b3eacdd3935d58203b09650f29
+src/flask/json/__init__.py
+
+COMMIT 7d2ba3e1fc55e8d04308ede674263727c85c86d2
+COMMIT 444550ab0c2ba8b1e003dee198b5628bc58302ce
+COMMIT aff21fd8bc4d168caf481de87bb5447adccd18ad
+src/flask/json/__init__.py
+
+COMMIT da8865bd6425a8f286ffbe73a46437bf4dac8adc
+requirements/dev.txt
+requirements/tests.txt
+
+COMMIT eb41e7e417cbf53d19517e356381423cfd256c2f
+tests/test_basic.py
+
+COMMIT d42eac90f6e3f0c84736005a78c262a66187cc74
+COMMIT a7cf23a2343e04e61bb770d373a29e2666c56330
+requirements/dev.txt
+requirements/docs.txt
+requirements/tests.txt
+
+COMMIT 959c64e8ceb76a059aa20cfc048c4b2ff078090a
+COMMIT d1a21022e0cf6b7243ce26965a13a0b8fe371f10
+requirements/dev.txt
+
+COMMIT 50eb6e579ff403d59f8b80c17718682a240b8c08
+COMMIT 27a36f1446a9fb3639da91794b87b333ff3ab83e
+COMMIT 2622739771778f2b901de5ad690ab1028c2a1df0
+requirements/dev.txt
+
+COMMIT e4c70eff7747abf12726d90f38d3c28006baf087
+requirements/dev.txt
+requirements/docs.txt
+
+COMMIT de0af038627fd4f45bfe61ca9aed36b8e10770d5
+COMMIT 7d3ae48d57e1f989dfec42e98997ca8b75370c9a
+docs/tutorial/deploy.rst
+
+COMMIT 9b62405f349ae3ec6164d87e801aab2d214cd23a
+COMMIT cab8121d8f94a465c11814010f4453d1bf61008a
+.pre-commit-config.yaml
+
+COMMIT 28a3eb106c20eb6c3b9064f27f07a2ca89c0a4d7
+COMMIT cd3a93a9c1aaf8440d366cbebbc852e1033914cd
+.pre-commit-config.yaml
+
+COMMIT 0855252f8c07084745fc598579ad40447a26d1f5
+.github/workflows/tests.yaml
+
+COMMIT d6b974f821fe37bb782a80e64174ee3180fc5215
+.github/workflows/tests.yaml

@@ -1,0 +1,59 @@
+{
+  "unreachable_modules": [
+    {
+      "path": "docs/conf.py",
+      "reason": "no other module imports this file"
+    },
+    {
+      "path": "examples/celery/make_celery.py",
+      "reason": "no other module imports this file"
+    }
+  ],
+  "unused_dependencies": [
+    {
+      "ecosystem": "PyPI",
+      "package": "blinker"
+    },
+    {
+      "ecosystem": "PyPI",
+      "package": "click"
+    },
+    {
+      "ecosystem": "PyPI",
+      "package": "itsdangerous"
+    },
+    {
+      "ecosystem": "PyPI",
+      "package": "jinja2"
+    },
+    {
+      "ecosystem": "PyPI",
+      "package": "markupsafe"
+    },
+    {
+      "ecosystem": "PyPI",
+      "package": "werkzeug"
+    }
+  ],
+  "entry_points_detected": [
+    "examples/celery/src/task_app/__init__.py",
+    "examples/javascript/js_example/__init__.py",
+    "examples/tutorial/flaskr/__init__.py",
+    "src/flask/__init__.py",
+    "src/flask/__main__.py",
+    "src/flask/app.py",
+    "src/flask/cli.py",
+    "src/flask/json/__init__.py",
+    "src/flask/sansio/app.py",
+    "tests/test_apps/blueprintapp/__init__.py",
+    "tests/test_apps/blueprintapp/apps/__init__.py",
+    "tests/test_apps/blueprintapp/apps/admin/__init__.py",
+    "tests/test_apps/blueprintapp/apps/frontend/__init__.py",
+    "tests/test_apps/cliapp/__init__.py",
+    "tests/test_apps/cliapp/app.py",
+    "tests/test_apps/cliapp/inner1/__init__.py",
+    "tests/test_apps/cliapp/inner1/inner2/__init__.py",
+    "tests/test_apps/helloworld/wsgi.py",
+    "tests/test_apps/subdomaintestmodule/__init__.py"
+  ]
+}

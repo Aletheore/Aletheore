@@ -1,0 +1,742 @@
+FILE: docs/conf.py
+import packaging.version
+from pallets_sphinx_themes import get_version
+from pallets_sphinx_themes import ProjectLink
+
+FILE: examples/celery/make_celery.py
+from task_app import create_app
+
+FILE: examples/celery/src/task_app/__init__.py
+from celery import Celery
+from celery import Task
+from flask import Flask
+from flask import render_template
+
+FILE: examples/celery/src/task_app/tasks.py
+import time
+from celery import shared_task
+from celery import Task
+
+FILE: examples/celery/src/task_app/views.py
+from celery.result import AsyncResult
+from flask import Blueprint
+from flask import request
+from . import tasks
+
+FILE: examples/javascript/js_example/__init__.py
+from flask import Flask
+from js_example import views  # noqa: F401
+
+FILE: examples/javascript/js_example/views.py
+from flask import jsonify
+from flask import render_template
+from flask import request
+from . import app
+
+FILE: examples/javascript/tests/conftest.py
+import pytest
+from js_example import app
+
+FILE: examples/javascript/tests/test_js_example.py
+import pytest
+from flask import template_rendered
+
+FILE: examples/tutorial/flaskr/__init__.py
+import os
+from flask import Flask
+
+FILE: examples/tutorial/flaskr/auth.py
+import functools
+from flask import Blueprint
+from flask import flash
+from flask import g
+from flask import redirect
+from flask import render_template
+from flask import request
+from flask import session
+from flask import url_for
+from werkzeug.security import check_password_hash
+from werkzeug.security import generate_password_hash
+from .db import get_db
+
+FILE: examples/tutorial/flaskr/blog.py
+from flask import Blueprint
+from flask import flash
+from flask import g
+from flask import redirect
+from flask import render_template
+from flask import request
+from flask import url_for
+from werkzeug.exceptions import abort
+from .auth import login_required
+from .db import get_db
+
+FILE: examples/tutorial/flaskr/db.py
+import sqlite3
+from datetime import datetime
+import click
+from flask import current_app
+from flask import g
+
+FILE: examples/tutorial/tests/conftest.py
+import os
+import tempfile
+import pytest
+from flaskr import create_app
+from flaskr.db import get_db
+from flaskr.db import init_db
+
+FILE: examples/tutorial/tests/test_auth.py
+import pytest
+from flask import g
+from flask import session
+from flaskr.db import get_db
+
+FILE: examples/tutorial/tests/test_blog.py
+import pytest
+from flaskr.db import get_db
+
+FILE: examples/tutorial/tests/test_db.py
+import sqlite3
+import pytest
+from flaskr.db import get_db
+
+FILE: examples/tutorial/tests/test_factory.py
+from flaskr import create_app
+
+FILE: src/flask/__init__.py
+from . import json as json
+from .app import Flask as Flask
+from .blueprints import Blueprint as Blueprint
+from .config import Config as Config
+from .ctx import after_this_request as after_this_request
+from .ctx import copy_current_request_context as copy_current_request_context
+from .ctx import has_app_context as has_app_context
+from .ctx import has_request_context as has_request_context
+from .globals import current_app as current_app
+from .globals import g as g
+from .globals import request as request
+from .globals import session as session
+from .helpers import abort as abort
+from .helpers import flash as flash
+from .helpers import get_flashed_messages as get_flashed_messages
+from .helpers import get_template_attribute as get_template_attribute
+from .helpers import make_response as make_response
+from .helpers import redirect as redirect
+from .helpers import send_file as send_file
+from .helpers import send_from_directory as send_from_directory
+from .helpers import stream_with_context as stream_with_context
+from .helpers import url_for as url_for
+from .json import jsonify as jsonify
+from .signals import appcontext_popped as appcontext_popped
+from .signals import appcontext_pushed as appcontext_pushed
+from .signals import appcontext_tearing_down as appcontext_tearing_down
+from .signals import before_render_template as before_render_template
+from .signals import got_request_exception as got_request_exception
+from .signals import message_flashed as message_flashed
+from .signals import request_finished as request_finished
+from .signals import request_started as request_started
+from .signals import request_tearing_down as request_tearing_down
+from .signals import template_rendered as template_rendered
+from .templating import render_template as render_template
+from .templating import render_template_string as render_template_string
+from .templating import stream_template as stream_template
+from .templating import stream_template_string as stream_template_string
+from .wrappers import Request as Request
+from .wrappers import Response as Response
+
+FILE: src/flask/__main__.py
+from .cli import main
+
+FILE: src/flask/app.py
+from __future__ import annotations
+import collections.abc as cabc
+import inspect
+import os
+import sys
+import typing as t
+import weakref
+from datetime import timedelta
+from functools import update_wrapper
+from inspect import iscoroutinefunction
+from itertools import chain
+from types import TracebackType
+from urllib.parse import quote as _url_quote
+from urllib.parse import urlsplit
+import click
+from werkzeug.datastructures import Headers
+from werkzeug.datastructures import ImmutableDict
+from werkzeug.exceptions import BadRequestKeyError
+from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import InternalServerError
+from werkzeug.routing import BuildError
+from werkzeug.routing import MapAdapter
+from werkzeug.routing import RequestRedirect
+from werkzeug.routing import RoutingException
+from werkzeug.routing import Rule
+from werkzeug.serving import is_running_from_reloader
+from werkzeug.wrappers import Response as BaseResponse
+from werkzeug.wsgi import get_host
+from . import cli
+from . import typing as ft
+from .ctx import AppContext
+from .globals import _cv_app
+from .globals import app_ctx
+from .globals import g
+from .globals import request
+from .globals import session
+from .helpers import _CollectErrors
+from .helpers import get_debug_flag
+from .helpers import get_flashed_messages
+from .helpers import get_load_dotenv
+from .helpers import send_from_directory
+from .sansio.app import App
+from .sessions import SecureCookieSessionInterface
+from .sessions import SessionInterface
+from .signals import appcontext_tearing_down
+from .signals import got_request_exception
+from .signals import request_finished
+from .signals import request_started
+from .signals import request_tearing_down
+from .templating import Environment
+from .wrappers import Request
+from .wrappers import Response
+
+FILE: src/flask/blueprints.py
+from __future__ import annotations
+import os
+import typing as t
+from datetime import timedelta
+from .cli import AppGroup
+from .globals import current_app
+from .helpers import send_from_directory
+from .sansio.blueprints import Blueprint as SansioBlueprint
+from .sansio.blueprints import BlueprintSetupState as BlueprintSetupState  # noqa
+from .sansio.scaffold import _sentinel
+
+FILE: src/flask/cli.py
+from __future__ import annotations
+import ast
+import collections.abc as cabc
+import importlib.metadata
+import inspect
+import os
+import platform
+import re
+import sys
+import traceback
+import typing as t
+from functools import update_wrapper
+from operator import itemgetter
+from types import ModuleType
+import click
+from click.core import ParameterSource
+from werkzeug import run_simple
+from werkzeug.serving import is_running_from_reloader
+from werkzeug.utils import import_string
+from .globals import current_app
+from .helpers import get_debug_flag
+from .helpers import get_load_dotenv
+
+FILE: src/flask/config.py
+from __future__ import annotations
+import errno
+import json
+import os
+import types
+import typing as t
+from werkzeug.utils import import_string
+
+FILE: src/flask/ctx.py
+from __future__ import annotations
+import contextvars
+import typing as t
+from functools import update_wrapper
+from types import TracebackType
+from werkzeug.exceptions import HTTPException
+from werkzeug.routing import MapAdapter
+from . import typing as ft
+from .globals import _cv_app
+from .helpers import _CollectErrors
+from .signals import appcontext_popped
+from .signals import appcontext_pushed
+
+FILE: src/flask/debughelpers.py
+from __future__ import annotations
+import typing as t
+from jinja2.loaders import BaseLoader
+from werkzeug.routing import RequestRedirect
+from .blueprints import Blueprint
+from .globals import _cv_app
+from .sansio.app import App
+
+FILE: src/flask/globals.py
+from __future__ import annotations
+import typing as t
+from contextvars import ContextVar
+from werkzeug.local import LocalProxy
+
+FILE: src/flask/helpers.py
+from __future__ import annotations
+import importlib.util
+import os
+import sys
+import typing as t
+from datetime import datetime
+from functools import cache
+from functools import update_wrapper
+from types import TracebackType
+import werkzeug.utils
+from werkzeug.exceptions import abort as _wz_abort
+from werkzeug.utils import redirect as _wz_redirect
+from werkzeug.wrappers import Response as BaseResponse
+from .globals import _cv_app
+from .globals import app_ctx
+from .globals import current_app
+from .globals import request
+from .globals import session
+from .signals import message_flashed
+
+FILE: src/flask/json/__init__.py
+from __future__ import annotations
+import json as _json
+import typing as t
+from ..globals import current_app
+from .provider import _default
+
+FILE: src/flask/json/provider.py
+from __future__ import annotations
+import dataclasses
+import decimal
+import json
+import typing as t
+import uuid
+import weakref
+from datetime import date
+from werkzeug.http import http_date
+
+FILE: src/flask/json/tag.py
+from __future__ import annotations
+import typing as t
+from base64 import b64decode
+from base64 import b64encode
+from datetime import datetime
+from uuid import UUID
+from markupsafe import Markup
+from werkzeug.http import http_date
+from werkzeug.http import parse_date
+from ..json import dumps
+from ..json import loads
+
+FILE: src/flask/logging.py
+from __future__ import annotations
+import logging
+import sys
+import typing as t
+from werkzeug.local import LocalProxy
+from .globals import request
+
+FILE: src/flask/sansio/app.py
+from __future__ import annotations
+import logging
+import os
+import sys
+import typing as t
+from datetime import timedelta
+from itertools import chain
+from werkzeug.exceptions import Aborter
+from werkzeug.exceptions import BadRequest
+from werkzeug.exceptions import BadRequestKeyError
+from werkzeug.routing import BuildError
+from werkzeug.routing import Map
+from werkzeug.routing import Rule
+from werkzeug.sansio.response import Response
+from werkzeug.utils import cached_property
+from werkzeug.utils import redirect as _wz_redirect
+from .. import typing as ft
+from ..config import Config
+from ..config import ConfigAttribute
+from ..ctx import _AppCtxGlobals
+from ..helpers import _split_blueprint_path
+from ..helpers import get_debug_flag
+from ..json.provider import DefaultJSONProvider
+from ..json.provider import JSONProvider
+from ..logging import create_logger
+from ..templating import DispatchingJinjaLoader
+from ..templating import Environment
+from .scaffold import _endpoint_from_view_func
+from .scaffold import find_package
+from .scaffold import Scaffold
+from .scaffold import setupmethod
+
+FILE: src/flask/sansio/blueprints.py
+from __future__ import annotations
+import os
+import typing as t
+from collections import defaultdict
+from functools import update_wrapper
+from .. import typing as ft
+from .scaffold import _endpoint_from_view_func
+from .scaffold import _sentinel
+from .scaffold import Scaffold
+from .scaffold import setupmethod
+
+FILE: src/flask/sansio/scaffold.py
+from __future__ import annotations
+import importlib.util
+import os
+import pathlib
+import sys
+import typing as t
+from collections import defaultdict
+from functools import update_wrapper
+from jinja2 import BaseLoader
+from jinja2 import FileSystemLoader
+from werkzeug.exceptions import default_exceptions
+from werkzeug.exceptions import HTTPException
+from werkzeug.utils import cached_property
+from .. import typing as ft
+from ..helpers import get_root_path
+from ..templating import _default_template_ctx_processor
+
+FILE: src/flask/sessions.py
+from __future__ import annotations
+import collections.abc as c
+import hashlib
+import typing as t
+from collections.abc import MutableMapping
+from datetime import datetime
+from datetime import timezone
+from itsdangerous import BadSignature
+from itsdangerous import URLSafeTimedSerializer
+from werkzeug.datastructures import CallbackDict
+from .json.tag import TaggedJSONSerializer
+
+FILE: src/flask/signals.py
+from __future__ import annotations
+from blinker import Namespace
+
+FILE: src/flask/templating.py
+from __future__ import annotations
+import typing as t
+from jinja2 import BaseLoader
+from jinja2 import Environment as BaseEnvironment
+from jinja2 import Template
+from jinja2 import TemplateNotFound
+from .ctx import AppContext
+from .globals import app_ctx
+from .helpers import stream_with_context
+from .signals import before_render_template
+from .signals import template_rendered
+
+FILE: src/flask/testing.py
+from __future__ import annotations
+import importlib.metadata
+import typing as t
+from contextlib import contextmanager
+from contextlib import ExitStack
+from copy import copy
+from types import TracebackType
+from urllib.parse import urlsplit
+import werkzeug.test
+from click.testing import CliRunner
+from click.testing import Result
+from werkzeug.test import Client
+from werkzeug.wrappers import Request as BaseRequest
+from .cli import ScriptInfo
+from .sessions import SessionMixin
+
+FILE: src/flask/typing.py
+from __future__ import annotations
+import collections.abc as cabc
+import typing as t
+
+FILE: src/flask/views.py
+from __future__ import annotations
+import typing as t
+from . import typing as ft
+from .globals import current_app
+from .globals import request
+
+FILE: src/flask/wrappers.py
+from __future__ import annotations
+import typing as t
+from werkzeug.exceptions import BadRequest
+from werkzeug.exceptions import HTTPException
+from werkzeug.wrappers import Request as RequestBase
+from werkzeug.wrappers import Response as ResponseBase
+from . import json
+from .globals import current_app
+from .helpers import _split_blueprint_path
+
+FILE: tests/conftest.py
+import os
+import sys
+import pytest
+from flask import Flask
+from flask.globals import app_ctx as _app_ctx
+
+FILE: tests/test_appctx.py
+import sys
+import pytest
+import flask
+from flask.globals import app_ctx
+from flask.testing import FlaskClient
+
+FILE: tests/test_apps/blueprintapp/__init__.py
+from flask import Flask
+from blueprintapp.apps.admin import admin  # noqa: E402
+from blueprintapp.apps.frontend import frontend  # noqa: E402
+
+FILE: tests/test_apps/blueprintapp/apps/__init__.py
+
+
+FILE: tests/test_apps/blueprintapp/apps/admin/__init__.py
+from flask import Blueprint
+from flask import render_template
+
+FILE: tests/test_apps/blueprintapp/apps/frontend/__init__.py
+from flask import Blueprint
+from flask import render_template
+
+FILE: tests/test_apps/cliapp/__init__.py
+
+
+FILE: tests/test_apps/cliapp/app.py
+from flask import Flask
+
+FILE: tests/test_apps/cliapp/factory.py
+from flask import Flask
+
+FILE: tests/test_apps/cliapp/importerrorapp.py
+from flask import Flask
+
+FILE: tests/test_apps/cliapp/inner1/__init__.py
+from flask import Flask
+
+FILE: tests/test_apps/cliapp/inner1/inner2/__init__.py
+
+
+FILE: tests/test_apps/cliapp/inner1/inner2/flask.py
+from flask import Flask
+
+FILE: tests/test_apps/cliapp/multiapp.py
+from flask import Flask
+
+FILE: tests/test_apps/helloworld/hello.py
+from flask import Flask
+
+FILE: tests/test_apps/helloworld/wsgi.py
+from hello import app  # noqa: F401
+
+FILE: tests/test_apps/subdomaintestmodule/__init__.py
+from flask import Module
+
+FILE: tests/test_async.py
+import asyncio
+import pytest
+from flask import Blueprint
+from flask import Flask
+from flask import request
+from flask.views import MethodView
+from flask.views import View
+
+FILE: tests/test_basic.py
+import gc
+import importlib.metadata
+import re
+import typing as t
+import uuid
+import weakref
+from contextlib import nullcontext
+from datetime import datetime
+from datetime import timezone
+from functools import partial
+from platform import python_implementation
+import pytest
+import werkzeug.serving
+from markupsafe import Markup
+from werkzeug.exceptions import BadRequest
+from werkzeug.exceptions import Forbidden
+from werkzeug.exceptions import NotFound
+from werkzeug.http import parse_date
+from werkzeug.routing import BuildError
+from werkzeug.routing import RequestRedirect
+import flask
+from flask.globals import app_ctx
+from flask.testing import FlaskClient
+
+FILE: tests/test_blueprints.py
+import pytest
+from jinja2 import TemplateNotFound
+import flask
+
+FILE: tests/test_cli.py
+import importlib.metadata
+import os
+import platform
+import ssl
+import sys
+import types
+from functools import partial
+from pathlib import Path
+import click
+import pytest
+from click.testing import CliRunner
+from flask import Blueprint
+from flask import current_app
+from flask import Flask
+from flask.cli import AppGroup
+from flask.cli import find_best_app
+from flask.cli import FlaskGroup
+from flask.cli import get_version
+from flask.cli import load_dotenv
+from flask.cli import locate_app
+from flask.cli import NoAppException
+from flask.cli import prepare_import
+from flask.cli import run_command
+from flask.cli import ScriptInfo
+from flask.cli import with_appcontext
+
+FILE: tests/test_config.py
+import json
+import os
+import pytest
+import flask
+
+FILE: tests/test_converters.py
+from werkzeug.routing import BaseConverter
+from flask import request
+from flask import session
+from flask import url_for
+
+FILE: tests/test_helpers.py
+import io
+import os
+import pytest
+import werkzeug.exceptions
+import flask
+from flask.helpers import get_debug_flag
+
+FILE: tests/test_instance_config.py
+import os
+import pytest
+import flask
+
+FILE: tests/test_json.py
+import datetime
+import decimal
+import io
+import uuid
+import pytest
+from werkzeug.http import http_date
+import flask
+from flask import json
+from flask.json.provider import DefaultJSONProvider
+
+FILE: tests/test_json_tag.py
+from datetime import datetime
+from datetime import timezone
+from uuid import uuid4
+import pytest
+from markupsafe import Markup
+from flask.json.tag import JSONTag
+from flask.json.tag import TaggedJSONSerializer
+
+FILE: tests/test_logging.py
+import logging
+import sys
+from io import StringIO
+import pytest
+from flask.logging import default_handler
+from flask.logging import has_level_handler
+from flask.logging import wsgi_errors_stream
+
+FILE: tests/test_regression.py
+import flask
+
+FILE: tests/test_reqctx.py
+from __future__ import annotations
+import collections.abc as cabc
+import warnings
+from concurrent import futures
+import pytest
+import flask
+from flask.sessions import SecureCookieSessionInterface
+from flask.sessions import SessionInterface
+from flask.testing import FlaskClient
+
+FILE: tests/test_request.py
+from __future__ import annotations
+from flask import Flask
+from flask import Request
+from flask import request
+from flask.testing import FlaskClient
+
+FILE: tests/test_session_interface.py
+import flask
+from flask.globals import app_ctx
+from flask.sessions import SessionInterface
+
+FILE: tests/test_signals.py
+import flask
+
+FILE: tests/test_subclassing.py
+from io import StringIO
+import flask
+
+FILE: tests/test_templating.py
+import logging
+import pytest
+import werkzeug.serving
+from jinja2 import TemplateNotFound
+from markupsafe import Markup
+import flask
+
+FILE: tests/test_testing.py
+import importlib.metadata
+import click
+import pytest
+import flask
+from flask import appcontext_popped
+from flask.cli import ScriptInfo
+from flask.globals import _cv_app
+from flask.json import jsonify
+from flask.testing import EnvironBuilder
+from flask.testing import FlaskCliRunner
+
+FILE: tests/test_user_error_handler.py
+import pytest
+from werkzeug.exceptions import Forbidden
+from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import InternalServerError
+from werkzeug.exceptions import NotFound
+import flask
+
+FILE: tests/test_views.py
+import pytest
+import flask.views
+from flask.testing import FlaskClient
+
+FILE: tests/type_check/typing_app_decorators.py
+from __future__ import annotations
+from flask import Flask
+from flask import Response
+
+FILE: tests/type_check/typing_error_handler.py
+from __future__ import annotations
+from http import HTTPStatus
+from werkzeug.exceptions import BadRequest
+from werkzeug.exceptions import NotFound
+from flask import Flask
+
+FILE: tests/type_check/typing_route.py
+from __future__ import annotations
+import typing as t
+from http import HTTPStatus
+from flask import Flask
+from flask import jsonify
+from flask import stream_template
+from flask.templating import render_template
+from flask.views import View
+from flask.wrappers import Response
