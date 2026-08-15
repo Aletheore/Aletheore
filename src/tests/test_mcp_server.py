@@ -253,6 +253,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_overview",
         "aletheore_search",
         "aletheore_symbol_source",
+        "aletheore_verify_citations",
         "aletheore_scan",
         "aletheore_healthcheck",
         "aletheore_index",
@@ -263,7 +264,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_dependency",
     }
     assert expected.issubset(names)
-    assert len(names) == 30
+    assert len(names) == 31
     assert "aletheore_answer" not in names
 
 
@@ -475,6 +476,22 @@ async def test_aletheore_symbol_source_returns_exact_source(tmp_path):
     result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo"})
 
     assert tool_result_body(result)["result"]["source"] == "def foo():"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_verify_citations_reports_verified_and_unverified(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    (repo / "a.py").write_text("def foo():\n    pass\n")
+    server = build_server(repo)
+
+    report = "See `a.py:1` for the real one and `nonexistent.py:5` for the fake one."
+    result = await server.call_tool("aletheore_verify_citations", {"report_text": report})
+
+    body = tool_result_body(result)["result"]
+    assert body["total_citations"] == 2
+    assert len(body["verified"]) == 1
+    assert len(body["unverified"]) == 1
+    assert body["unverified"][0]["file"] == "nonexistent.py"
 
 
 @pytest.mark.asyncio

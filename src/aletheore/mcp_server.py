@@ -426,6 +426,23 @@ def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> No
         return _toon_result(find_symbol_source(evidence, repo_path, module, symbol))
 
 
+def _register_verify_citations_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_verify_citations", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_verify_citations(report_text: str) -> str:
+        """Checks every `file:line` citation in report_text against this
+        repo's real evidence and real file line counts. Call this on any
+        report you write before presenting it - a citation naming a file
+        that isn't in evidence, or a line beyond the file's real length, is
+        flagged as unverified rather than trusted."""
+        from aletheore.citation_verifier import local_line_count_fetcher, verify_citations
+
+        evidence = read_evidence(repo_path)
+        result = verify_citations(
+            report_text, evidence, fetch_line_count=local_line_count_fetcher(repo_path)
+        )
+        return _toon_result(result)
+
+
 def _register_code_evidence_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_find_evidence_for_endpoint", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_find_evidence_for_endpoint(method: str, path: str) -> str:
@@ -668,6 +685,7 @@ def build_server(
     _register_overview_tool(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
     _register_symbol_source_tool(mcp_instance, repo_path)
+    _register_verify_citations_tool(mcp_instance, repo_path)
     _register_code_evidence_tools(mcp_instance, repo_path)
 
     withheld: list[str] = []
