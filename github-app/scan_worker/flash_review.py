@@ -410,6 +410,28 @@ def _line_is_near_diff(line: int, valid: set[int]) -> bool:
     return any(abs(line - candidate) <= DIFF_LINE_TOLERANCE for candidate in valid)
 
 
+def _lookup_valid_lines(file: str, valid_lines: dict[str, set[int]]) -> set[int]:
+    """Exact match first; fall back to a path-suffix match so a citation
+    naming a file relative to its own repo root still resolves when the
+    diff's own filename is longer (nested under a wrapper directory), or
+    the reverse. Matches on a '/' boundary, never a bare substring, so
+    'foo.py' cannot match 'not_foo.py'. Ambiguous matches (more than one
+    diff filename sharing that suffix, e.g. two 'utils.py' in different
+    packages) are treated as no match rather than guessed at - a wrong
+    guess here would ground a finding against the wrong file's line
+    numbers, which is worse than dropping it.
+    """
+    if file in valid_lines:
+        return valid_lines[file]
+    candidates = [
+        key for key in valid_lines
+        if key.endswith("/" + file) or file.endswith("/" + key)
+    ]
+    if len(candidates) == 1:
+        return valid_lines[candidates[0]]
+    return set()
+
+
 def _validate_findings(
     findings: list[dict], diff_text: str, file_contents: dict[str, str] | None = None
 ) -> list[dict]:
@@ -429,7 +451,9 @@ def _validate_findings(
     in_diff = []
     out_of_diff = []
     for finding in findings:
-        if _line_is_near_diff(finding["line"], valid_lines.get(finding["file"], set())):
+        if _line_is_near_diff(
+            finding["line"], _lookup_valid_lines(finding["file"], valid_lines)
+        ):
             in_diff.append(finding)
         else:
             out_of_diff.append(finding)

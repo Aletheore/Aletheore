@@ -7,6 +7,7 @@ from scan_worker.flash_review import (
     FLASH_REVIEW_SYSTEM_PROMPT,
     files_missing_from_review_context,
     _diff_valid_lines,
+    _lookup_valid_lines,
     _line_citation_content_matches,
     _names_referenced_in_diff,
     _quoted_strings,
@@ -48,6 +49,36 @@ def test_diff_valid_lines_tracks_multiple_files_separately():
     )
 
     assert _diff_valid_lines(diff_text) == {"a.py": {5}, "b.py": {10}}
+
+
+def test_lookup_valid_lines_falls_back_to_unambiguous_path_suffix():
+    valid_lines = {"benchmark-sandbox/case-1/pkg/module.py": {5, 6, 7}}
+    assert _lookup_valid_lines("pkg/module.py", valid_lines) == {5, 6, 7}
+
+
+def test_lookup_valid_lines_matches_the_reverse_direction_too():
+    valid_lines = {"pkg/module.py": {5, 6, 7}}
+    assert _lookup_valid_lines("benchmark-sandbox/case-1/pkg/module.py", valid_lines) == {5, 6, 7}
+
+
+def test_lookup_valid_lines_refuses_to_guess_between_ambiguous_matches():
+    valid_lines = {
+        "service_a/utils.py": {1, 2},
+        "service_b/utils.py": {10, 11},
+    }
+    assert _lookup_valid_lines("utils.py", valid_lines) == set()
+
+
+def test_lookup_valid_lines_does_not_match_on_a_bare_substring():
+    valid_lines = {"pkg/not_foo.py": {1, 2}}
+    assert _lookup_valid_lines("foo.py", valid_lines) == set()
+
+
+def test_validate_findings_keeps_a_finding_whose_path_is_a_suffix_of_the_diffs_filename():
+    diff_text = "--- pkg/module.py ---\n@@ -5,3 +5,3 @@\n+line\n"
+    findings = [{"file": "module.py", "line": 5, "issue": "should still ground"}]
+    # Only one file in the diff, so suffix resolution is unambiguous.
+    assert _validate_findings(findings, diff_text) == findings
 
 
 def test_validate_findings_keeps_findings_inside_diff_hunks():
