@@ -1,6 +1,7 @@
 import logging
 import json
 import logging
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -25,6 +26,8 @@ SPEND_LOCK_NAMESPACE = 2
 # composite (installation, repo) pair, not a single id.
 REPO_CHECKOUT_LOCK_NAMESPACE = 3
 ADVISORY_LOCK_TIMEOUT = "5s"
+INSTALLATION_SPEND_LOCK_MAX_ATTEMPTS = 4
+INSTALLATION_SPEND_LOCK_RETRY_DELAY_SECONDS = 3
 
 
 @lru_cache(maxsize=None)
@@ -326,10 +329,28 @@ def installation_spend_lock(dsn: str, installation_id: int):
         with conn.cursor() as cur:
             cur.execute("SELECT set_config('lock_timeout', %s, false)", (ADVISORY_LOCK_TIMEOUT,))
             # Namespace 2 is reserved for the session-scoped LLM spend lock.
-            cur.execute(
-                "SELECT pg_advisory_lock(%s, %s)",
-                (SPEND_LOCK_NAMESPACE, installation_id),
-            )
+            # Retries a transient LockNotAvailable rather than failing the
+            # whole job on the first attempt. Confirmed in production that
+            # every observed timeout here fell inside a Postgres checkpoint
+            # write window (60-160s, ~5min apart) - a genuinely transient
+            # condition, not another job holding this lock too long (that
+            # was a separate, now-fixed bug - see run_flash_review_job's
+            # comment). Each attempt already blocks up to
+            # ADVISORY_LOCK_TIMEOUT waiting for the lock, so this doesn't
+            # change behavior when the lock is actually contended by another
+            # job - only when the acquisition itself is being slowed by
+            # unrelated DB I/O pressure.
+            for attempt in range(1, INSTALLATION_SPEND_LOCK_MAX_ATTEMPTS + 1):
+                try:
+                    cur.execute(
+                        "SELECT pg_advisory_lock(%s, %s)",
+                        (SPEND_LOCK_NAMESPACE, installation_id),
+                    )
+                    break
+                except psycopg.errors.LockNotAvailable:
+                    if attempt == INSTALLATION_SPEND_LOCK_MAX_ATTEMPTS:
+                        raise
+                    time.sleep(INSTALLATION_SPEND_LOCK_RETRY_DELAY_SECONDS)
         yield
     finally:
         with conn.cursor() as cur:

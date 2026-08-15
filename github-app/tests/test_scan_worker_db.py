@@ -3,6 +3,8 @@ import os
 
 import pytest
 
+import scan_worker.db as scan_worker_db
+
 from datetime import timedelta
 
 from aletheore.evidence import EVIDENCE_VERSION
@@ -770,6 +772,82 @@ async def test_installation_spend_lock_releases_after_context_exits(pool):
             acquired = cur.fetchone()[0]
             cur.execute("SELECT pg_advisory_unlock(%s, %s)", (SPEND_LOCK_NAMESPACE, 301))
     assert acquired is True
+
+
+def test_installation_spend_lock_retries_transient_lock_not_available(monkeypatch):
+    execute_calls = []
+    sleep_calls = []
+    lock_attempts = 0
+
+    class _Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def execute(self, query, params):
+            nonlocal lock_attempts
+            execute_calls.append((query, params))
+            if "pg_advisory_lock" in query:
+                lock_attempts += 1
+                if lock_attempts < 3:
+                    raise scan_worker_db.psycopg.errors.LockNotAvailable("transient")
+
+    class _Connection:
+        def cursor(self):
+            return _Cursor()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(scan_worker_db.psycopg, "connect", lambda *args, **kwargs: _Connection())
+    monkeypatch.setattr(scan_worker_db.time, "sleep", sleep_calls.append)
+
+    with scan_worker_db.installation_spend_lock("postgresql://unused", 301):
+        pass
+
+    assert lock_attempts == 3
+    assert sleep_calls == [scan_worker_db.INSTALLATION_SPEND_LOCK_RETRY_DELAY_SECONDS] * 2
+    assert sum("set_config" in query for query, _ in execute_calls) == 1
+    assert sum("pg_advisory_unlock" in query for query, _ in execute_calls) == 1
+
+
+def test_installation_spend_lock_reraises_after_retry_limit(monkeypatch):
+    lock_attempts = 0
+    sleep_calls = []
+
+    class _Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def execute(self, query, params):
+            nonlocal lock_attempts
+            if "pg_advisory_lock" in query:
+                lock_attempts += 1
+                raise scan_worker_db.psycopg.errors.LockNotAvailable("persistent")
+
+    class _Connection:
+        def cursor(self):
+            return _Cursor()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(scan_worker_db.psycopg, "connect", lambda *args, **kwargs: _Connection())
+    monkeypatch.setattr(scan_worker_db.time, "sleep", sleep_calls.append)
+
+    with pytest.raises(scan_worker_db.psycopg.errors.LockNotAvailable, match="persistent"):
+        with scan_worker_db.installation_spend_lock("postgresql://unused", 301):
+            pass
+
+    assert lock_attempts == scan_worker_db.INSTALLATION_SPEND_LOCK_MAX_ATTEMPTS
+    assert sleep_calls == [scan_worker_db.INSTALLATION_SPEND_LOCK_RETRY_DELAY_SECONDS] * (
+        scan_worker_db.INSTALLATION_SPEND_LOCK_MAX_ATTEMPTS - 1
+    )
 
 
 @pytest.mark.asyncio

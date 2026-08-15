@@ -25,6 +25,40 @@ convenience sample; the whole point is the sample is externally fixed.
 3. Report the number honestly, including the cases with zero findings
    (that's real data too, not a gap in coverage).
 
+## Critical methodology bug found 2026-08-15 (post-deploy, post-retrigger)
+
+After the `installation_spend_lock` scope fix (see below) was deployed, all
+"coverage" checks this session — including ones reported as "17/25 done",
+"25/25 done" — polled with:
+```
+gh api .../issues/$n/comments --jq '... | contains("aletheore-flash-review") ...'
+```
+**This is a false positive.** `upsert_pr_comment` edits the SAME comment in
+place across every retrigger, and the `aletheore-flash-review` HTML marker is
+present in the comment body **whether the current content is a completed
+review OR a "Aletheore couldn't complete this flash review: canceling
+statement due to lock timeout" failure message.** A PR whose *first*
+retrigger succeeded and was later overwritten by a *second* retrigger's
+failure still matches this check. Verified directly: **15 of 25 PRs'
+current comment is a failure message**, not a real review, despite this
+session having reported "25/25" complete.
+
+**The fix**: check actual body content, not marker presence —
+`grep -q "couldn't complete"` → FAILED, else look for either "No issues
+found in this diff." / "No issues held up" / a `` `file:line` `` citation
+bullet → REAL_REVIEW. Any future coverage check in this effort MUST use
+content, not marker presence.
+
+**Root cause of the underlying failures** (separate from the lock-scope bug,
+confirmed via production Postgres logs): checkpoints on the prod host
+(`root@187.127.169.89`, `github-app-postgres-1`) take 60-160s to write out,
+recurring roughly every 5 minutes (`checkpoint_timeout` default), and every
+observed `LockNotAvailable` failure timestamp falls inside a checkpoint
+window. This is real infra signal, tracked separately (see task chip "Fix
+Postgres checkpoint I/O causing lock timeouts" / spawned task
+`task_f80ae561`) — not something more retriggering permanently fixes, just
+reduces the odds of hitting per attempt.
+
 ## State as of last update
 
 - [x] Downloaded SWE-bench Verified (500 instances, 12 Python repos) →
@@ -284,6 +318,86 @@ by a worker yet. A Monitor (task `by72gwrmn`) is polling
 it also verifies the `aletheore-flash-review` HTML comment marker is
 present, not just that the comment changed, since PR #3 demonstrated a
 comment can update with only the evidence-diff half landed.
+
+## Root cause fixed at the source (not another retrigger)
+
+After finding 14/25 PRs missing a flash-review comment (not the 3-4
+originally thought — every burst of retrigger pushes recreated the same
+concurrency spike), the user correctly redirected: stop hammering the
+symptom with more spaced retriggers, fix the actual bug.
+
+Root cause, confirmed in production logs (not guessed): `installation_spend_lock`
+(`github-app/scan_worker/db.py:317`, 5s `ADVISORY_LOCK_TIMEOUT`) wrapped
+the entire `_run_flash_review` call in `jobs.py` — a real LLM call plus
+several GitHub API round-trips, measured up to 5m50s in production — when
+the lock's actual job (per its own docstring) is just to make the spend
+check-then-record cycle atomic. Any review queued behind another for the
+same installation had no chance to wait; it failed outright with
+`psycopg.errors.LockNotAvailable`.
+
+**Fixed** in `github-app/scan_worker/jobs.py`: the lock is now acquired
+twice, briefly — once for the initial cap check, once (inside
+`_run_flash_review`) just for the final spend-record write — never around
+the expensive work between them. Verified this preserves the original F25
+invariant (`test_flash_review_job_records_spend_and_count_while_the_lock_is_still_held`
+passes unchanged) and added a new regression test
+(`test_flash_review_job_releases_lock_during_the_review_itself`) for the
+actual gap that was missing coverage. Full test suite: 146/146 in
+`test_jobs.py`, 702 passed / 3 failed (all 3 confirmed environmental, no
+local redis/postgres in this sandbox, none reference `jobs.py`) across the
+whole `github-app/tests/` suite.
+
+**PR:** https://github.com/Aletheore/Aletheore/pull/251 (also bundles the
+`normalize_aletheore` fix and this 25-case corpus, already committed
+separately in the same branch for clean history). Same broad-lock pattern
+also confirmed in `run_managed_audit_pr_job`/`run_managed_audit_api_job` —
+not fixed here, tracked separately (task #205) so this PR stays scoped to
+what's actually tested and verified.
+
+**Once merged and deployed**, re-run the whole SWE-bench pipeline clean
+from scratch — the fix should mean **zero** lock-timeout failures even
+with all 25 PRs' worth of jobs landing at once, no spacing needed:
+
+```bash
+cd scratchpad
+python3 run_swebench_cases.py   # rebuilds all 25 cases + opens 25 fresh PRs
+# wait for Flash Review (should now succeed cleanly, no retriggers needed)
+python3 measure_swebench_citations.py   # the real number
+```
+
+Before re-running, the 25 PRs from THIS run (`Aletheore/pr-review-benchmark-sandbox`
+#1-#25, several polluted by mid-flight retrigger attempts before the
+proper fix) should probably be closed/ignored rather than reused — cleaner
+to start over once the fix is live, since several of those PRs have messy
+git history from the retrigger churn documented above.
+
+## Clean re-run in progress (post-fix)
+
+Fix deployed to production and verified live:
+- `scan-worker` rebuilt from `origin/master` at `112093a` (PR #251 merged)
+  and restarted with `docker compose up -d --no-deps --scale scan-worker=2
+  scan-worker` — confirmed both containers running the new code
+  (`grep -c 'never around the expensive work' /app/scan_worker/jobs.py`
+  returns 1 on both).
+- Found and cleaned up a real deploy hygiene issue while verifying: an
+  orphaned container `github-app-scan-worker-2-1` (different image,
+  `github-app-scan-worker-2`, not the current `scan-worker` service at
+  all) was still running 20h-old code alongside the two freshly-deployed
+  replicas — leftover from before this got consolidated into one scaled
+  `scan-worker` service. Stopped and removed; confirmed exactly 2 workers
+  registered on the `scans` queue in Redis afterward (`rq:workers:scans`).
+
+Old messy PRs (#1-#25 on `Aletheore/pr-review-benchmark-sandbox`, several
+polluted by mid-flight retrigger attempts before the fix) all closed. The
+already-correct case branches (`case-swebench-*`, unchanged — only the
+production bug needed fixing, not the case content) were reopened as
+fresh PRs **#26-#50** on the same repo. `/tmp/swebench_cases_built.json`
+updated to point each case's `pr_url` at its new PR number.
+
+A Monitor (task `bnjx8hdhz`) is polling `queue_depth` and flash-review
+completion count across PRs #26-#50 every 45s. Expectation this time:
+**zero** `LockNotAvailable` failures even with all 25 landing close
+together, since the lock no longer holds through the review itself.
 
 ## Next steps once all 25 PRs exist and Flash Review has commented
 

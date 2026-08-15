@@ -294,6 +294,7 @@ services:
   postgres:
     image: postgres:16
     restart: unless-stopped
+    command: postgres -c shared_buffers=1GB -c max_wal_size=4GB
     environment:
       - POSTGRES_DB=aletheore_app
       - POSTGRES_USER=aletheore
