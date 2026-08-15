@@ -1,0 +1,9 @@
+case_id: swebench-django-14434
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: django/db/backends/base/schema.py
+expected_line: 1241
+fix_reference: 'SWE-bench Verified instance: django__django-14434 (https://www.swebench.com/)'
+description: "Statement created by _create_unique_sql makes references_column always false Description\
+  \ \t This is due to an instance of Table is passed as an argument to Columns when a string is expected."

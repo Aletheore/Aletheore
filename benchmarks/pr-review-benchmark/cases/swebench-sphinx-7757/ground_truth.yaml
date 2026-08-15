@@ -1,0 +1,11 @@
+case_id: swebench-sphinx-7757
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: sphinx/util/inspect.py
+expected_line: 518
+fix_reference: 'SWE-bench Verified instance: sphinx-doc__sphinx-7757 (https://www.swebench.com/)'
+description: "The default value for positional only argument has vanished **Describe the bug**\r The default\
+  \ value for positional only argument has vanished\r \r **To Reproduce**\r \r Build following document:\r\
+  \ ```\r .. py:function:: foo(a, b=0, /, c=1)\r ```\r \r Result:\r <img width=\"148\" alt=\"\u30B9\u30AF\
+  \u30EA\u30FC\u30F3\u30B7\u30E7\u30C3\u30C8 2020-05-30 23 43 01\" src=\"https://user-images.githubusercontent.com/748828/83331159-4eab4a80-a2cf-11ea-9559-9b17cc56b"

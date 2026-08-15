@@ -1,0 +1,2 @@
+repo_url=https://github.com/Aletheore/astropy.git
+base_commit=1ccfaad6623bbe89274ce60ac33d8ebd6848df92

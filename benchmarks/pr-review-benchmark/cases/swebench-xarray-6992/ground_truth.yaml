@@ -1,0 +1,11 @@
+case_id: swebench-xarray-6992
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: xarray/core/dataset.py
+expected_line: 4026
+fix_reference: 'SWE-bench Verified instance: pydata__xarray-6992 (https://www.swebench.com/)'
+description: 'index refactor: more `_coord_names` than `_variables` on Dataset ### What happened?  `xr.core.dataset.DataVariables`
+  assumes that everything that is in `ds._dataset._variables` and not in `self._dataset._coord_names`
+  is a "data variable". However, since the index refactor we can end up with more `_coord_names` than
+  `_variables` which breaks a number of stuff (e.g. the repr).  ### What did you expe'

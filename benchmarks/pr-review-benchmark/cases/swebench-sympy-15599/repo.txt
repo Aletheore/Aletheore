@@ -1,0 +1,2 @@
+repo_url=https://github.com/Aletheore/sympy.git
+base_commit=329bf8b3b207af901bbb1d4bbde08410fd0e0466

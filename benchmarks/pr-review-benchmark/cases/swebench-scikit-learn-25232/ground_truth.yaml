@@ -1,0 +1,12 @@
+case_id: swebench-scikit-learn-25232
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: sklearn/impute/_iterative.py
+expected_line: 117
+fix_reference: 'SWE-bench Verified instance: scikit-learn__scikit-learn-25232 (https://www.swebench.com/)'
+description: "IterativeImputer has no parameter \"fill_value\" ### Describe the workflow you want to enable\r\
+  \ \r In the first imputation round of `IterativeImputer`, an initial value needs to be set for the missing\
+  \ values. From its [docs](https://scikit-learn.org/stable/modules/generated/sklearn.impute.IterativeImputer.html):\r\
+  \ \r > **initial_strategy {\u2018mean\u2019, \u2018median\u2019, \u2018most_frequent\u2019, \u2018constant\u2019\
+  }, default=\u2019mean\u2019**\r"

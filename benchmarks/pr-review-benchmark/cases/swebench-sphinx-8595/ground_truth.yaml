@@ -1,0 +1,12 @@
+case_id: swebench-sphinx-8595
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: sphinx/ext/autodoc/__init__.py
+expected_line: 1074
+fix_reference: 'SWE-bench Verified instance: sphinx-doc__sphinx-8595 (https://www.swebench.com/)'
+description: "autodoc: empty __all__ attribute is ignored **Describe the bug**\r autodoc: empty `__all__`\
+  \ attribute is ignored\r \r **To Reproduce**\r ```\r # example.py\r __all__ = []\r \r \r def foo():\r\
+  \     \"docstring\"\r \r \r def bar():\r     \"docstring\"\r \r \r def baz():\r     \"docstring\"\r\
+  \ ```\r ```\r # index.rst\r .. automodule:: example\r    :members:\r ```\r \r All foo, bar, and baz\
+  \ are shown.\r \r **Expected behavior**\r No entr"

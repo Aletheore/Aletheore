@@ -1,0 +1,11 @@
+case_id: swebench-sympy-15599
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: sympy/core/mod.py
+expected_line: 1
+fix_reference: 'SWE-bench Verified instance: sympy__sympy-15599 (https://www.swebench.com/)'
+description: "Mod(3*i, 2) unchanged `Mod(3*i, 2)` should reduce to `Mod(i, 2)` (as reported in [this post](https://stackoverflow.com/questions/53302669/sympify-does-not-simplify-remainder-as-expected))\
+  \ and will do so with a change something like this:\r ```diff\r diff --git a/sympy/core/mod.py b/sympy/core/mod.py\r\
+  \ index eae2563..b1ff867 100644\r --- a/sympy/core/mod.py\r +++ b/sympy/core/mod.py\r @@ -123,9 +123,11\
+  \ @"

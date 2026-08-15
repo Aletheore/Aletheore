@@ -1,0 +1,12 @@
+case_id: swebench-django-13670
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: django/utils/dateformat.py
+expected_line: 325
+fix_reference: 'SWE-bench Verified instance: django__django-13670 (https://www.swebench.com/)'
+description: "dateformat.y() doesn't support years < 1000. Description \t  \t\t(last modified by Sam)\
+  \ \t  When using the the dateformat of django with a date before 999 (or 99 and 9 for similar matters)\
+  \ and the format character \"y\" no leading zero will be printed. This is not consistent with the way\
+  \ the python datetime module and PHP handle that character \"y\" in format strings: django (version\
+  \ 3.1): >>> import date"

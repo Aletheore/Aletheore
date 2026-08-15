@@ -1,0 +1,2 @@
+repo_url=https://github.com/Aletheore/sphinx.git
+base_commit=a34a32c54967fc89d20c455afab8448677028a9f

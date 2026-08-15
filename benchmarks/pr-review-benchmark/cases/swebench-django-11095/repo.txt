@@ -1,0 +1,2 @@
+repo_url=https://github.com/Aletheore/django.git
+base_commit=7797114bb7e225c850244c096cebbe63d87ed00d

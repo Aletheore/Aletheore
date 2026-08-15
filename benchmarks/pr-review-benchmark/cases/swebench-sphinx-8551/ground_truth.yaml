@@ -1,0 +1,12 @@
+case_id: swebench-sphinx-8551
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: sphinx/domains/python.py
+expected_line: 272
+fix_reference: 'SWE-bench Verified instance: sphinx-doc__sphinx-8551 (https://www.swebench.com/)'
+description: ":type: and :rtype: gives false ambiguous class lookup warnings **Describe the bug**\r The\
+  \ implicit xrefs created by the info fields ``:type:`` and ``:rtype:`` seems to do lookup differently\
+  \ than explicit xref roles. For unqualified names it seems like they search for the name in every (sub)module\
+  \ instead of in the current module and then parent modules.\r \r **To Reproduce**\r ```rst\r .. py:class::\
+  \ mo"

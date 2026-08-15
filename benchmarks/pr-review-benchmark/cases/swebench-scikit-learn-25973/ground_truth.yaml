@@ -1,0 +1,12 @@
+case_id: swebench-scikit-learn-25973
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: sklearn/feature_selection/_sequential.py
+expected_line: 8
+fix_reference: 'SWE-bench Verified instance: scikit-learn__scikit-learn-25973 (https://www.swebench.com/)'
+description: "Unable to pass splits to SequentialFeatureSelector ### Describe the bug  This runs fine\
+  \ with e.g. `cv=5`, but according to the documentation, it should also be able to take an iterable of\
+  \ splits.\r However, passing splits from the cross validator fails\r \r Im fairly certain I have done\
+  \ similar things in the past to other classes in scikit-learn requiring a `cv` parameter.\r \r If somebody\
+  \ could confir"

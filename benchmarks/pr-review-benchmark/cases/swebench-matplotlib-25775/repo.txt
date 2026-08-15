@@ -1,0 +1,2 @@
+repo_url=https://github.com/Aletheore/matplotlib.git
+base_commit=0325ab8eed1ba90ee306649ee792bc9f932ee199

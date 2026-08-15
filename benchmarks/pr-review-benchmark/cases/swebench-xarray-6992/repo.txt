@@ -1,0 +1,2 @@
+repo_url=https://github.com/Aletheore/xarray.git
+base_commit=e0bcda3d67401e76fe62135c3dece13e616b71b4

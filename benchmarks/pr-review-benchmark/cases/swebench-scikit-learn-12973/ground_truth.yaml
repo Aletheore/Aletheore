@@ -1,0 +1,11 @@
+case_id: swebench-scikit-learn-12973
+language: python
+category: real_bug_fix
+bug_type: swebench-derived
+expected_file: sklearn/linear_model/least_angle.py
+expected_line: 1479
+fix_reference: 'SWE-bench Verified instance: scikit-learn__scikit-learn-12973 (https://www.swebench.com/)'
+description: "LassoLarsIC: unintuitive copy_X behaviour Hi, I would like to report what seems to be a\
+  \ bug in the treatment of the `copy_X` parameter of the `LassoLarsIC` class. Because it's a simple bug,\
+  \ it's much easier to see in the code directly than in the execution, so I am not posting steps to reproduce\
+  \ it.\r \r As you can see here, LassoLarsIC accepts a copy_X parameter.\r https://github.com/scikit-learn/sc"
