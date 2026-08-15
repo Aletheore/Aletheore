@@ -70,7 +70,15 @@ def find_symbol_source(
 
 
 def find_branch(evidence: dict, target: str | None) -> dict:
-    for branch in evidence["git"]["branches"]:
+    # A repo with no commits yields git == {"available": False} - see
+    # air_schema.py's git section docstring and list_branches' matching
+    # guard. No branch named `target` can exist there, so this is a normal
+    # not-found rather than a special case: same exception as any other
+    # missing branch name, not a raw KeyError on a missing "branches" key.
+    git = evidence["git"]
+    if git.get("available") is False:
+        raise BranchNotFoundInEvidenceError(target)
+    for branch in git["branches"]:
         if branch["name"] == target:
             return branch
     raise BranchNotFoundInEvidenceError(target)
@@ -150,6 +158,63 @@ def find_environment_variables(evidence: dict, target: str | None) -> dict:
 
 def find_hotspots(evidence: dict, target: str | None) -> list[dict]:
     return evidence["git"].get("hotspots", [])
+
+
+def list_modules(evidence: dict) -> list[str]:
+    return [module["path"] for module in evidence["repository"]["modules"]]
+
+
+def list_clusters(evidence: dict) -> list[dict]:
+    return [
+        {"id": cluster["id"], "module_count": len(cluster["modules"])}
+        for cluster in evidence["architecture"]["clusters"]
+    ]
+
+
+def list_branches(evidence: dict) -> list[str]:
+    # A repo with no commits yields git == {"available": False} - see
+    # air_schema.py's git section docstring. There are no branches to list
+    # in that case, but that's honestly indistinguishable from "no branches
+    # were found" via a plain list return; callers that need to tell those
+    # apart should use aletheore_overview's git.available instead.
+    git = evidence["git"]
+    if git.get("available") is False:
+        return []
+    return [branch["name"] for branch in git["branches"]]
+
+
+def find_repo_overview(evidence: dict) -> dict:
+    repo = evidence["repository"]
+    git = evidence["git"]
+    arch = evidence["architecture"]
+    dependency_graph = repo["dependency_graph"]
+    # A repo with no commits yields git == {"available": False} and nothing
+    # else (see air_schema.py). Only `available` is safe to read
+    # unconditionally there - signal that honestly instead of indexing into
+    # keys that don't exist or silently reporting zero commits, which would
+    # be indistinguishable from a repo that genuinely has zero commits.
+    if git.get("available") is False:
+        git_summary: dict = {"available": False}
+    else:
+        git_summary = {
+            "repo_age_days": git["repo_age_days"],
+            "total_commits": git["total_commits"],
+            "commit_cadence": git["commit_cadence"],
+            "branch_count": len(git["branches"]),
+        }
+    return {
+        "languages": repo["languages"],
+        "frameworks": repo["frameworks"],
+        "monorepo": repo["monorepo"],
+        "dependency_graph_summary": {
+            "node_count": len(dependency_graph["nodes"]),
+            "edge_count": len(dependency_graph["edges"]),
+        },
+        "module_count": len(repo["modules"]),
+        "cluster_count": len(arch["clusters"]),
+        "cross_cluster_edge_count": len(arch["cross_cluster_edges"]),
+        "git": git_summary,
+    }
 
 
 QUERY_FUNCTIONS: dict[str, tuple[Callable[[dict, str | None], Any], bool]] = {

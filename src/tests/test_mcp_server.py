@@ -98,6 +98,8 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
         "branches": [{"name": "main", "ahead_of_main": 0}],
         "ownership": [{"path": "a.py", "top_author": "alice"}],
         "total_commits": 5,
+        "repo_age_days": 30,
+        "commit_cadence": {"weekly_counts": [1, 2, 1], "trend": "stable", "most_recent_week_partial": False},
         "hotspots": [
             {
                 "path": "a.py",
@@ -247,8 +249,11 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_environment_variables",
         "aletheore_changes",
         "aletheore_neighborhood",
+        "aletheore_list",
+        "aletheore_overview",
         "aletheore_search",
         "aletheore_symbol_source",
+        "aletheore_verify_citations",
         "aletheore_scan",
         "aletheore_healthcheck",
         "aletheore_index",
@@ -259,7 +264,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_dependency",
     }
     assert expected.issubset(names)
-    assert len(names) == 28
+    assert len(names) == 31
     assert "aletheore_answer" not in names
 
 
@@ -352,6 +357,22 @@ async def test_aletheore_search_codebase_returns_friendly_error_when_index_not_b
 
 
 @pytest.mark.asyncio
+async def test_aletheore_search_codebase_returns_friendly_error_on_dimension_mismatch(tmp_path):
+    from aletheore.mcp_server import IndexDimensionMismatchError
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    with patch(
+        "aletheore.mcp_server.search_index",
+        side_effect=IndexDimensionMismatchError("the index at ... holds 1536-dimension vectors ..."),
+    ):
+        result = await server.call_tool("aletheore_search_codebase", {"query": "where is foo"})
+
+    assert "1536-dimension" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
 async def test_aletheore_answer_returns_friendly_error_when_index_not_built(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo, answer_adapter=MagicMock())
@@ -368,6 +389,27 @@ async def test_aletheore_answer_returns_friendly_error_when_index_not_built(tmp_
 
 
 @pytest.mark.asyncio
+async def test_aletheore_answer_returns_friendly_error_on_dimension_mismatch(tmp_path):
+    # Same class of bug as aletheore_search_codebase above: answer_question
+    # calls search_index too (see aletheore/answer.py), so it can raise the
+    # same IndexDimensionMismatchError. Before this fix, aletheore_answer
+    # only caught IndexNotFoundError and let this one escape as a raw
+    # traceback.
+    from aletheore.mcp_server import IndexDimensionMismatchError
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, answer_adapter=MagicMock())
+
+    with patch(
+        "aletheore.mcp_server.answer_question",
+        side_effect=IndexDimensionMismatchError("the index at ... holds 1536-dimension vectors ..."),
+    ):
+        result = await server.call_tool("aletheore_answer", {"question": "what does foo do"})
+
+    assert "1536-dimension" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
 async def test_aletheore_index_tool_builds_the_search_index(tmp_path):
     # Before this fix, aletheore_search_codebase/aletheore_answer required
     # .aletheore/index.lancedb, buildable only via the CLI's `aletheore
@@ -381,6 +423,33 @@ async def test_aletheore_index_tool_builds_the_search_index(tmp_path):
 
     assert tool_result_body(result)["result"] == {"indexed_chunks": 7}
     mock_build_index.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_aletheore_index_tool_forbids_hosted_embeddings_by_default(tmp_path):
+    # Default MCP posture is EFFECT_WRITE + EFFECT_NETWORK only (mcp_server.py's
+    # _DEFAULT_ALLOWED_EFFECTS) - EFFECT_EXTERNAL is off, so a logged-in user's
+    # code must not silently reach the hosted embedding endpoint through MCP.
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)  # default effects, no `allow=` override
+
+    with patch("aletheore.search_index.build_index", return_value=3) as mock_build_index:
+        await server.call_tool("aletheore_index", {})
+
+    _, kwargs = mock_build_index.call_args
+    assert kwargs["allow_hosted"] is False
+
+
+@pytest.mark.asyncio
+async def test_aletheore_index_tool_permits_hosted_embeddings_when_external_is_allowed(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, allow=frozenset({"write", "network", "external"}))
+
+    with patch("aletheore.search_index.build_index", return_value=3) as mock_build_index:
+        await server.call_tool("aletheore_index", {})
+
+    _, kwargs = mock_build_index.call_args
+    assert kwargs["allow_hosted"] is True
 
 
 @pytest.mark.asyncio
@@ -408,6 +477,19 @@ async def test_aletheore_imports_tool_returns_correct_result(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_aletheore_overview_returns_repo_summary(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_overview", {})
+
+    body = tool_result_body(result)["result"]
+    assert body["module_count"] == 2
+    assert "languages" in body
+    assert "git" in body
+
+
+@pytest.mark.asyncio
 async def test_aletheore_symbol_source_returns_exact_source(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo)
@@ -415,6 +497,22 @@ async def test_aletheore_symbol_source_returns_exact_source(tmp_path):
     result = await server.call_tool("aletheore_symbol_source", {"module": "a.py", "symbol": "foo"})
 
     assert tool_result_body(result)["result"]["source"] == "def foo():"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_verify_citations_reports_verified_and_unverified(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    (repo / "a.py").write_text("def foo():\n    pass\n")
+    server = build_server(repo)
+
+    report = "See `a.py:1` for the real one and `nonexistent.py:5` for the fake one."
+    result = await server.call_tool("aletheore_verify_citations", {"report_text": report})
+
+    body = tool_result_body(result)["result"]
+    assert body["total_citations"] == 2
+    assert len(body["verified"]) == 1
+    assert len(body["unverified"]) == 1
+    assert body["unverified"][0]["file"] == "nonexistent.py"
 
 
 @pytest.mark.asyncio
@@ -584,6 +682,28 @@ async def test_aletheore_changes_tool_reports_no_prior_snapshot(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_aletheore_changes_returns_clear_error_for_incompatible_snapshot(tmp_path):
+    from aletheore.history import save_snapshot
+    from tests.air_fixtures import minimal_air_evidence
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    evidence = minimal_air_evidence()
+    save_snapshot(evidence, repo)  # first snapshot, compatible version
+
+    bad = minimal_air_evidence()
+    bad["aletheore_version"] = "0.0.1-does-not-exist"
+    save_snapshot(bad, repo)  # second snapshot, incompatible
+
+    result = await server.call_tool("aletheore_changes", {})
+
+    body = tool_result_body(result)["result"]
+    assert "error" in body
+    assert "0.0.1-does-not-exist" in body["error"]
+
+
+@pytest.mark.asyncio
 async def test_aletheore_neighborhood_combines_imports_imported_by_and_cluster(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo)
@@ -735,6 +855,23 @@ async def test_aletheore_search_caps_at_200_and_flags_truncated(tmp_path):
     assert result_body["truncated"] is True
 
 
+@pytest.mark.asyncio
+async def test_aletheore_search_respects_repo_config_ignored_paths(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    (repo / "vendor").mkdir()
+    (repo / "vendor" / "bundle.js").write_text("needle in a vendored file")
+    (repo / "real.py").write_text("needle in a real file")
+    (repo / ".aletheore.json").write_text(json.dumps({"ignored_paths": ["vendor/**"]}))
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_search", {"pattern": "needle"})
+
+    matches = tool_result_body(result)["result"]["matches"]
+    matched_paths = {m["path"] for m in matches}
+    assert "real.py" in matched_paths
+    assert "vendor/bundle.js" not in matched_paths
+
+
 def make_git_repo_with_source(tmp_path: Path) -> Path:
     repo = tmp_path / "git_repo"
     repo.mkdir()
@@ -857,3 +994,23 @@ async def test_aletheore_healthcheck_tool_rejects_file_scheme_base_url(tmp_path)
 
     body = tool_result_body(result)["result"]
     assert "http or https" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_list_modules(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_list", {"kind": "modules"})
+
+    assert tool_result_body(result) == {"result": ["a.py", "b.py"]}
+
+
+@pytest.mark.asyncio
+async def test_aletheore_list_unknown_kind_returns_an_error(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_list", {"kind": "nonsense"})
+
+    assert "error" in tool_result_body(result)["result"]

@@ -31,10 +31,15 @@ from aletheore.query import (
     find_cluster,
     find_imported_by,
     find_imports,
+    find_repo_overview,
     find_symbol_source,
+    list_branches,
+    list_clusters,
+    list_modules,
 )
+from aletheore.repo_config import load_repo_config
 from aletheore.secrets import iter_all_files
-from aletheore.search_index import IndexNotFoundError, search_index
+from aletheore.search_index import IndexDimensionMismatchError, IndexNotFoundError, search_index
 from aletheore.toon_encoding import to_toon
 
 
@@ -162,8 +167,9 @@ def _search_files(repo_path: Path, pattern: str, regex: bool, path_glob: str | N
     compiled = re.compile(pattern) if regex else None
     matches: list[dict] = []
     truncated = False
+    ignored_paths = load_repo_config(repo_path)["ignored_paths"]
 
-    for path in iter_all_files(repo_path):
+    for path in iter_all_files(repo_path, ignored_paths):
         rel_path = path.relative_to(repo_path).as_posix()
         if path_glob is not None and not PurePath(rel_path).match(path_glob):
             continue
@@ -308,10 +314,12 @@ def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         if len(snapshots) < 2:
             return _toon_result({"message": "no prior snapshot to compare against"})
         try:
-            old = json.loads(snapshots[-2].read_text())
+            old = load_evidence_file(snapshots[-2])
+            new = load_evidence_file(snapshots[-1])
         except json.JSONDecodeError:
             return _toon_result({"message": f"most recent snapshot is unreadable ({snapshots[-2]})"})
-        new = json.loads(snapshots[-1].read_text())
+        except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+            return _toon_result({"error": str(exc)})
         return _toon_result(compute_diff(old, new, full=full))
 
 
@@ -334,6 +342,42 @@ def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
                 "cluster": cluster,
             }
         )
+
+
+_LIST_KIND_TO_FUNCTION = {
+    "modules": list_modules,
+    "clusters": list_clusters,
+    "branches": list_branches,
+}
+
+
+def _register_list_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_list", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_list(kind: str) -> str:
+        """Lists the valid names/identifiers for one evidence collection, so
+        other tools' exact-match `target` arguments can be filled in
+        correctly. kind: one of 'modules' (file paths, for aletheore_imports/
+        _imported_by/_symbols/_secrets/_cluster/_neighborhood/_symbol_source's
+        module argument), 'clusters' (architecture cluster ids), or
+        'branches' (git branch names, for aletheore_branch)."""
+        func = _LIST_KIND_TO_FUNCTION.get(kind)
+        if func is None:
+            return _toon_result(
+                {"error": f"unknown kind {kind!r} - expected one of {sorted(_LIST_KIND_TO_FUNCTION)}"}
+            )
+        evidence = read_evidence(repo_path)
+        return _toon_result(func(evidence))
+
+
+def _register_overview_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_overview", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_overview() -> str:
+        """A repo-level summary: languages, frameworks, monorepo structure,
+        dependency-graph size, module/cluster counts, and git age/commit
+        cadence/branch count. The starting point for 'what is this repo?' -
+        call this before anything else on an unfamiliar repository."""
+        evidence = read_evidence(repo_path)
+        return _toon_result(find_repo_overview(evidence))
 
 
 def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -380,6 +424,23 @@ def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> No
         """Exact source text for one named function/class, with resolved line bounds."""
         evidence = read_evidence(repo_path)
         return _toon_result(find_symbol_source(evidence, repo_path, module, symbol))
+
+
+def _register_verify_citations_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_verify_citations", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_verify_citations(report_text: str) -> str:
+        """Checks every `file:line` citation in report_text against this
+        repo's real evidence and real file line counts. Call this on any
+        report you write before presenting it - a citation naming a file
+        that isn't in evidence, or a line beyond the file's real length, is
+        flagged as unverified rather than trusted."""
+        from aletheore.citation_verifier import local_line_count_fetcher, verify_citations
+
+        evidence = read_evidence(repo_path)
+        result = verify_citations(
+            report_text, evidence, fetch_line_count=local_line_count_fetcher(repo_path)
+        )
+        return _toon_result(result)
 
 
 def _register_code_evidence_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -485,25 +546,28 @@ def _register_healthcheck_tool(mcp_instance: MCPServer, repo_path: Path) -> None
         return _toon_result(result)
 
 
-def _register_index_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+def _register_index_tool(mcp_instance: MCPServer, repo_path: Path, effects: frozenset[str]) -> None:
     @mcp_instance.tool(
         name="aletheore_index",
         # Writes the vector index and sends code chunks to the embedding
-        # provider - local Ollama when it is up, OpenAI on fallback.
+        # provider - Aletheore's hosted endpoint if entitled and permitted,
+        # else local Ollama, else OpenAI on fallback.
         annotations=ToolAnnotations(
             readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True
         ),
     )
     def aletheore_index() -> str:
-        """Build the semantic search index this repo's evidence, required
+        """Build the semantic search index for this repo's evidence, required
         before aletheore_search_codebase or aletheore_answer can be used.
-        Embeds via a local Ollama instance, falling back to OpenAI if
-        unavailable."""
+        Embeds via Aletheore's hosted endpoint if this session has permission
+        to transmit evidence externally and a token is available, else a
+        local Ollama instance, falling back to OpenAI if that's unavailable
+        too."""
         from aletheore.search_index import build_index
 
         evidence = read_evidence(repo_path)
         try:
-            count = build_index(repo_path, evidence)
+            count = build_index(repo_path, evidence, allow_hosted=EFFECT_EXTERNAL in effects)
         except Exception as exc:  # noqa: BLE001
             return _toon_result({"error": str(exc)})
         return _toon_result({"indexed_chunks": count})
@@ -533,6 +597,8 @@ def _register_search_codebase_tool(mcp_instance: MCPServer, repo_path: Path) -> 
             return _toon_result(search_index(repo_path, query, k=k, language=language))
         except IndexNotFoundError:
             return _toon_result(_NO_INDEX_ERROR)
+        except IndexDimensionMismatchError as exc:
+            return _toon_result({"error": str(exc)})
 
 
 def _register_answer_tool(
@@ -551,6 +617,8 @@ def _register_answer_tool(
             return _toon_result(answer_question(repo_path, question, answer_adapter, k=k))
         except IndexNotFoundError:
             return _toon_result(_NO_INDEX_ERROR)
+        except IndexDimensionMismatchError as exc:
+            return _toon_result({"error": str(exc)})
 
 
 def _register_managed_audit_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -615,8 +683,11 @@ def build_server(
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)
+    _register_list_tool(mcp_instance, repo_path)
+    _register_overview_tool(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
     _register_symbol_source_tool(mcp_instance, repo_path)
+    _register_verify_citations_tool(mcp_instance, repo_path)
     _register_code_evidence_tools(mcp_instance, repo_path)
 
     withheld: list[str] = []
@@ -632,7 +703,7 @@ def build_server(
     if permitted("aletheore_healthcheck"):
         _register_healthcheck_tool(mcp_instance, repo_path)
     if permitted("aletheore_index"):
-        _register_index_tool(mcp_instance, repo_path)
+        _register_index_tool(mcp_instance, repo_path, effects)
     if permitted("aletheore_search_codebase"):
         _register_search_codebase_tool(mcp_instance, repo_path)
     if permitted("aletheore_managed_audit"):

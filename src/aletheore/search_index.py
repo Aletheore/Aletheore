@@ -37,6 +37,10 @@ class IndexNotFoundError(Exception):
     pass
 
 
+class IndexDimensionMismatchError(Exception):
+    pass
+
+
 def _default_confirm_openai_fallback() -> bool:
     print(
         "Ollama is unavailable. Aletheore can fall back to OpenAI's "
@@ -732,7 +736,10 @@ EMBED_BATCH_SIZE = 200
 
 
 def _embed_in_batches(
-    texts: list[str], batch_size: int = EMBED_BATCH_SIZE, repo_id: str | None = None
+    texts: list[str],
+    batch_size: int = EMBED_BATCH_SIZE,
+    repo_id: str | None = None,
+    allow_hosted: bool = True,
 ) -> list[list[float]]:
     """Embed everything, preferring Aletheore's endpoint when entitled.
 
@@ -749,11 +756,25 @@ def _embed_in_batches(
 
     repo_id: forwarded to embed_texts_hosted so the hosted rate limit can be
     keyed per repo rather than per installation - see _repo_id.
+
+    allow_hosted: the caller's consent to transmit this repository's code to
+    Aletheore's hosted embedding endpoint. Defaults to True to preserve the
+    CLI's existing interactive behavior. MCP's aletheore_index tool passes
+    False unless the operator has explicitly permitted EFFECT_EXTERNAL (see
+    mcp_server.py's consent model) - MCP tool calls are always
+    non-interactive, so there is no equivalent of embed_texts's isatty()
+    prompt available to ask for consent in the moment.
     """
     token = get_api_key(
         "ALETHEORE_API_TOKEN", "aletheore-managed-audit", prompt_fn=lambda _: ""
     )
-    use_hosted = bool(token)
+    use_hosted = bool(token) and allow_hosted
+    if token and not allow_hosted:
+        print(
+            "aletheore: hosted embeddings available but not permitted in this "
+            "context; using local provider",
+            file=sys.stderr,
+        )
     vectors: list[list[float]] = []
 
     for start in range(0, len(texts), batch_size):
@@ -811,16 +832,20 @@ def _reusable_vectors(index_path: Path) -> dict[str, list[float]]:
         return {}
 
 
-def _embed_stale_by_hash(stale: list[dict], repo_id: str | None = None) -> dict[str, list[float]]:
+def _embed_stale_by_hash(
+    stale: list[dict], repo_id: str | None = None, allow_hosted: bool = True
+) -> dict[str, list[float]]:
     stale_by_hash = {chunk["chunk_hash"]: chunk["text"] for chunk in stale}
     stale_hashes = list(stale_by_hash)
     fresh_vectors = _embed_in_batches(
-        [stale_by_hash[chunk_hash] for chunk_hash in stale_hashes], repo_id=repo_id
+        [stale_by_hash[chunk_hash] for chunk_hash in stale_hashes],
+        repo_id=repo_id,
+        allow_hosted=allow_hosted,
     )
     return dict(zip(stale_hashes, fresh_vectors))
 
 
-def build_index(repo_path: Path, evidence: dict) -> int:
+def build_index(repo_path: Path, evidence: dict, allow_hosted: bool = True) -> int:
     chunks = build_chunks(evidence, repo_path)
     if not chunks:
         return 0
@@ -842,7 +867,7 @@ def build_index(repo_path: Path, evidence: dict) -> int:
     reusable = _reusable_vectors(index_path)
     stale = [chunk for chunk in chunks if chunk["chunk_hash"] not in reusable]
     repo = _repo_id(repo_path)
-    fresh = _embed_stale_by_hash(stale, repo_id=repo)
+    fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted)
     fresh_vectors = list(fresh.values())
 
     # Vectors from two different embedding models cannot share an index -
@@ -878,13 +903,13 @@ def build_index(repo_path: Path, evidence: dict) -> int:
         current_dimension = (
             len(fresh_vectors[0])
             if fresh_vectors
-            else len(_embed_in_batches([chunks[0]["text"]], repo_id=repo)[0])
+            else len(_embed_in_batches([chunks[0]["text"]], repo_id=repo, allow_hosted=allow_hosted)[0])
         )
         reused_dimensions = {len(vector) for vector in reusable.values()}
         if reused_dimensions != {current_dimension}:
             reusable = {}
             stale = chunks
-            fresh = _embed_stale_by_hash(stale, repo_id=repo)
+            fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted)
 
     rows = [
         {**chunk, "vector": reusable.get(chunk["chunk_hash"]) or fresh[chunk["chunk_hash"]]}
@@ -1101,6 +1126,34 @@ def search_index(
         language = _detect_query_language(query_text)
     table = open_index(repo_path)
     query_vector = embed_texts([query_text])[0]
+
+    # The index and the query must come from the same embedding model - see
+    # build_index's dimension-drift handling for the mechanism that keeps
+    # the index internally consistent. This is the mirror check for the
+    # query itself: the available provider can differ between when the
+    # index was built and when it's searched (e.g. a hosted token was
+    # revoked, or Ollama came up where it wasn't before), and a raw
+    # dimension mismatch otherwise surfaces as an opaque LanceDB error deep
+    # inside table.search() rather than a message telling the user what to
+    # do about it.
+    table_dimension = table.schema.field("vector").type.list_size
+    if len(query_vector) != table_dimension:
+        # Query embeddings are always local (Ollama, or OpenAI as a fallback -
+        # see embed_texts above); they never consult ALETHEORE_API_TOKEN. So
+        # this mismatch is typically an index built with hosted embeddings
+        # (_embed_in_batches, which does use that token) while queries embed
+        # locally at a different dimension. Telling the user to just re-run
+        # 'aletheore index' is bad advice here: with the token still set,
+        # the rebuild uses hosted again, reproduces the same dimension, and
+        # the mismatch recurs forever. Point at what actually fixes it.
+        raise IndexDimensionMismatchError(
+            f"the index at {_index_path(repo_path)} holds {table_dimension}-dimension "
+            f"vectors but the query embedded to {len(query_vector)} dimensions - search "
+            "always embeds queries with the local embedding provider, never the hosted "
+            "one, so this index was likely built with hosted embeddings (ALETHEORE_API_TOKEN "
+            f"set). Unset ALETHEORE_API_TOKEN and re-run 'aletheore index {repo_path}' to "
+            "rebuild the index with the local provider that queries actually use"
+        )
 
     # Over-fetch, then thin by file: the chunks displaced by the per-file cap
     # have to be replaced by something, and that something is only available

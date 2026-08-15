@@ -247,6 +247,44 @@ def test_open_index_raises_when_missing(tmp_path):
         open_index(tmp_path)
 
 
+def test_search_index_raises_a_clear_error_on_dimension_mismatch(tmp_path):
+    """An index built with 1536-dim hosted vectors, searched with a 768-dim
+    local query vector, must fail with an actionable message - not an
+    opaque LanceDB internal error and not silently wrong rankings."""
+    from aletheore.search_index import (
+        IndexDimensionMismatchError,
+        TABLE_NAME,
+        _index_path,
+        search_index,
+    )
+    import lancedb
+
+    repo = tmp_path
+    index_path = _index_path(repo)
+    index_path.parent.mkdir(parents=True)
+    db = lancedb.connect(str(index_path))
+    db.create_table(
+        TABLE_NAME,
+        data=[
+            {
+                "module_path": "a.py",
+                "symbol_name": "foo",
+                "start_line": 1,
+                "end_line": 2,
+                "language": "python",
+                "imports": [],
+                "text": "def foo(): pass",
+                "chunk_hash": "abc",
+                "vector": [0.1] * 1536,
+            }
+        ],
+    )
+
+    with patch("aletheore.search_index.embed_texts", return_value=[[0.0] * 768]):
+        with pytest.raises(IndexDimensionMismatchError, match="1536.*768|768.*1536"):
+            search_index(repo, "where is foo")
+
+
 @patch("aletheore.search_index.embed_texts")
 def test_search_index_returns_ranked_results(mock_embed_texts, tmp_path):
     (tmp_path / "auth.py").write_text("def login():\n    return True\n")
@@ -336,6 +374,7 @@ def test_search_caps_chunks_per_file_and_backfills(tmp_path):
         for i in range(5)
     ]
     table = MagicMock()
+    table.schema.field.return_value.type.list_size = 1
     table.search.return_value.limit.return_value.to_list.return_value = hoggish + others
 
     with patch("aletheore.search_index.open_index", return_value=table), \
@@ -827,6 +866,7 @@ def test_fts_failure_degrades_to_vector_only(tmp_path):
     full of punctuation can be rejected by the tokenizer. Neither is worth
     losing search over."""
     table = MagicMock()
+    table.schema.field.return_value.type.list_size = 1
     table.search.return_value.limit.return_value.to_list.return_value = [
         {"module_path": "a.py", "symbol_name": "f", "start_line": 1, "end_line": 2,
          "language": "python", "imports": [], "text": "x", "_distance": 0.1}
@@ -885,6 +925,7 @@ def test_search_index_filters_both_retrievers_by_language(tmp_path):
     same where clause to both the vector query and the fts query, not only
     the vector one."""
     table = MagicMock()
+    table.schema.field.return_value.type.list_size = 1
     chain = table.search.return_value.limit.return_value
     chain.where.return_value.to_list.return_value = [
         {"module_path": "a.py", "symbol_name": "f", "start_line": 1, "end_line": 2,
@@ -1276,6 +1317,29 @@ def test_no_token_means_no_hosted_call_at_all():
         _embed_in_batches(["chunk"])
 
     http.post.assert_not_called()
+
+
+def test_allow_hosted_false_skips_hosted_call_even_with_a_token(capsys):
+    http = MagicMock()
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), \
+         patch("aletheore.search_index.httpx.Client", return_value=http), \
+         patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.0] * 768] * len(t)):
+        vectors = _embed_in_batches(["chunk"], allow_hosted=False)
+
+    http.post.assert_not_called()
+    assert len(vectors[0]) == 768
+    assert "not permitted in this context" in capsys.readouterr().err
+
+
+def test_allow_hosted_true_is_the_default_and_preserves_existing_behavior():
+    http = MagicMock()
+    http.post.return_value = _hosted_response(200, {"vectors": [[0.1] * 1536]})
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), \
+         patch("aletheore.search_index.httpx.Client", return_value=http):
+        vectors = _embed_in_batches(["chunk"])  # no allow_hosted kwarg at all
+
+    http.post.assert_called_once()
+    assert len(vectors[0]) == 1536
 
 
 def test_file_header_comment_stops_at_the_first_definition():

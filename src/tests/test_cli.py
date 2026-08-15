@@ -986,6 +986,20 @@ def test_query_search_codebase_prints_toon_results(tmp_path):
     assert "auth.py" in result.output
 
 
+def test_query_search_codebase_prints_friendly_error_on_dimension_mismatch(tmp_path):
+    from aletheore.search_index import IndexDimensionMismatchError
+
+    with patch(
+        "aletheore.search_index.search_index",
+        side_effect=IndexDimensionMismatchError("the index at ... holds 1536-dimension vectors ..."),
+    ):
+        result = runner.invoke(
+            app, ["query", "search-codebase", "how does auth work", "--path", str(tmp_path)]
+        )
+    assert result.exit_code == 1
+    assert "1536-dimension" in result.output
+
+
 def test_query_answer_reuses_selected_adapter(tmp_path):
     fake_adapter = MagicMock()
     fake_adapter.name = "ollama"
@@ -1015,6 +1029,36 @@ def test_query_answer_reuses_selected_adapter(tmp_path):
     assert result.exit_code == 0
     assert "Login uses auth.py::login" in result.output
     mock_answer.assert_called_once()
+
+
+def test_query_answer_prints_friendly_error_on_dimension_mismatch(tmp_path):
+    from aletheore.search_index import IndexDimensionMismatchError
+
+    fake_adapter = MagicMock()
+    fake_adapter.name = "ollama"
+    fake_adapter.requires_consent = False
+    with patch("aletheore.cli.select_adapter", return_value=fake_adapter):
+        with patch(
+            "aletheore.answer.answer_question",
+            side_effect=IndexDimensionMismatchError(
+                "the index at ... holds 1536-dimension vectors ..."
+            ),
+        ):
+            result = runner.invoke(
+                app,
+                [
+                    "query",
+                    "answer",
+                    "how does auth work",
+                    "--path",
+                    str(tmp_path),
+                    "--agent",
+                    "ollama",
+                ],
+            )
+
+    assert result.exit_code == 1
+    assert "1536-dimension" in result.output
 
 
 def test_main_mcp_invokes_mcp_flow(tmp_path):

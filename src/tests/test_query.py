@@ -197,6 +197,15 @@ def test_find_branch_raises_for_unknown_branch():
         find_branch(make_evidence(), "does-not-exist")
 
 
+def test_find_branch_raises_not_found_instead_of_crashing_when_git_unavailable():
+    """A repo with no commits yields git == {"available": False} and
+    nothing else (see air_schema.py). No branch can exist there, so this
+    is a normal not-found - not a raw KeyError on a missing "branches" key."""
+    evidence = {"git": {"available": False}}
+    with pytest.raises(BranchNotFoundInEvidenceError):
+        find_branch(evidence, "main")
+
+
 def test_find_ownership_returns_the_whole_list_ignoring_target():
     result = find_ownership(make_evidence(), None)
     assert result == make_evidence()["git"]["ownership"]
@@ -345,3 +354,133 @@ def test_query_functions_registry_has_all_kinds_with_correct_requires_target():
     for kind, requires_target in expected.items():
         _func, actual_requires_target = QUERY_FUNCTIONS[kind]
         assert actual_requires_target == requires_target, kind
+
+
+def test_list_modules_returns_every_module_path():
+    from aletheore.query import list_modules
+
+    evidence = {"repository": {"modules": [{"path": "a.py"}, {"path": "b.py"}]}}
+    assert list_modules(evidence) == ["a.py", "b.py"]
+
+
+def test_list_clusters_returns_id_and_module_count():
+    from aletheore.query import list_clusters
+
+    evidence = {
+        "architecture": {
+            "clusters": [
+                {"id": 0, "modules": ["a.py", "b.py"], "internal_edges": 1},
+                {"id": 1, "modules": ["c.py"], "internal_edges": 0},
+            ]
+        }
+    }
+    assert list_clusters(evidence) == [
+        {"id": 0, "module_count": 2},
+        {"id": 1, "module_count": 1},
+    ]
+
+
+def test_list_branches_returns_every_branch_name():
+    from aletheore.query import list_branches
+
+    evidence = {"git": {"branches": [{"name": "main"}, {"name": "dev"}]}}
+    assert list_branches(evidence) == ["main", "dev"]
+
+
+def test_find_repo_overview_summarizes_the_real_evidence_shape():
+    from aletheore.query import find_repo_overview
+
+    evidence = {
+        "repository": {
+            "languages": [{"name": "python", "file_count": 271, "loc": 65970}],
+            "frameworks": [{"name": "fastapi"}],
+            "monorepo": {"detected": False, "workspaces": []},
+            "dependency_graph": {"nodes": ["a.py", "b.py"], "edges": [["a.py", "b.py"]]},
+            "modules": [{"path": "a.py"}, {"path": "b.py"}],
+        },
+        "architecture": {
+            "clusters": [{"id": 0, "modules": ["a.py"], "internal_edges": 0}],
+            "cross_cluster_edges": [["a.py", "b.py"]],
+        },
+        "git": {
+            "repo_age_days": 400,
+            "total_commits": 1200,
+            "commit_cadence": {"weekly_counts": [10, 20], "trend": "increasing"},
+            "branches": [{"name": "main"}, {"name": "dev"}],
+        },
+    }
+
+    overview = find_repo_overview(evidence)
+
+    assert overview == {
+        "languages": [{"name": "python", "file_count": 271, "loc": 65970}],
+        "frameworks": [{"name": "fastapi"}],
+        "monorepo": {"detected": False, "workspaces": []},
+        "dependency_graph_summary": {"node_count": 2, "edge_count": 1},
+        "module_count": 2,
+        "cluster_count": 1,
+        "cross_cluster_edge_count": 1,
+        "git": {
+            "repo_age_days": 400,
+            "total_commits": 1200,
+            "commit_cadence": {"weekly_counts": [10, 20], "trend": "increasing"},
+            "branch_count": 2,
+        },
+    }
+
+
+def test_list_branches_returns_empty_list_when_git_unavailable():
+    """A repo with no commits yields git == {"available": False} and
+    nothing else (see air_schema.py). list_branches must not raise a
+    KeyError trying to index into a "branches" key that doesn't exist."""
+    from aletheore.query import list_branches
+
+    evidence = {"git": {"available": False}}
+    assert list_branches(evidence) == []
+
+
+def test_find_repo_overview_signals_unavailable_git_instead_of_crashing():
+    """Same no-commits repo shape as above. find_repo_overview must not
+    raise, and must honestly report git as unavailable rather than
+    defaulting numeric fields to 0 - which would be indistinguishable from
+    a repo that genuinely has zero commits."""
+    from aletheore.query import find_repo_overview
+
+    evidence = {
+        "repository": {
+            "languages": [{"name": "python", "file_count": 10, "loc": 500}],
+            "frameworks": [],
+            "monorepo": {"detected": False, "workspaces": []},
+            "dependency_graph": {"nodes": [], "edges": []},
+            "modules": [],
+        },
+        "architecture": {
+            "clusters": [],
+            "cross_cluster_edges": [],
+        },
+        "git": {"available": False},
+    }
+
+    overview = find_repo_overview(evidence)
+
+    assert overview["git"] == {"available": False}
+
+
+def test_list_modules_does_not_depend_on_git_and_is_unaffected_by_unavailable_git():
+    from aletheore.query import list_modules
+
+    evidence = {
+        "repository": {"modules": [{"path": "a.py"}]},
+        "git": {"available": False},
+    }
+    assert list_modules(evidence) == ["a.py"]
+
+
+def test_list_clusters_does_not_depend_on_git_and_is_unaffected_by_unavailable_git():
+    from aletheore.query import list_clusters
+
+    evidence = {
+        "architecture": {"clusters": [{"id": 0, "modules": ["a.py"], "internal_edges": 0}]},
+        "git": {"available": False},
+    }
+    assert list_clusters(evidence) == [{"id": 0, "module_count": 1}]

@@ -441,9 +441,10 @@ Starts a stdio MCP server scoped to one repository, so a coding agent can query 
 directly instead of shelling out via Bash or re-reading files on every lookup. Every tool
 result is [TOON](https://toonformat.dev)-encoded rather than plain JSON — the calling agent's
 own token budget is what actually pays for reading these results, and evidence's shape (almost
-entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 27 tools
-by default — see [Tool permissions](#tool-permissions) for the 28th — plus one optional answer
-tool when started with `--agent`:
+entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 26 tools in
+a read-only posture, 30 by default, and 31 with every effect permitted — see
+[Tool permissions](#tool-permissions) for what gates the rest — plus one optional answer tool
+when started with `--agent`:
 
 - The 16 query kinds above as tools, each named `aletheore_<kind>` with underscores in place of
   hyphens (`aletheore_imports`, `aletheore_imported_by`, `aletheore_symbols`, `aletheore_branch`,
@@ -453,12 +454,21 @@ tool when started with `--agent`:
   `aletheore_environment_variables`) — each tool's own description states what `target` expects
   (a file path, a branch name, or that the tool takes no target at all).
 - `aletheore_changes(full=False)` — what changed between the two most recent scans.
+- `aletheore_overview()` — a repo-level summary: languages, frameworks, monorepo structure,
+  dependency-graph size, module/cluster counts, and git age/commit cadence/branch count. The
+  starting point for "what is this repo?" — call this before anything else on an unfamiliar
+  repository.
+- `aletheore_list(kind)` — the valid names/identifiers for one evidence collection (`modules`,
+  `clusters`, or `branches`), so another tool's exact-match `target` argument can be filled in
+  correctly.
 - `aletheore_neighborhood(target)` — a module's imports, dependents, and cluster in one call,
   instead of three round-trips.
 - `aletheore_search(pattern, regex=False, path_glob=None)` — literal or regex full-text search
   over tracked source files, capped at 200 matches.
 - `aletheore_symbol_source(module, symbol)` — exact source text for one named function/class,
   with resolved line bounds.
+- `aletheore_verify_citations(report_text)` — checks every `file:line` citation in a report
+  against this repo's real evidence and real file line counts, same check as `aletheore verify`.
 - `aletheore_find_evidence_for_endpoint(method, path)`, `aletheore_find_evidence_for_symbol(symbol)`,
   `aletheore_find_evidence_for_dependency(dependency)` — resolve an endpoint/symbol/dependency to
   full source evidence: file, line, owner, commit, and (for endpoints) live-health risk.
@@ -523,12 +533,20 @@ are withheld, the server prints one line to stderr naming them and the variable 
 `aletheore_answer` reaches an LLM provider but is not gated, because it is registered only when
 you pass `aletheore mcp --agent` — that flag is already the consent step.
 
-`aletheore_index` and `aletheore_search_codebase` embed through a local Ollama instance and can
-fall back to OpenAI, which is why they might look like they belong under `external`. They don't:
-that fallback requires an interactive confirmation and is refused outright when stdin isn't a
-TTY, and an MCP server is always spawned with piped stdio. From MCP these tools reach Ollama on
-localhost or fail — they cannot send code to OpenAI. If Ollama isn't running, expect an
-"embedding provider unavailable" error rather than a silent upload.
+`aletheore_search_codebase` (and the query side of `aletheore_answer`) always embeds through a
+local Ollama instance and can fall back to OpenAI, which is why it might look like it belongs
+under `external`. It doesn't: that fallback requires an interactive confirmation and is refused
+outright when stdin isn't a TTY, and an MCP server is always spawned with piped stdio. From MCP
+this tool reaches Ollama on localhost or fails — it cannot send code to OpenAI. If Ollama isn't
+running, expect an "embedding provider unavailable" error rather than a silent upload.
+
+`aletheore_index` embeds the same way by default, but it has a second path `aletheore_search_codebase`
+doesn't: when `external` is permitted, it prefers Aletheore's own hosted embedding endpoint over
+the local instance, uploading this repository's code chunks there instead of embedding on your
+machine. With `external` withheld (the default posture), `aletheore_index` never reaches that
+hosted endpoint either — it falls through to the local Ollama/OpenAI-fallback path above, for the
+same reason `aletheore_managed_audit` doesn't upload evidence without being asked. Set
+`ALETHEORE_MCP_ALLOW=write,network,external` to opt in.
 
 ### `aletheore mcp-install [path]`
 

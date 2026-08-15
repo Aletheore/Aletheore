@@ -169,6 +169,9 @@ aletheore dashboard .</code></pre>
           <span>aletheore_environment_variables</span>
           <span>aletheore_changes</span>
           <span>aletheore_neighborhood</span>
+          <span>aletheore_list</span>
+          <span>aletheore_overview</span>
+          <span>aletheore_verify_citations</span>
           <span>aletheore_search</span>
           <span>aletheore_symbol_source</span>
           <span>aletheore_find_evidence_for_endpoint</span>
@@ -178,9 +181,9 @@ aletheore dashboard .</code></pre>
           <span>aletheore_index</span>
           <span>aletheore_search_codebase</span>
           <span class="optional" title="Only registered when the MCP server is started with --agent">aletheore_answer*</span>
-          <span>aletheore_managed_audit</span>
+          <span class="optional" title="Requires ALETHEORE_MCP_ALLOW to include 'external' - off by default">aletheore_managed_audit*</span>
         </div>
-        <p class="mcp-tool-note">28 tools are always available. <code>aletheore_answer</code>* is registered only when the server is started with <code>--agent</code>.</p>
+        <p class="mcp-tool-note">30 tools are available by default. <code>aletheore_answer</code>* is registered only when the server is started with <code>--agent</code>; <code>aletheore_managed_audit</code>* requires explicit consent to transmit evidence externally (<code>ALETHEORE_MCP_ALLOW=...,external</code>) and is off by default.</p>
       </section>
 
       <section class="developer-section evidence-contract">
