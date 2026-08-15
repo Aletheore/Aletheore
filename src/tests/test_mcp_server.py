@@ -352,6 +352,22 @@ async def test_aletheore_search_codebase_returns_friendly_error_when_index_not_b
 
 
 @pytest.mark.asyncio
+async def test_aletheore_search_codebase_returns_friendly_error_on_dimension_mismatch(tmp_path):
+    from aletheore.mcp_server import IndexDimensionMismatchError
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    with patch(
+        "aletheore.mcp_server.search_index",
+        side_effect=IndexDimensionMismatchError("the index at ... holds 1536-dimension vectors ..."),
+    ):
+        result = await server.call_tool("aletheore_search_codebase", {"query": "where is foo"})
+
+    assert "1536-dimension" in tool_result_body(result)["result"]["error"]
+
+
+@pytest.mark.asyncio
 async def test_aletheore_answer_returns_friendly_error_when_index_not_built(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo, answer_adapter=MagicMock())

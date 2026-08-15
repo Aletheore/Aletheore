@@ -34,7 +34,7 @@ from aletheore.query import (
     find_symbol_source,
 )
 from aletheore.secrets import iter_all_files
-from aletheore.search_index import IndexNotFoundError, search_index
+from aletheore.search_index import IndexDimensionMismatchError, IndexNotFoundError, search_index
 from aletheore.toon_encoding import to_toon
 
 
@@ -536,6 +536,8 @@ def _register_search_codebase_tool(mcp_instance: MCPServer, repo_path: Path) -> 
             return _toon_result(search_index(repo_path, query, k=k, language=language))
         except IndexNotFoundError:
             return _toon_result(_NO_INDEX_ERROR)
+        except IndexDimensionMismatchError as exc:
+            return _toon_result({"error": str(exc)})
 
 
 def _register_answer_tool(

@@ -37,6 +37,10 @@ class IndexNotFoundError(Exception):
     pass
 
 
+class IndexDimensionMismatchError(Exception):
+    pass
+
+
 def _default_confirm_openai_fallback() -> bool:
     print(
         "Ollama is unavailable. Aletheore can fall back to OpenAI's "
@@ -1122,6 +1126,24 @@ def search_index(
         language = _detect_query_language(query_text)
     table = open_index(repo_path)
     query_vector = embed_texts([query_text])[0]
+
+    # The index and the query must come from the same embedding model - see
+    # build_index's dimension-drift handling for the mechanism that keeps
+    # the index internally consistent. This is the mirror check for the
+    # query itself: the available provider can differ between when the
+    # index was built and when it's searched (e.g. a hosted token was
+    # revoked, or Ollama came up where it wasn't before), and a raw
+    # dimension mismatch otherwise surfaces as an opaque LanceDB error deep
+    # inside table.search() rather than a message telling the user what to
+    # do about it.
+    table_dimension = table.schema.field("vector").type.list_size
+    if len(query_vector) != table_dimension:
+        raise IndexDimensionMismatchError(
+            f"the index at {_index_path(repo_path)} holds {table_dimension}-dimension "
+            f"vectors but the query embedded to {len(query_vector)} dimensions with the "
+            f"embedding provider available right now - re-run 'aletheore index {repo_path}' "
+            "to rebuild the index with the current provider"
+        )
 
     # Over-fetch, then thin by file: the chunks displaced by the per-file cap
     # have to be replaced by something, and that something is only available
