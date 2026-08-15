@@ -33,6 +33,41 @@ def test_normalize_aletheore_extracts_citations_from_bot_pr_comments():
     }]
 
 
+def test_normalize_aletheore_excludes_suggestion_from_message():
+    # Real captured excerpt from https://github.com/ArihantK15/
+    # proctor-browser/pull/214 (case 016-flask-sql-injection-user-lookup).
+    # The suggestion's quoted replacement query ("...WHERE username = ?")
+    # must not end up in `message`, or check_citations.py's content-
+    # grounding check quote-verifies it against the *current* (different,
+    # unparameterized) code and fails by construction -- see
+    # scripts/check_citations.py's own docstring on this exact trap.
+    raw_comments = [{
+        "body": (
+            "- `benchmark-sandbox/016-flask-sql-injection-user-lookup/"
+            "src/flask/helpers.py:655` — SQL injection vulnerability: "
+            "user-supplied username is concatenated directly into the SQL "
+            "query string without parameterization. An attacker can "
+            "inject arbitrary SQL.\n"
+            "  ```\n"
+            "  Use a parameterized query, e.g.: return \"SELECT id, "
+            "username, email FROM users WHERE username = ?\" and pass "
+            "username as a parameter to the database cursor.\n"
+            "  ```"
+        ),
+    }]
+    findings = normalize_aletheore(raw_comments)
+    assert len(findings) == 1
+    assert findings[0]["file"] == (
+        "benchmark-sandbox/016-flask-sql-injection-user-lookup/src/flask/helpers.py"
+    )
+    assert findings[0]["line"] == 655
+    assert (
+        "SELECT id, username, email FROM users WHERE username = ?"
+        not in findings[0]["message"]
+    )
+    assert "SQL injection vulnerability" in findings[0]["message"]
+
+
 def test_normalize_pr_agent_reads_recommended_focus_areas_from_real_comment():
     # Real PR-Agent 0.39.0 `review` output does not print JSON to stdout and
     # does not emit a `code_suggestions` list (that key belongs to PR-Agent's
