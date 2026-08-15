@@ -533,7 +533,7 @@ def test_review_diff_suggestion_field_is_optional(mock_adapter_class):
     assert findings == [{"file": "a.py", "line": 3, "issue": "off-by-one"}]
 
 
-def test_names_referenced_in_diff_extracts_identifiers_from_added_lines_only():
+def test_names_referenced_in_diff_extracts_identifiers_from_added_and_context_lines():
     diff_text = (
         "--- a.py ---\n@@ -1,2 +1,3 @@\n"
         " unchanged_name(x)\n"
@@ -543,8 +543,32 @@ def test_names_referenced_in_diff_extracts_identifiers_from_added_lines_only():
     names = _names_referenced_in_diff(diff_text)
     assert "_github_http_client" in names
     assert "result" in names
-    assert "unchanged_name" not in names
+    # Context lines (a single leading space) are part of the hunk under
+    # review, not the diff's boilerplate - a symbol call sitting there is
+    # still real code being reviewed, so it counts as referenced.
+    assert "unchanged_name" in names
+    # Removed lines don't exist in the code being reviewed at all.
     assert "removed_name" not in names
+
+
+def test_names_referenced_in_diff_finds_a_call_reordered_around_other_changed_lines():
+    # Root cause of a real miss: two adjacent lines swapped so a call's own
+    # line is unchanged text - git's diff renders it as context (no +/-),
+    # even though the diff is entirely about that call's new position
+    # relative to its neighbor. Confirmed on a real case: a PR moved an
+    # audit-log snapshot to *after* a mutating call instead of before it;
+    # `op_eight` never appeared on a `+` line, so its real definition was
+    # never resolved and the (real) finding was never proposed at all.
+    diff_text = (
+        "--- caller.py ---\n@@ -2,6 +2,6 @@\n"
+        " def handler(record, log):\n"
+        "-    log.append({\"raw\": dict(record)})\n"
+        "     result = op_eight(record)\n"
+        "+    log.append({\"raw\": dict(record)})\n"
+        "     return result\n"
+    )
+    names = _names_referenced_in_diff(diff_text)
+    assert "op_eight" in names
 
 
 def _evidence_with_two_modules():
