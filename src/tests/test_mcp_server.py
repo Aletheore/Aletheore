@@ -247,6 +247,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_environment_variables",
         "aletheore_changes",
         "aletheore_neighborhood",
+        "aletheore_list",
         "aletheore_search",
         "aletheore_symbol_source",
         "aletheore_scan",
@@ -259,7 +260,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_dependency",
     }
     assert expected.issubset(names)
-    assert len(names) == 28
+    assert len(names) == 29
     assert "aletheore_answer" not in names
 
 
@@ -939,3 +940,23 @@ async def test_aletheore_healthcheck_tool_rejects_file_scheme_base_url(tmp_path)
 
     body = tool_result_body(result)["result"]
     assert "http or https" in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_list_modules(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_list", {"kind": "modules"})
+
+    assert tool_result_body(result) == {"result": ["a.py", "b.py"]}
+
+
+@pytest.mark.asyncio
+async def test_aletheore_list_unknown_kind_returns_an_error(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_list", {"kind": "nonsense"})
+
+    assert "error" in tool_result_body(result)["result"]

@@ -32,6 +32,9 @@ from aletheore.query import (
     find_imported_by,
     find_imports,
     find_symbol_source,
+    list_branches,
+    list_clusters,
+    list_modules,
 )
 from aletheore.repo_config import load_repo_config
 from aletheore.secrets import iter_all_files
@@ -340,6 +343,31 @@ def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
         )
 
 
+_LIST_KIND_TO_FUNCTION = {
+    "modules": list_modules,
+    "clusters": list_clusters,
+    "branches": list_branches,
+}
+
+
+def _register_list_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_list", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_list(kind: str) -> str:
+        """Lists the valid names/identifiers for one evidence collection, so
+        other tools' exact-match `target` arguments can be filled in
+        correctly. kind: one of 'modules' (file paths, for aletheore_imports/
+        _imported_by/_symbols/_secrets/_cluster/_neighborhood/_symbol_source's
+        module argument), 'clusters' (architecture cluster ids), or
+        'branches' (git branch names, for aletheore_branch)."""
+        func = _LIST_KIND_TO_FUNCTION.get(kind)
+        if func is None:
+            return _toon_result(
+                {"error": f"unknown kind {kind!r} - expected one of {sorted(_LIST_KIND_TO_FUNCTION)}"}
+            )
+        evidence = read_evidence(repo_path)
+        return _toon_result(func(evidence))
+
+
 def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_search(pattern: str, regex: bool = False, path_glob: str | None = None) -> str:
@@ -624,6 +652,7 @@ def build_server(
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)
+    _register_list_tool(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
     _register_symbol_source_tool(mcp_instance, repo_path)
     _register_code_evidence_tools(mcp_instance, repo_path)

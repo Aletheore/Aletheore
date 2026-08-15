@@ -345,3 +345,34 @@ def test_query_functions_registry_has_all_kinds_with_correct_requires_target():
     for kind, requires_target in expected.items():
         _func, actual_requires_target = QUERY_FUNCTIONS[kind]
         assert actual_requires_target == requires_target, kind
+
+
+def test_list_modules_returns_every_module_path():
+    from aletheore.query import list_modules
+
+    evidence = {"repository": {"modules": [{"path": "a.py"}, {"path": "b.py"}]}}
+    assert list_modules(evidence) == ["a.py", "b.py"]
+
+
+def test_list_clusters_returns_id_and_module_count():
+    from aletheore.query import list_clusters
+
+    evidence = {
+        "architecture": {
+            "clusters": [
+                {"id": 0, "modules": ["a.py", "b.py"], "internal_edges": 1},
+                {"id": 1, "modules": ["c.py"], "internal_edges": 0},
+            ]
+        }
+    }
+    assert list_clusters(evidence) == [
+        {"id": 0, "module_count": 2},
+        {"id": 1, "module_count": 1},
+    ]
+
+
+def test_list_branches_returns_every_branch_name():
+    from aletheore.query import list_branches
+
+    evidence = {"git": {"branches": [{"name": "main"}, {"name": "dev"}]}}
+    assert list_branches(evidence) == ["main", "dev"]

@@ -152,6 +152,21 @@ def find_hotspots(evidence: dict, target: str | None) -> list[dict]:
     return evidence["git"].get("hotspots", [])
 
 
+def list_modules(evidence: dict) -> list[str]:
+    return [module["path"] for module in evidence["repository"]["modules"]]
+
+
+def list_clusters(evidence: dict) -> list[dict]:
+    return [
+        {"id": cluster["id"], "module_count": len(cluster["modules"])}
+        for cluster in evidence["architecture"]["clusters"]
+    ]
+
+
+def list_branches(evidence: dict) -> list[str]:
+    return [branch["name"] for branch in evidence["git"]["branches"]]
+
+
 QUERY_FUNCTIONS: dict[str, tuple[Callable[[dict, str | None], Any], bool]] = {
     "imports": (find_imports, True),
     "imported-by": (find_imported_by, True),
