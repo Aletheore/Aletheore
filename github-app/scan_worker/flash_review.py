@@ -193,13 +193,31 @@ _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _names_referenced_in_diff(diff_text: str) -> set[str]:
-    """Identifiers appearing in the diff's added lines - a cheap,
-    language-agnostic proxy for "this diff calls or references this name".
-    Used only to decide which imported symbols are worth pulling in as
-    grounding evidence, not to prove a real call actually happens."""
+    """Identifiers appearing in the diff's added or unchanged-context
+    lines - a cheap, language-agnostic proxy for "this diff calls or
+    references this name". Used only to decide which imported symbols are
+    worth pulling in as grounding evidence, not to prove a real call
+    actually happens.
+
+    Context lines count too, not just `+` lines: a hunk can reorder or
+    restructure code around an existing call without that call's own line
+    ever being re-added - git renders an unmoved line as context even
+    when its position relative to its neighbors is exactly what the diff
+    changed. Confirmed as a real miss: a PR moved an audit-log snapshot to
+    *after* a mutating call instead of before it - the call's own line
+    text didn't change, so it showed up only as context, its symbol was
+    never resolved, and a real, correct finding was never proposed at
+    all.
+
+    Removed (`-`) lines are still excluded: a deleted call no longer
+    exists in the code under review, so pulling in its definition
+    wouldn't ground anything real.
+    """
     names: set[str] = set()
     for line in diff_text.splitlines():
-        if line.startswith("+") and not line.startswith("+++"):
+        if line.startswith("+++"):
+            continue
+        if line.startswith("+") or line.startswith(" "):
             names.update(_IDENTIFIER_RE.findall(line))
     return names
 
