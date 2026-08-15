@@ -876,6 +876,42 @@ def test_managed_audit_api_job_returns_report_text(monkeypatch):
     assert "API Report" in result
 
 
+def test_managed_audit_api_job_releases_lock_during_audit(monkeypatch):
+    lock_state = {"held": False, "observed_during_audit": None}
+
+    @contextmanager
+    def _tracking_spend_lock(*args, **kwargs):
+        lock_state["held"] = True
+        try:
+            yield
+        finally:
+            lock_state["held"] = False
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+    )
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _tracking_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda *a, **k: (
+        lock_state.update(observed_during_audit=lock_state["held"]) or "# API Report"
+    ))
+    monkeypatch.setattr("scan_worker.jobs._sign_and_persist_audit_report", lambda *a, **k: None)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+
+    from scan_worker.jobs import run_managed_audit_api_job
+
+    result = run_managed_audit_api_job(
+        installation_id=100,
+        evidence={"scanned_at": "2026-01-01"},
+        repo_full_name="octocat/widgets",
+    )
+
+    assert "API Report" in result
+    assert lock_state["observed_during_audit"] is False
+    assert lock_state["held"] is False
+
+
 def test_managed_audit_api_job_signs_and_persists_the_report(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
@@ -1060,6 +1096,56 @@ def test_managed_audit_pr_job_clones_pr_head_runs_audit_and_replies(monkeypatch,
     assert "Managed Audit" in posted["body"]
     assert posted["repo_full_name"] == "octocat/hello-world"
     assert posted["marker"] == AUDIT_COMMENT_MARKER
+
+
+def test_managed_audit_pr_job_releases_lock_during_audit(monkeypatch, tmp_path):
+    lock_state = {"held": False, "observed_during_audit": None}
+
+    @contextmanager
+    def _tracking_spend_lock(*args, **kwargs):
+        lock_state["held"] = True
+        try:
+            yield
+        finally:
+            lock_state["held"] = False
+
+    def _clone_pr_head(url, pr_number, dest):
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "app.py").write_text("print('hello')\n")
+
+    def _run_scan(repo_dir):
+        evidence_path = repo_dir / "evidence.json"
+        evidence_path.write_text(json.dumps({"repository": {"loc": 1}}))
+        return evidence_path
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.managed_audit_definitely_still_cooling_down", lambda *a, **k: False)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_managed_audit", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs._clone_pr_head", _clone_pr_head)
+    monkeypatch.setattr("scan_worker.jobs._run_scan", _run_scan)
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda: object())
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _tracking_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda *a, **k: (
+        lock_state.update(observed_during_audit=lock_state["held"]) or "# Managed Audit"
+    ))
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._sign_and_persist_audit_report", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+
+    from scan_worker.jobs import run_managed_audit_pr_job
+
+    run_managed_audit_pr_job(1, "octocat/hello-world", 42)
+
+    assert lock_state["observed_during_audit"] is False
+    assert lock_state["held"] is False
 
 
 def test_managed_audit_pr_job_persists_and_signs_the_report(monkeypatch, tmp_path):

@@ -1220,53 +1220,59 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                 extra_seats = get_extra_seats(settings.database_url, installation_id)
                 monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
                 current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
-                if current_spend >= monthly_cap:
-                    body = (
-                        f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n"
-                        f"Monthly spend cap reached for this installation (${monthly_cap:.2f}). "
-                        "Resumes next month, or email support@aletheore.com to raise the limit sooner."
-                    )
-                else:
-                    spend_accumulator = {"total": 0.0, "model": model_for_plan(plan)}
+                cap_reached = current_spend >= monthly_cap
 
-                    def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-                        spend_accumulator["total"] += cost_for_usage(
-                            spend_accumulator["model"], prompt_tokens, completion_tokens
-                        )
+            if cap_reached:
+                body = (
+                    f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n"
+                    f"Monthly spend cap reached for this installation (${monthly_cap:.2f}). "
+                    "Resumes next month, or email support@aletheore.com to raise the limit sooner."
+                )
+            else:
+                spend_accumulator = {"total": 0.0, "model": model_for_plan(plan)}
 
-                    report_text = run_managed_audit(
-                        repo_dir,
-                        on_usage=_on_usage,
-                        plan=plan,
-                        include_llm_suggestions=include_suggestions,
+                def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+                    spend_accumulator["total"] += cost_for_usage(
+                        spend_accumulator["model"], prompt_tokens, completion_tokens
                     )
+
+                # LLM call, measured to take minutes for large repos - must not
+                # run while installation_spend_lock is held (see
+                # run_flash_review_job's comment on the same pattern).
+                report_text = run_managed_audit(
+                    repo_dir,
+                    on_usage=_on_usage,
+                    plan=plan,
+                    include_llm_suggestions=include_suggestions,
+                )
+                with installation_spend_lock(settings.database_url, installation_id):
                     record_llm_spend(
                         settings.database_url,
                         installation_id,
                         spend_accumulator["total"],
                         monthly_cap=monthly_cap,
                     )
-                    verification_token = _sign_and_persist_audit_report(
-                        settings,
-                        installation_id,
-                        repo_full_name,
-                        report_text,
+                verification_token = _sign_and_persist_audit_report(
+                    settings,
+                    installation_id,
+                    repo_full_name,
+                    report_text,
+                )
+                if verification_token is not None:
+                    verify_url = f"{settings.public_base_url}/v1/audit/{verification_token}/verify"
+                    body = (
+                        f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n"
+                        f"{report_text}\n\n[Verify this report]({verify_url})"
                     )
-                    if verification_token is not None:
-                        verify_url = f"{settings.public_base_url}/v1/audit/{verification_token}/verify"
-                        body = (
-                            f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n"
-                            f"{report_text}\n\n[Verify this report]({verify_url})"
-                        )
-                        _maybe_create_audit_certificate_check_run(
-                            client,
-                            token,
-                            repo_full_name,
-                            _git_rev_parse_head(repo_dir),
-                            verify_url,
-                        )
-                    else:
-                        body = f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n{report_text}"
+                    _maybe_create_audit_certificate_check_run(
+                        client,
+                        token,
+                        repo_full_name,
+                        _git_rev_parse_head(repo_dir),
+                        verify_url,
+                    )
+                else:
+                    body = f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n{report_text}"
         upsert_pr_comment(
             client,
             token,
@@ -1312,45 +1318,51 @@ def run_managed_audit_api_job(
             raise RuntimeError(
                 f"monthly spend cap reached for this installation (${monthly_cap:.2f})"
             )
+    # Everything below runs outside installation_spend_lock: run_managed_audit
+    # can make several sequential LLM calls (see _IncrementalSpendBudget) and
+    # has been observed to take minutes. record_usage's underlying SQL
+    # increment is already atomic, so only the cap check above needs the lock
+    # - holding it for the whole audit just serializes concurrent jobs for the
+    # same installation into LockNotAvailable failures (same bug as
+    # run_flash_review_job, see its comment at jobs.py:1379).
+    job_dir = _job_temp_dir()
+    try:
+        if isinstance(evidence, dict):
+            write_evidence(evidence, job_dir)
+        else:
+            aletheore_dir = job_dir / ".aletheore"
+            aletheore_dir.mkdir(parents=True, exist_ok=True)
+            (aletheore_dir / "air.toon").write_text(evidence)
+            (aletheore_dir / "air.json").write_text(json.dumps({"managed_evidence": True}))
+        spend_budget = _IncrementalSpendBudget(
+            settings.database_url,
+            installation_id,
+            model_for_plan(plan),
+            current_spend,
+            monthly_cap,
+        )
 
-        job_dir = _job_temp_dir()
-        try:
-            if isinstance(evidence, dict):
-                write_evidence(evidence, job_dir)
-            else:
-                aletheore_dir = job_dir / ".aletheore"
-                aletheore_dir.mkdir(parents=True, exist_ok=True)
-                (aletheore_dir / "air.toon").write_text(evidence)
-                (aletheore_dir / "air.json").write_text(json.dumps({"managed_evidence": True}))
-            spend_budget = _IncrementalSpendBudget(
-                settings.database_url,
-                installation_id,
-                model_for_plan(plan),
-                current_spend,
-                monthly_cap,
-            )
-
-            result = run_managed_audit(
-                job_dir,
-                on_usage=spend_budget.record_usage,
-                before_llm_call=spend_budget.can_start_next_call,
-                allow_partial_report=True,
-                plan=plan,
-                include_llm_suggestions=include_suggestions,
-            )
-            verification_token = _sign_and_persist_audit_report(
-                settings,
-                installation_id,
-                repo_full_name,
-                result,
-            )
-            job = get_current_job()
-            if job is not None:
-                job.meta["verification_token"] = verification_token
-                job.save_meta()
-            return result
-        finally:
-            shutil.rmtree(job_dir, ignore_errors=True)
+        result = run_managed_audit(
+            job_dir,
+            on_usage=spend_budget.record_usage,
+            before_llm_call=spend_budget.can_start_next_call,
+            allow_partial_report=True,
+            plan=plan,
+            include_llm_suggestions=include_suggestions,
+        )
+        verification_token = _sign_and_persist_audit_report(
+            settings,
+            installation_id,
+            repo_full_name,
+            result,
+        )
+        job = get_current_job()
+        if job is not None:
+            job.meta["verification_token"] = verification_token
+            job.save_meta()
+        return result
+    finally:
+        shutil.rmtree(job_dir, ignore_errors=True)
 
 
 @log_job
