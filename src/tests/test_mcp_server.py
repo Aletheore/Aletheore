@@ -627,6 +627,28 @@ async def test_aletheore_changes_tool_reports_no_prior_snapshot(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_aletheore_changes_returns_clear_error_for_incompatible_snapshot(tmp_path):
+    from aletheore.history import save_snapshot
+    from tests.air_fixtures import minimal_air_evidence
+
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    evidence = minimal_air_evidence()
+    save_snapshot(evidence, repo)  # first snapshot, compatible version
+
+    bad = minimal_air_evidence()
+    bad["aletheore_version"] = "0.0.1-does-not-exist"
+    save_snapshot(bad, repo)  # second snapshot, incompatible
+
+    result = await server.call_tool("aletheore_changes", {})
+
+    body = tool_result_body(result)["result"]
+    assert "error" in body
+    assert "0.0.1-does-not-exist" in body["error"]
+
+
+@pytest.mark.asyncio
 async def test_aletheore_neighborhood_combines_imports_imported_by_and_cluster(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo)

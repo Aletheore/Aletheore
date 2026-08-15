@@ -308,10 +308,12 @@ def _register_changes_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         if len(snapshots) < 2:
             return _toon_result({"message": "no prior snapshot to compare against"})
         try:
-            old = json.loads(snapshots[-2].read_text())
+            old = load_evidence_file(snapshots[-2])
+            new = load_evidence_file(snapshots[-1])
         except json.JSONDecodeError:
             return _toon_result({"message": f"most recent snapshot is unreadable ({snapshots[-2]})"})
-        new = json.loads(snapshots[-1].read_text())
+        except (IncompatibleEvidenceVersionError, MalformedEvidenceError) as exc:
+            return _toon_result({"error": str(exc)})
         return _toon_result(compute_diff(old, new, full=full))
 
 
