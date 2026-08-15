@@ -376,3 +376,45 @@ def test_list_branches_returns_every_branch_name():
 
     evidence = {"git": {"branches": [{"name": "main"}, {"name": "dev"}]}}
     assert list_branches(evidence) == ["main", "dev"]
+
+
+def test_find_repo_overview_summarizes_the_real_evidence_shape():
+    from aletheore.query import find_repo_overview
+
+    evidence = {
+        "repository": {
+            "languages": [{"name": "python", "file_count": 271, "loc": 65970}],
+            "frameworks": [{"name": "fastapi"}],
+            "monorepo": {"detected": False, "workspaces": []},
+            "dependency_graph": {"nodes": ["a.py", "b.py"], "edges": [["a.py", "b.py"]]},
+            "modules": [{"path": "a.py"}, {"path": "b.py"}],
+        },
+        "architecture": {
+            "clusters": [{"id": 0, "modules": ["a.py"], "internal_edges": 0}],
+            "cross_cluster_edges": [["a.py", "b.py"]],
+        },
+        "git": {
+            "repo_age_days": 400,
+            "total_commits": 1200,
+            "commit_cadence": {"weekly_counts": [10, 20], "trend": "increasing"},
+            "branches": [{"name": "main"}, {"name": "dev"}],
+        },
+    }
+
+    overview = find_repo_overview(evidence)
+
+    assert overview == {
+        "languages": [{"name": "python", "file_count": 271, "loc": 65970}],
+        "frameworks": [{"name": "fastapi"}],
+        "monorepo": {"detected": False, "workspaces": []},
+        "dependency_graph_summary": {"node_count": 2, "edge_count": 1},
+        "module_count": 2,
+        "cluster_count": 1,
+        "cross_cluster_edge_count": 1,
+        "git": {
+            "repo_age_days": 400,
+            "total_commits": 1200,
+            "commit_cadence": {"weekly_counts": [10, 20], "trend": "increasing"},
+            "branch_count": 2,
+        },
+    }

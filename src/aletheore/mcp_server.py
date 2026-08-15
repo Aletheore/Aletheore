@@ -31,6 +31,7 @@ from aletheore.query import (
     find_cluster,
     find_imported_by,
     find_imports,
+    find_repo_overview,
     find_symbol_source,
     list_branches,
     list_clusters,
@@ -368,6 +369,17 @@ def _register_list_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         return _toon_result(func(evidence))
 
 
+def _register_overview_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_overview", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_overview() -> str:
+        """A repo-level summary: languages, frameworks, monorepo structure,
+        dependency-graph size, module/cluster counts, and git age/commit
+        cadence/branch count. The starting point for 'what is this repo?' -
+        call this before anything else on an unfamiliar repository."""
+        evidence = read_evidence(repo_path)
+        return _toon_result(find_repo_overview(evidence))
+
+
 def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_search", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_search(pattern: str, regex: bool = False, path_glob: str | None = None) -> str:
@@ -653,6 +665,7 @@ def build_server(
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)
     _register_list_tool(mcp_instance, repo_path)
+    _register_overview_tool(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
     _register_symbol_source_tool(mcp_instance, repo_path)
     _register_code_evidence_tools(mcp_instance, repo_path)

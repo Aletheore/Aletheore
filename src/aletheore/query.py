@@ -167,6 +167,31 @@ def list_branches(evidence: dict) -> list[str]:
     return [branch["name"] for branch in evidence["git"]["branches"]]
 
 
+def find_repo_overview(evidence: dict) -> dict:
+    repo = evidence["repository"]
+    git = evidence["git"]
+    arch = evidence["architecture"]
+    dependency_graph = repo["dependency_graph"]
+    return {
+        "languages": repo["languages"],
+        "frameworks": repo["frameworks"],
+        "monorepo": repo["monorepo"],
+        "dependency_graph_summary": {
+            "node_count": len(dependency_graph["nodes"]),
+            "edge_count": len(dependency_graph["edges"]),
+        },
+        "module_count": len(repo["modules"]),
+        "cluster_count": len(arch["clusters"]),
+        "cross_cluster_edge_count": len(arch["cross_cluster_edges"]),
+        "git": {
+            "repo_age_days": git["repo_age_days"],
+            "total_commits": git["total_commits"],
+            "commit_cadence": git["commit_cadence"],
+            "branch_count": len(git["branches"]),
+        },
+    }
+
+
 QUERY_FUNCTIONS: dict[str, tuple[Callable[[dict, str | None], Any], bool]] = {
     "imports": (find_imports, True),
     "imported-by": (find_imported_by, True),

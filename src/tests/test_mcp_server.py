@@ -98,6 +98,8 @@ def make_repo_with_evidence(tmp_path: Path) -> Path:
         "branches": [{"name": "main", "ahead_of_main": 0}],
         "ownership": [{"path": "a.py", "top_author": "alice"}],
         "total_commits": 5,
+        "repo_age_days": 30,
+        "commit_cadence": {"weekly_counts": [1, 2, 1], "trend": "stable", "most_recent_week_partial": False},
         "hotspots": [
             {
                 "path": "a.py",
@@ -248,6 +250,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_changes",
         "aletheore_neighborhood",
         "aletheore_list",
+        "aletheore_overview",
         "aletheore_search",
         "aletheore_symbol_source",
         "aletheore_scan",
@@ -260,7 +263,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_dependency",
     }
     assert expected.issubset(names)
-    assert len(names) == 29
+    assert len(names) == 30
     assert "aletheore_answer" not in names
 
 
@@ -449,6 +452,19 @@ async def test_aletheore_imports_tool_returns_correct_result(tmp_path):
     result = await server.call_tool("aletheore_imports", {"target": "a.py"})
 
     assert tool_result_body(result) == {"result": ["b.py"]}
+
+
+@pytest.mark.asyncio
+async def test_aletheore_overview_returns_repo_summary(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_overview", {})
+
+    body = tool_result_body(result)["result"]
+    assert body["module_count"] == 2
+    assert "languages" in body
+    assert "git" in body
 
 
 @pytest.mark.asyncio
