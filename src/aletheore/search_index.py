@@ -746,11 +746,19 @@ EMBED_BATCH_SIZE = 200
 # the local embedder. Every hosted index build did this, which is why the
 # feature looked configured and never actually ran.
 #
-# 20,000 characters is deliberately sized against the *old* rate as the floor:
-# ~59s even if the service is still single-threaded, and comfortable once it
-# is not. Raise it after measuring, not before - and if the timeout in
-# embeddings_api.get_jina_client changes, this has to move with it.
-HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "20000"))
+# After fixing the thread-pool oversubscription (JINA_EMBED_THREADS matched
+# to `cpus: "2.0"` instead of torch sizing its pool from the host's core
+# count), measured throughput against the deployed service came back at
+# ~9,800-13,150 characters/second across batch sizes 2/5/8/12 - a floor of
+# roughly 30x the old ~340 chars/s.
+#
+# 150,000 characters keeps a wide margin below the naive ceiling that rate
+# implies (~700k+ in the 60s budget): this box also runs app-server and
+# scan-worker on the same 2 CPUs, real chunks are not identical strings like
+# the probe used, and other requests can share the service concurrently. If
+# the timeout in embeddings_api.get_jina_client changes, this has to move
+# with it.
+HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "150000"))
 
 
 def _hosted_batches(texts: list[str], batch_size: int) -> list[tuple[int, int]]:
