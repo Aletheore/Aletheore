@@ -780,7 +780,27 @@ EMBED_BATCH_SIZE = 200
 # batching redesign this comment has long called for, just the same
 # character-count approach re-benchmarked against the backend that
 # currently exists.
-HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "130000"))
+#
+# Lowered to 60,000 after 130,000 caused a real production failure: a
+# thrift index build hit `ReadTimeout` at exactly 60.1s and lost 22 minutes
+# of progress (_embed_in_batches only falls back before the first
+# successful batch - see that function's own comment). The 24.55s
+# reference measurement above had zero concurrent load; #264's own
+# reasoning is that concurrent callers (two scan-worker replicas,
+# demo-scan-worker, hosted index builds) are the normal case for this
+# service, all queued behind one locked model instance, so real latency is
+# the reference compute time *plus* queueing delay under contention -
+# 130,000 chars at the measured ~2,630 chars/s real-world aggregate
+# throughput (project_indexing_speed_needs_investigation memory) is
+# already ~49.4s before any queueing, leaving under 11s of margin against
+# the 60s timeout. 60,000 chars is ~22.8s at that same rate, leaving ~37s
+# of margin - still 3x the original 20,000 baseline, not a full revert.
+# A `JINA_EMBED_INSTANCES` multi-instance change is in progress
+# specifically to reduce queueing delay under concurrent load (separate
+# from raw per-request compute time), which should allow raising this
+# again with real headroom once deployed and measured, rather than
+# guessing forward from an isolated single-request number a second time.
+HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "60000"))
 
 
 def _hosted_batches(texts: list[str], batch_size: int) -> list[tuple[int, int]]:
