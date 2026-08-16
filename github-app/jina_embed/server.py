@@ -22,10 +22,29 @@ a dev machine, doesn't silently take a different code path than prod runs).
 The single-text contract remains for scan-worker caches; the additive batch
 endpoint is used by hosted index builds so one request can encode many
 chunks in one call.
+
+_MODEL_LOCK below is not an optimization - it is required for correctness.
+A single `Llama` instance is not safe for concurrent use from multiple
+threads (abetlen/llama-cpp-python#1241: concurrent calls into one context
+corrupt its internal GGML tensor state), and both routes below are sync
+`def` handlers, which FastAPI/Starlette dispatches onto its worker
+threadpool rather than the event loop - so two requests arriving close
+together genuinely can call into `_model` from two different threads at
+once. Reproduced directly: profiling a real hosted index build crashed the
+container with `GGML_ASSERT(offset + size <= ggml_nbytes(tensor) &&
+"tensor read out of bounds")` after dozens of successful requests, on two
+different corpora (gson after ~33 requests, apache/thrift after ~38
+minutes) - not tied to any one input's size or content, consistent with a
+race rather than a bad chunk. This process serves exactly one shared model
+to every caller (two scan-worker replicas, demo-scan-worker, hosted `aletheore
+index` traffic), so concurrent callers are the normal case, not an edge
+case - serializing access to the model is the correct fix, not a
+workaround.
 """
 import logging
 import math
 import os
+import threading
 
 from fastapi import FastAPI
 from llama_cpp import Llama
@@ -54,6 +73,8 @@ _model = Llama(
     verbose=False,
 )
 logger.info("Model loaded")
+
+_model_lock = threading.Lock()
 
 
 class EmbedRequest(BaseModel):
@@ -85,14 +106,16 @@ def _normalize(vector: list[float]) -> list[float]:
 
 @app.post("/embed", response_model=EmbedResponse)
 def embed(req: EmbedRequest) -> EmbedResponse:
-    result = _model.create_embedding(req.text)
+    with _model_lock:
+        result = _model.create_embedding(req.text)
     vector = _normalize(result["data"][0]["embedding"])
     return EmbedResponse(embedding=vector)
 
 
 @app.post("/embed_batch", response_model=EmbedBatchResponse)
 def embed_batch(req: EmbedBatchRequest) -> EmbedBatchResponse:
-    result = _model.create_embedding(req.texts)
+    with _model_lock:
+        result = _model.create_embedding(req.texts)
     # Sorted explicitly rather than trusting list order: app-server checks
     # the returned count matches the request but has no way to check order,
     # so a reordered response would silently attach the wrong vector to the

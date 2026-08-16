@@ -1,6 +1,8 @@
 import importlib
 import math
 import sys
+import threading
+import time
 import types
 
 
@@ -106,3 +108,53 @@ def test_thread_count_defaults_to_one(monkeypatch):
     _, requested_threads = _import_server(monkeypatch)
 
     assert requested_threads == [1]
+
+
+def test_concurrent_requests_do_not_call_the_model_at_the_same_time(monkeypatch):
+    """A single Llama instance is not safe for concurrent use from multiple
+    threads (abetlen/llama-cpp-python#1241) - both routes are sync `def`
+    handlers, which FastAPI dispatches onto its worker threadpool, so two
+    requests arriving close together really can reach the model from two
+    threads at once without a lock. Reproduced in production as a
+    GGML_ASSERT "tensor read out of bounds" crash after dozens of
+    successful requests. This fake model raises if it is ever entered while
+    another call is still inside it, which only a correctly-held lock in
+    server.py prevents."""
+    server, _ = _import_server(monkeypatch)
+
+    class ConcurrencyDetectingLlama:
+        def __init__(self, *args, **kwargs):
+            self._inside = threading.Lock()
+
+        def create_embedding(self, input):
+            if not self._inside.acquire(blocking=False):
+                raise AssertionError("create_embedding entered concurrently")
+            try:
+                time.sleep(0.05)  # widen the race window
+                texts = [input] if isinstance(input, str) else input
+                return {
+                    "data": [
+                        {"index": index, "embedding": [1.0, 0.0, 0.0]}
+                        for index, _ in enumerate(texts)
+                    ]
+                }
+            finally:
+                self._inside.release()
+
+    server._model = ConcurrencyDetectingLlama()
+
+    errors: list[Exception] = []
+
+    def call_embed():
+        try:
+            server.embed(server.EmbedRequest(text="x"))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=call_embed) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
