@@ -750,15 +750,18 @@ EMBED_BATCH_SIZE = 200
 # to `cpus: "2.0"` instead of torch sizing its pool from the host's core
 # count), measured throughput against the deployed service came back at
 # ~9,800-13,150 characters/second across batch sizes 2/5/8/12 - a floor of
-# roughly 30x the old ~340 chars/s.
-#
-# 150,000 characters keeps a wide margin below the naive ceiling that rate
-# implies (~700k+ in the 60s budget): this box also runs app-server and
-# scan-worker on the same 2 CPUs, real chunks are not identical strings like
-# the probe used, and other requests can share the service concurrently. If
-# the timeout in embeddings_api.get_jina_client changes, this has to move
-# with it.
-HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "150000"))
+# roughly 30x the old ~340 chars/s. That number briefly raised this cap to
+# 150,000 (see git history), which turned out to be wrong: the probe text was
+# a single character repeated (~15.5 chars/token), while real source averages
+# ~3.97 chars/token - measured directly against a real flask-source batch,
+# whose first internal sub-batch alone took 164s and whose full ~133k-char
+# request pushed jina-embed to ~6GB and got OOM-killed at a 6000m mem_limit
+# raised specifically to accommodate it. Character count was never a valid
+# proxy for the model's real cost; token count is, and this was verified with
+# text that hid that fact. Reverted to 20,000 - the one number in this cap's
+# history actually measured against real production traffic - until batching
+# is redone against token count instead of character count.
+HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "20000"))
 
 
 def _hosted_batches(texts: list[str], batch_size: int) -> list[tuple[int, int]]:
