@@ -5,7 +5,7 @@ import aletheore
 
 
 def test_package_importable():
-    assert aletheore.__version__ == "0.8.12"
+    assert aletheore.__version__ == "0.8.13"
 
 
 def test_declared_version_matches_packaging_metadata():

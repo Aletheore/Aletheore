@@ -757,11 +757,30 @@ EMBED_BATCH_SIZE = 200
 # whose first internal sub-batch alone took 164s and whose full ~133k-char
 # request pushed jina-embed to ~6GB and got OOM-killed at a 6000m mem_limit
 # raised specifically to accommodate it. Character count was never a valid
-# proxy for the model's real cost; token count is, and this was verified with
-# text that hid that fact. Reverted to 20,000 - the one number in this cap's
-# history actually measured against real production traffic - until batching
-# is redone against token count instead of character count.
-HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "20000"))
+# proxy for the model's real cost on that backend; token count is, and this
+# was verified with text that hid that fact. Reverted to 20,000 - the one
+# number in that cap's history actually measured against real production
+# traffic on that backend.
+#
+# Raised again to 130,000 once the backend itself changed (see
+# jina_embed/server.py: sentence-transformers/PyTorch replaced with
+# llama.cpp against a Q8_0 GGUF), which made the OOM measurement above stale
+# rather than a permanent ceiling: the exact same ~133k-char real flask
+# batch that OOM-killed the old backend was re-measured directly against
+# the new one and peaked at 375MB, not 6GB+ - see docker-compose.yml's
+# jina-embed mem_limit comment. That leaves roughly 5x headroom under the
+# container's 2000m limit, and the request itself completed in 24.55s,
+# comfortably inside embeddings_api's 60s timeout. Real per-corpus indexing
+# (thrift, the largest benchmark corpus) was independently observed taking
+# over an hour at the 20,000 cap - 60-150+ sequential ~7-12s round-trips for
+# a large repo, each paying fixed per-request overhead regardless of size
+# (see project_indexing_speed_needs_investigation memory). 130,000 matches
+# the one figure on this backend that has real measured evidence behind it,
+# rather than extrapolating past it; it is not yet the token-count-based
+# batching redesign this comment has long called for, just the same
+# character-count approach re-benchmarked against the backend that
+# currently exists.
+HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "130000"))
 
 
 def _hosted_batches(texts: list[str], batch_size: int) -> list[tuple[int, int]]:
