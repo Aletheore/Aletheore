@@ -403,7 +403,7 @@ services:
       # Must match `cpus` below - see server.py's comment on why torch's
       # default (host core count) is actively harmful inside a cpu-limited
       # cgroup.
-      - JINA_EMBED_THREADS=4
+      - JINA_EMBED_THREADS=2
     # Bumped from 1.0. This service is the only CPU-bound one in the stack -
     # everything else is I/O-bound on Postgres, Redis or the GitHub API -
     # and at 1.0 it was the hard ceiling on hosted indexing: measured at a
@@ -412,7 +412,16 @@ services:
     # timeout embeddings_api gives it, returned 502, and silently fell back
     # to the local embedder on every attempt. The hosted embeddings feature
     # was therefore never actually exercised in production.
-    cpus: "4.0"
+    #
+    # 2.0 and not more: the host has **4 cores** (nproc), carrying a baseline
+    # load average of ~0.9. `cpus` is a limit rather than a reservation, so a
+    # higher number would not fail outright - it would let one sustained index
+    # build occupy the whole machine and starve app-server, which serves live
+    # webhooks and the dashboard. Half the box is the most this can take while
+    # a customer-facing request path shares it. If measurement shows 2.0 is
+    # still the ceiling on usable hosted indexing, the answer is a dedicated
+    # host for this service, not a bigger share of this one.
+    cpus: "2.0"
     # Bumped from 1500m: was already sitting at 84% of that cap after a
     # single warm-up request (model-load baseline, not a leak), leaving
     # almost no headroom for concurrent traffic before the cgroup OOM-kills
