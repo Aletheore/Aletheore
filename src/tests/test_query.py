@@ -102,6 +102,11 @@ def make_evidence():
             "ownership": [
                 {"email": "a@example.com", "names": ["Alice"], "commit_count": 5, "percent": 1.0}
             ],
+            "file_ownership": {
+                "app/auth.py": [
+                    {"email": "a@example.com", "names": ["Alice"], "commit_count": 3, "percent": 1.0}
+                ]
+            },
             "hotspots": [
                 {
                     "path": "app/auth.py",
@@ -206,9 +211,17 @@ def test_find_branch_raises_not_found_instead_of_crashing_when_git_unavailable()
         find_branch(evidence, "main")
 
 
-def test_find_ownership_returns_the_whole_list_ignoring_target():
+def test_find_ownership_returns_repository_ownership_without_target():
     result = find_ownership(make_evidence(), None)
     assert result == make_evidence()["git"]["ownership"]
+
+
+def test_find_ownership_returns_file_ownership_for_target():
+    assert find_ownership(make_evidence(), "app/auth.py") == make_evidence()["git"]["file_ownership"]["app/auth.py"]
+
+
+def test_find_ownership_does_not_fall_back_to_repository_ownership_for_unknown_target():
+    assert find_ownership(make_evidence(), "missing.py") == []
 
 
 def test_find_secrets_for_file_filters_by_path():

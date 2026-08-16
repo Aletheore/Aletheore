@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS evidence_git_file_churn (
     churn_count        INT NOT NULL,
     recent_commits     JSONB NOT NULL,
     co_change_counts   JSONB NOT NULL,
+    owners             JSONB NOT NULL DEFAULT '{}'::jsonb,
     PRIMARY KEY (installation_id, repo_full_name, branch, path)
 );
 

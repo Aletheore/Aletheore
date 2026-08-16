@@ -69,11 +69,11 @@ class PostgresRepoGraphStore:
 
                 file_churn: dict[str, FileChurnTotal] = {}
                 cur.execute(
-                    "SELECT path, churn_count, recent_commits, co_change_counts FROM evidence_git_file_churn "
+                    "SELECT path, churn_count, recent_commits, co_change_counts, owners FROM evidence_git_file_churn "
                     "WHERE installation_id = %s AND repo_full_name = %s AND branch = %s",
                     (self._installation_id, self._repo_full_name, branch),
                 )
-                for path, churn_count, recent_commits, co_change_counts in cur.fetchall():
+                for path, churn_count, recent_commits, co_change_counts, owners in cur.fetchall():
                     file_churn[path] = FileChurnTotal(
                         path=path,
                         churn_count=churn_count,
@@ -91,6 +91,14 @@ class PostgresRepoGraphStore:
                             for r in recent_commits
                         ],
                         co_change_counts=co_change_counts,
+                        owners={
+                            email: OwnershipTotal(
+                                email=email,
+                                names=set(owner["names"]),
+                                commit_count=owner["commit_count"],
+                            )
+                            for email, owner in (owners or {}).items()
+                        },
                     )
 
         return GraphSnapshot(
@@ -179,7 +187,7 @@ class PostgresRepoGraphStore:
                     cur.executemany(
                         "INSERT INTO evidence_git_file_churn "
                         "(installation_id, repo_full_name, branch, path, churn_count, recent_commits, "
-                        "co_change_counts) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)",
+                        "co_change_counts, owners) VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb)",
                         (
                             (
                                 self._installation_id,
@@ -200,6 +208,15 @@ class PostgresRepoGraphStore:
                                     ]
                                 ),
                                 json.dumps(churn.co_change_counts),
+                                json.dumps(
+                                    {
+                                        email: {
+                                            "names": sorted(owner.names),
+                                            "commit_count": owner.commit_count,
+                                        }
+                                        for email, owner in churn.owners.items()
+                                    }
+                                ),
                             )
                             for path, churn in merged.file_churn.items()
                         ),

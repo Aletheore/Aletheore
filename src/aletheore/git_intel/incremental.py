@@ -209,7 +209,13 @@ def fold(snapshot: GraphSnapshot, commits: list[CommitTouch]) -> GraphSnapshot:
     ownership = {email: OwnershipTotal(o.email, set(o.names), o.commit_count) for email, o in snapshot.ownership.items()}
     cadence = dict(snapshot.cadence_weekly_counts)
     file_churn = {
-        path: FileChurnTotal(f.path, f.churn_count, list(f.recent_commits), dict(f.co_change_counts))
+        path: FileChurnTotal(
+            f.path,
+            f.churn_count,
+            list(f.recent_commits),
+            dict(f.co_change_counts),
+            {email: OwnershipTotal(o.email, set(o.names), o.commit_count) for email, o in f.owners.items()},
+        )
         for path, f in snapshot.file_churn.items()
     }
 
@@ -232,11 +238,17 @@ def fold(snapshot: GraphSnapshot, commits: list[CommitTouch]) -> GraphSnapshot:
         for path in unique_files:
             churn = file_churn.get(path)
             if churn is None:
-                churn = FileChurnTotal(path=path, churn_count=0, recent_commits=[], co_change_counts={})
+                churn = FileChurnTotal(path=path, churn_count=0, recent_commits=[], co_change_counts={}, owners={})
                 file_churn[path] = churn
             churn.churn_count += 1
             churn.recent_commits.insert(0, recent)
             del churn.recent_commits[RECENT_COMMITS_PER_FILE:]
+            file_owner = churn.owners.get(email_key)
+            if file_owner is None:
+                file_owner = OwnershipTotal(email=email_key, names=set(), commit_count=0)
+                churn.owners[email_key] = file_owner
+            file_owner.names.add(commit.author_name)
+            file_owner.commit_count += 1
 
         if len(unique_files) <= MASS_COMMIT_FILE_THRESHOLD:
             for i, first in enumerate(unique_files):

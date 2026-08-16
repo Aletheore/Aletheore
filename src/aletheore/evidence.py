@@ -35,7 +35,7 @@ from aletheore.secrets import (
 from aletheore.toon_encoding import to_toon
 from aletheore.vulnerabilities import check_vulnerabilities as check_dependency_vulnerabilities
 
-EVIDENCE_VERSION = "0.3.0"
+EVIDENCE_VERSION = "0.4.0"
 
 
 def _version_compatibility_key(version: str) -> tuple[int, int] | None:
@@ -417,7 +417,7 @@ def scan_repository(
     )
 
     report("Analyzing git history and ownership")
-    git_data = analyze_git(repo_path, depth_cap=_git_history_depth_cap())
+    git_data = analyze_git(repo_path, modules, depth_cap=_git_history_depth_cap())
 
     report("Scanning working tree for secrets")
     secrets_baseline = load_secrets_baseline(repo_path)

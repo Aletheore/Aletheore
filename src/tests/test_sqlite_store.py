@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+import sqlite3
 from pathlib import Path
 
 from aletheore.git_intel.graph_store import CommitTouch, GraphSnapshot
@@ -42,6 +43,38 @@ def test_apply_commits_then_load_round_trips_correctly(tmp_path):
     assert snapshot.file_churn["a.txt"].co_change_counts == {"b.txt": 1}
     assert len(snapshot.file_churn["a.txt"].recent_commits) == 2
     assert snapshot.file_churn["a.txt"].recent_commits[0].sha == "s2"  # newest first
+    assert snapshot.file_churn["a.txt"].owners["a@example.com"].commit_count == 1
+    assert snapshot.file_churn["a.txt"].owners["b@example.com"].commit_count == 1
+
+
+def test_existing_database_without_file_owners_column_upgrades_in_place(tmp_path):
+    db_path = tmp_path / "graph.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE sync_state (repo_key TEXT NOT NULL, branch TEXT NOT NULL,
+            last_synced_sha TEXT NOT NULL, last_synced_at TEXT NOT NULL,
+            PRIMARY KEY (repo_key, branch));
+        CREATE TABLE ownership (repo_key TEXT NOT NULL, branch TEXT NOT NULL,
+            email TEXT NOT NULL, names TEXT NOT NULL, commit_count INTEGER NOT NULL,
+            PRIMARY KEY (repo_key, branch, email));
+        CREATE TABLE cadence (repo_key TEXT NOT NULL, branch TEXT NOT NULL,
+            week_start TEXT NOT NULL, commit_count INTEGER NOT NULL,
+            PRIMARY KEY (repo_key, branch, week_start));
+        CREATE TABLE file_churn (repo_key TEXT NOT NULL, branch TEXT NOT NULL,
+            path TEXT NOT NULL, churn_count INTEGER NOT NULL,
+            recent_commits TEXT NOT NULL, co_change_counts TEXT NOT NULL,
+            PRIMARY KEY (repo_key, branch, path));
+        INSERT INTO sync_state VALUES ('repo-1', 'main', 's1', '2026-06-01T00:00:00');
+        INSERT INTO file_churn VALUES ('repo-1', 'main', 'a.txt', 1, '[]', '{}');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    store = SQLiteRepoGraphStore(db_path)
+    snapshot = store.load("repo-1", "main")
+    assert snapshot.file_churn["a.txt"].owners == {}
 
 
 def test_incremental_apply_matches_a_single_full_fold(tmp_path):

@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS file_churn (
     churn_count INTEGER NOT NULL,
     recent_commits TEXT NOT NULL,
     co_change_counts TEXT NOT NULL,
+    owners TEXT NOT NULL,
     PRIMARY KEY (repo_key, branch, path)
 );
 """
@@ -67,6 +68,10 @@ class SQLiteRepoGraphStore:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(db_path)
         self._conn.executescript(_SCHEMA)
+        try:
+            self._conn.execute("ALTER TABLE file_churn ADD COLUMN owners TEXT NOT NULL DEFAULT '{}'")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         self._conn.commit()
 
     def close(self) -> None:
@@ -101,11 +106,11 @@ class SQLiteRepoGraphStore:
 
         file_churn: dict[str, FileChurnTotal] = {}
         cur.execute(
-            "SELECT path, churn_count, recent_commits, co_change_counts FROM file_churn "
+            "SELECT path, churn_count, recent_commits, co_change_counts, owners FROM file_churn "
             "WHERE repo_key = ? AND branch = ?",
             (repo_key, branch),
         )
-        for path, churn_count, recent_json, co_change_json in cur.fetchall():
+        for path, churn_count, recent_json, co_change_json, owners_json in cur.fetchall():
             recent_commits = [
                 RecentCommit(
                     sha=r["sha"],
@@ -123,6 +128,10 @@ class SQLiteRepoGraphStore:
                 churn_count=churn_count,
                 recent_commits=recent_commits,
                 co_change_counts=json.loads(co_change_json),
+                owners={
+                    email: OwnershipTotal(email=email, names=set(owner["names"]), commit_count=owner["commit_count"])
+                    for email, owner in json.loads(owners_json).items()
+                },
             )
 
         return GraphSnapshot(
@@ -171,8 +180,8 @@ class SQLiteRepoGraphStore:
                 ),
             )
             self._conn.executemany(
-                "INSERT INTO file_churn (repo_key, branch, path, churn_count, recent_commits, co_change_counts) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO file_churn (repo_key, branch, path, churn_count, recent_commits, co_change_counts, owners) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     (
                         repo_key,
@@ -192,6 +201,12 @@ class SQLiteRepoGraphStore:
                             ]
                         ),
                         json.dumps(churn.co_change_counts),
+                        json.dumps(
+                            {
+                                email: {"names": sorted(owner.names), "commit_count": owner.commit_count}
+                                for email, owner in churn.owners.items()
+                            }
+                        ),
                     )
                     for path, churn in merged.file_churn.items()
                 ),

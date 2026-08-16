@@ -94,6 +94,18 @@ def test_analyze_git_ownership(tmp_path):
     assert by_email["a@example.com"]["percent"] == 0.6667
 
 
+def test_analyze_git_file_ownership_includes_current_modules_only(tmp_path):
+    repo = make_git_repo(tmp_path)
+    result = analyze_git(
+        repo,
+        modules=[{"path": "a.txt"}],
+        now=datetime(2026, 7, 14, tzinfo=timezone.utc),
+    )
+    assert set(result["file_ownership"]) == {"a.txt"}
+    assert result["file_ownership"]["a.txt"][0]["email"] == "a@example.com"
+    assert sum(owner["percent"] for owner in result["file_ownership"]["a.txt"]) == 1.0
+
+
 def test_analyze_git_ownership_merges_same_email_different_names(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
