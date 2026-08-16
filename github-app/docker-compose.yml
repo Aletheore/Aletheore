@@ -399,7 +399,20 @@ services:
       # connections at all - generous start_period so a slow cold start on
       # a busy host doesn't get flagged unhealthy before it's had a chance.
       start_period: 60s
-    cpus: "1.0"
+    environment:
+      # Must match `cpus` below - see server.py's comment on why torch's
+      # default (host core count) is actively harmful inside a cpu-limited
+      # cgroup.
+      - JINA_EMBED_THREADS=4
+    # Bumped from 1.0. This service is the only CPU-bound one in the stack -
+    # everything else is I/O-bound on Postgres, Redis or the GitHub API -
+    # and at 1.0 it was the hard ceiling on hosted indexing: measured at a
+    # flat ~340 characters/second, so `aletheore index` on even a small repo
+    # (jq, 780 chunks) could not finish a single batch inside the 60s
+    # timeout embeddings_api gives it, returned 502, and silently fell back
+    # to the local embedder on every attempt. The hosted embeddings feature
+    # was therefore never actually exercised in production.
+    cpus: "4.0"
     # Bumped from 1500m: was already sitting at 84% of that cap after a
     # single warm-up request (model-load baseline, not a leak), leaving
     # almost no headroom for concurrent traffic before the cgroup OOM-kills

@@ -2,6 +2,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import aletheore.search_index as search_index_module
+
 from aletheore.search_index import (
     _file_header_comment,
     _is_declaration_only_file,
@@ -1582,3 +1584,39 @@ def test_detect_query_language_declines_when_two_languages_are_named():
 
 def test_detect_query_language_does_not_confuse_java_with_javascript():
     assert _detect_query_language("Where is the JavaScript adapter?") == "javascript"
+
+
+def test_hosted_batches_bound_a_request_by_characters_not_just_count():
+    """The hosted embedder costs per character; EMBED_BATCH_SIZE was tuned
+    against Ollama, where it costs per request. A 200-chunk batch of real code
+    is ~1MB, which needed roughly eleven minutes against embeddings_api's 60s
+    timeout - so it returned 502 and silently fell back to local on every
+    hosted index build."""
+    texts = ["x" * 1000] * 40
+    spans = search_index_module._hosted_batches(texts, search_index_module.EMBED_BATCH_SIZE)
+
+    assert len(spans) == 2, "40k characters must not go out as one request"
+    for start, end in spans:
+        assert sum(len(t) for t in texts[start:end]) <= search_index_module.HOSTED_EMBED_MAX_CHARS
+
+
+def test_hosted_batches_still_respect_the_count_cap_for_small_texts():
+    """Character-bounding is additional, not a replacement: many tiny chunks
+    are cheap per character but still one request's worth of overhead each."""
+    texts = ["y" * 10] * 300
+    spans = search_index_module._hosted_batches(texts, search_index_module.EMBED_BATCH_SIZE)
+
+    assert [end - start for start, end in spans] == [200, 100]
+
+
+def test_hosted_batches_never_drop_a_text_larger_than_the_character_cap():
+    """Chunks are truncated upstream, so this only fires on a pathological
+    input - and embedding it slowly beats not embedding it at all, which is
+    what silently skipping it would mean for that file's searchability."""
+    oversized = "z" * (search_index_module.HOSTED_EMBED_MAX_CHARS * 3)
+    texts = ["small", oversized, "small"]
+    spans = search_index_module._hosted_batches(texts, search_index_module.EMBED_BATCH_SIZE)
+
+    covered = [i for start, end in spans for i in range(start, end)]
+    assert covered == [0, 1, 2], "every text must appear in exactly one span"
+    assert (1, 2) in spans, "the oversized text goes out on its own"
