@@ -26,6 +26,25 @@ file is the history; that one is the current state.
   2.44GB+. Quantization cost was checked directly too - 0.9997 cosine similarity against the
   full-precision embedding on the same input. `jina-embed`'s `mem_limit` comes back down from the
   emergency-raised 6000m to 2000m on this evidence.
+- **`jina-embed` runs 2 independent model instances (`JINA_EMBED_INSTANCES=2`) instead of 1 instance
+  parallelizing across 2 threads.** Same total CPU budget, differently spent: a single instance
+  splitting one embedding call across threads pays real synchronization overhead inside llama.cpp's
+  matmul kernels, while N single-threaded instances processing N requests concurrently pay none of
+  that - pure task parallelism. Measured locally (4 concurrent streams of real `apache/thrift` source,
+  `--cpus=2` both configurations): 2x1 threads finished in 223.27s against 1x2's 238.83s, ~6.5% faster
+  on identical CPU. More importantly, it reduces queueing delay under concurrent load specifically -
+  every caller (two `scan-worker` replicas, `demo-scan-worker`, hosted index builds) previously queued
+  behind one locked instance even when their requests were otherwise fully independent, which
+  contributed to a real `ReadTimeout` on a thrift-scale request (see the char-cap entry below).
+  Memory checked under real concurrent load, not assumed: peaked at 620MiB, comfortably inside the
+  existing 2000m limit.
+- **`HOSTED_EMBED_MAX_CHARS` lowered from 130,000 to 60,000.** 130,000 was reasoned from a single
+  isolated request measurement (24.55s, zero concurrent load) and caused a real failure: a thrift
+  index build hit `ReadTimeout` at exactly 60.1s and lost 22 minutes of progress, because real latency
+  under concurrent load is compute time plus queueing delay, not compute time alone. 60,000 leaves
+  ~37s of margin against the 60s timeout at the measured ~2,630 chars/s real-world throughput, still
+  3x the original 20,000 baseline. Should be revisited once the multi-instance change above has real
+  concurrent-load evidence behind it, rather than another single-request extrapolation.
 
 ## 2026-08-12
 
