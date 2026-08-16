@@ -1591,11 +1591,19 @@ def test_hosted_batches_bound_a_request_by_characters_not_just_count():
     against Ollama, where it costs per request. A 200-chunk batch of real code
     is ~1MB, which needed roughly eleven minutes against embeddings_api's 60s
     timeout - so it returned 502 and silently fell back to local on every
-    hosted index build."""
-    texts = ["x" * 1000] * 40
+    hosted index build.
+
+    Sized relative to HOSTED_EMBED_MAX_CHARS rather than a literal, so this
+    keeps testing the same thing after that cap is raised on new throughput
+    evidence: four chunks each exactly half the cap, so pairs fit a request
+    (2 * half <= cap) but a third would not (3 * half > cap) - well under the
+    EMBED_BATCH_SIZE count cap, so the character bound is what forces the
+    split into two spans of two."""
+    half_cap = search_index_module.HOSTED_EMBED_MAX_CHARS // 2
+    texts = ["x" * half_cap] * 4
     spans = search_index_module._hosted_batches(texts, search_index_module.EMBED_BATCH_SIZE)
 
-    assert len(spans) == 2, "40k characters must not go out as one request"
+    assert len(spans) == 2, "characters over the cap must not go out as one request"
     for start, end in spans:
         assert sum(len(t) for t in texts[start:end]) <= search_index_module.HOSTED_EMBED_MAX_CHARS
 
