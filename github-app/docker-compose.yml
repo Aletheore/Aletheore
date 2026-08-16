@@ -422,11 +422,16 @@ services:
     # still the ceiling on usable hosted indexing, the answer is a dedicated
     # host for this service, not a bigger share of this one.
     cpus: "2.0"
-    # Bumped from 1500m: was already sitting at 84% of that cap after a
-    # single warm-up request (model-load baseline, not a leak), leaving
-    # almost no headroom for concurrent traffic before the cgroup OOM-kills
-    # it. Host has 12GB+ free, so this is cheap insurance.
-    mem_limit: 2500m
+    # Bumped from 2500m after #260 raised HOSTED_EMBED_MAX_CHARS to 150,000:
+    # a real 200-chunk/~150k-char batch (flask, 515 real code chunks) pushed
+    # anon-rss to ~2.44GB and the cgroup OOM-killer took uvicorn out mid
+    # request - confirmed via dmesg, same second app-server logged the
+    # resulting RemoteProtocolError. The earlier throughput measurement that
+    # justified the char-cap raise only used synthetic ~21k-char batches, far
+    # below what the new cap actually allows a real index build to send, so
+    # it never touched this ceiling. Host has 13GB+ available; this is still
+    # cheap insurance, not the whole margin the host could give it.
+    mem_limit: 6000m
 
   caddy:
     image: caddy:2-alpine
