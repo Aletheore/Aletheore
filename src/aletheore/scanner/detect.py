@@ -1,6 +1,7 @@
 import json
 import os
 import tomllib
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -215,6 +216,7 @@ def _npm_dependencies(repo_path: Path) -> dict[str, str]:
     return {**data.get("dependencies", {}), **data.get("devDependencies", {})}
 
 
+@lru_cache(maxsize=128)
 def _nested_git_roots(repo_path: Path) -> set[Path]:
     """Directories other than repo_path itself that contain their own `.git`
     entry (file or directory) - a linked worktree (`git worktree add`) or a
@@ -226,11 +228,20 @@ def _nested_git_roots(repo_path: Path) -> set[Path]:
     os.walk(followlinks=False) rather than Path.rglob(".git") - a symlinked
     directory shouldn't be descended into just to look for a nested repo.
     """
+    repo_path = repo_path.resolve()
     roots = set()
     for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
         current_dir = Path(dirpath)
-        if current_dir != repo_path and (".git" in dirnames or ".git" in filenames):
+        # Check for .git before pruning - IGNORED_DIRS contains ".git" itself
+        # (so descending into a found repo's own .git internals is skipped),
+        # and pruning first would remove ".git" from dirnames before this
+        # check ever sees it, silently disabling directory-style nested-clone
+        # detection entirely regardless of where it sits.
+        has_nested_git = ".git" in dirnames or ".git" in filenames
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        if current_dir != repo_path and has_nested_git:
             roots.add(current_dir)
+            dirnames[:] = []
     return roots
 
 

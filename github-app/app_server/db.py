@@ -66,6 +66,69 @@ async def set_installation_plan(pool: asyncpg.Pool, installation_id: int, plan: 
     )
 
 
+async def claim_free_to_paid_plan(
+    pool: asyncpg.Pool, installation_id: int, plan: str
+) -> bool:
+    """Atomically claim the first free-to-paid transition for an installation.
+
+    Also resets paid_setup_completed_at to NULL in the same UPDATE - see
+    claim_paid_setup. This is the one place setup should ever become
+    "pending": a genuine, freshly-observed free->paid transition, not an
+    installation that was already paid for some other reason (migrated
+    data, a direct insert, a paid->paid plan change).
+    """
+    row = await pool.fetchrow(
+        """
+        UPDATE installations
+        SET plan = $2, updated_at = now(), paid_setup_completed_at = NULL
+        WHERE installation_id = $1 AND plan = 'free'
+        RETURNING installation_id
+        """,
+        installation_id,
+        plan,
+    )
+    return row is not None
+
+
+async def claim_paid_setup(pool: asyncpg.Pool, installation_id: int) -> bool:
+    """Atomically claim the one-time paid setup (initial wiki/docs build,
+    affiliate attribution) for an installation.
+
+    Deliberately independent of claim_free_to_paid_plan's own transition
+    check: if a crash lands between that write committing and setup
+    actually running, a Paddle retry finds plan already non-free and
+    claim_free_to_paid_plan correctly returns False - but setup still never
+    ran. Gating setup on this claim instead of on that transition boolean
+    means the retry still runs it exactly once, rather than skipping it
+    forever because the plan write it depended on already happened.
+    """
+    row = await pool.fetchrow(
+        """
+        UPDATE installations
+        SET paid_setup_completed_at = now()
+        WHERE installation_id = $1 AND paid_setup_completed_at IS NULL
+        RETURNING installation_id
+        """,
+        installation_id,
+    )
+    return row is not None
+
+
+async def set_paid_installation_plan(
+    pool: asyncpg.Pool, installation_id: int, plan: str
+) -> None:
+    """Update a paid plan without resurrecting an installation already downgraded."""
+    await pool.execute(
+        """
+        UPDATE installations
+        SET plan = $2, updated_at = now()
+        WHERE installation_id = $1 AND plan <> 'free'
+        """,
+        installation_id,
+        plan,
+    )
+
+
 async def add_paddle_ids_to_installation(
     pool: asyncpg.Pool,
     installation_id: int,
@@ -172,6 +235,10 @@ async def claim_webhook_delivery(
     `source` namespaces the id ("github" for X-GitHub-Delivery GUIDs,
     "paddle" for event ids) so the two providers can't collide.
 
+    Claims older than fifteen minutes are reclaimable. This is the recovery
+    path for a process killed after claiming but before completing a webhook;
+    ordinary retries remain deduplicated.
+
     A single INSERT ... ON CONFLICT DO NOTHING does the whole thing
     atomically. A read-then-write would leave a window where two concurrent
     deliveries of the same id both see "not seen yet" and both proceed -
@@ -179,9 +246,11 @@ async def claim_webhook_delivery(
     """
     row = await pool.fetchrow(
         """
-        INSERT INTO webhook_deliveries (source, delivery_id, event)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (source, delivery_id) DO NOTHING
+        INSERT INTO webhook_deliveries (source, delivery_id, event, claimed_at)
+        VALUES ($1, $2, $3, now())
+        ON CONFLICT (source, delivery_id) DO UPDATE
+        SET received_at = now(), claimed_at = now()
+        WHERE webhook_deliveries.claimed_at < now() - interval '15 minutes'
         RETURNING delivery_id
         """,
         source,

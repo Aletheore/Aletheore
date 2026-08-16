@@ -1118,40 +1118,53 @@ def _detect_query_language(query_text: str) -> str | None:
 
 
 def search_index(
-    repo_path: Path, query_text: str, k: int = 10, language: str | None = None
+    repo_path: Path,
+    query_text: str,
+    k: int = 10,
+    language: str | None = None,
+    allow_hosted: bool = True,
 ) -> list[dict]:
     if language is None:
         # The question may name its own language - see _detect_query_language.
         language = _detect_query_language(query_text)
     table = open_index(repo_path)
-    query_vector = embed_texts([query_text])[0]
+    # Must use the same hosted-vs-local preference as build_index - see
+    # _embed_in_batches. Previously this called embed_texts() directly,
+    # which is always local: a hosted-built index searched with a local
+    # query vector compared unrelated vector spaces. That was masked by the
+    # dimension guard below as long as the two providers' dimensions
+    # differed (OpenAI 1536 vs local nomic 768), which turned the mismatch
+    # into a loud, actionable error. It stopped being masked the moment the
+    # hosted provider became jina-embeddings-v2-base-code, which is also
+    # 768-dim: the guard fell silent and every hosted-index search since
+    # then returned nonsense ranked against the wrong vector space, with no
+    # error at all. Matching the same provider choice at query time removes
+    # the coincidence the guard was accidentally relying on.
+    query_vector = _embed_in_batches(
+        [query_text], repo_id=_repo_id(repo_path), allow_hosted=allow_hosted
+    )[0]
 
     # The index and the query must come from the same embedding model - see
     # build_index's dimension-drift handling for the mechanism that keeps
     # the index internally consistent. This is the mirror check for the
     # query itself: the available provider can differ between when the
     # index was built and when it's searched (e.g. a hosted token was
-    # revoked, or Ollama came up where it wasn't before), and a raw
+    # revoked, added, or rotated between index and search), and a raw
     # dimension mismatch otherwise surfaces as an opaque LanceDB error deep
     # inside table.search() rather than a message telling the user what to
-    # do about it.
+    # do about it. Two different models sharing a dimension (e.g. jina and
+    # nomic, both 768) can still slip past this check with unrelated vector
+    # spaces - it catches size mismatches, not model mismatches - which is
+    # exactly why the query above must choose its provider the same way the
+    # index build does, rather than relying on this guard to catch a drift.
     table_dimension = table.schema.field("vector").type.list_size
     if len(query_vector) != table_dimension:
-        # Query embeddings are always local (Ollama, or OpenAI as a fallback -
-        # see embed_texts above); they never consult ALETHEORE_API_TOKEN. So
-        # this mismatch is typically an index built with hosted embeddings
-        # (_embed_in_batches, which does use that token) while queries embed
-        # locally at a different dimension. Telling the user to just re-run
-        # 'aletheore index' is bad advice here: with the token still set,
-        # the rebuild uses hosted again, reproduces the same dimension, and
-        # the mismatch recurs forever. Point at what actually fixes it.
         raise IndexDimensionMismatchError(
             f"the index at {_index_path(repo_path)} holds {table_dimension}-dimension "
-            f"vectors but the query embedded to {len(query_vector)} dimensions - search "
-            "always embeds queries with the local embedding provider, never the hosted "
-            "one, so this index was likely built with hosted embeddings (ALETHEORE_API_TOKEN "
-            f"set). Unset ALETHEORE_API_TOKEN and re-run 'aletheore index {repo_path}' to "
-            "rebuild the index with the local provider that queries actually use"
+            f"vectors but the query embedded to {len(query_vector)} dimensions - the "
+            "embedding provider available now differs from the one used to build this "
+            f"index. Re-run 'aletheore index {repo_path}' to rebuild it with the "
+            "provider currently available"
         )
 
     # Over-fetch, then thin by file: the chunks displaced by the per-file cap

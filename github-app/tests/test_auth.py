@@ -125,6 +125,11 @@ def test_backslash_protocol_relative_next_url_rejected():
     assert _is_safe_next_path("/\\evil.example.com/phish") == "/dashboard"
 
 
+@pytest.mark.parametrize("control", ["\t", "\n", "\r", "\x1f"])
+def test_control_characters_in_next_path_rejected(control):
+    assert _is_safe_next_path(f"/{control}/evil.example.com") == "/dashboard"
+
+
 def test_next_path_not_starting_with_slash_rejected():
     assert _is_safe_next_path("evil.example.com") == "/dashboard"
 

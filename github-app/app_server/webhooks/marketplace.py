@@ -2,9 +2,11 @@ import logging
 
 from app_server.db import (
     add_installation_member,
+    claim_free_to_paid_plan,
     get_installation_by_account_login,
     set_extra_seats,
     set_installation_plan,
+    set_paid_installation_plan,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,11 +56,16 @@ async def handle_marketplace_event(payload: dict, pool, redis_url: str, queue=No
         )
         return
     installation_id = installation["installation_id"]
-    previous_plan = installation["plan"]
 
     if action in ("purchased", "changed"):
         new_plan = _normalize_marketplace_plan_name(purchase["plan"]["name"])
-        await set_installation_plan(pool, installation_id, new_plan)
+        transitioned_to_paid = False
+        if new_plan != "free":
+            transitioned_to_paid = await claim_free_to_paid_plan(pool, installation_id, new_plan)
+            if not transitioned_to_paid:
+                await set_paid_installation_plan(pool, installation_id, new_plan)
+        else:
+            await set_installation_plan(pool, installation_id, new_plan)
 
         # Whoever completed the purchase becomes seat one, so they're never
         # locked out of their own installation's Settings by the seat check -
@@ -71,7 +78,7 @@ async def handle_marketplace_event(payload: dict, pool, redis_url: str, queue=No
         # One-time Live Wiki build, tier-independent - fires exactly once,
         # on the free -> paid transition. A paid-to-paid plan change (e.g.
         # Team -> Growth) must not re-trigger it.
-        if previous_plan == "free" and new_plan != "free":
+        if transitioned_to_paid:
             if queue is None:
                 from redis import Redis
                 from rq import Queue

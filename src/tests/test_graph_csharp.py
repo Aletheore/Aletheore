@@ -123,6 +123,21 @@ def test_build_module_graph_csharp_using_resolves_by_namespace_not_by_class_name
     assert ("Handlers/Handler.cs", "Store/Store.cs") in edges
 
 
+def test_build_module_graph_csharp_applies_directory_build_props_usings(tmp_path):
+    repo = make_csharp_repo(tmp_path)
+    (repo / "Directory.Build.props").write_text(
+        "<Project><ItemGroup><Using Include=\"App.Store\" /></ItemGroup></Project>"
+    )
+    (repo / "Handlers" / "Handler.cs").write_text(
+        "namespace App.Handlers { public class Handler { private UserStore _store; } }\n"
+    )
+
+    _, dependency_graph, _ = build_module_graph(repo)
+    edges = {tuple(edge) for edge in dependency_graph["edges"]}
+
+    assert ("Handlers/Handler.cs", "Store/Store.cs") in edges
+
+
 def test_build_module_graph_csharp_unmapped_namespace_does_not_resolve(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -190,11 +205,10 @@ def test_build_module_graph_csharp_using_escaping_repo_root_does_not_crash(tmp_p
     assert dependency_graph["edges"] == []
 
 
-def test_build_module_graph_reads_each_csharp_file_only_once(tmp_path):
-    # Before this fix, the namespace/root-inference pre-pass and the main
-    # extraction loop each independently read_bytes() and re-parsed every
-    # .cs file from scratch - a real, avoidable 2x tree-sitter parse cost
-    # per file.
+def test_build_module_graph_reparses_csharp_without_retaining_prepass_trees(tmp_path):
+    # The namespace/type pre-pass keeps only extracted strings. The main loop
+    # therefore reads and parses each file again, trading a small amount of
+    # CPU for bounded memory rather than retaining every tree.
     repo = make_csharp_repo(tmp_path)
 
     real_read_bytes = Path.read_bytes
@@ -209,7 +223,7 @@ def test_build_module_graph_reads_each_csharp_file_only_once(tmp_path):
         build_module_graph(repo)
 
     assert read_counts
-    assert all(count == 1 for count in read_counts.values())
+    assert all(count == 2 for count in read_counts.values())
 
 
 def test_csharp_extracts_summary_from_xmldoc(tmp_path):

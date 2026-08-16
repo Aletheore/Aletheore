@@ -39,6 +39,48 @@ def test_detect_languages_counts_files_and_loc(tmp_path):
     assert by_name["javascript"]["file_count"] == 1
 
 
+def test_nested_git_discovery_prunes_ignored_dependency_trees(tmp_path):
+    from aletheore.scanner.detect import _nested_git_roots
+
+    repo = tmp_path / "repo"
+    (repo / "node_modules" / "nested" / ".git").mkdir(parents=True)
+    (repo / "node_modules" / "nested" / "package.py").write_text("x = 1\n")
+    (repo / "app.py").write_text("x = 1\n")
+    _nested_git_roots.cache_clear()
+
+    assert _nested_git_roots(repo) == set()
+    assert [entry["file_count"] for entry in detect_languages(repo) if entry["name"] == "python"] == [1]
+
+
+def test_nested_git_discovery_still_finds_a_directory_style_clone_outside_ignored_dirs(tmp_path):
+    """IGNORED_DIRS contains ".git" itself (so a found root's own .git
+    internals aren't walked) - pruning dirnames against IGNORED_DIRS before
+    checking whether ".git" is present would silently disable directory-
+    style nested-clone detection everywhere, not just inside ignored dirs."""
+    from aletheore.scanner.detect import _nested_git_roots
+
+    repo = tmp_path / "repo"
+    (repo / "vendor" / "some-lib" / ".git").mkdir(parents=True)
+    (repo / "vendor" / "some-lib" / "lib.py").write_text("x = 1\n")
+    (repo / "app.py").write_text("x = 1\n")
+    _nested_git_roots.cache_clear()
+
+    assert _nested_git_roots(repo) == {repo / "vendor" / "some-lib"}
+
+
+def test_detect_languages_does_not_follow_symlinked_directories(tmp_path):
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    repo.mkdir()
+    outside.mkdir()
+    (outside / "leaked.py").write_text("x = 1\n")
+    (repo / "linked").symlink_to(outside, target_is_directory=True)
+    (repo / "main.py").write_text("x = 1\n")
+
+    python_entries = [entry for entry in detect_languages(repo) if entry["name"] == "python"]
+    assert python_entries[0]["file_count"] == 1
+
+
 def test_detect_languages_returns_a_sorted_list(tmp_path):
     # Built from _iter_source_files' raw filesystem-walk order, which is
     # filesystem-dependent (confirmed elsewhere in this file: the same repo

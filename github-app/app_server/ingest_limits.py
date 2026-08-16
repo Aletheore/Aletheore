@@ -34,12 +34,14 @@ EMBEDDINGS_MAX_BODY_BYTES = 3 * 1024 * 1024
 # small so unauthenticated callers cannot force the server to materialize large
 # strings before Pydantic validation runs.
 DEMO_SCAN_MAX_BODY_BYTES = 4 * 1024
+MANAGED_AUDIT_MAX_BODY_BYTES = 26 * 1024 * 1024
 
 MAX_BODY_BYTES_BY_PATH = {
     "/v1/telemetry": TELEMETRY_MAX_BODY_BYTES,
     "/v1/runtime-events": RUNTIME_EVENT_MAX_BODY_BYTES,
     "/v1/embeddings": EMBEDDINGS_MAX_BODY_BYTES,
     "/v1/demo-scan": DEMO_SCAN_MAX_BODY_BYTES,
+    "/v1/managed-audit": MANAGED_AUDIT_MAX_BODY_BYTES,
 }
 
 

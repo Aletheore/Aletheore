@@ -105,6 +105,14 @@ async def start_managed_audit(request: Request, body: StartManagedAuditRequest):
 
     decoded_evidence = _decode_and_validate_evidence(body.evidence)
 
+    # check_and_reserve_monthly_repo_scan_slot has a side effect - a True
+    # return permanently consumes one of this installation's limited monthly
+    # distinct-repo slots. It must run after decode succeeds, not before:
+    # moving it earlier (to avoid decoding evidence for a request that will
+    # fail the quota anyway) means a single malformed-evidence POST burns a
+    # slot for a scan that never actually happened. The pre-routing body-size
+    # cap (see MAX_BODY_BYTES_BY_PATH) is what protects against a caller
+    # forcing wasted decode work; this check protects the scan slot itself.
     if not await check_and_reserve_monthly_repo_scan_slot(
         pool, installation["installation_id"], body.repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
     ):

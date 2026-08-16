@@ -15,6 +15,7 @@ from app_server.affiliates import create_affiliate, get_referral, list_affiliate
 from app_server.auth import sign_checkout_installation_id
 from app_server.db import (
     add_installation_member,
+    claim_free_to_paid_plan,
     claim_webhook_delivery,
     get_extra_seats,
     get_installation,
@@ -420,6 +421,46 @@ async def test_paid_to_paid_change_does_not_retrigger_live_wiki_full_build(pool)
 
     installation = await get_installation(pool, 201)
     assert installation["plan"] == "air"
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_crash_after_plan_write_still_runs_setup_on_retry(pool):
+    """Simulates a process death between the plan write committing and
+    setup (wiki/docs build, attribution) running: claim_free_to_paid_plan
+    already flipped the plan to 'air' and reset paid_setup_completed_at to
+    NULL (a real free->paid transition happened), but nothing past that
+    point ran - as if the process died right there. claim_free_to_paid_plan
+    would return False on a retry (plan isn't 'free' anymore) and silently
+    skip setup forever if setup were gated on that transition boolean - the
+    retry must still run it because setup itself was never actually
+    claimed."""
+    fake_queue = MagicMock()
+    await upsert_installation(pool, 203, "acme")  # defaults to plan='free'
+    assert await claim_free_to_paid_plan(pool, 203, "air") is True  # the crashed attempt
+
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 203)
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert fake_queue.enqueue.call_count == 2
+    job_names = {call.args[0] for call in fake_queue.enqueue.call_args_list}
+    assert job_names == {
+        "scan_worker.jobs.run_live_wiki_full_build_for_installation_job",
+        "scan_worker.jobs.run_live_docs_full_build_for_installation_job",
+    }
+
+
+@pytest.mark.asyncio
+async def test_setup_runs_only_once_across_repeated_deliveries(pool):
+    fake_queue = MagicMock()
+    await upsert_installation(pool, 204, "acme")  # defaults to plan='free'
+    payload = _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 204)
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+    assert fake_queue.enqueue.call_count == 2
+
+    fake_queue.reset_mock()
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
     fake_queue.enqueue.assert_not_called()
 
 

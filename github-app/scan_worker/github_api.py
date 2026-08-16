@@ -9,6 +9,15 @@ MAX_CONTEXT_FILE_BYTES = 40_000
 MAX_CONTEXT_TOTAL_BYTES = 200_000
 
 
+class PRDiff(str):
+    """Flattened diff text plus structured patches from GitHub."""
+
+    def __new__(cls, text: str, patches: tuple[tuple[str, str], ...]):
+        value = str.__new__(cls, text)
+        value.patches = patches
+        return value
+
+
 class BranchNotOwnedByAletheoreError(Exception):
     """Raised by ensure_branch_at when a branch with our reserved name
     already exists but its HEAD commit wasn't made by us - force-pushing
@@ -80,7 +89,7 @@ def fetch_pr_diff(
     repo_full_name: str,
     base_ref: str,
     head_ref: str,
-) -> str:
+) -> PRDiff:
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
@@ -91,11 +100,13 @@ def fetch_pr_diff(
     )
     response.raise_for_status()
     parts = []
+    patches = []
     for file in response.json().get("files", []):
         patch = file.get("patch")
         if patch:
+            patches.append((file["filename"], patch))
             parts.append(f"--- {file['filename']} ---\n{patch}")
-    return "\n\n".join(parts)
+    return PRDiff("\n\n".join(parts), tuple(patches))
 
 
 def fetch_pr_changed_files(

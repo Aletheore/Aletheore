@@ -1448,7 +1448,9 @@ def _run_flash_review(
         settings.database_url, installation_id, repo_full_name, pr_number
     )
     diff_base = last_reviewed_sha or base_sha
-    diff_text = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha)
+    diff_result = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha)
+    diff_text = str(diff_result)
+    diff_patches = getattr(diff_result, "patches", None)
     changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
 
     spend_accumulator = {"total": 0.0}
@@ -1513,6 +1515,7 @@ def _run_flash_review(
                 model_used=flash_review_model,
                 file_contents=file_contents,
                 on_grounding_result=_on_grounding_result,
+                diff_patches=diff_patches,
             )
         else:
             findings = review_diff(
@@ -1525,6 +1528,7 @@ def _run_flash_review(
                 model_used=flash_review_model,
                 file_contents=file_contents,
                 on_grounding_result=_on_grounding_result,
+                diff_patches=diff_patches,
             )
     # Briefly re-acquire the lock just for the write, now that the
     # expensive review work above is done - see run_flash_review_job's
@@ -1846,42 +1850,45 @@ def _fix_suggestion_attachment(
 
         with installation_spend_lock(dsn, installation_id):
             cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
-            if cap_reached:
-                return None
+        if cap_reached:
+            return None
 
-            app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
-            token = _token_sync(installation_id, app_jwt)
-            client = get_github_api_client()
-            file_content = fetch_file_content(client, token, repo_full_name, source_file)
-            if not file_content:
-                return None
+        app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+        token = _token_sync(installation_id, app_jwt)
+        client = get_github_api_client()
+        file_content = fetch_file_content(client, token, repo_full_name, source_file)
+        if not file_content:
+            return None
 
-            lines = file_content.splitlines()
-            anchor = (source_line or 1) - 1
-            snippet = "\n".join(lines[max(0, anchor - 15) : min(len(lines), anchor + 15)])
-            user_prompt = json.dumps(
-                {
-                    "endpoint": f"{method} {path}",
-                    "status_code": status_code,
-                    "file": source_file,
-                    "line": source_line,
-                    "symbol": _find_enclosing_symbol(evidence, source_file, source_line),
-                    "code_context": snippet,
-                }
+        lines = file_content.splitlines()
+        anchor = (source_line or 1) - 1
+        snippet = "\n".join(lines[max(0, anchor - 15) : min(len(lines), anchor + 15)])
+        user_prompt = json.dumps(
+            {
+                "endpoint": f"{method} {path}",
+                "status_code": status_code,
+                "file": source_file,
+                "line": source_line,
+                "symbol": _find_enclosing_symbol(evidence, source_file, source_line),
+                "code_context": snippet,
+            }
+        )
+        fix_suggestion_model = model_for_plan(plan)
+        spend_accumulator = {"total": 0.0}
+
+        def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+            spend_accumulator["total"] += cost_for_usage(
+                fix_suggestion_model, prompt_tokens, completion_tokens
             )
-            fix_suggestion_model = model_for_plan(plan)
-            spend_accumulator = {"total": 0.0}
 
-            def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-                spend_accumulator["total"] += cost_for_usage(
-                    fix_suggestion_model, prompt_tokens, completion_tokens
-                )
-
-            raw = _health_fix_suggestion_adapter(on_usage=_on_usage).simple_completion(
-                FIX_SUGGESTION_SYSTEM_PROMPT, user_prompt, cwd="."
+        raw = _health_fix_suggestion_adapter(on_usage=_on_usage).simple_completion(
+            FIX_SUGGESTION_SYSTEM_PROMPT, user_prompt, cwd="."
+        )
+        with installation_spend_lock(dsn, installation_id):
+            record_llm_spend(
+                dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap
             )
-            record_llm_spend(dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap)
-            suggestion = raw.strip()
+        suggestion = raw.strip()
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
             "fix-suggestion generation failed (%s); alerting without it", type(exc).__name__
@@ -2941,61 +2948,62 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
 
     with installation_spend_lock(dsn, installation_id):
         cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
-        if cap_reached:
-            logging.getLogger("scan_worker.jobs").info(
-                "live wiki full build skipped for installation=%s repo=%s - monthly spend cap reached (${%.2f})",
-                installation_id, repo_full_name, monthly_cap,
-            )
-            set_wiki_build_status(
-                dsn, installation_id, repo_full_name, "failed",
-                f"monthly spend cap reached (${monthly_cap:.2f})",
-            )
-            return
+    if cap_reached:
+        logging.getLogger("scan_worker.jobs").info(
+            "live wiki full build skipped for installation=%s repo=%s - monthly spend cap reached (${%.2f})",
+            installation_id, repo_full_name, monthly_cap,
+        )
+        set_wiki_build_status(
+            dsn, installation_id, repo_full_name, "failed",
+            f"monthly spend cap reached (${monthly_cap:.2f})",
+        )
+        return
 
-        spend_accumulator = {"total": 0.0}
-        spend_lock = threading.Lock()
+    spend_accumulator = {"total": 0.0}
+    spend_lock = threading.Lock()
 
-        def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-            # live_wiki.generate_subsystems/generate_file_pages now run their
-            # per-item writing calls on a bounded thread pool, so this fires
-            # from multiple worker threads concurrently - += on a shared dict
-            # value is a read-modify-write race without the lock.
-            cost = cost_for_usage(model_used, prompt_tokens, completion_tokens)
-            with spend_lock:
-                spend_accumulator["total"] += cost
+    def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+        # Generation runs on a bounded thread pool, so usage callbacks can
+        # arrive concurrently and need a local accumulator lock.
+        cost = cost_for_usage(model_used, prompt_tokens, completion_tokens)
+        with spend_lock:
+            spend_accumulator["total"] += cost
 
-        try:
-            naming_adapter = _live_wiki_naming_adapter(on_usage=_on_usage)
-            writing_adapter = _live_wiki_full_build_writing_adapter(plan, on_usage=_on_usage)
-            fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, None)
-            records = live_wiki.generate_subsystems(
-                evidence,
-                naming_adapter,
-                writing_adapter,
-                cluster_ids=cluster_ids,
-                cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
-                cache_write=lambda packet, output, used: store_result(
-                    dsn, installation_id, repo_full_name, packet, output, used
-                ),
-                model_used=model_used,
-                fetch_line_count=fetch_line_count,
+    try:
+        naming_adapter = _live_wiki_naming_adapter(on_usage=_on_usage)
+        writing_adapter = _live_wiki_full_build_writing_adapter(plan, on_usage=_on_usage)
+        fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, None)
+        records = live_wiki.generate_subsystems(
+            evidence,
+            naming_adapter,
+            writing_adapter,
+            cluster_ids=cluster_ids,
+            cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
+            cache_write=lambda packet, output, used: store_result(
+                dsn, installation_id, repo_full_name, packet, output, used
+            ),
+            model_used=model_used,
+            fetch_line_count=fetch_line_count,
+        )
+        _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count)
+        with installation_spend_lock(dsn, installation_id):
+            record_llm_spend(
+                dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap
             )
-            _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count)
-            record_llm_spend(dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap)
-            _store_wiki_generation(
-                dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None,
-                fetch_line_count=fetch_line_count,
-            )
-        except Exception as exc:  # noqa: BLE001
-            # Without this, a failed build (LLM error, DB error) just leaves the
-            # AIRview page permanently blank with no way for the customer to
-            # tell "still building" apart from "broke and is never coming back".
-            logging.getLogger("scan_worker.jobs").warning(
-                "live wiki full build failed for installation=%s repo=%s (%s)",
-                installation_id, repo_full_name, exc,
-            )
-            set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
-            return
+        _store_wiki_generation(
+            dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None,
+            fetch_line_count=fetch_line_count,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Without this, a failed build (LLM error, DB error) just leaves the
+        # AIRview page permanently blank with no way for the customer to tell
+        # "still building" apart from "broke and is never coming back".
+        logging.getLogger("scan_worker.jobs").warning(
+            "live wiki full build failed for installation=%s repo=%s (%s)",
+            installation_id, repo_full_name, exc,
+        )
+        set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+        return
     set_wiki_build_status(dsn, installation_id, repo_full_name, "ready")
 
 
@@ -3079,64 +3087,59 @@ def _maybe_update_live_wiki(
     plan = installation["plan"]
     with installation_spend_lock(dsn, installation_id):
         cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
-        if cap_reached:
-            logging.getLogger("scan_worker.jobs").info(
-                "live wiki incremental update skipped for installation=%s repo=%s - "
-                "monthly spend cap reached (${%.2f})",
-                installation_id, repo_full_name, monthly_cap,
-            )
-            set_wiki_build_status(
-                dsn, installation_id, repo_full_name, "failed",
-                f"monthly spend cap reached (${monthly_cap:.2f})",
-            )
-            return
+    if cap_reached:
+        logging.getLogger("scan_worker.jobs").info(
+            "live wiki incremental update skipped for installation=%s repo=%s - "
+            "monthly spend cap reached (${%.2f})",
+            installation_id, repo_full_name, monthly_cap,
+        )
+        set_wiki_build_status(
+            dsn, installation_id, repo_full_name, "failed",
+            f"monthly spend cap reached (${monthly_cap:.2f})",
+        )
+        return
 
-        update_model = resolve_model(live_wiki.UPDATE_MODEL)
-        spend_accumulator = {"total": 0.0}
-        spend_lock = threading.Lock()
+    update_model = resolve_model(live_wiki.UPDATE_MODEL)
+    spend_accumulator = {"total": 0.0}
+    spend_lock = threading.Lock()
 
-        def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-            # See matching comment in run_live_wiki_full_build_job: generation
-            # now runs on a bounded thread pool, so this callback is no
-            # longer single-threaded.
-            cost = cost_for_usage(update_model, prompt_tokens, completion_tokens)
-            with spend_lock:
-                spend_accumulator["total"] += cost
+    def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+        cost = cost_for_usage(update_model, prompt_tokens, completion_tokens)
+        with spend_lock:
+            spend_accumulator["total"] += cost
 
-        try:
-            naming_adapter = _live_wiki_naming_adapter(on_usage=_on_usage)
-            writing_adapter = _live_wiki_update_writing_adapter(on_usage=_on_usage)
-            fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, head_sha)
-            records = live_wiki.generate_subsystems(
-                evidence,
-                naming_adapter,
-                writing_adapter,
-                cluster_ids=cluster_ids,
-                cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
-                cache_write=lambda packet, output, used: store_result(
-                    dsn, installation_id, repo_full_name, packet, output, used
-                ),
-                model_used=update_model,
-                fetch_line_count=fetch_line_count,
+    try:
+        naming_adapter = _live_wiki_naming_adapter(on_usage=_on_usage)
+        writing_adapter = _live_wiki_update_writing_adapter(on_usage=_on_usage)
+        fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, head_sha)
+        records = live_wiki.generate_subsystems(
+            evidence,
+            naming_adapter,
+            writing_adapter,
+            cluster_ids=cluster_ids,
+            cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
+            cache_write=lambda packet, output, used: store_result(
+                dsn, installation_id, repo_full_name, packet, output, used
+            ),
+            model_used=update_model,
+            fetch_line_count=fetch_line_count,
+        )
+        _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count)
+        with installation_spend_lock(dsn, installation_id):
+            record_llm_spend(
+                dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap
             )
-            _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count)
-            record_llm_spend(dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap)
-            _store_wiki_generation(
-                dsn, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
-                fetch_line_count=fetch_line_count,
-            )
-        except Exception as exc:  # noqa: BLE001
-            # Without this, a failed incremental update just leaves stale
-            # content in place with zero signal - the customer (and
-            # wiki_build_status) has no way to tell "stale" apart from
-            # "current", especially once a first full build has already
-            # succeeded and populated an overview.
-            logging.getLogger("scan_worker.jobs").warning(
-                "live wiki incremental update failed for installation=%s repo=%s (%s)",
-                installation_id, repo_full_name, exc,
-            )
-            set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
-            return
+        _store_wiki_generation(
+            dsn, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
+            fetch_line_count=fetch_line_count,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "live wiki incremental update failed for installation=%s repo=%s (%s)",
+            installation_id, repo_full_name, exc,
+        )
+        set_wiki_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+        return
     set_wiki_build_status(dsn, installation_id, repo_full_name, "ready")
 
 
@@ -3365,47 +3368,47 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
 
     with installation_spend_lock(dsn, installation_id):
         cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
-        if cap_reached:
-            logging.getLogger("scan_worker.jobs").info(
-                "live docs full build skipped for installation=%s repo=%s - monthly spend cap reached (${%.2f})",
-                installation_id, repo_full_name, monthly_cap,
-            )
-            set_docs_build_status(
-                dsn, installation_id, repo_full_name, "failed",
-                f"monthly spend cap reached (${monthly_cap:.2f})",
-            )
-            return
-
-        full_build_model = model_for_plan(plan)
-        current_spend = get_llm_spend_this_month(dsn, installation_id)
-        spend_budget = _IncrementalSpendBudget(
-            dsn, installation_id, full_build_model, current_spend, monthly_cap
+    if cap_reached:
+        logging.getLogger("scan_worker.jobs").info(
+            "live docs full build skipped for installation=%s repo=%s - monthly spend cap reached (${%.2f})",
+            installation_id, repo_full_name, monthly_cap,
         )
-
-        def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-            spend_budget.record_usage(prompt_tokens, completion_tokens)
-
-        try:
-            writing_adapter = _live_docs_full_build_writing_adapter(plan, on_usage=_on_usage)
-        except Exception as exc:  # noqa: BLE001
-            logging.getLogger("scan_worker.jobs").warning(
-                "live docs full build could not start for installation=%s repo=%s (%s)",
-                installation_id, repo_full_name, exc,
-            )
-            set_docs_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
-            return
-
-        succeeded, last_error = _run_docs_build_for_modules(
-            dsn,
-            installation_id,
-            repo_full_name,
-            modules,
-            writing_adapter,
-            client,
-            token,
-            None,
-            spend_budget=spend_budget,
+        set_docs_build_status(
+            dsn, installation_id, repo_full_name, "failed",
+            f"monthly spend cap reached (${monthly_cap:.2f})",
         )
+        return
+
+    full_build_model = model_for_plan(plan)
+    current_spend = get_llm_spend_this_month(dsn, installation_id)
+    spend_budget = _IncrementalSpendBudget(
+        dsn, installation_id, full_build_model, current_spend, monthly_cap
+    )
+
+    def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+        spend_budget.record_usage(prompt_tokens, completion_tokens)
+
+    try:
+        writing_adapter = _live_docs_full_build_writing_adapter(plan, on_usage=_on_usage)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "live docs full build could not start for installation=%s repo=%s (%s)",
+            installation_id, repo_full_name, exc,
+        )
+        set_docs_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+        return
+
+    succeeded, last_error = _run_docs_build_for_modules(
+        dsn,
+        installation_id,
+        repo_full_name,
+        modules,
+        writing_adapter,
+        client,
+        token,
+        None,
+        spend_budget=spend_budget,
+    )
     if succeeded == 0 and last_error is not None:
         # Every module in this run failed - genuinely nothing new landed,
         # unlike a partial run where some succeeded and persisted already.
@@ -3506,45 +3509,41 @@ def _maybe_update_live_docs(
     plan = installation["plan"]
     with installation_spend_lock(dsn, installation_id):
         cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
-        if cap_reached:
-            logging.getLogger("scan_worker.jobs").info(
-                "live docs incremental update skipped for installation=%s repo=%s - "
-                "monthly spend cap reached (${%.2f})",
-                installation_id, repo_full_name, monthly_cap,
-            )
-            set_docs_build_status(
-                dsn, installation_id, repo_full_name, "failed",
-                f"monthly spend cap reached (${monthly_cap:.2f})",
-            )
-            return
-
-        spend_accumulator = {"total": 0.0}
-        update_model = resolve_model(live_docs.FLASH_MODEL)
-
-        def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-            spend_accumulator["total"] += cost_for_usage(update_model, prompt_tokens, completion_tokens)
-
-        try:
-            writing_adapter = _live_docs_update_writing_adapter(on_usage=_on_usage)
-        except Exception as exc:  # noqa: BLE001
-            logging.getLogger("scan_worker.jobs").warning(
-                "live docs incremental update could not start for installation=%s repo=%s (%s)",
-                installation_id, repo_full_name, exc,
-            )
-            set_docs_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
-            return
-
-        # Per-module resilience matters here too, even for a typically-small
-        # changed-file list: one file's transient API failure shouldn't
-        # discard descriptions already generated for the others in the same
-        # push. Deliberately doesn't skip already-covered symbols the way the
-        # full build does - these files just changed, so an existing stored
-        # description may no longer match the new source and needs a fresh
-        # look regardless of whether a docs_symbols row already exists.
-        succeeded, last_error = _run_docs_build_for_modules(
-            dsn, installation_id, repo_full_name, changed_modules, writing_adapter, client, token, head_sha
+    if cap_reached:
+        logging.getLogger("scan_worker.jobs").info(
+            "live docs incremental update skipped for installation=%s repo=%s - "
+            "monthly spend cap reached (${%.2f})",
+            installation_id, repo_full_name, monthly_cap,
         )
-        record_llm_spend(dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap)
+        set_docs_build_status(
+            dsn, installation_id, repo_full_name, "failed",
+            f"monthly spend cap reached (${monthly_cap:.2f})",
+        )
+        return
+
+    spend_accumulator = {"total": 0.0}
+    update_model = resolve_model(live_docs.FLASH_MODEL)
+
+    def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+        spend_accumulator["total"] += cost_for_usage(update_model, prompt_tokens, completion_tokens)
+
+    try:
+        writing_adapter = _live_docs_update_writing_adapter(on_usage=_on_usage)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "live docs incremental update could not start for installation=%s repo=%s (%s)",
+            installation_id, repo_full_name, exc,
+        )
+        set_docs_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
+        return
+
+    succeeded, last_error = _run_docs_build_for_modules(
+        dsn, installation_id, repo_full_name, changed_modules, writing_adapter, client, token, head_sha
+    )
+    with installation_spend_lock(dsn, installation_id):
+        record_llm_spend(
+            dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap
+        )
     if succeeded == 0 and last_error is not None:
         set_docs_build_status(dsn, installation_id, repo_full_name, "failed", last_error)
         return

@@ -113,6 +113,28 @@ async def test_non_audit_comment_does_not_enqueue(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_quoted_command_does_not_enqueue(pool, monkeypatch):
+    await _seed_paid_installation(pool)
+    _mock_permission_check(monkeypatch, "write")
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(
+        _payload("Please do not run /aletheore audit here"), pool, "redis://unused", queue=fake_queue
+    )
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bot_command_does_not_enqueue(pool, monkeypatch):
+    await _seed_paid_installation(pool)
+    _mock_permission_check(monkeypatch, "write")
+    fake_queue = MagicMock()
+    payload = _payload("/aletheore audit")
+    payload["comment"]["user"]["type"] = "Bot"
+    await handle_issue_comment_event(payload, pool, "redis://unused", queue=fake_queue)
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_comment_on_plain_issue_not_pr_does_not_enqueue(pool, monkeypatch):
     await _seed_paid_installation(pool)
     _mock_permission_check(monkeypatch, "write")

@@ -3,6 +3,41 @@
 **Started:** 2026-08-15. **Owner:** Arihant + Claude (this session). Read this
 top to bottom before touching anything if you're picking this up cold.
 
+## Final result 2026-08-15: the benchmark's real signal is LLM proposal-rate
+## noise, not the bug we fixed
+
+Two full re-runs of the identical 25-case corpus (`--allow-empty` retriggers,
+byte-identical diffs both times), both through fresh LLM calls (semantic
+cache was not the confound - see below):
+
+- **Run A** (before `_lookup_valid_lines`, PR #253): model proposed *something*
+  in 14/25 cases (56%), 3 survived to be posted, 5 of the rejections were
+  confirmed via production logs to be the exact-path-match bug (correct
+  citations, wrong rejection reason).
+- **Run B** (after PR #253, same corpus, same diffs): model proposed
+  *something* in only 1/25 cases (4%) - 24/25 came back "No issues found in
+  this diff" (the model itself proposed nothing, not "proposed and
+  rejected"). The one proposal that did happen (PR #37) was legitimately
+  out-of-scope (2 of 6 changed files were skipped from review context).
+
+**The fix is confirmed correct** (code-reviewed, unit-tested, and its logic
+is unrelated to how often the model proposes anything) - but this pair of
+runs cannot demonstrate that on its own, because the model's raw proposal
+rate swung from 56% to 4% between two runs of the *same* diffs. That's
+LLM sampling variance dwarfing the effect being measured, the same
+"[[project_judge_noise_floor]]" problem already documented for the judge -
+single-run deltas on n=25 aren't evidence here either. Don't re-run this
+specific comparison expecting a stable before/after number; the noise floor
+is the finding.
+
+**What would actually settle it**: replay the *same* cached raw model
+output (captured from Run A, before grounding) through both the old and new
+`_validate_findings` in a local test, deterministically, no LLM call
+involved. That isolates the grounding-filter's effect from the model's own
+variance. Not done in this session - Run A's individual raw proposals were
+only ever recovered in fragments from grep'd production logs (5 of the 14),
+not saved wholesale.
+
 ## Why this exists
 
 We wanted a real number for "what fraction of Aletheore Flash Review's PR

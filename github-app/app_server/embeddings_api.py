@@ -119,7 +119,8 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
                 detail=f"each text must be at most {MAX_CHARS_PER_TEXT} characters",
             )
 
-    # Per-repo when the caller sends one (see EmbeddingsRequest.repo_id):
+    # Keep the per-repo bucket for fairness, but always consume an installation-wide
+    # bucket too. repo_id is caller-controlled, so it cannot be the only limiter.
     # `aletheore watch` running against several repos on one token would
     # otherwise share a single counter, and one repo's rebase-heavy burst
     # could starve the others' embeddings on the same installation. Falls
@@ -127,6 +128,7 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
     # send it, rather than treating a missing repo_id as its own bucket -
     # an empty-string "no repo" bucket would just recreate the shared-budget
     # problem for every caller that omits the field.
+    installation_rate_limit_key = f"ratelimit:embeddings:{installation_id}"
     rate_limit_key = (
         f"ratelimit:embeddings:{installation_id}:{body.repo_id}"
         if body.repo_id
@@ -135,10 +137,17 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
     try:
         rate_limited = is_rate_limited(
             get_redis_client(),
-            rate_limit_key,
+            installation_rate_limit_key,
             RATE_LIMIT_REQUESTS,
             RATE_LIMIT_WINDOW_SECONDS,
         )
+        if not rate_limited and body.repo_id:
+            rate_limited = is_rate_limited(
+                get_redis_client(),
+                rate_limit_key,
+                RATE_LIMIT_REQUESTS,
+                RATE_LIMIT_WINDOW_SECONDS,
+            )
     except Exception as exc:  # noqa: BLE001
         # Fails open, matching every other rate limit here: a Redis outage
         # should cost abuse protection, not availability. The upstream Jina

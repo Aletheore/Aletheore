@@ -76,6 +76,19 @@ async def record_commission(
     )
 
 
+async def reverse_commission(pool: asyncpg.Pool, paddle_transaction_id: str) -> bool:
+    """Mark a commission reversed while retaining its payment audit trail."""
+    result = await pool.execute(
+        """
+        UPDATE affiliate_commissions
+        SET reversed = true
+        WHERE paddle_transaction_id = $1 AND NOT reversed
+        """,
+        paddle_transaction_id,
+    )
+    return result.endswith(" 1")
+
+
 async def list_affiliates_with_totals(pool: asyncpg.Pool) -> list[dict]:
     """One row per affiliate for the admin report page: how many
     installations they've referred, and total commission accrued vs. paid
@@ -101,12 +114,12 @@ async def list_affiliates_with_totals(pool: asyncpg.Pool) -> list[dict]:
             (SELECT COUNT(*) FROM affiliate_referrals r WHERE r.affiliate_id = a.id) AS referral_count,
             COALESCE(
                 (SELECT SUM(amount_usd) FROM affiliate_commissions c
-                 WHERE c.affiliate_id = a.id AND NOT c.paid),
+                 WHERE c.affiliate_id = a.id AND NOT c.paid AND NOT c.reversed),
                 0
             ) AS total_owed_usd,
             COALESCE(
                 (SELECT SUM(amount_usd) FROM affiliate_commissions c
-                 WHERE c.affiliate_id = a.id AND c.paid),
+                 WHERE c.affiliate_id = a.id AND c.paid AND NOT c.reversed),
                 0
             ) AS total_paid_usd
         FROM affiliates a

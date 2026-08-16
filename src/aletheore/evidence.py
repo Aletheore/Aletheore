@@ -15,6 +15,7 @@ from aletheore.licenses import check_dependency_licenses
 from aletheore.repo_config import load_repo_config
 from aletheore.schema_map import extract_schema, skipped_schema
 from aletheore.scanner.detect import (
+    _nested_git_roots,
     detect_ai_usage,
     detect_build_tools,
     detect_database,
@@ -376,6 +377,14 @@ def scan_repository(
     report = progress or _noop_progress
     repo_path = repo_path.resolve()
     ignored_paths = load_repo_config(repo_path)["ignored_paths"]
+
+    # _nested_git_roots is @lru_cache'd for the life of the process, not one
+    # scan - a long-lived scan_worker reuses the same on-disk checkout_dir
+    # across many scans of different commits, and a linked worktree or
+    # submodule can appear or disappear between two of them. Clearing here
+    # keeps the within-scan caching win (it's still called up to 6 times per
+    # scan) without carrying a stale answer into the next scan of this path.
+    _nested_git_roots.cache_clear()
 
     # Must run before any file-counting walk below (detect_languages is the
     # first one), not after the scan in write_evidence as before - creating

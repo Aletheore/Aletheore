@@ -372,7 +372,27 @@ _FILE_MARKER_RE = re.compile(r"^--- (.+) ---$")
 _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
-def _diff_valid_lines(diff_text: str) -> dict[str, set[int]]:
+def _patch_valid_lines(patch: str) -> set[int]:
+    valid: set[int] = set()
+    current_line: int | None = None
+    for line in patch.splitlines():
+        hunk_match = _HUNK_HEADER_RE.match(line)
+        if hunk_match:
+            current_line = int(hunk_match.group(1))
+            continue
+        if line == "":
+            continue
+        if current_line is None:
+            continue
+        valid.add(current_line)
+        if not line.startswith("-"):
+            current_line += 1
+    return valid
+
+
+def _diff_valid_lines(
+    diff_text: str, patches: tuple[tuple[str, str], ...] | None = None
+) -> dict[str, set[int]]:
     """Maps each file to new-file line numbers its diff hunks touch.
 
     A removed line has no new-file line of its own, but the position it was
@@ -391,6 +411,9 @@ def _diff_valid_lines(diff_text: str) -> dict[str, set[int]]:
     real-world regression, so this silently suppressed a whole class of
     true positives.
     """
+    if patches is not None:
+        return {filename: _patch_valid_lines(patch) for filename, patch in patches}
+
     valid_lines: dict[str, set[int]] = {}
     current_file: str | None = None
     current_line: int | None = None
@@ -451,7 +474,10 @@ def _lookup_valid_lines(file: str, valid_lines: dict[str, set[int]]) -> set[int]
 
 
 def _validate_findings(
-    findings: list[dict], diff_text: str, file_contents: dict[str, str] | None = None
+    findings: list[dict],
+    diff_text: str,
+    file_contents: dict[str, str] | None = None,
+    diff_patches: tuple[tuple[str, str], ...] | None = None,
 ) -> list[dict]:
     """Drops findings whose cited location doesn't hold up, and says so.
 
@@ -464,7 +490,7 @@ def _validate_findings(
     Grounding that fails closed and silent is indistinguishable from a
     model that found nothing, which makes it unfixable and unmeasurable.
     """
-    valid_lines = _diff_valid_lines(diff_text)
+    valid_lines = _diff_valid_lines(diff_text, diff_patches)
 
     in_diff = []
     out_of_diff = []
@@ -543,6 +569,7 @@ def review_diff(
     model_used: str | None = None,
     file_contents: dict[str, str] | None = None,
     on_grounding_result: Callable[[dict], None] | None = None,
+    diff_patches: tuple[tuple[str, str], ...] | None = None,
 ) -> list[dict]:
     if not diff_text.strip():
         return []
@@ -562,7 +589,7 @@ def review_diff(
             logger.warning("flash review cache lookup failed (%s); treating as miss", type(exc).__name__)
             cached = None
         if cached is not None:
-            kept = _validate_findings(cached, diff_text, file_contents)
+            kept = _validate_findings(cached, diff_text, file_contents, diff_patches)
             if on_grounding_result is not None:
                 on_grounding_result({"proposed": len(cached), "kept": len(kept)})
             return kept
@@ -616,7 +643,7 @@ def review_diff(
         except Exception as exc:
             logger.warning("flash review cache write failed (%s); continuing without cache", type(exc).__name__)
 
-    kept = _validate_findings(valid, diff_text, file_contents)
+    kept = _validate_findings(valid, diff_text, file_contents, diff_patches)
     if on_grounding_result is not None:
         on_grounding_result({"proposed": len(valid), "kept": len(kept)})
     return kept

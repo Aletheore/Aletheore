@@ -285,6 +285,50 @@ def test_search_index_raises_a_clear_error_on_dimension_mismatch(tmp_path):
             search_index(repo, "where is foo")
 
 
+def test_search_index_embeds_the_query_hosted_when_a_token_exists(tmp_path):
+    """A hosted-built index searched with a query embedded by the local
+    provider compares two unrelated vector spaces - previously caught only
+    when the two providers' dimensions happened to differ (OpenAI 1536 vs
+    local nomic 768). Two providers sharing a dimension (jina and nomic are
+    both 768) would pass the dimension guard while still returning nonsense
+    rankings, so the query must choose hosted-vs-local the same way the
+    index build does, not default to local unconditionally."""
+    from aletheore.search_index import TABLE_NAME, _index_path
+    import lancedb
+
+    repo = tmp_path
+    index_path = _index_path(repo)
+    index_path.parent.mkdir(parents=True)
+    db = lancedb.connect(str(index_path))
+    db.create_table(
+        TABLE_NAME,
+        data=[
+            {
+                "module_path": "a.py",
+                "symbol_name": "foo",
+                "start_line": 1,
+                "end_line": 2,
+                "language": "python",
+                "imports": [],
+                "text": "def foo(): pass",
+                "chunk_hash": "abc",
+                "vector": [0.1] * 768,
+            }
+        ],
+    )
+
+    http = MagicMock()
+    http.post.return_value = _hosted_response(200, {"vectors": [[0.2] * 768]})
+
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), \
+         patch("aletheore.search_index.httpx.Client", return_value=http), \
+         patch("aletheore.search_index.embed_texts") as local:
+        search_index(repo, "where is foo")
+
+    http.post.assert_called_once()
+    local.assert_not_called()
+
+
 @patch("aletheore.search_index.embed_texts")
 def test_search_index_returns_ranked_results(mock_embed_texts, tmp_path):
     (tmp_path / "auth.py").write_text("def login():\n    return True\n")

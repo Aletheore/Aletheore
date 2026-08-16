@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import tree_sitter_c as tsc
@@ -64,6 +65,8 @@ KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR = {
     ".swift",
     ".kt", ".kts", ".m", ".mm", ".scala",
 }
+
+MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024
 
 
 def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
@@ -1993,6 +1996,55 @@ def _resolve_csharp_using(prefix_map: dict[str, Path], dotted: str) -> list[Path
     return sorted(namespace_dir.glob("*.cs"))
 
 
+def _load_csharp_implicit_usings(repo_path: Path, source_paths: list[Path]) -> dict[Path, list[str]]:
+    """Load explicit MSBuild ``Using`` items for each C# file's scope."""
+    config_paths: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        current = Path(dirpath)
+        for filename in filenames:
+            if filename == "Directory.Build.props" or filename.endswith(".csproj"):
+                config_paths.append(current / filename)
+
+    values_by_config: dict[Path, list[str]] = {}
+    for config_path in config_paths:
+        try:
+            root = ET.parse(config_path).getroot()
+        except (ET.ParseError, OSError):
+            continue
+        values = []
+        for element in root.iter():
+            if element.tag.rsplit("}", 1)[-1] == "Using":
+                include = element.attrib.get("Include", "").strip()
+                if include:
+                    values.append(include)
+        values_by_config[config_path] = values
+
+    result: dict[Path, list[str]] = {}
+    for source_path in source_paths:
+        ancestors = [source_path.parent, *source_path.parent.parents]
+        applicable_props = [
+            config for config in config_paths
+            if config.parent in ancestors
+            and config.name == "Directory.Build.props"
+        ]
+        project_configs = [
+            config for config in config_paths
+            if config.parent in ancestors and config.suffix == ".csproj"
+        ]
+        applicable = applicable_props
+        if project_configs:
+            applicable.append(max(project_configs, key=lambda p: (len(p.parts), str(p))))
+        imports: list[str] = []
+        for config in sorted(applicable, key=lambda p: (len(p.parts), str(p))):
+            for value in values_by_config.get(config, []):
+                if value not in imports:
+                    imports.append(value)
+        if imports:
+            result[source_path] = imports
+    return result
+
+
 def _python_source_roots(repo_path: Path) -> list[Path]:
     # A monorepo can hold several independent Python projects, each with its own
     # top-level package one or more directories below repo_path (src/aletheore/,
@@ -2157,19 +2209,18 @@ def build_module_graph(
     # declaration implies about its directory, so every .java file needs a quick
     # pre-parse before any of them can have their imports resolved.
     java_source_roots: list[Path] = []
-    # Cached alongside the source root inference below so the main loop's
-    # own per-file parse doesn't read and re-parse every .java file a
-    # second time from scratch - this pre-pass already did the identical
-    # work once.
-    java_pre_parsed: dict[Path, tuple[bytes, Tree]] = {}
+    oversized_paths: set[Path] = set()
     pre_parser = Parser()
     pre_parser.language = JAVA_LANGUAGE
     for path in _iter_source_files(repo_path, ignored_paths):
         if path.suffix != ".java":
             continue
+        if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
+            oversized_paths.add(path)
+            unparseable.append({"path": _rel(repo_path, path), "reason": "file exceeds size limit"})
+            continue
         pre_source = path.read_bytes()
         tree = pre_parser.parse(pre_source)
-        java_pre_parsed[path] = (pre_source, tree)
         package = _extract_java_package(tree.root_node, pre_source)
         root = _java_source_root_for(path, package)
         if root is not None and root not in java_source_roots:
@@ -2183,7 +2234,7 @@ def build_module_graph(
     # (prefix -> root) map rather than a plain root list, PSR-4-style, to handle
     # <RootNamespace>'s implicit prefix (see _csharp_prefix_and_root_for).
     csharp_prefix_map: dict[str, Path] = {}
-    csharp_pre_parsed: dict[Path, tuple[bytes, Tree]] = {}
+    csharp_source_paths: list[Path] = []
     # Which file declares each type name, for the type-reference edges below.
     csharp_type_owners: dict[str, set[Path]] = {}
     cs_pre_parser = Parser()
@@ -2191,9 +2242,13 @@ def build_module_graph(
     for path in _iter_source_files(repo_path, ignored_paths):
         if path.suffix != ".cs":
             continue
+        if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
+            oversized_paths.add(path)
+            unparseable.append({"path": _rel(repo_path, path), "reason": "file exceeds size limit"})
+            continue
+        csharp_source_paths.append(path)
         pre_source = path.read_bytes()
         tree = cs_pre_parser.parse(pre_source)
-        csharp_pre_parsed[path] = (pre_source, tree)
         namespace = _extract_csharp_namespace(tree.root_node, pre_source)
         result = _csharp_prefix_and_root_for(path, namespace)
         if result is not None:
@@ -2201,6 +2256,7 @@ def build_module_graph(
             csharp_prefix_map.setdefault(prefix, root)
         for declared in _csharp_declared_type_names(tree.root_node, pre_source):
             csharp_type_owners.setdefault(declared, set()).add(path)
+    csharp_implicit_usings = _load_csharp_implicit_usings(repo_path, csharp_source_paths)
 
     parser = Parser()
 
@@ -2224,14 +2280,15 @@ def build_module_graph(
             continue
 
         language_name, ts_language = language_info
-        if language_name == "java" and path in java_pre_parsed:
-            source, tree = java_pre_parsed[path]
-        elif language_name == "csharp" and path in csharp_pre_parsed:
-            source, tree = csharp_pre_parsed[path]
-        else:
-            parser.language = ts_language
-            source = path.read_bytes()
-            tree = parser.parse(source)
+        if path in oversized_paths:
+            continue
+        if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
+            oversized_paths.add(path)
+            unparseable.append({"path": rel_path, "reason": "file exceeds size limit"})
+            continue
+        parser.language = ts_language
+        source = path.read_bytes()
+        tree = parser.parse(source)
 
         constants: list[dict] = []
         if language_name != "python":
@@ -2340,6 +2397,7 @@ def build_module_graph(
                         imported_by_map.setdefault(target, []).append(rel_path)
         elif language_name == "csharp":
             raw_imports, functions, classes = _extract_csharp(tree.root_node, source)
+            raw_imports.extend(csharp_implicit_usings.get(path, []))
             resolved_imports = []
             for dotted in raw_imports:
                 for target_path in _resolve_csharp_using(csharp_prefix_map, dotted):

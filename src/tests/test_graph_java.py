@@ -225,11 +225,10 @@ def test_build_module_graph_java_import_escaping_repo_root_does_not_crash(tmp_pa
     assert dependency_graph["edges"] == []
 
 
-def test_build_module_graph_reads_each_java_file_only_once(tmp_path):
-    # Before this fix, the source-root-inference pre-pass and the main
-    # extraction loop each independently read_bytes() and re-parsed every
-    # .java file from scratch - a real, avoidable 2x tree-sitter parse cost
-    # per file.
+def test_build_module_graph_reparses_java_without_retaining_prepass_trees(tmp_path):
+    # The source-root pre-pass keeps only the package string. The main loop
+    # therefore reads and parses each file again, trading a small amount of
+    # CPU for bounded memory rather than retaining every tree.
     repo = make_java_repo(tmp_path)
 
     real_read_bytes = Path.read_bytes
@@ -244,7 +243,7 @@ def test_build_module_graph_reads_each_java_file_only_once(tmp_path):
         build_module_graph(repo)
 
     assert read_counts
-    assert all(count == 1 for count in read_counts.values())
+    assert all(count == 2 for count in read_counts.values())
 
 
 def test_java_extracts_javadoc_and_return_type(tmp_path):

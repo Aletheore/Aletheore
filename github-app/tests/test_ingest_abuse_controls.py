@@ -6,6 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app_server.ingest_limits import (
+    MANAGED_AUDIT_MAX_BODY_BYTES,
     RUNTIME_EVENT_MAX_BODY_BYTES,
     TELEMETRY_MAX_BODY_BYTES,
     BodyTooLargeError,
@@ -58,10 +59,14 @@ def test_a_non_numeric_content_length_is_refused():
         check_declared_body_size("/v1/telemetry", "POST", "not-a-number")
 
 
-def test_uncapped_paths_are_untouched():
-    # The cap is per-path on purpose: a global limit would break the managed
-    # audit API, which legitimately accepts large evidence payloads.
-    check_declared_body_size("/v1/managed-audit", "POST", str(50 * 1024 * 1024))
+def test_managed_audit_has_a_pre_routing_body_cap():
+    check_declared_body_size(
+        "/v1/managed-audit", "POST", str(MANAGED_AUDIT_MAX_BODY_BYTES)
+    )
+    with pytest.raises(BodyTooLargeError):
+        check_declared_body_size(
+            "/v1/managed-audit", "POST", str(MANAGED_AUDIT_MAX_BODY_BYTES + 1)
+        )
 
 
 def test_get_requests_are_untouched():
