@@ -7,10 +7,9 @@ why: real, corrected benchmark numbers across 6 languages showed jina
 beating nomic on every metric (75.0/93.1/95.8% vs 73.6/87.5/91.7% top-1/3/5),
 with bge-m3 actually worse than nomic.
 
-CPU-only in production (no MPS/CUDA on these hosts) - fine here because
-callers send one text per request, not the large batches a full index
-build sends; a single ~5000-char embed is fast enough on CPU that the
-batching/leak concerns from local benchmarking don't apply.
+CPU-only in production (no MPS/CUDA on these hosts). The single-text
+contract remains for scan-worker caches; the additive batch endpoint is used
+by hosted index builds so one request can encode many chunks efficiently.
 """
 import logging
 
@@ -36,10 +35,24 @@ class EmbedResponse(BaseModel):
     embedding: list[float]
 
 
+class EmbedBatchRequest(BaseModel):
+    texts: list[str]
+
+
+class EmbedBatchResponse(BaseModel):
+    embeddings: list[list[float]]
+
+
 @app.post("/embed", response_model=EmbedResponse)
 def embed(req: EmbedRequest) -> EmbedResponse:
     vector = _model.encode(req.text, normalize_embeddings=True).tolist()
     return EmbedResponse(embedding=vector)
+
+
+@app.post("/embed_batch", response_model=EmbedBatchResponse)
+def embed_batch(req: EmbedBatchRequest) -> EmbedBatchResponse:
+    vectors = _model.encode(req.texts, normalize_embeddings=True).tolist()
+    return EmbedBatchResponse(embeddings=vectors)
 
 
 @app.get("/healthz")

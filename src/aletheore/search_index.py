@@ -16,13 +16,13 @@ DEFAULT_EMBEDDING_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 OPENAI_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+HOSTED_EMBEDDING_MODEL = "jina-embeddings-v2-base-code"
 
 # Aletheore's own embedding endpoint, used when a saved API token belongs to
-# an entitled installation. It serves the same OPENAI_EMBEDDING_MODEL, so a
-# user switching between hosted and their own key keeps the same 1536
-# dimensions and does not trigger the full re-embed a dimension change
-# forces. Local Ollama does not - nomic-embed-text is 768 - so that switch
-# does rebuild, correctly.
+# an entitled installation. It serves HOSTED_EMBEDDING_MODEL. The client
+# does not hardcode its dimension: the provider's returned vector length is
+# what the index drift check observes. Local Ollama remains nomic-embed-text;
+# switching between those providers rebuilds the index, correctly.
 HOSTED_EMBEDDING_PATH = "/v1/embeddings"
 DEFAULT_API_BASE_URL = "https://app.aletheore.com"
 INDEX_DIRNAME = "index.lancedb"
@@ -748,9 +748,9 @@ def _embed_in_batches(
     OpenAI account instead.
 
     The fallback is only allowed before the first batch succeeds. After that,
-    switching providers mid-run would mix 1536-dimension vectors with 768-
-    dimension ones in a single index, which LanceDB rejects outright - so a
-    hosted failure partway through is raised rather than worked around. A
+    switching providers mid-run would mix vectors with different dimensions
+    in a single index, which LanceDB rejects outright - so a hosted failure
+    partway through is raised rather than worked around. A
     half-built index that errors is recoverable; one built from two models
     is not.
 
@@ -871,9 +871,8 @@ def build_index(repo_path: Path, evidence: dict, allow_hosted: bool = True) -> i
     fresh_vectors = list(fresh.values())
 
     # Vectors from two different embedding models cannot share an index -
-    # nomic-embed-text returns 768 dimensions and text-embedding-3-small
-    # returns 1536, and LanceDB rejects the mix outright with "Vector column
-    # 'vector' has variable length vectors". Reproduced directly: index with
+    # LanceDB rejects mixed dimensions outright with "Vector column 'vector'
+    # has variable length vectors". Reproduced directly: index with
     # Ollama, lose Ollama, and the next build crashed on the fallback rather
     # than degrading.
     #
