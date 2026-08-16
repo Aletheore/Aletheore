@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from aletheore.citation_verifier import (
     citation_verification_section,
     extract_citations,
@@ -37,6 +39,20 @@ def test_extract_citations_finds_file_line_pairs():
 
 def test_extract_citations_returns_empty_for_no_citations():
     assert extract_citations("This report has no file references at all.") == []
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("see TestMakefile:3 for details", []),
+        ("see Makefile:3 for details", [{"file": "Makefile", "line": 3}]),
+        ("see docker/Dockerfile:5", [{"file": "docker/Dockerfile", "line": 5}]),
+        ("step 3:12 of the plan", []),
+        ("http://host:8080/x", []),
+    ],
+)
+def test_extensionless_citations_require_a_token_boundary(text, expected):
+    assert extract_citations(text, {"Makefile", "docker/Dockerfile"}) == expected
 
 
 def test_verify_citations_marks_known_file_as_verified():

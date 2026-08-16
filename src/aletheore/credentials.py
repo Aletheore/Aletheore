@@ -84,6 +84,10 @@ def _save_key(provider_name: str, key: str, credentials_path: Path) -> None:
         except json.JSONDecodeError:
             data = {}
     data[provider_name] = key
+    _write_credentials(data, credentials_path)
+
+
+def _write_credentials(data: dict, credentials_path: Path) -> None:
     content = json.dumps(data, indent=2)
     # os.open's mode only applies when it creates the file - an existing
     # file (e.g. one that pre-dates this restrictive-permissions fix, or
@@ -112,7 +116,7 @@ def clear_api_key(provider_name: str, credentials_path: Path = DEFAULT_CREDENTIA
     if not isinstance(data, dict) or provider_name not in data:
         return False
     del data[provider_name]
-    credentials_path.write_text(json.dumps(data, indent=2))
+    _write_credentials(data, credentials_path)
     return True
 
 

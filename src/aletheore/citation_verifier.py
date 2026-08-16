@@ -72,7 +72,7 @@ def _extensionless_citation_pattern(known_paths: set[str]) -> re.Pattern | None:
         return None
     # Longest first so a nested path wins over a bare filename suffix of it.
     alternation = "|".join(re.escape(p) for p in sorted(targets, key=len, reverse=True))
-    return re.compile(rf"`?({alternation}):(\d+)`?")
+    return re.compile(rf"`?(?<![\w./-])({alternation}):(\d+)`?")
 
 
 def extract_citations(report_text: str, known_paths: set[str] | None = None) -> list[dict]:

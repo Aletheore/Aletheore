@@ -144,6 +144,7 @@ def test_fetch_pr_diff_concatenates_real_patches():
     assert "app.py" in diff_text
     assert "print('hi')" in diff_text
     assert "image.png" not in diff_text
+    assert diff_text.patches == (("app.py", "@@ -1,2 +1,3 @@\n def hello():\n+    print('hi')\n     pass"),)
 
 
 def test_fetch_pr_diff_returns_empty_string_when_no_files_changed():

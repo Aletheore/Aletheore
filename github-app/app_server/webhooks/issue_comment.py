@@ -28,7 +28,11 @@ async def handle_issue_comment_event(payload: dict, pool, redis_url: str, queue=
         return
     if "pull_request" not in payload.get("issue", {}):
         return
-    if AUDIT_COMMAND not in payload.get("comment", {}).get("body", ""):
+    comment = payload.get("comment", {})
+    body = comment.get("body", "")
+    if not any(line.strip().startswith(AUDIT_COMMAND) for line in body.splitlines()):
+        return
+    if comment.get("user", {}).get("type") == "Bot":
         return
 
     installation_id = payload["installation"]["id"]

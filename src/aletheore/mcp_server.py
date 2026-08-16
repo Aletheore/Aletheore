@@ -578,7 +578,9 @@ _NO_INDEX_ERROR = {
 }
 
 
-def _register_search_codebase_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+def _register_search_codebase_tool(
+    mcp_instance: MCPServer, repo_path: Path, effects: frozenset[str]
+) -> None:
     @mcp_instance.tool(
         name="aletheore_search_codebase",
         # Writes nothing, but embeds the query text through the configured
@@ -594,7 +596,15 @@ def _register_search_codebase_tool(mcp_instance: MCPServer, repo_path: Path) -> 
         an unfiltered search ranks every language's chunks against each other.
         Names must match evidence's own repository.languages values."""
         try:
-            return _toon_result(search_index(repo_path, query, k=k, language=language))
+            return _toon_result(
+                search_index(
+                    repo_path,
+                    query,
+                    k=k,
+                    language=language,
+                    allow_hosted=EFFECT_EXTERNAL in effects,
+                )
+            )
         except IndexNotFoundError:
             return _toon_result(_NO_INDEX_ERROR)
         except IndexDimensionMismatchError as exc:
@@ -705,7 +715,7 @@ def build_server(
     if permitted("aletheore_index"):
         _register_index_tool(mcp_instance, repo_path, effects)
     if permitted("aletheore_search_codebase"):
-        _register_search_codebase_tool(mcp_instance, repo_path)
+        _register_search_codebase_tool(mcp_instance, repo_path, effects)
     if permitted("aletheore_managed_audit"):
         _register_managed_audit_tool(mcp_instance, repo_path)
     if answer_adapter is not None and permitted("aletheore_answer"):

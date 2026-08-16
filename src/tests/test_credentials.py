@@ -172,6 +172,15 @@ def test_clear_api_key_removes_saved_key(tmp_path):
     assert not has_api_key("UNUSED_ENV", "aletheore-managed-audit", credentials_path=path)
 
 
+def test_clear_api_key_repairs_existing_file_permissions(tmp_path):
+    path = tmp_path / "credentials.json"
+    save_api_token("provider-a", "tok-a", path)
+    path.chmod(0o644)
+
+    assert clear_api_key("provider-a", path) is True
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
 def test_clear_api_key_returns_false_when_nothing_to_clear(tmp_path):
     path = tmp_path / "credentials.json"
     assert clear_api_key("aletheore-managed-audit", path) is False

@@ -312,7 +312,12 @@ def _is_safe_next_path(next_path: str | None) -> str:
     # "//evil.com" by the time it's followed - "//" alone isn't enough to
     # block, the character right after the first "/" has to be checked for
     # either variant.
-    if not next_path or not next_path.startswith("/") or next_path[1:2] in ("/", "\\"):
+    if (
+        not next_path
+        or not next_path.startswith("/")
+        or next_path[1:2] in ("/", "\\")
+        or any(ord(char) < 0x20 for char in next_path)
+    ):
         return "/dashboard"
     return next_path
 

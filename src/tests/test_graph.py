@@ -2,8 +2,19 @@ from pathlib import Path
 
 import pytest
 
-from aletheore.scanner.graph import _is_public_symbol, build_module_graph
+from aletheore.scanner.graph import MAX_SOURCE_FILE_BYTES, _is_public_symbol, build_module_graph
 from conftest import symbol_names
+
+
+def test_build_module_graph_records_oversized_source_without_parsing(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "large.py").write_bytes(b"x = 1\n" + b"#" * MAX_SOURCE_FILE_BYTES)
+
+    modules, _graph, unparseable = build_module_graph(repo)
+
+    assert modules == []
+    assert unparseable == [{"path": "large.py", "reason": "file exceeds size limit"}]
 
 
 def make_python_repo(tmp_path: Path) -> Path:

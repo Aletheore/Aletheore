@@ -51,6 +51,33 @@ def test_diff_valid_lines_tracks_multiple_files_separately():
     assert _diff_valid_lines(diff_text) == {"a.py": {5}, "b.py": {10}}
 
 
+def test_structured_patches_do_not_treat_deleted_comment_markers_as_filenames():
+    patch = "@@ -10,4 +10,4 @@\n context\n--- x ---\n-removed\n+added\n context"
+
+    result = _diff_valid_lines("flattened text is intentionally ignored", (("db/schema.sql", patch),))
+
+    assert set(result) == {"db/schema.sql"}
+    assert 10 in result["db/schema.sql"]
+    assert 11 in result["db/schema.sql"]
+
+
+def test_structured_patches_keep_marker_like_added_and_context_lines():
+    patch = "@@ -1,3 +1,3 @@\n---- x ---\n+---- x ---\n -- x ---"
+
+    result = _diff_valid_lines("", (("app.py", patch),))
+
+    assert result == {"app.py": {1, 2}}
+
+
+def test_structured_patches_keep_genuine_two_file_diff_separate():
+    patches = (
+        ("a.py", "@@ -4,1 +4,1 @@\n+one"),
+        ("b.py", "@@ -20,1 +20,1 @@\n+two"),
+    )
+
+    assert _diff_valid_lines("", patches) == {"a.py": {4}, "b.py": {20}}
+
+
 def test_lookup_valid_lines_falls_back_to_unambiguous_path_suffix():
     valid_lines = {"benchmark-sandbox/case-1/pkg/module.py": {5, 6, 7}}
     assert _lookup_valid_lines("pkg/module.py", valid_lines) == {5, 6, 7}

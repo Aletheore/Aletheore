@@ -10,11 +10,14 @@ from app_server.config import get_settings
 from app_server.db import (
     add_paddle_ids_to_installation,
     claim_webhook_delivery,
+    claim_free_to_paid_plan,
+    claim_paid_setup,
     get_installation,
     list_installation_member_emails,
     release_webhook_delivery,
     set_extra_seats,
     set_installation_plan,
+    set_paid_installation_plan,
 )
 from app_server.email_queue import enqueue_transactional_email
 from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for, is_known_paddle_ip
@@ -55,6 +58,13 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     event_type = payload.get("event_type")
     if event_type == "transaction.completed":
         await _handle_transaction_completed(payload.get("data") or {}, pool)
+        return
+    if event_type == "adjustment.created" or (
+        event_type == "transaction.updated"
+        and (payload.get("data") or {}).get("status")
+        in {"refunded", "partially_refunded", "charged_back"}
+    ):
+        await _handle_adjustment_created(payload.get("data") or {}, pool)
         return
     if event_type not in _SUBSCRIPTION_EVENT_TYPES:
         return
@@ -119,7 +129,22 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
         )
         return
 
-    await set_installation_plan(pool, installation_id, plan)
+    transitioned_to_paid = False
+    if plan != "free":
+        transitioned_to_paid = await claim_free_to_paid_plan(pool, installation_id, plan)
+        if not transitioned_to_paid:
+            await set_paid_installation_plan(pool, installation_id, plan)
+    else:
+        await set_installation_plan(pool, installation_id, plan)
+
+    # Deliberately independent of transitioned_to_paid: if a crash lands
+    # between that write committing and the one-time setup below actually
+    # running, a Paddle retry finds plan already non-free, so
+    # claim_free_to_paid_plan correctly returns False on the retry - but
+    # setup still never ran once. This claim is what actually decides
+    # whether to run it, so a crash-then-retry still runs it exactly once
+    # instead of silently skipping it forever.
+    should_run_paid_setup = plan != "free" and await claim_paid_setup(pool, installation_id)
     if "id" in data and "customer_id" in data:
         await add_paddle_ids_to_installation(pool, installation_id, data["id"], data["customer_id"])
 
@@ -145,12 +170,12 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     # only the Marketplace webhook used to trigger it, so a Paddle
     # installation's wiki stayed limited to whatever clusters an
     # incremental push happened to touch after the fact.
-    if previous_plan == "free" and plan != "free":
+    if should_run_paid_setup:
         # Attribution: first time this installation goes free -> paid, if it
         # was checked out with a known affiliate's discount code, credit
-        # that affiliate. Gated the same free -> paid transition as the
-        # wiki/docs build below, so a later subscription.updated for the
-        # same installation (e.g. switching monthly <-> annual) can't
+        # that affiliate. Gated the same paid-setup claim as the wiki/docs
+        # build below, so a later subscription.updated for the same
+        # installation (e.g. switching monthly <-> annual) can't
         # re-attribute or steal credit - record_referral is also itself a
         # database-enforced no-op past the first row (installation_id is
         # that table's primary key).
@@ -270,6 +295,19 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
     )
 
 
+async def _handle_adjustment_created(data: dict, pool) -> None:
+    """Reverse a commission when Paddle refunds or charges back a transaction."""
+    transaction_id = (
+        data.get("transaction_id")
+        or data.get("id")
+        or (data.get("transaction") or {}).get("id")
+    )
+    if transaction_id:
+        from app_server.affiliates import reverse_commission
+
+        await reverse_commission(pool, transaction_id)
+
+
 @paddle_webhook_router.post("/webhooks/paddle")
 async def handle_paddle_webhook(request: Request) -> Response:
     raw_body = await request.body()
@@ -311,7 +349,7 @@ async def handle_paddle_webhook(request: Request) -> Response:
     # Claimed after signature and IP verification, so an unauthenticated
     # caller can't burn an event id and suppress the genuine delivery.
     #
-    # The signature's own 5s timestamp tolerance already makes captured
+    # The signature's own 60s timestamp tolerance already makes captured
     # payload replay a narrow window. This is here for concurrency:
     # handle_paddle_webhook_event reads installations.plan, then writes it,
     # and gates a pair of expensive full AIRview/Docs builds on that read

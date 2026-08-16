@@ -11,6 +11,7 @@ from app_server.affiliates import (
     mark_commissions_paid,
     record_commission,
     record_referral,
+    reverse_commission,
 )
 from app_server.db import upsert_installation
 
@@ -99,6 +100,24 @@ async def test_duplicate_paddle_transaction_id_does_not_double_count(pool):
 
     totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
     assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("4.50")
+
+
+@pytest.mark.asyncio
+async def test_reversed_commission_is_preserved_but_excluded_from_totals(pool):
+    affiliate = await create_affiliate(pool, "REV10", "dsc_rev", "Referred")
+    await upsert_installation(pool, 907, "acme")
+    await record_referral(pool, 907, affiliate["id"])
+    await record_commission(
+        pool, affiliate["id"], 907, "txn_refund", Decimal("4.50"), datetime.now(timezone.utc)
+    )
+
+    assert await reverse_commission(pool, "txn_refund") is True
+    assert await reverse_commission(pool, "txn_refund") is False
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0")
+    assert await pool.fetchval(
+        "SELECT reversed FROM affiliate_commissions WHERE paddle_transaction_id = 'txn_refund'"
+    ) is True
 
 
 @pytest.mark.asyncio
