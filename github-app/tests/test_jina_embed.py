@@ -1,4 +1,5 @@
 import importlib
+import itertools
 import math
 import sys
 import threading
@@ -74,7 +75,7 @@ def test_embed_batch_preserves_request_order_even_if_the_backend_does_not(monkey
                 ]
             }
 
-    server._model = ShufflingLlama()
+    server._instances = [server._Instance(ShufflingLlama())]
     response = server.embed_batch(server.EmbedBatchRequest(texts=["a", "b", "c"]))
 
     assert [[round(x) for x in v] for v in response.embeddings] == [
@@ -141,7 +142,7 @@ def test_concurrent_requests_do_not_call_the_model_at_the_same_time(monkeypatch)
             finally:
                 self._inside.release()
 
-    server._model = ConcurrencyDetectingLlama()
+    server._instances = [server._Instance(ConcurrencyDetectingLlama())]
 
     errors: list[Exception] = []
 
@@ -158,3 +159,53 @@ def test_concurrent_requests_do_not_call_the_model_at_the_same_time(monkeypatch)
         t.join()
 
     assert errors == []
+
+
+def test_multiple_instances_actually_run_concurrently(monkeypatch):
+    """The whole point of JINA_EMBED_INSTANCES > 1: independent requests on
+    different instances must be able to overlap in time, not just avoid
+    corrupting each other. A round-robin bug that always picked the same
+    instance would pass the concurrency-safety test above (nothing would
+    ever race) while silently defeating the entire feature - this test
+    would catch that, the one above would not."""
+    server, _ = _import_server(monkeypatch)
+
+    class SlowLlama:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def create_embedding(self, input):
+            concurrent_calls.append(1)
+            time.sleep(0.1)
+            concurrent_calls.append(-1)
+            texts = [input] if isinstance(input, str) else input
+            return {
+                "data": [
+                    {"index": index, "embedding": [1.0, 0.0, 0.0]}
+                    for index, _ in enumerate(texts)
+                ]
+            }
+
+    concurrent_calls: list[int] = []
+    server._instances = [server._Instance(SlowLlama()), server._Instance(SlowLlama())]
+    server._next_instance = itertools.count()
+
+    threads = [
+        threading.Thread(target=server.embed, args=(server.EmbedRequest(text="x"),))
+        for _ in range(4)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Running total of in-flight calls across both instances at any point in
+    # time - if it never exceeds 1, the two instances never actually
+    # overlapped despite being separate objects.
+    running_total = 0
+    peak_concurrency = 0
+    for delta in concurrent_calls:
+        running_total += delta
+        peak_concurrency = max(peak_concurrency, running_total)
+
+    assert peak_concurrency == 2

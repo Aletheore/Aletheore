@@ -400,11 +400,28 @@ services:
       # a busy host doesn't get flagged unhealthy before it's had a chance.
       start_period: 60s
     environment:
-      # Passed straight through to llama.cpp's n_threads. Must match `cpus`
+      # Passed straight through to llama.cpp's n_threads (divided across
+      # instances - see JINA_EMBED_INSTANCES below). Must match `cpus`
       # below - the 24.55s/2-thread real-batch measurement server.py's
       # docstring cites was made at this exact thread count, not a larger
       # one this box's 4 cores could technically support.
       - JINA_EMBED_THREADS=2
+      # 2 instances x 1 thread each, not 1 instance x 2 threads. Measured
+      # locally (10-core/8GB Docker, 4 concurrent streams of real thrift
+      # source, --cpus=2 both configurations): 2x1 finished in 223.27s
+      # against 1x2's 238.83s, ~6.5% faster on identical total CPU. The
+      # mechanism isn't more compute - the container's thread budget is
+      # unchanged either way - it's that a single instance parallelizing
+      # one call across threads pays real synchronization overhead inside
+      # llama.cpp's matmul kernels, while N single-threaded instances
+      # processing N requests pay none of that. It also reduces queueing
+      # delay under concurrent load specifically: today every caller (two
+      # scan-worker replicas, demo-scan-worker, hosted index builds) queues
+      # behind one locked instance even when their requests are otherwise
+      # fully independent - this exact queueing was part of what pushed a
+      # thrift-scale request past the 60s embeddings_api timeout at the old
+      # HOSTED_EMBED_MAX_CHARS (see search_index.py's comment on that cap).
+      - JINA_EMBED_INSTANCES=2
     # Bumped from 1.0. This service is the only CPU-bound one in the stack -
     # everything else is I/O-bound on Postgres, Redis or the GitHub API -
     # and at 1.0 it was the hard ceiling on hosted indexing: measured at a
