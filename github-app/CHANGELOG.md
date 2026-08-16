@@ -12,6 +12,21 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-16
+
+- **jina-embed now runs llama.cpp against a Q8_0 GGUF quantization of jinaai/jina-embeddings-v2-base-code,
+  replacing the raw PyTorch/HuggingFace `transformers` backend.** Earlier the same day, two production
+  incidents against that backend (a request that never finished within the 60s timeout, then an
+  OOM kill under a mem_limit already raised to accommodate it) traced back to comparing the wrong
+  things: nomic-embed-text, which this service replaced, was served by Ollama's llama.cpp engine -
+  quantized weights, hand-tuned CPU kernels - while jina-embed ran unquantized in eager-mode PyTorch.
+  Measured directly on this host against a real 133k-char, 38-chunk flask source sample: the old
+  backend hadn't finished the first fifth of the batch after 164s before OOM-killing; llama.cpp
+  finished the same batch in 24.55s (~5,400 chars/s) at a 375MB peak, against the old backend's
+  2.44GB+. Quantization cost was checked directly too - 0.9997 cosine similarity against the
+  full-precision embedding on the same input. `jina-embed`'s `mem_limit` comes back down from the
+  emergency-raised 6000m to 2000m on this evidence.
+
 ## 2026-08-12
 
 - AIRview depth: file-level reference pages. Each important file now gets a sectioned page

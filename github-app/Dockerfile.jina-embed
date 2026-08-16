@@ -1,31 +1,47 @@
-FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS builder
 
-WORKDIR /app
+# llama-cpp-python has no prebuilt wheel for this base image/Python
+# combination, so it compiles from source - build-essential/cmake are only
+# needed here, in the discarded builder stage, not the final image.
+RUN apt-get update -qq \
+    && apt-get install -y -qq --no-install-recommends build-essential cmake curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /build
 COPY github-app/requirements-jina-embed.txt .
-# CPU-only torch wheel - these hosts have no GPU, and the default PyPI
-# wheel pulls CUDA libraries that roughly double image size for nothing.
-RUN pip install --no-cache-dir torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir -r requirements-jina-embed.txt \
-    # torch's CPU wheel pulls setuptools 78.1.0, which carries CVE-2025-47273
-    # (path traversal) - fixed in 78.1.1. Upgraded explicitly since torch
-    # itself doesn't pin a fixed floor.
+RUN pip install --no-cache-dir -r requirements-jina-embed.txt \
+    # pulled in transitively; carries the same setuptools CVE-2025-47273
+    # (path traversal) the old torch-based image upgraded explicitly.
     && pip install --no-cache-dir --upgrade "setuptools>=78.1.1"
 
+# Baked into the image at build time rather than downloaded on first
+# request, same reasoning as the old sentence-transformers weights: a cold
+# start that also needs a ~170MB download is a worse failure mode than a
+# slower image build.
+RUN curl -sSL -o /build/model.gguf \
+    "https://huggingface.co/ggml-org/jina-embeddings-v2-base-code-Q8_0-GGUF/resolve/main/jina-embeddings-v2-base-code-q8_0.gguf"
+
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+
+# libllama.so links against libgomp (GNU OpenMP) at build time via
+# build-essential/gcc - that dependency is a runtime one too, and this
+# stage doesn't have build-essential. Confirmed by testing the compiled
+# library against a bare python:3.12-slim without this: it fails to import
+# at all with "libgomp.so.1: cannot open shared object file", not a
+# degraded-but-working fallback.
+RUN apt-get update -qq \
+    && apt-get install -y -qq --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /build/model.gguf /app/model.gguf
+ENV PATH="/opt/venv/bin:$PATH"
+
 COPY github-app/jina_embed ./jina_embed
-
-# HF_HOME set before the download below so the cache lands under /app,
-# where the aletheore user (whose $HOME is /app) can actually read it -
-# the default ~/.cache/huggingface would be under /root, invisible to a
-# non-root user with a different $HOME, silently forcing a re-download
-# on every cold start despite the weights already being baked in.
-ENV HF_HOME=/app/.cache/huggingface
-
-# Bake the model weights into the image at build time rather than
-# downloading on first request - a cold start that also needs a ~300MB
-# HuggingFace download is a worse failure mode (timeout, no retry budget)
-# than a slower image build.
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('jinaai/jina-embeddings-v2-base-code', trust_remote_code=True, device='cpu')"
 
 RUN groupadd --system aletheore \
     && useradd --system --gid aletheore --home-dir /app --no-create-home aletheore \
