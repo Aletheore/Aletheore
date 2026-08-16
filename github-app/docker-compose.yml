@@ -400,9 +400,10 @@ services:
       # a busy host doesn't get flagged unhealthy before it's had a chance.
       start_period: 60s
     environment:
-      # Must match `cpus` below - see server.py's comment on why torch's
-      # default (host core count) is actively harmful inside a cpu-limited
-      # cgroup.
+      # Passed straight through to llama.cpp's n_threads. Must match `cpus`
+      # below - the 24.55s/2-thread real-batch measurement server.py's
+      # docstring cites was made at this exact thread count, not a larger
+      # one this box's 4 cores could technically support.
       - JINA_EMBED_THREADS=2
     # Bumped from 1.0. This service is the only CPU-bound one in the stack -
     # everything else is I/O-bound on Postgres, Redis or the GitHub API -
@@ -422,16 +423,17 @@ services:
     # still the ceiling on usable hosted indexing, the answer is a dedicated
     # host for this service, not a bigger share of this one.
     cpus: "2.0"
-    # Bumped from 2500m after #260 raised HOSTED_EMBED_MAX_CHARS to 150,000:
-    # a real 200-chunk/~150k-char batch (flask, 515 real code chunks) pushed
-    # anon-rss to ~2.44GB and the cgroup OOM-killer took uvicorn out mid
-    # request - confirmed via dmesg, same second app-server logged the
-    # resulting RemoteProtocolError. The earlier throughput measurement that
-    # justified the char-cap raise only used synthetic ~21k-char batches, far
-    # below what the new cap actually allows a real index build to send, so
-    # it never touched this ceiling. Host has 13GB+ available; this is still
-    # cheap insurance, not the whole margin the host could give it.
-    mem_limit: 6000m
+    # 6000m was sized for the old sentence-transformers/PyTorch backend,
+    # which OOM-killed at ~2.44GB on a 133k-char real-code batch even after
+    # being raised from 2500m (see git history). This backend is llama.cpp
+    # against a Q8_0 GGUF quantization instead - measured directly on this
+    # host, the identical 133k-char real flask batch peaked at 375MB, not
+    # 2.44GB+. 2000m keeps ~5x headroom over that single-request peak for
+    # concurrent requests sharing the process (endpoints are sync `def`s,
+    # so FastAPI's threadpool can run more than one at once) without
+    # carrying forward a limit sized for a backend this image no longer
+    # runs. Not concurrency-load-tested; a further reduction should be too.
+    mem_limit: 2000m
 
   caddy:
     image: caddy:2-alpine
