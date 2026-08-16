@@ -26,6 +26,16 @@ RUN curl -sSL -o /build/model.gguf \
 
 FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
+# libllama.so links against libgomp (GNU OpenMP) at build time via
+# build-essential/gcc - that dependency is a runtime one too, and this
+# stage doesn't have build-essential. Confirmed by testing the compiled
+# library against a bare python:3.12-slim without this: it fails to import
+# at all with "libgomp.so.1: cannot open shared object file", not a
+# degraded-but-working fallback.
+RUN apt-get update -qq \
+    && apt-get install -y -qq --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /build/model.gguf /app/model.gguf
