@@ -1,4 +1,5 @@
 import hashlib
+import os
 import re
 import sys
 from collections.abc import Callable
@@ -734,6 +735,46 @@ def _escape_sql_literal(value: str) -> str:
 # it.
 EMBED_BATCH_SIZE = 200
 
+# Hosted batches are bounded by characters as well as by count, because the
+# hosted embedder's cost is per character while EMBED_BATCH_SIZE was tuned
+# against Ollama, where it is per request.
+#
+# embeddings_api gives the embedding service a 60s timeout. Measured against
+# production at `cpus: "1.0"`, throughput was a flat ~340 characters/second
+# regardless of batch size - so a 200-chunk batch of real code (~1MB) needed
+# roughly eleven minutes, blew that timeout, came back 502, and fell back to
+# the local embedder. Every hosted index build did this, which is why the
+# feature looked configured and never actually ran.
+#
+# 20,000 characters is deliberately sized against the *old* rate as the floor:
+# ~59s even if the service is still single-threaded, and comfortable once it
+# is not. Raise it after measuring, not before - and if the timeout in
+# embeddings_api.get_jina_client changes, this has to move with it.
+HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "20000"))
+
+
+def _hosted_batches(texts: list[str], batch_size: int) -> list[tuple[int, int]]:
+    """(start, end) spans respecting both the count and character caps.
+
+    A single text longer than the character cap still goes out on its own
+    rather than being dropped or split: chunks are already truncated upstream
+    (_truncate_for_embedding), so this only ever fires on a pathological
+    input, and embedding it slowly beats not embedding it at all.
+    """
+    spans: list[tuple[int, int]] = []
+    start = 0
+    while start < len(texts):
+        end = start
+        chars = 0
+        while end < len(texts):
+            if end > start and (end - start >= batch_size or chars + len(texts[end]) > HOSTED_EMBED_MAX_CHARS):
+                break
+            chars += len(texts[end])
+            end += 1
+        spans.append((start, end))
+        start = end
+    return spans
+
 
 def _embed_in_batches(
     texts: list[str],
@@ -777,8 +818,17 @@ def _embed_in_batches(
         )
     vectors: list[list[float]] = []
 
-    for start in range(0, len(texts), batch_size):
-        batch = texts[start : start + batch_size]
+    # Recomputed when the provider changes: the hosted spans are character-
+    # bounded, the local ones are not, and a fallback mid-run must not keep
+    # using the hosted shape.
+    spans = _hosted_batches(texts, batch_size) if use_hosted else [
+        (s, min(s + batch_size, len(texts))) for s in range(0, len(texts), batch_size)
+    ]
+    span_index = 0
+    while span_index < len(spans):
+        start, end = spans[span_index]
+        span_index += 1
+        batch = texts[start:end]
         if use_hosted:
             try:
                 vectors.extend(embed_texts_hosted(batch, token, repo_id=repo_id))
@@ -791,6 +841,8 @@ def _embed_in_batches(
                 # changed, which the user needs to see.
                 print(f"aletheore: hosted embeddings unavailable ({exc}); using local provider")
                 use_hosted = False
+                spans = [(s, min(s + batch_size, len(texts))) for s in range(start, len(texts), batch_size)]
+                span_index = 0
         vectors.extend(embed_texts(batch))
 
     return vectors
