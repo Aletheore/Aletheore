@@ -163,6 +163,22 @@ def test_fold_tracks_file_churn_and_co_change():
     assert result.file_churn["b.txt"].co_change_counts == {"a.txt": 1}
 
 
+def test_fold_tracks_complete_per_file_ownership_separately_from_recent_commits():
+    commits = [
+        _touch("s1", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", ("a.txt", "shared.txt")),
+        _touch("s2", "Bob", "b@example.com", "2026-06-02T00:00:00+00:00", ("shared.txt", "b.txt")),
+        _touch("s3", "Alice", "a@example.com", "2026-06-03T00:00:00+00:00", ("a.txt",)),
+    ]
+
+    result = fold(GraphSnapshot.empty(), commits)
+
+    assert result.file_churn["a.txt"].owners["a@example.com"].commit_count == 2
+    assert result.file_churn["a.txt"].owners.keys() == {"a@example.com"}
+    assert result.file_churn["shared.txt"].owners["a@example.com"].commit_count == 1
+    assert result.file_churn["shared.txt"].owners["b@example.com"].commit_count == 1
+    assert result.file_churn["b.txt"].owners.keys() == {"b@example.com"}
+
+
 def test_fold_skips_co_change_for_mass_commits():
     files = tuple(f"f{i}.txt" for i in range(60))  # over MASS_COMMIT_FILE_THRESHOLD (50)
     commits = [_touch("s1", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", files)]

@@ -34,6 +34,7 @@ _INT: dict = {"type": "integer"}
 _NUM: dict = {"type": "number"}
 _BOOL: dict = {"type": "boolean"}
 _ANY_LIST: dict = {"type": "array"}
+_ANY_OBJECT: dict = {"type": "object"}
 
 
 def _obj(properties: dict, required: list[str] | None = None) -> dict:
@@ -174,6 +175,7 @@ AIR_JSON_SCHEMA: dict = {
                     }
                 ),
                 "ownership": _arr(_OWNERSHIP),
+                "file_ownership": _ANY_OBJECT,
                 "repo_age_days": _INT,
                 "total_commits": _INT,
                 "history_depth_limited": _BOOL,

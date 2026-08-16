@@ -32,6 +32,9 @@ bump signals the breaking change — `0.2.0` and `0.2.7` are the same schema,
 than misreading it. Once AIR reaches `1.0.0`, that comparison moves to major
 alone.
 
+Version `0.4.0` adds `git.file_ownership`, a current-source-file keyed
+ownership breakdown used by file-scoped ownership queries.
+
 ## Migration rules
 
 1. **Any change to `AIR_JSON_SCHEMA` requires an `EVIDENCE_VERSION` MINOR bump.**

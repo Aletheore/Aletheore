@@ -85,6 +85,8 @@ def find_branch(evidence: dict, target: str | None) -> dict:
 
 
 def find_ownership(evidence: dict, target: str | None) -> list[dict]:
+    if target:
+        return evidence["git"].get("file_ownership", {}).get(target, [])
     return evidence["git"].get("ownership", [])
 
 

@@ -60,6 +60,13 @@ async def test_apply_commits_then_load_round_trips_correctly(pool):
     assert snapshot.file_churn["a.txt"].co_change_counts == {"b.txt": 1}
     assert len(snapshot.file_churn["a.txt"].recent_commits) == 2
     assert snapshot.file_churn["a.txt"].recent_commits[0].sha == "s2"
+    # Per-file ownership must round-trip independently of the repo-wide
+    # ownership dict above - a.txt was touched by both authors, b.txt by
+    # only Alice, so the two files' owner sets must differ.
+    assert snapshot.file_churn["a.txt"].owners["a@example.com"].commit_count == 1
+    assert snapshot.file_churn["a.txt"].owners["b@example.com"].commit_count == 1
+    assert snapshot.file_churn["b.txt"].owners["a@example.com"].commit_count == 1
+    assert "b@example.com" not in snapshot.file_churn["b.txt"].owners
 
 
 @pytest.mark.asyncio

@@ -56,6 +56,10 @@ class FileChurnTotal:
     # hotspot algorithm's own noise filter (a mass rename/reformat commit
     # touching hundreds of files isn't a meaningful co-change signal).
     co_change_counts: dict[str, int]
+    # Per-file ownership, using the same lowercased-email convention as the
+    # repository-wide ownership aggregate. This is independent of the capped
+    # recent_commits list, which is intentionally not a complete history.
+    owners: dict[str, OwnershipTotal]
 
 
 @dataclass(frozen=True)

@@ -221,6 +221,25 @@ def _ownership_summary(snapshot: GraphSnapshot) -> list[dict]:
     ]
 
 
+def _file_ownership_summary(snapshot: GraphSnapshot, modules: list[dict]) -> dict[str, list[dict]]:
+    current_paths = {module["path"] for module in modules}
+    result = {}
+    for path, churn in snapshot.file_churn.items():
+        if path not in current_paths or not churn.owners:
+            continue
+        total = sum(owner.commit_count for owner in churn.owners.values())
+        result[path] = [
+            {
+                "email": owner.email,
+                "names": sorted(owner.names),
+                "commit_count": owner.commit_count,
+                "percent": round(owner.commit_count / total, 4),
+            }
+            for owner in sorted(churn.owners.values(), key=lambda owner: -owner.commit_count)
+        ]
+    return result
+
+
 def _cadence_summary(snapshot: GraphSnapshot, now: datetime) -> dict:
     if not snapshot.cadence_weekly_counts:
         return {"weekly_counts": [], "trend": "flat", "most_recent_week_partial": False}
@@ -309,6 +328,7 @@ def _first_commit_at(repo_path: Path) -> datetime:
 
 def analyze_git(
     repo_path: Path,
+    modules: list[dict] | None = None,
     now: datetime | None = None,
     *,
     store: RepoGraphStore | None = None,
@@ -317,6 +337,7 @@ def analyze_git(
 ) -> dict:
     if now is None:
         now = datetime.now(timezone.utc)
+    modules = modules or []
 
     if not _has_commits(repo_path):
         return {"available": False}
@@ -341,6 +362,7 @@ def analyze_git(
         "branches": _parse_branches(repo_path, now),
         "commit_cadence": _cadence_summary(snapshot, now),
         "ownership": _ownership_summary(snapshot),
+        "file_ownership": _file_ownership_summary(snapshot, modules),
         "repo_age_days": repo_age_days,
         "total_commits": total_commits,
         "history_depth_limited": history_depth_limited,

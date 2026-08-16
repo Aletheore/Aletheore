@@ -105,6 +105,9 @@
           ],
           "type": "object"
         },
+        "file_ownership": {
+          "type": "object"
+        },
         "history_depth_limited": {
           "type": "boolean"
         },

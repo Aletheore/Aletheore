@@ -477,7 +477,13 @@ def _sync_persistent_git_graph(installation_id: int, repo_full_name: str, repo_d
         settings = get_settings()
         store = PostgresRepoGraphStore(settings.database_url, installation_id, repo_full_name)
         modules = evidence.get("repository", {}).get("modules", [])
-        git_data = analyze_git(repo_dir, store=store, depth_cap=GRAPH_COLD_SYNC_DEPTH_CAP, branch=GRAPH_BRANCH)
+        git_data = analyze_git(
+            repo_dir,
+            modules,
+            store=store,
+            depth_cap=GRAPH_COLD_SYNC_DEPTH_CAP,
+            branch=GRAPH_BRANCH,
+        )
         if git_data.get("available"):
             git_data["hotspots"] = compute_hotspots(
                 repo_dir, modules, store=store, depth_cap=GRAPH_COLD_SYNC_DEPTH_CAP, branch=GRAPH_BRANCH
