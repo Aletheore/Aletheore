@@ -528,6 +528,45 @@ def test_progress_printer_prints_every_license_line_when_not_a_tty(capsys):
     assert "Done" in lines[2]
 
 
+def test_progress_printer_overwrites_repeated_embedding_progress_on_a_tty(capsys):
+    # index's own progress messages, not license checking - a run that can
+    # take over an hour on a large repo (thrift: 553 sequential hosted
+    # batches at the old char cap) deserves the same in-place treatment.
+    report = _make_progress_printer(is_tty=True)
+    report("Embedding chunks: 100/515")
+    report("Embedding chunks: 515/515")
+
+    captured = capsys.readouterr()
+    assert "\r" in captured.out
+    assert "515/515" in captured.out
+
+
+def test_progress_printer_finish_closes_a_pending_in_place_line(capsys):
+    # index's last progress update can genuinely be the last thing that
+    # happens before the caller's own console.print("Indexed N chunks.") -
+    # unlike license checking, which is always followed by another report()
+    # call in scan's flow that closes the line as a side effect. Without an
+    # explicit finish(), the next line printed directly would concatenate
+    # onto the same terminal line instead of starting a new one.
+    report = _make_progress_printer(is_tty=True)
+    report("Embedding chunks: 515/515")
+    report.finish()
+
+    captured = capsys.readouterr()
+    assert captured.out.endswith("\n")
+
+
+def test_progress_printer_finish_is_a_no_op_when_nothing_was_in_place(capsys):
+    # A repo re-indexed with nothing changed never calls report() at all
+    # (build_index's fast path reuses every vector by hash) - finish() must
+    # not print a spurious blank line in that case.
+    report = _make_progress_printer(is_tty=True)
+    report.finish()
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+
+
 def test_elapsed_ticker_updates_in_place_on_a_tty(capsys):
     with _ElapsedTicker("Waiting", interval=0.05, is_tty=True):
         time.sleep(0.12)

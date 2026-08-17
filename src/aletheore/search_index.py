@@ -800,7 +800,24 @@ EMBED_BATCH_SIZE = 200
 # from raw per-request compute time), which should allow raising this
 # again with real headroom once deployed and measured, rather than
 # guessing forward from an isolated single-request number a second time.
-HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "60000"))
+#
+# Raised to 100,000 on exactly that real evidence, not another
+# extrapolation. Timed real batches of known token count (llama.cpp's own
+# tokenizer, not a char-count guess) directly against jina-embed with the
+# #267 multi-instance change deployed: 14,897 tokens/20.18s, 29,681/35.28s,
+# 44,419/60.10s - the last one lands almost exactly on the 60s ceiling in
+# isolation, with zero queueing. 30,000 tokens (35.28s, 41% margin) is the
+# real safe target this cap should protect. Converting back to characters
+# uses the more conservative (token-dense) ratio measured across corpora -
+# thrift's 3.89 chars/token, not flask's safer 4.08 - so a token-dense
+# corpus doesn't silently exceed the real margin a char cap can't see:
+# 30,000 tokens / 3.89 chars-per-token =~ 116,700 chars, rounded down to
+# 100,000 for headroom. This is still a char cap, not the token-count-based
+# batching this comment has called for since #262 - true token-based
+# batching needs the CLI to tokenize client-side, which means bundling a
+# tokenizer (or the model itself) as a new dependency, scoped as separate,
+# larger follow-up work, not folded into this recalibration.
+HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "100000"))
 
 
 def _hosted_batches(texts: list[str], batch_size: int) -> list[tuple[int, int]]:
@@ -831,6 +848,7 @@ def _embed_in_batches(
     batch_size: int = EMBED_BATCH_SIZE,
     repo_id: str | None = None,
     allow_hosted: bool = True,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> list[list[float]]:
     """Embed everything, preferring Aletheore's endpoint when entitled.
 
@@ -855,6 +873,12 @@ def _embed_in_batches(
     mcp_server.py's consent model) - MCP tool calls are always
     non-interactive, so there is no equivalent of embed_texts's isatty()
     prompt available to ask for consent in the moment.
+
+    on_progress: called as (chunks_embedded, total_chunks) after each batch,
+    for callers that want to show something better than silence on a run
+    that can take over an hour on a large repo (thrift: 553 sequential
+    hosted batches at the old char cap). None by default so non-interactive
+    callers (MCP, watch mode) see no behavior change.
     """
     token = get_api_key(
         "ALETHEORE_API_TOKEN", "aletheore-managed-audit", prompt_fn=lambda _: ""
@@ -867,6 +891,7 @@ def _embed_in_batches(
             file=sys.stderr,
         )
     vectors: list[list[float]] = []
+    total = len(texts)
 
     # Recomputed when the provider changes: the hosted spans are character-
     # bounded, the local ones are not, and a fallback mid-run must not keep
@@ -882,6 +907,8 @@ def _embed_in_batches(
         if use_hosted:
             try:
                 vectors.extend(embed_texts_hosted(batch, token, repo_id=repo_id))
+                if on_progress is not None:
+                    on_progress(len(vectors), total)
                 continue
             except HostedEmbeddingUnavailableError as exc:
                 if vectors:
@@ -894,6 +921,8 @@ def _embed_in_batches(
                 spans = [(s, min(s + batch_size, len(texts))) for s in range(start, len(texts), batch_size)]
                 span_index = 0
         vectors.extend(embed_texts(batch))
+        if on_progress is not None:
+            on_progress(len(vectors), total)
 
     return vectors
 
@@ -935,7 +964,10 @@ def _reusable_vectors(index_path: Path) -> dict[str, list[float]]:
 
 
 def _embed_stale_by_hash(
-    stale: list[dict], repo_id: str | None = None, allow_hosted: bool = True
+    stale: list[dict],
+    repo_id: str | None = None,
+    allow_hosted: bool = True,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, list[float]]:
     stale_by_hash = {chunk["chunk_hash"]: chunk["text"] for chunk in stale}
     stale_hashes = list(stale_by_hash)
@@ -943,11 +975,17 @@ def _embed_stale_by_hash(
         [stale_by_hash[chunk_hash] for chunk_hash in stale_hashes],
         repo_id=repo_id,
         allow_hosted=allow_hosted,
+        on_progress=on_progress,
     )
     return dict(zip(stale_hashes, fresh_vectors))
 
 
-def build_index(repo_path: Path, evidence: dict, allow_hosted: bool = True) -> int:
+def build_index(
+    repo_path: Path,
+    evidence: dict,
+    allow_hosted: bool = True,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> int:
     chunks = build_chunks(evidence, repo_path)
     if not chunks:
         return 0
@@ -969,7 +1007,7 @@ def build_index(repo_path: Path, evidence: dict, allow_hosted: bool = True) -> i
     reusable = _reusable_vectors(index_path)
     stale = [chunk for chunk in chunks if chunk["chunk_hash"] not in reusable]
     repo = _repo_id(repo_path)
-    fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted)
+    fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress)
     fresh_vectors = list(fresh.values())
 
     # Vectors from two different embedding models cannot share an index -
@@ -1010,7 +1048,7 @@ def build_index(repo_path: Path, evidence: dict, allow_hosted: bool = True) -> i
         if reused_dimensions != {current_dimension}:
             reusable = {}
             stale = chunks
-            fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted)
+            fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress)
 
     rows = [
         {**chunk, "vector": reusable.get(chunk["chunk_hash"]) or fresh[chunk["chunk_hash"]]}
