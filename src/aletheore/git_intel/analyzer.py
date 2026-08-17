@@ -7,6 +7,7 @@ from aletheore.git_intel.incremental import (
     CO_CHANGE_PARTNERS_RETURNED,
     GitLogStreamError,
     compute_repo_key,
+    parse_commit_date,
     stream_commit_touches,
 )
 from aletheore.git_intel.sqlite_store import SQLiteRepoGraphStore, default_graph_db_path
@@ -120,7 +121,7 @@ def _parse_branches(repo_path: Path, now: datetime) -> list[dict]:
         branch_type = "remote" if name.startswith("origin/") or (
             "/" in name and name.split("/")[0] in remotes
         ) else "local"
-        last_commit_at = datetime.fromisoformat(date_str)
+        last_commit_at = parse_commit_date(date_str)
         stale_days = (now - last_commit_at).days
 
         ahead, behind = 0, 0
@@ -322,7 +323,7 @@ def _first_commit_at(repo_path: Path) -> datetime:
     dates = []
     for sha in root_shas:
         date_result = _run_git_or_raise(repo_path, "log", "-1", "--format=%ad", "--date=iso-strict", sha)
-        dates.append(datetime.fromisoformat(date_result.stdout.strip()))
+        dates.append(parse_commit_date(date_result.stdout.strip()))
     return min(dates)
 
 

@@ -1,6 +1,6 @@
 import os
 import subprocess
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -12,6 +12,7 @@ from aletheore.git_intel.incremental import (
     GitLogStreamError,
     compute_repo_key,
     fold,
+    parse_commit_date,
     stream_commit_touches,
 )
 
@@ -44,6 +45,35 @@ def init_repo(tmp_path: Path) -> Path:
 
 def _touch(sha, name, email, date_str, files):
     return CommitTouch(sha, name, email, datetime.fromisoformat(date_str), files)
+
+
+# --- parse_commit_date: real git history has commits with genuinely
+# malformed author/committer dates, not just unusual-but-valid ones ---
+
+
+def test_parse_commit_date_parses_a_normal_iso_strict_date():
+    assert parse_commit_date("2026-06-01T00:00:00+00:00") == datetime.fromisoformat(
+        "2026-06-01T00:00:00+00:00"
+    )
+
+
+def test_parse_commit_date_recovers_the_real_date_from_a_corrupted_offset():
+    # Real, observed data: a historical commit in psf/requests' upstream
+    # history has this exact author date. '+518:00' is not a valid UTC
+    # offset (max is +/-14:00) - datetime.fromisoformat rejects it outright,
+    # which crashed the whole git-history analysis for this repo before this
+    # fix. The date/time itself (everything before the offset) is genuine
+    # and worth keeping, so this recovers it as UTC rather than discarding
+    # the commit or crashing.
+    result = parse_commit_date("2011-09-08T02:38:50+518:00")
+    assert result == datetime(2011, 9, 8, 2, 38, 50, tzinfo=timezone.utc)
+
+
+def test_parse_commit_date_falls_back_to_epoch_for_a_totally_unparseable_string():
+    # Not just a bad offset - the date/time portion itself is garbage, so
+    # even the first-19-characters fallback can't recover a real date.
+    result = parse_commit_date("not-a-date-at-all")
+    assert result == datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 # --- stream_commit_touches: reads real git output, never buffers it whole ---
