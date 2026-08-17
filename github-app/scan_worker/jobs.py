@@ -107,7 +107,9 @@ from scan_worker.db import (
 from scan_worker.docs_repo_commit import sync_docs_to_repo
 from scan_worker.flash_review import (
     FLASH_REVIEW_FALLBACK_MODEL,
+    build_change_impact_context,
     build_code_evidence_context,
+    build_dependency_impact_context,
     build_referenced_symbol_context,
     fetch_review_file_context,
     files_missing_from_review_context,
@@ -125,6 +127,7 @@ from scan_worker.github_api import (
     fetch_default_branch_head_sha,
     fetch_file_content,
     fetch_pr_changed_files,
+    fetch_pr_context,
     fetch_pr_diff,
     upsert_pr_comment,
 )
@@ -1452,6 +1455,10 @@ def _run_flash_review(
     diff_text = str(diff_result)
     diff_patches = getattr(diff_result, "patches", None)
     changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
+    try:
+        pr_context = fetch_pr_context(client, token, repo_full_name, pr_number)
+    except Exception:  # noqa: BLE001
+        pr_context = ""
 
     spend_accumulator = {"total": 0.0}
     grounding_result: dict = {}
@@ -1476,6 +1483,16 @@ def _run_flash_review(
             )
         evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
         code_evidence_context = build_code_evidence_context(evidence, changed_files)
+        dependency_impact_context = build_dependency_impact_context(evidence, changed_files)
+        if dependency_impact_context:
+            code_evidence_context = "\n\n".join(
+                part for part in (code_evidence_context, dependency_impact_context) if part
+            )
+        change_impact_context = build_change_impact_context(diff_text)
+        if change_impact_context:
+            code_evidence_context = "\n\n".join(
+                part for part in (code_evidence_context, change_impact_context) if part
+            )
 
         def _fetch_symbol_source(file_path: str, start_line: int, end_line: int) -> str | None:
             content = fetch_file_content(client, token, repo_full_name, file_path, head_sha)
@@ -1510,6 +1527,7 @@ def _run_flash_review(
                 code_evidence_context=code_evidence_context,
                 on_usage=_on_usage,
                 referenced_symbol_context=referenced_symbol_context,
+                pr_context=pr_context,
                 cache_lookup=_cache_lookup,
                 cache_write=_cache_write,
                 model_used=flash_review_model,
@@ -1523,6 +1541,7 @@ def _run_flash_review(
                 file_context=file_context,
                 on_usage=_on_usage,
                 referenced_symbol_context=referenced_symbol_context,
+                pr_context=pr_context,
                 cache_lookup=_cache_lookup,
                 cache_write=_cache_write,
                 model_used=flash_review_model,
