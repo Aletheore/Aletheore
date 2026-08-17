@@ -12,6 +12,23 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-18
+
+- **Fixed a diff-parser collision that silently dropped real findings.** `_diff_valid_lines`
+  recovers per-file boundaries from a `--- {filename} ---` marker `fetch_pr_diff` inserts into the
+  flattened diff text. A deleted line whose content is `-- x ---` (any SQL/Lua/Haskell comment, or
+  a `--- section ---` divider in any language) arrives in that text as `--- x ---` after the diff's
+  own `-` prefix — indistinguishable from a real marker. The real change following it got
+  attributed to a phantom file and dropped from the valid-line set, surfacing as "No issues found
+  in this diff." Fixed by requiring a marker to sit at an actual file boundary (start of text, or
+  immediately after a blank line — the only place a real one is ever placed).
+- **Scanner walked the repo tree 19 times per scan, six of them unpruned.** Six detectors (migration
+  dirs, docker-compose, kubernetes manifests, terraform files, helm charts, declared env vars) each
+  called `repo_path.rglob(...)` independently and filtered `IGNORED_DIRS` out afterward — walking
+  into `node_modules`/`.git`/`vendor` on every scan and discarding what they found. Replaced with
+  one shared pruned `os.walk`; verified byte-identical output before and after, ~7.75x faster on
+  this repo.
+
 ## 2026-08-17
 
 - **`app-server`'s own httpx client to `jina-embed` raised from a 60.0s timeout to 120.0s.**
