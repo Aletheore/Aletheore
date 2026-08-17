@@ -83,7 +83,20 @@ class EmbeddingsRequest(BaseModel):
 
 @functools.lru_cache(maxsize=1)
 def get_jina_client() -> httpx.Client:
-    return httpx.Client(base_url=JINA_EMBED_BASE_URL, timeout=60.0)
+    # Matches src/aletheore/search_index.py's own client timeout to
+    # app-server, which has been 120.0 all along - this was the actual
+    # binding constraint underneath, cutting itself off at half the budget
+    # the CLI already tolerates waiting for. Real requests through this
+    # endpoint stay well under this ceiling: they're bounded by the CLI's
+    # own HOSTED_EMBED_MAX_CHARS cap (100,000 chars as of #268, ~25,700
+    # tokens at the measured ~3.89 chars/token), and the closest real
+    # measurement above that - 59,903 tokens in 83.24s against jina-embed
+    # post-#267 (2 instances) - leaves ~37s of margin against 120s. The
+    # 88,859-token/124.70s point from that same measurement run is larger
+    # than any request this cap can actually produce; it was one input to
+    # the interpolation in search_index.py's HOSTED_EMBED_MAX_CHARS
+    # comment, not a size this timeout needs to cover.
+    return httpx.Client(base_url=JINA_EMBED_BASE_URL, timeout=120.0)
 
 
 async def _authenticated_installation(request: Request) -> dict:

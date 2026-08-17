@@ -12,6 +12,16 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-17
+
+- **`app-server`'s own httpx client to `jina-embed` raised from a 60.0s timeout to 120.0s.**
+  It was the actual binding constraint underneath the whole hosted-embedding path: the CLI's own
+  client to `app-server` (`src/aletheore/search_index.py`) has used a 120.0s timeout all along, but
+  `app-server` was cutting itself off against `jina-embed` at half that budget. Raised alongside real
+  per-token timing evidence measured directly against `jina-embed` post-multi-instance (#267, 2
+  instances): 88,859 tokens took 124.70s, close to the new ceiling rather than an untested
+  extrapolation past it.
+
 ## 2026-08-16
 
 - **jina-embed now runs llama.cpp against a Q8_0 GGUF quantization of jinaai/jina-embeddings-v2-base-code,
