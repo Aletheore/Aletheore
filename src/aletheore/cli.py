@@ -295,19 +295,25 @@ def _banner_panel() -> Panel:
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
+_OVERWRITABLE_PREFIXES = ("Checking dependency licenses:", "Embedding chunks:")
+
+
 def _make_progress_printer(is_tty: bool | None = None) -> Callable[[str], None]:
-    # License checks report one message per pinned dependency (can be dozens).
-    # In a real terminal those overwrite in place via \r instead of scrolling,
-    # since they're the same phase repeating, not a new step. \r only means
-    # "return to start of line" on an actual TTY though - piped to a CI log or
-    # a file, it prints as a literal character with no effect, so non-TTY
-    # output instead prints every message on its own line: more lines, but a
-    # real, readable history in a log rather than concatenated garbage.
+    # License checks and hosted-embedding batches each report one message
+    # per unit of repeating work (dozens of dependencies; up to hundreds of
+    # embedding batches on a large repo - thrift alone needs 553 sequential
+    # ones at the old char cap). In a real terminal those overwrite in place
+    # via \r instead of scrolling, since they're the same phase repeating,
+    # not a new step. \r only means "return to start of line" on an actual
+    # TTY though - piped to a CI log or a file, it prints as a literal
+    # character with no effect, so non-TTY output instead prints every
+    # message on its own line: more lines, but a real, readable history in
+    # a log rather than concatenated garbage.
     is_tty = sys.stdout.isatty() if is_tty is None else is_tty
     state = {"in_place": False, "frame": 0}
 
     def report(message: str) -> None:
-        overwritable = is_tty and message.startswith("Checking dependency licenses:")
+        overwritable = is_tty and message.startswith(_OVERWRITABLE_PREFIXES)
         if overwritable:
             # A single phase repeating many times in place is the one spot
             # where a rotating glyph is actually visible (many updates over
@@ -323,6 +329,20 @@ def _make_progress_printer(is_tty: bool | None = None) -> Callable[[str], None]:
                 state["in_place"] = False
             console.print(f"  [green]→[/green] {message}")
 
+    def finish() -> None:
+        # scan's own report() calls always end on a non-overwritable message
+        # ("Mapping API endpoints", a final "Done"), which closes any
+        # pending in-place line as a side effect - callers whose last update
+        # can genuinely be the overwritable kind (index: the last batch
+        # finishing is the last thing that happens) need an explicit way to
+        # close it, or the next line printed via console.print directly
+        # concatenates onto the same terminal line instead of starting a
+        # new one.
+        if state["in_place"]:
+            print()
+            state["in_place"] = False
+
+    report.finish = finish  # type: ignore[attr-defined]
     return report
 
 
@@ -667,11 +687,18 @@ def _index(repo_path: str) -> int:
     )
     from aletheore.search_index import build_index
 
+    report = _make_progress_printer()
+
+    def on_progress(done: int, total: int) -> None:
+        report(f"Embedding chunks: {done}/{total}")
+
     try:
-        count = build_index(repo, evidence)
+        count = build_index(repo, evidence, on_progress=on_progress)
     except Exception as exc:
+        report.finish()  # type: ignore[attr-defined]
         console.print(f"[bold red]error:[/bold red] {exc}")
         return 1
+    report.finish()  # type: ignore[attr-defined]
     console.print(f"[green]Indexed {count} chunks.[/green]")
     return 0
 

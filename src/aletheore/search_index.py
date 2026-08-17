@@ -848,6 +848,7 @@ def _embed_in_batches(
     batch_size: int = EMBED_BATCH_SIZE,
     repo_id: str | None = None,
     allow_hosted: bool = True,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> list[list[float]]:
     """Embed everything, preferring Aletheore's endpoint when entitled.
 
@@ -872,6 +873,12 @@ def _embed_in_batches(
     mcp_server.py's consent model) - MCP tool calls are always
     non-interactive, so there is no equivalent of embed_texts's isatty()
     prompt available to ask for consent in the moment.
+
+    on_progress: called as (chunks_embedded, total_chunks) after each batch,
+    for callers that want to show something better than silence on a run
+    that can take over an hour on a large repo (thrift: 553 sequential
+    hosted batches at the old char cap). None by default so non-interactive
+    callers (MCP, watch mode) see no behavior change.
     """
     token = get_api_key(
         "ALETHEORE_API_TOKEN", "aletheore-managed-audit", prompt_fn=lambda _: ""
@@ -884,6 +891,7 @@ def _embed_in_batches(
             file=sys.stderr,
         )
     vectors: list[list[float]] = []
+    total = len(texts)
 
     # Recomputed when the provider changes: the hosted spans are character-
     # bounded, the local ones are not, and a fallback mid-run must not keep
@@ -899,6 +907,8 @@ def _embed_in_batches(
         if use_hosted:
             try:
                 vectors.extend(embed_texts_hosted(batch, token, repo_id=repo_id))
+                if on_progress is not None:
+                    on_progress(len(vectors), total)
                 continue
             except HostedEmbeddingUnavailableError as exc:
                 if vectors:
@@ -911,6 +921,8 @@ def _embed_in_batches(
                 spans = [(s, min(s + batch_size, len(texts))) for s in range(start, len(texts), batch_size)]
                 span_index = 0
         vectors.extend(embed_texts(batch))
+        if on_progress is not None:
+            on_progress(len(vectors), total)
 
     return vectors
 
@@ -952,7 +964,10 @@ def _reusable_vectors(index_path: Path) -> dict[str, list[float]]:
 
 
 def _embed_stale_by_hash(
-    stale: list[dict], repo_id: str | None = None, allow_hosted: bool = True
+    stale: list[dict],
+    repo_id: str | None = None,
+    allow_hosted: bool = True,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, list[float]]:
     stale_by_hash = {chunk["chunk_hash"]: chunk["text"] for chunk in stale}
     stale_hashes = list(stale_by_hash)
@@ -960,11 +975,17 @@ def _embed_stale_by_hash(
         [stale_by_hash[chunk_hash] for chunk_hash in stale_hashes],
         repo_id=repo_id,
         allow_hosted=allow_hosted,
+        on_progress=on_progress,
     )
     return dict(zip(stale_hashes, fresh_vectors))
 
 
-def build_index(repo_path: Path, evidence: dict, allow_hosted: bool = True) -> int:
+def build_index(
+    repo_path: Path,
+    evidence: dict,
+    allow_hosted: bool = True,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> int:
     chunks = build_chunks(evidence, repo_path)
     if not chunks:
         return 0
@@ -986,7 +1007,7 @@ def build_index(repo_path: Path, evidence: dict, allow_hosted: bool = True) -> i
     reusable = _reusable_vectors(index_path)
     stale = [chunk for chunk in chunks if chunk["chunk_hash"] not in reusable]
     repo = _repo_id(repo_path)
-    fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted)
+    fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress)
     fresh_vectors = list(fresh.values())
 
     # Vectors from two different embedding models cannot share an index -
@@ -1027,7 +1048,7 @@ def build_index(repo_path: Path, evidence: dict, allow_hosted: bool = True) -> i
         if reused_dimensions != {current_dimension}:
             reusable = {}
             stale = chunks
-            fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted)
+            fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress)
 
     rows = [
         {**chunk, "vector": reusable.get(chunk["chunk_hash"]) or fresh[chunk["chunk_hash"]]}

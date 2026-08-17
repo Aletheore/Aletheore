@@ -451,6 +451,37 @@ def test_embed_in_batches_splits_large_inputs():
     assert len(vectors) == 450
 
 
+def test_embed_in_batches_reports_cumulative_progress_after_each_batch():
+    # A large repo can need hundreds of sequential batches (thrift: 553 at
+    # the old char cap) with no other feedback during a run that can take
+    # over an hour - on_progress is what a caller wires to a real progress
+    # indicator instead of silence.
+    def fake_embed(texts):
+        return [[0.0]] * len(texts)
+
+    calls = []
+    with patch("aletheore.search_index.embed_texts", side_effect=fake_embed):
+        _embed_in_batches(
+            [f"t{i}" for i in range(450)],
+            batch_size=200,
+            on_progress=lambda done, total: calls.append((done, total)),
+        )
+
+    assert calls == [(200, 450), (400, 450), (450, 450)]
+
+
+def test_embed_in_batches_on_progress_defaults_to_silent():
+    # None by default - existing callers (MCP, watch mode) see no behavior
+    # change from adding this parameter.
+    def fake_embed(texts):
+        return [[0.0]] * len(texts)
+
+    with patch("aletheore.search_index.embed_texts", side_effect=fake_embed):
+        vectors = _embed_in_batches([f"t{i}" for i in range(10)], batch_size=200)
+
+    assert len(vectors) == 10
+
+
 def test_rrf_fuse_ranks_a_chunk_found_by_both_retrievers_first():
     """Fusion is on rank, not score: vector search returns an L2 distance and
     full-text a BM25 relevance, on different scales with opposite polarity."""
