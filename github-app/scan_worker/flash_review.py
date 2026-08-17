@@ -235,6 +235,94 @@ def build_dependency_impact_context(evidence: dict | None, changed_files: list[s
     return "--- deterministic dependency impact context (raw graph facts, not conclusions) ---\n" + "\n".join(lines)
 
 
+MAX_BLAST_RADIUS_SYMBOLS = 5
+MAX_BLAST_RADIUS_CANDIDATES = 20
+MAX_BLAST_RADIUS_CALLERS_SHOWN = 5
+
+def build_blast_radius_context(
+    evidence: dict | None,
+    changed_files: list[str],
+    diff_text: str,
+    fetch_file_content: Callable[[str], str | None],
+) -> str:
+    """For each symbol this diff actually touches, who else in the repo
+    calls it - confirmed by both a real import relationship (evidence's
+    own imported_by) AND the symbol name actually appearing in a
+    call-shaped position in that file's real content, not just "imports
+    the file at all" (which says nothing about which of possibly many
+    exported names is actually used).
+
+    This is deliberately the high-confidence case only: "imported_by AND
+    real call-shape match in real content" - not a bare repo-wide text
+    search for the symbol name, which would be a real false-positive risk
+    (name collisions between unrelated symbols in different modules are
+    common, especially for short/generic names). A lower-confidence,
+    name-only tier is explicitly out of scope for this pass.
+    """
+    if not evidence:
+        return ""
+    modules = evidence.get("repository", {}).get("modules", [])
+    by_path = {m["path"]: m for m in modules if m.get("path")}
+    valid_lines = _diff_valid_lines(diff_text)
+
+    lines: list[str] = []
+    symbols_analyzed = 0
+
+    for file_path in changed_files:
+        if symbols_analyzed >= MAX_BLAST_RADIUS_SYMBOLS:
+            break
+        module = by_path.get(file_path)
+        if module is None:
+            continue
+        touched = valid_lines.get(file_path, set())
+        if not touched:
+            continue
+        symbols = module.get("symbols", {})
+        for entry in symbols.get("functions", []) + symbols.get("classes", []):
+            if symbols_analyzed >= MAX_BLAST_RADIUS_SYMBOLS:
+                break
+            name = entry.get("name")
+            start, end = entry.get("start_line"), entry.get("end_line")
+            if not name or start is None or end is None:
+                continue
+            if not any(start <= line <= end for line in touched):
+                continue  # this symbol's range wasn't actually touched by the diff
+
+            symbols_analyzed += 1
+            candidates = (module.get("imported_by") or [])[:MAX_BLAST_RADIUS_CANDIDATES]
+            # No caching needed: at most MAX_BLAST_RADIUS_SYMBOLS (5) distinct
+            # patterns are ever compiled in one call, and a module-level cache
+            # here would grow unbounded over a long-running scan-worker
+            # process's whole lifetime (one entry per distinct symbol name
+            # ever analyzed across every PR it ever reviews).
+            call_re = re.compile(rf"\b{re.escape(name)}\s*\(")
+            callers: list[str] = []
+            for candidate_path in candidates:
+                if len(callers) >= MAX_BLAST_RADIUS_CALLERS_SHOWN:
+                    break
+                content = fetch_file_content(candidate_path)
+                if content is None:
+                    continue
+                if call_re.search(content):
+                    callers.append(candidate_path)
+
+            if callers:
+                total = len(module.get("imported_by") or [])
+                shown = f"{', '.join(callers)}" + (
+                    f" (+{total - len(callers)} more importers not shown)"
+                    if total > len(callers)
+                    else ""
+                )
+                lines.append(f"{file_path}:{name} is called from: {shown}")
+
+    if not lines:
+        return ""
+    return (
+        "--- deterministic blast-radius context (confirmed import + real call-shape match, "
+        "not conclusions) ---\n" + "\n".join(lines)
+    )
+
+
 MAX_REFERENCED_SYMBOLS = 8
 MAX_REFERENCED_SYMBOL_BYTES = 20_000
 
