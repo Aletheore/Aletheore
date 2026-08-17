@@ -13,7 +13,7 @@
 <p align="center">
   <a href="https://pypi.org/project/aletheore/"><img src="https://img.shields.io/pypi/v/aletheore?color=blue" alt="PyPI version"></a>
   <a href="https://pypi.org/project/aletheore/"><img src="https://img.shields.io/pypi/pyversions/aletheore" alt="Python versions"></a>
-  <a href="https://github.com/Aletheore/Aletheore/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License"></a>
+  <a href="https://github.com/Aletheore/Aletheore/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-PolyForm--Noncommercial--1.0.0-blue" alt="License"></a>
   <a href="https://github.com/Aletheore/Aletheore/actions/workflows/tests.yml"><img src="https://github.com/Aletheore/Aletheore/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
 </p>
 
@@ -92,6 +92,16 @@ configuration options: **[`src/README.md`](src/README.md)**.
   deployment verification, branch protection, support process.
 - `SECURITY.md` — vulnerability reporting and response targets.
 
-Aletheore is free and open source. If it's useful to you, consider
+## Licensing
+
+Aletheore is licensed under the
+[PolyForm Noncommercial License 1.0.0](LICENSE), not an OSI-approved open-source license.
+It's free for individuals: personal use, research, hobby projects, and evaluation. Any use
+for or within a company or other organization — including internal tooling at a company you
+work for — is a commercial use and requires a separate commercial license. Reach out at
+[arihantkaul@outlook.com](mailto:arihantkaul@outlook.com) for commercial licensing, or see
+[Aletheore AIR](https://aletheore.com) for the hosted, paid tier.
+
+If it's useful to you personally, consider
 [sponsoring development](https://github.com/sponsors/ArihantK15) — no accounts, no tracking,
 nothing leaves your machine when you run it.

@@ -3,6 +3,19 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.8.13 — 2026-08-17
+
+- **License changed from Apache 2.0 to the [PolyForm Noncommercial License
+  1.0.0](LICENSE).** Aletheore remains free for personal, noncommercial use -
+  individual developers, research, hobby projects, evaluation. Using it for or
+  within a company or other organization (including as internal tooling at a
+  company you work for) is a commercial use and requires a separate commercial
+  license. This is not retroactive: anyone who obtained a copy under the prior
+  Apache 2.0 license (every release through 0.8.12, and any clone or fork made
+  before this change) keeps their Apache 2.0 rights for that copy. Only new
+  releases and new distributions from this point forward are under the new
+  terms. See the [Licensing](README.md#licensing) section of the README.
+
 ## 0.8.12 — 2026-08-15
 
 - **C# repositories had almost no dependency graph, because C# does not need
