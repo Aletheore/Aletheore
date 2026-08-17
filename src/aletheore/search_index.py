@@ -856,7 +856,29 @@ EMBED_BATCH_SIZE = 200
 # rounded down to 50,000 for headroom - comfortably inside both tested
 # points, not a new extreme. 50,000 / 3.89 =~ 200,600 chars, rounded down
 # to 180,000.
-HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "180000"))
+#
+# Lowered to 120,000 - 180,000 was still using 3.89 (thrift's *corpus-wide
+# average*) as the worst-case ratio, but individual batches vary around
+# that average, and _hosted_batches' real output was never checked against
+# a real tokenizer before this. Simulated the actual batches this function
+# produces across 13 benchmark corpora with jina-embeddings-v2-base-code's
+# real tokenizer (jinaai/jina-embeddings-v2-base-code, WordPiece, 61,056
+# vocab - loaded via HF `tokenizers` against tokenizer.json, not llama.cpp,
+# to check the *char cap's* assumption independent of the serving stack):
+# three corpora (zod, thrift, jq) already produce real batches over the
+# 50,000-token target this cap exists to protect, up to 59,895 tokens
+# (~89.5s at the measured ~669 tok/s, still under the 120s timeout but
+# eating into intended margin). The worst single real batch found - jq,
+# ordinary pointer-heavy C source, nothing anomalous - was 125,514 chars /
+# 48,944 tokens, a 2.564 chars/token ratio, denser than 3.89 assumed.
+# 50,000 tokens * 2.564 =~ 128,200 chars; rounded down to 120,000 for
+# headroom, the same margin discipline as every cap change above. A stopgap
+# on the existing char-cap design, not the fix: true token-based batching
+# (see the "not folded into this recalibration" comment above) removes
+# this whole failure mode by bounding batches on real per-chunk token
+# counts instead of a char proxy with an assumed ratio, however carefully
+# that ratio is chosen.
+HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "120000"))
 
 
 def _hosted_batches(texts: list[str], batch_size: int) -> list[tuple[int, int]]:
