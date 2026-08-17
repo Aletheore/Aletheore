@@ -657,19 +657,24 @@ def _diff_valid_lines(
     valid_lines: dict[str, set[int]] = {}
     current_file: str | None = None
     current_line: int | None = None
+    prev_blank = True  # start-of-text counts as a boundary
     for line in diff_text.splitlines():
         file_match = _FILE_MARKER_RE.match(line)
-        if file_match:
+        if file_match and prev_blank:
             current_file = file_match.group(1)
             valid_lines.setdefault(current_file, set())
             current_line = None
+            prev_blank = False
             continue
         hunk_match = _HUNK_HEADER_RE.match(line)
         if hunk_match:
             current_line = int(hunk_match.group(1))
+            prev_blank = False
             continue
         if line == "":
+            prev_blank = True
             continue
+        prev_blank = False
         if current_file is None or current_line is None:
             continue
         valid_lines[current_file].add(current_line)
