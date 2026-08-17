@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Iterator
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from aletheore.git_intel.graph_store import (
@@ -80,6 +80,36 @@ def _scan_root_prefix(repo_path: Path) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+# A fallback for a commit whose author/committer date is real garbage, not
+# just an unrecognized-but-valid timezone - confirmed on a real repo
+# (requests, upstream): git's own `--date=iso-strict` faithfully reproduces
+# whatever timezone offset was recorded at commit time, and at least one
+# real historical commit has an offset outside any valid UTC range
+# ('+518:00' - no such timezone exists; this is a corrupted local clock at
+# authorship time, not a git or Aletheore bug). Ownership/hotspot analysis
+# needs *some* real datetime for every commit, never a crash, and treating
+# a bad date as "very old" rather than dropping the commit keeps it counted
+# for ownership/authorship purposes without letting it skew recency-based
+# ranking as if it just happened.
+_EPOCH_UTC = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def parse_commit_date(date_str: str) -> datetime:
+    try:
+        return datetime.fromisoformat(date_str)
+    except ValueError:
+        pass
+    # The date/time portion of `--date=iso-strict` output is always exactly
+    # 19 characters (YYYY-MM-DDTHH:MM:SS) before the timezone offset - only
+    # the offset itself is ever malformed in the real case this guards
+    # against, so re-parsing just that prefix as UTC recovers the real
+    # commit date whenever it's the offset, specifically, that's bad.
+    try:
+        return datetime.fromisoformat(date_str[:19]).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return _EPOCH_UTC
+
+
 def stream_commit_touches(
     repo_path: Path, rev_range: str, *, max_commits: int | None = None
 ) -> Iterator[CommitTouch]:
@@ -118,7 +148,7 @@ def stream_commit_touches(
                 # something a real commit message would contain) lands
                 # whole in the subject rather than breaking the unpack.
                 sha, name, email, date_str, pending_subject = line[1:].split(_FIELD_SEP, 4)
-                pending_header = (sha, name, email, datetime.fromisoformat(date_str))
+                pending_header = (sha, name, email, parse_commit_date(date_str))
                 pending_files = []
             elif line.strip():
                 path = line.strip()
