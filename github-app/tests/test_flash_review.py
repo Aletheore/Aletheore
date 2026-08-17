@@ -81,6 +81,54 @@ def test_structured_patches_keep_genuine_two_file_diff_separate():
     assert _diff_valid_lines("", patches) == {"a.py": {4}, "b.py": {20}}
 
 
+def test_deleted_comment_line_shaped_like_file_marker_not_misread_as_boundary():
+    diff = "--- db/schema.sql ---\n@@ -10,6 +10,6 @@\n CREATE TABLE users (\n--- users table ---\n-  id INT,\n+  id BIGINT,\n   name TEXT\n );"
+
+    result = _diff_valid_lines(diff)
+
+    assert "users table" not in result
+    assert "db/schema.sql" in result
+    assert 12 in result["db/schema.sql"]
+
+
+def test_second_marker_shaped_line_with_no_blank_line_before_it_is_not_a_boundary():
+    # "---- x ---" (four leading dashes) never matches _FILE_MARKER_RE at all
+    # (the regex requires exactly three dashes then a space), so it can't
+    # exercise the boundary check regardless of whether the fix exists -
+    # verified empirically before writing this test. A second genuine
+    # "--- name ---"-shaped line immediately after a real marker, with no
+    # blank line between them, is the actual collision case that
+    # distinguishes old from new behavior: on the old code this second line
+    # gets misread as a new file marker (silently invents a "b.py" entry
+    # and abandons "a.py"); the fix must keep treating it as content of the
+    # still-current file since it isn't preceded by a boundary.
+    diff = "--- a.py ---\n--- b.py ---\n@@ -1,1 +1,1 @@\n+content"
+
+    result = _diff_valid_lines(diff)
+
+    assert set(result) == {"a.py"}
+    assert 1 in result["a.py"]
+
+
+def test_context_line_starting_with_space_and_marker_shape_not_misread():
+    diff = "--- app.py ---\n@@ -1,3 +1,3 @@\n context\n -- x ---\n+replaced\n context2"
+
+    result = _diff_valid_lines(diff)
+
+    assert set(result) == {"app.py"}
+    assert 3 in result["app.py"]
+
+
+def test_genuine_two_file_diff_with_blank_line_separators_still_works():
+    diff = "--- a.py ---\n@@ -1,1 +1,1 @@\n+in a\n\n--- b.py ---\n@@ -10,1 +10,1 @@\n+in b"
+
+    result = _diff_valid_lines(diff)
+
+    assert set(result) == {"a.py", "b.py"}
+    assert 1 in result["a.py"]
+    assert 10 in result["b.py"]
+
+
 def test_lookup_valid_lines_falls_back_to_unambiguous_path_suffix():
     valid_lines = {"benchmark-sandbox/case-1/pkg/module.py": {5, 6, 7}}
     assert _lookup_valid_lines("pkg/module.py", valid_lines) == {5, 6, 7}
