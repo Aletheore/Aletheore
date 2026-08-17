@@ -245,6 +245,25 @@ def _nested_git_roots(repo_path: Path) -> set[Path]:
     return roots
 
 
+def _iter_pruned_tree(repo_path: Path):
+    """Single os.walk yielding (path, is_dir) for every file and directory
+    under repo_path, pruning IGNORED_DIRS before descending.
+
+    Replaces six independent repo_path.rglob() calls that each traversed the
+    full tree then discarded IGNORED_DIRS results after the fact. Same pruning
+    pattern as _iter_source_files: dirnames[:] = [d for d in dirnames if d
+    not in IGNORED_DIRS], followlinks=False (a symlinked directory shouldn't
+    be descended into).
+    """
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+        current_dir = Path(dirpath)
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        for filename in filenames:
+            yield current_dir / filename, False
+        for dirname in dirnames:
+            yield current_dir / dirname, True
+
+
 def _iter_source_files(repo_path: Path, ignored_paths: list[str] | None = None):
     # os.walk(followlinks=False) rather than Path.rglob("*") - a symlinked
     # directory would otherwise have its contents walked and reported on as
@@ -398,23 +417,23 @@ def detect_monorepo(repo_path: Path) -> dict:
     return {"detected": False, "workspaces": []}
 
 
-def _detect_migration_directories(repo_path: Path) -> list[dict]:
+def _detect_migration_directories(repo_path: Path, pruned_tree=None) -> list[dict]:
     results: list[dict] = []
-    for name in MIGRATION_DIR_NAME_MARKERS:
-        for candidate in repo_path.rglob(name):
-            if not candidate.is_dir():
-                continue
-            rel_parts = candidate.relative_to(repo_path).parts
-            if any(part in IGNORED_DIRS for part in rel_parts):
-                continue
-            file_count = sum(
-                1
-                for f in candidate.iterdir()
-                if f.is_file() and f.suffix in (".py", ".sql", ".js", ".ts", ".rb")
-            )
-            results.append(
-                {"path": candidate.relative_to(repo_path).as_posix(), "file_count": file_count}
-            )
+    if pruned_tree is None:
+        pruned_tree = _iter_pruned_tree(repo_path)
+    for path, is_dir in pruned_tree:
+        if not is_dir:
+            continue
+        if path.name not in MIGRATION_DIR_NAME_MARKERS:
+            continue
+        file_count = sum(
+            1
+            for f in path.iterdir()
+            if f.is_file() and f.suffix in (".py", ".sql", ".js", ".ts", ".rb")
+        )
+        results.append(
+            {"path": path.relative_to(repo_path).as_posix(), "file_count": file_count}
+        )
 
     alembic_versions = repo_path / "alembic" / "versions"
     if alembic_versions.is_dir():
@@ -438,95 +457,107 @@ def _detect_schema_files(repo_path: Path) -> list[str]:
     return [marker for marker in SCHEMA_FILE_MARKERS if (repo_path / marker).exists()]
 
 
-def _detect_docker_compose_services(repo_path: Path) -> list[dict]:
+def _detect_docker_compose_services(repo_path: Path, pruned_tree=None) -> list[dict]:
     # Compose files commonly live under one app inside a larger repository.
     results: list[dict] = []
-    for filename in COMPOSE_FILE_NAMES:
-        for compose_file in repo_path.rglob(filename):
-            rel_parts = compose_file.relative_to(repo_path).parts
-            if any(part in IGNORED_DIRS for part in rel_parts):
-                continue
-            try:
-                data = yaml.safe_load(compose_file.read_text(encoding="utf-8", errors="ignore"))
-            except yaml.YAMLError:
-                continue
-            if not isinstance(data, dict):
-                continue
-            services = list(data.get("services", {}).keys())
-            if services:
-                results.append(
-                    {"file": compose_file.relative_to(repo_path).as_posix(), "services": services}
-                )
+    if pruned_tree is None:
+        pruned_tree = _iter_pruned_tree(repo_path)
+    for path, is_dir in pruned_tree:
+        if is_dir:
+            continue
+        if path.name not in COMPOSE_FILE_NAMES:
+            continue
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8", errors="ignore"))
+        except yaml.YAMLError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        services = list(data.get("services", {}).keys())
+        if services:
+            results.append(
+                {"file": path.relative_to(repo_path).as_posix(), "services": services}
+            )
     # See _detect_migration_directories for why this is sorted.
     results.sort(key=lambda entry: entry["file"])
     return results
 
 
-def _detect_kubernetes_manifests(repo_path: Path) -> list[str]:
+def _detect_kubernetes_manifests(repo_path: Path, pruned_tree=None) -> list[str]:
     results: list[str] = []
-    for extension in YAML_EXTENSIONS:
-        for candidate in repo_path.rglob(f"*{extension}"):
-            rel_parts = candidate.relative_to(repo_path).parts
-            if any(part in IGNORED_DIRS for part in rel_parts):
-                continue
-            try:
-                docs = list(
-                    yaml.safe_load_all(candidate.read_text(encoding="utf-8", errors="ignore"))
-                )
-            except yaml.YAMLError:
-                continue
-            for doc in docs:
-                if (
-                    isinstance(doc, dict)
-                    and doc.get("kind") in K8S_KIND_MARKERS
-                    and "apiVersion" in doc
-                ):
-                    results.append(candidate.relative_to(repo_path).as_posix())
-                    break
-    # See _detect_migration_directories for why this is sorted.
-    results.sort()
-    return results
-
-
-def _detect_terraform_files(repo_path: Path) -> list[str]:
-    results: list[str] = []
-    for candidate in repo_path.rglob("*.tf"):
-        rel_parts = candidate.relative_to(repo_path).parts
-        if any(part in IGNORED_DIRS for part in rel_parts):
+    if pruned_tree is None:
+        pruned_tree = _iter_pruned_tree(repo_path)
+    for path, is_dir in pruned_tree:
+        if is_dir:
             continue
-        results.append(candidate.relative_to(repo_path).as_posix())
-    # See _detect_migration_directories for why this is sorted.
-    results.sort()
-    return results
-
-
-def _detect_helm_charts(repo_path: Path) -> list[str]:
-    results: list[str] = []
-    for candidate in repo_path.rglob("Chart.yaml"):
-        rel_parts = candidate.relative_to(repo_path).parts
-        if any(part in IGNORED_DIRS for part in rel_parts):
+        if path.suffix not in YAML_EXTENSIONS:
             continue
-        results.append(candidate.relative_to(repo_path).as_posix())
+        try:
+            docs = list(
+                yaml.safe_load_all(path.read_text(encoding="utf-8", errors="ignore"))
+            )
+        except yaml.YAMLError:
+            continue
+        for doc in docs:
+            if (
+                isinstance(doc, dict)
+                and doc.get("kind") in K8S_KIND_MARKERS
+                and "apiVersion" in doc
+            ):
+                results.append(path.relative_to(repo_path).as_posix())
+                break
     # See _detect_migration_directories for why this is sorted.
     results.sort()
     return results
 
 
-def _detect_declared_env_vars(repo_path: Path) -> list[dict]:
+def _detect_terraform_files(repo_path: Path, pruned_tree=None) -> list[str]:
+    results: list[str] = []
+    if pruned_tree is None:
+        pruned_tree = _iter_pruned_tree(repo_path)
+    for path, is_dir in pruned_tree:
+        if is_dir:
+            continue
+        if path.suffix != ".tf":
+            continue
+        results.append(path.relative_to(repo_path).as_posix())
+    # See _detect_migration_directories for why this is sorted.
+    results.sort()
+    return results
+
+
+def _detect_helm_charts(repo_path: Path, pruned_tree=None) -> list[str]:
+    results: list[str] = []
+    if pruned_tree is None:
+        pruned_tree = _iter_pruned_tree(repo_path)
+    for path, is_dir in pruned_tree:
+        if is_dir:
+            continue
+        if path.name != "Chart.yaml":
+            continue
+        results.append(path.relative_to(repo_path).as_posix())
+    # See _detect_migration_directories for why this is sorted.
+    results.sort()
+    return results
+
+
+def _detect_declared_env_vars(repo_path: Path, pruned_tree=None) -> list[dict]:
     results: list[dict] = []
-    for marker in ENV_FILE_MARKERS:
-        for candidate in repo_path.rglob(marker):
-            rel_parts = candidate.relative_to(repo_path).parts
-            if any(part in IGNORED_DIRS for part in rel_parts):
+    if pruned_tree is None:
+        pruned_tree = _iter_pruned_tree(repo_path)
+    for path, is_dir in pruned_tree:
+        if is_dir:
+            continue
+        if path.name not in ENV_FILE_MARKERS:
+            continue
+        source = path.relative_to(repo_path).as_posix()
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
                 continue
-            source = candidate.relative_to(repo_path).as_posix()
-            for line in candidate.read_text(encoding="utf-8", errors="ignore").splitlines():
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                name = stripped.split("=", 1)[0].strip()
-                if name and all(c.isalnum() or c == "_" for c in name):
-                    results.append({"name": name, "source": source})
+            name = stripped.split("=", 1)[0].strip()
+            if name and all(c.isalnum() or c == "_" for c in name):
+                results.append({"name": name, "source": source})
     # Stable sort by source only (not name too) - which file gets visited
     # first is what's filesystem-dependent and needs pinning down; each
     # file's own variables should stay in their original declaration order.
@@ -538,23 +569,26 @@ def _detect_declared_env_vars(repo_path: Path) -> list[dict]:
 def detect_database(repo_path: Path) -> dict:
     pip_lines = _iter_pip_package_lines(repo_path)
     npm_deps = _npm_dependencies(repo_path)
+    pruned_tree = list(_iter_pruned_tree(repo_path))
     return {
         "orm_frameworks": _match_dependency_markers(
             DB_ORM_MARKERS_PY, DB_ORM_MARKERS_JS, pip_lines, npm_deps
         ),
-        "migration_directories": _detect_migration_directories(repo_path),
+        "migration_directories": _detect_migration_directories(repo_path, pruned_tree),
         "schema_files": _detect_schema_files(repo_path),
     }
 
 
 def detect_infrastructure(repo_path: Path) -> dict:
+    pruned_tree = list(_iter_pruned_tree(repo_path))
     return {
-        "docker_compose_services": _detect_docker_compose_services(repo_path),
-        "kubernetes_manifests": _detect_kubernetes_manifests(repo_path),
-        "terraform_files": _detect_terraform_files(repo_path),
-        "helm_charts": _detect_helm_charts(repo_path),
+        "docker_compose_services": _detect_docker_compose_services(repo_path, pruned_tree),
+        "kubernetes_manifests": _detect_kubernetes_manifests(repo_path, pruned_tree),
+        "terraform_files": _detect_terraform_files(repo_path, pruned_tree),
+        "helm_charts": _detect_helm_charts(repo_path, pruned_tree),
     }
 
 
 def detect_environment_variables(repo_path: Path) -> dict:
-    return {"declared": _detect_declared_env_vars(repo_path)}
+    pruned_tree = list(_iter_pruned_tree(repo_path))
+    return {"declared": _detect_declared_env_vars(repo_path, pruned_tree)}
