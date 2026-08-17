@@ -817,7 +817,19 @@ EMBED_BATCH_SIZE = 200
 # batching needs the CLI to tokenize client-side, which means bundling a
 # tokenizer (or the model itself) as a new dependency, scoped as separate,
 # larger follow-up work, not folded into this recalibration.
-HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "100000"))
+#
+# Raised again to 180,000 after app-server's own timeout to jina-embed
+# went from 60s to 120s (embeddings_api.get_jina_client) - it was cutting
+# itself off at half the budget the CLI's own client already tolerated
+# waiting (this file's HTTP client has used timeout=120.0 all along).
+# Interpolated within the already-measured range above rather than
+# extrapolating past it: the real 44,419/60.10s and 59,903/83.24s points
+# bracket a ~669 tok/s rate in that segment; targeting the same ~41%
+# margin against the new 120s budget (70.8s) lands at ~51,600 tokens,
+# rounded down to 50,000 for headroom - comfortably inside both tested
+# points, not a new extreme. 50,000 / 3.89 =~ 200,600 chars, rounded down
+# to 180,000.
+HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "180000"))
 
 
 def _hosted_batches(texts: list[str], batch_size: int) -> list[tuple[int, int]]:
