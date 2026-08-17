@@ -754,3 +754,116 @@ def test_detect_environment_variables_wraps_declared_list(tmp_path):
     result = detect_environment_variables(repo)
 
     assert result == {"declared": [{"name": "FOO", "source": ".env.example"}]}
+
+
+# ── _iter_pruned_tree tests ─────────────────────────────────────────────
+
+
+def test_iter_pruned_tree_excludes_ignored_dirs(tmp_path):
+    from aletheore.scanner.detect import _iter_pruned_tree
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("x = 1\n")
+    vendored = repo / "node_modules" / "pkg"
+    vendored.mkdir(parents=True)
+    (vendored / "index.js").write_text("console.log('hi')\n")
+    (repo / ".git" / "config").parent.mkdir(parents=True, exist_ok=True)
+    (repo / ".git" / "config").write_text("[core]\n")
+
+    pruned = list(_iter_pruned_tree(repo))
+    pruned_names = {path.name for path, _ in pruned}
+
+    assert "main.py" in pruned_names
+    assert "index.js" not in pruned_names
+    assert "config" not in pruned_names
+
+
+def test_iter_pruned_tree_never_visits_ignored_dirs(tmp_path):
+    """The whole point of the fix is fewer filesystem operations.
+    Verify the walk never descends into ignored dirs, not just that the
+    final result excludes files inside them."""
+    from aletheore.scanner.detect import _iter_pruned_tree
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.py").write_text("x = 1\n")
+    ignored = repo / "node_modules" / "some-pkg"
+    ignored.mkdir(parents=True)
+    (ignored / "docker-compose.yml").write_text("services:\n  web: {}\n")
+    (ignored / "Chart.yaml").write_text("apiVersion: v2\n")
+    (ignored / "main.tf").write_text('resource "x" "y" {}\n')
+    (ignored / ".env.example").write_text("FOO=bar\n")
+    (ignored / "migrations").mkdir()
+    (ignored / "migrations" / "001.py").write_text("x = 1\n")
+
+    pruned = list(_iter_pruned_tree(repo))
+    pruned_names = {path.name for path, _ in pruned}
+
+    assert "docker-compose.yml" not in pruned_names
+    assert "Chart.yaml" not in pruned_names
+    assert "main.tf" not in pruned_names
+    assert ".env.example" not in pruned_names
+    assert "migrations" not in pruned_names
+
+
+def test_iter_pruned_tree_does_not_follow_symlinked_directories(tmp_path):
+    from aletheore.scanner.detect import _iter_pruned_tree
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.py").write_text("x = 1\n")
+    (repo / "linked_dir").symlink_to(outside, target_is_directory=True)
+    (repo / "main.py").write_text("x = 1\n")
+
+    pruned = list(_iter_pruned_tree(repo))
+    pruned_names = {path.name for path, _ in pruned}
+
+    assert "main.py" in pruned_names
+    assert "secret.py" not in pruned_names
+
+
+def test_six_detectors_identical_output_with_shared_walk(tmp_path):
+    """Each of the six detectors produces byte-identical results when called
+    with a shared pruned_tree list vs. creating their own internally."""
+    from aletheore.scanner.detect import (
+        _detect_declared_env_vars,
+        _detect_docker_compose_services,
+        _detect_helm_charts,
+        _detect_kubernetes_manifests,
+        _detect_migration_directories,
+        _detect_terraform_files,
+        _iter_pruned_tree,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    # migration dirs
+    (repo / "app" / "migrations").mkdir(parents=True)
+    (repo / "app" / "migrations" / "001.py").write_text("x = 1\n")
+    # docker compose
+    compose = {"services": {"web": {"image": "nginx"}}}
+    (repo / "docker-compose.yml").write_text(yaml.dump(compose))
+    # kubernetes
+    (repo / "k8s").mkdir()
+    manifest = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "web"}}
+    (repo / "k8s" / "deploy.yaml").write_text(yaml.dump(manifest))
+    # terraform
+    (repo / "infra").mkdir()
+    (repo / "infra" / "main.tf").write_text('resource "x" "y" {}\n')
+    # helm
+    (repo / "charts" / "myapp").mkdir(parents=True)
+    (repo / "charts" / "myapp" / "Chart.yaml").write_text("apiVersion: v2\n")
+    # env vars
+    (repo / ".env.example").write_text("FOO=bar\n")
+
+    shared_tree = list(_iter_pruned_tree(repo))
+
+    assert _detect_migration_directories(repo, shared_tree) == _detect_migration_directories(repo)
+    assert _detect_docker_compose_services(repo, shared_tree) == _detect_docker_compose_services(repo)
+    assert _detect_kubernetes_manifests(repo, shared_tree) == _detect_kubernetes_manifests(repo)
+    assert _detect_terraform_files(repo, shared_tree) == _detect_terraform_files(repo)
+    assert _detect_helm_charts(repo, shared_tree) == _detect_helm_charts(repo)
+    assert _detect_declared_env_vars(repo, shared_tree) == _detect_declared_env_vars(repo)
