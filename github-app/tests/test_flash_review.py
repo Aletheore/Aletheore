@@ -1656,3 +1656,172 @@ def test_semantic_checker_does_not_flag_ordinary_english_using_sql_keywords():
     findings = find_semantic_regressions(diff, {"notify.py": source}, "")
 
     assert findings == []
+
+
+# ── blast-radius context tests ──────────────────────────────────────────
+
+
+def test_build_blast_radius_context_finds_real_confirmed_caller():
+    """A changed symbol whose imported_by includes a file, and the fake fetcher
+    returns content containing the call shape for that file."""
+    from scan_worker.flash_review import build_blast_radius_context
+
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imported_by": ["caller.py"],
+                    "symbols": {
+                        "functions": [
+                            {"name": "handler", "start_line": 1, "end_line": 10}
+                        ],
+                        "classes": [],
+                    },
+                }
+            ]
+        }
+    }
+
+    diff_text = "--- a.py ---\n@@ -1,10 +1,10 @@\n def handler():\n     pass\n"
+
+    def fake_fetch_file_content(candidate_path: str) -> str | None:
+        if candidate_path == "caller.py":
+            return "def call_handler():\n    handler()\n"
+        return None
+
+    context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
+    assert "is called from:" in context
+    assert "caller.py" in context
+
+
+def test_build_blast_radius_context_omits_symbol_with_no_confirmed_callers():
+    """A symbol with imported_by present, but the fake fetcher never returns
+    content containing the call shape -> context omitted entirely ("")."""
+    from scan_worker.flash_review import build_blast_radius_context
+
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imported_by": ["other.py"],
+                    "symbols": {
+                        "functions": [
+                            {"name": "unused_func", "start_line": 1, "end_line": 5}
+                        ],
+                        "classes": [],
+                    },
+                }
+            ]
+        }
+    }
+
+    diff_text = "--- a.py ---\n@@ -1,5 +1,5 @@\n def unused_func():\n     pass\n"
+
+    def fake_fetch_file_content(candidate_path: str) -> str | None:
+        return None
+
+    context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
+    assert context == ""
+
+
+def test_build_blast_radius_context_does_not_flag_untouched_symbol():
+    """A file has two functions, the diff only touches one -> only the touched one appears."""
+    from scan_worker.flash_review import build_blast_radius_context
+
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imported_by": ["some_import.py"],
+                    "symbols": {
+                        "functions": [
+                            {"name": "touch_func", "start_line": 1, "end_line": 5},
+                            {"name": "untouched_func", "start_line": 20, "end_line": 30},
+                        ],
+                        "classes": [],
+                    },
+                }
+            ]
+        }
+    }
+
+    diff_text = "--- a.py ---\n@@ -1,5 +1,5 @@\n def touch_func():\n     pass\n"
+
+    def fake_fetch_file_content(candidate_path: str) -> str | None:
+        return "def caller_usage():\n    touch_func()\n" if candidate_path == "some_import.py" else None
+
+    context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
+    assert "touch_func" in context
+    assert "untouched_func" not in context
+
+
+def test_build_blast_radius_context_caps_candidates_checked():
+    """An imported_by list longer than MAX_BLAST_RADIUS_CANDIDATES ->
+    fetch_file_content should never be called for anything past the cap."""
+    from scan_worker.flash_review import build_blast_radius_context
+
+    imported_by_list = [f"caller_{i}.py" for i in range(30)]
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imported_by": imported_by_list,
+                    "symbols": {
+                        "functions": [
+                            {"name": "handler", "start_line": 1, "end_line": 10}
+                        ],
+                        "classes": [],
+                    },
+                }
+            ]
+        }
+    }
+
+    diff_text = "--- a.py ---\n@@ -1,10 +1,10 @@\n def handler():\n     pass\n"
+
+    call_count = [0]
+
+    def fake_fetch_file_content(candidate_path: str) -> str | None:
+        call_count[0] += 1
+        if call_count[0] <= 20:
+            return f"def call_{call_count[0]}():\n    handler()\n"
+        return None
+
+    context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
+    assert "is called from:" in context
+    assert call_count[0] <= 20
+
+
+def test_build_blast_radius_context_caller_using_different_symbol_not_flagged():
+    """A caller imports the file but uses a *different* symbol is not flagged.
+    This justifies requiring real content match, not just imported_by membership."""
+    from scan_worker.flash_review import build_blast_radius_context
+
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imported_by": ["caller.py"],
+                    "symbols": {
+                        "functions": [
+                            {"name": "handler", "start_line": 1, "end_line": 10}
+                        ],
+                        "classes": [],
+                    },
+                }
+            ]
+        }
+    }
+
+    diff_text = "--- a.py ---\n@@ -1,10 +1,10 @@\n def handler():\n     pass\n"
+
+    def fake_fetch_file_content(candidate_path: str) -> str | None:
+        return "def caller_usage():\n    other_func()\n" if candidate_path == "caller.py" else None
+
+    context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
+    assert "is called from:" not in context

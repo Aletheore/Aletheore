@@ -107,6 +107,7 @@ from scan_worker.db import (
 from scan_worker.docs_repo_commit import sync_docs_to_repo
 from scan_worker.flash_review import (
     FLASH_REVIEW_FALLBACK_MODEL,
+    build_blast_radius_context,
     build_change_impact_context,
     build_code_evidence_context,
     build_dependency_impact_context,
@@ -1492,6 +1493,14 @@ def _run_flash_review(
         if change_impact_context:
             code_evidence_context = "\n\n".join(
                 part for part in (code_evidence_context, change_impact_context) if part
+            )
+
+        blast_radius_context = build_blast_radius_context(
+            evidence, changed_files, diff_text, lambda p: fetch_file_content(client, token, repo_full_name, p, head_sha)
+        )
+        if blast_radius_context:
+            code_evidence_context = "\n\n".join(
+                part for part in (code_evidence_context, blast_radius_context) if part
             )
 
         def _fetch_symbol_source(file_path: str, start_line: int, end_line: int) -> str | None:
