@@ -128,6 +128,30 @@ def fetch_pr_changed_files(
     return [file["filename"] for file in response.json().get("files", [])]
 
 
+def fetch_pr_context(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    pr_number: int,
+) -> str:
+    """Return bounded human-authored PR context for review when available."""
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    response = client.get(f"/repos/{repo_full_name}/pulls/{pr_number}", headers=headers)
+    response.raise_for_status()
+    payload = response.json()
+    title = str(payload.get("title") or "").strip()
+    body = str(payload.get("body") or "").strip()
+    parts = ["--- pull request context (author-provided, untrusted) ---"]
+    if title:
+        parts.append(f"title: {title[:500]}")
+    if body:
+        parts.append(f"body:\n{body[:7_500]}")
+    return "\n".join(parts) if len(parts) > 1 else ""
+
+
 def fetch_default_branch_head_sha(
     client: httpx.Client,
     token: str,

@@ -12,8 +12,11 @@ from scan_worker.flash_review import (
     _names_referenced_in_diff,
     _quoted_strings,
     _validate_findings,
+    build_change_impact_context,
     build_code_evidence_context,
+    build_dependency_impact_context,
     build_referenced_symbol_context,
+    find_semantic_regressions,
     is_non_substantive_diff,
     review_diff,
 )
@@ -531,6 +534,25 @@ def test_build_code_evidence_context_includes_file_symbol_dependency_and_risk():
     assert "risk=generic_secret at a.py:2" in context
 
 
+def test_build_dependency_impact_context_includes_raw_graph_facts():
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imports": ["b.py"],
+                    "imported_by": ["app.py", "worker.py"],
+                }
+            ]
+        }
+    }
+
+    context = build_dependency_impact_context(evidence, ["a.py"])
+
+    assert "imports=b.py" in context
+    assert "imported_by=app.py,worker.py" in context
+
+
 @patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_parses_optional_suggestion_field(mock_adapter_class):
     mock_adapter = MagicMock()
@@ -648,6 +670,470 @@ def test_build_referenced_symbol_context_includes_symbol_actually_referenced_in_
     assert "def _github_http_client() -> httpx.Client" in context
 
 
+def test_build_referenced_symbol_context_includes_symbol_only_present_on_removed_line():
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "caller.py",
+                    "imports": ["callee.py"],
+                    "symbols": {"functions": [], "classes": []},
+                },
+                {
+                    "path": "callee.py",
+                    "imports": [],
+                    "symbols": {
+                        "functions": [],
+                        "classes": [{"name": "ErrorA", "start_line": 1, "end_line": 2}],
+                    },
+                },
+            ],
+        },
+    }
+    diff_text = (
+        "--- caller.py ---\n@@ -1,2 +1,1 @@\n"
+        "-from .callee import op_one, ErrorA\n"
+        " from .callee import op_one\n"
+    )
+
+    context = build_referenced_symbol_context(
+        evidence,
+        ["caller.py"],
+        diff_text,
+        lambda path, start, end: "class ErrorA(Exception):\n    pass",
+    )
+
+    assert "callee.py:ErrorA" in context
+
+
+def test_build_change_impact_context_surfaces_behavioral_change_signals():
+    diff_text = (
+        "--- caller.py ---\n@@ -1,4 +1,5 @@\n"
+        "-    log.append(record)\n"
+        "+    result = op_three(key, store)\n"
+        "+    for _ in range(3):\n"
+        "+        notify(result)\n"
+        "+        result = op_three(key, store)\n"
+    )
+
+    context = build_change_impact_context(diff_text)
+
+    assert "mutation:" in context
+    assert "retries:" in context
+    assert "concurrency:" not in context
+    assert "iterator consumption:" in context
+
+
+def test_build_referenced_symbol_context_adds_observable_contract_signals():
+    evidence = _evidence_with_two_modules()
+    diff_text = "--- dashboard.py ---\n@@ -1,1 +1,1 @@\n+_github_http_client()\n"
+
+    context = build_referenced_symbol_context(
+        evidence,
+        ["dashboard.py"],
+        diff_text,
+        lambda *args: "def _github_http_client():\n    raise ErrorA()\n    yield 1\n    items.sort()",
+    )
+
+    assert "contract signals (deterministic, verify):" in context
+    assert "raises ErrorA" in context
+    assert "yields values" in context
+    assert "uses mutation operations: sort" in context
+
+
+def test_semantic_checker_finds_removed_exception_handler():
+    diff = (
+        "--- caller.py ---\n@@ -1,3 +1,2 @@\n"
+        "-except ErrorA:\n"
+        "+    value = op_one(key, store)\n"
+    )
+    refs = "--- referenced definition (not part of this diff): callee.py:op_one ---\nraise ErrorA()"
+    findings = find_semantic_regressions(
+        diff, {"caller.py": "def handler():\n    value = op_one(key, store)"}, refs
+    )
+    assert findings[0]["file"] == "caller.py"
+    assert "removed its exception handler" in findings[0]["issue"]
+
+
+def test_semantic_checker_finds_mutable_alias_and_iterator_regressions():
+    diff = (
+        "--- caller.py ---\n@@ -1,5 +1,4 @@\n"
+        "-working = list(raw)\n"
+        "+result = op_two(raw)\n"
+        "+items = op_five(db)\n"
+    )
+    refs = (
+        "--- referenced definition (not part of this diff): callee.py:op_two ---\nitems.sort()\n"
+        "--- referenced definition (not part of this diff): callee.py:op_five ---\nyield row\n"
+    )
+    findings = find_semantic_regressions(
+        diff,
+        {"caller.py": "working = list(raw)\nresult = op_two(raw)\nitems = op_five(db)\nfor x in items:\n    sum(x for x in items)"},
+        refs,
+    )
+    issues = " ".join(finding["issue"] for finding in findings)
+    assert "defensive copy" in issues
+    assert "one-shot iterator" in issues
+
+
+def test_semantic_checker_finds_wrong_exception_type():
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,2 +1,3 @@\n+try:\n+    value = op(key)\n+except ErrorB:\n+    return None\n",
+        {"caller.py": "value = op(key)\nexcept ErrorB:"},
+        "--- referenced definition (not part of this diff): callee.py:op ---\nraise ErrorA()",
+    )
+
+    assert len(findings) == 1
+    assert "catches ErrorB instead" in findings[0]["issue"]
+
+
+def test_semantic_checker_finds_retry_mutation():
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,2 +1,4 @@\n+for attempt in range(2):\n+    write_record(key, value)\n+    if ok:\n+        break\n",
+        {"caller.py": "write_record(key, value)\nwrite_record(key, value)"},
+        "--- referenced definition (not part of this diff): db.py:write_record ---\nstore[key] = value",
+    )
+
+    assert len(findings) == 1
+    assert "mutating write_record" in findings[0]["issue"]
+
+
+def test_semantic_checker_finds_shared_state_called_concurrently():
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,1 +1,3 @@\n+with ThreadPoolExecutor() as pool:\n+    pool.map(worker, values)\n",
+        {"caller.py": "worker(value)"},
+        "--- referenced definition (not part of this diff): worker.py:worker ---\nself.cache = {}",
+    )
+
+    assert len(findings) == 1
+    assert "shared mutable instance state" in findings[0]["issue"]
+
+
+def test_semantic_checker_finds_double_scaling():
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,1 +1,1 @@\n+score = ratio(value) * 100\n",
+        {"caller.py": "score = ratio(value) * 100"},
+        "--- referenced definition (not part of this diff): metrics.py:ratio ---\nreturn raw * 100",
+    )
+
+    assert len(findings) == 1
+    assert "scales its input by 100" in findings[0]["issue"]
+
+
+def test_semantic_checker_finds_call_before_moved_record_operation():
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,3 +1,3 @@\n-record.append(item)\n+result = consume(items)\n+record.append(item)\n",
+        {"caller.py": "result = consume(items)\nrecord.append(item)"},
+        "--- referenced definition (not part of this diff): worker.py:consume ---\nitems.pop()\nraise ErrorA()",
+    )
+
+    assert len(findings) == 1
+    assert "moved side-effecting log/record" in findings[0]["issue"]
+
+
+def test_semantic_checker_does_not_flag_exception_handling_that_remains():
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,2 +1,2 @@\n+try:\n+    value = op(key)\n+except ErrorA:\n+    return None\n",
+        {"caller.py": "try:\n    value = op(key)\nexcept ErrorA:\n    return None"},
+        "--- referenced definition (not part of this diff): callee.py:op ---\nraise ErrorA()",
+    )
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_a_defensive_copy_that_remains():
+    findings = find_semantic_regressions(
+        "--- caller.py ---\n@@ -1,2 +1,2 @@\n+working = list(raw)\n+result = op(working)\n",
+        {"caller.py": "working = list(raw)\nresult = op(working)"},
+        "--- referenced definition (not part of this diff): callee.py:op ---\nitems.sort()",
+    )
+
+    assert findings == []
+
+
+def _padded_source(before: list[str], after: list[str], pad: int = 40) -> str:
+    return "\n".join(before + [f"# padding {i}" for i in range(pad)] + after)
+
+
+def test_semantic_checker_does_not_flag_concurrency_unrelated_to_the_call_site():
+    """Whole-file scope was the bug: a referenced symbol that touches
+    self-state anywhere, plus a concurrency keyword added anywhere in the
+    same file, used to be enough to fire - even when the two live in
+    unrelated hunks 40+ lines apart. Scoping to the hunk nearest the actual
+    call must keep this from firing."""
+    source = _padded_source(
+        ["def handler():", "    x = 1", "    worker(x)", "    return x", ""],
+        ["def unrelated():", "    with ThreadPoolExecutor() as pool:", "        pool.map(f, values)"],
+    )
+    diff = (
+        "--- caller.py ---\n"
+        "@@ -1,4 +1,4 @@\n"
+        " def handler():\n"
+        "     x = 1\n"
+        "-    worker(old)\n"
+        "+    worker(x)\n"
+        "     return x\n"
+        "@@ -46,2 +46,3 @@\n"
+        " def unrelated():\n"
+        "-    pool.map(f, values)\n"
+        "+    with ThreadPoolExecutor() as pool:\n"
+        "+        pool.map(f, values)\n"
+    )
+    refs = "--- referenced definition (not part of this diff): worker.py:worker ---\nself.cache = {}"
+
+    findings = find_semantic_regressions(diff, {"caller.py": source}, refs)
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_a_retry_loop_unrelated_to_the_call_site():
+    """Same bug, same fix, different check: two unrelated calls to the same
+    store-like dependency in different functions, plus an unrelated loop
+    added somewhere else in the file, used to be enough evidence on their
+    own - whole-file scope never checked that any of the three were
+    actually related to each other."""
+    source = "\n".join(
+        ["def handler_a():", "    write_record(key1, value1)", ""]
+        + [f"# padding {i}" for i in range(20)]
+        + ["def handler_b():", "    write_record(key2, value2)", ""]
+        + [f"# padding {i}" for i in range(20)]
+        + ["def unrelated():", "    for _ in range(3):", "        poll()"]
+    )
+    diff = (
+        "--- caller.py ---\n"
+        "@@ -1,3 +1,3 @@\n"
+        " def handler_a():\n"
+        "-    write_record(old_key1, value1)\n"
+        "+    write_record(key1, value1)\n"
+        "@@ -47,1 +47,3 @@\n"
+        " def unrelated():\n"
+        "+    for _ in range(3):\n"
+        "+        poll()\n"
+    )
+    refs = "--- referenced definition (not part of this diff): db.py:write_record ---\nstore[key] = value"
+
+    findings = find_semantic_regressions(diff, {"caller.py": source}, refs)
+
+    assert findings == []
+
+
+def test_semantic_checker_still_flags_a_removed_handler_when_an_unrelated_one_survives_elsewhere():
+    """The other direction of the same whole-file-scope bug: a same-named
+    except block living in an unrelated function elsewhere in the file must
+    not mask a real regression at the actual call site."""
+    source = _padded_source(
+        ["def handler():", "    value = op(key)", ""],
+        ["def other():", "    try:", "        risky()", "    except ErrorA:", "        pass"],
+    )
+    diff = (
+        "--- caller.py ---\n"
+        "@@ -1,3 +1,2 @@\n"
+        "-    try:\n"
+        "-        value = op(key)\n"
+        "-    except ErrorA:\n"
+        "-        pass\n"
+        "+    value = op(key)\n"
+    )
+    refs = "--- referenced definition (not part of this diff): callee.py:op ---\nraise ErrorA()"
+
+    findings = find_semantic_regressions(diff, {"caller.py": source}, refs)
+
+    assert len(findings) == 1
+    assert "removed its exception handler" in findings[0]["issue"]
+
+
+def test_semantic_checker_evaluates_each_occurrence_of_a_repeated_call_independently():
+    """A referenced name called twice in the same file - once far from any
+    diff hunk, once right where the diff actually changed something - must
+    be judged only on the occurrence that's actually part of the change."""
+    source = _padded_source(
+        ["def untouched():", "    op(key)", ""],
+        ["def handler():", "    value = op(key)"],
+    )
+    diff = (
+        "--- caller.py ---\n"
+        "@@ -44,1 +44,2 @@\n"
+        " def handler():\n"
+        "+    value = op(key)\n"
+    )
+    refs = "--- referenced definition (not part of this diff): callee.py:op ---\nitems.sort()"
+
+    # Neither occurrence removed a defensive copy, so this should find
+    # nothing - but it proves both occurrences get considered rather than
+    # only ever the first one in the file (a distinct pre-existing bug:
+    # _line_number always returned the *first* match, regardless of which
+    # occurrence the diff actually touched).
+    findings = find_semantic_regressions(diff, {"caller.py": source}, refs)
+
+    assert findings == []
+
+
+def test_semantic_checker_finds_a_resource_leak_from_a_removed_close():
+    """Real shape: gin-gonic/gin#4422 (this project's own PR-review
+    benchmark case 010) - `defer f.Close()` removed from RunFd, leaking
+    the file descriptor for the process's lifetime."""
+    source = (
+        "func (engine *Engine) RunFd(fd int) (err error) {\n"
+        '\tf := os.NewFile(uintptr(fd), fmt.Sprintf("fd@%d", fd))\n'
+        "\tlistener, err := net.FileListener(f)\n"
+        "\tif err != nil {\n"
+        "\t\treturn\n"
+        "\t}\n"
+        "\treturn engine.RunListener(listener)\n"
+        "}\n"
+    )
+    diff = (
+        "--- gin.go ---\n"
+        "@@ -1,7 +1,6 @@\n"
+        " func (engine *Engine) RunFd(fd int) (err error) {\n"
+        '\tf := os.NewFile(uintptr(fd), fmt.Sprintf("fd@%d", fd))\n'
+        "-\tdefer f.Close()\n"
+        "\tlistener, err := net.FileListener(f)\n"
+        "\tif err != nil {\n"
+        "\t\treturn\n"
+        "\t}\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"gin.go": source}, "")
+
+    assert len(findings) == 1
+    assert "leaks" in findings[0]["issue"]
+    assert findings[0]["file"] == "gin.go"
+
+
+def test_semantic_checker_does_not_flag_a_close_moved_within_the_same_hunk():
+    source = (
+        "func run(fd int) error {\n"
+        "\tf := os.NewFile(uintptr(fd), \"fd\")\n"
+        "\tlistener, err := net.FileListener(f)\n"
+        "\tf.Close()\n"
+        "\treturn err\n"
+        "}\n"
+    )
+    diff = (
+        "--- gin.go ---\n"
+        "@@ -1,5 +1,5 @@\n"
+        " func run(fd int) error {\n"
+        '\tf := os.NewFile(uintptr(fd), "fd")\n'
+        "-\tdefer f.Close()\n"
+        "\tlistener, err := net.FileListener(f)\n"
+        "+\tf.Close()\n"
+        "\treturn err\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"gin.go": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_finds_copy_replaced_with_alias():
+    """Real shape: spf13/cobra#2257 (benchmark case 009) - a defensive
+    copy of args replaced with a bare re-slice, letting a later append
+    write into the caller's original backing array (ultimately os.Args)."""
+    source = (
+        "func getCompletions(args []string) {\n"
+        "\ttrimmedArgs := args[:len(args)-1]\n"
+        "\tfinalArgs := append(trimmedArgs, \"--\")\n"
+        "}\n"
+    )
+    diff = (
+        "--- completions.go ---\n"
+        "@@ -1,4 +1,3 @@\n"
+        " func getCompletions(args []string) {\n"
+        "-\ttrimmedArgs := make([]string, len(args)-1)\n"
+        "-\tcopy(trimmedArgs, args[:len(args)-1])\n"
+        "+\ttrimmedArgs := args[:len(args)-1]\n"
+        "\tfinalArgs := append(trimmedArgs, \"--\")\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"completions.go": source}, "")
+
+    assert len(findings) == 1
+    assert "defensive copy" in findings[0]["issue"]
+
+
+def test_semantic_checker_does_not_flag_a_copy_that_survives_as_a_copy():
+    source = (
+        "func getCompletions(args []string) {\n"
+        "\ttrimmedArgs := make([]string, len(args)-1)\n"
+        "\tcopy(trimmedArgs, args[:len(args)-1])\n"
+        "}\n"
+    )
+    diff = (
+        "--- completions.go ---\n"
+        "@@ -1,3 +1,3 @@\n"
+        " func getCompletions(args []string) {\n"
+        "-\ttrimmedArgs := make([]string, len(args))\n"
+        "-\tcopy(trimmedArgs, args)\n"
+        "+\ttrimmedArgs := make([]string, len(args)-1)\n"
+        "+\tcopy(trimmedArgs, args[:len(args)-1])\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"completions.go": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_runs_hunk_only_checks_with_no_referenced_symbol_context():
+    """Resource-leak and copy-to-alias detection need only the diff and the
+    current file - referenced_symbol_context is optional evidence for the
+    other check family, not a precondition for these two. A real corpus
+    run found a resolvable referenced symbol in only 6 of 22 cases, so
+    gating every check behind it would skip these on most real diffs."""
+    source = (
+        "func run(fd int) error {\n"
+        '\tf := os.NewFile(uintptr(fd), "fd")\n'
+        "\treturn nil\n"
+        "}\n"
+    )
+    diff = (
+        "--- gin.go ---\n"
+        "@@ -1,3 +1,2 @@\n"
+        " func run(fd int) error {\n"
+        '\tf := os.NewFile(uintptr(fd), "fd")\n'
+        "-\tdefer f.Close()\n"
+        "\treturn nil\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"gin.go": source}, "")
+
+    assert len(findings) == 1
+
+
+@patch("scan_worker.flash_review.writing_adapter_for")
+def test_review_diff_keeps_deterministic_semantic_finding_when_model_is_silent(mock_adapter_class):
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = "[]"
+    mock_adapter_class.return_value = mock_adapter
+
+    findings = review_diff(
+        "--- caller.py ---\n@@ -1,2 +1,1 @@\n-working = list(raw)\n+result = op_two(raw)",
+        referenced_symbol_context=(
+            "--- referenced definition (not part of this diff): callee.py:op_two ---\nitems.sort()"
+        ),
+        file_contents={"caller.py": "result = op_two(raw)"},
+    )
+
+    assert len(findings) == 1
+    assert "defensive copy" in findings[0]["issue"]
+
+
+@patch("scan_worker.flash_review.writing_adapter_for")
+def test_review_diff_labels_pr_context_as_untrusted_and_includes_it(mock_adapter_class):
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = "[]"
+    mock_adapter_class.return_value = mock_adapter
+
+    review_diff(
+        "--- a.py ---\n@@ -1,1 +1,1 @@\n+thing",
+        pr_context="--- pull request context (author-provided, untrusted) ---\ntitle: Fix it",
+    )
+
+    user_prompt = mock_adapter.simple_completion.call_args[0][1]
+    assert "author-provided, untrusted" in user_prompt
+    assert "title: Fix it" in user_prompt
+
+
 def test_build_referenced_symbol_context_skips_symbols_not_referenced_in_diff():
     evidence = _evidence_with_two_modules()
     diff_text = "--- dashboard.py ---\n@@ -1,1 +1,1 @@\n+something_unrelated()\n"
@@ -711,6 +1197,14 @@ def test_system_prompt_instructs_model_not_to_guess_about_unresolved_symbols():
     normalized = " ".join(FLASH_REVIEW_SYSTEM_PROMPT.lower().split())
     assert "referenced definition" in normalized
     assert "do not guess" in normalized or "never guess" in normalized
+
+
+def test_system_prompt_requires_changed_behavior_comparison_before_reporting():
+    normalized = " ".join(FLASH_REVIEW_SYSTEM_PROMPT.lower().split())
+    assert "identify what behavior changed" in normalized
+    assert "trace every changed call" in normalized
+    assert "compare the old and new control/data flow" in normalized
+    assert "do not report unused code" in normalized
 
 
 def test_system_prompt_warns_about_host_language_escaping_in_generated_source():
@@ -948,3 +1442,217 @@ def test_validate_findings_still_rejects_a_citation_far_from_any_hunk():
     finding = {"file": "a.py", "line": 900, "issue": "unrelated claim"}
 
     assert _validate_findings([finding], diff_text) == []
+
+
+def test_semantic_checker_finds_a_removed_bounds_clamp():
+    """Real shape: axios#6807 (benchmark case 005) - `Math.max(0, total !=
+    null ? Math.min(rawLoaded, total) : rawLoaded)` lost its outer
+    Math.max(0, ...), letting a computed byte count go negative."""
+    source = (
+        "function reducer(e) {\n"
+        "  const loaded = total != null ? Math.min(rawLoaded, total) : rawLoaded;\n"
+        "  return loaded;\n"
+        "}\n"
+    )
+    diff = (
+        "--- progressEventReducer.js ---\n"
+        "@@ -1,3 +1,3 @@\n"
+        " function reducer(e) {\n"
+        "-  const loaded = Math.max(0, total != null ? Math.min(rawLoaded, total) : rawLoaded);\n"
+        "+  const loaded = total != null ? Math.min(rawLoaded, total) : rawLoaded;\n"
+        "   return loaded;\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"progressEventReducer.js": source}, "")
+
+    assert len(findings) == 1
+    assert "clamped to a bound" in findings[0]["issue"]
+
+
+def test_semantic_checker_does_not_flag_a_clamp_that_only_moved_within_the_hunk():
+    source = (
+        "function reducer(e) {\n"
+        "  const raw = total != null ? Math.min(rawLoaded, total) : rawLoaded;\n"
+        "  const loaded = Math.max(0, raw);\n"
+        "  return loaded;\n"
+        "}\n"
+    )
+    diff = (
+        "--- progressEventReducer.js ---\n"
+        "@@ -1,3 +1,4 @@\n"
+        " function reducer(e) {\n"
+        "-  const loaded = Math.max(0, total != null ? Math.min(rawLoaded, total) : rawLoaded);\n"
+        "+  const raw = total != null ? Math.min(rawLoaded, total) : rawLoaded;\n"
+        "+  const loaded = Math.max(0, raw);\n"
+        "   return loaded;\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"progressEventReducer.js": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_finds_an_off_by_one_loop_bound():
+    """Real shape: apache/commons-lang#1247 (benchmark case 017) - a
+    newly-added getLast() iterates `i <= array.length` and indexes
+    array[i], reading one element past the end on the last pass."""
+    source = (
+        "public static <T> T getLast(final T[] array) {\n"
+        "    T last = null;\n"
+        "    for (int i = 0; i <= array.length; i++) {\n"
+        "        last = array[i];\n"
+        "    }\n"
+        "    return last;\n"
+        "}\n"
+    )
+    diff = (
+        "--- ArrayUtils.java ---\n"
+        "@@ -1,6 +1,7 @@\n"
+        " public static <T> T getLast(final T[] array) {\n"
+        "+    T last = null;\n"
+        "+    for (int i = 0; i <= array.length; i++) {\n"
+        "+        last = array[i];\n"
+        "+    }\n"
+        "+    return last;\n"
+        " }\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"ArrayUtils.java": source}, "")
+
+    assert len(findings) == 1
+    assert "one past the end" in findings[0]["issue"]
+
+
+def test_semantic_checker_finds_an_off_by_one_loop_bound_with_gos_len_call():
+    """Same pattern, Go's function-call len() syntax rather than a
+    .length/.size() property - proves this isn't hardcoded to one
+    language's collection-length syntax."""
+    source = (
+        "func lastOf(items []string) string {\n"
+        "\tvar last string\n"
+        "\tfor i := 0; i <= len(items); i++ {\n"
+        "\t\tlast = items[i]\n"
+        "\t}\n"
+        "\treturn last\n"
+        "}\n"
+    )
+    diff = (
+        "--- last.go ---\n"
+        "@@ -1,6 +1,7 @@\n"
+        " func lastOf(items []string) string {\n"
+        "+\tvar last string\n"
+        "+\tfor i := 0; i <= len(items); i++ {\n"
+        "+\t\tlast = items[i]\n"
+        "+\t}\n"
+        "+\treturn last\n"
+        " }\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"last.go": source}, "")
+
+    assert len(findings) == 1
+    assert "one past the end" in findings[0]["issue"]
+
+
+def test_semantic_checker_does_not_flag_a_correctly_bounded_loop():
+    source = (
+        "public static <T> T getLast(final T[] array) {\n"
+        "    T last = null;\n"
+        "    for (int i = 0; i < array.length; i++) {\n"
+        "        last = array[i];\n"
+        "    }\n"
+        "    return last;\n"
+        "}\n"
+    )
+    diff = (
+        "--- ArrayUtils.java ---\n"
+        "@@ -1,6 +1,7 @@\n"
+        " public static <T> T getLast(final T[] array) {\n"
+        "+    T last = null;\n"
+        "+    for (int i = 0; i < array.length; i++) {\n"
+        "+        last = array[i];\n"
+        "+    }\n"
+        "+    return last;\n"
+        " }\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"ArrayUtils.java": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_an_off_by_one_shaped_loop_that_indexes_something_else():
+    """The <= bound alone isn't enough evidence - it must actually index
+    the same collection it's bounded against, or this is just a loop that
+    happens to run one extra time on purpose (e.g. an inclusive range)."""
+    source = (
+        "def process(items, other):\n"
+        "    for i in range(0, len(items) + 1):\n"
+        "        touch(other[0])\n"
+    )
+    diff = (
+        "--- process.py ---\n"
+        "@@ -1,2 +1,3 @@\n"
+        " def process(items, other):\n"
+        "+    for i in range(0, len(items) + 1):\n"
+        "+        touch(other[0])\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"process.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_finds_sql_built_by_string_concatenation():
+    """Real shape: this project's own PR-review benchmark case 016
+    (flask's build_user_lookup_query, hand-injected for the corpus) -
+    a query string built by concatenating a variable directly in."""
+    source = (
+        "def build_user_lookup_query(username):\n"
+        "    return \"SELECT id, username, email FROM users WHERE username = '\" + username + \"'\"\n"
+    )
+    diff = (
+        "--- helpers.py ---\n"
+        "@@ -1,1 +1,2 @@\n"
+        " def build_user_lookup_query(username):\n"
+        "+    return \"SELECT id, username, email FROM users WHERE username = '\" + username + \"'\"\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"helpers.py": source}, "")
+
+    assert len(findings) == 1
+    assert "SQL-injection" in findings[0]["issue"]
+
+
+def test_semantic_checker_does_not_flag_a_parameterized_query():
+    source = (
+        "def build_user_lookup_query(username):\n"
+        "    return \"SELECT id, username, email FROM users WHERE username = %s\", (username,)\n"
+    )
+    diff = (
+        "--- helpers.py ---\n"
+        "@@ -1,1 +1,2 @@\n"
+        " def build_user_lookup_query(username):\n"
+        "+    return \"SELECT id, username, email FROM users WHERE username = %s\", (username,)\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"helpers.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_ordinary_english_using_sql_keywords():
+    """"select" and "update" are also plain English words - a single
+    keyword plus a nearby + must not be enough evidence on its own, or
+    this fires on ordinary log/UI strings that happen to use them."""
+    source = 'def notify(name):\n    log("Update your settings, " + name + "!")\n'
+    diff = (
+        "--- notify.py ---\n"
+        "@@ -1,1 +1,2 @@\n"
+        " def notify(name):\n"
+        '+    log("Update your settings, " + name + "!")\n'
+    )
+
+    findings = find_semantic_regressions(diff, {"notify.py": source}, "")
+
+    assert findings == []
