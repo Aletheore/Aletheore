@@ -800,7 +800,24 @@ EMBED_BATCH_SIZE = 200
 # from raw per-request compute time), which should allow raising this
 # again with real headroom once deployed and measured, rather than
 # guessing forward from an isolated single-request number a second time.
-HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "60000"))
+#
+# Raised to 100,000 on exactly that real evidence, not another
+# extrapolation. Timed real batches of known token count (llama.cpp's own
+# tokenizer, not a char-count guess) directly against jina-embed with the
+# #267 multi-instance change deployed: 14,897 tokens/20.18s, 29,681/35.28s,
+# 44,419/60.10s - the last one lands almost exactly on the 60s ceiling in
+# isolation, with zero queueing. 30,000 tokens (35.28s, 41% margin) is the
+# real safe target this cap should protect. Converting back to characters
+# uses the more conservative (token-dense) ratio measured across corpora -
+# thrift's 3.89 chars/token, not flask's safer 4.08 - so a token-dense
+# corpus doesn't silently exceed the real margin a char cap can't see:
+# 30,000 tokens / 3.89 chars-per-token =~ 116,700 chars, rounded down to
+# 100,000 for headroom. This is still a char cap, not the token-count-based
+# batching this comment has called for since #262 - true token-based
+# batching needs the CLI to tokenize client-side, which means bundling a
+# tokenizer (or the model itself) as a new dependency, scoped as separate,
+# larger follow-up work, not folded into this recalibration.
+HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "100000"))
 
 
 def _hosted_batches(texts: list[str], batch_size: int) -> list[tuple[int, int]]:
