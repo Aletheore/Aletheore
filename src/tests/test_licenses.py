@@ -99,14 +99,65 @@ def test_detect_repo_license_from_package_json(tmp_path):
     assert "package.json" in result["detected_from"]
 
 
+# The real, verbatim opening of the Apache License 2.0 (as published at
+# apache.org/licenses/LICENSE-2.0.txt) - not a hand-typed guess at what an
+# Apache license file looks like. This used to be read live from this
+# repo's own LICENSE file, but that file is PolyForm Noncommercial as of
+# this project's own license change; embedding the real text here keeps the
+# test's original intent (verify against genuine license text) without
+# coupling a dependency-license-detection test to this repo's own license.
+_REAL_APACHE_2_0_TEXT = """\
+Apache License
+Version 2.0, January 2004
+http://www.apache.org/licenses/
+
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+1. Definitions.
+
+"License" shall mean the terms and conditions for use, reproduction,
+and distribution as defined by Sections 1 through 9 of this document.
+
+"Licensor" shall mean the copyright owner or entity authorized by
+the copyright owner that is granting the License.
+
+"Legal Entity" shall mean the union of the acting entity and all
+other entities that control, are controlled by, or are under common
+control with that entity. For the purposes of this definition,
+"control" means (i) the power, direct or indirect, to cause the
+direction or management of such entity, whether by contract or
+otherwise, or (ii) ownership of fifty percent (50%) or more of the
+outstanding shares, or (iii) beneficial ownership of such entity.
+
+"You" (or "Your") shall mean an individual or Legal Entity
+exercising permissions granted by this License.
+
+"Source" form shall mean the preferred form for making modifications,
+including but not limited to software source code, documentation
+source, and configuration files.
+
+"Object" form shall mean any form resulting from mechanical
+transformation or translation of a Source form, including but
+not limited to compiled object code, generated documentation,
+and conversions to other media types.
+
+"Work" shall mean the work of authorship, whether in Source or
+Object form, made available under the License, as indicated by a
+copyright notice that is included in or attached to the work
+(an example is provided in the Appendix below).
+
+"Derivative Works" shall mean any work, whether in Source or Object
+form, that is based on (or derived from) the Work and for which the
+editorial revisions, annotations, elaborations, or other modifications
+represent, as a whole, an original work of authorship. For the purposes
+of this License, Derivative Works shall not include works that remain
+separable from, or merely link (or bind by nam"""
+
+
 def test_detect_repo_license_from_real_apache_license_file_text(tmp_path):
-    # The exact real LICENSE file already committed at this repo's own root -
-    # verifying against the actual file content, not a hand-typed guess at what
-    # an Apache license file looks like.
-    real_license = Path(__file__).resolve().parents[2] / "LICENSE"
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "LICENSE").write_text(real_license.read_text(encoding="utf-8")[:2000])
+    (repo / "LICENSE").write_text(_REAL_APACHE_2_0_TEXT)
 
     result = detect_repo_license(repo)
 

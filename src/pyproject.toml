@@ -3,7 +3,7 @@ name = "aletheore"
 version = "0.8.13"
 description = "Evidence-grounded repository audit CLI: deterministic scanner, MCP server, live dashboard, and a GitHub Action that posts PR diffs."
 readme = "README.md"
-license = "Apache-2.0"
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Arihant Kaul", email = "arihantkaul@outlook.com" }]
 requires-python = ">=3.11"
