@@ -21,6 +21,18 @@ file is the history; that one is the current state.
   per-token timing evidence measured directly against `jina-embed` post-multi-instance (#267, 2
   instances): 88,859 tokens took 124.70s, close to the new ceiling rather than an untested
   extrapolation past it.
+- **`/v1/embeddings` now caps concurrent hosted-embed requests, not just requests per hour.**
+  The existing rate limiter throttled request *count per window*, which did nothing about several
+  requests landing on `jina-embed` at the same moment - it runs `JINA_EMBED_INSTANCES=2`, each
+  single-threaded, so a third concurrent request just queues behind a lock until one frees up,
+  inside whatever's left of the 120s timeout above. A Redis sorted-set semaphore now admits at
+  most `MAX_CONCURRENT_HOSTED_EMBED_REQUESTS` (default 2, matched to `JINA_EMBED_INSTANCES`) at
+  once, refusing the rest with 429 and a short `Retry-After` (3s, not the rate limiter's hour) -
+  self-healing against a crashed holder via a TTL slightly above the 120s request timeout, so a
+  process that dies mid-request leaks its slot for at most that long, never permanently. The CLI's
+  `embed_texts_hosted` now retries on 429 (bounded, capped sleep) before falling back to local
+  embeddings or failing an in-progress index build, so the common case - a momentary capacity blip
+  under concurrent load - costs a short wait instead of degrading the result.
 
 ## 2026-08-16
 

@@ -2,6 +2,7 @@ import hashlib
 import os
 import re
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -614,6 +615,21 @@ def _repo_id(repo_path: Path) -> str:
     return hashlib.sha256(str(repo_path.resolve()).encode("utf-8")).hexdigest()[:16]
 
 
+# A 429 from /v1/embeddings means one of two different things: the hourly
+# per-installation quota (Retry-After in the thousands of seconds) or
+# app-server's concurrency cap on jina-embed momentarily saturated
+# (Retry-After a few seconds - see embeddings_api's
+# HOSTED_EMBED_CONCURRENCY_RETRY_AFTER_SECONDS). embed_texts_hosted can't
+# tell which from the status code alone, so it retries a bounded number of
+# times with a capped sleep either way: cheap in the quota case (a few short
+# waits before falling through to the existing terminal behavior), and turns
+# the common case - a momentary capacity blip under concurrent load - into a
+# short wait instead of silently dropping to local embeddings or losing an
+# in-progress index build (_embed_in_batches' fallback is all-or-nothing).
+_HOSTED_EMBED_429_RETRY_ATTEMPTS = 3
+_HOSTED_EMBED_429_MAX_SLEEP_SECONDS = 10.0
+
+
 def embed_texts_hosted(
     texts: list[str],
     token: str,
@@ -633,16 +649,27 @@ def embed_texts_hosted(
     body: dict = {"texts": texts}
     if repo_id:
         body["repo_id"] = repo_id
-    try:
-        response = client.post(
-            HOSTED_EMBEDDING_PATH,
-            json=body,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-    except httpx.HTTPError as exc:
-        raise HostedEmbeddingUnavailableError(
-            f"could not reach Aletheore's embedding service ({type(exc).__name__})"
-        ) from exc
+
+    for attempt in range(_HOSTED_EMBED_429_RETRY_ATTEMPTS + 1):
+        try:
+            response = client.post(
+                HOSTED_EMBEDDING_PATH,
+                json=body,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        except httpx.HTTPError as exc:
+            raise HostedEmbeddingUnavailableError(
+                f"could not reach Aletheore's embedding service ({type(exc).__name__})"
+            ) from exc
+
+        if response.status_code == 429 and attempt < _HOSTED_EMBED_429_RETRY_ATTEMPTS:
+            retry_after = min(
+                float(response.headers.get("Retry-After", _HOSTED_EMBED_429_MAX_SLEEP_SECONDS)),
+                _HOSTED_EMBED_429_MAX_SLEEP_SECONDS,
+            )
+            time.sleep(retry_after)
+            continue
+        break
 
     if response.status_code == 402:
         raise HostedEmbeddingUnavailableError(_detail_of(response))

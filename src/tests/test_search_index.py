@@ -1261,6 +1261,7 @@ def _hosted_response(status: int, payload: dict | None = None):
     response.json.return_value = payload or {}
     response.reason_phrase = "Error"
     response.text = str(payload)
+    response.headers = {}
     return response
 
 
@@ -1301,6 +1302,55 @@ def test_embed_texts_hosted_omits_repo_id_when_not_given():
     embed_texts_hosted(["chunk"], "tok", http_client=http)
 
     assert "repo_id" not in http.post.call_args.kwargs["json"]
+
+
+def test_embed_texts_hosted_retries_after_a_429_and_succeeds():
+    """A 429 here can be app-server's concurrency cap on jina-embed
+    momentarily saturated, not a hard failure - retrying should recover
+    silently rather than falling back to local embeddings or raising."""
+    http = MagicMock()
+    http.post.side_effect = [
+        _hosted_response(429, {"detail": "embedding service at capacity - retry shortly"}),
+        _hosted_response(200, {"vectors": [[0.1] * 1536]}),
+    ]
+
+    with patch("aletheore.search_index.time.sleep") as sleep:
+        vectors = embed_texts_hosted(["chunk"], "tok", http_client=http)
+
+    assert vectors == [[0.1] * 1536]
+    assert http.post.call_count == 2
+    sleep.assert_called_once()
+
+
+def test_embed_texts_hosted_gives_up_after_repeated_429s():
+    http = MagicMock()
+    http.post.return_value = _hosted_response(
+        429, {"detail": "embedding service at capacity - retry shortly"}
+    )
+
+    with patch("aletheore.search_index.time.sleep"):
+        with pytest.raises(HostedEmbeddingUnavailableError):
+            embed_texts_hosted(["chunk"], "tok", http_client=http)
+
+    # The initial attempt plus every retry, no more.
+    assert http.post.call_count == 1 + 3
+
+
+def test_embed_texts_hosted_caps_the_retry_sleep_below_a_large_retry_after():
+    """The hourly per-installation rate limit also returns 429 with a
+    Retry-After in the thousands of seconds - retrying must not actually
+    sleep anywhere near that long before giving up and falling through to
+    the existing terminal behavior."""
+    http = MagicMock()
+    response = _hosted_response(429, {"detail": "too many embedding requests"})
+    response.headers = {"Retry-After": "3600"}
+    http.post.return_value = response
+
+    with patch("aletheore.search_index.time.sleep") as sleep:
+        with pytest.raises(HostedEmbeddingUnavailableError):
+            embed_texts_hosted(["chunk"], "tok", http_client=http)
+
+    assert all(call.args[0] <= 10.0 for call in sleep.call_args_list)
 
 
 def test_embed_in_batches_forwards_repo_id_to_every_hosted_batch():
