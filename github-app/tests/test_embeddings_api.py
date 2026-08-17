@@ -96,7 +96,7 @@ async def test_embedding_route_uses_cached_jina_client_factory(pool):
 
     assert first.status_code == 200
     assert second.status_code == 200
-    jina_factory.assert_called_once_with(base_url="http://jina-embed:80", timeout=60.0)
+    jina_factory.assert_called_once_with(base_url="http://jina-embed:80", timeout=120.0)
     assert client.post.call_count == 2
 
 
