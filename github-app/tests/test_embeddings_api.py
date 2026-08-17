@@ -230,6 +230,70 @@ async def test_rate_limit_key_falls_back_to_installation_only_without_repo_id(po
 
 
 @pytest.mark.asyncio
+async def test_hosted_embed_concurrency_cap_returns_429_with_a_short_retry_after(pool):
+    """Distinct from the hourly rate limit's 429: jina-embed frees a slot in
+    low tens of seconds for a typical batch, not an hour, and the CLI's
+    retry loop (embed_texts_hosted) needs a short Retry-After to know it's
+    worth retrying rather than giving up."""
+    await _installation_with_token(pool, 9014, "air", "saturated-token")
+
+    with patch("app_server.embeddings_api.acquire_concurrency_slot", return_value=False):
+        response = await _post(pool, "saturated-token", ["x"])
+
+    assert response.status_code == 429
+    assert "capacity" in response.json()["detail"]
+    assert int(response.headers["retry-after"]) < 60
+
+
+@pytest.mark.asyncio
+async def test_hosted_embed_releases_its_concurrency_slot_after_a_successful_call(pool):
+    await _installation_with_token(pool, 9015, "air", "release-token")
+
+    with patch("app_server.embeddings_api.get_jina_client", return_value=_fake_jina()), \
+         patch("app_server.embeddings_api.acquire_concurrency_slot", return_value=True), \
+         patch("app_server.embeddings_api.release_concurrency_slot") as release:
+        response = await _post(pool, "release-token", ["x"])
+
+    assert response.status_code == 200
+    release.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_hosted_embed_releases_its_concurrency_slot_even_when_jina_fails(pool):
+    """The slot must not leak just because the upstream call failed - the
+    finally block is what makes this safe, not the happy path."""
+    await _installation_with_token(pool, 9016, "air", "release-on-fail-token")
+    failing = MagicMock()
+    failing.post.side_effect = RuntimeError("boom")
+
+    with patch("app_server.embeddings_api.get_jina_client", return_value=failing), \
+         patch("app_server.embeddings_api.acquire_concurrency_slot", return_value=True), \
+         patch("app_server.embeddings_api.release_concurrency_slot") as release:
+        response = await _post(pool, "release-on-fail-token", ["x"])
+
+    assert response.status_code == 502
+    release.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_hosted_embed_concurrency_check_fails_open_on_redis_error(pool):
+    """Matches the rate limiter's own fail-open policy: jina-embed's
+    per-instance locks are the hard backstop against real overload, this is
+    only the soft admission control - a Redis outage should cost that
+    smoothing, not availability."""
+    await _installation_with_token(pool, 9017, "air", "redis-down-token")
+
+    with patch("app_server.embeddings_api.get_jina_client", return_value=_fake_jina()), \
+         patch(
+             "app_server.embeddings_api.acquire_concurrency_slot",
+             side_effect=RuntimeError("redis unreachable"),
+         ):
+        response = await _post(pool, "redis-down-token", ["x"])
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_one_repo_being_rate_limited_does_not_block_another_repo_on_the_same_token(pool):
     """The actual point of per-repo keying: one repo's rebase-heavy burst
     hitting its own limit must not starve a second repo watched on the same

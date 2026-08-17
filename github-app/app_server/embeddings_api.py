@@ -22,6 +22,7 @@ import functools
 import hashlib
 import logging
 import os
+import uuid
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -30,7 +31,7 @@ from pydantic import BaseModel, Field
 from app_server.db import (
     get_installation_by_token_hash,
 )
-from app_server.rate_limit import is_rate_limited
+from app_server.rate_limit import acquire_concurrency_slot, is_rate_limited, release_concurrency_slot
 from app_server.redis_client import get_redis_client
 
 embeddings_router = APIRouter()
@@ -63,6 +64,35 @@ MAX_CHARS_PER_TEXT = 8_000
 # stops a caller from turning one token into unbounded CPU-bound upstream volume.
 RATE_LIMIT_REQUESTS = 2000
 RATE_LIMIT_WINDOW_SECONDS = 3600
+
+# The rate limiter above throttles *request count per hour*, which does
+# nothing about several requests landing on jina-embed at the same moment -
+# it has JINA_EMBED_INSTANCES=2 (docker-compose.yml), each single-threaded,
+# so a third concurrent request just queues behind a lock until one frees
+# up, inside whatever's left of get_jina_client's 120s budget. This caps how
+# many hosted-embed calls this process will admit to jina-embed at once;
+# keep it in sync with JINA_EMBED_INSTANCES by hand if that ever changes -
+# admitting more than jina-embed can actually run concurrently just moves
+# the queueing from here to there, which is exactly what this exists to
+# avoid.
+MAX_CONCURRENT_HOSTED_EMBED_REQUESTS = int(
+    os.environ.get("MAX_CONCURRENT_HOSTED_EMBED_REQUESTS", "2")
+)
+
+# Comfortably above get_jina_client's 120s request timeout, so a slot for a
+# request that's still genuinely in flight is never mistaken for a crashed
+# holder's leaked slot and evicted out from under it.
+HOSTED_EMBED_CONCURRENCY_SLOT_TTL_SECONDS = 130
+
+# Short on purpose: jina-embed frees a slot in low tens of seconds for a
+# typical batch (real measurement: 59,903 tokens in 83.24s), not the hour
+# RATE_LIMIT_WINDOW_SECONDS implies for the request-count limiter above.
+# The CLI's own retry loop (embed_texts_hosted) honours this and retries a
+# bounded number of times rather than treating a capacity 429 the same as a
+# hard failure.
+HOSTED_EMBED_CONCURRENCY_RETRY_AFTER_SECONDS = 3
+
+_HOSTED_EMBED_CONCURRENCY_KEY = "concurrency:hosted-embed"
 
 # Bucket key length, not a content limit: repo_id is a 16-char hex prefix of
 # a sha256 (see aletheore.search_index._repo_id) client-side, but the field
@@ -174,6 +204,30 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
             headers={"Retry-After": str(RATE_LIMIT_WINDOW_SECONDS)},
         )
 
+    slot_id = uuid.uuid4().hex
+    try:
+        admitted = acquire_concurrency_slot(
+            get_redis_client(),
+            _HOSTED_EMBED_CONCURRENCY_KEY,
+            MAX_CONCURRENT_HOSTED_EMBED_REQUESTS,
+            slot_id,
+            HOSTED_EMBED_CONCURRENCY_SLOT_TTL_SECONDS,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Fails open like the rate limit check above: jina-embed's own
+        # per-instance locks are the hard backstop against real overload,
+        # this is only the soft admission control that keeps requests from
+        # piling up behind them. A Redis outage should cost that
+        # smoothing, not availability.
+        logger.warning("hosted embed concurrency check failed (%s); allowing request", exc)
+        admitted = True
+    if not admitted:
+        raise HTTPException(
+            status_code=429,
+            detail="embedding service at capacity - retry shortly",
+            headers={"Retry-After": str(HOSTED_EMBED_CONCURRENCY_RETRY_AFTER_SECONDS)},
+        )
+
     client = get_jina_client()
     try:
         response = await asyncio.to_thread(
@@ -194,6 +248,13 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
             type(exc).__name__,
         )
         raise HTTPException(status_code=502, detail="embedding provider unavailable") from exc
+    finally:
+        try:
+            release_concurrency_slot(get_redis_client(), _HOSTED_EMBED_CONCURRENCY_KEY, slot_id)
+        except Exception as exc:  # noqa: BLE001
+            # Not fatal: the slot ages out via HOSTED_EMBED_CONCURRENCY_SLOT_TTL_SECONDS
+            # on its own if this can't reach Redis either.
+            logger.warning("failed to release hosted embed concurrency slot (%s)", exc)
 
     return {
         "model": EMBEDDING_MODEL,
