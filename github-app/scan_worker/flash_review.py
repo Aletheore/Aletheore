@@ -235,9 +235,9 @@ def build_dependency_impact_context(evidence: dict | None, changed_files: list[s
     return "--- deterministic dependency impact context (raw graph facts, not conclusions) ---\n" + "\n".join(lines)
 
 
-MAX_BLAST_RADIUS_SYMBOLS = 5
-MAX_BLAST_RADIUS_CANDIDATES = 20
-MAX_BLAST_RADIUS_CALLERS_SHOWN = 5
+MAX_BLAST_RADIUS_SYMBOLS = 10
+MAX_BLAST_RADIUS_CANDIDATES = 40
+MAX_BLAST_RADIUS_CALLERS_SHOWN = 10
 
 def build_blast_radius_context(
     evidence: dict | None,
@@ -323,8 +323,8 @@ def build_blast_radius_context(
     )
 
 
-MAX_REFERENCED_SYMBOLS = 8
-MAX_REFERENCED_SYMBOL_BYTES = 20_000
+MAX_REFERENCED_SYMBOLS = 16
+MAX_REFERENCED_SYMBOL_BYTES = 40_000
 
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 

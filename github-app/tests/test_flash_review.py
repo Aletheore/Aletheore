@@ -1809,9 +1809,9 @@ def test_build_blast_radius_context_does_not_flag_untouched_symbol():
 def test_build_blast_radius_context_caps_candidates_checked():
     """An imported_by list longer than MAX_BLAST_RADIUS_CANDIDATES ->
     fetch_file_content should never be called for anything past the cap."""
-    from scan_worker.flash_review import build_blast_radius_context
+    from scan_worker.flash_review import MAX_BLAST_RADIUS_CANDIDATES, build_blast_radius_context
 
-    imported_by_list = [f"caller_{i}.py" for i in range(30)]
+    imported_by_list = [f"caller_{i}.py" for i in range(MAX_BLAST_RADIUS_CANDIDATES + 10)]
     evidence = {
         "repository": {
             "modules": [
@@ -1835,13 +1835,13 @@ def test_build_blast_radius_context_caps_candidates_checked():
 
     def fake_fetch_file_content(candidate_path: str) -> str | None:
         call_count[0] += 1
-        if call_count[0] <= 20:
+        if call_count[0] <= MAX_BLAST_RADIUS_CANDIDATES:
             return f"def call_{call_count[0]}():\n    handler()\n"
         return None
 
     context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
     assert "is called from:" in context
-    assert call_count[0] <= 20
+    assert call_count[0] <= MAX_BLAST_RADIUS_CANDIDATES
 
 
 def test_build_blast_radius_context_caller_using_different_symbol_not_flagged():
