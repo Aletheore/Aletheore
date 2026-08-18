@@ -28,6 +28,20 @@ file is the history; that one is the current state.
   into `node_modules`/`.git`/`vendor` on every scan and discarding what they found. Replaced with
   one shared pruned `os.walk`; verified byte-identical output before and after, ~7.75x faster on
   this repo.
+- **Ops-monitor alerts re-fired on every ~3-minute check with no cooldown.** A month-old,
+  since-fixed health-check-sweep bug (`c34aa6c`) had left 186 failed jobs sitting in the "scans"
+  queue's `FailedJobRegistry` that nothing ever cleared — the alert had been silently re-firing on
+  that same stale condition ever since, 918 emails accumulated in Spam before this was caught.
+  Fixed with a Redis cooldown centralized in `_send_ops_alert` itself, so every ops-alert source
+  gets it automatically. Cleared the 349 stale failed jobs on production after verifying each
+  failure category first — some already fixed by this same deploy, the rest resolved
+  historical/external incidents (GitHub's own API outage, not a code bug).
+- **Raised Flash Review's context-depth caps for the paid tier.** Doubled eight constants governing
+  how much of a PR's changed-file content, referenced definitions, and blast-radius symbols get
+  analyzed — real headroom was there and unused (current worst case ~56,000 tokens against Luna's
+  1,050,000-token window, pricing flat to 272,000). One real corpus case
+  (`swebench-django-14434`) had its changed file entirely excluded from review under the old
+  per-file byte cap; it's included now.
 
 ## 2026-08-17
 
