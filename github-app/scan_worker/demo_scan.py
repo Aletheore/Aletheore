@@ -96,12 +96,16 @@ def _summarize_for_public_display(evidence: dict) -> dict:
 
     return {
         "languages": [
-            {"name": lang.get("name"), "lines": lang.get("lines")} for lang in languages[:MAX_LISTED_ITEMS]
+            {"name": lang.get("name"), "lines": lang.get("loc")} for lang in languages[:MAX_LISTED_ITEMS]
         ],
         "dead_code": {
             "unreachable_module_count": len(unreachable_modules),
             "unused_dependency_count": len(unused_dependencies),
-            "sample": unreachable_modules[:MAX_LISTED_ITEMS],
+            # unreachable_modules entries are {"path": ..., "reason": ...} dicts
+            # (dead_code.py) - the live-demo frontend renders each sample item as
+            # a plain path string, so extract that field rather than passing the
+            # dict through (it would otherwise render as "[object Object]").
+            "sample": [m.get("path") for m in unreachable_modules[:MAX_LISTED_ITEMS]],
         },
         "secrets": {
             "finding_count": len(secrets_findings),

@@ -45,9 +45,12 @@ def _fake_urlopen_raising_http_error(status: int, reason: str):
 def _fake_evidence(**overrides) -> dict:
     base = {
         "repository": {
-            "languages": [{"name": "Python", "lines": 1000}],
+            "languages": [{"name": "Python", "loc": 1000}],
             "dead_code": {
-                "unreachable_modules": [f"module_{i}.py" for i in range(8)],
+                "unreachable_modules": [
+                    {"path": f"module_{i}.py", "reason": "no other module imports this file"}
+                    for i in range(8)
+                ],
                 "unused_dependencies": ["requests"],
             },
             "api_endpoints": {"endpoints": [{"path": "/a"}, {"path": "/b"}]},
@@ -82,6 +85,23 @@ def test_summarize_caps_sample_list_size_but_keeps_true_count():
     summary = _summarize_for_public_display(_fake_evidence())
     assert summary["dead_code"]["unreachable_module_count"] == 8
     assert len(summary["dead_code"]["sample"]) == 5
+
+
+def test_summarize_dead_code_sample_is_plain_path_strings():
+    # unreachable_modules entries are {"path": ..., "reason": ...} dicts
+    # (dead_code.py) - the sample must extract the path string, not pass
+    # the dict through, or it renders as "[object Object]" on the live
+    # demo page.
+    summary = _summarize_for_public_display(_fake_evidence())
+    assert summary["dead_code"]["sample"][0] == "module_0.py"
+    assert all(isinstance(path, str) for path in summary["dead_code"]["sample"])
+
+
+def test_summarize_language_lines_reads_the_real_loc_field():
+    # air.json's language entries use "loc", not "lines" - confirmed
+    # against a real scan output, not assumed.
+    summary = _summarize_for_public_display(_fake_evidence())
+    assert summary["languages"][0]["lines"] == 1000
 
 
 def test_summarize_handles_empty_evidence_gracefully():
