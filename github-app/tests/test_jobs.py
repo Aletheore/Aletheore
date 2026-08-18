@@ -4553,24 +4553,50 @@ def test_run_health_sweep_staleness_check_job_does_not_alert_when_no_data_yet(mo
 
 
 class _FakeRedis:
-    def __init__(self):
-        self.data = {}
+    """now_fn defaults to real time.time so existing callers of this fake
+    (none of which care about expiry) are unaffected; a test that does care
+    - see test_run_ops_monitor_job_does_not_repeat_alert_within_cooldown -
+    passes the same controllable time source it already uses to advance
+    jobs.time.time, so `ex=` expiry is real for that test rather than
+    silently ignored (which the old version of this fake did - `set`
+    dropped `ex` on the floor entirely, so a cooldown key could never
+    expire no matter how much simulated time passed)."""
+
+    def __init__(self, now_fn=time.time):
+        self.data = {}  # key -> (value, expire_at | None)
+        self._now_fn = now_fn
+
+    def _expire_if_due(self, key):
+        entry = self.data.get(key)
+        if entry is None:
+            return
+        _value, expire_at = entry
+        if expire_at is not None and self._now_fn() >= expire_at:
+            del self.data[key]
 
     def get(self, key):
-        return self.data.get(key)
+        self._expire_if_due(key)
+        entry = self.data.get(key)
+        return entry[0] if entry else None
 
     def set(self, key, value, ex=None):
-        self.data[key] = str(value)
+        expire_at = self._now_fn() + ex if ex is not None else None
+        self.data[key] = (str(value), expire_at)
 
     def delete(self, key):
         self.data.pop(key, None)
 
     def incr(self, key):
-        value = int(self.data.get(key, "0")) + 1
-        self.data[key] = str(value)
+        self._expire_if_due(key)
+        value = int(self.data.get(key, ("0", None))[0]) + 1
+        _prev_value, expire_at = self.data.get(key, ("0", None))
+        self.data[key] = (str(value), expire_at)
         return value
 
     def expire(self, key, seconds):
+        entry = self.data.get(key)
+        if entry is not None:
+            self.data[key] = (entry[0], self._now_fn() + seconds)
         return True
 
 
@@ -4582,7 +4608,7 @@ def test_run_ops_monitor_job_alerts_on_second_app_health_failure(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
     monkeypatch.setattr("scan_worker.jobs._fetch_app_health", lambda url: (False, "broken"))
     monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
-    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
     monkeypatch.setenv("ALETHEORE_APP_HEALTH_URL", "http://bad-health.local/healthz")
 
@@ -4611,7 +4637,7 @@ def test_run_ops_monitor_job_broken_app_health_sends_ops_email(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
     monkeypatch.setattr("scan_worker.jobs._fetch_app_health", lambda url: (False, "broken"))
     monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
-    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
     monkeypatch.setattr(
         error_alerts,
         "send_transactional_email",
@@ -4649,7 +4675,7 @@ def test_run_ops_monitor_job_alerts_when_queue_depth_stays_high(monkeypatch):
 
     monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
     monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
-    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs.Queue", FakeQueue)
     monkeypatch.setattr("scan_worker.jobs.FailedJobRegistry", FakeFailedRegistry)
     monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
@@ -4667,6 +4693,81 @@ def test_run_ops_monitor_job_alerts_when_queue_depth_stays_high(monkeypatch):
     assert len(alerts) == 1
     assert alerts[0][0][0] == "ops_monitor.queue_depth.scans"
     assert "scans queue depth=26" in alerts[0][0][2]
+
+
+def test_run_ops_monitor_job_does_not_repeat_alert_within_cooldown(monkeypatch):
+    """Real incident this guards against: a condition that crossed its
+    threshold once (a month-old, since-fixed failed-jobs count that was
+    never cleared from the registry) kept re-alerting on every ~3-minute
+    ops_monitor run indefinitely - 918 emails accumulated in production
+    before this was caught. A persisting condition must alert once, then
+    stay quiet until OPS_ALERT_COOLDOWN_SECONDS has passed, not on every
+    single check."""
+    from scan_worker import jobs
+    from scan_worker.jobs import (
+        OPS_ALERT_COOLDOWN_SECONDS,
+        OPS_THRESHOLD_DURATION_SECONDS,
+        run_ops_monitor_job,
+    )
+
+    t = 1000.0
+    redis_conn = _FakeRedis(now_fn=lambda: t)
+    alerts = []
+
+    class FakeQueue:
+        def __init__(self, name, connection):
+            self.name = name
+            self.count = 26 if name == "scans" else 0
+
+    class FakeFailedRegistry:
+        def __init__(self, queue):
+            self.count = 0
+
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
+    monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
+    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs.Queue", FakeQueue)
+    monkeypatch.setattr("scan_worker.jobs.FailedJobRegistry", FakeFailedRegistry)
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+    monkeypatch.setenv("ALETHEORE_OPS_QUEUE_DEPTH_THRESHOLD", "25")
+
+    monkeypatch.setattr(jobs.time, "time", lambda: t)
+    run_ops_monitor_job()
+    assert alerts == []  # condition just started, not yet past OPS_THRESHOLD_DURATION_SECONDS
+
+    alert_fired_at = 1000.0 + OPS_THRESHOLD_DURATION_SECONDS + 1
+    t = alert_fired_at
+    monkeypatch.setattr(jobs.time, "time", lambda: t)
+    run_ops_monitor_job()
+    assert len(alerts) == 1  # first alert, condition has now persisted past the duration threshold
+
+    # Condition is still present (queue depth still 26) and only a little
+    # time has passed - this is exactly the "every ~3 minutes" repeat-check
+    # scenario that caused the real incident. Must NOT alert again.
+    t = alert_fired_at + 180
+    monkeypatch.setattr(jobs.time, "time", lambda: t)
+    run_ops_monitor_job()
+    assert len(alerts) == 1
+
+    t = alert_fired_at + 360
+    monkeypatch.setattr(jobs.time, "time", lambda: t)
+    run_ops_monitor_job()
+    assert len(alerts) == 1
+
+    # Once the cooldown has genuinely elapsed (anchored to when it was
+    # actually set - alert_fired_at - not to whatever t happens to be now),
+    # a still-persisting condition should alert again as a "this is still
+    # ongoing" reminder, not stay silent forever. Must land before
+    # _check_threshold_duration's own first_seen state (set at t=1000,
+    # TTL OPS_THRESHOLD_DURATION_SECONDS*3=1800s, expires at t=2800) also
+    # expires - otherwise this test would exercise a second, different
+    # pre-existing behavior (first_seen resetting) instead of the cooldown
+    # clearing.
+    t = alert_fired_at + OPS_ALERT_COOLDOWN_SECONDS + 1
+    assert t < 1000.0 + 1800  # stay inside first_seen's own TTL window
+    monkeypatch.setattr(jobs.time, "time", lambda: t)
+    run_ops_monitor_job()
+    assert len(alerts) == 2
 
 
 def test_run_ops_monitor_job_alerts_when_backup_missing(monkeypatch, tmp_path):
