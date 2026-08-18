@@ -5,9 +5,9 @@
 <h3 align="center">Evidence-grounded repository intelligence</h3>
 
 <p align="center">
-  A deterministic scanner reads your repo and writes structured evidence — every downstream
-  feature (AI audit, PR bot, MCP server, dashboard) has to cite that evidence, or it doesn't
-  get to make the claim.
+  Code intelligence that has to show its work. A deterministic scanner reads your repo and
+  writes structured evidence — every downstream feature (AI audit, PR bot, MCP server,
+  dashboard) has to cite that evidence, or it doesn't get to make the claim.
 </p>
 
 <p align="center">
@@ -50,6 +50,10 @@ PHP, C, C++, and C#**.
   (Claude, OpenAI, Google, Mistral, xAI, or a local Ollama model) — your key, your cost, your
   choice — or skip the LLM step entirely and just use the deterministic evidence.
 - **1,600+ tests**, real CI, and a GitHub Action that dogfoods itself on every PR to this repo.
+- **Benchmarked, not just claimed.** [aletheore-benchmarks](https://github.com/Aletheore/aletheore-benchmarks)
+  is the public harness we test review quality against — real open-source PRs, blind LLM
+  judging, and a published methodology, comparing Aletheore's evidence-grounded context
+  against raw-diff and full-file-context baselines.
 
 ## What's actually shipped
 
@@ -82,15 +86,41 @@ PHP, C, C++, and C#**.
 Full command reference, MCP tool list, per-language import-resolution details, and
 configuration options: **[`src/README.md`](src/README.md)**.
 
+## Aletheore AIR (hosted GitHub App)
+
+Everything above is the free, local-first CLI (Aletheore Community). Installing the
+[Aletheore GitHub App](https://aletheore.com) adds a hosted layer on top of the same
+evidence — paid plans start at $29.99/mo for up to 5 team members:
+
+- **Automated PR review** — Flash reviews and managed audits comment directly on pull
+  requests, scoped to the changed hunks, citing file:line evidence. Blast-radius checks
+  trace a changed symbol to its real callers across the repo (or say plainly when no
+  caller could be confirmed, instead of guessing).
+- **AIRview** — an AI-generated, always-current architecture map of the repo, rebuilt
+  from the same dependency-graph evidence `scan` produces.
+- **AI-generated Docs** — per-symbol descriptions written straight from real source,
+  drafted as PRs land and backfilled for a repo's existing public API, always marked
+  as AI-generated rather than presented as hand-written.
+- **Production monitoring** — live endpoint reachability/latency checks mapped back to
+  the source handler that owns the route, with Slack/Teams alerts on state changes.
+- **Branch-protection checks** and team seat management.
+
+The GitHub App and dashboard code lives in `github-app/`; see its own
+[README](github-app/README.md) for deployment and operations details.
+
 ## Repository layout
 
 - `src/` — the actual, working CLI code (see its README for everything above in detail).
-- `github-app/` — the hosted GitHub App: FastAPI server, RQ workers, migrations.
+- `github-app/` — the hosted GitHub App: FastAPI server, RQ workers, migrations. See
+  [Aletheore AIR](#aletheore-air-hosted-github-app) above for what it does.
 - `website/` — the marketing site and live demo.
 - `docs/superpowers/` — design specs and implementation plans written during development.
 - `docs/operations/` — current operational baselines: incident response, data handling, SLOs,
   deployment verification, branch protection, support process.
 - `SECURITY.md` — vulnerability reporting and response targets.
+
+Related, separate repo: [aletheore-benchmarks](https://github.com/Aletheore/aletheore-benchmarks) —
+the public PR-review benchmark harness and published results.
 
 ## Licensing
 
