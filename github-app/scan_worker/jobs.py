@@ -2485,7 +2485,35 @@ def _fetch_app_health(url: str) -> tuple[bool, str]:
     return False, f"HTTP {response.status_code}: {response.text[:200]}"
 
 
-def _send_ops_alert(source: str, message: str, context: str) -> None:
+# Must stay comfortably under _check_threshold_duration's own state-key TTL
+# (OPS_THRESHOLD_DURATION_SECONDS * 3 = 1800s, never refreshed once set,
+# counted from the condition's original detection - not from when an
+# alert fires) - a cooldown too close to that window risks the underlying
+# "how long has this persisted" tracking expiring and resetting before the
+# cooldown clears, which would silently skip the next legitimate reminder
+# alert instead of sending it. 900s (15min) leaves real margin: the
+# earliest an alert (and so a cooldown) can start is
+# OPS_THRESHOLD_DURATION_SECONDS (600s) after first detection, so the
+# latest a cooldown started then could still clear before the 1800s
+# state-key TTL is 1800 - 600 = 1200s - 900s has real headroom under that.
+OPS_ALERT_COOLDOWN_SECONDS = 900
+
+
+def _send_ops_alert(redis_conn, source: str, message: str, context: str) -> None:
+    # Real incident: a condition that crossed its threshold once (e.g. a
+    # month-old, since-fixed failed-jobs count that was never cleared from
+    # the registry) kept re-alerting on every ~3-minute ops_monitor run
+    # indefinitely, with no way for it to ever go quiet on its own - 918
+    # emails accumulated in production before this was caught. Neither
+    # caller previously had any notion of "already alerted for this
+    # condition, and how recently" - this is the shared fix for both
+    # (_check_threshold_duration and _check_app_health), not a per-caller
+    # patch, so any future ops-alert source gets the same protection
+    # without having to remember to add it again.
+    cooldown_key = f"ops_monitor:alert_cooldown:{source}"
+    if redis_conn.get(cooldown_key) is not None:
+        return
+    _set_with_expiry(redis_conn, cooldown_key, "1", OPS_ALERT_COOLDOWN_SECONDS)
     send_error_alert(source, OpsMonitorError(message), context)
 
 
@@ -2503,6 +2531,7 @@ def _check_app_health(redis_conn, health_url: str) -> None:
         return
 
     _send_ops_alert(
+        redis_conn,
         "ops_monitor.app_health",
         f"app server health check failed {failures} consecutive times",
         f"url={health_url} detail={detail}",
@@ -2532,6 +2561,7 @@ def _check_threshold_duration(
         return
 
     _send_ops_alert(
+        redis_conn,
         source,
         f"{metric_name} has been above threshold for at least {OPS_THRESHOLD_DURATION_SECONDS}s",
         f"{metric_name}={current_value} threshold={threshold} first_seen={first_seen:.0f}",
@@ -2576,10 +2606,11 @@ def _latest_backup_age_seconds(backup_dir: Path, now: float) -> float | None:
     return now - newest
 
 
-def _check_backup_freshness(now: float) -> None:
+def _check_backup_freshness(redis_conn, now: float) -> None:
     backup_dir = Path(os.environ.get(OPS_BACKUP_DIR_ENV, OPS_DEFAULT_BACKUP_DIR))
     if not backup_dir.is_dir():
         _send_ops_alert(
+            redis_conn,
             "ops_monitor.backup_freshness",
             "PostgreSQL backup directory is not available",
             f"backup_dir={backup_dir}",
@@ -2589,6 +2620,7 @@ def _check_backup_freshness(now: float) -> None:
     age_seconds = _latest_backup_age_seconds(backup_dir, now)
     if age_seconds is None:
         _send_ops_alert(
+            redis_conn,
             "ops_monitor.backup_freshness",
             "no PostgreSQL backup dump found",
             f"backup_dir={backup_dir} stale_after={OPS_BACKUP_STALE_SECONDS}s",
@@ -2599,6 +2631,7 @@ def _check_backup_freshness(now: float) -> None:
         return
 
     _send_ops_alert(
+        redis_conn,
         "ops_monitor.backup_freshness",
         "latest PostgreSQL backup is stale",
         f"backup_dir={backup_dir} age_seconds={age_seconds:.0f} "
@@ -2619,7 +2652,7 @@ def run_ops_monitor_job() -> None:
         os.environ.get(OPS_APP_HEALTH_URL_ENV, OPS_DEFAULT_APP_HEALTH_URL),
     )
     _check_queue_alerts(redis_conn, now)
-    _check_backup_freshness(now)
+    _check_backup_freshness(redis_conn, now)
 
 
 # Each template function takes exactly one positional string arg
