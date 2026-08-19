@@ -1548,6 +1548,140 @@ def test_flash_review_job_routes_free_tier_to_free_tier_path(monkeypatch):
     assert cache_write_calls == []
 
 
+def test_flash_review_job_locks_the_free_tier_monthly_count_check(monkeypatch):
+    # Regression guard for a TOCTOU race: the paid branch reads its
+    # monthly-count cap inside installation_spend_lock (see the `else`
+    # branch a few lines below the free-tier one in jobs.py); the free-tier
+    # branch didn't, so two concurrent free-tier reviews on the same
+    # installation could both read "under cap" before either recorded an
+    # attempt. This only checks the lock is actually acquired around the
+    # check - the fix is the `with installation_spend_lock(...)` wrapper
+    # itself, not anything this test can observe about ordering under real
+    # concurrency (see test_model_tiers.py's own note on why that's hard to
+    # test directly for the sibling OpenAI-token-cap fix).
+    from contextlib import contextmanager
+
+    lock_calls = []
+
+    @contextmanager
+    def _tracking_spend_lock(*args, **kwargs):
+        lock_calls.append(args)
+        yield
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"}
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0
+    )
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _tracking_spend_lock)
+    # Short-circuit before the review body runs - this test only cares
+    # whether the cap check itself was locked, not the rest of the job.
+    monkeypatch.setattr("scan_worker.jobs._run_flash_review", lambda *a, **k: None)
+
+    from scan_worker.jobs import run_flash_review_job
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert len(lock_calls) >= 1
+
+
+def test_flash_review_job_skips_when_over_the_free_tier_monthly_cap(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"}
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_flash_review_count_this_month",
+        lambda *a, **k: 150,  # == MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH
+    )
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    run_called = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._run_flash_review", lambda *a, **k: run_called.append(True)
+    )
+
+    from scan_worker.jobs import run_flash_review_job
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert run_called == []
+
+
+def test_flash_review_job_alerts_ops_when_all_free_tier_providers_fail(monkeypatch):
+    # The failed-review-comment path is deliberately not used here (see
+    # flash_review.review_diff's FreeTierFallbackExhausted handling - "no
+    # findings, not a crash" is the intended degradation for a free user).
+    # But a total outage across all four providers still needs to reach a
+    # human, or a rotated/expired key could silently blackhole free-tier
+    # review indefinitely with nothing but an unwatched log line. This
+    # confirms the on_free_tier_exhausted callback jobs.py wires into
+    # review_diff actually reaches _send_ops_alert.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"}
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0
+    )
+    from unittest.mock import MagicMock
+    failing_adapter = MagicMock()
+    failing_adapter.name = "Groq"
+    failing_adapter.simple_completion.side_effect = RuntimeError("rate limited")
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.writing_adapter_chain_for_free_tier",
+        lambda *a, **k: [failing_adapter],
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: _FakeRedis())
+    monkeypatch.setattr("scan_worker.jobs.resolve_model", lambda *a: "gpt-5.6-luna")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- a.py ---\n+real change\n")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["a.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_context", lambda *a, **k: "")
+    monkeypatch.setattr("scan_worker.jobs.is_non_substantive_diff", lambda *a: False)
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs.build_code_evidence_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_dependency_impact_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_change_impact_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_blast_radius_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_referenced_symbol_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a: 999.0)
+    monkeypatch.setattr("scan_worker.jobs.lookup_cached_flash_review_result", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs.store_flash_review_result", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+
+    ops_alert_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._send_ops_alert",
+        lambda *a, **k: ops_alert_calls.append(a),
+    )
+
+    from scan_worker.jobs import run_flash_review_job
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert len(ops_alert_calls) == 1
+    assert ops_alert_calls[0][1] == "flash_review.free_tier_exhausted"
+
+
 def test_flash_review_job_skips_when_debounced(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(

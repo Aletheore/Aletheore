@@ -1,4 +1,5 @@
 import logging
+import threading
 
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from scan_worker.model_tiers import (
@@ -24,14 +25,22 @@ class _FakeRedis:
     def __init__(self, initial: dict[str, int] | None = None):
         self.data = dict(initial or {})
         self.expiries: dict[str, int] = {}
+        # Real Redis commands are atomic server-side; a plain dict
+        # read-modify-write is not (two operations, a thread can be
+        # preempted between them). Locked here so a real multi-threaded
+        # test against this fake actually proves something about the
+        # production reservation logic's correctness under concurrency,
+        # rather than coincidentally passing (or failing) on GIL timing.
+        self._lock = threading.Lock()
 
     def get(self, key):
         value = self.data.get(key)
         return str(value).encode() if value is not None else None
 
     def incrby(self, key, amount):
-        self.data[key] = self.data.get(key, 0) + amount
-        return self.data[key]
+        with self._lock:
+            self.data[key] = self.data.get(key, 0) + amount
+            return self.data[key]
 
     def expire(self, key, ttl_seconds):
         self.expiries[key] = ttl_seconds
@@ -229,13 +238,14 @@ def test_openai_free_tier_before_llm_call_allows_under_daily_cap(monkeypatch):
     assert redis_conn.data[_openai_free_tier_token_key()] == OPENAI_FREE_TIER_RESERVATION_TOKENS
 
 
-def test_openai_free_tier_reservation_is_atomic_across_concurrent_calls(monkeypatch):
-    # Simulates the TOCTOU race this fix closes: two "concurrent" reviews
-    # both attempting to reserve budget right at the cap boundary. With a
-    # plain read-then-decide check, both could read "under cap" before
-    # either recorded anything. With reservation, each INCRBY is atomic
-    # and lands in order, so the second one genuinely sees the
-    # post-reservation total and is correctly refused.
+def test_openai_free_tier_reservation_arithmetic_is_correct_at_the_cap_boundary(monkeypatch):
+    # Sequential, not concurrent - this checks the reserve/refund
+    # arithmetic itself (a first reservation that fits, a second that
+    # doesn't and correctly refunds). The real concurrency guarantee is
+    # exercised by test_openai_free_tier_reservation_is_atomic_across_real_
+    # concurrent_threads below; this one is intentionally the simpler,
+    # non-threaded case so a failure here points straight at the
+    # arithmetic rather than at thread scheduling.
     from scan_worker.model_tiers import (
         OPENAI_FREE_TIER_RESERVATION_TOKENS,
         _openai_free_tier_token_key,
@@ -251,6 +261,53 @@ def test_openai_free_tier_reservation_is_atomic_across_concurrent_calls(monkeypa
 
     assert first is True
     assert second is False
+    assert redis_conn.data[_openai_free_tier_token_key()] == OPENAI_FREE_TIER_DAILY_TOKEN_CAP
+
+
+def test_openai_free_tier_reservation_is_atomic_across_real_concurrent_threads(monkeypatch):
+    # The TOCTOU race this closes: two concurrent reviews both attempting
+    # to reserve budget right at the cap boundary. A plain read-then-decide
+    # check could let both read "under cap" before either recorded
+    # anything. Unlike the sequential test above, this uses real
+    # threading.Thread objects and a Barrier so every thread's INCRBY call
+    # genuinely races against the others, not just calls made one after
+    # another in program order - _FakeRedis.incrby is itself lock-protected
+    # (see its docstring) specifically so this test can prove something
+    # about real concurrent access rather than getting lucky on GIL timing.
+    from scan_worker.model_tiers import (
+        OPENAI_FREE_TIER_RESERVATION_TOKENS,
+        _openai_free_tier_token_key,
+        _reserve_openai_free_tier_budget,
+    )
+
+    # Room for exactly one more reservation - of N concurrent attempts,
+    # exactly one may succeed.
+    redis_conn = _FakeRedis({
+        _openai_free_tier_token_key(): OPENAI_FREE_TIER_DAILY_TOKEN_CAP - OPENAI_FREE_TIER_RESERVATION_TOKENS
+    })
+
+    thread_count = 10
+    results: list[bool] = []
+    results_lock = threading.Lock()
+    barrier = threading.Barrier(thread_count)
+
+    def _attempt():
+        barrier.wait()  # maximize actual overlap, not just thread creation order
+        result = _reserve_openai_free_tier_budget(redis_conn)
+        with results_lock:
+            results.append(result)
+
+    threads = [threading.Thread(target=_attempt) for _ in range(thread_count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert results.count(True) == 1
+    assert results.count(False) == thread_count - 1
+    # Every refused reservation released itself - the counter lands
+    # exactly at the cap, not above it (overshoot) or below (a refund that
+    # over-corrected).
     assert redis_conn.data[_openai_free_tier_token_key()] == OPENAI_FREE_TIER_DAILY_TOKEN_CAP
 
 

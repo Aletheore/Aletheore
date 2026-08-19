@@ -828,6 +828,7 @@ def review_diff(
     diff_patches: tuple[tuple[str, str], ...] | None = None,
     adapter=None,
     adapter_chain: list | None = None,
+    on_free_tier_exhausted: Callable[[list[tuple[str, Exception]]], None] | None = None,
 ) -> list[dict]:
     if not diff_text.strip():
         return []
@@ -898,7 +899,15 @@ def review_diff(
             # failed is a real infra problem, but it shouldn't turn into
             # an unhandled exception and a scary failure comment on the
             # PR when "report no issues found" is the safer degradation.
+            # A logger.warning alone is invisible to ops, though - if every
+            # provider is genuinely down (a rotated key, a real outage),
+            # this degradation would otherwise mask silently-broken free
+            # tier reviews indefinitely. on_free_tier_exhausted gives the
+            # caller (jobs.py) a hook to surface that operationally without
+            # coupling this function to any particular alerting mechanism.
             logger.warning("flash review: every free-tier provider failed (%s)", exc)
+            if on_free_tier_exhausted is not None:
+                on_free_tier_exhausted(exc.errors)
             raw_output = "[]"
     else:
         adapter = writing_adapter_for(FLASH_REVIEW_FALLBACK_MODEL, on_usage=on_usage)

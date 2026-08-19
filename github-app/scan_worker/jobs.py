@@ -1421,8 +1421,18 @@ def run_flash_review_job(
     # final spend record - never around the expensive work in between.
     if is_free_tier:
         # Free-tier: request-count cap, no dollar cap (providers are free/near-free).
-        if get_flash_review_count_this_month(settings.database_url, installation_id) >= MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH:
-            return
+        # Locked the same way the paid branch below locks its own count
+        # check - without it, two concurrent Flash Reviews on the same free
+        # installation (e.g. two PRs pushed at once, landing on different
+        # scan-worker replicas) could both read the count as under-cap
+        # before either recorded an attempt, overshooting
+        # MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH by however many land in that
+        # window - the same class of race this PR's OpenAI daily-token cap
+        # fix (see model_tiers._reserve_openai_free_tier_budget) closes for
+        # a different counter.
+        with installation_spend_lock(settings.database_url, installation_id):
+            if get_flash_review_count_this_month(settings.database_url, installation_id) >= MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH:
+                return
         monthly_cap = 0.0  # no dollar cap for free tier
     else:
         with installation_spend_lock(settings.database_url, installation_id):
@@ -1555,6 +1565,23 @@ def _run_flash_review(
         def _on_grounding_result(stats: dict) -> None:
             grounding_result.update(stats)
 
+        def _on_free_tier_exhausted(errors: list[tuple[str, Exception]]) -> None:
+            # Every free-tier provider failed for one review - possibly a
+            # transient outage across four independent providers at once,
+            # but also possibly a rotated/expired key silently blackholing
+            # every free-tier review from now on. Either way this needs a
+            # human, not just a log line nobody's watching - reuses the
+            # same cooldown-guarded ops-alert path other production
+            # incidents already go through, so this can't spam either.
+            _send_ops_alert(
+                get_redis_client(),
+                "flash_review.free_tier_exhausted",
+                f"all {len(errors)} free-tier providers failed for a Flash Review",
+                f"{repo_full_name}#{pr_number}: " + "; ".join(
+                    f"{name}: {type(exc).__name__}: {exc}" for name, exc in errors
+                ),
+            )
+
         # Free-tier: build the cascading adapter chain; paid: single adapter.
         free_tier_chain = None
         if is_free_tier:
@@ -1588,6 +1615,7 @@ def _run_flash_review(
                 on_grounding_result=_on_grounding_result,
                 diff_patches=diff_patches,
                 adapter_chain=free_tier_chain,
+                on_free_tier_exhausted=_on_free_tier_exhausted,
             )
         else:
             findings = review_diff(
@@ -1609,6 +1637,7 @@ def _run_flash_review(
                 on_grounding_result=_on_grounding_result,
                 diff_patches=diff_patches,
                 adapter_chain=free_tier_chain,
+                on_free_tier_exhausted=_on_free_tier_exhausted,
             )
     # Briefly re-acquire the lock just for the write, now that the
     # expensive review work above is done - see run_flash_review_job's
