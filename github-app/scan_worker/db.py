@@ -625,6 +625,43 @@ def get_last_endpoint_health(
             return result
 
 
+def was_recently_down(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    method: str,
+    path: str,
+    target_id: int | None,
+    since: datetime,
+) -> bool:
+    """Whether this exact endpoint (same target, not just same path - a
+    staging and a prod target sharing a path are different incidents) was
+    already recorded unreachable at least once since `since`. Called before
+    the current check's own row is inserted, so this only ever reflects
+    PRIOR checks - a flapping endpoint's second, third, fourth down-flip
+    inside the window reads as "already had a recent incident" rather than
+    a fresh one, which is what lets the fix-suggestion cooldown work.
+    """
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM endpoint_health
+                WHERE installation_id = %s
+                  AND repo_full_name = %s
+                  AND endpoint_method = %s
+                  AND endpoint_path = %s
+                  AND target_id IS NOT DISTINCT FROM %s
+                  AND reachable = false
+                  AND checked_at >= %s
+                LIMIT 1
+                """,
+                (installation_id, repo_full_name, method, path, target_id, since),
+            )
+            return cur.fetchone() is not None
+
+
 def list_recent_endpoint_incidents(
     dsn: str,
     installation_id: int,
@@ -911,6 +948,7 @@ def upsert_docs_symbol(
     description: str,
     mode: str,
     source_commit: str | None = None,
+    content_hash: str | None = None,
 ) -> None:
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
@@ -918,12 +956,13 @@ def upsert_docs_symbol(
                 """
                 INSERT INTO docs_symbols
                     (installation_id, repo_full_name, module_path, symbol_name, description,
-                     mode, source_commit, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, now())
+                     mode, source_commit, content_hash, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())
                 ON CONFLICT (installation_id, repo_full_name, module_path, symbol_name) DO UPDATE
                 SET description = EXCLUDED.description,
                     mode = EXCLUDED.mode,
                     source_commit = EXCLUDED.source_commit,
+                    content_hash = EXCLUDED.content_hash,
                     updated_at = now()
                 """,
                 (
@@ -934,9 +973,34 @@ def upsert_docs_symbol(
                     description,
                     mode,
                     source_commit,
+                    content_hash,
                 ),
             )
         conn.commit()
+
+
+def get_docs_symbol_hashes(
+    dsn: str, installation_id: int, repo_full_name: str, module_path: str
+) -> dict[str, str]:
+    """symbol_name -> content_hash for one module's already-stored
+    descriptions - lets a caller skip re-asking the LLM about a symbol
+    whose source snippet hasn't changed since it was last described (see
+    live_docs.generate_file_descriptions_combined's already_hashed param).
+    Rows written before the content_hash column existed have a NULL hash
+    and are naturally excluded, so old data just means "generate everything
+    that module still needs" rather than a crash.
+    """
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT symbol_name, content_hash FROM docs_symbols
+                WHERE installation_id = %s AND repo_full_name = %s AND module_path = %s
+                  AND content_hash IS NOT NULL
+                """,
+                (installation_id, repo_full_name, module_path),
+            )
+            return dict(cur.fetchall())
 
 
 def list_docs_symbols(dsn: str, installation_id: int, repo_full_name: str) -> list[dict]:

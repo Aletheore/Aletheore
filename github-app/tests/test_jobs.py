@@ -6,7 +6,11 @@ from contextlib import contextmanager
 
 import pytest
 
-from scan_worker.jobs import MAX_FLASH_REVIEWS_PER_MONTH, run_pr_scan_job
+from scan_worker.jobs import (
+    MAX_FLASH_REVIEWS_PER_MONTH,
+    MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH,
+    run_pr_scan_job,
+)
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -1601,7 +1605,7 @@ def test_flash_review_job_skips_when_over_the_free_tier_monthly_cap(monkeypatch)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr(
         "scan_worker.jobs.get_flash_review_count_this_month",
-        lambda *a, **k: 150,  # == MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH
+        lambda *a, **k: MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH,
     )
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     run_called = []
@@ -2458,6 +2462,7 @@ def _patch_sweep(
         "scan_worker.jobs.get_last_endpoint_health", lambda dsn, iid, repo, method, path, target_id=None: prior
     )
     monkeypatch.setattr("scan_worker.jobs.insert_endpoint_health", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.was_recently_down", lambda *a, **k: False)
     sent = []
     monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: sent.append(msg))
     return sent
@@ -2637,6 +2642,48 @@ def test_sweep_attaches_recent_commit_on_confirmed_down(monkeypatch):
     assert len(sent) == 1
     assert "Recent commit: `abc123de`" in sent[0]["text"]
     assert "touched the handler" in sent[0]["text"]
+
+
+def test_sweep_skips_fix_suggestion_when_endpoint_was_recently_down(monkeypatch):
+    # The cooldown itself, not just its plumbing: a flapping endpoint
+    # already recorded down within HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS
+    # must not pay for a second LLM fix-suggestion call on this flip - the
+    # alert (and its deterministic commit/owner attachments) still fires,
+    # only the one expensive call is skipped.
+    sent = _patch_sweep(
+        monkeypatch,
+        prior={"reachable": True, "latency_ms": 100.0},
+        evidence={
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {"method": "GET", "path": "/x", "file": "controllers/user.controller.ts", "line": 42}
+                    ]
+                }
+            }
+        },
+        result_entry={
+            "method": "GET", "path": "/x", "reachable": False,
+            "status_code": None, "latency_ms": 10.0, "response_shape": None,
+        },
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.was_recently_down", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs._commit_attachment_from_graph", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._owner_attachment_from_graph", lambda *a, **k: None)
+
+    suggestion_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._fix_suggestion_attachment",
+        lambda *a, **k: suggestion_calls.append(True),
+    )
+
+    from scan_worker.jobs import run_health_check_sweep_job
+
+    run_health_check_sweep_job()
+
+    assert len(sent) == 1
+    assert suggestion_calls == []
 
 
 def test_sweep_alerts_without_commit_when_correlation_fails(monkeypatch):
@@ -4209,6 +4256,62 @@ def test_modules_with_uncovered_docs_work_respects_limit():
     result = _modules_with_uncovered_docs_work(modules, covered_by_module={}, limit=2)
 
     assert len(result) == 2
+
+
+def test_store_docs_generation_skips_llm_call_for_an_unchanged_symbol_but_keeps_its_row(monkeypatch):
+    # "add" already has a stored description whose hash matches its current
+    # source - unchanged, so no LLM call for it. "sub" has no stored hash
+    # (new), so it does need one. The unchanged symbol's existing row must
+    # survive the module's prune-stale-symbols step, not get deleted just
+    # because this run's LLM response never mentioned it.
+    from unittest.mock import MagicMock
+
+    from scan_worker.jobs import _store_docs_generation_for_module
+    from scan_worker.live_docs import _content_hash, _symbol_snippet
+
+    source_lines = [
+        "def add(a, b):", "    return a + b",
+        "def sub(a, b):", "    return a - b",
+    ]
+    add_symbol = {
+        "name": "add", "start_line": 1, "end_line": 2, "params": "(a, b)",
+        "docstring": None, "is_public": True,
+    }
+    sub_symbol = {
+        "name": "sub", "start_line": 3, "end_line": 4, "params": "(a, b)",
+        "docstring": None, "is_public": True,
+    }
+    module = _docs_module("a.py", functions=[add_symbol, sub_symbol])
+    add_hash = _content_hash(_symbol_snippet(source_lines, add_symbol))
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_docs_symbol_hashes", lambda *a, **k: {"add": add_hash}
+    )
+    upserted = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_docs_symbol",
+        lambda dsn, iid, repo, path, name, desc, mode, commit, content_hash: upserted.append(name),
+    )
+    pruned_keep_lists = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.delete_docs_symbols_not_in",
+        lambda dsn, iid, repo, path, keep: pruned_keep_lists.append(set(keep)),
+    )
+
+    adapter = MagicMock()
+    adapter.simple_completion.return_value = json.dumps({"sub": {"description": "Subtracts b from a."}})
+
+    _store_docs_generation_for_module(
+        "postgresql://unused", 1, "octocat/hello-world", module, adapter, source_lines, "sha123",
+    )
+
+    # Only "sub" triggered an LLM call and a write - "add" was skipped.
+    assert adapter.simple_completion.call_count == 1
+    sent_items = json.loads(adapter.simple_completion.call_args[0][1])
+    assert {item["name"] for item in sent_items} == {"sub"}
+    assert upserted == ["sub"]
+    # But "add" is still in the keep-list, so its existing row isn't pruned.
+    assert pruned_keep_lists == [{"add", "sub"}]
 
 
 def test_run_live_docs_full_build_job_skips_without_evidence(monkeypatch):

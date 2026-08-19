@@ -596,17 +596,21 @@ def _two_cluster_evidence() -> dict:
 
 
 def test_generate_subsystems_preserves_cluster_order_under_concurrency():
-    # Cluster 0's write is the slow one, so a naive implementation that just
-    # ran things concurrently and appended results in completion order would
-    # put cluster 1 first - order must come from the input, not the race.
+    # Two clusters land in the same batch (batch size 5 > 2 clusters), so
+    # this now guards that a batched response's per-id entries land back
+    # in the caller's cluster order regardless of what order the model's
+    # JSON object happens to list them in - the model returns them
+    # reversed here to prove ordering comes from the input, not the
+    # response.
     evidence = _two_cluster_evidence()
     naming_adapter = _adapter(json.dumps({"0": "Auth", "1": "Billing"}))
 
     def _respond(_system_prompt, user_prompt, cwd):
-        payload = json.loads(user_prompt)
-        if payload["name"] == "Auth":
-            time.sleep(0.15)
-        return json.dumps({"description": f"{payload['name']} stuff.", "files": []})
+        items = json.loads(user_prompt)
+        return json.dumps({
+            item["id"]: {"description": f"{item['name']} stuff.", "files": []}
+            for item in reversed(items)
+        })
 
     writing_adapter = MagicMock()
     writing_adapter.simple_completion.side_effect = _respond
@@ -616,26 +620,48 @@ def test_generate_subsystems_preserves_cluster_order_under_concurrency():
     assert [r["name"] for r in records] == ["Auth", "Billing"]
 
 
+def _n_cluster_evidence(n: int) -> dict:
+    modules = [
+        {
+            "path": f"pkg{i}/mod.py", "language": "python", "imports": [],
+            "symbols": {"functions": [{"name": f"do_{i}", "start_line": 1, "end_line": 2}], "classes": []},
+        }
+        for i in range(n)
+    ]
+    return {
+        "repository": {"modules": modules, "dependency_graph": {"nodes": [], "edges": []}},
+        "architecture": {
+            "clusters": [{"id": i, "modules": [f"pkg{i}/mod.py"], "internal_edges": 0} for i in range(n)]
+        },
+    }
+
+
 def test_generate_subsystems_overlaps_writing_calls_instead_of_serializing():
     # Real regression this guards: before bounding concurrency, a full build
-    # paid full LLM round-trip latency per subsystem in strict sequence,
-    # measured at ~20-30 min total for one medium repo. Two 150ms calls
-    # finishing in well under their combined 300ms proves they overlapped.
-    evidence = _two_cluster_evidence()
-    naming_adapter = _adapter(json.dumps({"0": "Auth", "1": "Billing"}))
+    # paid full LLM round-trip latency per subsystem in strict sequence.
+    # Batching (SUBSYSTEM_WRITE_BATCH_SIZE=5) means the unit of concurrency
+    # is now the batch, not the individual cluster - 12 clusters need 3
+    # batches, so this needs enough clusters to force more than one batch
+    # to prove they still overlap rather than running batch-after-batch.
+    evidence = _n_cluster_evidence(12)
+    naming_adapter = _adapter(json.dumps({str(i): f"Sub{i}" for i in range(12)}))
 
     def _slow_response(_system_prompt, user_prompt, cwd):
         time.sleep(0.15)
-        return json.dumps({"description": "stuff.", "files": []})
+        items = json.loads(user_prompt)
+        return json.dumps({item["id"]: {"description": "stuff.", "files": []} for item in items})
 
     writing_adapter = MagicMock()
     writing_adapter.simple_completion.side_effect = _slow_response
 
     started = time.monotonic()
-    generate_subsystems(evidence, naming_adapter, writing_adapter)
+    records = generate_subsystems(evidence, naming_adapter, writing_adapter)
     elapsed = time.monotonic() - started
 
+    # 3 batches (5, 5, 2) at 150ms each: serial would be ~450ms, overlapped
+    # (MAX_GENERATION_WORKERS=6) all 3 run at once, so well under 300ms.
     assert elapsed < 0.28
+    assert len(records) == 12
 
 
 def test_generate_subsystems_propagates_a_write_failure_instead_of_swallowing_it():
@@ -792,36 +818,40 @@ def test_generate_file_pages_keys_pages_by_path():
 def test_generate_file_pages_overlaps_writing_calls_instead_of_serializing():
     # Same regression as generate_subsystems: up to DEFAULT_MAX_FILE_PAGES
     # (40) file pages were written one full LLM round-trip at a time.
-    evidence = _two_cluster_evidence()
+    # Batching (FILE_PAGE_WRITE_BATCH_SIZE=5) makes the unit of concurrency
+    # the batch, not the individual file, so this needs more than one
+    # batch's worth of paths to prove batches still overlap each other.
+    evidence = _n_cluster_evidence(12)
+    paths = [f"pkg{i}/mod.py" for i in range(12)]
 
     def _slow_response(_system_prompt, user_prompt, cwd):
         time.sleep(0.15)
-        payload = json.loads(user_prompt)
-        return json.dumps({"detail": f"## Overview\nSee {payload['path']}:1."})
+        items = json.loads(user_prompt)
+        return json.dumps({item["id"]: {"detail": f"## Overview\nSee {item['path']}:1."} for item in items})
 
     writing_adapter = MagicMock()
     writing_adapter.simple_completion.side_effect = _slow_response
 
     started = time.monotonic()
-    pages = generate_file_pages(
-        evidence, writing_adapter, paths=["auth/login.py", "billing/charge.py"]
-    )
+    pages = generate_file_pages(evidence, writing_adapter, paths=paths)
     elapsed = time.monotonic() - started
 
+    # 3 batches (5, 5, 2) at 150ms each, overlapped: well under serial ~450ms.
     assert elapsed < 0.28
-    assert set(pages) == {"auth/login.py", "billing/charge.py"}
+    assert set(pages) == set(paths)
 
 
 def test_generate_file_pages_keeps_path_to_detail_mapping_correct_under_concurrency():
-    # A naive zip(targets, completion_order) would cross-wire pages across
-    # files whenever a later file's call happens to finish first.
+    # A naive result-merging implementation could cross-wire pages across
+    # files whenever a later file's batch happens to finish first, or
+    # whenever a batched response lists ids in an unexpected order.
     evidence = _two_cluster_evidence()
 
     def _respond(_system_prompt, user_prompt, cwd):
-        payload = json.loads(user_prompt)
-        if payload["path"] == "auth/login.py":
+        items = json.loads(user_prompt)
+        if any(item["path"] == "auth/login.py" for item in items):
             time.sleep(0.1)
-        return json.dumps({"detail": f"## Overview\nSee {payload['path']}:1."})
+        return json.dumps({item["id"]: {"detail": f"## Overview\nSee {item['path']}:1."} for item in items})
 
     writing_adapter = MagicMock()
     writing_adapter.simple_completion.side_effect = _respond
