@@ -92,47 +92,11 @@ python scripts/score_fallback_judge.py</code></pre>
             it isn't beating a weaker mode by default.</p>
         </div>
 
-        <div class="bench-chart" role="img" aria-label="Bar chart: Aletheore versus RepoWise top-1 accuracy across gin, serde, gson, jekyll, Slim, guzzle, and zod. Aletheore leads or ties on every corpus.">
+        <div class="bench-chart">
           <p class="bench-chart-title">Locating code, top-1: Aletheore vs. RepoWise (best mode)</p>
           <p class="bench-chart-sub">Same questions, same ground truth, all 7 shared corpora</p>
-          <div class="bench-chart-legend">
-            <span>Aletheore</span>
-            <span class="bench-legend-b">RepoWise (best mode)</span>
-          </div>
-          <div class="bench-chart-group">
-            <div class="bench-chart-group-label">gin (Go)</div>
-            <div class="bench-chart-row"><div class="bench-chart-label">Aletheore</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:100%"></div></div><div class="bench-chart-value">80.0%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">RepoWise</div><div class="bench-chart-track"><div class="bench-chart-fill bench-fill-b" style="width:75.0%"></div></div><div class="bench-chart-value">60.0%</div></div>
-          </div>
-          <div class="bench-chart-group">
-            <div class="bench-chart-group-label">serde (Rust)</div>
-            <div class="bench-chart-row"><div class="bench-chart-label">Aletheore</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:66.6%"></div></div><div class="bench-chart-value">53.3%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">RepoWise</div><div class="bench-chart-track"><div class="bench-chart-fill bench-fill-b" style="width:16.6%"></div></div><div class="bench-chart-value">13.3%</div></div>
-          </div>
-          <div class="bench-chart-group">
-            <div class="bench-chart-group-label">gson (Java)</div>
-            <div class="bench-chart-row"><div class="bench-chart-label">Aletheore</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:50.0%"></div></div><div class="bench-chart-value">40.0%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">RepoWise</div><div class="bench-chart-track"><div class="bench-chart-fill bench-fill-b" style="width:33.4%"></div></div><div class="bench-chart-value">26.7%</div></div>
-          </div>
-          <div class="bench-chart-group">
-            <div class="bench-chart-group-label">jekyll (Ruby)</div>
-            <div class="bench-chart-row"><div class="bench-chart-label">Aletheore</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:33.4%"></div></div><div class="bench-chart-value">26.7%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">RepoWise</div><div class="bench-chart-track"><div class="bench-chart-fill bench-fill-b" style="width:16.6%"></div></div><div class="bench-chart-value">13.3%</div></div>
-          </div>
-          <div class="bench-chart-group">
-            <div class="bench-chart-group-label">Slim (PHP)</div>
-            <div class="bench-chart-row"><div class="bench-chart-label">Aletheore</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:33.4%"></div></div><div class="bench-chart-value">26.7%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">RepoWise</div><div class="bench-chart-track"><div class="bench-chart-fill bench-fill-b" style="width:33.4%"></div></div><div class="bench-chart-value">26.7%</div></div>
-          </div>
-          <div class="bench-chart-group">
-            <div class="bench-chart-group-label">guzzle (PHP)</div>
-            <div class="bench-chart-row"><div class="bench-chart-label">Aletheore</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:25.0%"></div></div><div class="bench-chart-value">20.0%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">RepoWise</div><div class="bench-chart-track"><div class="bench-chart-fill bench-fill-b" style="width:25.0%"></div></div><div class="bench-chart-value">20.0%</div></div>
-          </div>
-          <div class="bench-chart-group">
-            <div class="bench-chart-group-label">zod (TypeScript)</div>
-            <div class="bench-chart-row"><div class="bench-chart-label">Aletheore</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:25.0%"></div></div><div class="bench-chart-value">20.0%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">RepoWise</div><div class="bench-chart-track"><div class="bench-chart-fill bench-fill-b" style="width:16.6%"></div></div><div class="bench-chart-value">13.3%</div></div>
+          <div class="bench-chart-canvas-wrap" style="height: 320px;">
+            <canvas id="chart-head-to-head" role="img" aria-label="Bar chart: Aletheore versus RepoWise top-1 accuracy across gin, serde, gson, jekyll, Slim, guzzle, and zod. Aletheore leads or ties on every corpus."></canvas>
           </div>
         </div>
 
@@ -207,21 +171,12 @@ python scripts/score_fallback_judge.py</code></pre>
             both rather than given by either. Every weak corpus moves 20-47 points on phrasing
             alone, larger than any ranking change in this programme.</p>
 
-          <div class="bench-chart" role="img" aria-label="Bar chart: top-1 accuracy under general phrasing across 12 corpora, ranging from 6.7 percent to 80.0 percent.">
+          <div class="bench-chart">
             <p class="bench-chart-title">Top-1, general phrasing, by corpus — the spread the average hides</p>
             <p class="bench-chart-sub">Go and Python are strong; Java, Ruby, PHP, and TypeScript are not — and the weak corpora were measured last</p>
-            <div class="bench-chart-row"><div class="bench-chart-label">gin</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:100%"></div></div><div class="bench-chart-value">80.0%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">flask</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:89.9%"></div></div><div class="bench-chart-value">71.9%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">serde</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:66.6%"></div></div><div class="bench-chart-value">53.3%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">jq</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:66.6%"></div></div><div class="bench-chart-value">53.3%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">gson</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:50.0%"></div></div><div class="bench-chart-value">40.0%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">fmt</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:50.0%"></div></div><div class="bench-chart-value">40.0%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">Slim</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:33.4%"></div></div><div class="bench-chart-value">26.7%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">jekyll</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:33.4%"></div></div><div class="bench-chart-value">26.7%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">zod</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:25.0%"></div></div><div class="bench-chart-value">20.0%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">axios</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:25.0%"></div></div><div class="bench-chart-value">20.0%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">AutoMapper</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:8.4%"></div></div><div class="bench-chart-value">6.7%</div></div>
-            <div class="bench-chart-row"><div class="bench-chart-label">thrift</div><div class="bench-chart-track"><div class="bench-chart-fill" style="width:8.4%"></div></div><div class="bench-chart-value">6.7%</div></div>
+            <div class="bench-chart-canvas-wrap" style="height: 360px;">
+              <canvas id="chart-spread" role="img" aria-label="Bar chart: top-1 accuracy under general phrasing across 12 corpora, ranging from 6.7 percent to 80.0 percent."></canvas>
+            </div>
           </div>
 
           <div class="dogfood-table-wrap">
@@ -491,5 +446,7 @@ python scripts/score_fallback_judge.py</code></pre>
     </div>
   </footer>
   <script src="vendor/motion.js"></script>
+  <script src="vendor/chart.umd.min.js"></script>
+  <script src="benchmarks.js"></script>
 </body>
 </html>
