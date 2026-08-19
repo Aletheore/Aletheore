@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aletheore Benchmarks — Measured Against RepoWise, In the Open</title>
+  <meta name="description" content="Aletheore vs. RepoWise on locating code, cost, and PR review — every number reproducible from the public aletheore-benchmarks repo, no API key required. We publish the rows we lose too.">
+  <link rel="canonical" href="https://www.aletheore.com/benchmarks">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Aletheore">
+  <meta property="og:url" content="https://www.aletheore.com/benchmarks">
+  <meta property="og:title" content="Aletheore Benchmarks — Measured Against RepoWise, In the Open">
+  <meta property="og:description" content="Head-to-head retrieval results, PR review cost/quality, and deterministic-vs-bare-LLM precision — reproducible from the public aletheore-benchmarks repo. We publish the rows we lose too.">
+  <meta property="og:image" content="https://www.aletheore.com/assets/logo-mark.png">
+
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Aletheore Benchmarks — Measured Against RepoWise, In the Open">
+  <meta name="twitter:description" content="Head-to-head retrieval results, PR review cost/quality, and deterministic-vs-bare-LLM precision — reproducible, no API key required.">
+  <meta name="twitter:image" content="https://www.aletheore.com/assets/logo-mark.png">
+
+  <link rel="icon" type="image/png" href="assets/logo-mark.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <nav class="site-nav" aria-label="Main navigation">
+      <a class="wordmark" href="index.html">
+        <img src="assets/logo-mark.png" alt="" width="28" height="28">
+        Aletheore
+      </a>
+      <div class="nav-links">
+        <a href="pricing.html">Pricing</a>
+        <a href="developers.html">Developers</a>
+        <a href="benchmarks.html">Benchmarks</a>
+        <a href="dogfooding.html">Proof</a>
+        <a href="status.html">Status</a>
+        <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+        <a href="https://www.linkedin.com/company/aletheore">LinkedIn</a>
+        <a href="https://app.aletheore.com/">Dashboard</a>
+        <a class="btn btn-primary" href="https://app.aletheore.com/">Get Started</a>
+      </div>
+    </nav>
+
+    <main>
+      <section class="developer-hero">
+        <div>
+          <p class="eyebrow">Benchmarked, not just claimed</p>
+          <h1>We publish the rows we lose, too.</h1>
+          <p>A separate, public repository measures Aletheore head-to-head against RepoWise —
+            locating code, generated docs, PR review quality, and what a bare LLM gets wrong
+            that a deterministic scanner gets right. Every retrieval number below recomputes
+            from raw results with no API key and no network; every PR-review number comes from
+            real API runs with the actual production model.</p>
+        </div>
+        <div class="install-card" aria-label="Reproduce these results">
+          <div class="terminal-title">
+            <span class="terminal-controls"></span>
+            <strong>Reproduce it yourself</strong>
+          </div>
+          <pre><code>git clone https://github.com/Aletheore/aletheore-benchmarks
+cd aletheore-benchmarks
+python scripts/score_fallback_judge.py</code></pre>
+        </div>
+      </section>
+
+      <div class="toon-demo">
+        <h3>Locating code, head-to-head against RepoWise</h3>
+        <div class="toon-counters">
+          <div class="toon-counter">
+            <div class="toon-counter-value">5–0–2</div>
+            <div class="toon-counter-label">wins–losses–ties on top-1,<br>all 7 shared corpora</div>
+          </div>
+          <div class="toon-counter">
+            <div class="toon-counter-value">$0.00</div>
+            <div class="toon-counter-label">to build a searchable index,<br>vs. RepoWise's $1.85</div>
+          </div>
+          <div class="toon-counter">
+            <div class="toon-counter-value">93.3%</div>
+            <div class="toon-counter-label">cross-language top-5<br>accuracy</div>
+          </div>
+        </div>
+      </div>
+
+      <section class="developer-section dogfood-repo">
+        <div class="section-heading dogfood-heading">
+          <p class="eyebrow">PR review · shipped, not hypothetical</p>
+          <h2>Dropping the raw file dump didn't cost review quality.</h2>
+          <p>Flash Review can build its prompt with the full raw content of every changed file,
+            or with Aletheore's own evidence alone (blast radius, referenced symbols — no file
+            dump). Four experiments across three models asked whether that trade-off actually
+            costs anything. The one that decided it: <code>gpt-5.6-luna</code>, the real
+            production model, generating reviews under both arms; <code>deepseek-v4-flash</code>
+            independently verifying every finding against the diff, three full repeats of a
+            50-case mixed-language corpus.</p>
+        </div>
+
+        <div class="dogfood-table-wrap">
+          <table class="dogfood-table">
+            <thead>
+              <tr><th>Run</th><th>Evidence only (compact)</th><th>+ full file content</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Run 1</td><td><strong>97.7%</strong> verified-accept (42/43)</td><td>85.7% (36/42)</td></tr>
+              <tr><td>Run 2</td><td><strong>97.6%</strong> verified-accept (40/41)</td><td>90.5% (38/42)</td></tr>
+              <tr><td>Run 3</td><td><strong>96.7%</strong> verified-accept (29/30)</td><td>100% (27/27) — coverage artifact*</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="dogfood-callout">
+          <p><strong>*Read honestly, not cherry-picked:</strong> run 3's apparent 100% isn't
+            evidence full context caught up — a transient network failure happened to strip out
+            exactly the harder cases that produced its rejects and uncertains in the other two
+            runs. Evidence-only never underperformed full context in any run. Full writeup,
+            including an earlier weaker-model run where the compact approach's real recall win
+            came with a real cost — the highest false-positive rate of the arms tested — in
+            <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/pr_review/README.md" rel="noopener">pr_review/README.md</a>.</p>
+        </div>
+
+        <p class="dogfood-p">Result: evidence-only shipped as Flash Review's actual production
+          default, not an experiment behind a flag. Total cost for all three validation runs,
+          real API pricing: <strong>$0.9229</strong>.</p>
+      </section>
+
+      <section class="developer-section dogfood-repo dogfood-repo-alt">
+        <div class="section-heading dogfood-heading">
+          <p class="eyebrow">Deterministic analysis vs. bare LLM</p>
+          <h2>Can a bare LLM reproduce the scanner's answer, given the same data?</h2>
+          <p>Not "Aletheore vs. RepoWise" — for the parts of Aletheore that aren't an LLM call
+            at all (hotspots, ownership, dead code, computed from real git history and a real
+            import graph), what happens if a model is simply handed the same data and asked the
+            same question? On the flask corpus, given the exact git log slice and import
+            statements the scanner itself consumes:</p>
+        </div>
+
+        <div class="dogfood-table-wrap">
+          <table class="dogfood-table">
+            <thead>
+              <tr><th></th><th>Aletheore</th><th>Bare LLM (gpt-5.6-luna)</th><th>Bare LLM (gpt-5.6-terra)</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Hotspots (top 10)</td><td>exact, every run</td><td>declined — asked for real code instead</td><td>0/10 correct, 4 fabricated</td></tr>
+              <tr><td>Ownership (top 8)</td><td>exact</td><td>1/8 exact, drops a contributor</td><td>4/8 exact, still fabricates a person</td></tr>
+              <tr><td>Dead code</td><td>2/2, zero false positives</td><td>48 flagged, 4.2% precision</td><td>49 flagged, 4.1% precision</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="dogfood-p">Full methodology, including a real bug this testing surfaced, in
+          <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/DETERMINISTIC_VS_LLM.md" rel="noopener">DETERMINISTIC_VS_LLM.md</a>.</p>
+      </section>
+
+      <section class="developer-section">
+        <div class="section-heading dogfood-heading">
+          <p class="eyebrow">Where we lose</p>
+          <h2>Stated here rather than in a footnote.</h2>
+        </div>
+        <div class="dogfood-callout">
+          <p>⚠️ RepoWise's generated wiki scores higher on "how does X work?" questions — 2.35
+            vs. our 2.13 on a blind 0-3 judge, though we sit within roughly 0.2 of them at about
+            one-seventh the cost.<br>
+            ⚠️ RepoWise retrieval is faster in-process — 68ms against our 125ms.<br>
+            ⚠️ Five of eight corpora score below 35% top-1 under vocabulary-avoiding phrasing,
+            though most of that gap is our question authoring, not the product — every one
+            recovers 20-47 points when asked in the project's own terms.<br>
+            ⚠️ AIRview writes a page for only 21 of 100 changed files on Flask's last 30 commits;
+            the rest are served by a deterministic fallback, not the generated wiki this project
+            is named for.</p>
+        </div>
+      </section>
+
+      <section class="proof-zone dogfood-close">
+        <div class="proof-inner">
+          <div class="proof-label">The point</div>
+          <h2>Every number above is in a public repo, with the raw results.</h2>
+          <p class="section-intro">418 questions across 12 corpora and 11 languages, a 50-case
+            PR-review corpus, and the deterministic-vs-LLM writeup — all reproducible, all
+            checked against real Aletheore output, not a mockup.</p>
+          <div class="cta-actions" style="margin-top: 24px;">
+            <a class="btn btn-primary" href="https://github.com/Aletheore/aletheore-benchmarks" rel="noopener">View aletheore-benchmarks on GitHub</a>
+            <a class="btn btn-ghost" href="dogfooding.html">See a raw scan instead</a>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <div class="container footer-grid">
+      <div>
+        <a class="wordmark" href="index.html">
+          <img src="assets/logo-mark.png" alt="" width="24" height="24">
+          Aletheore
+        </a>
+        <p class="footer-note">Evidence-grounded repository audits. Free for individuals, local-first.</p>
+      </div>
+      <div>
+        <h4>Product</h4>
+        <a href="pricing.html">Pricing</a>
+        <a href="developers.html">Developers</a>
+        <a href="benchmarks.html">Benchmarks</a>
+        <a href="https://github.com/Aletheore/Aletheore">GitHub</a>
+      </div>
+      <div>
+        <h4>Community</h4>
+        <a href="https://www.linkedin.com/company/aletheore">LinkedIn</a>
+        <a href="https://github.com/sponsors/ArihantK15">Sponsor</a>
+        <a href="https://github.com/Aletheore/Aletheore/issues">Issues</a>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <a href="terms.html">Terms</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="refund.html">Refund Policy</a>
+        <a href="security.html">Security</a>
+      </div>
+      <div>
+        <h4>Contact</h4>
+        <a href="mailto:support@aletheore.com">support@aletheore.com</a>
+      </div>
+    </div>
+  </footer>
+  <script src="vendor/motion.js"></script>
+</body>
+</html>
