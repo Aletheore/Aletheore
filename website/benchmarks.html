@@ -304,9 +304,30 @@ python scripts/score_fallback_judge.py</code></pre>
             <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/pr_review/README.md" rel="noopener">pr_review/README.md</a>.</p>
         </div>
 
+        <h3 class="dogfood-finding-title">How much smaller is the prompt, actually?</h3>
+        <div class="dogfood-table-wrap">
+          <table class="dogfood-table">
+            <thead>
+              <tr><th></th><th>Evidence only (compact)</th><th>+ full file content</th><th>Compact is</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Median context size (measured)</td><td>1,480 chars (~370 tok)</td><td>15,212 chars (~3,800 tok)</td><td><strong>~10.3x smaller</strong></td></tr>
+              <tr><td>Avg prompt tokens, real API (DeepSeek V4 Flash)</td><td>2,483</td><td>16,325</td><td><strong>~6.6x smaller</strong></td></tr>
+              <tr><td>Avg cost per review, same run</td><td>$0.0041</td><td>$0.0054</td><td>~24% cheaper</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="dogfood-p">Read the last row honestly rather than expecting a 6-10x price
+          drop to match the token drop: on this model, completion tokens run 11k-13k almost
+          regardless of which arm generated the prompt — reasoning-mode verbosity, a model-level
+          trait unrelated to context strategy — so the real dollar savings land at roughly a
+          quarter, not a multiple. What the ~6-10x <em>input</em>-side reduction actually buys is
+          headroom against a tight tokens-per-minute quota (e.g. a free-tier provider's 6,000
+          TPM) — the difference between a review fitting in one call and not fitting at all.</p>
+
         <p class="dogfood-p">Result: evidence-only shipped as Flash Review's actual production
-          default, not an experiment behind a flag. Total cost for all three validation runs,
-          real API pricing: <strong>$0.9229</strong>.</p>
+          default, not an experiment behind a flag. Total cost for all three validation runs on
+          the real production model, real API pricing: <strong>$0.9229</strong>.</p>
       </section>
 
       <section class="developer-section dogfood-repo dogfood-repo-alt">
