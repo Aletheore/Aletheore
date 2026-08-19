@@ -1724,6 +1724,125 @@ pre {
   padding-bottom: 16px;
 }
 
+.bench-chart {
+  margin: 20px 0 28px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--card-bg);
+  padding: 22px 24px 18px;
+}
+
+.bench-chart-title {
+  margin: 0 0 4px;
+  color: #efe7d8;
+  font-size: 15px;
+  font-weight: 640;
+}
+
+.bench-chart-sub {
+  margin: 0 0 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.bench-chart-legend {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.bench-chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bench-chart-legend span::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--legend-color, var(--accent));
+}
+
+.bench-chart-legend .bench-legend-b::before {
+  --legend-color: #7d7568;
+}
+
+.bench-chart-row {
+  display: grid;
+  grid-template-columns: 92px 1fr 52px;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+}
+
+.bench-chart-row + .bench-chart-row {
+  margin-top: 2px;
+}
+
+.bench-chart-label {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bench-chart-track {
+  height: 10px;
+  border-radius: 5px;
+  background: rgba(243, 238, 227, 0.06);
+  overflow: hidden;
+}
+
+.bench-chart-fill {
+  height: 100%;
+  border-radius: 5px;
+  background: var(--accent);
+}
+
+.bench-chart-fill.bench-fill-b {
+  background: #7d7568;
+}
+
+.bench-chart-value {
+  font-size: 12.5px;
+  color: #efe7d8;
+  font-variant-numeric: tabular-nums;
+}
+
+.bench-chart-group {
+  padding: 8px 0 10px;
+}
+
+.bench-chart-group:not(:last-child) {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.bench-chart-group-label {
+  font-size: 12.5px;
+  color: #efe7d8;
+  margin-bottom: 6px;
+}
+
+.bench-chart-group .bench-chart-row {
+  grid-template-columns: 108px 1fr 52px;
+}
+
+@media (max-width: 640px) {
+  .bench-chart-row,
+  .bench-chart-group .bench-chart-row {
+    grid-template-columns: 66px 1fr 44px;
+  }
+  .bench-chart-label {
+    font-size: 11px;
+  }
+}
+
 footer {
   margin-top: 40px;
   padding: 48px 0;
