@@ -192,6 +192,36 @@ def test_quoted_strings_returns_empty_for_no_quotes():
     assert _quoted_strings("this issue names no literal string") == []
 
 
+def test_quoted_strings_does_not_bleed_across_two_separate_short_quotes():
+    # Real regression, found via a real deepseek-v4-flash Flash Review
+    # output (pr-review-benchmark case
+    # 018-axios-missing-null-check-charset). Two separate short quoted
+    # spans ("utf-8", 5 chars each) used to make the old {8,}-inside-the-
+    # regex version extract garbage: unable to satisfy the minimum length
+    # within either short pair (the character class can't cross a real
+    # quote character), the engine retried from the next quote it found -
+    # which was the first pair's closing delimiter, reinterpreted as an
+    # opening delimiter reaching all the way to the second pair's opening
+    # delimiter. The extracted "quote" was real narrative text that will
+    # never appear verbatim in any source file, so a correct, well-formed
+    # finding citing this text got rejected by _line_citation_content_matches
+    # for a citation problem that was never real.
+    text = (
+        'The regex captures surrounding quotes (e.g. `charset="utf-8"`), '
+        'so the function returns `"utf-8"` with quotes instead of `utf-8`.'
+    )
+    assert _quoted_strings(text) == []
+
+
+def test_quoted_strings_still_extracts_a_long_quote_next_to_a_short_one():
+    # Companion to the regression above: the fix must not overcorrect into
+    # dropping every quote just because a short one is nearby - only the
+    # short pair itself should be filtered, and a genuinely long, real
+    # anchor right next to it must still come through.
+    text = 'returns "ok" but should return "a real error message here" instead'
+    assert _quoted_strings(text) == ["a real error message here"]
+
+
 def test_line_citation_content_matches_true_when_quoted_string_is_at_claimed_line():
     finding = {"file": "a.py", "line": 3, "issue": 'missing quote: \'a specific buggy string here\''}
     file_contents = {"a.py": "one\ntwo\na specific buggy string here\nfour"}
