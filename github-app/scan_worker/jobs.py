@@ -222,15 +222,18 @@ GRAPH_COLD_SYNC_DEPTH_CAP = 50_000
 # GRAPH_COLD_SYNC_DEPTH_CAP for that reason.
 SECRETS_HISTORY_DEPTH_CAP = 20_000
 
-# The real, customer-facing promise for Pro ($34.99/mo): up to 300 PR
-# reviews/month. This is a usage ceiling for the promise itself, not a
+# The real, customer-facing promise for AIR ($29.99/mo): up to 500 PR
+# reviews/month (raised from 300 - real customers were hitting the old cap
+# without difficulty). This is a usage ceiling for the promise itself, not a
 # cost-protection measure; the existing dollar-based monthly_cap_for_installation
 # check stays in place as a separate defense against a pathological
-# per-review cost blowing past what 300 reviews should ever cost - see
+# per-review cost blowing past what 500 reviews should ever cost - see
 # model_tiers.py/flash_review.py for which model that cost is actually
 # priced against (Luna, falling back to deepseek-v4-flash).
-MAX_FLASH_REVIEWS_PER_MONTH = 300
-# Free-tier cap: half of paid, so paid stays clearly ahead.
+MAX_FLASH_REVIEWS_PER_MONTH = 500
+# Free-tier cap held at 150 deliberately (not scaled with the paid cap
+# above) - free tier is meant to stay generous and reach more people, not
+# track paid 1:1.
 MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH = 150
 DEFAULT_LLM_NEXT_CALL_RESERVE_USD = 0.001
 

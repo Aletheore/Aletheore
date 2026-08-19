@@ -6,7 +6,11 @@ from contextlib import contextmanager
 
 import pytest
 
-from scan_worker.jobs import MAX_FLASH_REVIEWS_PER_MONTH, run_pr_scan_job
+from scan_worker.jobs import (
+    MAX_FLASH_REVIEWS_PER_MONTH,
+    MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH,
+    run_pr_scan_job,
+)
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -1601,7 +1605,7 @@ def test_flash_review_job_skips_when_over_the_free_tier_monthly_cap(monkeypatch)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr(
         "scan_worker.jobs.get_flash_review_count_this_month",
-        lambda *a, **k: 150,  # == MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH
+        lambda *a, **k: MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH,
     )
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     run_called = []
