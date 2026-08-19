@@ -209,13 +209,25 @@ def get_llm_spend_this_month(dsn: str, installation_id: int) -> float:
 
 
 def record_llm_spend(
-    dsn: str, installation_id: int, cost_usd: float, monthly_cap: float | None = None
+    dsn: str,
+    installation_id: int,
+    cost_usd: float,
+    monthly_cap: float | None = None,
+    feature: str = "unknown",
 ) -> None:
     """monthly_cap: when given, logs a one-time warning if this call is the
     one that pushes the installation's spend this month past
     WARN_FRACTION_OF_CAP of it - see llm_cost.crossed_spend_warning_threshold.
     Omit it (as existing callers that predate this did) to skip the check
-    entirely; it has no effect on what gets recorded."""
+    entirely; it has no effect on what gets recorded.
+
+    feature: which surface this spend came from (e.g. "flash_review",
+    "managed_audit", "airview_full_build", "docs_incremental") - llm_spend
+    itself only stores one aggregate total per (installation_id, month), so
+    without this logged breakdown there is no way to later reconstruct
+    which feature is actually driving an installation's spend. Every
+    caller should pass a real label; "unknown" exists only so this doesn't
+    hard-fail if a future call site forgets to set it."""
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -230,6 +242,12 @@ def record_llm_spend(
             )
             row = cur.fetchone()
         conn.commit()
+
+    if cost_usd > 0:
+        logger.info(
+            "llm_spend: installation=%s feature=%s cost_usd=%.4f",
+            installation_id, feature, cost_usd,
+        )
 
     if monthly_cap is not None and row is not None:
         new_total = float(row[0])

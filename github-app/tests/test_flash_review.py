@@ -1873,3 +1873,89 @@ def test_build_blast_radius_context_caller_using_different_symbol_not_flagged():
 
     context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
     assert "is called from:" not in context
+
+
+# ── review_diff via the free-tier adapter_chain fallback ───────────────
+
+
+class _FakeChainAdapter:
+    def __init__(self, name: str, response: str | None = None, raises: Exception | None = None):
+        self.name = name
+        self._response = response
+        self._raises = raises
+        self.calls = 0
+
+    def simple_completion(self, system_prompt, user_prompt, cwd):
+        self.calls += 1
+        if self._raises is not None:
+            raise self._raises
+        return self._response
+
+
+def test_review_diff_falls_through_to_next_provider_on_malformed_json():
+    # A response that succeeds at the HTTP level but isn't valid JSON must
+    # still count as a failed attempt for the free-tier chain, or
+    # run_with_free_tier_fallback has no way to know to try the next
+    # provider - it only reacts to raised exceptions.
+    first = _FakeChainAdapter("Groq", response="not valid json at all")
+    second = _FakeChainAdapter(
+        "Gemini",
+        response='[{"file": "app.py", "line": 1, "issue": "real issue from the second provider"}]',
+    )
+
+    findings = review_diff(
+        "--- app.py ---\n@@ -1,1 +1,1 @@\n+print(1)",
+        adapter_chain=[first, second],
+    )
+
+    assert first.calls == 1
+    assert second.calls == 1
+    assert findings == [{"file": "app.py", "line": 1, "issue": "real issue from the second provider"}]
+
+
+def test_review_diff_falls_through_to_next_provider_on_non_list_json():
+    first = _FakeChainAdapter("Groq", response='{"file": "app.py", "line": 1, "issue": "not a list"}')
+    second = _FakeChainAdapter(
+        "Gemini",
+        response='[{"file": "app.py", "line": 1, "issue": "real issue from the second provider"}]',
+    )
+
+    findings = review_diff(
+        "--- app.py ---\n@@ -1,1 +1,1 @@\n+print(1)",
+        adapter_chain=[first, second],
+    )
+
+    assert first.calls == 1
+    assert second.calls == 1
+    assert findings == [{"file": "app.py", "line": 1, "issue": "real issue from the second provider"}]
+
+
+def test_review_diff_uses_first_providers_valid_json_without_falling_through():
+    first = _FakeChainAdapter(
+        "Groq",
+        response='[{"file": "app.py", "line": 1, "issue": "found by the first provider"}]',
+    )
+    second = _FakeChainAdapter("Gemini", response="should never be called")
+
+    findings = review_diff(
+        "--- app.py ---\n@@ -1,1 +1,1 @@\n+print(1)",
+        adapter_chain=[first, second],
+    )
+
+    assert first.calls == 1
+    assert second.calls == 0
+    assert findings == [{"file": "app.py", "line": 1, "issue": "found by the first provider"}]
+
+
+def test_review_diff_returns_empty_findings_when_every_chain_provider_fails():
+    first = _FakeChainAdapter("Groq", response="garbage")
+    second = _FakeChainAdapter("Gemini", response="also garbage")
+
+    findings = review_diff(
+        "--- app.py ---\n@@ -1,1 +1,1 @@\n+print(1)",
+        adapter_chain=[first, second],
+    )
+
+    assert first.calls == 1
+    assert second.calls == 1
+    assert findings == []

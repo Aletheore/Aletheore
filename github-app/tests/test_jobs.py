@@ -1011,7 +1011,7 @@ def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeyp
     recorded_spend = []
     monkeypatch.setattr(
         "scan_worker.jobs.record_llm_spend",
-        lambda dsn, iid, cost: recorded_spend.append(cost),
+        lambda dsn, iid, cost, **k: recorded_spend.append(cost),
     )
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.insert_audit_report", lambda *a, **k: None)
@@ -1457,18 +1457,95 @@ def test_managed_audit_pr_job_skips_llm_call_when_rate_limited(monkeypatch, tmp_
     assert posted["marker"] == AUDIT_COMMENT_MARKER
 
 
-def test_flash_review_job_skips_free_tier(monkeypatch):
+def test_flash_review_job_routes_free_tier_to_free_tier_path(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"}
     )
-    llm_called = []
-    monkeypatch.setattr("scan_worker.jobs.review_diff", lambda *a, **k: llm_called.append(True))
-    from scan_worker.jobs import run_flash_review_job
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0
+    )
+    # Mock the free-tier adapter chain to have one working adapter
+    from unittest.mock import MagicMock
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = "[]"
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.writing_adapter_chain_for_free_tier",
+        lambda *a, **k: [mock_adapter],
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: _FakeRedis())
+    monkeypatch.setattr("scan_worker.jobs.resolve_model", lambda *a: "gpt-5.6-luna")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- a.py ---\n+real change\n")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["a.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_context", lambda *a, **k: "")
+    # Deliberately False (not the True this test used to hardcode) - True
+    # short-circuits _run_flash_review before it ever builds the adapter
+    # chain or calls review_diff, which would silently pass this test
+    # while exercising none of the free-tier code it's named for.
+    monkeypatch.setattr("scan_worker.jobs.is_non_substantive_diff", lambda *a: False)
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs.build_code_evidence_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_dependency_impact_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_change_impact_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_blast_radius_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_referenced_symbol_context", lambda *a: "")
 
+    cost_for_usage_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.cost_for_usage",
+        lambda *a: cost_for_usage_calls.append(a) or 999.0,  # loud, obviously-wrong value if ever called
+    )
+    cache_lookup_calls = []
+    cache_write_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.lookup_cached_flash_review_result",
+        lambda *a: cache_lookup_calls.append(a) or None,
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.store_flash_review_result",
+        lambda *a, **k: cache_write_calls.append(a),
+    )
+    record_llm_spend_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_llm_spend",
+        lambda *a, **k: record_llm_spend_calls.append(a),
+    )
+    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.installation_spend_lock", _noop_spend_lock
+    )
+
+    from scan_worker.jobs import run_flash_review_job
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
-    assert llm_called == []
+    # The free-tier chain's adapter was really called - proves the free-tier
+    # path was actually exercised, not short-circuited before it started.
+    mock_adapter.simple_completion.assert_called_once()
+
+    # Fix for Issue A: free-tier tokens must never get priced at the paid
+    # (Luna/DeepSeek) rate - cost_for_usage should never be called at all
+    # for a free-tier review.
+    assert cost_for_usage_calls == []
+    # The spend actually recorded must be $0, not whatever cost_for_usage
+    # would have produced if it had (wrongly) been called.
+    assert record_llm_spend_calls == [("postgresql://unused", 1, 0.0)]
+
+    # Fix for Issue B: free-tier reviews must never read or write the
+    # shared similarity cache, so a paid customer who upgraded from free
+    # can never be served a free-tier-model cached result.
+    assert cache_lookup_calls == []
+    assert cache_write_calls == []
 
 
 def test_flash_review_job_skips_when_debounced(monkeypatch):
@@ -4193,7 +4270,7 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
     recorded_spend = []
     monkeypatch.setattr(
         "scan_worker.jobs.record_llm_spend",
-        lambda dsn, iid, cost: recorded_spend.append(cost),
+        lambda dsn, iid, cost, **k: recorded_spend.append(cost),
     )
     status_calls = []
     monkeypatch.setattr(

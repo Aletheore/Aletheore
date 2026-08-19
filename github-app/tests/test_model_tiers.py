@@ -3,12 +3,38 @@ import logging
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from scan_worker.model_tiers import (
     LUNA_MODEL,
+    OPENAI_FREE_TIER_DAILY_TOKEN_CAP,
     PRO_MODEL,
+    FreeTierFallbackExhausted,
     model_for_plan,
     resolve_model,
+    run_with_free_tier_fallback,
+    writing_adapter_chain_for_free_tier,
     writing_adapter_for,
     writing_adapter_for_plan,
 )
+
+
+class _FakeRedis:
+    """Minimal in-memory stand-in for the get/incrby/expire surface
+    writing_adapter_chain_for_free_tier's token-cap logic uses - real
+    Postgres/Redis-backed tests live in test_jobs.py, this just needs to
+    exercise the cap logic itself in isolation."""
+
+    def __init__(self, initial: dict[str, int] | None = None):
+        self.data = dict(initial or {})
+        self.expiries: dict[str, int] = {}
+
+    def get(self, key):
+        value = self.data.get(key)
+        return str(value).encode() if value is not None else None
+
+    def incrby(self, key, amount):
+        self.data[key] = self.data.get(key, 0) + amount
+        return self.data[key]
+
+    def expire(self, key, ttl_seconds):
+        self.expiries[key] = ttl_seconds
 
 
 def test_resolve_model_returns_luna_when_openai_key_configured(monkeypatch):
@@ -85,3 +111,272 @@ def test_model_for_plan_never_drifts_from_writing_adapter_for_plan(monkeypatch):
         for plan in ["pro", "free"]:
             adapter = writing_adapter_for_plan(plan)
             assert model_for_plan(plan) == adapter._model, (key_configured, plan)
+
+
+# ── free-tier adapter chain tests ───────────────────────────────────────
+
+
+def test_writing_adapter_chain_for_free_tier_includes_configured_providers(monkeypatch):
+    def fake_has_api_key(env_var, name, **kwargs):
+        return env_var in ("GROQ_API_KEY", "GEMINI_API_KEY")
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", fake_has_api_key)
+    chain = writing_adapter_chain_for_free_tier(_FakeRedis())
+    names = [a.name for a in chain]
+    assert "Groq" in names
+    assert "Gemini" in names
+    assert "OpenRouter" not in names
+    assert "OpenAI-FreeTier" not in names
+
+
+def test_writing_adapter_chain_for_free_tier_skips_unconfigured_providers(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    chain = writing_adapter_chain_for_free_tier(_FakeRedis())
+    assert chain == []
+
+
+def test_writing_adapter_chain_for_free_tier_builds_correct_adapter_details(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    chain = writing_adapter_chain_for_free_tier(_FakeRedis())
+    by_name = {a.name: a for a in chain}
+
+    assert by_name["Groq"]._base_url == "https://api.groq.com/openai/v1"
+    assert by_name["Groq"]._model == "openai/gpt-oss-120b"
+    assert by_name["Groq"]._api_key_env_var == "GROQ_API_KEY"
+
+    assert by_name["Gemini"]._base_url == "https://generativelanguage.googleapis.com/v1beta/openai"
+    assert by_name["Gemini"]._model == "gemini-3.5-flash"
+
+    assert by_name["OpenRouter"]._base_url == "https://openrouter.ai/api/v1"
+    assert by_name["OpenRouter"]._model == "nvidia/nemotron-3.5-lightning:free"
+
+    assert by_name["OpenAI-FreeTier"]._base_url == "https://api.openai.com/v1"
+    assert by_name["OpenAI-FreeTier"]._model == "gpt-5-nano"
+    assert by_name["OpenAI-FreeTier"]._extra_body == {"reasoning_effort": "minimal"}
+    assert by_name["OpenAI-FreeTier"]._before_llm_call is not None
+
+
+def test_writing_adapter_chain_for_free_tier_orders_openai_before_openrouter(monkeypatch):
+    # Fallback priority order: Groq, Gemini, OpenAI free-tier key,
+    # OpenRouter last - OpenRouter is the weakest/most rate-limit-prone
+    # free option of the four, so it's tried only after everything else
+    # (including the dollar-costing OpenAI key) has failed.
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    chain = writing_adapter_chain_for_free_tier(_FakeRedis())
+    names = [a.name for a in chain]
+    assert names == ["Groq", "Gemini", "OpenAI-FreeTier", "OpenRouter"]
+
+
+def test_writing_adapter_chain_for_free_tier_passes_on_usage(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    received = []
+    chain = writing_adapter_chain_for_free_tier(_FakeRedis(), on_usage=lambda p, c: received.append((p, c)))
+    for adapter in chain:
+        adapter._on_usage(10, 20)
+    assert received == [(10, 20)] * len(chain)
+
+
+# ── OpenAI free-tier daily token cap ────────────────────────────────────
+# Real free daily allowance (OpenAI's shared-traffic free tier: gpt-5-nano
+# and other mini/nano models get 2,500,000 free tokens PER DAY, not per
+# month - confirmed against OpenAI's own published free-tier terms), not
+# an abuse ceiling. Enforced via before_llm_call (an atomic reserve-then-
+# true-up, invoked only when a real call is about to happen) rather than
+# by deciding whether to include the adapter in the chain at build time -
+# see _reserve_openai_free_tier_budget's docstring for why a plain
+# read-then-decide check at build time had a real concurrency gap.
+
+
+def test_building_the_chain_alone_never_reserves_openai_budget(monkeypatch):
+    # Regression guard: reservation must only happen when a real call is
+    # about to be attempted (via before_llm_call), not merely because the
+    # adapter was included in the chain - otherwise an adapter that's
+    # never actually reached (an earlier provider succeeded first) would
+    # still burn real budget for nothing.
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    from scan_worker.model_tiers import _openai_free_tier_token_key
+
+    redis_conn = _FakeRedis()
+    chain = writing_adapter_chain_for_free_tier(redis_conn)
+
+    assert "OpenAI-FreeTier" in [a.name for a in chain]
+    assert redis_conn.data.get(_openai_free_tier_token_key(), 0) == 0
+
+
+def test_openai_free_tier_before_llm_call_blocks_once_daily_cap_reached(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    from scan_worker.model_tiers import _openai_free_tier_token_key
+
+    redis_conn = _FakeRedis({_openai_free_tier_token_key(): OPENAI_FREE_TIER_DAILY_TOKEN_CAP})
+    chain = writing_adapter_chain_for_free_tier(redis_conn)
+    openai_adapter = next(a for a in chain if a.name == "OpenAI-FreeTier")
+
+    assert openai_adapter._before_llm_call() is False
+    # The refused reservation released itself - the counter isn't left
+    # permanently inflated by a reservation nobody got to use.
+    assert redis_conn.data[_openai_free_tier_token_key()] == OPENAI_FREE_TIER_DAILY_TOKEN_CAP
+
+
+def test_openai_free_tier_before_llm_call_allows_under_daily_cap(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    from scan_worker.model_tiers import OPENAI_FREE_TIER_RESERVATION_TOKENS, _openai_free_tier_token_key
+
+    redis_conn = _FakeRedis()
+    chain = writing_adapter_chain_for_free_tier(redis_conn)
+    openai_adapter = next(a for a in chain if a.name == "OpenAI-FreeTier")
+
+    assert openai_adapter._before_llm_call() is True
+    assert redis_conn.data[_openai_free_tier_token_key()] == OPENAI_FREE_TIER_RESERVATION_TOKENS
+
+
+def test_openai_free_tier_reservation_is_atomic_across_concurrent_calls(monkeypatch):
+    # Simulates the TOCTOU race this fix closes: two "concurrent" reviews
+    # both attempting to reserve budget right at the cap boundary. With a
+    # plain read-then-decide check, both could read "under cap" before
+    # either recorded anything. With reservation, each INCRBY is atomic
+    # and lands in order, so the second one genuinely sees the
+    # post-reservation total and is correctly refused.
+    from scan_worker.model_tiers import (
+        OPENAI_FREE_TIER_RESERVATION_TOKENS,
+        _openai_free_tier_token_key,
+        _reserve_openai_free_tier_budget,
+    )
+
+    redis_conn = _FakeRedis({
+        _openai_free_tier_token_key(): OPENAI_FREE_TIER_DAILY_TOKEN_CAP - OPENAI_FREE_TIER_RESERVATION_TOKENS
+    })
+
+    first = _reserve_openai_free_tier_budget(redis_conn)
+    second = _reserve_openai_free_tier_budget(redis_conn)
+
+    assert first is True
+    assert second is False
+    assert redis_conn.data[_openai_free_tier_token_key()] == OPENAI_FREE_TIER_DAILY_TOKEN_CAP
+
+
+def test_openai_free_tier_usage_trues_up_the_reservation_to_the_real_total(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    from scan_worker.model_tiers import _openai_free_tier_token_key
+
+    redis_conn = _FakeRedis()
+    chain = writing_adapter_chain_for_free_tier(redis_conn)
+    openai_adapter = next(a for a in chain if a.name == "OpenAI-FreeTier")
+
+    assert openai_adapter._before_llm_call() is True  # reserves the conservative estimate
+    openai_adapter._on_usage(1000, 500)  # trues up to the real total
+
+    assert redis_conn.data[_openai_free_tier_token_key()] == 1500
+    assert redis_conn.expiries[_openai_free_tier_token_key()] == 2 * 24 * 3600
+
+
+def test_openai_free_tier_usage_still_forwards_to_the_shared_on_usage(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    received = []
+    chain = writing_adapter_chain_for_free_tier(
+        _FakeRedis(), on_usage=lambda p, c: received.append((p, c))
+    )
+    openai_adapter = next(a for a in chain if a.name == "OpenAI-FreeTier")
+
+    openai_adapter._on_usage(10, 20)
+
+    assert received == [(10, 20)]
+
+
+# ── cascading fallback tests ────────────────────────────────────────────
+
+
+def test_run_with_free_tier_fallback_uses_first_succeeding_adapter():
+    call_log = []
+
+    class FakeAdapter:
+        def __init__(self, name, succeeds):
+            self.name = name
+            self._succeeds = succeeds
+
+    adapters = [
+        FakeAdapter("failing-1", False),
+        FakeAdapter("failing-2", False),
+        FakeAdapter("succeeding", True),
+    ]
+
+    def fn(adapter):
+        call_log.append(adapter.name)
+        if not adapter._succeeds:
+            raise RuntimeError(f"{adapter.name} is down")
+        return f"result from {adapter.name}"
+
+    result = run_with_free_tier_fallback(adapters, fn)
+    assert result == "result from succeeding"
+    assert call_log == ["failing-1", "failing-2", "succeeding"]
+
+
+def test_run_with_free_tier_fallback_raises_when_all_fail():
+    class AlwaysFails:
+        def __init__(self, name):
+            self.name = name
+
+    adapters = [AlwaysFails("prov-a"), AlwaysFails("prov-b")]
+
+    def fn(adapter):
+        raise ConnectionError(f"{adapter.name} timeout")
+
+    try:
+        run_with_free_tier_fallback(adapters, fn)
+        assert False, "should have raised"
+    except FreeTierFallbackExhausted as exc:
+        assert len(exc.errors) == 2
+        assert exc.errors[0][0] == "prov-a"
+        assert exc.errors[1][0] == "prov-b"
+        assert "prov-a" in str(exc)
+        assert "prov-b" in str(exc)
+
+
+def test_run_with_free_tier_fallback_logs_each_failure(monkeypatch, caplog):
+    class AlwaysFails:
+        def __init__(self, name):
+            self.name = name
+
+    adapters = [AlwaysFails("bad-1"), AlwaysFails("bad-2")]
+
+    def fn(adapter):
+        raise RuntimeError("nope")
+
+    with caplog.at_level(logging.WARNING, logger="scan_worker.model_tiers"):
+        try:
+            run_with_free_tier_fallback(adapters, fn)
+        except FreeTierFallbackExhausted:
+            pass
+
+    assert "bad-1" in caplog.text
+    assert "bad-2" in caplog.text
+    assert "RuntimeError" in caplog.text
+
+
+def test_run_with_free_tier_fallback_logs_successful_provider(monkeypatch, caplog):
+    class FakeAdapter:
+        def __init__(self, name):
+            self.name = name
+
+    adapters = [FakeAdapter("winner")]
+
+    def fn(adapter):
+        return "ok"
+
+    with caplog.at_level(logging.INFO, logger="scan_worker.model_tiers"):
+        result = run_with_free_tier_fallback(adapters, fn)
+
+    assert result == "ok"
+    assert "winner" in caplog.text
+    assert "served request successfully" in caplog.text
+
+
+def test_run_with_free_tier_fallback_single_adapter_succeeds():
+    class SingleAdapter:
+        name = "only-one"
+
+    adapters = [SingleAdapter()]
+
+    def fn(adapter):
+        return "direct success"
+
+    assert run_with_free_tier_fallback(adapters, fn) == "direct success"
