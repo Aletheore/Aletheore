@@ -418,6 +418,141 @@ def test_review_diff_drops_a_hallucinated_finding_outside_the_diff(mock_adapter_
     assert findings == [{"file": "app.py", "line": 42, "issue": "real, inside the diff"}]
 
 
+# ── adapter_chain (free-tier cascading fallback) integration ────────────
+#
+# The fallback loop itself (run_with_free_tier_fallback) has its own unit
+# tests in test_model_tiers.py, against fake callables. These test the
+# actual integration point in review_diff() - _call_adapter_and_validate,
+# which is what makes a real weak-model failure (non-JSON output) actually
+# trigger a fallback, and what happens when every real adapter in the
+# chain is exhausted - neither had any coverage before.
+
+
+def test_review_diff_falls_back_to_the_next_adapter_in_the_chain_on_failure():
+    first = MagicMock()
+    first.name = "Groq"
+    first.simple_completion.side_effect = RuntimeError("rate limited")
+    second = MagicMock()
+    second.name = "Gemini"
+    second.simple_completion.return_value = (
+        '[{"file": "app.py", "line": 42, "issue": "found by the second provider"}]'
+    )
+
+    findings = review_diff(
+        "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')",
+        adapter_chain=[first, second],
+    )
+
+    assert findings == [{"file": "app.py", "line": 42, "issue": "found by the second provider"}]
+    first.simple_completion.assert_called_once()
+    second.simple_completion.assert_called_once()
+
+
+def test_review_diff_treats_non_json_output_as_a_failure_and_tries_the_next_adapter():
+    # The real failure mode _call_adapter_and_validate exists for: a weak
+    # free-tier model returns a plain-English refusal or partial output
+    # instead of a JSON list. run_with_free_tier_fallback only reacts to
+    # raised exceptions, so without this, a malformed-but-200 response
+    # would be silently accepted as final and the rest of the chain would
+    # never be tried.
+    weak_model = MagicMock()
+    weak_model.name = "OpenRouter"
+    weak_model.simple_completion.return_value = "I don't see any issues with this code."
+    strong_model = MagicMock()
+    strong_model.name = "Groq"
+    strong_model.simple_completion.return_value = (
+        '[{"file": "app.py", "line": 42, "issue": "real finding from the working adapter"}]'
+    )
+
+    findings = review_diff(
+        "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')",
+        adapter_chain=[weak_model, strong_model],
+    )
+
+    assert findings == [{"file": "app.py", "line": 42, "issue": "real finding from the working adapter"}]
+
+
+def test_review_diff_treats_non_json_list_as_a_failure_and_tries_the_next_adapter():
+    # Distinct from the above: valid JSON that parses but isn't a list
+    # (e.g. a model that wraps its answer in an object) must also count as
+    # a failure worth falling back on, not just outright non-JSON text.
+    weak_model = MagicMock()
+    weak_model.name = "OpenRouter"
+    weak_model.simple_completion.return_value = '{"findings": []}'
+    strong_model = MagicMock()
+    strong_model.name = "Groq"
+    strong_model.simple_completion.return_value = "[]"
+
+    findings = review_diff(
+        "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')",
+        adapter_chain=[weak_model, strong_model],
+    )
+
+    assert findings == []
+    weak_model.simple_completion.assert_called_once()
+    strong_model.simple_completion.assert_called_once()
+
+
+def test_review_diff_returns_no_findings_when_every_adapter_in_the_chain_fails():
+    first = MagicMock()
+    first.name = "Groq"
+    first.simple_completion.side_effect = RuntimeError("rate limited")
+    second = MagicMock()
+    second.name = "Gemini"
+    second.simple_completion.side_effect = TimeoutError("upstream timeout")
+
+    # Same "no findings, not a crash" degradation as a single malformed
+    # response - a free user's PR gets a quiet "nothing found" rather than
+    # an exception bubbling up into a scary failure comment.
+    findings = review_diff(
+        "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')",
+        adapter_chain=[first, second],
+    )
+
+    assert findings == []
+
+
+def test_review_diff_calls_on_free_tier_exhausted_with_every_provider_error():
+    first = MagicMock()
+    first.name = "Groq"
+    first.simple_completion.side_effect = RuntimeError("rate limited")
+    second = MagicMock()
+    second.name = "Gemini"
+    second.simple_completion.side_effect = TimeoutError("upstream timeout")
+
+    calls = []
+    findings = review_diff(
+        "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')",
+        adapter_chain=[first, second],
+        on_free_tier_exhausted=lambda errors: calls.append(errors),
+    )
+
+    assert findings == []
+    assert len(calls) == 1
+    names = [name for name, _exc in calls[0]]
+    assert names == ["Groq", "Gemini"]
+    assert isinstance(calls[0][0][1], RuntimeError)
+    assert isinstance(calls[0][1][1], TimeoutError)
+
+
+def test_review_diff_does_not_call_on_free_tier_exhausted_when_a_provider_succeeds():
+    first = MagicMock()
+    first.name = "Groq"
+    first.simple_completion.side_effect = RuntimeError("rate limited")
+    second = MagicMock()
+    second.name = "Gemini"
+    second.simple_completion.return_value = "[]"
+
+    calls = []
+    review_diff(
+        "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')",
+        adapter_chain=[first, second],
+        on_free_tier_exhausted=lambda errors: calls.append(errors),
+    )
+
+    assert calls == []
+
+
 def test_review_diff_serves_validated_cache_hit_without_calling_the_model():
     diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
     cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding"}]
@@ -1873,3 +2008,89 @@ def test_build_blast_radius_context_caller_using_different_symbol_not_flagged():
 
     context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
     assert "is called from:" not in context
+
+
+# ── review_diff via the free-tier adapter_chain fallback ───────────────
+
+
+class _FakeChainAdapter:
+    def __init__(self, name: str, response: str | None = None, raises: Exception | None = None):
+        self.name = name
+        self._response = response
+        self._raises = raises
+        self.calls = 0
+
+    def simple_completion(self, system_prompt, user_prompt, cwd):
+        self.calls += 1
+        if self._raises is not None:
+            raise self._raises
+        return self._response
+
+
+def test_review_diff_falls_through_to_next_provider_on_malformed_json():
+    # A response that succeeds at the HTTP level but isn't valid JSON must
+    # still count as a failed attempt for the free-tier chain, or
+    # run_with_free_tier_fallback has no way to know to try the next
+    # provider - it only reacts to raised exceptions.
+    first = _FakeChainAdapter("Groq", response="not valid json at all")
+    second = _FakeChainAdapter(
+        "Gemini",
+        response='[{"file": "app.py", "line": 1, "issue": "real issue from the second provider"}]',
+    )
+
+    findings = review_diff(
+        "--- app.py ---\n@@ -1,1 +1,1 @@\n+print(1)",
+        adapter_chain=[first, second],
+    )
+
+    assert first.calls == 1
+    assert second.calls == 1
+    assert findings == [{"file": "app.py", "line": 1, "issue": "real issue from the second provider"}]
+
+
+def test_review_diff_falls_through_to_next_provider_on_non_list_json():
+    first = _FakeChainAdapter("Groq", response='{"file": "app.py", "line": 1, "issue": "not a list"}')
+    second = _FakeChainAdapter(
+        "Gemini",
+        response='[{"file": "app.py", "line": 1, "issue": "real issue from the second provider"}]',
+    )
+
+    findings = review_diff(
+        "--- app.py ---\n@@ -1,1 +1,1 @@\n+print(1)",
+        adapter_chain=[first, second],
+    )
+
+    assert first.calls == 1
+    assert second.calls == 1
+    assert findings == [{"file": "app.py", "line": 1, "issue": "real issue from the second provider"}]
+
+
+def test_review_diff_uses_first_providers_valid_json_without_falling_through():
+    first = _FakeChainAdapter(
+        "Groq",
+        response='[{"file": "app.py", "line": 1, "issue": "found by the first provider"}]',
+    )
+    second = _FakeChainAdapter("Gemini", response="should never be called")
+
+    findings = review_diff(
+        "--- app.py ---\n@@ -1,1 +1,1 @@\n+print(1)",
+        adapter_chain=[first, second],
+    )
+
+    assert first.calls == 1
+    assert second.calls == 0
+    assert findings == [{"file": "app.py", "line": 1, "issue": "found by the first provider"}]
+
+
+def test_review_diff_returns_empty_findings_when_every_chain_provider_fails():
+    first = _FakeChainAdapter("Groq", response="garbage")
+    second = _FakeChainAdapter("Gemini", response="also garbage")
+
+    findings = review_diff(
+        "--- app.py ---\n@@ -1,1 +1,1 @@\n+print(1)",
+        adapter_chain=[first, second],
+    )
+
+    assert first.calls == 1
+    assert second.calls == 1
+    assert findings == []

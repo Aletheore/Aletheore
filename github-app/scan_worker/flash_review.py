@@ -826,6 +826,9 @@ def review_diff(
     file_contents: dict[str, str] | None = None,
     on_grounding_result: Callable[[dict], None] | None = None,
     diff_patches: tuple[tuple[str, str], ...] | None = None,
+    adapter=None,
+    adapter_chain: list | None = None,
+    on_free_tier_exhausted: Callable[[list[tuple[str, Exception]]], None] | None = None,
 ) -> list[dict]:
     if not diff_text.strip():
         return []
@@ -855,7 +858,6 @@ def review_diff(
                 on_grounding_result({"proposed": len(combined), "kept": len(kept)})
             return kept
 
-    adapter = writing_adapter_for(FLASH_REVIEW_FALLBACK_MODEL, on_usage=on_usage)
     prompt_parts = [diff_text]
     if file_context:
         prompt_parts.append(file_context)
@@ -866,7 +868,50 @@ def review_diff(
     if pr_context:
         prompt_parts.append(pr_context)
     user_prompt = "\n\n".join(prompt_parts)
-    raw_output = adapter.simple_completion(FLASH_REVIEW_SYSTEM_PROMPT, user_prompt, cwd=".")
+
+    def _call_adapter(used_adapter) -> str:
+        return used_adapter.simple_completion(FLASH_REVIEW_SYSTEM_PROMPT, user_prompt, cwd=".")
+
+    def _call_adapter_and_validate(used_adapter) -> str:
+        # Only used by the free-tier fallback chain: run_with_free_tier_fallback
+        # only reacts to raised exceptions, so a response that succeeds at the
+        # HTTP level but isn't a valid JSON list (a real failure mode on
+        # weaker free-tier models) must be raised here, or the chain would
+        # silently accept it as final and never try the remaining providers.
+        raw = _call_adapter(used_adapter)
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{used_adapter.name} returned non-JSON output") from exc
+        if not isinstance(parsed, list):
+            raise ValueError(f"{used_adapter.name} returned JSON that wasn't a list")
+        return raw
+
+    if adapter is not None:
+        raw_output = _call_adapter(adapter)
+    elif adapter_chain is not None:
+        from scan_worker.model_tiers import FreeTierFallbackExhausted, run_with_free_tier_fallback
+        try:
+            raw_output = run_with_free_tier_fallback(adapter_chain, _call_adapter_and_validate)
+        except FreeTierFallbackExhausted as exc:
+            # Same "no findings, not a crash" philosophy as a single
+            # malformed response below - every free-tier provider having
+            # failed is a real infra problem, but it shouldn't turn into
+            # an unhandled exception and a scary failure comment on the
+            # PR when "report no issues found" is the safer degradation.
+            # A logger.warning alone is invisible to ops, though - if every
+            # provider is genuinely down (a rotated key, a real outage),
+            # this degradation would otherwise mask silently-broken free
+            # tier reviews indefinitely. on_free_tier_exhausted gives the
+            # caller (jobs.py) a hook to surface that operationally without
+            # coupling this function to any particular alerting mechanism.
+            logger.warning("flash review: every free-tier provider failed (%s)", exc)
+            if on_free_tier_exhausted is not None:
+                on_free_tier_exhausted(exc.errors)
+            raw_output = "[]"
+    else:
+        adapter = writing_adapter_for(FLASH_REVIEW_FALLBACK_MODEL, on_usage=on_usage)
+        raw_output = _call_adapter(adapter)
 
     try:
         findings = json.loads(raw_output)

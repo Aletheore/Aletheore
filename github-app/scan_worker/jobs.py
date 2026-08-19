@@ -216,6 +216,8 @@ SECRETS_HISTORY_DEPTH_CAP = 20_000
 # model_tiers.py/flash_review.py for which model that cost is actually
 # priced against (Luna, falling back to deepseek-v4-flash).
 MAX_FLASH_REVIEWS_PER_MONTH = 300
+# Free-tier cap: half of paid, so paid stays clearly ahead.
+MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH = 150
 DEFAULT_LLM_NEXT_CALL_RESERVE_USD = 0.001
 
 
@@ -1261,6 +1263,7 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                         installation_id,
                         spend_accumulator["total"],
                         monthly_cap=monthly_cap,
+                        feature="managed_audit",
                     )
                 verification_token = _sign_and_persist_audit_report(
                     settings,
@@ -1350,6 +1353,7 @@ def run_managed_audit_api_job(
             model_for_plan(plan),
             current_spend,
             monthly_cap,
+            feature="managed_audit",
         )
 
         result = run_managed_audit(
@@ -1385,8 +1389,10 @@ def run_flash_review_job(
 ) -> None:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    if installation is None or installation["plan"] == "free":
+    if installation is None:
         return
+
+    is_free_tier = installation["plan"] == "free"
 
     if not check_and_reserve_monthly_repo_scan_slot(
         settings.database_url, installation_id, repo_full_name, MAX_SCANNED_REPOS_PER_MONTH
@@ -1413,18 +1419,35 @@ def run_flash_review_job(
     # installation in quick succession. The lock is now acquired twice,
     # briefly, around the check and (inside _run_flash_review) around the
     # final spend record - never around the expensive work in between.
-    with installation_spend_lock(settings.database_url, installation_id):
-        extra_seats = get_extra_seats(settings.database_url, installation_id)
-        monthly_cap = monthly_cap_for_installation(base_cap_for_plan(installation["plan"]), extra_seats)
-        current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
-        if current_spend >= monthly_cap:
-            return
-        if get_flash_review_count_this_month(settings.database_url, installation_id) >= MAX_FLASH_REVIEWS_PER_MONTH:
-            return
+    if is_free_tier:
+        # Free-tier: request-count cap, no dollar cap (providers are free/near-free).
+        # Locked the same way the paid branch below locks its own count
+        # check - without it, two concurrent Flash Reviews on the same free
+        # installation (e.g. two PRs pushed at once, landing on different
+        # scan-worker replicas) could both read the count as under-cap
+        # before either recorded an attempt, overshooting
+        # MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH by however many land in that
+        # window - the same class of race this PR's OpenAI daily-token cap
+        # fix (see model_tiers._reserve_openai_free_tier_budget) closes for
+        # a different counter.
+        with installation_spend_lock(settings.database_url, installation_id):
+            if get_flash_review_count_this_month(settings.database_url, installation_id) >= MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH:
+                return
+        monthly_cap = 0.0  # no dollar cap for free tier
+    else:
+        with installation_spend_lock(settings.database_url, installation_id):
+            extra_seats = get_extra_seats(settings.database_url, installation_id)
+            monthly_cap = monthly_cap_for_installation(base_cap_for_plan(installation["plan"]), extra_seats)
+            current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
+            if current_spend >= monthly_cap:
+                return
+            if get_flash_review_count_this_month(settings.database_url, installation_id) >= MAX_FLASH_REVIEWS_PER_MONTH:
+                return
 
     try:
         _run_flash_review(
-            settings, installation_id, repo_full_name, pr_number, base_sha, head_sha, monthly_cap
+            settings, installation_id, repo_full_name, pr_number, base_sha, head_sha, monthly_cap,
+            is_free_tier=is_free_tier,
         )
     except Exception as exc:  # noqa: BLE001
         try:
@@ -1443,6 +1466,8 @@ def _run_flash_review(
     base_sha: str,
     head_sha: str,
     monthly_cap: float,
+    *,
+    is_free_tier: bool = False,
 ) -> None:
     app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
     token = _token_sync(installation_id, app_jwt)
@@ -1516,6 +1541,17 @@ def _run_flash_review(
         flash_review_model = resolve_model(FLASH_REVIEW_FALLBACK_MODEL)
 
         def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
+            if is_free_tier:
+                # Free-tier providers (Groq/Gemini/OpenRouter, and OpenAI's
+                # real free daily allowance) cost nothing against Aletheore's
+                # paid model pricing. Pricing their tokens at
+                # flash_review_model's (Luna or DeepSeek) real per-token rate
+                # would write phantom spend into this installation's shared
+                # llm_spend ledger - the same row a later paid-plan upgrade
+                # reads as real, already-consumed monthly budget. OpenAI's
+                # real free-tier usage is tracked separately, in tokens, not
+                # dollars (see model_tiers.OPENAI_FREE_TIER_DAILY_TOKEN_CAP).
+                return
             spend_accumulator["total"] += cost_for_usage(
                 flash_review_model, prompt_tokens, completion_tokens
             )
@@ -1529,6 +1565,35 @@ def _run_flash_review(
         def _on_grounding_result(stats: dict) -> None:
             grounding_result.update(stats)
 
+        def _on_free_tier_exhausted(errors: list[tuple[str, Exception]]) -> None:
+            # Every free-tier provider failed for one review - possibly a
+            # transient outage across four independent providers at once,
+            # but also possibly a rotated/expired key silently blackholing
+            # every free-tier review from now on. Either way this needs a
+            # human, not just a log line nobody's watching - reuses the
+            # same cooldown-guarded ops-alert path other production
+            # incidents already go through, so this can't spam either.
+            _send_ops_alert(
+                get_redis_client(),
+                "flash_review.free_tier_exhausted",
+                f"all {len(errors)} free-tier providers failed for a Flash Review",
+                f"{repo_full_name}#{pr_number}: " + "; ".join(
+                    f"{name}: {type(exc).__name__}: {exc}" for name, exc in errors
+                ),
+            )
+
+        # Free-tier: build the cascading adapter chain; paid: single adapter.
+        free_tier_chain = None
+        if is_free_tier:
+            from scan_worker.model_tiers import writing_adapter_chain_for_free_tier
+            free_tier_chain = writing_adapter_chain_for_free_tier(get_redis_client(), on_usage=_on_usage)
+            if not free_tier_chain:
+                logging.getLogger("scan_worker.jobs").warning(
+                    "free-tier: no provider keys configured, skipping review for %s#%s",
+                    repo_full_name, pr_number,
+                )
+                return
+
         if code_evidence_context:
             findings = review_diff(
                 diff_text,
@@ -1537,12 +1602,20 @@ def _run_flash_review(
                 on_usage=_on_usage,
                 referenced_symbol_context=referenced_symbol_context,
                 pr_context=pr_context,
-                cache_lookup=_cache_lookup,
-                cache_write=_cache_write,
+                # The similarity cache is keyed only by (installation_id,
+                # repo_full_name) + diff similarity - it has no notion of
+                # which model produced a cached result. Free tier never
+                # reads or writes it, so a paid customer who upgraded from
+                # free mid-month can never be silently served a weaker
+                # free-tier-model result for a similar diff.
+                cache_lookup=None if is_free_tier else _cache_lookup,
+                cache_write=None if is_free_tier else _cache_write,
                 model_used=flash_review_model,
                 file_contents=file_contents,
                 on_grounding_result=_on_grounding_result,
                 diff_patches=diff_patches,
+                adapter_chain=free_tier_chain,
+                on_free_tier_exhausted=_on_free_tier_exhausted,
             )
         else:
             findings = review_diff(
@@ -1551,19 +1624,28 @@ def _run_flash_review(
                 on_usage=_on_usage,
                 referenced_symbol_context=referenced_symbol_context,
                 pr_context=pr_context,
-                cache_lookup=_cache_lookup,
-                cache_write=_cache_write,
+                # The similarity cache is keyed only by (installation_id,
+                # repo_full_name) + diff similarity - it has no notion of
+                # which model produced a cached result. Free tier never
+                # reads or writes it, so a paid customer who upgraded from
+                # free mid-month can never be silently served a weaker
+                # free-tier-model result for a similar diff.
+                cache_lookup=None if is_free_tier else _cache_lookup,
+                cache_write=None if is_free_tier else _cache_write,
                 model_used=flash_review_model,
                 file_contents=file_contents,
                 on_grounding_result=_on_grounding_result,
                 diff_patches=diff_patches,
+                adapter_chain=free_tier_chain,
+                on_free_tier_exhausted=_on_free_tier_exhausted,
             )
     # Briefly re-acquire the lock just for the write, now that the
     # expensive review work above is done - see run_flash_review_job's
     # comment on why the lock no longer wraps this whole function.
     with installation_spend_lock(settings.database_url, installation_id):
         record_llm_spend(
-            settings.database_url, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap
+            settings.database_url, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap,
+            feature="flash_review",
         )
         increment_flash_review_count(settings.database_url, installation_id)
 
@@ -1914,7 +1996,8 @@ def _fix_suggestion_attachment(
         )
         with installation_spend_lock(dsn, installation_id):
             record_llm_spend(
-                dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap
+                dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap,
+                feature="health_fix_suggestion",
             )
         suggestion = raw.strip()
     except Exception as exc:  # noqa: BLE001
@@ -2801,6 +2884,7 @@ class _IncrementalSpendBudget:
         current_spend: float,
         monthly_cap: float,
         next_call_reserve_usd: float = DEFAULT_LLM_NEXT_CALL_RESERVE_USD,
+        feature: str = "unknown",
     ) -> None:
         self.dsn = dsn
         self.installation_id = installation_id
@@ -2809,6 +2893,7 @@ class _IncrementalSpendBudget:
         self.monthly_cap = monthly_cap
         self.next_call_reserve_usd = next_call_reserve_usd
         self.spent_this_job = 0.0
+        self.feature = feature
 
     def can_start_next_call(self) -> bool:
         return (
@@ -2820,7 +2905,7 @@ class _IncrementalSpendBudget:
         cost = cost_for_usage(self.model, prompt_tokens, completion_tokens)
         if cost <= 0:
             return
-        record_llm_spend(self.dsn, self.installation_id, cost)
+        record_llm_spend(self.dsn, self.installation_id, cost, feature=self.feature)
         self.spent_this_job += cost
 
     def cap_message(self) -> str:
@@ -3049,7 +3134,8 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
         _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count)
         with installation_spend_lock(dsn, installation_id):
             record_llm_spend(
-                dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap
+                dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap,
+                feature="airview_full_build",
             )
         _store_wiki_generation(
             dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None,
@@ -3188,7 +3274,8 @@ def _maybe_update_live_wiki(
         _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count)
         with installation_spend_lock(dsn, installation_id):
             record_llm_spend(
-                dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap
+                dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap,
+                feature="airview_incremental",
             )
         _store_wiki_generation(
             dsn, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
@@ -3443,7 +3530,8 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
     full_build_model = model_for_plan(plan)
     current_spend = get_llm_spend_this_month(dsn, installation_id)
     spend_budget = _IncrementalSpendBudget(
-        dsn, installation_id, full_build_model, current_spend, monthly_cap
+        dsn, installation_id, full_build_model, current_spend, monthly_cap,
+        feature="docs_full_build",
     )
 
     def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
@@ -3603,7 +3691,8 @@ def _maybe_update_live_docs(
     )
     with installation_spend_lock(dsn, installation_id):
         record_llm_spend(
-            dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap
+            dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap,
+            feature="docs_incremental",
         )
     if succeeded == 0 and last_error is not None:
         set_docs_build_status(dsn, installation_id, repo_full_name, "failed", last_error)

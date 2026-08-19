@@ -23,10 +23,82 @@ price entry from the start.)
 
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Callable
 
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.credentials import has_api_key
+
+# Real free daily allowance, not an abuse ceiling: gpt-5-nano falls in
+# OpenAI's shared-traffic free-tier bucket (gpt-5.4-mini/nano, gpt-5-mini,
+# gpt-5-nano, gpt-4.1-mini/nano, gpt-4o-mini, o3-mini, o4-mini), which gets
+# 2,500,000 free tokens PER DAY, not per month (confirmed against OpenAI's
+# own published free-tier terms - usage above this is billed at standard
+# rates, which this key should never actually reach). Stopped 100,000
+# tokens short of that as a real safety margin, not cut exactly at the
+# edge - usage is checked once per Flash Review, not per token, so the
+# last review before the cap trips could still land close to it.
+OPENAI_FREE_TIER_DAILY_TOKEN_CAP = 2_400_000
+
+# Conservative per-review reservation, anchored to this project's own
+# measured worst-case Flash Review prompt+completion size after the
+# context-depth caps were doubled (~112,000 tokens, see
+# docs/superpowers/specs/2026-08-18-flash-review-context-depth-increase.md),
+# rounded up for margin. Free-tier reviews share the exact same context-
+# building code as paid tier, so they can be just as large.
+OPENAI_FREE_TIER_RESERVATION_TOKENS = 130_000
+
+
+def _openai_free_tier_token_key() -> str:
+    # Scoped to calendar day (UTC) - the allowance itself resets daily.
+    return f"free_tier:openai_tokens:{datetime.now(timezone.utc):%Y-%m-%d}"
+
+
+def openai_free_tier_tokens_today(redis_conn) -> int:
+    value = redis_conn.get(_openai_free_tier_token_key())
+    return int(value) if value is not None else 0
+
+
+def _reserve_openai_free_tier_budget(redis_conn) -> bool:
+    """Atomically reserve OPENAI_FREE_TIER_RESERVATION_TOKENS against
+    today's counter, right before a real OpenAI call is about to happen
+    (wired as an adapter's before_llm_call - invoked fresh per real
+    attempt, never at chain-build time). Returns True if the reservation
+    fit under the cap and the call may proceed; False if it didn't, in
+    which case the reservation is released immediately and the caller
+    (openai_compatible.OpenAICompatibleAdapter._ensure_budget_for_next_call)
+    raises AdapterInvocationError, which run_with_free_tier_fallback
+    already treats as "try the next provider" - no separate handling
+    needed here.
+
+    This closes two real gaps a plain read-then-decide check had: (1) two
+    concurrent free-tier reviews could both read the counter as under-cap
+    before either had recorded real usage - the reservation itself is one
+    atomic INCRBY, so the worst-case overshoot across concurrent callers
+    is bounded by one reservation each, not unbounded; (2) an adapter that
+    was merely *included* in the chain but never actually reached (an
+    earlier provider succeeded first) never reserves anything, since this
+    only fires at the moment a real call is about to be attempted."""
+    key = _openai_free_tier_token_key()
+    new_total = redis_conn.incrby(key, OPENAI_FREE_TIER_RESERVATION_TOKENS)
+    if hasattr(redis_conn, "expire"):
+        # 2 days: comfortably outlives the single calendar day this key is
+        # scoped to (covers timezone-boundary edge cases), so it cleans
+        # itself up without ever needing a cron.
+        redis_conn.expire(key, 2 * 24 * 3600)
+    if new_total > OPENAI_FREE_TIER_DAILY_TOKEN_CAP:
+        redis_conn.incrby(key, -OPENAI_FREE_TIER_RESERVATION_TOKENS)
+        return False
+    return True
+
+
+def _true_up_openai_free_tier_reservation(redis_conn, real_total_tokens: int) -> None:
+    """Correct the reservation placeholder with the real prompt+completion
+    total once a reserved call has actually completed - the reservation
+    was a conservative estimate, not the real usage."""
+    delta = real_total_tokens - OPENAI_FREE_TIER_RESERVATION_TOKENS
+    if delta != 0:
+        redis_conn.incrby(_openai_free_tier_token_key(), delta)
 
 LUNA_MODEL = "gpt-5.6-luna"
 PRO_MODEL = "deepseek-v4-pro"
@@ -133,3 +205,113 @@ def writing_adapter_for_plan(
         before_llm_call=before_llm_call,
         allow_partial_report=allow_partial_report,
     )
+
+
+def writing_adapter_chain_for_free_tier(
+    redis_conn,
+    on_usage: Callable[[int, int], None] | None = None,
+) -> list[OpenAICompatibleAdapter]:
+    """Build one OpenAICompatibleAdapter per free-tier provider whose env var
+    is configured, in fallback priority order: Groq, Gemini, OpenAI free-tier
+    key, OpenRouter last. Providers whose key is missing are silently skipped
+    (never hard-fail on missing infra). If the list ends up empty, callers
+    should behave like today: no free-tier Flash Review.
+
+    redis_conn is required (not optional) - it backs the real daily token
+    cap on the OpenAI free-tier key below, which is a real allowance
+    boundary, not an abuse ceiling, and must never be silently skippable by
+    omitting it."""
+    logger = logging.getLogger(__name__)
+    chain: list[OpenAICompatibleAdapter] = []
+
+    if has_api_key("GROQ_API_KEY", "Groq"):
+        chain.append(OpenAICompatibleAdapter(
+            name="Groq",
+            base_url="https://api.groq.com/openai/v1",
+            api_key_env_var="GROQ_API_KEY",
+            model="openai/gpt-oss-120b",
+            on_usage=on_usage,
+        ))
+    else:
+        logger.info("free-tier: GROQ_API_KEY not configured, skipping Groq")
+
+    if has_api_key("GEMINI_API_KEY", "Gemini"):
+        chain.append(OpenAICompatibleAdapter(
+            name="Gemini",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            api_key_env_var="GEMINI_API_KEY",
+            model="gemini-3.5-flash",
+            on_usage=on_usage,
+        ))
+    else:
+        logger.info("free-tier: GEMINI_API_KEY not configured, skipping Gemini")
+
+    if has_api_key("OPENAI_FREE_TIER_API_KEY", "OpenAI-FreeTier"):
+        def _on_openai_free_tier_usage(prompt_tokens: int, completion_tokens: int) -> None:
+            _true_up_openai_free_tier_reservation(redis_conn, prompt_tokens + completion_tokens)
+            if on_usage is not None:
+                on_usage(prompt_tokens, completion_tokens)
+
+        # The daily cap is enforced via before_llm_call, not by deciding
+        # here whether to include this adapter - see
+        # _reserve_openai_free_tier_budget's docstring for why: this
+        # closes a real TOCTOU race (concurrent reviews both reading the
+        # counter as under-cap before either recorded usage) that a
+        # plain check-then-include here could not.
+        chain.append(OpenAICompatibleAdapter(
+            name="OpenAI-FreeTier",
+            base_url="https://api.openai.com/v1",
+            api_key_env_var="OPENAI_FREE_TIER_API_KEY",
+            model="gpt-5-nano",
+            extra_body={"reasoning_effort": "minimal"},
+            on_usage=_on_openai_free_tier_usage,
+            before_llm_call=lambda: _reserve_openai_free_tier_budget(redis_conn),
+        ))
+    else:
+        logger.info("free-tier: OPENAI_FREE_TIER_API_KEY not configured, skipping OpenAI free-tier")
+
+    if has_api_key("OPENROUTER_API_KEY", "OpenRouter"):
+        chain.append(OpenAICompatibleAdapter(
+            name="OpenRouter",
+            base_url="https://openrouter.ai/api/v1",
+            api_key_env_var="OPENROUTER_API_KEY",
+            model="nvidia/nemotron-3.5-lightning:free",
+            on_usage=on_usage,
+        ))
+    else:
+        logger.info("free-tier: OPENROUTER_API_KEY not configured, skipping OpenRouter")
+
+    return chain
+
+
+class FreeTierFallbackExhausted(Exception):
+    """Raised when every adapter in the free-tier chain has failed."""
+
+    def __init__(self, errors: list[tuple[str, Exception]]):
+        self.errors = errors
+        names = ", ".join(name for name, _ in errors)
+        super().__init__(f"All free-tier providers failed: {names}")
+
+
+def run_with_free_tier_fallback(
+    adapters: list[OpenAICompatibleAdapter],
+    fn: Callable[[OpenAICompatibleAdapter], str],
+) -> str:
+    """Try each adapter in the chain in order. `fn(adapter)` is called with
+    each adapter; if it raises (rate limit / 429, timeout, 5xx, auth failure),
+    log the failure and move to the next adapter. Only raise
+    FreeTierFallbackExhausted if every adapter fails. Log which provider
+    actually served the successful request."""
+    logger = logging.getLogger(__name__)
+    errors: list[tuple[str, Exception]] = []
+
+    for adapter in adapters:
+        try:
+            result = fn(adapter)
+            logger.info("free-tier: %s served request successfully", adapter.name)
+            return result
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("free-tier: %s failed (%s: %s), trying next provider", adapter.name, type(exc).__name__, exc)
+            errors.append((adapter.name, exc))
+
+    raise FreeTierFallbackExhausted(errors)
