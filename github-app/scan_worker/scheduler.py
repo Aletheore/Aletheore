@@ -22,8 +22,6 @@ SESSION_CLEANUP_JOB_TIMEOUT_SECONDS = 60
 # and means the table can never quietly grow unbounded if the scheduler
 # spends a long stretch restarting.
 WEBHOOK_DELIVERY_CLEANUP_JOB_TIMEOUT_SECONDS = 60
-# Same shape again: one range DELETE over an indexed timestamp column.
-TELEMETRY_CLEANUP_JOB_TIMEOUT_SECONDS = 60
 # Local orphaned per-job repo clones live under scan_worker.jobs.JOBS_ROOT
 # and can survive worker SIGKILLs; this is a bounded age-based filesystem
 # sweep over direct children only.
@@ -87,10 +85,6 @@ def run_forever(
         scans_queue.enqueue(
             "scan_worker.jobs.run_webhook_delivery_cleanup_job",
             job_timeout=WEBHOOK_DELIVERY_CLEANUP_JOB_TIMEOUT_SECONDS,
-        )
-        scans_queue.enqueue(
-            "scan_worker.jobs.run_telemetry_cleanup_job",
-            job_timeout=TELEMETRY_CLEANUP_JOB_TIMEOUT_SECONDS,
         )
         scans_queue.enqueue(
             "scan_worker.jobs.run_job_temp_dir_cleanup_job",

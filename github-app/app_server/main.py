@@ -28,7 +28,6 @@ from app_server.managed_audit_api import managed_audit_router
 from app_server.metrics import metrics_router
 from app_server.runtime_events import runtime_events_router
 from app_server.signature import verify_signature
-from app_server.telemetry import telemetry_router
 from app_server.webhooks.installation import handle_installation_event
 from app_server.webhooks.paddle import paddle_webhook_router
 
@@ -66,7 +65,6 @@ app.include_router(metrics_router)
 app.include_router(frontend_router)
 app.include_router(paddle_webhook_router)
 app.include_router(demo_scan_router)
-app.include_router(telemetry_router)
 app.include_router(runtime_events_router)
 
 

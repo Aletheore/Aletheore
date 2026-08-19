@@ -11,7 +11,6 @@ from scan_worker.scheduler import (
     OPS_MONITOR_JOB_TIMEOUT_SECONDS,
     SCANS_QUEUE_NAME,
     SESSION_CLEANUP_JOB_TIMEOUT_SECONDS,
-    TELEMETRY_CLEANUP_JOB_TIMEOUT_SECONDS,
     WEBHOOK_DELIVERY_CLEANUP_JOB_TIMEOUT_SECONDS,
     WEEKLY_DIGEST_SWEEP_JOB_TIMEOUT_SECONDS,
     WIKI_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS,
@@ -59,7 +58,7 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         assert call.args == ("scan_worker.jobs.run_health_check_sweep_job",)
         assert call.kwargs == {"job_timeout": HEALTH_SWEEP_JOB_TIMEOUT_SECONDS}
 
-    assert scans_queue.enqueue.call_count == 30
+    assert scans_queue.enqueue.call_count == 27
     session_cleanup_calls = [
         c for c in scans_queue.enqueue.call_args_list
         if c.args == ("scan_worker.jobs.run_session_cleanup_job",)
@@ -84,10 +83,6 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         c for c in scans_queue.enqueue.call_args_list
         if c.args == ("scan_worker.jobs.run_webhook_delivery_cleanup_job",)
     ]
-    telemetry_cleanup_calls = [
-        c for c in scans_queue.enqueue.call_args_list
-        if c.args == ("scan_worker.jobs.run_telemetry_cleanup_job",)
-    ]
     job_temp_dir_cleanup_calls = [
         c for c in scans_queue.enqueue.call_args_list
         if c.args == ("scan_worker.jobs.run_job_temp_dir_cleanup_job",)
@@ -106,7 +101,6 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
     assert len(weekly_digest_calls) == 3
     assert len(staleness_check_calls) == 3
     assert len(webhook_cleanup_calls) == 3
-    assert len(telemetry_cleanup_calls) == 3
     assert len(job_temp_dir_cleanup_calls) == 3
     assert len(endpoint_health_cleanup_calls) == 3
     assert len(ops_monitor_calls) == 3
@@ -124,8 +118,6 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         assert call.kwargs == {"job_timeout": HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS}
     for call in webhook_cleanup_calls:
         assert call.kwargs == {"job_timeout": WEBHOOK_DELIVERY_CLEANUP_JOB_TIMEOUT_SECONDS}
-    for call in telemetry_cleanup_calls:
-        assert call.kwargs == {"job_timeout": TELEMETRY_CLEANUP_JOB_TIMEOUT_SECONDS}
     for call in job_temp_dir_cleanup_calls:
         assert call.kwargs == {"job_timeout": JOB_TEMP_DIR_CLEANUP_JOB_TIMEOUT_SECONDS}
     for call in ops_monitor_calls:

@@ -1,9 +1,6 @@
-"""Body-size caps for the two inbound ingestion endpoints.
-
-/v1/telemetry is public and unauthenticated; /v1/runtime-events is
-authenticated but accepts a caller-supplied dict. Neither had any bound on
-request size, so either could be handed an arbitrarily large body that the
-server parses into memory before any of its own validation runs.
+"""Body-size caps for inbound ingestion endpoints that accept a
+caller-supplied payload the server would otherwise parse into memory before
+any of its own validation runs.
 
 The cap is enforced in middleware rather than inside the handler because by
 the time a handler runs, FastAPI has already read and parsed the body - a
@@ -14,14 +11,10 @@ Caps are per-path and deliberately generous relative to real traffic: the
 point is to make a hostile body impossible, not to police a legitimate one.
 """
 
-# {"event": "scan", "anonymous_id": "<=64 chars"} is ~100 bytes. 2 KiB leaves
-# room for a future field without leaving room for an attack.
-TELEMETRY_MAX_BODY_BYTES = 2 * 1024
-
 # A Sentry-compatible error event carries a stack trace, so it is legitimately
-# much larger than a telemetry ping - but parse_sentry_event only reads
-# exception.values[].stacktrace.frames[] and request.url/method, so a payload
-# past this size is carrying data this endpoint has no use for.
+# large - but parse_sentry_event only reads exception.values[].stacktrace.
+# frames[] and request.url/method, so a payload past this size is carrying
+# data this endpoint has no use for.
 RUNTIME_EVENT_MAX_BODY_BYTES = 256 * 1024
 
 # 256 chunks at the 8,000-char ceiling embeddings_api enforces per text,
@@ -37,7 +30,6 @@ DEMO_SCAN_MAX_BODY_BYTES = 4 * 1024
 MANAGED_AUDIT_MAX_BODY_BYTES = 26 * 1024 * 1024
 
 MAX_BODY_BYTES_BY_PATH = {
-    "/v1/telemetry": TELEMETRY_MAX_BODY_BYTES,
     "/v1/runtime-events": RUNTIME_EVENT_MAX_BODY_BYTES,
     "/v1/embeddings": EMBEDDINGS_MAX_BODY_BYTES,
     "/v1/demo-scan": DEMO_SCAN_MAX_BODY_BYTES,

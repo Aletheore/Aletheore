@@ -1484,20 +1484,3 @@ async def list_docs_symbols(pool: asyncpg.Pool, installation_id: int, repo_full_
         repo_full_name,
     )
     return [dict(row) for row in rows]
-
-
-async def record_telemetry_event(pool: asyncpg.Pool, event_type: str, anonymous_id: str) -> None:
-    await pool.execute(
-        "INSERT INTO cli_telemetry_events (event_type, anonymous_id) VALUES ($1, $2)",
-        event_type,
-        anonymous_id,
-    )
-
-
-async def count_telemetry_events(pool: asyncpg.Pool, event_type: str) -> dict:
-    row = await pool.fetchrow(
-        "SELECT count(*) AS total, count(DISTINCT anonymous_id) AS unique_machines "
-        "FROM cli_telemetry_events WHERE event_type = $1",
-        event_type,
-    )
-    return {"total": row["total"], "unique_machines": row["unique_machines"]}
