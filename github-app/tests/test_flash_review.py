@@ -1420,6 +1420,24 @@ def test_system_prompt_requires_changed_behavior_comparison_before_reporting():
     assert "do not report unused code" in normalized
 
 
+def test_system_prompt_instructs_checking_local_logic_independent_of_cross_file_evidence():
+    # Real gap found via the mixed-repo benchmark (aletheore-benchmarks
+    # pr_review, deepseek-v4-flash compact arm, 2026-08-19): every one of a
+    # cluster of consistent misses (missing null check, regex matching an
+    # empty string, a missing closing quote in a CLI error message) was a
+    # pure local-logic bug the diff itself fully contains - no cross-file
+    # evidence (blast radius, referenced symbols) could ever surface it,
+    # and the review procedure's existing steps are framed entirely around
+    # cross-file call tracing and control/data-flow comparison, with no
+    # explicit instruction to sanity-check a changed expression on its own
+    # terms. This only proves the instruction exists, not that a live
+    # model obeys it - untestable without a real call.
+    normalized = " ".join(FLASH_REVIEW_SYSTEM_PROMPT.lower().split())
+    assert "null/undefined/none guard" in normalized
+    assert "edge-case input" in normalized
+    assert "accurately describe the condition it fires on" in normalized
+
+
 def test_system_prompt_warns_about_host_language_escaping_in_generated_source():
     # Real false positive, caught dogfooding Flash review against this
     # repo's own frontend.py (which builds JS via a Python f-string): a

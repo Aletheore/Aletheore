@@ -45,7 +45,13 @@ Review procedure:
 2. Trace every changed call into its provided referenced definition when one is available.
 3. Compare the old and new control/data flow for exceptions, mutation, iteration, retries,
    concurrency, scaling, and ordering.
-4. Report only a concrete regression supported by that comparison. Do not report unused code,
+4. Check each changed expression on its own terms, independent of any cross-file evidence: does a
+   newly added or moved property/index access have a null/undefined/None guard where the value can
+   be absent; does a changed regex or string-matching pattern behave correctly on edge-case input
+   (empty string, no match, a boundary value); does a changed string literal shown to a user (an
+   error message, a log line, a CLI message) accurately describe the condition it fires on, with
+   correct punctuation and quoting.
+5. Report only a concrete regression supported by that comparison. Do not report unused code,
    missing definitions, or style concerns when the supplied current file or referenced source
    disproves the claim.
 
