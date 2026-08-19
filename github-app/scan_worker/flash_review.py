@@ -559,7 +559,22 @@ _MIN_QUOTED_STRING_LENGTH = 8
 # quote pairs are always identified correctly regardless of length, so a
 # short pair is just dropped by the length check rather than bleeding into
 # neighboring text.
-_QUOTED_STRING_RE = re.compile(r"'([^'\n]*)'|\"([^\"\n]*)\"")
+#
+# The (?<!\w)/(?!\w) guards around each delimiter are a second, related fix:
+# an apostrophe used as a contraction or possessive ("doesn't", "user's")
+# sits directly between two word characters, and without the guards it's
+# indistinguishable from a real opening or closing single-quote. Two such
+# apostrophes on the same line - e.g. "The API doesn't validate the user's
+# session token" - paired into a fabricated 20-char "quote" ("t validate the
+# user") that never appears verbatim in any source file, which would reject
+# a correct finding the same way the cross-pairing bug above did. A real
+# quote delimiter is essentially never flanked by a word character on the
+# delimiter side that faces outward (whitespace, punctuation, or
+# start/end-of-string instead), so excluding word-flanked apostrophes drops
+# only contractions/possessives, not genuine quoted spans - confirmed against
+# the original cross-pairing regression case and ordinary code-ish quoting
+# (`'value'.method()`, `class='name'`) below.
+_QUOTED_STRING_RE = re.compile(r"(?<!\w)'([^'\n]*)'(?!\w)|(?<!\w)\"([^\"\n]*)\"(?!\w)")
 LINE_CITATION_CONTEXT_WINDOW = 8
 
 
