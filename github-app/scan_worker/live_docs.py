@@ -16,6 +16,7 @@ Content correctness is a prompt-design problem (tight snippet, explicit
 "describe only what's shown" instruction), not a post-hoc-checkable one.
 """
 
+import hashlib
 import json
 import logging
 
@@ -69,10 +70,18 @@ def _symbols_needing_work(module: dict, polish_existing: bool) -> list[dict]:
     return [s for s in all_symbols if s.get("is_public") and not s.get("docstring")]
 
 
+def _symbol_snippet(source_lines: list[str], symbol: dict) -> str:
+    return "\n".join(source_lines[symbol["start_line"] - 1 : symbol["end_line"]])
+
+
+def _content_hash(snippet: str) -> str:
+    return hashlib.sha256(snippet.encode("utf-8")).hexdigest()
+
+
 def _build_request_items(symbols: list[dict], source_lines: list[str], polish_existing: bool) -> list[dict]:
     items = []
     for symbol in symbols:
-        snippet = "\n".join(source_lines[symbol["start_line"] - 1 : symbol["end_line"]])
+        snippet = _symbol_snippet(source_lines, symbol)
         item = {
             "name": symbol["name"],
             "signature": f"{symbol['name']}{symbol.get('params') or ''}",
@@ -112,19 +121,37 @@ def generate_file_descriptions_combined(
     module: dict,
     source_lines: list[str],
     writing_adapter,
+    already_hashed: dict[str, str] | None = None,
 ) -> dict[str, dict]:
     """Same result shape as generate_file_descriptions (symbol name ->
-    {"description", "mode"}), but handles a module's generate pass
-    (undocumented symbols) and polish pass (already-documented symbols) in
-    one LLM call instead of two. The two passes operate on disjoint symbol
-    sets within the same file, so there is no correctness reason to pay for
-    two separate round trips - existing_docstring's presence or absence on
-    each item is itself the signal for which treatment it gets (see
-    COMBINED_SYSTEM_PROMPT), so a single response can carry both kinds
-    without ambiguity.
+    {"description", "mode", "content_hash"}), but handles a module's
+    generate pass (undocumented symbols) and polish pass (already-documented
+    symbols) in one LLM call instead of two. The two passes operate on
+    disjoint symbol sets within the same file, so there is no correctness
+    reason to pay for two separate round trips - existing_docstring's
+    presence or absence on each item is itself the signal for which
+    treatment it gets (see COMBINED_SYSTEM_PROMPT), so a single response can
+    carry both kinds without ambiguity.
+
+    `already_hashed` (symbol name -> sha256 of its last-generated source
+    snippet, from docs_symbols.content_hash) lets a caller skip symbols
+    whose snippet hasn't changed since they were last described - without
+    it, every symbol "needing work" (any undocumented or documented public
+    symbol) gets re-asked about on every call for that module, even ones
+    that already have a perfectly good stored description and weren't
+    touched by whatever change triggered this run.
     """
     generate_symbols = _symbols_needing_work(module, polish_existing=False)
     polish_symbols = _symbols_needing_work(module, polish_existing=True)
+
+    hashes = {
+        s["name"]: _content_hash(_symbol_snippet(source_lines, s))
+        for s in generate_symbols + polish_symbols
+    }
+    if already_hashed:
+        generate_symbols = [s for s in generate_symbols if already_hashed.get(s["name"]) != hashes[s["name"]]]
+        polish_symbols = [s for s in polish_symbols if already_hashed.get(s["name"]) != hashes[s["name"]]]
+
     if not generate_symbols and not polish_symbols:
         return {}
 
@@ -152,7 +179,7 @@ def generate_file_descriptions_combined(
         ):
             continue
         mode = "polished" if name in polish_names else "generated"
-        result[name] = {"description": entry["description"].strip(), "mode": mode}
+        result[name] = {"description": entry["description"].strip(), "mode": mode, "content_hash": hashes[name]}
     return result
 
 

@@ -58,6 +58,7 @@ from scan_worker.db import (
     check_and_reserve_monthly_repo_scan_slot,
     count_repo_scans_since,
     delete_docs_symbols_not_in,
+    get_docs_symbol_hashes,
     delete_expired_endpoint_health,
     delete_expired_sessions,
     delete_expired_telemetry_events,
@@ -3372,15 +3373,35 @@ def _store_docs_generation_for_module(
     with nothing to generate and nothing to polish makes no LLM call at all
     (returns {} immediately - see live_docs.py's own no-symbols-needing-
     work short-circuit).
+
+    Symbols whose source snippet is unchanged since their last stored
+    description (per content_hash) are skipped entirely - so a push that
+    touches one function in a ten-function file only re-asks the LLM about
+    that one function, not the other nine, and a re-run over the same
+    module (a retry, or the 48h full-build catch-up sweep) doesn't keep
+    paying to re-describe symbols it already has good descriptions for.
     """
-    combined = live_docs.generate_file_descriptions_combined(module, source_lines, writing_adapter)
+    already_hashed = get_docs_symbol_hashes(dsn, installation_id, repo_full_name, module["path"])
+    combined = live_docs.generate_file_descriptions_combined(
+        module, source_lines, writing_adapter, already_hashed=already_hashed
+    )
     for symbol_name, entry in combined.items():
         upsert_docs_symbol(
             dsn, installation_id, repo_full_name, module["path"], symbol_name,
-            entry["description"], entry["mode"], source_commit,
+            entry["description"], entry["mode"], source_commit, entry["content_hash"],
         )
+    # still_valid_names is every symbol the module currently asks a
+    # description for (generate or polish bucket), independent of whether
+    # this run actually called the LLM about it - a symbol skipped above
+    # for having an unchanged hash is still valid and must be kept, not
+    # pruned just because it isn't a key in `combined`.
+    still_valid_names = {
+        s["name"] for s in live_docs._symbols_needing_work(module, polish_existing=False)
+    } | {
+        s["name"] for s in live_docs._symbols_needing_work(module, polish_existing=True)
+    }
     delete_docs_symbols_not_in(
-        dsn, installation_id, repo_full_name, module["path"], list(combined.keys())
+        dsn, installation_id, repo_full_name, module["path"], list(still_valid_names)
     )
 
 

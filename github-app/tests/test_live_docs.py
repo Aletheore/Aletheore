@@ -1,7 +1,12 @@
 import json
 from unittest.mock import MagicMock
 
-from scan_worker.live_docs import generate_file_descriptions, generate_file_descriptions_combined
+from scan_worker.live_docs import (
+    _content_hash,
+    _symbol_snippet,
+    generate_file_descriptions,
+    generate_file_descriptions_combined,
+)
 
 
 def _adapter(response_text: str) -> MagicMock:
@@ -189,6 +194,72 @@ def test_combined_no_symbols_needing_work_never_calls_the_adapter():
     adapter = _adapter("{}")
 
     result = generate_file_descriptions_combined(module, [], adapter)
+
+    assert result == {}
+    adapter.simple_completion.assert_not_called()
+
+
+def test_combined_result_includes_a_content_hash_per_symbol():
+    module = _module("a.py", [_symbol("add", start_line=1, end_line=2)])
+    source_lines = ["def add(a, b):", "    return a + b"]
+    adapter = _adapter(json.dumps({"add": {"description": "Adds two numbers."}}))
+
+    result = generate_file_descriptions_combined(module, source_lines, adapter)
+
+    assert result["add"]["content_hash"] == _content_hash(_symbol_snippet(source_lines, module["symbols"]["functions"][0]))
+
+
+def test_combined_skips_a_symbol_whose_snippet_hash_is_unchanged():
+    # "add" already has a stored description matching its current source -
+    # nothing about it changed, so it shouldn't be re-asked about. "sub" has
+    # no stored hash (new/never described), so it should still be sent.
+    module = _module("a.py", [
+        _symbol("add", start_line=1, end_line=2),
+        _symbol("sub", start_line=3, end_line=4),
+    ])
+    source_lines = [
+        "def add(a, b):", "    return a + b",
+        "def sub(a, b):", "    return a - b",
+    ]
+    add_hash = _content_hash(_symbol_snippet(source_lines, module["symbols"]["functions"][0]))
+    adapter = _adapter(json.dumps({"sub": {"description": "Subtracts b from a."}}))
+
+    result = generate_file_descriptions_combined(
+        module, source_lines, adapter, already_hashed={"add": add_hash},
+    )
+
+    sent_items = json.loads(adapter.simple_completion.call_args[0][1])
+    sent_names = {item["name"] for item in sent_items}
+    assert sent_names == {"sub"}
+    assert "add" not in result
+    assert result["sub"]["description"] == "Subtracts b from a."
+
+
+def test_combined_still_asks_about_a_symbol_whose_source_actually_changed():
+    # "add" has a stored hash, but it doesn't match the symbol's current
+    # source - the function body changed since it was last described, so it
+    # must be re-asked about even though a row already exists for it.
+    module = _module("a.py", [_symbol("add", start_line=1, end_line=2)])
+    source_lines = ["def add(a, b):", "    return a + b + 1"]
+    adapter = _adapter(json.dumps({"add": {"description": "Adds two numbers plus one."}}))
+
+    result = generate_file_descriptions_combined(
+        module, source_lines, adapter, already_hashed={"add": "stale-hash-from-before-the-edit"},
+    )
+
+    adapter.simple_completion.assert_called_once()
+    assert result["add"]["description"] == "Adds two numbers plus one."
+
+
+def test_combined_all_symbols_unchanged_never_calls_the_adapter():
+    module = _module("a.py", [_symbol("add", start_line=1, end_line=2)])
+    source_lines = ["def add(a, b):", "    return a + b"]
+    add_hash = _content_hash(_symbol_snippet(source_lines, module["symbols"]["functions"][0]))
+    adapter = _adapter("{}")
+
+    result = generate_file_descriptions_combined(
+        module, source_lines, adapter, already_hashed={"add": add_hash},
+    )
 
     assert result == {}
     adapter.simple_completion.assert_not_called()

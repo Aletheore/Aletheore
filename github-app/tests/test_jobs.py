@@ -4254,6 +4254,62 @@ def test_modules_with_uncovered_docs_work_respects_limit():
     assert len(result) == 2
 
 
+def test_store_docs_generation_skips_llm_call_for_an_unchanged_symbol_but_keeps_its_row(monkeypatch):
+    # "add" already has a stored description whose hash matches its current
+    # source - unchanged, so no LLM call for it. "sub" has no stored hash
+    # (new), so it does need one. The unchanged symbol's existing row must
+    # survive the module's prune-stale-symbols step, not get deleted just
+    # because this run's LLM response never mentioned it.
+    from unittest.mock import MagicMock
+
+    from scan_worker.jobs import _store_docs_generation_for_module
+    from scan_worker.live_docs import _content_hash, _symbol_snippet
+
+    source_lines = [
+        "def add(a, b):", "    return a + b",
+        "def sub(a, b):", "    return a - b",
+    ]
+    add_symbol = {
+        "name": "add", "start_line": 1, "end_line": 2, "params": "(a, b)",
+        "docstring": None, "is_public": True,
+    }
+    sub_symbol = {
+        "name": "sub", "start_line": 3, "end_line": 4, "params": "(a, b)",
+        "docstring": None, "is_public": True,
+    }
+    module = _docs_module("a.py", functions=[add_symbol, sub_symbol])
+    add_hash = _content_hash(_symbol_snippet(source_lines, add_symbol))
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_docs_symbol_hashes", lambda *a, **k: {"add": add_hash}
+    )
+    upserted = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_docs_symbol",
+        lambda dsn, iid, repo, path, name, desc, mode, commit, content_hash: upserted.append(name),
+    )
+    pruned_keep_lists = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.delete_docs_symbols_not_in",
+        lambda dsn, iid, repo, path, keep: pruned_keep_lists.append(set(keep)),
+    )
+
+    adapter = MagicMock()
+    adapter.simple_completion.return_value = json.dumps({"sub": {"description": "Subtracts b from a."}})
+
+    _store_docs_generation_for_module(
+        "postgresql://unused", 1, "octocat/hello-world", module, adapter, source_lines, "sha123",
+    )
+
+    # Only "sub" triggered an LLM call and a write - "add" was skipped.
+    assert adapter.simple_completion.call_count == 1
+    sent_items = json.loads(adapter.simple_completion.call_args[0][1])
+    assert {item["name"] for item in sent_items} == {"sub"}
+    assert upserted == ["sub"]
+    # But "add" is still in the keep-list, so its existing row isn't pruned.
+    assert pruned_keep_lists == [{"add", "sub"}]
+
+
 def test_run_live_docs_full_build_job_skips_without_evidence(monkeypatch):
     from scan_worker.jobs import run_live_docs_full_build_job
 

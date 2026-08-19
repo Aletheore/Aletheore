@@ -16,6 +16,7 @@ from scan_worker.db import (
     check_and_reserve_monthly_repo_scan_slot,
     count_repo_scans_since,
     delete_docs_symbols_not_in,
+    get_docs_symbol_hashes,
     delete_expired_endpoint_health,
     delete_expired_sessions,
     delete_expired_webhook_deliveries,
@@ -1057,6 +1058,31 @@ async def test_delete_docs_symbols_not_in_removes_stale_symbols_for_that_module(
     symbols = list_docs_symbols(TEST_DATABASE_URL, 301, "a/repo1")
     names = {(s["module_path"], s["symbol_name"]) for s in symbols}
     assert names == {("a.py", "add"), ("b.py", "unrelated")}
+
+
+@pytest.mark.asyncio
+async def test_get_docs_symbol_hashes_returns_only_hashed_rows_for_that_module(pool):
+    await _insert_installation(pool, 301, "a")
+
+    upsert_docs_symbol(TEST_DATABASE_URL, 301, "a/repo1", "a.py", "add", "d", "generated", "sha1", "hash-add")
+    upsert_docs_symbol(TEST_DATABASE_URL, 301, "a/repo1", "a.py", "subtract", "d", "generated", "sha1", "hash-sub")
+    # No content_hash passed - simulates a row written before the column existed.
+    upsert_docs_symbol(TEST_DATABASE_URL, 301, "a/repo1", "a.py", "legacy", "d", "generated", "sha1")
+    upsert_docs_symbol(TEST_DATABASE_URL, 301, "a/repo1", "b.py", "unrelated", "d", "generated", "sha1", "hash-other")
+
+    hashes = get_docs_symbol_hashes(TEST_DATABASE_URL, 301, "a/repo1", "a.py")
+    assert hashes == {"add": "hash-add", "subtract": "hash-sub"}
+
+
+@pytest.mark.asyncio
+async def test_upsert_docs_symbol_updates_content_hash_on_conflict(pool):
+    await _insert_installation(pool, 301, "a")
+
+    upsert_docs_symbol(TEST_DATABASE_URL, 301, "a/repo1", "a.py", "add", "d1", "generated", "sha1", "hash-v1")
+    upsert_docs_symbol(TEST_DATABASE_URL, 301, "a/repo1", "a.py", "add", "d2", "generated", "sha2", "hash-v2")
+
+    hashes = get_docs_symbol_hashes(TEST_DATABASE_URL, 301, "a/repo1", "a.py")
+    assert hashes == {"add": "hash-v2"}
 
 
 @pytest.mark.asyncio
