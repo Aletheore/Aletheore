@@ -222,6 +222,36 @@ def test_quoted_strings_still_extracts_a_long_quote_next_to_a_short_one():
     assert _quoted_strings(text) == ["a real error message here"]
 
 
+def test_quoted_strings_does_not_pair_contraction_apostrophes_into_a_fake_quote():
+    # Second regex bug in the same family as the cross-pairing regression
+    # above, found by auditing _QUOTED_STRING_RE for other quote-adjacent
+    # failure modes after that fix landed. An English contraction or
+    # possessive apostrophe ("doesn't", "user's") sits directly between two
+    # word characters and is otherwise indistinguishable from a real
+    # single-quote delimiter. Two of them on the same line paired into a
+    # fabricated "quote" spanning the prose between them - never real quoted
+    # content, so it can never appear verbatim in any source file, and would
+    # reject a correct finding the same way the original bug did.
+    text = "The API doesn't validate the user's session token which isn't checked."
+    assert _quoted_strings(text) == []
+
+
+def test_quoted_strings_does_not_pair_possessive_plural_apostrophes():
+    # Companion case: a trailing-only possessive apostrophe ("users'") has
+    # no word character after it, but still has one before - must not pair
+    # with a later apostrophe either.
+    text = "Check the users' permissions before granting the admins' access here."
+    assert _quoted_strings(text) == []
+
+
+def test_quoted_strings_still_extracts_real_quotes_next_to_a_contraction():
+    # Companion to both fixes above: a genuine long quoted anchor must still
+    # come through even when a contraction apostrophe appears elsewhere in
+    # the same text.
+    text = "It doesn't check that 'a_specific_config_value' is set before using it."
+    assert _quoted_strings(text) == ["a_specific_config_value"]
+
+
 def test_line_citation_content_matches_true_when_quoted_string_is_at_claimed_line():
     finding = {"file": "a.py", "line": 3, "issue": 'missing quote: \'a specific buggy string here\''}
     file_contents = {"a.py": "one\ntwo\na specific buggy string here\nfour"}
