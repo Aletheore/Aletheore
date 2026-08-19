@@ -79,6 +79,7 @@ from scan_worker.db import (
     increment_flash_review_count,
     insert_audit_report,
     insert_endpoint_health,
+    was_recently_down,
     insert_repo_history,
     installation_spend_lock,
     list_docs_symbols,
@@ -172,6 +173,18 @@ LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS = 1800
 LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS = 300
 HEALTH_CHECK_DOWN_RETRY_ATTEMPTS = 2
 HEALTH_CHECK_DOWN_RETRY_DELAY_SECONDS = 2.0
+# A flapping endpoint (down -> up -> down -> ...) re-triggers
+# reachability_flipped on every flip, and without this, each flip paid for
+# a fresh LLM fix-suggestion call - a genuinely down service could spend
+# once per HEALTH_SWEEP_INTERVAL_SECONDS tick for as long as it flapped.
+# One suggestion per real incident is the right shape here (Sentry-style
+# issue grouping, not a fresh notification per occurrence): if this exact
+# endpoint was already recorded down within this window, the fix-
+# suggestion call is skipped on this flip - the deterministic parts of the
+# alert (recent commit, likely owner, dependency context, and the plain
+# reachability notification itself) still fire every time, only the LLM
+# call is throttled.
+HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS = 1800
 MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET = 64
 HEALTH_SWEEP_SOFT_DEADLINE_SECONDS = 540
 HEALTH_SWEEP_ROTATION_KEY = "health_sweep:target_rotation"
@@ -2020,6 +2033,7 @@ def _attach_recent_commit_for_failure(
     path: str = "",
     status_code: int | None = None,
     source_line: int | None = None,
+    include_fix_suggestion: bool = True,
 ) -> dict | None:
     attachments = []
     commit_attachment = _commit_attachment_from_graph(installation_id, repo_full_name, source_file)
@@ -2031,18 +2045,22 @@ def _attach_recent_commit_for_failure(
     dependency_attachment = _dependency_context_attachment(evidence, source_file)
     if dependency_attachment is not None:
         attachments.append(dependency_attachment)
-    suggestion_attachment = _fix_suggestion_attachment(
-        installation_id,
-        repo_full_name,
-        source_file,
-        source_line,
-        method,
-        path,
-        status_code,
-        evidence,
-    )
-    if suggestion_attachment is not None:
-        attachments.append(suggestion_attachment)
+    # include_fix_suggestion=False skips the one LLM call in this whole
+    # correlation chain (see HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS) - the
+    # deterministic attachments above are unaffected either way.
+    if include_fix_suggestion:
+        suggestion_attachment = _fix_suggestion_attachment(
+            installation_id,
+            repo_full_name,
+            source_file,
+            source_line,
+            method,
+            path,
+            status_code,
+            evidence,
+        )
+        if suggestion_attachment is not None:
+            attachments.append(suggestion_attachment)
 
     if not attachments:
         return evidence_resolution
@@ -2218,6 +2236,10 @@ def _run_health_check_sweep_for_target(
 
         if reachability_flipped:
             if not reachable and source_file:
+                recently_down = was_recently_down(
+                    dsn, installation_id, repo_full_name, method, path, target_id,
+                    datetime.now(timezone.utc) - timedelta(seconds=HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS),
+                )
                 evidence_resolution = _attach_recent_commit_for_failure(
                     installation_id,
                     repo_full_name,
@@ -2228,6 +2250,7 @@ def _run_health_check_sweep_for_target(
                     path=path,
                     status_code=status_code,
                     source_line=source_line,
+                    include_fix_suggestion=not recently_down,
                 )
             _send_if_webhook_configured(
                 target,
@@ -2347,6 +2370,10 @@ def run_health_check_down_retry_job(target: dict, entry: dict, attempt: int) -> 
 
     if reachability_flipped:
         if not reachable and source_file:
+            recently_down = was_recently_down(
+                dsn, installation_id, repo_full_name, method, path, target_id,
+                datetime.now(timezone.utc) - timedelta(seconds=HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS),
+            )
             evidence_resolution = _attach_recent_commit_for_failure(
                 installation_id,
                 repo_full_name,
@@ -2357,6 +2384,7 @@ def run_health_check_down_retry_job(target: dict, entry: dict, attempt: int) -> 
                 path=path,
                 status_code=status_code,
                 source_line=source_line,
+                include_fix_suggestion=not recently_down,
             )
         _send_if_webhook_configured(
             target,
@@ -3338,17 +3366,14 @@ def _store_docs_generation_for_module(
     source_commit: str | None,
 ) -> None:
     """Generates and stores descriptions for one module's symbols - fills
-    gaps first, then polishes whatever (if anything) already had a real
-    docstring, storing both under the same table (mode distinguishes them).
-    A module with nothing to generate and nothing to polish makes no LLM
-    call at all (generate_file_descriptions returns {} immediately - see
-    live_docs.py's own no-symbols-needing-work short-circuit).
+    gaps and polishes whatever (if anything) already had a real docstring
+    in a single combined LLM call (see generate_file_descriptions_combined),
+    storing both under the same table (mode distinguishes them). A module
+    with nothing to generate and nothing to polish makes no LLM call at all
+    (returns {} immediately - see live_docs.py's own no-symbols-needing-
+    work short-circuit).
     """
-    generated = live_docs.generate_file_descriptions(module, source_lines, writing_adapter)
-    polished = live_docs.generate_file_descriptions(
-        module, source_lines, writing_adapter, polish_existing=True
-    )
-    combined = {**generated, **polished}
+    combined = live_docs.generate_file_descriptions_combined(module, source_lines, writing_adapter)
     for symbol_name, entry in combined.items():
         upsert_docs_symbol(
             dsn, installation_id, repo_full_name, module["path"], symbol_name,
@@ -3670,11 +3695,15 @@ def _maybe_update_live_docs(
         )
         return
 
-    spend_accumulator = {"total": 0.0}
     update_model = resolve_model(live_docs.FLASH_MODEL)
+    current_spend = get_llm_spend_this_month(dsn, installation_id)
+    spend_budget = _IncrementalSpendBudget(
+        dsn, installation_id, update_model, current_spend, monthly_cap,
+        feature="docs_incremental",
+    )
 
     def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-        spend_accumulator["total"] += cost_for_usage(update_model, prompt_tokens, completion_tokens)
+        spend_budget.record_usage(prompt_tokens, completion_tokens)
 
     try:
         writing_adapter = _live_docs_update_writing_adapter(on_usage=_on_usage)
@@ -3686,14 +3715,13 @@ def _maybe_update_live_docs(
         set_docs_build_status(dsn, installation_id, repo_full_name, "failed", str(exc))
         return
 
+    # spend_budget re-checks can_start_next_call() before every module, not
+    # just once up front - a push touching hundreds of modules can no
+    # longer run entirely ungated between here and the next spend check.
     succeeded, last_error = _run_docs_build_for_modules(
-        dsn, installation_id, repo_full_name, changed_modules, writing_adapter, client, token, head_sha
+        dsn, installation_id, repo_full_name, changed_modules, writing_adapter, client, token, head_sha,
+        spend_budget=spend_budget,
     )
-    with installation_spend_lock(dsn, installation_id):
-        record_llm_spend(
-            dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap,
-            feature="docs_incremental",
-        )
     if succeeded == 0 and last_error is not None:
         set_docs_build_status(dsn, installation_id, repo_full_name, "failed", last_error)
         return

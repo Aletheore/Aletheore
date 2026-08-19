@@ -2458,6 +2458,7 @@ def _patch_sweep(
         "scan_worker.jobs.get_last_endpoint_health", lambda dsn, iid, repo, method, path, target_id=None: prior
     )
     monkeypatch.setattr("scan_worker.jobs.insert_endpoint_health", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.was_recently_down", lambda *a, **k: False)
     sent = []
     monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: sent.append(msg))
     return sent
@@ -2637,6 +2638,48 @@ def test_sweep_attaches_recent_commit_on_confirmed_down(monkeypatch):
     assert len(sent) == 1
     assert "Recent commit: `abc123de`" in sent[0]["text"]
     assert "touched the handler" in sent[0]["text"]
+
+
+def test_sweep_skips_fix_suggestion_when_endpoint_was_recently_down(monkeypatch):
+    # The cooldown itself, not just its plumbing: a flapping endpoint
+    # already recorded down within HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS
+    # must not pay for a second LLM fix-suggestion call on this flip - the
+    # alert (and its deterministic commit/owner attachments) still fires,
+    # only the one expensive call is skipped.
+    sent = _patch_sweep(
+        monkeypatch,
+        prior={"reachable": True, "latency_ms": 100.0},
+        evidence={
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {"method": "GET", "path": "/x", "file": "controllers/user.controller.ts", "line": 42}
+                    ]
+                }
+            }
+        },
+        result_entry={
+            "method": "GET", "path": "/x", "reachable": False,
+            "status_code": None, "latency_ms": 10.0, "response_shape": None,
+        },
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.was_recently_down", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs._commit_attachment_from_graph", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._owner_attachment_from_graph", lambda *a, **k: None)
+
+    suggestion_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._fix_suggestion_attachment",
+        lambda *a, **k: suggestion_calls.append(True),
+    )
+
+    from scan_worker.jobs import run_health_check_sweep_job
+
+    run_health_check_sweep_job()
+
+    assert len(sent) == 1
+    assert suggestion_calls == []
 
 
 def test_sweep_alerts_without_commit_when_correlation_fails(monkeypatch):

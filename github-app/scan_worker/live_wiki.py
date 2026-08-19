@@ -54,6 +54,10 @@ MAX_GENERATION_WORKERS = 6
 _T = TypeVar("_T")
 
 
+def _batches(items: list[_T], size: int) -> list[list[_T]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
 def _run_concurrently(thunks: list[Callable[[], _T]], max_workers: int = MAX_GENERATION_WORKERS) -> list[_T]:
     """Runs each zero-arg callable in a bounded thread pool, in order.
 
@@ -571,6 +575,167 @@ def build_subsystem_record(
     }
 
 
+# Chosen conservatively, not maximized. A prior experiment that raised
+# MAX_SYMBOLS_PER_FILE and merged multiple clusters' content into oversized
+# single prompts caused generation to silently stop finishing - Flask's
+# subsystem coverage dropped from 83 files to 14 (see
+# _sanitize_written_files's docstring for the full incident). A batch of 5
+# keeps each request's content well short of that failure mode while still
+# cutting a full build's worst-case call count from up to
+# len(clusters) * SUBSYSTEM_WRITE_ATTEMPTS single-item calls down to roughly
+# 2 * ceil(len(clusters) / 5) batched calls.
+SUBSYSTEM_WRITE_BATCH_SIZE = 5
+
+BATCH_SUBSYSTEM_WRITING_SYSTEM_PROMPT = (
+    """You write one page of a codebase wiki for EACH of several subsystems, in a single response.
+You are given a JSON array of subsystem items, each with an "id" (echo this back exactly as the
+key in your response - never invent your own id), "name", a "brief" listing its files and each
+file's key functions/classes with line numbers, and a "related_files" list naming files elsewhere
+in the repository that this subsystem imports or is imported by.
+
+Respond with ONLY a single JSON object with one entry per item you were given, keyed by that
+item's "id" (as a string): {"<id>": {"description": "<see below>", "files": [{"path": "<exact
+path from that item's brief>", "role": "2-3 sentences on this file's responsibility and how it
+fits the subsystem", "key_symbols": [{"name": "<exact name from that item's brief>", "line":
+<exact start_line from that item's brief>, "explanation": "1-2 sentences on what it does and when
+it runs"}]}]}, "<id>": {...}, ...}
+
+Each item's "description" must be 4-8 sentences and must cover, in this order:
+1. What this subsystem does.
+2. WHY it exists as a separate unit - the design problem it solves. This is the most valuable
+   sentence on the page; a reader can already see the file list, they cannot see the rationale.
+3. How control or data flows through it, naming the specific symbols involved.
+4. How it connects to the neighbouring subsystems in that item's own `related_files`.
+
+Each item's `files` array is structural: it may only contain paths and symbols that appear in
+THAT SAME item's own brief - never mix content from one subsystem's brief into a different
+subsystem's response. Never invent a file, function, or line number.
+
+Each item's `description` prose is NOT restricted to that one subsystem - you may reference and
+cite any file in the repository, including ones in its own `related_files`, using
+`path/to/file.py:123` citations. Every citation is checked against the scan independently per
+item, and that specific item's page is discarded if any of its citations do not resolve - a bad
+citation in one item's description never affects any other item's result. Cite only line numbers
+that item was actually given. No markdown fences, no top-level keys other than the ids you were
+given."""
+    + _INJECTION_GUARD
+)
+
+
+class _SubsystemWriteTarget:
+    __slots__ = ("cluster", "brief", "name", "cluster_id_str")
+
+    def __init__(self, cluster: dict, brief: dict, name: str) -> None:
+        self.cluster = cluster
+        self.brief = brief
+        self.name = name
+        self.cluster_id_str = str(brief["cluster_id"])
+
+
+def _write_subsystem_batch(
+    evidence: dict,
+    targets: list[_SubsystemWriteTarget],
+    writing_adapter,
+    fetch_line_count: Callable[[str], int | None] | None,
+) -> dict[str, tuple[dict, str]]:
+    """One LLM call covering every target in this batch. Returns cluster_id_str
+    -> (parsed, description) only for targets whose citations verified -
+    callers are responsible for retrying whatever key is missing from the
+    result, same contract as a single build_subsystem_record attempt.
+    """
+    payload = [
+        {
+            "id": t.cluster_id_str,
+            "name": t.name,
+            "brief": t.brief,
+            "related_files": _related_files(evidence, t.brief),
+        }
+        for t in targets
+    ]
+    raw = writing_adapter.simple_completion(
+        BATCH_SUBSYSTEM_WRITING_SYSTEM_PROMPT, json.dumps(payload), cwd="."
+    )
+    parsed_batch = _parse_json_object(raw) or {}
+
+    results: dict[str, tuple[dict, str]] = {}
+    for t in targets:
+        raw_item = parsed_batch.get(t.cluster_id_str)
+        if not isinstance(raw_item, dict):
+            continue
+        candidate = _validate_written_output(
+            raw_item, evidence, fetch_line_count, context=f"subsystem {t.name!r} (batched)"
+        )
+        if candidate is not None:
+            results[t.cluster_id_str] = candidate
+    return results
+
+
+def _generate_subsystem_records_for_targets(
+    evidence: dict,
+    targets: list[_SubsystemWriteTarget],
+    writing_adapter,
+    *,
+    cache_write: Callable[[dict, dict, str], None] | None,
+    model_used: str,
+    fetch_line_count: Callable[[str], int | None] | None,
+) -> dict[str, dict]:
+    """Writes every target that wasn't already served from cache, batching
+    multiple targets per call and retrying only the specific targets whose
+    citations failed verification - not the whole batch - up to
+    SUBSYSTEM_WRITE_ATTEMPTS total rounds. Returns cluster_id_str -> record
+    dict (files/diagram already attached) for every target, falling back to
+    SUBSYSTEM_DESCRIPTION_UNAVAILABLE for any that never produced verifiable
+    prose, matching build_subsystem_record's own fallback behavior.
+    """
+    by_id = {t.cluster_id_str: t for t in targets}
+    resolved: dict[str, tuple[dict, str]] = {}
+    remaining = list(targets)
+
+    for _attempt in range(1, SUBSYSTEM_WRITE_ATTEMPTS + 1):
+        if not remaining:
+            break
+        chunks = _batches(remaining, SUBSYSTEM_WRITE_BATCH_SIZE)
+
+        def _thunk(chunk: list[_SubsystemWriteTarget]) -> dict[str, tuple[dict, str]]:
+            return _write_subsystem_batch(evidence, chunk, writing_adapter, fetch_line_count)
+
+        chunk_results = _run_concurrently([lambda c=chunk: _thunk(c) for chunk in chunks])
+        for chunk_result in chunk_results:
+            resolved.update(chunk_result)
+        remaining = [t for t in remaining if t.cluster_id_str not in resolved]
+
+    records: dict[str, dict] = {}
+    for cluster_id_str, target in by_id.items():
+        candidate = resolved.get(cluster_id_str)
+        if candidate is not None:
+            parsed, description = candidate
+            if cache_write is not None:
+                packet = build_evidence_packet(
+                    evidence, target.cluster, target.brief, model_used,
+                    cache_eligible=True, prompt_version=AIRVIEW_PROMPT_VERSION,
+                )
+                try:
+                    cache_write(packet, parsed, model_used)
+                except Exception as exc:
+                    logger.warning("AIRview cache write failed (%s); continuing without cache", type(exc).__name__)
+        else:
+            logger.warning(
+                "AIRview keeping subsystem %r without a description: no attempt produced "
+                "fully-verifiable prose",
+                target.name,
+            )
+            parsed, description = {}, SUBSYSTEM_DESCRIPTION_UNAVAILABLE
+
+        records[cluster_id_str] = {
+            "subsystem_id": cluster_id_str,
+            "name": target.name,
+            "description": description,
+            "files": _sanitize_written_files(parsed.get("files"), target.brief["files"]),
+            "diagram_mermaid": build_subsystem_diagram(evidence, target.cluster),
+        }
+    return records
+
+
 def affected_cluster_ids(evidence: dict, changed_files: list[str]) -> set[int]:
     """Maps a list of changed file paths to the clusters they belong to,
     for incremental updates - only these clusters need regenerating.
@@ -601,6 +766,51 @@ def _drop_test_only_briefs(briefs: list[dict]) -> list[dict]:
     return keep
 
 
+def _cached_subsystem_record(
+    evidence: dict,
+    cluster: dict,
+    brief: dict,
+    name: str,
+    cache_lookup: Callable[[dict], tuple[dict, str] | None] | None,
+    model_used: str,
+    fetch_line_count: Callable[[str], int | None] | None,
+) -> dict | None:
+    """Same cache-hit check build_subsystem_record performs internally,
+    split out so generate_subsystems can decide which clusters actually
+    need a real LLM call - and therefore whether batching applies - before
+    any call is made, without duplicating build_subsystem_record's own
+    single-item call path. Returns a fully-built record on a verified
+    cache hit, else None (cache disabled, miss, or a hit that no longer
+    reverifies against current evidence).
+    """
+    if cache_lookup is None:
+        return None
+    packet = build_evidence_packet(
+        evidence, cluster, brief, model_used, cache_eligible=True, prompt_version=AIRVIEW_PROMPT_VERSION,
+    )
+    try:
+        cached = cache_lookup(packet)
+    except Exception as exc:
+        logger.warning("AIRview cache lookup failed (%s); treating as miss", type(exc).__name__)
+        return None
+    if cached is None:
+        return None
+    cached_output, _cached_model_used = cached
+    candidate = _validate_written_output(
+        cached_output, evidence, fetch_line_count, context=f"cached subsystem {name!r}"
+    )
+    if candidate is None:
+        return None
+    parsed, description = candidate
+    return {
+        "subsystem_id": str(cluster["id"]),
+        "name": name,
+        "description": description,
+        "files": _sanitize_written_files(parsed.get("files"), brief["files"]),
+        "diagram_mermaid": build_subsystem_diagram(evidence, cluster),
+    }
+
+
 def generate_subsystems(
     evidence: dict,
     naming_adapter,
@@ -626,28 +836,50 @@ def generate_subsystems(
     names = propose_cluster_names(briefs, naming_adapter)
     clusters_by_id = {c["id"]: c for c in evidence.get("architecture", {}).get("clusters", [])}
 
-    def _thunk(brief: dict, cluster: dict) -> Callable[[], dict]:
-        return lambda: build_subsystem_record(
-            evidence,
-            cluster,
-            brief,
-            names[brief["cluster_id"]],
-            writing_adapter,
-            cache_lookup=cache_lookup,
-            cache_write=cache_write,
-            model_used=model_used,
-            fetch_line_count=fetch_line_count,
-        )
-
-    thunks = []
+    # Cache lookups are cheap and per-cluster, so they run first, before any
+    # decision about whether the remaining clusters get one call each or
+    # (2+) a batched call - a cache hit never enters the write path at all.
+    records_by_id: dict[str, dict] = {}
+    targets: list[_SubsystemWriteTarget] = []
+    order: list[str] = []
     for brief in briefs:
         cluster = clusters_by_id.get(brief["cluster_id"])
         if cluster is None:
             continue
-        thunks.append(_thunk(brief, cluster))
+        name = names[brief["cluster_id"]]
+        cluster_id_str = str(brief["cluster_id"])
+        order.append(cluster_id_str)
 
-    records = _run_concurrently(thunks)
-    return [r for r in records if r is not None]
+        cached_record = _cached_subsystem_record(
+            evidence, cluster, brief, name, cache_lookup, model_used, fetch_line_count
+        )
+        if cached_record is not None:
+            records_by_id[cluster_id_str] = cached_record
+        else:
+            targets.append(_SubsystemWriteTarget(cluster, brief, name))
+
+    if len(targets) == 1:
+        # No batching benefit for a single item - the plain single-item
+        # path handles its own retries. cache_lookup=None since we already
+        # know this one missed above; passing the real callable again would
+        # just re-run the same lookup for no reason.
+        t = targets[0]
+        record = build_subsystem_record(
+            evidence, t.cluster, t.brief, t.name, writing_adapter,
+            cache_lookup=None, cache_write=cache_write, model_used=model_used,
+            fetch_line_count=fetch_line_count,
+        )
+        if record is not None:
+            records_by_id[t.cluster_id_str] = record
+    elif targets:
+        records_by_id.update(
+            _generate_subsystem_records_for_targets(
+                evidence, targets, writing_adapter,
+                cache_write=cache_write, model_used=model_used, fetch_line_count=fetch_line_count,
+            )
+        )
+
+    return [records_by_id[cid] for cid in order if cid in records_by_id]
 
 
 def select_file_page_paths(
@@ -798,6 +1030,212 @@ def build_file_page_record(
     return None
 
 
+FILE_PAGE_WRITE_BATCH_SIZE = 5
+
+BATCH_FILE_PAGE_WRITING_SYSTEM_PROMPT = (
+    """You write the reference page for EACH of several source files in a codebase wiki, in a
+single response. You are given a JSON array of file items, each with an "id" (echo this back
+exactly as the key in your response - never invent your own id), the file's path, its key
+functions/classes with line numbers, the subsystem it belongs to, the files it imports and is
+imported by, and - in `related_symbols` - a few named functions/classes with line numbers from
+those related files.
+
+Respond with ONLY a single JSON object with one entry per item you were given, keyed by that
+item's "id" (as a string): {"<id>": {"detail": "<markdown, 250-400 words>"}, "<id>": {...}, ...}
+
+Structure each item's markdown with these headings, in order:
+
+## Overview
+What this file is responsible for, in two or three sentences.
+
+## Why it exists
+The design problem this file solves and why it is a separate file. If the answer is visible in the
+code - a separation of concerns, a protocol boundary, a compatibility shim - say so specifically.
+Skip this heading only if the file is a trivial re-export.
+
+## How it works
+The main flow through the file, naming concrete symbols and citing them as `path:line`. This is
+where a reader learns the mechanism, so prefer specifics over restating names.
+
+## Key symbols
+A short bulleted list: `` `name` (path:line) `` followed by what it does and when it runs.
+
+## Gotchas
+Anything surprising a reader would otherwise trip on - ordering constraints, mutation,
+deprecations. Omit this heading if the code shows nothing surprising; do not invent one.
+
+Prefer depth over breadth within each heading: a reader who opens a file page wants the
+mechanism, not a restatement of the symbol list they can already see.
+
+Cite as `path/to/file.py:123`, using only line numbers given for THAT item. You may cite the
+imported and importing files listed for that item, not just the item's own file - use that item's
+own `related_symbols` for those, it is the only source of real line numbers outside the file
+itself. A cross-file citation using a name or line not present there will fail verification, so do
+not guess at a related file's internals beyond what it lists. Every citation is checked against
+the scan independently per item, and that item's page is discarded if any of ITS citations do not
+resolve - a bad citation in one item's page never affects any other item's result. Describe only
+what that item's given symbols support - never invent a symbol, a line number, or behaviour you
+cannot see, and never mix content from one file's item into a different file's response. No
+markdown fences around any response, no top-level keys other than the ids you were given."""
+    + _INJECTION_GUARD
+)
+
+
+class _FilePageWriteTarget:
+    __slots__ = ("path", "request_item")
+
+    def __init__(self, path: str, request_item: dict) -> None:
+        self.path = path
+        self.request_item = request_item
+
+
+def _file_page_request_item(evidence: dict, path: str, subsystem_name: str) -> dict | None:
+    """Same request-payload construction build_file_page_record uses
+    internally, split out so callers can build it once per file up front
+    and decide whether the resulting set is large enough to batch, without
+    duplicating build_file_page_record's own single-item call path.
+    Returns None when there's nothing to explain beyond the path (no key
+    symbols), matching build_file_page_record's own early return.
+    """
+    modules_by_path = {m["path"]: m for m in evidence.get("repository", {}).get("modules", [])}
+    module = modules_by_path.get(path)
+    if module is None:
+        return None
+
+    symbols = module.get("symbols", {}) or {}
+    key_symbols = [
+        {"name": s["name"], "kind": kind, "start_line": s.get("start_line"), "end_line": s.get("end_line")}
+        for kind, group in (("function", "functions"), ("class", "classes"), ("constant", "constants"))
+        for s in symbols.get(group, []) or []
+        if s.get("name") and (group != "constants" or s.get("is_public", True))
+    ]
+    if not key_symbols:
+        return None
+
+    related_paths = (
+        list(module.get("imports", []) or [])[:MAX_RELATED_FILES]
+        + list(module.get("imported_by", []) or [])[:MAX_RELATED_FILES]
+    )
+    related_symbols = {}
+    for related_path in related_paths:
+        related_module = modules_by_path.get(related_path)
+        if related_module is None:
+            continue
+        related_module_symbols = related_module.get("symbols", {}) or {}
+        symbols_here = [
+            {"name": s["name"], "line": s.get("start_line")}
+            for group in ("functions", "classes")
+            for s in related_module_symbols.get(group, []) or []
+            if s.get("name") and s.get("start_line") is not None
+        ][:MAX_RELATED_SYMBOLS_PER_FILE]
+        if symbols_here:
+            related_symbols[related_path] = symbols_here
+
+    return {
+        "path": path,
+        "language": module.get("language"),
+        "subsystem": subsystem_name,
+        "key_symbols": key_symbols,
+        "imports": list(module.get("imports", []) or [])[:MAX_RELATED_FILES],
+        "imported_by": list(module.get("imported_by", []) or [])[:MAX_RELATED_FILES],
+        "related_symbols": related_symbols,
+    }
+
+
+def _write_file_page_batch(
+    evidence: dict,
+    targets: list[_FilePageWriteTarget],
+    writing_adapter,
+    fetch_line_count: Callable[[str], int | None] | None,
+) -> dict[str, tuple[str, str | None, list[dict]]]:
+    """One LLM call covering every target in this batch. Returns
+    path -> (status, detail_or_None, unverified) where status is "verified"
+    or "failed" - callers use the (last detail, unverified) pair for
+    salvage on final exhaustion, matching build_file_page_record's own
+    single-item salvage behavior.
+    """
+    payload = [{"id": t.path, **t.request_item} for t in targets]
+    raw = writing_adapter.simple_completion(
+        BATCH_FILE_PAGE_WRITING_SYSTEM_PROMPT, json.dumps(payload), cwd="."
+    )
+    parsed_batch = _parse_json_object(raw) or {}
+
+    results: dict[str, tuple[str, str | None, list[dict]]] = {}
+    for t in targets:
+        raw_item = parsed_batch.get(t.path)
+        detail = raw_item.get("detail") if isinstance(raw_item, dict) else None
+        if not isinstance(detail, str) or not detail.strip():
+            logger.info("AIRview file page %s: no usable detail (batched)", t.path)
+            results[t.path] = ("failed", None, [])
+            continue
+        result = verify_citations(detail, evidence, fetch_line_count=fetch_line_count)
+        if result["all_verified"]:
+            results[t.path] = ("verified", detail.strip(), [])
+        else:
+            logger.info(
+                "AIRview file page %s: %d/%d citation(s) unverified (batched, %s)",
+                t.path, len(result["unverified"]), result["total_citations"],
+                ", ".join(f"{c['file']}:{c['line']}" for c in result["unverified"]),
+            )
+            results[t.path] = ("failed", detail.strip(), result["unverified"])
+    return results
+
+
+def _generate_file_pages_for_targets(
+    evidence: dict,
+    targets: list[_FilePageWriteTarget],
+    writing_adapter,
+    fetch_line_count: Callable[[str], int | None] | None,
+) -> dict[str, str]:
+    """Writes every target's page, batching multiple targets per call and
+    retrying only the specific paths whose citations failed verification -
+    not the whole batch - up to SUBSYSTEM_WRITE_ATTEMPTS total rounds.
+    Falls back to the same strip-unverified-lines salvage
+    build_file_page_record uses for any path that never fully verified.
+    """
+    verified: dict[str, str] = {}
+    last_attempt: dict[str, tuple[str, list[dict]]] = {}
+    remaining = list(targets)
+
+    for _attempt in range(1, SUBSYSTEM_WRITE_ATTEMPTS + 1):
+        if not remaining:
+            break
+        chunks = _batches(remaining, FILE_PAGE_WRITE_BATCH_SIZE)
+        chunk_results = _run_concurrently(
+            [lambda c=chunk: _write_file_page_batch(evidence, c, writing_adapter, fetch_line_count)
+             for chunk in chunks]
+        )
+        merged: dict[str, tuple[str, str | None, list[dict]]] = {}
+        for chunk_result in chunk_results:
+            merged.update(chunk_result)
+
+        next_remaining = []
+        for t in remaining:
+            status, detail, unverified = merged.get(t.path, ("failed", None, []))
+            if status == "verified" and detail is not None:
+                verified[t.path] = detail
+            else:
+                if detail is not None:
+                    last_attempt[t.path] = (detail, unverified)
+                next_remaining.append(t)
+        remaining = next_remaining
+
+    for t in remaining:
+        prior = last_attempt.get(t.path)
+        if prior is None:
+            continue
+        last_detail, last_unverified = prior
+        salvaged = _strip_unverified_lines(last_detail, last_unverified)
+        if salvaged and verify_citations(salvaged, evidence, fetch_line_count=fetch_line_count)["all_verified"]:
+            logger.info(
+                "AIRview file page %s kept with %d unverified line(s) removed (batched)",
+                t.path, len(last_unverified),
+            )
+            verified[t.path] = salvaged
+
+    return verified
+
+
 def generate_file_pages(
     evidence: dict,
     writing_adapter,
@@ -817,19 +1255,27 @@ def generate_file_pages(
     targets = paths if paths is not None else select_file_page_paths(evidence, max_files=max_files)
     subsystem_by_path = subsystem_by_path or {}
 
-    def _thunk(path: str) -> Callable[[], str | None]:
-        return lambda: build_file_page_record(
-            evidence,
-            path,
-            writing_adapter,
-            subsystem_name=subsystem_by_path.get(path, ""),
+    write_targets: list[_FilePageWriteTarget] = []
+    for path in targets:
+        request_item = _file_page_request_item(evidence, path, subsystem_by_path.get(path, ""))
+        if request_item is not None:
+            write_targets.append(_FilePageWriteTarget(path, request_item))
+
+    if len(write_targets) == 1:
+        # No batching benefit for a single item - use the plain single-item
+        # path directly, which also carries its own salvage-on-failure logic.
+        t = write_targets[0]
+        detail = build_file_page_record(
+            evidence, t.path, writing_adapter,
+            subsystem_name=subsystem_by_path.get(t.path, ""),
             fetch_line_count=fetch_line_count,
         )
+        pages = {t.path: detail} if detail else {}
+    elif write_targets:
+        pages = _generate_file_pages_for_targets(evidence, write_targets, writing_adapter, fetch_line_count)
+    else:
+        pages = {}
 
-    details = _run_concurrently([_thunk(path) for path in targets])
-    pages: dict[str, str] = {
-        path: detail for path, detail in zip(targets, details) if detail
-    }
     logger.info("AIRview generated %d/%d file pages", len(pages), len(targets))
     return pages
 
