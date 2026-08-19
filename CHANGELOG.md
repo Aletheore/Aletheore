@@ -3,7 +3,7 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
-## 0.8.13 — 2026-08-17
+## 0.8.13 — 2026-08-19
 
 - **License changed from Apache 2.0 to the [PolyForm Noncommercial License
   1.0.0](LICENSE).** Aletheore remains free for personal, noncommercial use -
@@ -15,6 +15,13 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
   before this change) keeps their Apache 2.0 rights for that copy. Only new
   releases and new distributions from this point forward are under the new
   terms. See the [Licensing](README.md#licensing) section of the README.
+- **Removed the CLI's anonymous usage ping.** Every completed scan used to send a single
+  fire-and-forget event (`scan` + a random per-machine ID, respecting `DO_NOT_TRACK`/
+  `ALETHEORE_TELEMETRY_DISABLED`) to a hosted endpoint - it carried no repo name, code, or account
+  info, but any HTTP request necessarily carries the caller's IP, and the endpoint itself was
+  unauthenticated (the CLI has no account to authenticate with), making it the single most exposed
+  write path in the hosted service. Removed end to end: nothing is sent, no flag needed. Adoption
+  is now tracked from public PyPI download stats instead.
 
 ## 0.8.12 — 2026-08-15
 
