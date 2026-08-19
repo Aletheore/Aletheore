@@ -60,7 +60,6 @@ from scan_worker.db import (
     delete_docs_symbols_not_in,
     delete_expired_endpoint_health,
     delete_expired_sessions,
-    delete_expired_telemetry_events,
     delete_expired_webhook_deliveries,
     delete_wiki_subsystems_not_in,
     email_already_sent,
@@ -1497,6 +1496,19 @@ def _run_flash_review(
         file_context, file_contents = fetch_review_file_context(
             client, token, repo_full_name, changed_files, head_sha
         )
+        # Compact mode: file_contents (the raw fetched content) is still used
+        # below for citation grounding/verification, but the raw file-content
+        # blob itself is deliberately never put in the prompt. A 3-run real
+        # Luna-generates/DeepSeek-verifies benchmark (see
+        # aletheore-benchmarks/pr_review/README.md) found compact matched or
+        # beat full-context inclusion on independently-verified accept rate
+        # on every run (96.7-97.7% vs 85.7-100%, the wider spread on context's
+        # side being run-to-run coverage noise, not a real quality edge) while
+        # using a fraction of the prompt tokens - so this is now the default,
+        # not an experiment. `file_context` is blanked right after the fetch
+        # rather than removed as a parameter, so nothing downstream needs to
+        # change if this default is ever revisited.
+        file_context = ""
         skipped_files = files_missing_from_review_context(changed_files, file_contents)
         if skipped_files:
             logging.getLogger("scan_worker.jobs").info(
@@ -2410,21 +2422,6 @@ def run_endpoint_health_cleanup_job() -> None:
 # replayed event can never outlive its ledger entry. See
 # delete_expired_webhook_deliveries.
 WEBHOOK_DELIVERY_RETENTION_DAYS = 30
-
-
-# Aggregate usage counters, not per-user data - a year is far more history
-# than count_telemetry_events needs, and bounds the one table an
-# unauthenticated caller can write to.
-TELEMETRY_RETENTION_DAYS = 365
-
-
-@log_job
-def run_telemetry_cleanup_job() -> None:
-    dsn = get_settings().database_url
-    deleted = delete_expired_telemetry_events(dsn, TELEMETRY_RETENTION_DAYS)
-    logging.getLogger("scan_worker.jobs").info(
-        "telemetry cleanup completed", extra={"deleted_count": deleted}
-    )
 
 
 @log_job

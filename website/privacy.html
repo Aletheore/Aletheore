@@ -32,17 +32,8 @@
         <p>
           Your source code and the evidence <code>aletheore scan</code> produces stay on your
           machine. Evidence is written to <code>.aletheore/</code> in the repository you scanned;
-          nothing about your code, your repository, or your identity is transmitted.
-        </p>
-        <p>
-          One exception, so it is stated plainly: each completed scan sends a single anonymous usage
-          ping to Aletheore - the event name <code>scan</code> and a random identifier generated
-          once on first run and stored in <code>~/.aletheore/telemetry_id</code>. It is not derived
-          from and cannot be linked to your machine, your account, or anything you scanned, and the
-          request necessarily carries your IP address as any HTTP request does. It exists only so we
-          can count how often the CLI is actually used. Disable it by setting either
-          <code>ALETHEORE_TELEMETRY_DISABLED=1</code> or the cross-vendor
-          <code>DO_NOT_TRACK=1</code>, and nothing is sent at all.
+          nothing about your code, your repository, or your identity is transmitted. The CLI makes
+          no network calls of its own and reports no usage data.
         </p>
         <p>
           If you use an AI-assisted audit command, evidence, not source code, is sent to whichever

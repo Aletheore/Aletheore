@@ -699,26 +699,6 @@ def insert_endpoint_health(
         conn.commit()
 
 
-def delete_expired_telemetry_events(dsn: str, retention_days: int) -> int:
-    """Drop anonymous CLI telemetry older than the retention window.
-
-    /v1/telemetry is unauthenticated, so without this the one table a stranger
-    can write to grows without bound. The rows are aggregate usage counters
-    with no per-user value once they age out - count_telemetry_events reports
-    totals and unique machines, neither of which needs multi-year history.
-    """
-    with get_db_pool(dsn).connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM cli_telemetry_events "
-                "WHERE occurred_at < now() - make_interval(days => %s)",
-                (retention_days,),
-            )
-            deleted = cur.rowcount
-        conn.commit()
-    return deleted
-
-
 def delete_expired_webhook_deliveries(dsn: str, retention_days: int) -> int:
     """Drop delivery GUIDs older than the retention window.
 

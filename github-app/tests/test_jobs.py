@@ -2263,6 +2263,56 @@ def test_flash_review_job_passes_changed_file_contents_to_review_diff(monkeypatc
     assert captured["file_contents"] == {"app.py": "real content of app.py"}
 
 
+def test_flash_review_job_never_sends_the_raw_file_context_blob_to_review_diff(monkeypatch):
+    # Compact is the shipped default (see the comment above the file_context
+    # blanking in _run_flash_review): review_diff must never receive the raw
+    # file-content blob, even when fetch_review_file_context returns one -
+    # only file_contents (used for citation verification) should flow
+    # through unchanged.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_diff",
+        lambda *a, **k: "--- app.py ---\n@@ -1,1 +1,1 @@\n+broken",
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_review_file_context",
+        lambda *a, **k: (
+            "--- full content: app.py ---\ndef broken():\n    pass",
+            {"app.py": "real content of app.py"},
+        ),
+    )
+    captured = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: captured.update(
+            {"file_context": file_context, **kwargs}
+        )
+        or [],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert captured["file_context"] == ""
+    assert captured["file_contents"] == {"app.py": "real content of app.py"}
+
+
 def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestion_syntax(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(

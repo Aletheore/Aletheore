@@ -1,6 +1,4 @@
 import json
-import os
-from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -8,18 +6,11 @@ from httpx import ASGITransport, AsyncClient
 from app_server.ingest_limits import (
     MANAGED_AUDIT_MAX_BODY_BYTES,
     RUNTIME_EVENT_MAX_BODY_BYTES,
-    TELEMETRY_MAX_BODY_BYTES,
     BodyTooLargeError,
     MissingContentLengthError,
     check_declared_body_size,
 )
 from app_server.main import app
-from scan_worker.db import delete_expired_telemetry_events
-
-TEST_DATABASE_URL = os.environ.get(
-    "TEST_DATABASE_URL",
-    "postgresql://postgres:test@localhost:55433/aletheore_test",
-)
 
 
 @pytest.fixture(autouse=True)
@@ -31,7 +22,6 @@ def _no_rate_limit(monkeypatch):
     never silently make an unrelated test pass by rejecting the request
     before it reaches the thing under test.
     """
-    monkeypatch.setattr("app_server.telemetry.is_rate_limited", lambda *a, **k: False)
     monkeypatch.setattr("app_server.runtime_events.is_rate_limited", lambda *a, **k: False)
 
 
@@ -40,23 +30,23 @@ def _no_rate_limit(monkeypatch):
 
 def test_oversized_declared_body_is_rejected():
     with pytest.raises(BodyTooLargeError):
-        check_declared_body_size("/v1/telemetry", "POST", str(TELEMETRY_MAX_BODY_BYTES + 1))
+        check_declared_body_size("/v1/runtime-events", "POST", str(RUNTIME_EVENT_MAX_BODY_BYTES + 1))
 
 
 def test_a_body_at_the_limit_is_allowed():
-    check_declared_body_size("/v1/telemetry", "POST", str(TELEMETRY_MAX_BODY_BYTES))
+    check_declared_body_size("/v1/runtime-events", "POST", str(RUNTIME_EVENT_MAX_BODY_BYTES))
 
 
 def test_missing_content_length_is_refused_not_waved_through():
     # Without a declared size the cap is unenforceable before reading, which
     # is the whole hole. Both real clients always send one.
     with pytest.raises(MissingContentLengthError):
-        check_declared_body_size("/v1/telemetry", "POST", None)
+        check_declared_body_size("/v1/runtime-events", "POST", None)
 
 
 def test_a_non_numeric_content_length_is_refused():
     with pytest.raises(MissingContentLengthError):
-        check_declared_body_size("/v1/telemetry", "POST", "not-a-number")
+        check_declared_body_size("/v1/runtime-events", "POST", "not-a-number")
 
 
 def test_managed_audit_has_a_pre_routing_body_cap():
@@ -70,219 +60,7 @@ def test_managed_audit_has_a_pre_routing_body_cap():
 
 
 def test_get_requests_are_untouched():
-    check_declared_body_size("/v1/telemetry", "GET", None)
-
-
-def test_runtime_events_allows_a_real_stack_trace():
-    # A Sentry event with frames is legitimately far bigger than a telemetry
-    # ping; the caps are not interchangeable.
-    assert RUNTIME_EVENT_MAX_BODY_BYTES > TELEMETRY_MAX_BODY_BYTES * 50
-    check_declared_body_size("/v1/runtime-events", "POST", str(100 * 1024))
-
-
-@pytest.mark.asyncio
-async def test_oversized_telemetry_post_gets_413_end_to_end(pool):
-    app.state.db_pool = pool
-    body = json.dumps({"event": "scan", "anonymous_id": "x" * 60, "pad": "p" * 4000}).encode()
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post(
-            "/v1/telemetry", content=body, headers={"Content-Type": "application/json"}
-        )
-
-    assert response.status_code == 413
-
-
-@pytest.mark.asyncio
-async def test_oversized_body_never_reaches_the_database(pool, monkeypatch):
-    """The point of enforcing in middleware rather than the handler.
-
-    A handler-level check rejects a payload the process has already read and
-    parsed - which is the cost the cap exists to avoid.
-    """
-    app.state.db_pool = pool
-    recorded = []
-    monkeypatch.setattr(
-        "app_server.telemetry.record_telemetry_event",
-        lambda *a, **k: recorded.append(a),
-    )
-    body = json.dumps({"event": "scan", "anonymous_id": "y" * 60, "pad": "p" * 8000}).encode()
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        await client.post(
-            "/v1/telemetry", content=body, headers={"Content-Type": "application/json"}
-        )
-
-    assert recorded == []
-
-
-# --- Schema narrowing --------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_telemetry_rejects_unknown_fields(pool):
-    # Otherwise an unauthenticated endpoint becomes a store for whatever a
-    # caller attaches.
-    app.state.db_pool = pool
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post(
-            "/v1/telemetry",
-            json={"event": "scan", "anonymous_id": "a" * 20, "extra": "smuggled"},
-        )
-
-    assert response.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_telemetry_rejects_an_overlong_event_name(pool):
-    app.state.db_pool = pool
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post(
-            "/v1/telemetry", json={"event": "s" * 64, "anonymous_id": "a" * 20}
-        )
-
-    assert response.status_code == 422
-
-
-@pytest.mark.asyncio
-async def test_a_valid_telemetry_event_still_works(pool):
-    # The controls must not break the thing they protect.
-    app.state.db_pool = pool
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post(
-            "/v1/telemetry", json={"event": "scan", "anonymous_id": "machine-abc-123"}
-        )
-
-    assert response.status_code == 200, response.text
-    stored = await pool.fetchval(
-        "SELECT count(*) FROM cli_telemetry_events WHERE anonymous_id = 'machine-abc-123'"
-    )
-    assert stored == 1
-
-
-# --- Rate limiting -----------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_telemetry_returns_429_when_rate_limited(pool, monkeypatch):
-    app.state.db_pool = pool
-    monkeypatch.setattr("app_server.telemetry.is_rate_limited", lambda *a, **k: True)
-    recorded = []
-    monkeypatch.setattr(
-        "app_server.telemetry.record_telemetry_event", lambda *a, **k: recorded.append(a)
-    )
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post(
-            "/v1/telemetry", json={"event": "scan", "anonymous_id": "b" * 20}
-        )
-
-    assert response.status_code == 429
-    assert response.headers["Retry-After"]
-    assert recorded == [], "a rate-limited request still wrote to the database"
-
-
-@pytest.mark.asyncio
-async def test_telemetry_fails_open_when_redis_is_down(pool, monkeypatch):
-    # A Redis outage should cost abuse protection on a best-effort stats
-    # endpoint, not turn into a hard failure for every CLI user.
-    app.state.db_pool = pool
-
-    def _boom(*_args, **_kwargs):
-        raise ConnectionError("redis unavailable")
-
-    monkeypatch.setattr("app_server.telemetry.is_rate_limited", _boom)
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post(
-            "/v1/telemetry", json={"event": "scan", "anonymous_id": "c" * 20}
-        )
-
-    assert response.status_code == 200, response.text
-
-
-@pytest.mark.asyncio
-async def test_telemetry_rate_limit_key_cannot_be_spoofed_via_forwarded_for(pool, monkeypatch):
-    """The limit is only worth having if a caller can't rotate its own key.
-
-    Caddy appends the real connecting peer as the LAST X-Forwarded-For entry;
-    anything earlier arrived with the request and is attacker-controlled. So
-    the key must derive from the last entry - keying on the first would let
-    one client mint unlimited buckets just by varying a header.
-    """
-    app.state.db_pool = pool
-    keys = []
-    monkeypatch.setattr(
-        "app_server.telemetry.is_rate_limited",
-        lambda _conn, key, _limit, _window: keys.append(key) or False,
-    )
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        await client.post(
-            "/v1/telemetry",
-            json={"event": "scan", "anonymous_id": "d" * 20},
-            headers={"x-forwarded-for": "203.0.113.9, 10.0.0.1"},
-        )
-
-    assert keys == ["ratelimit:telemetry:10.0.0.1"]
-    assert "203.0.113.9" not in keys[0], "attacker-supplied hop was used as the key"
-
-
-@pytest.mark.asyncio
-async def test_unknown_event_type_is_rejected_before_the_rate_limiter(pool, monkeypatch):
-    # A junk event must not consume a caller's budget - otherwise malformed
-    # traffic could exhaust the allowance for a legitimate client on the
-    # same NAT address.
-    app.state.db_pool = pool
-    calls = []
-    monkeypatch.setattr(
-        "app_server.telemetry.is_rate_limited", lambda *a, **k: calls.append(a) or False
-    )
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.post(
-            "/v1/telemetry", json={"event": "not-a-real-event", "anonymous_id": "e" * 20}
-        )
-
-    assert response.status_code == 400
-    assert calls == []
-
-
-# --- Retention ---------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_retention_sweep_drops_old_events_and_keeps_recent_ones(pool):
-    now = datetime.now(timezone.utc)
-    await pool.execute(
-        "INSERT INTO cli_telemetry_events (event_type, anonymous_id, occurred_at) "
-        "VALUES ($1, $2, $3)",
-        "scan",
-        "old-machine",
-        now - timedelta(days=366),
-    )
-    await pool.execute(
-        "INSERT INTO cli_telemetry_events (event_type, anonymous_id, occurred_at) "
-        "VALUES ($1, $2, $3)",
-        "scan",
-        "recent-machine",
-        now - timedelta(days=364),
-    )
-
-    deleted = delete_expired_telemetry_events(TEST_DATABASE_URL, 365)
-
-    assert deleted == 1
-    remaining = await pool.fetch("SELECT anonymous_id FROM cli_telemetry_events")
-    assert {row["anonymous_id"] for row in remaining} == {"recent-machine"}
+    check_declared_body_size("/v1/runtime-events", "GET", None)
 
 
 # --- Runtime events: the queue is the resource being protected ---------------
@@ -459,12 +237,12 @@ async def test_a_length_less_request_is_refused_end_to_end(pool):
     app.state.db_pool = pool
 
     async def _chunks():
-        yield b'{"event":"scan","anonymous_id":"abcdefghij"}'
+        yield b'{"repo_full_name":"octocat/widgets"}'
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
-            "/v1/telemetry", content=_chunks(), headers={"Content-Type": "application/json"}
+            "/v1/runtime-events", content=_chunks(), headers={"Content-Type": "application/json"}
         )
 
     assert response.status_code == 411
@@ -478,16 +256,16 @@ async def test_the_oversized_and_length_less_paths_return_distinct_codes(pool):
     app.state.db_pool = pool
 
     async def _chunks():
-        yield b'{"event":"scan","anonymous_id":"abcdefghij"}'
+        yield b'{"repo_full_name":"octocat/widgets"}'
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         length_less = await client.post(
-            "/v1/telemetry", content=_chunks(), headers={"Content-Type": "application/json"}
+            "/v1/runtime-events", content=_chunks(), headers={"Content-Type": "application/json"}
         )
         oversized = await client.post(
-            "/v1/telemetry",
-            content=json.dumps({"event": "scan", "anonymous_id": "z" * 60, "pad": "p" * 5000}).encode(),
+            "/v1/runtime-events",
+            content=json.dumps({"repo_full_name": "octocat/widgets", "pad": "p" * (RUNTIME_EVENT_MAX_BODY_BYTES + 1000)}).encode(),
             headers={"Content-Type": "application/json"},
         )
 
