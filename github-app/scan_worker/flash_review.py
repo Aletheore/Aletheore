@@ -45,7 +45,13 @@ Review procedure:
 2. Trace every changed call into its provided referenced definition when one is available.
 3. Compare the old and new control/data flow for exceptions, mutation, iteration, retries,
    concurrency, scaling, and ordering.
-4. Report only a concrete regression supported by that comparison. Do not report unused code,
+4. Check each changed expression on its own terms, independent of any cross-file evidence: does a
+   newly added or moved property/index access have a null/undefined/None guard where the value can
+   be absent; does a changed regex or string-matching pattern behave correctly on edge-case input
+   (empty string, no match, a boundary value); does a changed string literal shown to a user (an
+   error message, a log line, a CLI message) accurately describe the condition it fires on, with
+   correct punctuation and quoting.
+5. Report only a concrete regression supported by that comparison. Do not report unused code,
    missing definitions, or style concerns when the supplied current file or referenced source
    disproves the claim.
 
@@ -531,19 +537,46 @@ def build_referenced_symbol_context(
     return "\n\n".join(parts)
 
 
-_QUOTED_STRING_RE = re.compile(r"'([^'\n]{8,})'|\"([^\"\n]{8,})\"")
+_MIN_QUOTED_STRING_LENGTH = 8
+# The {8,} minimum used to live inside the regex itself. Real bug, found
+# via a real deepseek-v4-flash Flash Review output (pr-review-benchmark
+# case 018-axios-missing-null-check-charset): when a genuine quoted span is
+# too short to satisfy an in-regex minimum, the character class still
+# can't cross that span's own closing delimiter (it excludes the quote
+# character entirely) - so the engine abandons that pairing and retries
+# from the next quote character it finds, which is that same short span's
+# closing delimiter now reinterpreted as an OPENING delimiter for an
+# entirely different, unrelated span later in the text. On text like
+# `...(e.g. \`charset="utf-8"\`), so the function returns \`"utf-8"\`...`,
+# both "utf-8" occurrences are individually only 5 chars (correctly too
+# short to count as evidence) - but the in-regex minimum caused this
+# specific text to instead extract '"), so the function returns "'
+# spanning from one "utf-8" pair's closing quote to the next pair's
+# opening quote: real content that will never appear verbatim anywhere in
+# the source, so a correct, well-formed finding was rejected outright by
+# _line_citation_content_matches for a citation problem that isn't real.
+# Matching any length first, then filtering afterward, fixes this: real
+# quote pairs are always identified correctly regardless of length, so a
+# short pair is just dropped by the length check rather than bleeding into
+# neighboring text.
+_QUOTED_STRING_RE = re.compile(r"'([^'\n]*)'|\"([^\"\n]*)\"")
 LINE_CITATION_CONTEXT_WINDOW = 8
 
 
 def _quoted_strings(text: str) -> list[str]:
     """Literal quoted snippets in a finding's own text - a real anchor to
     check the finding's claimed line against, when one exists. Short
-    quotes (under 8 chars) are skipped: real code is full of short quoted
-    tokens ('x', "ok") that aren't meaningful evidence of a specific
-    location."""
+    quotes (under _MIN_QUOTED_STRING_LENGTH) are skipped: real code is full
+    of short quoted tokens ('x', "ok") that aren't meaningful evidence of a
+    specific location. Filtered after matching, not inside the regex
+    itself - see _QUOTED_STRING_RE's comment for why matching first and
+    filtering after avoids a real cross-pairing bug the in-regex minimum
+    caused."""
     matches = []
     for match in _QUOTED_STRING_RE.finditer(text):
-        matches.append(match.group(1) if match.group(1) is not None else match.group(2))
+        value = match.group(1) if match.group(1) is not None else match.group(2)
+        if len(value) >= _MIN_QUOTED_STRING_LENGTH:
+            matches.append(value)
     return matches
 
 
