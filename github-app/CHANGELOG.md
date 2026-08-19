@@ -12,6 +12,39 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-19
+
+- **AIRview and Docs generation cut down to a fraction of their prior LLM call volume.**
+  Subsystem and file-page writing for AIRview now batch 5 items per call instead of one, with
+  per-item retry only on the items that fail (batch size chosen conservatively - a prior
+  experiment merging more content into single prompts silently dropped subsystem coverage from
+  83 files to 14 on Flask). Docs' incremental-update path had zero per-call spend gating (a large
+  push had no dollar ceiling at all); it now uses the same `_IncrementalSpendBudget` gate the
+  full-build path already had, and its two-call-per-module generate/polish pass merged into one.
+  Estimated worst case for a full AIRview build: ~$8.40 -> ~$1-2; a large Docs push: uncapped ->
+  hard-capped by the shared monthly spend budget.
+- **Docs no longer re-describes every symbol in a file on every push that touches it.** A new
+  `content_hash` column on `docs_symbols` lets a symbol be skipped if its source snippet is
+  unchanged since it was last described - previously, touching one function in a 20-function file
+  re-sent all 20 to the LLM, every push, with no memory of prior generations.
+- **Health-fix-suggestion no longer re-fires on a flapping endpoint.** A 30-minute cooldown
+  (`was_recently_down`) means one down/up/down incident produces one LLM-generated suggestion, not
+  a fresh one on every flip - matching how Sentry groups repeat issues rather than re-alerting on
+  each occurrence.
+- **AIR's PR review cap raised from 300 to 500/month; free tier held at 150.** This is a
+  usage-promise ceiling, not a cost-protection measure - the separate dollar-based spend cap is
+  unaffected and remains the real defense against a pathological per-review cost.
+- **Flash Review now defaults to "compact" evidence (diff + Aletheore's own context, no raw
+  file-content dump) instead of including full file contents in the prompt.** A 3-run real
+  Luna-generates/DeepSeek-verifies benchmark (see `aletheore-benchmarks/pr_review/README.md`,
+  Experiment 4) found compact held 96.7-97.7% independently-verified accept rate across every run
+  while full-context swung 85.7-100% and never once won, using a fraction of the prompt tokens.
+  Citation verification still uses the real fetched file content; only the prompt-facing blob is
+  dropped.
+- **Removed the CLI's anonymous usage-ping endpoint (`/v1/telemetry`) from the backend.** It was
+  the single most exposed, unauthenticated write path in the service. See the root
+  [`CHANGELOG.md`](../CHANGELOG.md)'s 0.8.13 entry for the CLI-side half of this change.
+
 ## 2026-08-18
 
 - **Fixed a diff-parser collision that silently dropped real findings.** `_diff_valid_lines`
