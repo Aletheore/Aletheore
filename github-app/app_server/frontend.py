@@ -314,6 +314,9 @@ table.findings tr:last-child td { border-bottom: none; }
 .diagram-wrap .mermaid { display: flex; justify-content: center; min-width: max-content; }
 .diagram-wrap.diagram-zoomable { cursor: zoom-in; }
 .diagram-wrap.diagram-zoomable::after { content: "Click to open full diagram"; display: block; margin-top: 8px; color: var(--slate-400); font-size: 11px; text-align: center; }
+.diagram-wrap.diagram-drilldown.diagram-zoomable::after { content: "Click a box to explore it - click elsewhere to open full diagram"; }
+.diagram-wrap .node.diagram-node-clickable { cursor: pointer; }
+.diagram-wrap .node.diagram-node-clickable:hover > * { filter: brightness(1.35); }
 .diagram-zoom-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(10, 8, 4, 0.94);
   overflow: auto; padding: 84px 28px 36px; cursor: zoom-out; }
 .diagram-zoom-content { cursor: grab; display: block; }
@@ -325,7 +328,7 @@ table.findings tr:last-child td { border-bottom: none; }
   color: #F5F0E6; cursor: pointer; font-family: var(--font-sans); font-size: 12px; font-weight: 650; padding: 6px 10px; }
 .diagram-zoom-toolbar button:hover { background: rgba(255, 255, 255, 0.14); }
 .diagram-zoom-hint { padding: 0 8px; color: #D8D2C5; font-size: 12px; white-space: nowrap; }
-.subsystem-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.subsystem-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 20px; }
 .subsystem-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px; text-align: left; background: var(--paper); cursor: pointer; font-family: var(--font-sans); box-shadow: var(--shadow-card); }
 .subsystem-card:hover { border-color: var(--border-strong); }
 .subsystem-name { font-size: 13px; font-weight: 500; margin-bottom: 3px; color: var(--accent-strong); }
@@ -1329,7 +1332,12 @@ if (window.mermaid) {{
   }});
 }}
 let mermaidSeq = 0;
-async function renderDiagram(container, text) {{
+// nodeClickMap (optional): {{ "exact node label": subsystemId }}. When given,
+// each matching rendered node becomes its own click target that drills into
+// that subsystem instead of the whole diagram's zoom-open - the overview
+// diagram's boxes are themselves subsystems, so clicking one should show
+// that one rather than only ever re-opening the same fixed diagram.
+async function renderDiagram(container, text, nodeClickMap) {{
   if (!text || !window.mermaid) {{ container.remove(); return; }}
   try {{
     const id = 'mmd-' + (mermaidSeq++);
@@ -1338,7 +1346,20 @@ async function renderDiagram(container, text) {{
     const wrap = container.closest('.diagram-wrap');
     if (wrap) {{
       wrap.classList.add('diagram-zoomable');
+      wrap.classList.toggle('diagram-drilldown', !!nodeClickMap);
       wrap.onclick = function () {{ openDiagramZoom(svg); }};
+    }}
+    if (nodeClickMap) {{
+      const svgEl = container.querySelector('svg');
+      (svgEl ? svgEl.querySelectorAll('.node') : []).forEach(function (node) {{
+        const subsystemId = nodeClickMap[node.textContent.trim()];
+        if (!subsystemId) return;
+        node.classList.add('diagram-node-clickable');
+        node.addEventListener('click', function (event) {{
+          event.stopPropagation();
+          showSubsystem(subsystemId);
+        }});
+      }});
     }}
   }} catch (e) {{
     container.remove();
@@ -1564,7 +1585,9 @@ async function loadWiki() {{
     '<div class="diagram-wrap"><div class="mermaid" id="overview-diagram"></div></div>' +
     '<div class="subsystem-grid" id="subsystem-grid"></div>';
   body.innerHTML = html;
-  renderDiagram(document.getElementById('overview-diagram'), data.overview.diagram_mermaid);
+  const overviewNodeClickMap = {{}};
+  (data.subsystems || []).forEach(function (s) {{ overviewNodeClickMap[s.name] = s.subsystem_id; }});
+  renderDiagram(document.getElementById('overview-diagram'), data.overview.diagram_mermaid, overviewNodeClickMap);
   const grid = document.getElementById('subsystem-grid');
   (data.subsystems || []).forEach(function (s) {{
     const card = document.createElement('button');
