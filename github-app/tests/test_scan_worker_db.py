@@ -51,6 +51,10 @@ from scan_worker.db import (
     record_llm_spend,
     record_sent_email,
     record_wiki_catchup_swept,
+    release_flash_review_count_reservation,
+    release_llm_spend_reservation,
+    reserve_flash_review_count,
+    reserve_llm_spend,
     set_last_reviewed_sha,
     upsert_docs_symbol,
     upsert_wiki_overview,
@@ -731,6 +735,113 @@ async def test_check_and_reserve_flash_review_attempt_allows_after_debounce_elap
         TEST_DATABASE_URL, 301, "a/repo1", 42, debounce_seconds=0
     )
     assert allowed is True
+
+
+@pytest.mark.asyncio
+async def test_reserve_flash_review_count_allows_up_to_limit_then_blocks(pool):
+    await _insert_installation(pool, 401, "a")
+    first = reserve_flash_review_count(TEST_DATABASE_URL, 401, limit=2)
+    second = reserve_flash_review_count(TEST_DATABASE_URL, 401, limit=2)
+    third = reserve_flash_review_count(TEST_DATABASE_URL, 401, limit=2)
+    assert (first, second, third) == (True, True, False)
+
+
+@pytest.mark.asyncio
+async def test_release_flash_review_count_reservation_frees_a_slot(pool):
+    await _insert_installation(pool, 402, "a")
+    reserve_flash_review_count(TEST_DATABASE_URL, 402, limit=1)
+    blocked = reserve_flash_review_count(TEST_DATABASE_URL, 402, limit=1)
+    assert blocked is False
+
+    release_flash_review_count_reservation(TEST_DATABASE_URL, 402)
+    allowed_again = reserve_flash_review_count(TEST_DATABASE_URL, 402, limit=1)
+    assert allowed_again is True
+
+
+@pytest.mark.asyncio
+async def test_release_flash_review_count_reservation_never_goes_negative(pool):
+    await _insert_installation(pool, 403, "a")
+    # Nothing reserved yet - a double-release (or a release with no matching
+    # reserve) must not underflow the count into negative territory.
+    release_flash_review_count_reservation(TEST_DATABASE_URL, 403)
+    release_flash_review_count_reservation(TEST_DATABASE_URL, 403)
+    allowed = reserve_flash_review_count(TEST_DATABASE_URL, 403, limit=1)
+    assert allowed is True
+
+
+@pytest.mark.asyncio
+async def test_reserve_flash_review_count_is_atomic_under_real_concurrency(pool):
+    # This is the actual regression test for the TOCTOU race
+    # run_flash_review_job used to have: many real, concurrent callers
+    # racing the same (installation_id, month) row, same as two Flash
+    # Reviews for one installation landing on different scan-worker
+    # replicas at once. A read-then-write check-then-act would let more
+    # than `limit` through under real thread-level concurrency; the atomic
+    # UPSERT...WHERE...RETURNING must not, no matter how many callers race
+    # it at once.
+    import concurrent.futures
+
+    await _insert_installation(pool, 404, "a")
+    limit = 20
+    attempts = 60
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=attempts) as pool_exec:
+        results = list(
+            pool_exec.map(
+                lambda _: reserve_flash_review_count(TEST_DATABASE_URL, 404, limit=limit),
+                range(attempts),
+            )
+        )
+
+    assert sum(results) == limit
+    assert results.count(False) == attempts - limit
+
+
+@pytest.mark.asyncio
+async def test_reserve_llm_spend_allows_up_to_cap_then_blocks(pool):
+    await _insert_installation(pool, 405, "a")
+    first = reserve_llm_spend(TEST_DATABASE_URL, 405, reserve_usd=0.5, monthly_cap=1.0)
+    second = reserve_llm_spend(TEST_DATABASE_URL, 405, reserve_usd=0.5, monthly_cap=1.0)
+    third = reserve_llm_spend(TEST_DATABASE_URL, 405, reserve_usd=0.5, monthly_cap=1.0)
+    assert (first, second, third) == (True, True, False)
+    assert get_llm_spend_this_month(TEST_DATABASE_URL, 405) == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_release_llm_spend_reservation_gives_back_the_reserved_amount(pool):
+    await _insert_installation(pool, 406, "a")
+    reserve_llm_spend(TEST_DATABASE_URL, 406, reserve_usd=0.5, monthly_cap=1.0)
+    release_llm_spend_reservation(TEST_DATABASE_URL, 406, reserve_usd=0.5)
+    assert get_llm_spend_this_month(TEST_DATABASE_URL, 406) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_release_llm_spend_reservation_never_goes_negative(pool):
+    await _insert_installation(pool, 407, "a")
+    release_llm_spend_reservation(TEST_DATABASE_URL, 407, reserve_usd=0.5)
+    assert get_llm_spend_this_month(TEST_DATABASE_URL, 407) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_reserve_llm_spend_is_atomic_under_real_concurrency(pool):
+    import concurrent.futures
+
+    await _insert_installation(pool, 408, "a")
+    reserve_usd = 0.5
+    cap = 5.0
+    max_successes = 10  # cap / reserve_usd
+    attempts = 30
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=attempts) as pool_exec:
+        results = list(
+            pool_exec.map(
+                lambda _: reserve_llm_spend(TEST_DATABASE_URL, 408, reserve_usd, cap),
+                range(attempts),
+            )
+        )
+
+    assert sum(results) == max_successes
+    assert get_llm_spend_this_month(TEST_DATABASE_URL, 408) == pytest.approx(max_successes * reserve_usd)
 
 
 @pytest.mark.asyncio

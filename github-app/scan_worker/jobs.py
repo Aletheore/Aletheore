@@ -76,12 +76,15 @@ from scan_worker.db import (
     get_latest_evidence,
     get_llm_spend_this_month,
     get_seconds_since_last_health_check,
-    increment_flash_review_count,
     insert_audit_report,
     insert_endpoint_health,
     was_recently_down,
     insert_repo_history,
     installation_spend_lock,
+    release_flash_review_count_reservation,
+    release_llm_spend_reservation,
+    reserve_flash_review_count,
+    reserve_llm_spend,
     list_docs_symbols,
     list_health_check_targets_all,
     list_installation_member_emails,
@@ -235,6 +238,19 @@ MAX_FLASH_REVIEWS_PER_MONTH = 500
 # track paid 1:1.
 MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH = 150
 DEFAULT_LLM_NEXT_CALL_RESERVE_USD = 0.001
+
+# Conservative flat reserve for one paid-tier Flash Review, used by
+# reserve_llm_spend to make the dollar-cap check atomic with the reservation
+# (see run_flash_review_job). Deliberately generous relative to a real
+# review's likely cost: Luna/deepseek-v4-flash pricing is $0.20-1.20 per
+# million tokens (see app_server/llm_cost.py's MODEL_RATES_PER_MILLION_USD)
+# and compact mode keeps prompts to diff + evidence only, so a real review
+# should land well under this - but reasoning-token output on a single
+# unusually large diff is the failure mode this needs to survive without
+# under-reserving. Small relative to a real monthly cap (the base AIR plan's
+# is ~$15, see monthly_cap_for_installation), so it doesn't meaningfully
+# throttle legitimate usage near the cap boundary.
+FLASH_REVIEW_SPEND_RESERVE_USD = 0.50
 
 
 def _job_temp_dir() -> Path:
@@ -1339,20 +1355,22 @@ def run_managed_audit_api_job(
     include_suggestions = (
         installation.get("llm_suggestions_enabled", True) if installation is not None else True
     )
-    with installation_spend_lock(settings.database_url, installation_id):
-        extra_seats = get_extra_seats(settings.database_url, installation_id)
-        monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
-        current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
-        if current_spend >= monthly_cap:
-            raise RuntimeError(
-                f"monthly spend cap reached for this installation (${monthly_cap:.2f})"
-            )
-    # Everything below runs outside installation_spend_lock: run_managed_audit
-    # can make several sequential LLM calls (see _IncrementalSpendBudget) and
-    # has been observed to take minutes. record_usage's underlying SQL
-    # increment is already atomic, so only the cap check above needs the lock
-    # - holding it for the whole audit just serializes concurrent jobs for the
-    # same installation into LockNotAvailable failures (same bug as
+    # No lock: this is a fast-fail hint (skip the setup work below if the
+    # cap is obviously already blown), not the enforcement itself - real
+    # enforcement is each _IncrementalSpendBudget.can_start_next_call()
+    # reserving atomically against the live total, so a stale read here has
+    # no financial-integrity consequence, just a possibly-later-than-ideal
+    # rejection.
+    extra_seats = get_extra_seats(settings.database_url, installation_id)
+    monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
+    current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
+    if current_spend >= monthly_cap:
+        raise RuntimeError(
+            f"monthly spend cap reached for this installation (${monthly_cap:.2f})"
+        )
+    # run_managed_audit can make several sequential LLM calls (see
+    # _IncrementalSpendBudget) and has been observed to take minutes -
+    # nothing below needs a lock held for that whole duration (same bug as
     # run_flash_review_job, see its comment at jobs.py:1379).
     job_dir = _job_temp_dir()
     try:
@@ -1367,7 +1385,6 @@ def run_managed_audit_api_job(
             settings.database_url,
             installation_id,
             model_for_plan(plan),
-            current_spend,
             monthly_cap,
             feature="managed_audit",
         )
@@ -1420,50 +1437,53 @@ def run_flash_review_job(
     ):
         return
 
-    # The advisory lock only needs to guard the quick check-then-write
-    # spend bookkeeping (see installation_spend_lock's docstring) - NOT
-    # the review itself, which does a real LLM call plus several GitHub
-    # API round-trips and has been measured at up to 5m50s in production
-    # (see FLASH_REVIEW_JOB_TIMEOUT_SECONDS in
-    # app_server/webhooks/pull_request.py). Holding the lock for that
-    # whole duration serialized every Flash Review for one installation
-    # to run strictly one at a time, and ADVISORY_LOCK_TIMEOUT (5s) is far
-    # shorter than that review time, so any review queued behind another
-    # for the same installation reliably failed outright with
-    # psycopg.errors.LockNotAvailable instead of just waiting its turn -
-    # confirmed in production logs while opening 25 PRs on one
-    # installation in quick succession. The lock is now acquired twice,
-    # briefly, around the check and (inside _run_flash_review) around the
-    # final spend record - never around the expensive work in between.
+    # Both caps are reserved atomically up front via a single UPSERT each
+    # (reserve_flash_review_count / reserve_llm_spend), not read-then-later-
+    # written under an advisory lock. A held lock can only guard against two
+    # concurrent callers racing each other while both hold it - it does
+    # nothing once either releases it, and the actual review (a real LLM
+    # call plus several GitHub API round-trips, measured at up to 5m50s in
+    # production, see FLASH_REVIEW_JOB_TIMEOUT_SECONDS in
+    # app_server/webhooks/pull_request.py) can't run while a lock this
+    # narrow is held - ADVISORY_LOCK_TIMEOUT (5s) is far shorter than that,
+    # so any review queued behind another for the same installation used to
+    # fail outright with psycopg.errors.LockNotAvailable instead of just
+    # waiting its turn (confirmed in production logs while opening 25 PRs on
+    # one installation in quick succession). Reserving atomically at
+    # check-time - the same fix this PR's OpenAI daily-token cap already
+    # uses, see model_tiers._reserve_openai_free_tier_budget - closes the
+    # race completely instead of narrowing the window where it can occur:
+    # two concurrent Flash Reviews for the same installation can no longer
+    # both pass the cap check before either has "spent" anything, because
+    # the reservation itself IS the spend, applied atomically at the moment
+    # of the check.
+    reserved_spend = 0.0
     if is_free_tier:
-        # Free-tier: request-count cap, no dollar cap (providers are free/near-free).
-        # Locked the same way the paid branch below locks its own count
-        # check - without it, two concurrent Flash Reviews on the same free
-        # installation (e.g. two PRs pushed at once, landing on different
-        # scan-worker replicas) could both read the count as under-cap
-        # before either recorded an attempt, overshooting
-        # MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH by however many land in that
-        # window - the same class of race this PR's OpenAI daily-token cap
-        # fix (see model_tiers._reserve_openai_free_tier_budget) closes for
-        # a different counter.
-        with installation_spend_lock(settings.database_url, installation_id):
-            if get_flash_review_count_this_month(settings.database_url, installation_id) >= MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH:
-                return
+        if not reserve_flash_review_count(
+            settings.database_url, installation_id, MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH
+        ):
+            return
         monthly_cap = 0.0  # no dollar cap for free tier
     else:
-        with installation_spend_lock(settings.database_url, installation_id):
-            extra_seats = get_extra_seats(settings.database_url, installation_id)
-            monthly_cap = monthly_cap_for_installation(base_cap_for_plan(installation["plan"]), extra_seats)
-            current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
-            if current_spend >= monthly_cap:
-                return
-            if get_flash_review_count_this_month(settings.database_url, installation_id) >= MAX_FLASH_REVIEWS_PER_MONTH:
-                return
+        # Reads only, no lock needed - extra_seats/monthly_cap are inputs to
+        # this request's own reservation below, not shared mutable state
+        # that itself needs cross-process atomicity.
+        extra_seats = get_extra_seats(settings.database_url, installation_id)
+        monthly_cap = monthly_cap_for_installation(base_cap_for_plan(installation["plan"]), extra_seats)
+        if not reserve_flash_review_count(
+            settings.database_url, installation_id, MAX_FLASH_REVIEWS_PER_MONTH
+        ):
+            return
+        reserved_spend = FLASH_REVIEW_SPEND_RESERVE_USD
+        if not reserve_llm_spend(settings.database_url, installation_id, reserved_spend, monthly_cap):
+            release_flash_review_count_reservation(settings.database_url, installation_id)
+            return
 
+    review_ran = False
     try:
-        _run_flash_review(
+        review_ran = _run_flash_review(
             settings, installation_id, repo_full_name, pr_number, base_sha, head_sha, monthly_cap,
-            is_free_tier=is_free_tier,
+            reserved_spend, is_free_tier=is_free_tier,
         )
     except Exception as exc:  # noqa: BLE001
         try:
@@ -1472,6 +1492,17 @@ def run_flash_review_job(
             )
         except Exception:  # noqa: BLE001
             pass
+    finally:
+        # A reservation that never became a real review (every free-tier
+        # provider failed, no provider keys configured, or an unrelated
+        # exception aborted the job before it could produce a result) must
+        # not permanently consume a slot/dollar the installation never
+        # actually used - see release_flash_review_count_reservation and
+        # release_llm_spend_reservation.
+        if not review_ran:
+            release_flash_review_count_reservation(settings.database_url, installation_id)
+            if reserved_spend:
+                release_llm_spend_reservation(settings.database_url, installation_id, reserved_spend)
 
 
 def _run_flash_review(
@@ -1482,9 +1513,15 @@ def _run_flash_review(
     base_sha: str,
     head_sha: str,
     monthly_cap: float,
+    reserved_spend: float,
     *,
     is_free_tier: bool = False,
-) -> None:
+) -> bool:
+    """Returns True if a real review actually ran and its spend/count
+    reservation (see run_flash_review_job) was trued up to reflect it -
+    False if it bailed out before that point (no free-tier provider keys
+    configured, or every free-tier provider failed), in which case the
+    caller's reservation was never "spent" and must be released."""
     app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
     token = _token_sync(installation_id, app_jwt)
     client = get_github_api_client()
@@ -1504,6 +1541,10 @@ def _run_flash_review(
 
     spend_accumulator = {"total": 0.0}
     grounding_result: dict = {}
+    # Defined before the branch below so the tail of this function can
+    # always read it, whether or not the non-substantive-diff short-circuit
+    # (which never touches free-tier providers at all) was taken.
+    free_tier_exhausted = {"value": False}
 
     skipped_files: list[str] = []
 
@@ -1602,6 +1643,11 @@ def _run_flash_review(
             # human, not just a log line nobody's watching - reuses the
             # same cooldown-guarded ops-alert path other production
             # incidents already go through, so this can't spam either.
+            # Also flagged here (not inferred from empty findings downstream)
+            # so run_flash_review_job's caller can release this review's
+            # reservation - a review that never actually ran must not
+            # permanently consume a slot/dollar the installation never used.
+            free_tier_exhausted["value"] = True
             _send_ops_alert(
                 get_redis_client(),
                 "flash_review.free_tier_exhausted",
@@ -1621,7 +1667,7 @@ def _run_flash_review(
                     "free-tier: no provider keys configured, skipping review for %s#%s",
                     repo_full_name, pr_number,
                 )
-                return
+                return False
 
         if code_evidence_context:
             findings = review_diff(
@@ -1668,15 +1714,21 @@ def _run_flash_review(
                 adapter_chain=free_tier_chain,
                 on_free_tier_exhausted=_on_free_tier_exhausted,
             )
-    # Briefly re-acquire the lock just for the write, now that the
-    # expensive review work above is done - see run_flash_review_job's
-    # comment on why the lock no longer wraps this whole function.
-    with installation_spend_lock(settings.database_url, installation_id):
+    # The review-count reservation already happened atomically up front (see
+    # run_flash_review_job); nothing left to do for it here on the success
+    # path. The dollar reservation was a conservative flat estimate, not the
+    # real cost - true it up to what actually happened. No lock needed:
+    # record_llm_spend's own UPSERT is already atomic per call, and it was
+    # only ever paired with the (now-removed) count increment for the
+    # illusion of atomicity, not because either write needed one on its own.
+    # Skipped entirely when free-tier was fully exhausted before producing a
+    # result - that reservation gets released, not trued up, by the caller.
+    review_ran = not free_tier_exhausted["value"]
+    if review_ran:
         record_llm_spend(
-            settings.database_url, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap,
-            feature="flash_review",
+            settings.database_url, installation_id, spend_accumulator["total"] - reserved_spend,
+            monthly_cap=monthly_cap, feature="flash_review",
         )
-        increment_flash_review_count(settings.database_url, installation_id)
 
     proposed = grounding_result.get("proposed", 0)
     kept = grounding_result.get("kept", 0)
@@ -1731,6 +1783,7 @@ def _run_flash_review(
     set_last_reviewed_sha(
         settings.database_url, installation_id, repo_full_name, pr_number, head_sha
     )
+    return review_ran
 
 
 def _send_if_webhook_configured(installation: dict, message: dict) -> None:
@@ -2892,11 +2945,17 @@ def run_weekly_digest_sweep_job() -> None:
 
 
 def _llm_spend_cap_reached(dsn: str, installation_id: int, plan: str) -> tuple[bool, float]:
-    """(cap_reached, monthly_cap) - caller must hold installation_spend_lock,
-    same as every other spend-gated call site (managed audits, flash
-    review). Factored out because AIRview/Docs builds now have four call
-    sites needing the identical cap computation, where every existing
-    caller only ever needed it once.
+    """(cap_reached, monthly_cap) - a plain read, no lock required. For a
+    caller that goes on to gate every real LLM call through an
+    _IncrementalSpendBudget, this is a fast-fail hint only (skip setup work
+    if the cap is obviously already blown); real enforcement is that
+    budget's can_start_next_call() reserving atomically per call. A caller
+    with no such budget (a single LLM call, or none at all downstream)
+    should still treat this as its real enforcement and keep locking around
+    it - see run_flash_review_job's fix-suggestion attachment for that
+    shape. Factored out because AIRview/Docs builds have several call sites
+    needing the identical cap computation, where every existing caller only
+    ever needed it once.
     """
     extra_seats = get_extra_seats(dsn, installation_id)
     monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
@@ -2905,12 +2964,33 @@ def _llm_spend_cap_reached(dsn: str, installation_id: int, plan: str) -> tuple[b
 
 
 class _IncrementalSpendBudget:
+    """Gates a job that makes several sequential LLM calls (managed audits,
+    AIRview/Docs full builds) against the monthly dollar cap.
+
+    can_start_next_call() used to compare against a `current_spend` snapshot
+    read once when the budget object was created, plus an in-process
+    spent_this_job counter - invisible to any OTHER concurrent job spending
+    against the same installation's cap (a Flash Review, or a second
+    AIRview/Docs build) for the whole duration of this one, sometimes
+    minutes long. Now reserves atomically per call instead (see
+    reserve_llm_spend, the same primitive run_flash_review_job's cap check
+    uses): each call to can_start_next_call() re-reads and compares against
+    the real current total in one atomic statement, so two jobs racing each
+    other can no longer both see room for a call that only one of them can
+    actually afford.
+
+    Known residual gap, not addressed here: if the LLM call itself fails
+    after can_start_next_call() reserves but before record_usage() trues it
+    up, that reservation is never released - the same class of gap
+    model_tiers._reserve_openai_free_tier_budget already has for the OpenAI
+    free-tier daily token cap. Closing it needs a failure hook the adapter
+    chain doesn't expose yet; tracked separately, not part of this fix."""
+
     def __init__(
         self,
         dsn: str,
         installation_id: int,
         model: str,
-        current_spend: float,
         monthly_cap: float,
         next_call_reserve_usd: float = DEFAULT_LLM_NEXT_CALL_RESERVE_USD,
         feature: str = "unknown",
@@ -2918,24 +2998,21 @@ class _IncrementalSpendBudget:
         self.dsn = dsn
         self.installation_id = installation_id
         self.model = model
-        self.current_spend = current_spend
         self.monthly_cap = monthly_cap
         self.next_call_reserve_usd = next_call_reserve_usd
-        self.spent_this_job = 0.0
         self.feature = feature
 
     def can_start_next_call(self) -> bool:
-        return (
-            self.current_spend + self.spent_this_job + self.next_call_reserve_usd
-            <= self.monthly_cap
+        return reserve_llm_spend(
+            self.dsn, self.installation_id, self.next_call_reserve_usd, self.monthly_cap
         )
 
     def record_usage(self, prompt_tokens: int, completion_tokens: int) -> None:
         cost = cost_for_usage(self.model, prompt_tokens, completion_tokens)
-        if cost <= 0:
+        delta = cost - self.next_call_reserve_usd
+        if delta == 0:
             return
-        record_llm_spend(self.dsn, self.installation_id, cost, feature=self.feature)
-        self.spent_this_job += cost
+        record_llm_spend(self.dsn, self.installation_id, delta, feature=self.feature)
 
     def cap_message(self) -> str:
         return (
@@ -3560,8 +3637,10 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         return
     client, token = client_and_token
 
-    with installation_spend_lock(dsn, installation_id):
-        cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
+    # Fast-fail hint only, no lock - see _IncrementalSpendBudget's docstring;
+    # real enforcement is its can_start_next_call() reserving atomically per
+    # call below.
+    cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
     if cap_reached:
         logging.getLogger("scan_worker.jobs").info(
             "live docs full build skipped for installation=%s repo=%s - monthly spend cap reached (${%.2f})",
@@ -3574,9 +3653,8 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         return
 
     full_build_model = model_for_plan(plan)
-    current_spend = get_llm_spend_this_month(dsn, installation_id)
     spend_budget = _IncrementalSpendBudget(
-        dsn, installation_id, full_build_model, current_spend, monthly_cap,
+        dsn, installation_id, full_build_model, monthly_cap,
         feature="docs_full_build",
     )
 
@@ -3702,8 +3780,13 @@ def _maybe_update_live_docs(
 
     dsn = settings.database_url
     plan = installation["plan"]
-    with installation_spend_lock(dsn, installation_id):
-        cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
+    # Fast-fail hint only, no lock - see _IncrementalSpendBudget's docstring;
+    # real enforcement is its can_start_next_call() reserving atomically per
+    # call below. This closes the actual gap: two concurrent jobs spending
+    # against the same installation (e.g. this incremental update racing a
+    # Flash Review or a full build) no longer share one stale current_spend
+    # snapshot that neither can see the other invalidate mid-run.
+    cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
     if cap_reached:
         logging.getLogger("scan_worker.jobs").info(
             "live docs incremental update skipped for installation=%s repo=%s - "
@@ -3717,9 +3800,8 @@ def _maybe_update_live_docs(
         return
 
     update_model = resolve_model(live_docs.FLASH_MODEL)
-    current_spend = get_llm_spend_this_month(dsn, installation_id)
     spend_budget = _IncrementalSpendBudget(
-        dsn, installation_id, update_model, current_spend, monthly_cap,
+        dsn, installation_id, update_model, monthly_cap,
         feature="docs_incremental",
     )
 
