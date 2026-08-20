@@ -1734,6 +1734,38 @@ def test_fetch_review_file_context_stops_context_at_total_byte_budget(monkeypatc
     assert file_contents == {"a.py": "0123456789", "b.py": "0123456789", "c.py": "0123456789"}
 
 
+def test_fetch_review_file_context_does_not_mislabel_a_production_file_starting_with_test(monkeypatch):
+    # Real regression: the old unanchored "/test" in path.lower() substring
+    # check false-positived on any production file whose path segment
+    # merely starts with "test" - src/testing_utils.py is not a test file.
+    from scan_worker import flash_review
+
+    monkeypatch.setattr(flash_review, "fetch_file_content", lambda client, token, repo, path, ref: "content")
+
+    file_context, _ = flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["src/testing_utils.py"], "sha"
+    )
+
+    assert "full content: src/testing_utils.py" in file_context
+    assert "test file content: src/testing_utils.py" not in file_context
+
+
+def test_fetch_review_file_context_labels_a_tests_directory_jsx_spec_file_correctly(monkeypatch):
+    # Real regression: __tests__/Button.spec.tsx was missed entirely by the
+    # old check - no literal "/test" substring (it's "__tests__/"), and
+    # .tsx isn't in the old endswith(...) tuple, which only covered
+    # .js/.ts.
+    from scan_worker import flash_review
+
+    monkeypatch.setattr(flash_review, "fetch_file_content", lambda client, token, repo, path, ref: "content")
+
+    file_context, _ = flash_review.fetch_review_file_context(
+        None, "tok", "o/r", ["__tests__/Button.spec.tsx"], "sha"
+    )
+
+    assert "test file content: __tests__/Button.spec.tsx" in file_context
+
+
 def test_fetch_review_file_context_returns_path_to_content_mapping(monkeypatch):
     from scan_worker import flash_review
 
