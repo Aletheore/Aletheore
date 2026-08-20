@@ -1699,61 +1699,37 @@ def _run_flash_review(
                 )
                 return False
 
-        if code_evidence_context:
-            findings = review_diff(
-                diff_text,
-                file_context=file_context,
-                code_evidence_context=code_evidence_context,
-                on_usage=_on_usage,
-                referenced_symbol_context=referenced_symbol_context,
-                pr_context=pr_context,
-                # The similarity cache is keyed only by (installation_id,
-                # repo_full_name) + diff similarity - it has no notion of
-                # which model produced a cached result. Free tier never
-                # reads or writes it, so a paid customer who upgraded from
-                # free mid-month can never be silently served a weaker
-                # free-tier-model result for a similar diff.
-                cache_lookup=None if is_free_tier else _cache_lookup,
-                cache_write=None if is_free_tier else _cache_write,
-                model_used=flash_review_model,
-                file_contents=file_contents,
-                on_grounding_result=_on_grounding_result,
-                diff_patches=diff_patches,
-                adapter_chain=free_tier_chain,
-                on_free_tier_exhausted=_on_free_tier_exhausted,
-                # Paid-tier only (see _on_verification_usage) - free tier's
-                # own generation quality/cost tradeoffs are a separate,
-                # already-pooled budget this doesn't touch.
-                verify_with_second_model=not is_free_tier,
-                on_verification_usage=_on_verification_usage,
-            )
-        else:
-            findings = review_diff(
-                diff_text,
-                file_context=file_context,
-                on_usage=_on_usage,
-                referenced_symbol_context=referenced_symbol_context,
-                pr_context=pr_context,
-                # The similarity cache is keyed only by (installation_id,
-                # repo_full_name) + diff similarity - it has no notion of
-                # which model produced a cached result. Free tier never
-                # reads or writes it, so a paid customer who upgraded from
-                # free mid-month can never be silently served a weaker
-                # free-tier-model result for a similar diff.
-                cache_lookup=None if is_free_tier else _cache_lookup,
-                cache_write=None if is_free_tier else _cache_write,
-                model_used=flash_review_model,
-                file_contents=file_contents,
-                on_grounding_result=_on_grounding_result,
-                diff_patches=diff_patches,
-                adapter_chain=free_tier_chain,
-                on_free_tier_exhausted=_on_free_tier_exhausted,
-                # Paid-tier only (see _on_verification_usage) - free tier's
-                # own generation quality/cost tradeoffs are a separate,
-                # already-pooled budget this doesn't touch.
-                verify_with_second_model=not is_free_tier,
-                on_verification_usage=_on_verification_usage,
-            )
+        # code_evidence_context defaults to "" in review_diff's own
+        # signature, so passing it unconditionally (even when this build
+        # produced none) is identical to omitting it - no need for the two
+        # near-duplicate call sites this used to be split into.
+        findings = review_diff(
+            diff_text,
+            file_context=file_context,
+            code_evidence_context=code_evidence_context,
+            on_usage=_on_usage,
+            referenced_symbol_context=referenced_symbol_context,
+            pr_context=pr_context,
+            # The similarity cache is keyed only by (installation_id,
+            # repo_full_name) + diff similarity - it has no notion of
+            # which model produced a cached result. Free tier never
+            # reads or writes it, so a paid customer who upgraded from
+            # free mid-month can never be silently served a weaker
+            # free-tier-model result for a similar diff.
+            cache_lookup=None if is_free_tier else _cache_lookup,
+            cache_write=None if is_free_tier else _cache_write,
+            model_used=flash_review_model,
+            file_contents=file_contents,
+            on_grounding_result=_on_grounding_result,
+            diff_patches=diff_patches,
+            adapter_chain=free_tier_chain,
+            on_free_tier_exhausted=_on_free_tier_exhausted,
+            # Paid-tier only (see _on_verification_usage) - free tier's
+            # own generation quality/cost tradeoffs are a separate,
+            # already-pooled budget this doesn't touch.
+            verify_with_second_model=not is_free_tier,
+            on_verification_usage=_on_verification_usage,
+        )
     # The review-count reservation already happened atomically up front (see
     # run_flash_review_job); nothing left to do for it here on the success
     # path. The dollar reservation was a conservative flat estimate, not the
