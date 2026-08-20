@@ -55,7 +55,7 @@
       "Multi-provider AI audit reports (Claude, OpenAI, Gemini, Mistral, Grok, DeepSeek, Ollama)",
       "GitHub App: automatic PR comments and branch-protection check runs",
       "AI-powered managed audit reports on pull requests, written by an OpenAI frontier model",
-      "Automatic Flash reviews on every pull request push, grounded with an OpenAI frontier model",
+      "Automatic Flash reviews on every pull request push: one model writes the review, a second independent model re-checks every finding against the diff before it's shown (AIR)",
       "Slack/Teams alerts on new findings",
       "Live API endpoint health monitoring across multiple targets, with a public status API",
       "AIRview: an AI-generated, always-current map of your repo's architecture with dependency diagrams",
@@ -173,7 +173,7 @@
         <article class="pillar-card">
           <span class="pillar-index">01</span>
           <h3>Code Review</h3>
-          <p>Automatic PR comments, Flash reviews, managed audits, and branch-protection checks that cite the changed file and line.</p>
+          <p>Automatic PR comments, Flash reviews independently re-checked by a second model before you see them, managed audits, and branch-protection checks that cite the changed file and line.</p>
           <ul>
             <li>Review only what changed</li>
             <li>Catch secrets before merge</li>
