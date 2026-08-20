@@ -465,6 +465,30 @@ async def add_member(org: str, repo: str, request: Request, body: AddMemberReque
     return {"ok": True}
 
 
+# buy_extra_seat and remove_extra_seat each do a read-then-write against
+# Paddle's subscription (get_paddle_subscription, then a delta computed off
+# what it returned, then update_subscription_items) with no lock around it.
+# Two concurrent calls for the same installation - a double-click, or two
+# admins both clicking around the same time - can both read the same
+# starting quantity and each submit their own absolute (not relative) item
+# list, so the second write silently clobbers the first rather than
+# stacking: two "buy" clicks can net only +1 seat, with both requests
+# returning 200. The app server runs as a single uvicorn worker (see
+# Dockerfile.app-server's CMD, no --workers flag, and docker-compose.yml has
+# no replicas set for app-server), so - unlike a multi-replica service - a
+# plain in-process lock, keyed per installation, is sufficient to serialize
+# this without needing a cross-process Postgres advisory lock held open
+# across the Paddle network round-trip.
+_SEAT_ADJUSTMENT_LOCKS: dict[int, asyncio.Lock] = {}
+
+
+def _seat_adjustment_lock(installation_id: int) -> asyncio.Lock:
+    lock = _SEAT_ADJUSTMENT_LOCKS.get(installation_id)
+    if lock is None:
+        lock = _SEAT_ADJUSTMENT_LOCKS[installation_id] = asyncio.Lock()
+    return lock
+
+
 def _build_updated_seat_items(subscription_items: list[dict], delta: int) -> list[dict] | None:
     # Paddle requires the complete item list on every subscription update -
     # this rebuilds it with the extra-seat item's quantity adjusted by
@@ -515,9 +539,10 @@ async def buy_extra_seat(org: str, repo: str, request: Request):
 
     settings = get_settings()
     try:
-        await asyncio.to_thread(
-            _adjust_extra_seat_sync, settings.paddle_api_key, subscription_id, 1
-        )
+        async with _seat_adjustment_lock(installation["installation_id"]):
+            await asyncio.to_thread(
+                _adjust_extra_seat_sync, settings.paddle_api_key, subscription_id, 1
+            )
     except PaddleAPIError as exc:
         # exc's message includes the raw Paddle response (URL, status code,
         # docs link) - useful in a log, not something to hand an end user
@@ -554,9 +579,10 @@ async def remove_extra_seat(org: str, repo: str, request: Request):
 
     settings = get_settings()
     try:
-        items = await asyncio.to_thread(
-            _adjust_extra_seat_sync, settings.paddle_api_key, subscription_id, -1
-        )
+        async with _seat_adjustment_lock(installation["installation_id"]):
+            items = await asyncio.to_thread(
+                _adjust_extra_seat_sync, settings.paddle_api_key, subscription_id, -1
+            )
         if items is None:
             raise HTTPException(status_code=409, detail="no extra seats to remove")
     except PaddleAPIError as exc:
