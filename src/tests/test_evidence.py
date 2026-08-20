@@ -377,6 +377,50 @@ def test_scan_repository_reparses_a_file_that_changed_since_the_local_cache(tmp_
     assert "before" not in [f["name"] for f in by_path["changing.py"]["symbols"]["functions"]]
 
 
+def test_scan_repository_reports_no_cache_found_on_a_first_scan(tmp_path):
+    # A CLI user who only ever sees "Scanning..." has no way to know a scan
+    # is cached at all - a fast repeat scan would otherwise read as
+    # suspicious (did it actually check everything?) rather than as the
+    # cache working as intended.
+    repo = make_repo(tmp_path)
+    (repo / "main.py").write_text("x = 1\n")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "add main.py")
+
+    messages = []
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        scan_repository(repo, check_licenses=False, progress=messages.append)
+
+    assert any("No previous scan cache found" in m for m in messages)
+    assert not any("Reusing cached results" in m for m in messages)
+
+
+def test_scan_repository_reports_reused_file_count_on_a_cached_scan(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / "unchanged.py").write_text("def cached():\n    pass\n")
+    run(repo, "add", "-A")
+    run(repo, "commit", "-q", "-m", "add unchanged.py")
+
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        scan_repository(repo, check_licenses=False)
+
+    messages = []
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        scan_repository(repo, check_licenses=False, progress=messages.append)
+
+    # make_repo's own main.py + requirements.txt fixture files are also
+    # unchanged on this second scan, so the count is >1, not exactly the 1
+    # file this test itself adds - assert the message shape, not the exact
+    # count, so this doesn't depend on make_repo's fixture contents.
+    assert any(
+        m.startswith("Reusing cached results for ") and "unchanged file" in m for m in messages
+    )
+    assert not any("No previous scan cache found" in m for m in messages)
+
+
 def test_scan_repository_ignores_local_cache_when_hosted_cache_env_var_is_set(tmp_path, monkeypatch):
     # The hosted worker's own cache must always take priority - a plain
     # local cache left over on the same machine (e.g. a developer testing
