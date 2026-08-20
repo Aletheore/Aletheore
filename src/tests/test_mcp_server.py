@@ -410,6 +410,36 @@ async def test_aletheore_answer_returns_friendly_error_on_dimension_mismatch(tmp
 
 
 @pytest.mark.asyncio
+async def test_aletheore_answer_tool_forbids_hosted_embeddings_by_default(tmp_path):
+    # Regression test: aletheore_answer used to call answer_question with no
+    # allow_hosted argument at all, so the question (and retrieved chunks)
+    # still reached Aletheore's hosted embedding endpoint whenever a token
+    # was configured, regardless of the operator's actual EFFECT_EXTERNAL
+    # grant - unlike aletheore_index/aletheore_search_codebase, which this
+    # same default-posture test already covers for their own hosted calls.
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo, answer_adapter=MagicMock())  # default effects, no `allow=` override
+
+    with patch("aletheore.mcp_server.answer_question", return_value={"answer": "", "cited_chunks": [], "confidence_gated": True}) as mock_answer:
+        await server.call_tool("aletheore_answer", {"question": "what does foo do"})
+
+    assert mock_answer.call_args.kwargs["allow_hosted"] is False
+
+
+@pytest.mark.asyncio
+async def test_aletheore_answer_tool_permits_hosted_embeddings_when_external_is_allowed(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(
+        repo, answer_adapter=MagicMock(), allow=frozenset({"write", "network", "external"})
+    )
+
+    with patch("aletheore.mcp_server.answer_question", return_value={"answer": "", "cited_chunks": [], "confidence_gated": True}) as mock_answer:
+        await server.call_tool("aletheore_answer", {"question": "what does foo do"})
+
+    assert mock_answer.call_args.kwargs["allow_hosted"] is True
+
+
+@pytest.mark.asyncio
 async def test_aletheore_index_tool_builds_the_search_index(tmp_path):
     # Before this fix, aletheore_search_codebase/aletheore_answer required
     # .aletheore/index.lancedb, buildable only via the CLI's `aletheore

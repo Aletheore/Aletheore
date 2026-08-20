@@ -23,8 +23,17 @@ def answer_question(
     adapter: AgentAdapter,
     k: int = 5,
     confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+    allow_hosted: bool = True,
 ) -> dict:
-    results = search_index(repo_path, question, k=k)
+    # Forwarded to search_index (and transitively _embed_in_batches) rather
+    # than left to default True unconditionally - mcp_server.py's
+    # aletheore_answer tool passes this through from the caller's actual
+    # EFFECT_EXTERNAL consent, the same way aletheore_search_codebase and
+    # aletheore_index already do for their own hosted-embedding calls.
+    # Without it, declining hosted-transmission consent for this specific
+    # tool had no effect: the question (and retrieved chunks) still went to
+    # Aletheore's hosted embedding endpoint whenever a token was configured.
+    results = search_index(repo_path, question, k=k, allow_hosted=allow_hosted)
 
     if not results or results[0]["score"] > confidence_threshold:
         return {

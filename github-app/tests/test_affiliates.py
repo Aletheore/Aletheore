@@ -178,6 +178,50 @@ async def test_mark_commissions_paid_does_not_touch_other_affiliates(pool):
 
 
 @pytest.mark.asyncio
+async def test_mark_commissions_paid_does_not_touch_a_reversed_commission(pool):
+    # Regression test: a commission reversed via the Paddle
+    # refund/chargeback webhook path (reverse_commission) was already
+    # correctly excluded from total_owed_usd, but mark_commissions_paid's
+    # UPDATE had no NOT reversed filter, so an admin's "mark everything
+    # paid" click could still flip it to paid=true - after which it's ALSO
+    # excluded from total_paid_usd (same NOT reversed filter on that
+    # query), silently vanishing from both totals while sitting in the
+    # database marked paid. A commission never actually paid out, with no
+    # trace in either report.
+    affiliate = await create_affiliate(pool, "NIA10", "dsc_nia", "Nia")
+    await upsert_installation(pool, 910, "acme")
+    await record_referral(pool, 910, affiliate["id"])
+    now = datetime.now(timezone.utc)
+    await record_commission(pool, affiliate["id"], 910, "txn_reversed", Decimal("4.00"), now)
+    await reverse_commission(pool, "txn_reversed")
+
+    marked = await mark_commissions_paid(pool, affiliate["id"])
+
+    assert marked == 0
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0")
+    assert totals[affiliate["id"]]["total_paid_usd"] == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_mark_commissions_paid_still_pays_unreversed_commissions_alongside_a_reversed_one(pool):
+    affiliate = await create_affiliate(pool, "OWEN10", "dsc_owen", "Owen")
+    await upsert_installation(pool, 911, "acme")
+    await record_referral(pool, 911, affiliate["id"])
+    now = datetime.now(timezone.utc)
+    await record_commission(pool, affiliate["id"], 911, "txn_good", Decimal("5.00"), now)
+    await record_commission(pool, affiliate["id"], 911, "txn_bad", Decimal("4.00"), now)
+    await reverse_commission(pool, "txn_bad")
+
+    marked = await mark_commissions_paid(pool, affiliate["id"])
+
+    assert marked == 1
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_paid_usd"] == Decimal("5.00")
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0")
+
+
+@pytest.mark.asyncio
 async def test_totals_are_not_multiplied_by_referral_count(pool):
     """Regression for a real bug: joining affiliate_referrals and
     affiliate_commissions onto affiliates in one query is a cartesian
