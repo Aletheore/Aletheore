@@ -1,6 +1,8 @@
 import logging
 import threading
 
+import pytest
+
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from scan_worker.model_tiers import (
     LUNA_MODEL,
@@ -365,6 +367,57 @@ def test_openai_free_tier_usage_still_forwards_to_the_shared_on_usage(monkeypatc
     openai_adapter._on_usage(10, 20)
 
     assert received == [(10, 20)]
+
+
+def test_openai_free_tier_on_call_failed_releases_the_reservation(monkeypatch):
+    # Real regression this guards: on_usage only fires on a completed call -
+    # a failed call (rotated key, outage, transient error exhausted its
+    # retries) never reaches it, so without on_call_failed the reservation
+    # before_llm_call already made stays stuck forever against zero real
+    # tokens. ~18 such failures in a day (18 x 130k ~= 2.34M against the
+    # 2.4M daily cap) would silently exhaust the counter and exclude
+    # OpenAI-FreeTier from the fallback chain for the rest of the day, even
+    # though every failed review still succeeded via the next provider in
+    # the chain (Groq/Gemini tried first, OpenRouter last) - the bug is
+    # invisible in review outcomes, only visible in the day's shrinking
+    # free-tier capacity.
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    from scan_worker.model_tiers import _openai_free_tier_token_key
+
+    redis_conn = _FakeRedis()
+    chain = writing_adapter_chain_for_free_tier(redis_conn)
+    openai_adapter = next(a for a in chain if a.name == "OpenAI-FreeTier")
+
+    assert openai_adapter._before_llm_call() is True  # reserves 130,000
+    assert redis_conn.data[_openai_free_tier_token_key()] == 130_000
+    openai_adapter._on_call_failed()  # the real call then failed outright
+
+    assert redis_conn.data[_openai_free_tier_token_key()] == 0
+
+
+def test_openai_free_tier_simple_completion_releases_reservation_on_a_failed_call(monkeypatch):
+    # End-to-end version of the test above, through the real
+    # simple_completion exception path rather than calling the hook
+    # directly.
+    from unittest.mock import MagicMock, patch
+
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    from scan_worker.model_tiers import _openai_free_tier_token_key
+
+    redis_conn = _FakeRedis()
+    chain = writing_adapter_chain_for_free_tier(redis_conn)
+    openai_adapter = next(a for a in chain if a.name == "OpenAI-FreeTier")
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.side_effect = RuntimeError("boom")
+    with (
+        patch("aletheore.adapters.openai_compatible.OpenAI", return_value=mock_client),
+        patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"),
+    ):
+        with pytest.raises(Exception):
+            openai_adapter.simple_completion("system", "user", cwd="/repo")
+
+    assert redis_conn.data[_openai_free_tier_token_key()] == 0
 
 
 # ── cascading fallback tests ────────────────────────────────────────────

@@ -273,6 +273,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         credentials_path: Path | None = None,
         on_usage: Callable[[int, int], None] | None = None,
         before_llm_call: Callable[[], bool] | None = None,
+        on_call_failed: Callable[[], None] | None = None,
         allow_partial_report: bool = False,
         extra_body: dict | None = None,
     ) -> None:
@@ -295,6 +296,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         self._credentials_path = credentials_path or DEFAULT_CREDENTIALS_PATH
         self._on_usage = on_usage
         self._before_llm_call = before_llm_call
+        self._on_call_failed = on_call_failed
         self._allow_partial_report = allow_partial_report
 
     def is_available(self) -> bool:
@@ -324,6 +326,16 @@ class OpenAICompatibleAdapter(AgentAdapter):
                 )
             )
         except Exception as exc:
+            # _ensure_budget_for_next_call above already reserved real budget
+            # for this attempt (e.g. the OpenAI free-tier daily token
+            # counter) - a failed call still needs that reservation released,
+            # or a run of failures (rotated key, outage) silently exhausts
+            # the counter against zero real usage. Only fires here, not when
+            # _ensure_budget_for_next_call itself raised: a declined
+            # reservation already released itself before this try block was
+            # ever entered.
+            if self._on_call_failed is not None:
+                self._on_call_failed()
             raise AdapterInvocationError(
                 f"{self.name} invocation failed: {type(exc).__name__}"
             ) from exc
