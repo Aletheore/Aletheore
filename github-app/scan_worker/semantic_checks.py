@@ -123,6 +123,32 @@ def _line_number(source: str, needle: str) -> int | None:
     return None
 
 
+def _line_number_near_hunk(source: str, needle: str, hunk: "_Hunk") -> int | None:
+    """Same as _line_number, but scoped to the window around one hunk
+    instead of a whole-file scan for the first match.
+
+    Every finding in this module cites a line via a substring search for
+    something like "{var} =" or "except {name}" - for a common name
+    (result, count, except ValueError), _line_number's whole-file scan
+    returns whichever occurrence happens to appear first in the file, which
+    is very often a different, unrelated one from the actual line inside
+    the hunk that triggered the check. Confirmed: a variable clamped-then-
+    reassigned in a diff hunk, with an earlier unrelated assignment to the
+    same name in a different function, cited that earlier line instead of
+    the real one. Scoping the search to the same DIFF_HUNK_TOLERANCE window
+    every proximity check in this module already uses makes a same-window
+    collision the only way to still get this wrong, instead of any same-
+    name occurrence anywhere in the file.
+    """
+    lines = source.splitlines()
+    start = max(0, hunk.new_start - 1 - DIFF_HUNK_TOLERANCE)
+    end = min(len(lines), hunk.new_end + DIFF_HUNK_TOLERANCE)
+    for offset, line in enumerate(lines[start:end]):
+        if needle in line:
+            return start + offset + 1
+    return None
+
+
 def _nearest_hunk(hunks: list[_Hunk], line: int) -> _Hunk | None:
     candidates = [hunk for hunk in hunks if hunk.near(line)]
     if not candidates:
@@ -169,23 +195,38 @@ def _check_reference_at_call(
         if wrong:
             return _finding(
                 file,
-                _line_number(source, f"except {wrong[0]}") or call_line,
+                _line_number_near_hunk(source, f"except {wrong[0]}", hunk) or call_line,
                 f"{name} raises {', '.join(raised)}, but the changed handler catches {wrong[0]} instead.",
                 f"Catch {raised[0]} or translate the dependency error before handling it.",
             )
 
     if "yield" in dependency:
-        assignments = re.findall(rf"\b(\w+)\s*=\s*{re.escape(name)}\s*\(", source)
+        # Scoped to the hunk's own nearby window, not the whole file - this
+        # docstring's own contract ("every condition below is checked
+        # against that hunk's own removed/added lines, never the whole
+        # file's") was being violated here specifically. A common variable
+        # name (e.g. "results") reused across two genuinely unrelated
+        # functions - one already consuming a one-shot iterator correctly
+        # elsewhere in the file, another touched by this diff and calling a
+        # different yield-based dependency - could trip the len(uses) >= 2
+        # whole-file count and fire a false "consumes the iterator twice"
+        # finding tied to unrelated code.
+        window = "\n".join(
+            source.splitlines()[
+                max(0, hunk.new_start - 1 - DIFF_HUNK_TOLERANCE) : hunk.new_end + DIFF_HUNK_TOLERANCE
+            ]
+        )
+        assignments = re.findall(rf"\b(\w+)\s*=\s*{re.escape(name)}\s*\(", window)
         for variable in assignments:
             uses = re.findall(
                 rf"\bfor\s+\w+\s+in\s+{re.escape(variable)}\b|"
                 rf"\b(?:sum|list|tuple|set)\([^\n]*\b{re.escape(variable)}\b",
-                source,
+                window,
             )
             if len(uses) >= 2 and any(name in line for line in added_lines):
                 return _finding(
                     file,
-                    _line_number(source, f"{variable} = {name}(") or call_line,
+                    _line_number_near_hunk(source, f"{variable} = {name}(", hunk) or call_line,
                     f"{name} returns a one-shot iterator that the changed code consumes more than once.",
                     f"Materialize {variable} once before performing multiple passes.",
                 )
@@ -251,7 +292,7 @@ def _moved_record_findings(
             if removed_line.strip() not in {line.strip() for line in hunk.added}:
                 continue
             moved = removed_line.strip()
-            moved_line = _line_number(source, moved)
+            moved_line = _line_number_near_hunk(source, moved, hunk)
             if moved_line is None:
                 continue
             for name, (_path, dependency) in references.items():
@@ -302,19 +343,30 @@ def _resource_leak_findings(file: str, source: str, hunks: list[_Hunk]) -> list[
             if any(re.search(rf"\b{re.escape(var)}\.[Cc]lose\s*\(", line) for line in nearby):
                 continue  # a close for this variable survives nearby
 
+            # Cite the hunk itself, not open_line - a resource is
+            # frequently opened near the top of a function and closed near
+            # the bottom, and the downstream grounding filter
+            # (flash_review.py's _validate_findings) drops any finding
+            # whose cited line lands more than DIFF_LINE_TOLERANCE (8)
+            # lines from a diff-touched line. hunk.new_start is always
+            # inside the diff by construction, so this survives grounding
+            # regardless of how far the open() call is from the removed
+            # Close(). Where the resource was opened is still useful
+            # context for a human - included in the issue text, just not
+            # used as the finding's own citation, and its lookup stays a
+            # whole-file search since the open call itself can legitimately
+            # be anywhere in the file.
             open_match = next(
                 (m for m in _RESOURCE_OPEN_RE.finditer(source) if m.group(1) == var), None
             )
             open_line = _line_number(source, open_match.group(0)) if open_match else None
-            if open_line is None:
-                continue
+            opened_at = f" ({var} was opened at line {open_line})" if open_line else ""
 
             findings.append(
                 _finding(
                     file,
-                    open_line,
-                    f"{var} is opened here, but the changed code removed its Close() call - "
-                    "this resource now leaks.",
+                    hunk.new_start,
+                    f"The changed code removed {var}'s Close() call{opened_at} - this resource now leaks.",
                     f"Restore closing {var} (e.g. `defer {var}.Close()`), including on early-return paths.",
                 )
             )
@@ -351,7 +403,7 @@ def _copy_to_alias_findings(file: str, source: str, hunks: list[_Hunk]) -> list[
         if re.search(r"\bcopy\s*\(|\.copy\s*\(|\bmake\s*\(", alias.group(0)):
             continue  # the replacement still copies - not the bug this guards
 
-        line = _line_number(source, f"{dest} ") or hunk.new_start
+        line = _line_number_near_hunk(source, f"{dest} ", hunk) or hunk.new_start
         findings.append(
             _finding(
                 file,
@@ -400,7 +452,7 @@ def _removed_bounds_clamp_findings(file: str, source: str, hunks: list[_Hunk]) -
             findings.append(
                 _finding(
                     file,
-                    _line_number(source, f"{var} =") or hunk.new_start,
+                    _line_number_near_hunk(source, f"{var} =", hunk) or hunk.new_start,
                     f"{var} used to be clamped to a bound; the changed code removed it, "
                     f"so {var} can now fall outside that bound.",
                     f"Restore the bound (e.g. `max(0, ...)`) around {var}'s assignment.",
@@ -448,7 +500,7 @@ def _off_by_one_loop_findings(file: str, source: str, hunks: list[_Hunk]) -> lis
         if not indexed:
             continue  # the loop bound is suspicious, but nothing in this hunk actually indexes with it
 
-        line = _line_number(source, match.group(0)) or hunk.new_start
+        line = _line_number_near_hunk(source, match.group(0), hunk) or hunk.new_start
         findings.append(
             _finding(
                 file,
@@ -492,7 +544,7 @@ def _sql_injection_findings(file: str, source: str, hunks: list[_Hunk]) -> list[
             findings.append(
                 _finding(
                     file,
-                    _line_number(source, added_line.strip()) or hunk.new_start,
+                    _line_number_near_hunk(source, added_line.strip(), hunk) or hunk.new_start,
                     "This builds a SQL query by concatenating a variable directly into the query "
                     "text - a SQL-injection risk if that value can be influenced by a caller.",
                     "Use a parameterized query (a placeholder plus a bound parameter) instead of "
