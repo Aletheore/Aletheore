@@ -664,6 +664,43 @@ def test_generate_subsystems_overlaps_writing_calls_instead_of_serializing():
     assert len(records) == 12
 
 
+def test_generate_subsystems_overlaps_cache_lookups_instead_of_serializing():
+    # Real regression this guards: the cache-lookup phase used to be a
+    # plain sequential for loop, adding one blocking round-trip per
+    # cluster to the front of every build before the (already concurrent)
+    # write phase even started - on a repo with 30-40 subsystem clusters,
+    # 30-40 serialized lookups, working against the very "overlap calls"
+    # goal batching exists for. Every cluster here misses cache (the slow
+    # cache_lookup returns None), so the whole measured elapsed time is the
+    # lookup phase; the write phase's own adapter responds instantly, no
+    # sleep, so it can't be what makes this pass.
+    evidence = _n_cluster_evidence(12)
+    naming_adapter = _adapter(json.dumps({str(i): f"Sub{i}" for i in range(12)}))
+
+    def _fast_write_response(_system_prompt, user_prompt, cwd):
+        items = json.loads(user_prompt)
+        return json.dumps({item["id"]: {"description": "stuff.", "files": []} for item in items})
+
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = _fast_write_response
+
+    def _slow_cache_lookup(packet):
+        time.sleep(0.15)
+        return None
+
+    started = time.monotonic()
+    records = generate_subsystems(
+        evidence, naming_adapter, writing_adapter, cache_lookup=_slow_cache_lookup
+    )
+    elapsed = time.monotonic() - started
+
+    # 12 lookups at 150ms each: serial would be ~1.8s. Overlapped
+    # (MAX_GENERATION_WORKERS=6), 2 rounds of 6 at once is ~300ms - generous
+    # margin above that, comfortably below the serial figure.
+    assert elapsed < 0.9
+    assert len(records) == 12
+
+
 def test_generate_subsystems_propagates_a_write_failure_instead_of_swallowing_it():
     # Matches the prior fully-serial behavior: one subsystem's LLM call
     # raising aborted the whole build rather than silently continuing to
