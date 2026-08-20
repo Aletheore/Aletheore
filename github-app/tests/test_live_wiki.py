@@ -864,6 +864,42 @@ def test_generate_file_pages_keeps_path_to_detail_mapping_correct_under_concurre
     assert pages["billing/charge.py"] == "## Overview\nSee billing/charge.py:1."
 
 
+def test_generate_file_pages_batched_salvage_survives_a_later_detail_less_retry():
+    # Real regression this must not reintroduce (guards _run_batched_with_
+    # retry's on_round_result contract): a target's most recent USABLE
+    # detail from an earlier round must not be erased by a later retry that
+    # fails outright with no detail at all - only a retry that itself
+    # produces a (still-unverified) detail should replace it.
+    evidence = _two_cluster_evidence()
+    call_count = {"n": 0}
+
+    def _respond(_system_prompt, user_prompt, cwd):
+        call_count["n"] += 1
+        items = json.loads(user_prompt)
+        if call_count["n"] == 1:
+            return json.dumps({
+                item["id"]: (
+                    {"detail": "## Overview\nSee billing/charge.py:1."}
+                    if item["path"] == "billing/charge.py"
+                    else {"detail": "## Overview\nSee auth/login.py:10.\n- `ghost` (auth/nowhere.py:99): missing."}
+                )
+                for item in items
+            })
+        # Retry round: only auth/login.py is still remaining, and this
+        # attempt produces nothing usable at all - must not erase round 1's
+        # salvageable detail.
+        return json.dumps({item["id"]: {"detail": ""} for item in items})
+
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = _respond
+
+    pages = generate_file_pages(evidence, writing_adapter, paths=["auth/login.py", "billing/charge.py"])
+
+    assert pages["billing/charge.py"] == "## Overview\nSee billing/charge.py:1."
+    assert "auth/nowhere.py:99" not in pages["auth/login.py"]
+    assert "auth/login.py:10" in pages["auth/login.py"]
+
+
 def test_run_concurrently_preserves_input_order_regardless_of_completion_order():
     def _slow():
         time.sleep(0.1)
