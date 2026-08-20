@@ -60,11 +60,11 @@ function renderHeadToHeadChart() {
   new Chart(canvas, {
     type: "bar",
     data: {
-      labels: ["gin", "serde", "gson", "jekyll", "Slim", "guzzle", "zod"],
+      labels: ["gin", "Slim", "serde", "gson", "guzzle", "jekyll", "zod"],
       datasets: [
         {
           label: "Aletheore",
-          data: [80.0, 53.3, 40.0, 26.7, 26.7, 20.0, 20.0],
+          data: [86.7, 60.0, 53.3, 40.0, 33.3, 26.7, 0.0],
           backgroundColor: CHART_COLORS.accent,
           borderRadius: 4,
           barPercentage: 0.75,
@@ -72,7 +72,7 @@ function renderHeadToHeadChart() {
         },
         {
           label: "RepoWise (best mode)",
-          data: [60.0, 13.3, 26.7, 13.3, 26.7, 20.0, 13.3],
+          data: [60.0, 26.7, 13.3, 26.7, 20.0, 13.3, 13.3],
           backgroundColor: CHART_COLORS.muted,
           borderRadius: 4,
           barPercentage: 0.75,
@@ -109,13 +109,13 @@ function renderSpreadChart() {
     type: "bar",
     data: {
       labels: [
-        "gin", "flask", "serde", "jq", "gson", "fmt",
-        "Slim", "jekyll", "zod", "axios", "AutoMapper", "thrift",
+        "gin", "flask", "Slim", "jq", "serde", "fmt",
+        "gson", "jekyll", "axios", "AutoMapper", "thrift", "zod",
       ],
       datasets: [
         {
           label: "Top-1 (general phrasing)",
-          data: [80.0, 71.9, 53.3, 53.3, 40.0, 40.0, 26.7, 26.7, 20.0, 20.0, 6.7, 6.7],
+          data: [86.7, 78.1, 60.0, 53.3, 53.3, 46.7, 40.0, 26.7, 20.0, 13.3, 13.3, 0.0],
           backgroundColor: CHART_COLORS.accent,
           borderRadius: 4,
           barPercentage: 0.7,
