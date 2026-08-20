@@ -2341,6 +2341,104 @@ def test_flash_review_job_passes_changed_file_contents_to_review_diff(monkeypatc
     assert captured["file_contents"] == {"app.py": "real content of app.py"}
 
 
+def test_flash_review_job_requests_second_model_verification_on_paid_plan(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n@@ -1,1 +1,1 @@\n+broken"
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    captured = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: captured.update(kwargs) or [],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert captured["verify_with_second_model"] is True
+    assert callable(captured["on_verification_usage"])
+
+    # And that callback must price at the verification model's own rate
+    # (deepseek-v4-flash), never flash_review_model's - wrong whenever
+    # generation ran on Luna, which paid plan usually does.
+    cost_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.cost_for_usage", lambda model, p, c: cost_calls.append(model) or 0.001
+    )
+    captured["on_verification_usage"](100, 50)
+    assert cost_calls == ["deepseek-v4-flash"]
+
+
+def test_flash_review_job_does_not_request_second_model_verification_on_free_tier(monkeypatch):
+    from unittest.mock import MagicMock
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = "[]"
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.writing_adapter_chain_for_free_tier", lambda *a, **k: [mock_adapter]
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: _FakeRedis())
+    monkeypatch.setattr("scan_worker.jobs.resolve_model", lambda *a: "gpt-5.6-luna")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- a.py ---\n+real change\n")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["a.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_context", lambda *a, **k: "")
+    monkeypatch.setattr("scan_worker.jobs.is_non_substantive_diff", lambda *a: False)
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs.build_code_evidence_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_dependency_impact_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_change_impact_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_blast_radius_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_referenced_symbol_context", lambda *a: "")
+    captured = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: captured.update(kwargs) or [],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert captured["verify_with_second_model"] is False
+
+
 def test_flash_review_job_never_sends_the_raw_file_context_blob_to_review_diff(monkeypatch):
     # Compact is the shipped default (see the comment above the file_context
     # blanking in _run_flash_review): review_diff must never receive the raw

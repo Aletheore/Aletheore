@@ -147,6 +147,7 @@ from app_server.email_client import send_transactional_email
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.model_tiers import (
     PRO_MODEL,
+    VERIFICATION_MODEL,
     model_for_plan,
     resolve_model,
     writing_adapter_for,
@@ -1626,6 +1627,19 @@ def _run_flash_review(
                 flash_review_model, prompt_tokens, completion_tokens
             )
 
+        def _on_verification_usage(prompt_tokens: int, completion_tokens: int) -> None:
+            # Verification always runs on deepseek-v4-flash regardless of
+            # which model generated the finding (see model_tiers.
+            # verification_adapter), so its cost is priced at that model's
+            # rate specifically - never flash_review_model's, which would be
+            # wrong whenever generation ran on Luna. Never called for free
+            # tier: this closure is only ever passed to review_diff when
+            # verify_with_second_model=True, which is gated to paid plans
+            # below.
+            spend_accumulator["total"] += cost_for_usage(
+                VERIFICATION_MODEL, prompt_tokens, completion_tokens
+            )
+
         def _cache_lookup(diff: str) -> list[dict] | None:
             return lookup_cached_flash_review_result(dsn, installation_id, repo_full_name, diff)
 
@@ -1691,6 +1705,11 @@ def _run_flash_review(
                 diff_patches=diff_patches,
                 adapter_chain=free_tier_chain,
                 on_free_tier_exhausted=_on_free_tier_exhausted,
+                # Paid-tier only (see _on_verification_usage) - free tier's
+                # own generation quality/cost tradeoffs are a separate,
+                # already-pooled budget this doesn't touch.
+                verify_with_second_model=not is_free_tier,
+                on_verification_usage=_on_verification_usage,
             )
         else:
             findings = review_diff(
@@ -1713,6 +1732,11 @@ def _run_flash_review(
                 diff_patches=diff_patches,
                 adapter_chain=free_tier_chain,
                 on_free_tier_exhausted=_on_free_tier_exhausted,
+                # Paid-tier only (see _on_verification_usage) - free tier's
+                # own generation quality/cost tradeoffs are a separate,
+                # already-pooled budget this doesn't touch.
+                verify_with_second_model=not is_free_tier,
+                on_verification_usage=_on_verification_usage,
             )
     # The review-count reservation already happened atomically up front (see
     # run_flash_review_job); nothing left to do for it here on the success

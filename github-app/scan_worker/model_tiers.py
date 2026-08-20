@@ -102,6 +102,7 @@ def _true_up_openai_free_tier_reservation(redis_conn, real_total_tokens: int) ->
 
 LUNA_MODEL = "gpt-5.6-luna"
 PRO_MODEL = "deepseek-v4-pro"
+VERIFICATION_MODEL = "deepseek-v4-flash"
 
 # Every model we write with is a reasoning model, and reasoning tokens are
 # billed as output tokens - the most expensive kind. Nothing was switching them
@@ -204,6 +205,31 @@ def writing_adapter_for_plan(
         on_usage=on_usage,
         before_llm_call=before_llm_call,
         allow_partial_report=allow_partial_report,
+    )
+
+
+def verification_adapter(
+    on_usage: Callable[[int, int], None] | None = None,
+) -> OpenAICompatibleAdapter:
+    """Always DeepSeek V4 Flash, regardless of whether OpenAI is configured -
+    unlike writing_adapter_for, which prefers OpenAI when available and only
+    falls back to DeepSeek when it isn't. Independent verification only means
+    something if the checking model didn't also write the finding, so this
+    must not follow generation's own preference the way writing_adapter_for
+    does.
+    """
+    return OpenAICompatibleAdapter(
+        name="DeepSeek",
+        base_url="https://api.deepseek.com",
+        api_key_env_var="DEEPSEEK_API_KEY",
+        model=VERIFICATION_MODEL,
+        # See writing_adapter_for's DeepSeek branch - deepseek-v4-pro runs in
+        # thinking mode by default and rejects tool_choice="required", but
+        # this only matters for a model still forced onto thinking; kept
+        # here for the same reason it's kept there, not because flash-tier
+        # is known to need it.
+        supports_tool_choice=False,
+        on_usage=on_usage,
     )
 
 
