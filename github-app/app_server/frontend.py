@@ -329,7 +329,9 @@ table.findings tr:last-child td { border-bottom: none; }
 .diagram-zoom-toolbar button:hover { background: rgba(255, 255, 255, 0.14); }
 .diagram-zoom-hint { padding: 0 8px; color: #D8D2C5; font-size: 12px; white-space: nowrap; }
 .subsystem-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 20px; }
-.subsystem-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px; text-align: left; background: var(--paper); cursor: pointer; font-family: var(--font-sans); box-shadow: var(--shadow-card); }
+.subsystem-card { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start;
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px; text-align: left; background: var(--paper);
+  cursor: pointer; font-family: var(--font-sans); box-shadow: var(--shadow-card); }
 .subsystem-card:hover { border-color: var(--border-strong); }
 .subsystem-name { font-size: 13px; font-weight: 500; margin-bottom: 3px; color: var(--accent-strong); }
 .subsystem-desc { font-size: 12px; color: var(--slate-600); line-height: 1.55; }
