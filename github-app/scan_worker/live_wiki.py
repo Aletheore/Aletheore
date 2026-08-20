@@ -84,6 +84,52 @@ def _run_concurrently(thunks: list[Callable[[], _T]], max_workers: int = MAX_GEN
             raise first_exception
         return [f.result() for f in futures]
 
+
+_BatchTarget = TypeVar("_BatchTarget")
+_BatchResult = TypeVar("_BatchResult")
+
+
+def _run_batched_with_retry(
+    targets: list[_BatchTarget],
+    target_id: Callable[[_BatchTarget], str],
+    write_batch: Callable[[list[_BatchTarget]], dict[str, _BatchResult]],
+    on_round_result: Callable[[str, _BatchResult], None],
+    is_resolved: Callable[[_BatchResult], bool],
+    attempts: int,
+    batch_size: int,
+) -> list[_BatchTarget]:
+    """Shared shape behind both subsystem and file-page batch generation:
+    chunk `targets`, run chunks concurrently via `write_batch`, retry only
+    whatever didn't resolve - up to `attempts` rounds - then stop.
+
+    `on_round_result(target_id, result)` fires once per target per round it
+    has a result for (in `targets`' order, while that target is still
+    unresolved) - callers own how to accumulate across rounds, since that
+    differs by type: subsystem callers only ever want a first/only success,
+    file-page callers need to keep the *last* result with a usable detail
+    even across failed retries, for salvage. Returns the targets that never
+    satisfied `is_resolved` after the final attempt.
+    """
+    remaining = list(targets)
+    for _attempt in range(1, attempts + 1):
+        if not remaining:
+            break
+        chunks = _batches(remaining, batch_size)
+        chunk_results = _run_concurrently([lambda c=chunk: write_batch(c) for chunk in chunks])
+        merged: dict[str, _BatchResult] = {}
+        for chunk_result in chunk_results:
+            merged.update(chunk_result)
+        for t in remaining:
+            result = merged.get(target_id(t))
+            if result is not None:
+                on_round_result(target_id(t), result)
+        remaining = [
+            t for t in remaining
+            if (result := merged.get(target_id(t))) is None or not is_resolved(result)
+        ]
+    return remaining
+
+
 SUBSYSTEM_DESCRIPTION_UNAVAILABLE = (
     "_Description withheld: the generated summary for this subsystem cited code that "
     "could not be verified against the scan. The file list and diagram below come "
@@ -689,20 +735,18 @@ def _generate_subsystem_records_for_targets(
     """
     by_id = {t.cluster_id_str: t for t in targets}
     resolved: dict[str, tuple[dict, str]] = {}
-    remaining = list(targets)
-
-    for _attempt in range(1, SUBSYSTEM_WRITE_ATTEMPTS + 1):
-        if not remaining:
-            break
-        chunks = _batches(remaining, SUBSYSTEM_WRITE_BATCH_SIZE)
-
-        def _thunk(chunk: list[_SubsystemWriteTarget]) -> dict[str, tuple[dict, str]]:
-            return _write_subsystem_batch(evidence, chunk, writing_adapter, fetch_line_count)
-
-        chunk_results = _run_concurrently([lambda c=chunk: _thunk(c) for chunk in chunks])
-        for chunk_result in chunk_results:
-            resolved.update(chunk_result)
-        remaining = [t for t in remaining if t.cluster_id_str not in resolved]
+    _run_batched_with_retry(
+        targets,
+        target_id=lambda t: t.cluster_id_str,
+        write_batch=lambda chunk: _write_subsystem_batch(evidence, chunk, writing_adapter, fetch_line_count),
+        on_round_result=resolved.__setitem__,
+        # _write_subsystem_batch only ever returns an entry for a target
+        # whose citations verified - any presence in a round's result means
+        # resolved, nothing further to check.
+        is_resolved=lambda _result: True,
+        attempts=SUBSYSTEM_WRITE_ATTEMPTS,
+        batch_size=SUBSYSTEM_WRITE_BATCH_SIZE,
+    )
 
     records: dict[str, dict] = {}
     for cluster_id_str, target in by_id.items():
@@ -1206,30 +1250,26 @@ def _generate_file_pages_for_targets(
     """
     verified: dict[str, str] = {}
     last_attempt: dict[str, tuple[str, list[dict]]] = {}
-    remaining = list(targets)
 
-    for _attempt in range(1, SUBSYSTEM_WRITE_ATTEMPTS + 1):
-        if not remaining:
-            break
-        chunks = _batches(remaining, FILE_PAGE_WRITE_BATCH_SIZE)
-        chunk_results = _run_concurrently(
-            [lambda c=chunk: _write_file_page_batch(evidence, c, writing_adapter, fetch_line_count)
-             for chunk in chunks]
-        )
-        merged: dict[str, tuple[str, str | None, list[dict]]] = {}
-        for chunk_result in chunk_results:
-            merged.update(chunk_result)
+    def _on_result(path: str, result: tuple[str, str | None, list[dict]]) -> None:
+        status, detail, unverified = result
+        if status == "verified" and detail is not None:
+            verified[path] = detail
+        elif detail is not None:
+            # Only remember an attempt that actually produced usable prose -
+            # a later retry that fails outright (no detail at all) must not
+            # erase an earlier round's salvageable one.
+            last_attempt[path] = (detail, unverified)
 
-        next_remaining = []
-        for t in remaining:
-            status, detail, unverified = merged.get(t.path, ("failed", None, []))
-            if status == "verified" and detail is not None:
-                verified[t.path] = detail
-            else:
-                if detail is not None:
-                    last_attempt[t.path] = (detail, unverified)
-                next_remaining.append(t)
-        remaining = next_remaining
+    remaining = _run_batched_with_retry(
+        targets,
+        target_id=lambda t: t.path,
+        write_batch=lambda chunk: _write_file_page_batch(evidence, chunk, writing_adapter, fetch_line_count),
+        on_round_result=_on_result,
+        is_resolved=lambda result: result[0] == "verified",
+        attempts=SUBSYSTEM_WRITE_ATTEMPTS,
+        batch_size=FILE_PAGE_WRITE_BATCH_SIZE,
+    )
 
     for t in remaining:
         prior = last_attempt.get(t.path)
