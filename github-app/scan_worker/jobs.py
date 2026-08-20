@@ -78,7 +78,6 @@ from scan_worker.db import (
     get_seconds_since_last_health_check,
     insert_audit_report,
     insert_endpoint_health,
-    was_recently_down,
     insert_repo_history,
     installation_spend_lock,
     release_flash_review_count_reservation,
@@ -2223,6 +2222,7 @@ def run_runtime_event_job(
 def run_health_check_sweep_job() -> None:
     settings = get_settings()
     dsn = settings.database_url
+    redis_conn = get_redis_client()
     deadline = time.monotonic() + HEALTH_SWEEP_SOFT_DEADLINE_SECONDS
     targets = _rotated_health_check_targets(dsn)
 
@@ -2241,7 +2241,7 @@ def run_health_check_sweep_job() -> None:
 
         try:
             _run_health_check_sweep_for_target(
-                dsn, target, installation_id, repo_full_name, target_id, base_url, threshold_ms
+                dsn, redis_conn, target, installation_id, repo_full_name, target_id, base_url, threshold_ms
             )
         except Exception as exc:  # noqa: BLE001
             # One customer's dead webhook URL, an unreachable target, or any
@@ -2262,6 +2262,7 @@ def run_health_check_sweep_job() -> None:
 
 def _run_health_check_sweep_for_target(
     dsn: str,
+    redis_conn,
     target: dict,
     installation_id: int,
     repo_full_name: str,
@@ -2333,10 +2334,13 @@ def _run_health_check_sweep_for_target(
 
         if reachability_flipped:
             if not reachable and source_file:
-                recently_down = was_recently_down(
-                    dsn, installation_id, repo_full_name, method, path, target_id,
-                    datetime.now(timezone.utc) - timedelta(seconds=HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS),
+                recently_down = _recently_suggested_a_fix(
+                    redis_conn, installation_id, repo_full_name, method, path, target_id
                 )
+                if not recently_down:
+                    _mark_fix_suggestion_sent(
+                        redis_conn, installation_id, repo_full_name, method, path, target_id
+                    )
                 evidence_resolution = _attach_recent_commit_for_failure(
                     installation_id,
                     repo_full_name,
@@ -2420,6 +2424,7 @@ def _run_health_check_sweep_for_target(
 def run_health_check_down_retry_job(target: dict, entry: dict, attempt: int) -> None:
     settings = get_settings()
     dsn = settings.database_url
+    redis_conn = get_redis_client()
     installation_id = target["installation_id"]
     repo_full_name = target["repo_full_name"]
     target_id = target["target_id"]
@@ -2467,10 +2472,13 @@ def run_health_check_down_retry_job(target: dict, entry: dict, attempt: int) -> 
 
     if reachability_flipped:
         if not reachable and source_file:
-            recently_down = was_recently_down(
-                dsn, installation_id, repo_full_name, method, path, target_id,
-                datetime.now(timezone.utc) - timedelta(seconds=HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS),
+            recently_down = _recently_suggested_a_fix(
+                redis_conn, installation_id, repo_full_name, method, path, target_id
             )
+            if not recently_down:
+                _mark_fix_suggestion_sent(
+                    redis_conn, installation_id, repo_full_name, method, path, target_id
+                )
             evidence_resolution = _attach_recent_commit_for_failure(
                 installation_id,
                 repo_full_name,
@@ -2666,6 +2674,37 @@ def _set_with_expiry(redis_conn, key: str, value, ttl_seconds: int) -> None:
         redis_conn.set(key, value)
         if hasattr(redis_conn, "expire"):
             redis_conn.expire(key, ttl_seconds)
+
+
+def _health_fix_suggestion_cooldown_key(
+    installation_id: int, repo_full_name: str, method: str, path: str, target_id: int | None
+) -> str:
+    return f"health_fix_suggestion:cooldown:{installation_id}:{repo_full_name}:{method}:{path}:{target_id}"
+
+
+def _recently_suggested_a_fix(
+    redis_conn, installation_id: int, repo_full_name: str, method: str, path: str, target_id: int | None
+) -> bool:
+    """Same Redis key-+-TTL cooldown shape _send_ops_alert uses, not a
+    was_recently_down-style Postgres row-history query - a DB round-trip per
+    down-flip to answer "have we already suggested a fix for this exact
+    endpoint recently" was slower and functionally redundant with a
+    primitive this module already has for exactly this shape of question.
+    """
+    return redis_conn.get(_health_fix_suggestion_cooldown_key(
+        installation_id, repo_full_name, method, path, target_id
+    )) is not None
+
+
+def _mark_fix_suggestion_sent(
+    redis_conn, installation_id: int, repo_full_name: str, method: str, path: str, target_id: int | None
+) -> None:
+    _set_with_expiry(
+        redis_conn,
+        _health_fix_suggestion_cooldown_key(installation_id, repo_full_name, method, path, target_id),
+        "1",
+        HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS,
+    )
 
 
 def _fetch_app_health(url: str) -> tuple[bool, str]:
