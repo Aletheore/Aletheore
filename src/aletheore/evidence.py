@@ -419,6 +419,21 @@ def scan_repository(
     unchanged_modules, unchanged_endpoints = _load_unchanged_scan_cache()
     if not using_hosted_cache and not local_cache_disabled:
         unchanged_modules, unchanged_endpoints = _load_local_scan_cache(repo_path)
+        # Surfaced here, not left implicit: a CLI user who only ever sees
+        # "Scanning..." has no way to know a scan is cached at all, so a
+        # fast repeat scan reads as suspicious (did it actually check
+        # everything?) rather than as the cache working as intended.
+        if unchanged_modules:
+            report(
+                f"Reusing cached results for {len(unchanged_modules)} unchanged "
+                "file(s) from the last scan of this repo"
+            )
+        else:
+            report(
+                "No previous scan cache found for this repo - this first scan "
+                "will take longer. Results are cached automatically, so future "
+                "scans only re-parse files that actually changed."
+            )
 
     report("Building module dependency graph (parsing source with tree-sitter)")
     modules, dependency_graph, unparseable_files = build_module_graph(

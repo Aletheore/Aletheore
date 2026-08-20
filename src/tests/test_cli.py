@@ -987,6 +987,23 @@ def test_index_command_builds_index_from_existing_evidence(tmp_path):
     mock_build.assert_called_once()
 
 
+def test_index_command_explains_incremental_re_embedding(tmp_path):
+    # A user who only ever sees "Building semantic search index..." then a
+    # near-instant "Indexed N chunks" on a repeat run has no way to know
+    # that's the cache working as intended, not something skipped.
+    repo = tmp_path
+    (repo / "app.py").write_text("def greet():\n    return 'hi'\n")
+    result = runner.invoke(app, ["scan", str(repo)])
+    assert result.exit_code == 0
+
+    with patch("aletheore.search_index.build_index", return_value=3):
+        result = runner.invoke(app, ["index", str(repo)])
+
+    assert result.exit_code == 0
+    assert "re-embedded" in result.output
+    assert "first index" in result.output.lower()
+
+
 def test_index_command_fails_clearly_without_prior_scan(tmp_path):
     result = runner.invoke(app, ["index", str(tmp_path)])
     assert result.exit_code == 1

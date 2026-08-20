@@ -680,6 +680,15 @@ def _index(repo_path: str) -> int:
         "Building semantic search index (embedding via local Ollama, "
         "falling back to OpenAI if unavailable)..."
     )
+    # Same reasoning as _scan's cache-hit message: only a chunk whose text
+    # actually changed gets re-embedded (see search_index.build_index), so a
+    # repeat index of a mostly-unchanged repo is much faster than the first
+    # one - said explicitly here so a fast rebuild reads as the cache
+    # working, not as something having been skipped.
+    console.print(
+        "[dim]Only chunks that changed since the last index are re-embedded - "
+        "the first index of a repo is the slow one.[/dim]"
+    )
     from aletheore.search_index import build_index
 
     report = _make_progress_printer()
