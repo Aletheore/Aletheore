@@ -75,8 +75,13 @@ SECRET_PATTERNS = [
     (
         "generic_credential_assignment",
         re.compile(
+            # The value class includes "." for key formats that embed one (e.g. newer
+            # Google AI Studio keys: "AQ.Ab8R..." rather than the older AIza-prefixed
+            # google_api_key shape above) - without it, GEMINI_API_KEY=AQ.Ab8R... matched
+            # only the 2 characters before the dot, fell under the 16-char minimum, and
+            # the whole credential silently went undetected rather than just unredacted.
             r"(?i)(?:^|[\s_-])(PASSWORD|SECRET|API_KEY)\s*[:=]\s*"
-            r"['\"]?([A-Za-z0-9+/=_-]{16,})['\"]?(?=\s|$|[,#;)])"
+            r"['\"]?([A-Za-z0-9+/=_.-]{16,})['\"]?(?=\s|$|[,#;)])"
         ),
         2,
     ),

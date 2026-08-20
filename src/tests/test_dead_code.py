@@ -74,6 +74,51 @@ def test_script_without_main_guard_is_still_unreachable(tmp_path):
     assert "orphan.py" in paths
 
 
+def test_conftest_py_is_never_unreachable(tmp_path):
+    # pytest auto-discovers conftest.py by filename alone - never imported by
+    # test files or anything else, which is the whole point of the convention.
+    modules = [_module("tests/conftest.py"), _module("github-app/tests/conftest.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert set(result["entry_points_detected"]) == {"tests/conftest.py", "github-app/tests/conftest.py"}
+
+
+def test_module_dispatched_by_dotted_string_is_never_unreachable(tmp_path):
+    # Found on this repo: RQ's queue.enqueue("scan_worker.jobs.<fn>", ...) dispatches
+    # by dotted-string module path, never a Python import - scan_worker/jobs.py, the
+    # busiest module in the worker, looked completely unreachable without this check.
+    (tmp_path / "scan_worker").mkdir()
+    (tmp_path / "scan_worker" / "jobs.py").write_text("def run_pr_scan_job():\n    pass\n")
+    (tmp_path / "scan_worker" / "scheduler.py").write_text(
+        'queue.enqueue("scan_worker.jobs.run_pr_scan_job")\n'
+    )
+    modules = [
+        _module("scan_worker/jobs.py"),
+        _module("scan_worker/scheduler.py", imported_by=["scan_worker/worker.py"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "scan_worker/jobs.py" in result["entry_points_detected"]
+
+
+def test_module_referenced_only_by_unrelated_substring_is_still_unreachable(tmp_path):
+    # False-negative guard rail: a module whose name merely happens to be a substring
+    # of something else in the repo (not a real dotted-path dispatch reference) must
+    # still be flagged - this isn't a license to treat any name collision as reachable.
+    (tmp_path / "scan_worker").mkdir()
+    (tmp_path / "scan_worker" / "jobs.py").write_text("def helper():\n    pass\n")
+    (tmp_path / "scan_worker" / "other.py").write_text(
+        "# unrelated comment mentioning scan_worker.jobsxyz elsewhere\n"
+    )
+    modules = [
+        _module("scan_worker/jobs.py"),
+        _module("scan_worker/other.py", imported_by=["scan_worker/worker.py"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    paths = [module["path"] for module in result["unreachable_modules"]]
+    assert "scan_worker/jobs.py" in paths
+
+
 def test_js_referenced_by_html_script_tag_is_never_unreachable(tmp_path):
     # Found on this repo: plain <script src="..."> tags (no bundler, no ES
     # module imports) load website JS - the import graph never sees these

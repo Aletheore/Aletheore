@@ -11,6 +11,7 @@ ENTRY_POINT_FILENAMES = {
     "app.py",
     "asgi.py",
     "cli.py",
+    "conftest.py",
     "index.js",
     "index.jsx",
     "index.ts",
@@ -45,6 +46,38 @@ PACKAGE_IMPORT_ALIASES = {
 _MAIN_GUARD_PATTERN = re.compile(r"if\s+__name__\s*==\s*[\'\"]__main__[\'\"]\s*:")
 
 _HTML_SCRIPT_SRC_PATTERN = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
+
+# A module dispatched by dotted-string name (RQ's queue.enqueue("pkg.mod.func", ...),
+# Celery task names, cron-style job registries) is never imported by another module
+# either - the same blind spot as the __main__-guard case above, just for library-level
+# dynamic dispatch instead of direct script invocation. Confirmed on this repo:
+# scan_worker/jobs.py and scan_worker/demo_scan.py are the busiest modules in the
+# worker, dispatched exclusively via `queue.enqueue("scan_worker.jobs.<fn>", ...)`
+# string literals from scheduler.py and friends, and looked completely unreachable
+# without this check. Minimum 2 dotted segments required - a single bare segment
+# (just "jobs") collides with too many unrelated identifiers to be a reliable signal.
+_DOTTED_STRING_REF_MIN_SEGMENTS = 2
+
+
+def _dotted_path_candidates(path: str) -> list[str]:
+    if not path.endswith(".py"):
+        return []
+    parts = [part for part in path[: -len(".py")].split("/") if part and part != "__init__"]
+    span = len(parts) - _DOTTED_STRING_REF_MIN_SEGMENTS + 1
+    return [".".join(parts[start:]) for start in range(max(span, 0))]
+
+
+def _referenced_by_dotted_string(path: str, sources: dict[str, str]) -> bool:
+    candidates = _dotted_path_candidates(path)
+    if not candidates:
+        return False
+    patterns = [re.compile(r'["\']' + re.escape(candidate) + r'(?=[.\'"])') for candidate in candidates]
+    for other_path, content in sources.items():
+        if other_path == path:
+            continue
+        if any(pattern.search(content) for pattern in patterns):
+            return True
+    return False
 
 
 def _is_entry_point(path: str, custom_entry_points: set[str]) -> bool:
@@ -143,6 +176,25 @@ def find_dead_code(
             unreachable_modules.append(
                 {"path": path, "reason": "no other module imports this file"}
             )
+
+    if any(entry["path"].endswith(".py") for entry in unreachable_modules):
+        py_sources = {}
+        for module in modules:
+            if not module["path"].endswith(".py"):
+                continue
+            try:
+                py_sources[module["path"]] = (repo_path / module["path"]).read_text(
+                    encoding="utf-8", errors="ignore"
+                )
+            except OSError:
+                continue
+        still_unreachable = []
+        for entry in unreachable_modules:
+            if entry["path"].endswith(".py") and _referenced_by_dotted_string(entry["path"], py_sources):
+                entry_points_detected.append(entry["path"])
+            else:
+                still_unreachable.append(entry)
+        unreachable_modules = still_unreachable
 
     imported_roots = _import_roots(modules)
     unused_dependencies = []
