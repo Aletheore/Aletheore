@@ -1063,6 +1063,41 @@ def test_semantic_checker_finds_mutable_alias_and_iterator_regressions():
     assert "one-shot iterator" in issues
 
 
+def test_semantic_checker_does_not_flag_a_common_variable_name_used_correctly_elsewhere_in_the_file():
+    # False-positive guard for the iterator-reuse check's hunk-scoping fix:
+    # two genuinely unrelated functions each assign a common variable name
+    # ("items") from the same yield-based dependency and consume it exactly
+    # once - correct on its own in both places. A whole-file scan of "uses"
+    # used to sum both functions' single uses into a false "consumed
+    # twice" count; scoped to the hunk's own nearby window, only the
+    # touched function's own use counts.
+    filler = "\n".join(f"    pass  # filler{i}" for i in range(10))
+    source = (
+        "def unrelated_func():\n"
+        "    items = op_five(other_db)\n"
+        "    for x in items:\n"
+        "        pass\n"
+        f"{filler}\n"
+        "\n"
+        "def caller():\n"
+        "    items = op_five(db)\n"
+        "    for x in items:\n"
+        "        pass\n"
+    )
+    diff = (
+        "--- caller.py ---\n@@ -16,4 +16,4 @@\n"
+        " def caller():\n"
+        "-    items = old_call(db)\n"
+        "+    items = op_five(db)\n"
+        "     for x in items:\n"
+    )
+    refs = "--- referenced definition (not part of this diff): callee.py:op_five ---\nyield row\n"
+
+    findings = find_semantic_regressions(diff, {"caller.py": source}, refs)
+
+    assert findings == []
+
+
 def test_semantic_checker_finds_wrong_exception_type():
     findings = find_semantic_regressions(
         "--- caller.py ---\n@@ -1,2 +1,3 @@\n+try:\n+    value = op(key)\n+except ErrorB:\n+    return None\n",
@@ -1286,6 +1321,37 @@ def test_semantic_checker_finds_a_resource_leak_from_a_removed_close():
     assert len(findings) == 1
     assert "leaks" in findings[0]["issue"]
     assert findings[0]["file"] == "gin.go"
+
+
+def test_semantic_checker_cites_the_hunk_not_the_far_away_open_call_for_a_resource_leak():
+    # Real-world shape this check exists for: a resource opened near the
+    # top of a function, closed near the bottom - the open() and the
+    # removed close() can be much more than flash_review.py's
+    # DIFF_LINE_TOLERANCE (8) lines apart. Citing the open() line (line 2
+    # here) instead of the hunk (line 17) meant the downstream grounding
+    # filter dropped this exact, correct finding as "outside the diff" -
+    # the single most common real trigger for this check, silently
+    # defeating it.
+    source = (
+        "func handle(fd int) error {\n"
+        "\tf := os.NewFile(uintptr(fd), \"fd\")\n"
+        + "".join(f"\tstep{i}()\n" for i in range(15))
+        + "\treturn nil\n"
+        "}\n"
+    )
+    diff = (
+        "--- handler.go ---\n"
+        "@@ -17,3 +17,2 @@\n"
+        " \tstep14()\n"
+        "-\tf.close()\n"
+        " \treturn nil\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"handler.go": source}, "")
+
+    assert len(findings) == 1
+    assert findings[0]["line"] == 17
+    assert "opened at line 2" in findings[0]["issue"]
 
 
 def test_semantic_checker_does_not_flag_a_close_moved_within_the_same_hunk():
@@ -1772,6 +1838,40 @@ def test_semantic_checker_finds_a_removed_bounds_clamp():
 
     assert len(findings) == 1
     assert "clamped to a bound" in findings[0]["issue"]
+
+
+def test_semantic_checker_cites_the_hunk_not_an_earlier_unrelated_assignment_for_a_removed_bounds_clamp():
+    # Regression test for a wrong-line citation bug: _line_number's
+    # whole-file scan for "{var} =" returned whichever occurrence came
+    # first in the file - for a common name like "loaded", that's very
+    # often a different, unrelated assignment in a different function, not
+    # the real one inside the hunk that triggered the check.
+    filler = "\n".join(f"  // filler{i}" for i in range(8))
+    source = (
+        "function unrelated() {\n"
+        "  const loaded = 999;\n"
+        "  return loaded;\n"
+        "}\n"
+        f"{filler}\n"
+        "\n"
+        "function reducer(e) {\n"
+        "  const loaded = total != null ? Math.min(rawLoaded, total) : rawLoaded;\n"
+        "  return loaded;\n"
+        "}\n"
+    )
+    diff = (
+        "--- progressEventReducer.js ---\n"
+        "@@ -14,3 +14,3 @@\n"
+        " function reducer(e) {\n"
+        "-  const loaded = Math.max(0, total != null ? Math.min(rawLoaded, total) : rawLoaded);\n"
+        "+  const loaded = total != null ? Math.min(rawLoaded, total) : rawLoaded;\n"
+        "   return loaded;\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"progressEventReducer.js": source}, "")
+
+    assert len(findings) == 1
+    assert findings[0]["line"] == 15
 
 
 def test_semantic_checker_does_not_flag_a_clamp_that_only_moved_within_the_hunk():
