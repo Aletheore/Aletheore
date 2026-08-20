@@ -14,6 +14,7 @@ from app_server.admin import (
     _fetch_administered_installation_ids,
     _administered_installation_ids_for_session_or_401,
     _build_updated_seat_items,
+    _has_real_admin_permission,
     _repo_installation_id,
 )
 from app_server.auth import decrypt_access_token, encrypt_access_token, sign_session_id
@@ -25,6 +26,7 @@ from app_server.db import (
     get_max_tokens,
     get_session,
     insert_repo_history,
+    is_installation_member,
     record_llm_spend,
     set_installation_plan,
     upsert_installation,
@@ -70,11 +72,26 @@ async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="air"):
         "app_server.url_validation.socket.getaddrinfo",
         lambda *a, **k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))],
     )
+    # Default "logged in" represents a real GitHub admin on the repo -
+    # _has_real_admin_permission would otherwise attempt a live GitHub API
+    # call (via app_server.github_auth, a different client than the
+    # coarse-check mock above) and fail closed. Tests exercising the
+    # narrower, non-admin case override this back to _async_false after
+    # calling this fixture.
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     app.state.db_pool = pool
     signed = sign_session_id("sess-1", "test-session-secret")
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed})
+
+
+async def _async_true(*args, **kwargs) -> bool:
+    return True
+
+
+async def _async_false(*args, **kwargs) -> bool:
+    return False
 
 
 async def _mock_github_installations(monkeypatch, installation_ids: list[int]):
@@ -1140,6 +1157,7 @@ async def test_remove_extra_seat_updates_paddle_subscription(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_billing_portal_requires_billing_account_on_file(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
     async with client:
         response = await client.get("/admin/octocat/hello-world/billing-portal")
     assert response.status_code == 400
@@ -1162,6 +1180,7 @@ async def test_billing_portal_accessible_on_free_plan(pool, monkeypatch):
             "urls": {"general": {"overview": "https://customer-portal.paddle.com/overview"}}
         },
     )
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     async with client:
         response = await client.get("/admin/octocat/hello-world/billing-portal")
@@ -1197,6 +1216,7 @@ async def test_billing_portal_returns_subscription_scoped_url(pool, monkeypatch)
         }
 
     monkeypatch.setattr("app_server.admin.create_portal_session", fake_create_portal_session)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     async with client:
         response = await client.get("/admin/octocat/hello-world/billing-portal")
@@ -1219,6 +1239,7 @@ async def test_billing_portal_falls_back_to_general_url_without_subscription(poo
             "urls": {"general": {"overview": "https://customer-portal.paddle.com/overview"}}
         },
     )
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     async with client:
         response = await client.get("/admin/octocat/hello-world/billing-portal")
@@ -1237,11 +1258,94 @@ async def test_billing_portal_reports_paddle_api_failure(pool, monkeypatch):
         raise PaddleAPIError("could not create portal session")
 
     monkeypatch.setattr("app_server.admin.create_portal_session", _boom)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     async with client:
         response = await client.get("/admin/octocat/hello-world/billing-portal")
 
     assert response.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_billing_portal_denies_a_non_admin_in_the_coarse_installations_set(pool, monkeypatch):
+    # The gap this closes: GET /user/installations (the coarse set
+    # _require_authorized_installation checks) includes anyone with mere
+    # read access to one repo the app covers, per GitHub's own docs - not
+    # enough to trust with a session that can view/change a payment method
+    # or cancel the subscription. Real per-repo permission ("admin") must
+    # be verified before an unseated caller reaches this.
+    await upsert_installation(pool, 100, "octocat")
+    await add_paddle_ids_to_installation(pool, 100, "sub_test", "ctm_test")
+    client = await _logged_in_client(pool, monkeypatch)
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world/billing-portal")
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_seat_claim_denied_for_a_non_admin_in_the_coarse_installations_set(pool, monkeypatch):
+    # Same gap as above, for the other place the coarse set was trusted
+    # alone: claiming the first seat on a paid installation with none yet -
+    # which would otherwise hand the claimant /admin/{org}/{repo} access
+    # (API tokens, team management), not just the billing portal.
+    client = await _logged_in_client(pool, monkeypatch, plan="air")
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_false)
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world")
+
+    assert response.status_code == 403
+    assert "admin access" in response.json()["detail"]
+    assert await is_installation_member(pool, 100, "octocat") is False
+
+
+@pytest.mark.asyncio
+async def test_has_real_admin_permission_true_only_for_admin_level(monkeypatch):
+    monkeypatch.setattr("app_server.admin.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("app_server.admin.get_installation_token", lambda *a, **k: "fake-installation-token")
+    monkeypatch.setattr("app_server.admin.get_repo_permission_for_user", lambda *a, **k: "admin")
+
+    assert await _has_real_admin_permission(100, "octocat", "octocat/hello-world") is True
+
+
+@pytest.mark.asyncio
+async def test_has_real_admin_permission_false_for_read_or_write(monkeypatch):
+    monkeypatch.setattr("app_server.admin.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("app_server.admin.get_installation_token", lambda *a, **k: "fake-installation-token")
+    for permission in ("read", "write", "none"):
+        monkeypatch.setattr(
+            "app_server.admin.get_repo_permission_for_user", lambda *a, permission=permission, **k: permission
+        )
+        assert await _has_real_admin_permission(100, "octocat", "octocat/hello-world") is False
+
+
+@pytest.mark.asyncio
+async def test_has_real_admin_permission_fails_closed_on_a_github_error(monkeypatch):
+    monkeypatch.setattr("app_server.admin.generate_app_jwt", lambda *a, **k: "fake-jwt")
+
+    def _boom(*a, **k):
+        raise RuntimeError("GitHub API unavailable")
+
+    monkeypatch.setattr("app_server.admin.get_installation_token", _boom)
+
+    assert await _has_real_admin_permission(100, "octocat", "octocat/hello-world") is False
+
+
+@pytest.mark.asyncio
+async def test_seat_claim_still_succeeds_for_a_verified_real_admin(pool, monkeypatch):
+    # The legitimate path this must not break: a genuinely-admin caller
+    # with no seat yet (a paid installation from before seats existed, or
+    # the purchase webhook hasn't landed) still becomes seat one.
+    client = await _logged_in_client(pool, monkeypatch, plan="air")
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world")
+
+    assert response.status_code == 200
+    assert await is_installation_member(pool, 100, "octocat") is True
 
 
 @pytest.mark.asyncio
