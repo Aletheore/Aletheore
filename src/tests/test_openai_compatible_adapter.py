@@ -194,6 +194,56 @@ def test_invoke_returns_partial_report_when_budget_stops_between_rounds(
     assert mock_client.chat.completions.create.call_count == 1
 
 
+def test_simple_completion_raises_the_default_budget_message_when_before_llm_call_declines():
+    adapter = OpenAICompatibleAdapter(
+        name="testprovider",
+        base_url="https://example.test/v1",
+        api_key_env_var="TESTPROVIDER_API_KEY",
+        model="test-model",
+        before_llm_call=lambda: False,
+    )
+
+    with pytest.raises(AdapterInvocationError, match="the monthly LLM spend cap would be exceeded"):
+        adapter.simple_completion("system", "user", cwd="/repo")
+
+
+def test_simple_completion_raises_a_custom_budget_message_when_before_llm_call_declines():
+    # Real regression this guards: the default message names the monthly
+    # LLM spend cap, which is wrong for a caller whose before_llm_call
+    # actually enforces a different budget entirely (e.g. the OpenAI
+    # free-tier daily token allowance in model_tiers.py) - an ops alert for
+    # a healthy daily rollover would misreport as a billing problem.
+    adapter = OpenAICompatibleAdapter(
+        name="testprovider",
+        base_url="https://example.test/v1",
+        api_key_env_var="TESTPROVIDER_API_KEY",
+        model="test-model",
+        before_llm_call=lambda: False,
+        budget_exceeded_message="the daily free-tier token allowance would be exceeded",
+    )
+
+    with pytest.raises(AdapterInvocationError, match="the daily free-tier token allowance would be exceeded"):
+        adapter.simple_completion("system", "user", cwd="/repo")
+
+    with pytest.raises(AdapterInvocationError) as exc_info:
+        adapter.simple_completion("system", "user", cwd="/repo")
+    assert "monthly LLM spend cap" not in str(exc_info.value)
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_raises_the_custom_budget_message_when_before_llm_call_declines(mock_openai_class, tmp_path):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    adapter = _adapter(
+        tmp_path,
+        before_llm_call=lambda: False,
+        budget_exceeded_message="the daily free-tier token allowance would be exceeded",
+    )
+
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError, match="the daily free-tier token allowance would be exceeded"):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+
 @patch("aletheore.adapters.openai_compatible.OpenAI")
 def test_invoke_raises_if_finish_called_before_all_sections_written(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})

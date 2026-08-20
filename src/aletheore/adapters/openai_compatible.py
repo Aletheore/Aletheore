@@ -274,6 +274,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         on_usage: Callable[[int, int], None] | None = None,
         before_llm_call: Callable[[], bool] | None = None,
         on_call_failed: Callable[[], None] | None = None,
+        budget_exceeded_message: str = "the monthly LLM spend cap would be exceeded",
         allow_partial_report: bool = False,
         extra_body: dict | None = None,
     ) -> None:
@@ -297,6 +298,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         self._on_usage = on_usage
         self._before_llm_call = before_llm_call
         self._on_call_failed = on_call_failed
+        self._budget_exceeded_message = budget_exceeded_message
         self._allow_partial_report = allow_partial_report
 
     def is_available(self) -> bool:
@@ -392,7 +394,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
                     return self._partial_report(sections)
                 raise AdapterInvocationError(
                     f"{self.name} stopped before starting the next model call because "
-                    "the monthly LLM spend cap would be exceeded"
+                    f"{self._budget_exceeded_message}"
                 )
             try:
                 response = _call_with_retry(
@@ -477,7 +479,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         if not self._has_budget_for_next_call():
             raise AdapterInvocationError(
                 f"{self.name} stopped before starting the next model call because "
-                "the monthly LLM spend cap would be exceeded"
+                f"{self._budget_exceeded_message}"
             )
 
     def _partial_report(self, sections: dict[str, str]) -> str:

@@ -301,6 +301,14 @@ def writing_adapter_chain_for_free_tier(
             # that would misrepresent a failed call as a completed one to
             # any other on_usage consumer.
             on_call_failed=lambda: _true_up_openai_free_tier_reservation(redis_conn, 0),
+            # OpenAICompatibleAdapter's default budget_exceeded_message
+            # names the monthly LLM spend cap - correct for every other
+            # before_llm_call wiring (e.g. jobs.py's spend_budget.
+            # can_start_next_call), but wrong here: this adapter's
+            # before_llm_call is the daily free-tier token allowance, a
+            # different cap entirely. Left at the default, an ops alert for
+            # a healthy daily rollover reads as a billing problem.
+            budget_exceeded_message="the daily free-tier token allowance would be exceeded",
         ))
     else:
         logger.info("free-tier: OPENAI_FREE_TIER_API_KEY not configured, skipping OpenAI free-tier")
