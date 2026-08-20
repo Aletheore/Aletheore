@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app_server.db import (
+    claim_free_to_paid_plan,
     get_installation,
     get_extra_seats,
     is_installation_member,
@@ -165,6 +166,35 @@ async def test_cancellation_does_not_trigger_live_wiki_build(pool):
     )
 
     fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_crash_after_plan_write_still_runs_setup_on_retry(pool):
+    """Simulates a process death between the plan write committing and
+    setup (wiki/docs build) running: claim_free_to_paid_plan already
+    flipped the plan to 'air' and reset paid_setup_completed_at to NULL (a
+    real free->paid transition happened), but nothing past that point ran -
+    as if the handler crashed right there, e.g. inside add_installation_member
+    a few lines later. GitHub retries the same delivery on the handler's
+    exception. Gating the build on transitioned_to_paid (claim_free_to_paid_plan's
+    own return value) would find plan already non-free on the retry and
+    silently skip the initial build forever; gating on the independent
+    claim_paid_setup claim instead means the retry still runs it exactly
+    once, mirroring the fix already in the Paddle webhook path."""
+    fake_queue = MagicMock()
+    await upsert_installation(pool, 777, "octocat")  # defaults to plan='free'
+    assert await claim_free_to_paid_plan(pool, 777, "air") is True  # the crashed attempt
+
+    await handle_marketplace_event(
+        _payload("purchased", 999011, "octocat"), pool, "redis://unused", queue=fake_queue
+    )
+
+    assert fake_queue.enqueue.call_count == 2
+    job_names = {call.args[0] for call in fake_queue.enqueue.call_args_list}
+    assert job_names == {
+        "scan_worker.jobs.run_live_wiki_full_build_for_installation_job",
+        "scan_worker.jobs.run_live_docs_full_build_for_installation_job",
+    }
 
 
 @pytest.mark.asyncio
