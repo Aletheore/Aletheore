@@ -271,6 +271,25 @@ python scripts/score_fallback_judge.py</code></pre>
             parallel <code>classic</code> and <code>mini</code> API variants, not a scanner bug
             — both embedders hit the same 6/15 top-5 rate on zod's general questions, they just
             disagree on <em>which</em> two they miss.</p>
+          <p class="dogfood-p"><strong>Update, 2026-08-20:</strong> a later, independent hosted-jina
+            measurement against today's live service (not this section's dev checkout) found a much
+            steeper zod gap than the -6.7pp above — general top-1 20.0% → 0.0%, vocabulary 60.0% →
+            6.7%. Reading the raw ranked files (not just the score) found two concrete decoy files
+            jina ranks above the true answer that nomic does not: <code>packages/resolution/src/index.ts</code>,
+            a 37-line smoke-test file that literally imports every zod build variant in one place
+            (<code>zod</code>, <code>zod/mini</code>, <code>zod/v3</code>, <code>zod/v4</code>,
+            <code>zod/v4-mini</code>, plus a locale file), giving it lexical overlap with nearly the
+            entire module surface despite being semantically irrelevant to any single one of them —
+            it shows up as a false top-3 hit on 4 of 15 general questions; and the ~30 locale files
+            under <code>packages/zod/src/v4/locales/</code>, each importing the same core types
+            (<code>$ZodStringFormats</code>, <code>errors</code>, <code>util</code>) as the real
+            implementation files they're competing against, because every locale wires up the same
+            error-message keys. Neither is a broken pipeline — both are plausible, on-topic, wrong
+            answers, the same near-duplicate-crowding category above, just a sharper instance of it.
+            Why this measurement's gap is so much larger than the -6.7pp already published above is
+            not yet resolved — the two were measured against different deployments, so infrastructure
+            drift between them hasn't been ruled out. Full account in
+            <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/METHODOLOGY.md#a-0813-reproducibility-check-that-measured-hosted-jina-instead-of-local-nomic-caught-and-corrected-2026-08-20" rel="noopener">METHODOLOGY.md</a>.</p>
         </details>
 
         <div class="dogfood-callout">
