@@ -821,11 +821,28 @@ def test_generate_file_pages_overlaps_writing_calls_instead_of_serializing():
     # Batching (FILE_PAGE_WRITE_BATCH_SIZE=5) makes the unit of concurrency
     # the batch, not the individual file, so this needs more than one
     # batch's worth of paths to prove batches still overlap each other.
+    #
+    # Asserts on the recorded call windows actually overlapping, not a
+    # tight total-wall-clock threshold - a fixed cutoff like "elapsed <
+    # 0.28" is a condition-based check in disguise (did the batches run
+    # concurrently?) expressed as an arbitrary timing number instead, and
+    # CI-runner scheduling noise can push even genuinely-overlapped calls
+    # past a tight bound (observed 0.33-0.36s here against a 0.28s cutoff,
+    # still nowhere near the ~450ms fully-serial floor). Checking overlap
+    # directly proves the real property without being sensitive to how
+    # loaded the runner happens to be.
     evidence = _n_cluster_evidence(12)
     paths = [f"pkg{i}/mod.py" for i in range(12)]
 
+    call_windows: list[tuple[float, float]] = []
+    windows_lock = threading.Lock()
+
     def _slow_response(_system_prompt, user_prompt, cwd):
+        call_start = time.monotonic()
         time.sleep(0.15)
+        call_end = time.monotonic()
+        with windows_lock:
+            call_windows.append((call_start, call_end))
         items = json.loads(user_prompt)
         return json.dumps({item["id"]: {"detail": f"## Overview\nSee {item['path']}:1."} for item in items})
 
@@ -836,8 +853,21 @@ def test_generate_file_pages_overlaps_writing_calls_instead_of_serializing():
     pages = generate_file_pages(evidence, writing_adapter, paths=paths)
     elapsed = time.monotonic() - started
 
-    # 3 batches (5, 5, 2) at 150ms each, overlapped: well under serial ~450ms.
-    assert elapsed < 0.28
+    # 3 batches (5, 5, 2) at 150ms each - real proof of concurrency: at
+    # least two calls' [start, end) windows genuinely intersect. A fully
+    # serial implementation could never produce this, regardless of how
+    # loaded the machine running the test is.
+    assert len(call_windows) == 3
+    overlapping_pairs = [
+        (a, b)
+        for i, a in enumerate(call_windows)
+        for b in call_windows[i + 1:]
+        if a[0] < b[1] and b[0] < a[1]
+    ]
+    assert overlapping_pairs, f"no overlapping call windows found: {call_windows}"
+    # Loose backstop against genuine full serialization (~450ms) - not the
+    # primary assertion, just a sanity net with real margin over CI noise.
+    assert elapsed < 0.4
     assert set(pages) == set(paths)
 
 
