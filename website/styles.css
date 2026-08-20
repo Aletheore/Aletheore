@@ -1677,6 +1677,85 @@ pre {
   color: #b9b1a4;
 }
 
+.bench-details {
+  margin: 18px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--card-bg);
+  padding: 4px 20px;
+}
+
+.bench-details summary {
+  cursor: pointer;
+  padding: 14px 0;
+  font-weight: 640;
+  color: #efe7d8;
+  list-style: none;
+}
+
+.bench-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.bench-details summary::before {
+  content: "+";
+  display: inline-block;
+  width: 18px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.bench-details[open] summary::before {
+  content: "\2212";
+}
+
+.bench-details[open] summary {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.bench-details .dogfood-table-wrap {
+  margin: 16px 0;
+}
+
+.bench-details > p {
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.6;
+  padding-bottom: 16px;
+}
+
+.bench-chart {
+  margin: 20px 0 28px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--card-bg);
+  padding: 22px 24px 18px;
+}
+
+.bench-chart-title {
+  margin: 0 0 4px;
+  color: #efe7d8;
+  font-size: 15px;
+  font-weight: 640;
+}
+
+.bench-chart-sub {
+  margin: 0 0 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.bench-chart-canvas-wrap {
+  position: relative;
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .bench-chart {
+    padding: 18px 16px 14px;
+  }
+}
+
 footer {
   margin-top: 40px;
   padding: 48px 0;

@@ -7,6 +7,7 @@ Aletheore separates two things most tools mix: **finding out what is true about 
 The free tier is genuinely free: `scan`, `query`, `diff`, the MCP server, and the local dashboard need no account and no API key.
 
 - Repository: https://github.com/Aletheore/Aletheore
+- Benchmarks (separate repo, reproducible): https://github.com/Aletheore/aletheore-benchmarks
 - Install: `pip install aletheore`
 - License: open source
 
@@ -102,6 +103,10 @@ AIR adds a hosted GitHub App:
 - **Managed dashboard**, seat management, API tokens, data export and self-serve deletion
 
 LLM spend is capped monthly per installation and recorded per call. Deterministic work never consumes it.
+
+## Benchmarked, in the open
+
+`aletheore-benchmarks` (github.com/Aletheore/aletheore-benchmarks) is a separate public repository measuring Aletheore against RepoWise: locating code (5 wins, 0 losses, 2 ties on top-1 across 7 shared corpora), generated-docs quality, and PR review. Retrieval numbers recompute from raw results with no API key and no network. Losses are published alongside wins — RepoWise's generated wiki scores higher on "how does X work?" questions, for one. A separate result set validated that Flash review's default prompt (evidence only, no raw file dump) matches or beats including full file content on independently-verified accept rate, using a fraction of the tokens — that is why it shipped as the default rather than staying an experiment.
 
 ## Security posture
 
