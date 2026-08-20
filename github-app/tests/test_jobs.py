@@ -7,7 +7,7 @@ from contextlib import contextmanager
 import pytest
 
 from scan_worker.jobs import (
-    MAX_FLASH_REVIEWS_PER_MONTH,
+    FLASH_REVIEW_SPEND_RESERVE_USD,
     MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH,
     run_pr_scan_job,
 )
@@ -45,6 +45,12 @@ def _patch_no_spend_cap(monkeypatch) -> None:
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    # _IncrementalSpendBudget.can_start_next_call() now reserves atomically
+    # against the real DB per call instead of comparing an in-memory
+    # snapshot - always-succeed here for the same "well under any cap"
+    # reason as the mocks above.
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
 
 
 class _FakeCodeGraphStore:
@@ -1007,16 +1013,31 @@ def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeyp
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
     )
-    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.0012)
     monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.0006)
-    recorded_spend = []
-    monkeypatch.setattr(
-        "scan_worker.jobs.record_llm_spend",
-        lambda dsn, iid, cost, **k: recorded_spend.append(cost),
-    )
+    # In-memory stand-in for the real atomic reserve_llm_spend/record_llm_spend
+    # pair, sharing running-total state the same way the real DB row does -
+    # reserve_llm_spend reserves next_call_reserve_usd up front (atomic
+    # check-and-add), record_llm_spend's delta then trues it up to the real
+    # cost. `cost_for_usage` mocked to 0.0006 < DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+    # (0.001), so the true-up delta is negative: -0.0004.
+    spend_state = {"total": 0.0}
+    recorded_deltas = []
+
+    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
+        if spend_state["total"] + reserve_usd <= monthly_cap:
+            spend_state["total"] += reserve_usd
+            return True
+        return False
+
+    def _record_llm_spend(dsn, iid, delta, **k):
+        spend_state["total"] += delta
+        recorded_deltas.append(delta)
+
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.insert_audit_report", lambda *a, **k: None)
 
@@ -1040,7 +1061,7 @@ def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeyp
     )
 
     assert "Partial managed audit" in result
-    assert recorded_spend == [0.0006]
+    assert recorded_deltas == [pytest.approx(-0.0004)]
     assert budget_checks == [True, False]
 
 
@@ -1523,7 +1544,10 @@ def test_flash_review_job_routes_free_tier_to_free_tier_path(monkeypatch):
         "scan_worker.jobs.record_llm_spend",
         lambda *a, **k: record_llm_spend_calls.append(a),
     )
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -1552,25 +1576,20 @@ def test_flash_review_job_routes_free_tier_to_free_tier_path(monkeypatch):
     assert cache_write_calls == []
 
 
-def test_flash_review_job_locks_the_free_tier_monthly_count_check(monkeypatch):
-    # Regression guard for a TOCTOU race: the paid branch reads its
-    # monthly-count cap inside installation_spend_lock (see the `else`
-    # branch a few lines below the free-tier one in jobs.py); the free-tier
-    # branch didn't, so two concurrent free-tier reviews on the same
-    # installation could both read "under cap" before either recorded an
-    # attempt. This only checks the lock is actually acquired around the
-    # check - the fix is the `with installation_spend_lock(...)` wrapper
-    # itself, not anything this test can observe about ordering under real
-    # concurrency (see test_model_tiers.py's own note on why that's hard to
-    # test directly for the sibling OpenAI-token-cap fix).
-    from contextlib import contextmanager
+def test_flash_review_job_reserves_the_free_tier_monthly_count_atomically(monkeypatch):
+    # Regression guard for a TOCTOU race: the old check-then-later-increment
+    # design under installation_spend_lock let two concurrent free-tier
+    # reviews on the same installation both read "under cap" before either
+    # recorded an attempt. The fix is reserve_flash_review_count - a single
+    # atomic UPSERT...WHERE...RETURNING, not a lock (see
+    # test_scan_worker_db.py's real-concurrency test for proof it holds
+    # under actual concurrent load). This just confirms jobs.py calls it
+    # with the right cap.
+    reserve_calls = []
 
-    lock_calls = []
-
-    @contextmanager
-    def _tracking_spend_lock(*args, **kwargs):
-        lock_calls.append(args)
-        yield
+    def _reserve_flash_review_count(dsn, installation_id, limit):
+        reserve_calls.append((installation_id, limit))
+        return True
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(
@@ -1580,18 +1599,15 @@ def test_flash_review_job_locks_the_free_tier_monthly_count_check(monkeypatch):
         "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
     )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
-    monkeypatch.setattr(
-        "scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0
-    )
-    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _tracking_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", _reserve_flash_review_count)
     # Short-circuit before the review body runs - this test only cares
-    # whether the cap check itself was locked, not the rest of the job.
-    monkeypatch.setattr("scan_worker.jobs._run_flash_review", lambda *a, **k: None)
+    # whether the cap was reserved, not the rest of the job.
+    monkeypatch.setattr("scan_worker.jobs._run_flash_review", lambda *a, **k: True)
 
     from scan_worker.jobs import run_flash_review_job
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
-    assert len(lock_calls) >= 1
+    assert reserve_calls == [(1, MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH)]
 
 
 def test_flash_review_job_skips_when_over_the_free_tier_monthly_cap(monkeypatch):
@@ -1603,11 +1619,9 @@ def test_flash_review_job_skips_when_over_the_free_tier_monthly_cap(monkeypatch)
         "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
     )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
-    monkeypatch.setattr(
-        "scan_worker.jobs.get_flash_review_count_this_month",
-        lambda *a, **k: MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH,
-    )
-    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    # False = the atomic reservation itself found the cap already reached -
+    # nothing left to release, since nothing was ever reserved.
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: False)
     run_called = []
     monkeypatch.setattr(
         "scan_worker.jobs._run_flash_review", lambda *a, **k: run_called.append(True)
@@ -1668,7 +1682,10 @@ def test_flash_review_job_alerts_ops_when_all_free_tier_providers_fail(monkeypat
     monkeypatch.setattr("scan_worker.jobs.lookup_cached_flash_review_result", lambda *a: None)
     monkeypatch.setattr("scan_worker.jobs.store_flash_review_result", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
@@ -1713,9 +1730,18 @@ def test_flash_review_job_skips_when_spend_cap_reached(monkeypatch):
         "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
     )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
-    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
-    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    # The count reservation succeeds (a slot exists), but the dollar
+    # reservation is the one that finds the cap already reached - jobs.py
+    # must then release the count reservation it just took, since the
+    # review never actually gets to run.
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: False)
+    released = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.release_flash_review_count_reservation",
+        lambda *a, **k: released.append(True),
+    )
     llm_called = []
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda *a, **k: llm_called.append(True))
     from scan_worker.jobs import run_flash_review_job
@@ -1723,6 +1749,7 @@ def test_flash_review_job_skips_when_spend_cap_reached(monkeypatch):
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert llm_called == []
+    assert released == [True]
 
 
 def test_flash_review_job_skips_when_monthly_review_count_reached(monkeypatch):
@@ -1734,12 +1761,14 @@ def test_flash_review_job_skips_when_monthly_review_count_reached(monkeypatch):
         "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
     )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
-    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
-    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    # False = the atomic reservation itself found the count cap already
+    # reached - reserve_llm_spend must never even be attempted, since
+    # there's nothing to reserve it for.
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: False)
+    spend_reserve_called = []
     monkeypatch.setattr(
-        "scan_worker.jobs.get_flash_review_count_this_month",
-        lambda *a, **k: MAX_FLASH_REVIEWS_PER_MONTH,
+        "scan_worker.jobs.reserve_llm_spend", lambda *a, **k: spend_reserve_called.append(True)
     )
     llm_called = []
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda *a, **k: llm_called.append(True))
@@ -1748,6 +1777,7 @@ def test_flash_review_job_skips_when_monthly_review_count_reached(monkeypatch):
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert llm_called == []
+    assert spend_reserve_called == []
 
 
 def test_flash_review_job_skips_model_call_for_lockfile_only_diff(monkeypatch):
@@ -1773,7 +1803,10 @@ def test_flash_review_job_skips_model_call_for_lockfile_only_diff(monkeypatch):
     llm_called = []
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda *a, **k: llm_called.append(True))
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     posted = {}
     monkeypatch.setattr(
@@ -1818,7 +1851,10 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
         "scan_worker.jobs.record_llm_spend",
         lambda dsn, iid, cost, **kwargs: recorded_spend.append(cost),
     )
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     set_sha_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs.set_last_reviewed_sha",
@@ -1839,40 +1875,123 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     assert "real problem" in posted["body"]
     assert posted["marker"] == FLASH_REVIEW_MARKER
     assert set_sha_calls == ["bbb"]
-    assert recorded_spend == [0.0]
+    # True-up delta, not the raw total: real cost (0.0 - review_diff is
+    # mocked, no on_usage ever fires) minus the FLASH_REVIEW_SPEND_RESERVE_USD
+    # (0.5) reserved up front - record_llm_spend's additive upsert applies
+    # this negative delta to give back the unused portion of the reservation.
+    assert recorded_spend == [-FLASH_REVIEW_SPEND_RESERVE_USD]
 
 
-def test_flash_review_job_records_spend_and_count_while_the_lock_is_still_held(monkeypatch):
-    # F25: installation_spend_lock exists to make the check/run/record cycle
-    # atomic per installation - a prior version of this job read the cap
-    # inside the lock but recorded spend and incremented the review count
-    # after it had already been released, so two concurrent reviews for the
-    # same installation could both pass the cap check before either had
-    # recorded its cost. _noop_spend_lock (used by every other test in this
-    # file) can't catch that regression since it never tracks "held" at
-    # all - this test uses a real tracking fake instead.
-    from contextlib import contextmanager
-
-    lock_state = {"held": False, "observed_during_record": None, "observed_during_increment": None}
-
-    @contextmanager
-    def _tracking_spend_lock(*args, **kwargs):
-        lock_state["held"] = True
-        try:
-            yield
-        finally:
-            lock_state["held"] = False
+def test_flash_review_job_reserves_the_cap_before_running_the_review(monkeypatch):
+    # F25/atomic-reservation redesign: run_flash_review_job used to check the
+    # cap inside a lock, release it, run the (multi-minute) review unlocked,
+    # then re-acquire the lock just to record spend/count - a real window
+    # where two concurrent reviews for the same installation could both pass
+    # the check before either recorded anything. The fix reserves both caps
+    # atomically (reserve_flash_review_count/reserve_llm_spend) BEFORE the
+    # review starts, not after - see test_scan_worker_db.py's real-concurrency
+    # tests for proof the reservation itself is atomic under actual
+    # concurrent load. This test verifies the call ORDER: by the time
+    # review_diff runs, the reservation has already happened.
+    call_order = []
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
-    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
-    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
-    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _tracking_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+
+    def _reserve_flash_review_count(dsn, iid, limit):
+        call_order.append("reserve_count")
+        return True
+
+    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
+        call_order.append("reserve_spend")
+        return True
+
+    def _review_diff(diff_text, file_context="", **kwargs):
+        call_order.append("review_diff")
+        return [{"file": "app.py", "line": 1, "issue": "x"}]
+
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", _reserve_flash_review_count)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
+    monkeypatch.setattr("scan_worker.jobs.review_diff", _review_diff)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert call_order == ["reserve_count", "reserve_spend", "review_diff"]
+
+
+def test_flash_review_job_releases_reservation_when_the_review_never_runs(monkeypatch):
+    # A reservation that never became a real review (every free-tier
+    # provider failed, or no provider keys were configured) must not
+    # permanently consume a slot/dollar the installation never actually
+    # used - see run_flash_review_job's finally block.
+    released = {"count": False, "spend": False}
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.jobs.release_flash_review_count_reservation",
+        lambda *a, **k: released.__setitem__("count", True),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.release_llm_spend_reservation",
+        lambda *a, **k: released.__setitem__("spend", True),
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    # Free tier, no adapter chain built (no provider keys) - _run_flash_review
+    # returns False before ever calling review_diff.
+    monkeypatch.setattr("scan_worker.model_tiers.writing_adapter_chain_for_free_tier", lambda *a, **k: [])
+
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    # Free tier has no dollar reservation (reserved_spend stays 0.0), so
+    # only the count reservation should be released.
+    assert released == {"count": True, "spend": False}
+
+
+def test_flash_review_job_does_not_release_reservation_after_a_successful_review(monkeypatch):
+    released = {"count": False, "spend": False}
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.jobs.release_flash_review_count_reservation",
+        lambda *a, **k: released.__setitem__("count", True),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.release_llm_spend_reservation",
+        lambda *a, **k: released.__setitem__("spend", True),
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
@@ -1881,74 +2000,7 @@ def test_flash_review_job_records_spend_and_count_while_the_lock_is_still_held(m
         "scan_worker.jobs.review_diff",
         lambda diff_text, file_context="", **kwargs: [{"file": "app.py", "line": 1, "issue": "x"}],
     )
-
-    def _record_llm_spend(dsn, iid, cost, **kwargs):
-        lock_state["observed_during_record"] = lock_state["held"]
-
-    def _increment_flash_review_count(dsn, iid):
-        lock_state["observed_during_increment"] = lock_state["held"]
-
-    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", _increment_flash_review_count)
-    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
-
-    from scan_worker.jobs import run_flash_review_job
-
-    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
-
-    assert lock_state["observed_during_record"] is True
-    assert lock_state["observed_during_increment"] is True
-    assert lock_state["held"] is False  # released once the job actually finished
-
-
-def test_flash_review_job_releases_lock_during_the_review_itself(monkeypatch):
-    # Real production bug, found while opening 25 PRs on one installation
-    # in a benchmark run: the lock used to wrap the ENTIRE review (a real
-    # LLM call plus several GitHub API round-trips, measured up to 5m50s
-    # in production - see FLASH_REVIEW_JOB_TIMEOUT_SECONDS in
-    # app_server/webhooks/pull_request.py), not just the check-then-record
-    # spend bookkeeping it exists to protect (see installation_spend_lock's
-    # docstring). ADVISORY_LOCK_TIMEOUT is 5s, far shorter than a real
-    # review, so any review queued behind another for the same
-    # installation reliably failed with psycopg.errors.LockNotAvailable
-    # instead of just waiting its turn - confirmed in production logs.
-    # This asserts the lock is free during the expensive part, which the
-    # F25 test above doesn't check (it only checks record/increment).
-    from contextlib import contextmanager
-
-    lock_state = {"held": False, "observed_during_review": None}
-
-    @contextmanager
-    def _tracking_spend_lock(*args, **kwargs):
-        lock_state["held"] = True
-        try:
-            yield
-        finally:
-            lock_state["held"] = False
-
-    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
-    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
-    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
-    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
-    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
-    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
-    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
-    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
-    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _tracking_spend_lock)
-    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
-    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
-    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
-
-    def _review_diff(diff_text, file_context="", **kwargs):
-        lock_state["observed_during_review"] = lock_state["held"]
-        return [{"file": "app.py", "line": 1, "issue": "x"}]
-
-    monkeypatch.setattr("scan_worker.jobs.review_diff", _review_diff)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
 
@@ -1956,8 +2008,7 @@ def test_flash_review_job_releases_lock_during_the_review_itself(monkeypatch):
 
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
-    assert lock_state["observed_during_review"] is False
-    assert lock_state["held"] is False
+    assert released == {"count": False, "spend": False}
 
 
 def test_flash_review_job_posts_grounding_note_when_some_findings_are_dropped(monkeypatch):
@@ -1982,7 +2033,10 @@ def test_flash_review_job_posts_grounding_note_when_some_findings_are_dropped(mo
 
     monkeypatch.setattr("scan_worker.jobs.review_diff", fake_review_diff)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     posted = {}
     monkeypatch.setattr(
@@ -2018,7 +2072,10 @@ def test_flash_review_job_reports_zero_grounded_distinctly_from_no_issues_found(
 
     monkeypatch.setattr("scan_worker.jobs.review_diff", fake_review_diff)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     posted = {}
     monkeypatch.setattr(
@@ -2065,7 +2122,10 @@ def test_flash_review_job_discloses_files_it_never_reviewed(monkeypatch):
     )
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda *a, **k: [])
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     posted = {}
     monkeypatch.setattr(
@@ -2103,7 +2163,10 @@ def test_flash_review_job_adds_no_coverage_note_when_every_file_was_read(monkeyp
     )
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda *a, **k: [])
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     posted = {}
     monkeypatch.setattr(
@@ -2126,12 +2189,17 @@ def test_flash_review_job_posts_failure_comment_instead_of_raising(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
-    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
-    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    # The raised exception aborts the job before _run_flash_review reaches
+    # its normal completion, so run_flash_review_job's finally block must
+    # release both reservations - a review that never ran must not
+    # permanently consume a slot/dollar the installation never used.
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
-    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
 
     def _raise_diff_fetch(*a, **k):
@@ -2213,7 +2281,10 @@ def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkey
         lambda diff_text, file_context="", **kwargs: captured.update(kwargs) or [],
     )
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     from scan_worker.jobs import run_flash_review_job
@@ -2257,7 +2328,10 @@ def test_flash_review_job_passes_changed_file_contents_to_review_diff(monkeypatc
         lambda diff_text, file_context="", **kwargs: captured.update(kwargs) or [],
     )
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     from scan_worker.jobs import run_flash_review_job
@@ -2306,7 +2380,10 @@ def test_flash_review_job_never_sends_the_raw_file_context_blob_to_review_diff(m
         or [],
     )
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     from scan_worker.jobs import run_flash_review_job
@@ -2343,7 +2420,10 @@ def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestio
         ],
     )
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     posted = {}
     monkeypatch.setattr(
@@ -2379,7 +2459,10 @@ def test_flash_review_job_posts_no_issues_found_when_findings_empty(monkeypatch)
     monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda diff_text, file_context="", **kwargs: [])
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.increment_flash_review_count", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     posted = {}
     monkeypatch.setattr(
@@ -4532,7 +4615,6 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
-    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.0012)
@@ -4554,11 +4636,25 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
         adapter.on_usage(1, 1)
 
     monkeypatch.setattr("scan_worker.jobs._store_docs_generation_for_module", fake_store)
-    recorded_spend = []
-    monkeypatch.setattr(
-        "scan_worker.jobs.record_llm_spend",
-        lambda dsn, iid, cost, **k: recorded_spend.append(cost),
-    )
+    # In-memory stand-in for the real atomic reserve_llm_spend/record_llm_spend
+    # pair - see test_managed_audit_api_job_records_each_call_and_exposes_budget_stop
+    # for the full explanation of the shared running-total state and why the
+    # true-up delta (cost - next_call_reserve_usd) is negative here.
+    spend_state = {"total": 0.0}
+    recorded_deltas = []
+
+    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
+        if spend_state["total"] + reserve_usd <= monthly_cap:
+            spend_state["total"] += reserve_usd
+            return True
+        return False
+
+    def _record_llm_spend(dsn, iid, delta, **k):
+        spend_state["total"] += delta
+        recorded_deltas.append(delta)
+
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
     status_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs.set_docs_build_status",
@@ -4569,7 +4665,7 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
     run_live_docs_full_build_job(1, "octocat/hello-world")
 
     assert stored_for == ["m0.py"]
-    assert recorded_spend == [0.0006]
+    assert recorded_deltas == [pytest.approx(-0.0004)]
     assert status_calls[0][0] == "ready"
     assert "1/3 files processed" in status_calls[0][1]
     assert "spend cap" in status_calls[0][1]
