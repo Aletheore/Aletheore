@@ -839,20 +839,31 @@ def generate_subsystems(
     # Cache lookups are cheap and per-cluster, so they run first, before any
     # decision about whether the remaining clusters get one call each or
     # (2+) a batched call - a cache hit never enters the write path at all.
-    records_by_id: dict[str, dict] = {}
-    targets: list[_SubsystemWriteTarget] = []
-    order: list[str] = []
-    for brief in briefs:
+    # Run concurrently, same as the write phase below: on a repo with
+    # 30-40 subsystem clusters, a plain sequential loop here added 30-40
+    # blocking round-trips to the front of every build - serialized latency
+    # ahead of the very calls this function exists to batch/parallelize.
+    def _lookup_one(brief: dict) -> tuple[dict, dict, str, dict | None] | None:
         cluster = clusters_by_id.get(brief["cluster_id"])
         if cluster is None:
-            continue
+            return None
         name = names[brief["cluster_id"]]
-        cluster_id_str = str(brief["cluster_id"])
-        order.append(cluster_id_str)
-
         cached_record = _cached_subsystem_record(
             evidence, cluster, brief, name, cache_lookup, model_used, fetch_line_count
         )
+        return brief, cluster, name, cached_record
+
+    lookup_results = _run_concurrently([lambda b=brief: _lookup_one(b) for brief in briefs])
+
+    records_by_id: dict[str, dict] = {}
+    targets: list[_SubsystemWriteTarget] = []
+    order: list[str] = []
+    for result in lookup_results:
+        if result is None:
+            continue
+        brief, cluster, name, cached_record = result
+        cluster_id_str = str(brief["cluster_id"])
+        order.append(cluster_id_str)
         if cached_record is not None:
             records_by_id[cluster_id_str] = cached_record
         else:
