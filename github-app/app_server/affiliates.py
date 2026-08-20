@@ -134,8 +134,17 @@ async def mark_commissions_paid(pool: asyncpg.Pool, affiliate_id: int) -> int:
     after the admin has sent that amount manually outside the app. Returns
     the number of rows updated, for the route to confirm back to the
     caller."""
+    # AND NOT reversed, matching list_affiliates_with_totals's own
+    # total_owed_usd/total_paid_usd queries - without it, a commission
+    # reversed via the Paddle refund/chargeback webhook path (correctly
+    # already excluded from total_owed_usd) could still be matched here and
+    # flipped to paid=true, after which it's also excluded from
+    # total_paid_usd (same NOT reversed filter). The row would silently
+    # disappear from both totals while sitting in the database marked
+    # paid - a commission never actually paid out, with no trace in either
+    # report.
     result = await pool.execute(
-        "UPDATE affiliate_commissions SET paid = true WHERE affiliate_id = $1 AND NOT paid",
+        "UPDATE affiliate_commissions SET paid = true WHERE affiliate_id = $1 AND NOT paid AND NOT reversed",
         affiliate_id,
     )
     return int(result.split()[-1])

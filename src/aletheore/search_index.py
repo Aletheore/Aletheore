@@ -979,7 +979,16 @@ def _embed_in_batches(
                 # changed, which the user needs to see.
                 print(f"aletheore: hosted embeddings unavailable ({exc}); using local provider")
                 use_hosted = False
-                spans = [(s, min(s + batch_size, len(texts))) for s in range(start, len(texts), batch_size)]
+                # range(end, ...), not range(start, ...): the current batch
+                # (texts[start:end]) is about to be embedded locally by the
+                # fallthrough below - rebuilding remaining spans from `start`
+                # put that same batch back at the front of the queue, so the
+                # next loop iteration embedded it a second time via the local
+                # path. Confirmed: 10 texts, batch_size=5, hosted fails on the
+                # first batch -> 15 vectors returned for 10 input texts, with
+                # _embed_stale_by_hash's zip(stale_hashes, fresh_vectors)
+                # silently misaligning every hash after the duplicate.
+                spans = [(s, min(s + batch_size, len(texts))) for s in range(end, len(texts), batch_size)]
                 span_index = 0
         vectors.extend(embed_texts(batch))
         if on_progress is not None:

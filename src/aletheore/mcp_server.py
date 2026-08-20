@@ -631,11 +631,13 @@ def _register_search_codebase_tool(
 
 
 def _register_answer_tool(
-    mcp_instance: MCPServer, repo_path: Path, answer_adapter: AgentAdapter
+    mcp_instance: MCPServer, repo_path: Path, answer_adapter: AgentAdapter, effects: frozenset[str]
 ) -> None:
     @mcp_instance.tool(
         name="aletheore_answer",
-        # Sends retrieved code chunks to the configured LLM adapter.
+        # Sends retrieved code chunks to the configured LLM adapter, and -
+        # same as aletheore_search_codebase - embeds the question text
+        # through the configured provider, so it can reach the network too.
         annotations=ToolAnnotations(
             readOnlyHint=True, destructiveHint=False, idempotentHint=False, openWorldHint=True
         ),
@@ -643,7 +645,11 @@ def _register_answer_tool(
     def aletheore_answer(question: str, k: int = 5) -> str:
         """Answer a natural-language question about this repository from the semantic index."""
         try:
-            return _toon_result(answer_question(repo_path, question, answer_adapter, k=k))
+            return _toon_result(
+                answer_question(
+                    repo_path, question, answer_adapter, k=k, allow_hosted=EFFECT_EXTERNAL in effects
+                )
+            )
         except IndexNotFoundError:
             return _toon_result(_NO_INDEX_ERROR)
         except IndexDimensionMismatchError as exc:
@@ -738,7 +744,7 @@ def build_server(
     if permitted("aletheore_managed_audit"):
         _register_managed_audit_tool(mcp_instance, repo_path)
     if answer_adapter is not None and permitted("aletheore_answer"):
-        _register_answer_tool(mcp_instance, repo_path, answer_adapter)
+        _register_answer_tool(mcp_instance, repo_path, answer_adapter, effects)
 
     if withheld:
         # stderr, not stdout: stdout is the MCP transport. The operator is the

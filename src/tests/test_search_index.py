@@ -1412,8 +1412,45 @@ def test_a_402_falls_back_to_local_and_says_why(capsys):
          patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.0] * 768] * len(t)):
         vectors = _embed_in_batches(["chunk"])
 
+    # One vector for one input text - not two. The local fallback for the
+    # batch that just failed on hosted used to also get re-queued as
+    # "remaining work", so it was embedded locally a second time.
+    assert len(vectors) == 1
     assert len(vectors[0]) == 768
     assert "requires a paid plan" in capsys.readouterr().out
+
+
+def test_hosted_failure_on_the_first_of_several_batches_does_not_duplicate_it():
+    """Real bug: the local fallback for a batch that just failed on hosted
+    rebuilt the remaining-spans list starting from that same batch's own
+    start index instead of its end index, re-queuing a batch that had
+    already been embedded (by the immediate local fallthrough) as if it
+    were still pending. Confirmed: 10 texts, batch_size=5, hosted fails on
+    the first batch -> 15 vectors returned for 10 input texts, with
+    _embed_stale_by_hash's zip(stale_hashes, fresh_vectors) then silently
+    misaligning every hash after the duplicate - a search index built from
+    this run would return plausible-looking but wrong results for an
+    unknown subset of chunks, with nothing in the logs to indicate it
+    happened."""
+    http = MagicMock()
+    http.post.return_value = _hosted_response(402, {"detail": "requires a paid plan"})
+    texts = [f"t{i}" for i in range(10)]
+    local_calls = []
+
+    def fake_local_embed(batch):
+        local_calls.append(list(batch))
+        return [[0.0] * 768] * len(batch)
+
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), \
+         patch("aletheore.search_index.httpx.Client", return_value=http), \
+         patch("aletheore.search_index.embed_texts", side_effect=fake_local_embed):
+        vectors = _embed_in_batches(texts, batch_size=5)
+
+    assert len(vectors) == 10
+    # Every input text embedded exactly once, not twice - flattening
+    # local_calls (list of batches) must reproduce the original input with
+    # no repeats.
+    assert [t for batch in local_calls for t in batch] == texts
 
 
 def test_hosted_failure_partway_through_raises_rather_than_mixing_providers():
