@@ -663,6 +663,27 @@ async def test_aletheore_ownership_tool_needs_no_target(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_aletheore_ownership_tool_accepts_an_optional_target(tmp_path):
+    # Regression test: aletheore_ownership was wired as a zero-argument MCP
+    # tool (requires_target=False), so it could never forward a target even
+    # though find_ownership already branches on one for file-scoped ownership
+    # via evidence["git"]["file_ownership"]. Confirms both ends of the fix -
+    # a target is now accepted at all, and it actually reaches find_ownership.
+    repo = make_repo_with_evidence(tmp_path)
+    evidence_path = repo / ".aletheore" / "air.json"
+    evidence = json.loads(evidence_path.read_text())
+    evidence["git"]["file_ownership"] = {"a.py": [{"author": "alice", "commits": 3}]}
+    evidence_path.write_text(json.dumps(evidence))
+    server = build_server(repo)
+
+    scoped = await server.call_tool("aletheore_ownership", {"target": "a.py"})
+    aggregate = await server.call_tool("aletheore_ownership", {})
+
+    assert tool_result_body(scoped) == {"result": [{"author": "alice", "commits": 3}]}
+    assert tool_result_body(aggregate) == {"result": [{"path": "a.py", "top_author": "alice"}]}
+
+
+@pytest.mark.asyncio
 async def test_aletheore_imports_tool_raises_for_unknown_module(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     server = build_server(repo)

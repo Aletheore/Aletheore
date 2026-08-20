@@ -124,6 +124,23 @@ def test_find_secrets_detects_unquoted_generic_credentials_and_multiple_matches(
     assert sum(f["pattern"] == "aws_access_key_id" for f in findings) == 2
 
 
+def test_find_secrets_detects_credential_value_containing_a_dot(tmp_path):
+    # Regression: newer Google AI Studio keys use a dotted shape
+    # ("AQ.Ab8R...") rather than the older AIza-prefixed google_api_key
+    # format - the generic value class didn't include ".", so the match
+    # stopped after 2 characters, fell under the 16-char minimum, and the
+    # whole credential went undetected rather than just unredacted.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".env").write_text(
+        "GEMINI_API_KEY=AQ.NotARealKey0123456789ABCDEFGHIJKLMNOPqrstuv\n"
+    )
+
+    findings = find_secrets(repo)["findings"]
+
+    assert sum(f["pattern"] == "generic_credential_assignment" for f in findings) == 1
+
+
 def test_find_secrets_detects_fine_grained_github_and_sts_aws_tokens(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

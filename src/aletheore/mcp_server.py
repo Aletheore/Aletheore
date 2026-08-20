@@ -122,7 +122,8 @@ _QUERY_TOOL_DESCRIPTIONS = {
     "imported-by": "Which modules import this one. target: file path exactly as it appears in evidence.",
     "symbols": "This module's extracted functions and classes. target: file path exactly as it appears in evidence.",
     "branch": "Git branch metadata (head commit, tracking info). target: branch name (e.g. 'main').",
-    "ownership": "Per-file code ownership derived from git blame history. Takes no target.",
+    "ownership": "Code ownership derived from git blame history. Optional target: a file path "
+    "exactly as it appears in evidence, for that file's ownership; omit for repo-wide aggregate.",
     "secrets": "Secret-scanner findings for one file. target: file path exactly as it appears in evidence.",
     "vulnerabilities": "All dependency vulnerability findings for this repo. Takes no target.",
     "licenses": "All dependency license findings for this repo. Takes no target.",
@@ -282,6 +283,18 @@ READ_ONLY_ANNOTATIONS = ToolAnnotations(
 
 
 def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
+    # Query kinds whose function treats `target` as an optional refinement (None ->
+    # repo-wide aggregate, a real value -> scoped result) rather than an unused
+    # parameter kept only for signature uniformity - find_ownership branches on
+    # target to return evidence["git"]["file_ownership"][target] instead of the
+    # aggregate. The CLI's _query already forwards target for every kind
+    # regardless of requires_target, so this only affects the generated MCP tool's
+    # signature: without it, requires_target=False (correct - target was never
+    # mandatory for ownership) meant the wrapper generated a zero-argument tool(),
+    # so an MCP caller could never pass a target at all, even though the
+    # underlying query already supported one.
+    optional_target_kinds = {"ownership"}
+
     for tool_name, kind in _TOOL_NAME_TO_QUERY_KIND.items():
         func, requires_target = QUERY_FUNCTIONS[kind]
 
@@ -289,6 +302,12 @@ def _register_query_wrapper_tools(mcp_instance: MCPServer, repo_path: Path) -> N
             if requires_target:
 
                 def tool(target: str) -> str:
+                    evidence = read_evidence(repo_path)
+                    return _toon_result(func(evidence, target))
+
+            elif kind in optional_target_kinds:
+
+                def tool(target: str | None = None) -> str:
                     evidence = read_evidence(repo_path)
                     return _toon_result(func(evidence, target))
 
