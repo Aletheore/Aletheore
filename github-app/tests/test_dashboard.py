@@ -145,6 +145,10 @@ def _evidence_with_module(module_path: str, function_name: str, docstring: str |
     }
 
 
+async def _async_true(*args, **kwargs) -> bool:
+    return True
+
+
 async def _logged_in_client(pool, monkeypatch, administered_ids):
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     await create_session(
@@ -169,6 +173,11 @@ async def _logged_in_client(pool, monkeypatch, administered_ids):
         "app_server.admin._github_http_client",
         lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
     )
+    # This fixture's "logged in" user represents a real GitHub admin on the
+    # repo - _has_real_admin_permission (app_server/admin.py) would otherwise
+    # attempt a live GitHub API call and fail closed. See test_admin.py's
+    # identical mock on its own _logged_in_client for the same reasoning.
+    monkeypatch.setattr("app_server.admin._has_real_admin_permission", _async_true)
 
     app.state.db_pool = pool
     signed = sign_session_id("sess-1", "test-session-secret")

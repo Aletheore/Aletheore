@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from app_server.affiliates import create_affiliate, list_affiliates_with_totals, mark_commissions_paid
 from app_server.auth import encrypt_access_token, get_current_session, refresh_github_access_token
 from app_server.config import get_settings
+from app_server.github_auth import generate_app_jwt, get_installation_token, get_repo_permission_for_user
 from app_server.github_pagination import fetch_paginated_github_collection
 from app_server.http_client import get_github_api_client
 from app_server.email_client import send_transactional_email
@@ -333,7 +334,42 @@ def _bearer_github_token(request: Request) -> str:
     return auth_header.removeprefix("Bearer ")
 
 
-async def _require_seat_if_paid(pool, installation: dict, github_login: str) -> None:
+def _fetch_repo_permission_sync(installation_id: int, github_login: str, repo_full_name: str) -> str:
+    settings = get_settings()
+    app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+    installation_token = get_installation_token(installation_id, app_jwt)
+    return get_repo_permission_for_user(repo_full_name, github_login, installation_token)
+
+
+async def _has_real_admin_permission(installation_id: int, github_login: str, repo_full_name: str) -> bool:
+    """A stronger check than membership in the coarse `/user/installations`
+    set (_administered_installation_ids draws from it) - GitHub documents
+    that endpoint as listing every installation the caller has explicit
+    *read*, write, or admin access to on any one repo it covers, so a
+    read-only org member passes it too, same as a real admin. This queries
+    GitHub's actual per-repo permission for the specific repo being
+    administered instead, and is reserved for the two places the coarse
+    set is too weak to trust on its own: claiming the first seat, and
+    reaching the billing portal before any seat exists.
+
+    Fails closed on any error (network, revoked token, GitHub outage) - an
+    inability to verify real admin rights must never be treated as having
+    them.
+    """
+    try:
+        permission = await asyncio.to_thread(
+            _fetch_repo_permission_sync, installation_id, github_login, repo_full_name
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "real admin permission check failed for installation=%s login=%s repo=%s (%s)",
+            installation_id, github_login, repo_full_name, exc,
+        )
+        return False
+    return permission == "admin"
+
+
+async def _require_seat_if_paid(pool, installation: dict, github_login: str, repo_full_name: str) -> None:
     """Paid installations gate on a seat, not just raw GitHub admin rights -
     GitHub's own "who can manage this installation" set is an org-side
     setting Aletheore doesn't control, and in many orgs is every Owner, so
@@ -343,14 +379,24 @@ async def _require_seat_if_paid(pool, installation: dict, github_login: str) -> 
 
     If nobody has ever been seated yet (a paid installation from before
     seats existed, or the purchase webhook hasn't landed), the first
-    verified GitHub admin to show up becomes seat one rather than every
-    such customer being locked out of their own account.
+    *verified* GitHub admin to show up becomes seat one rather than every
+    such customer being locked out of their own account - verified via
+    _has_real_admin_permission, not just presence in the coarse
+    administered-installations set, since that set alone would let any
+    read-only org member with access to one repo the app is installed on
+    claim the first seat and everything it unlocks (API tokens, team
+    management).
     """
     if installation["plan"] == "free":
         return
     installation_id = installation["installation_id"]
     if await is_installation_member(pool, installation_id, github_login):
         return
+    if not await _has_real_admin_permission(installation_id, github_login, repo_full_name):
+        raise HTTPException(
+            status_code=403,
+            detail="you do not have admin access to this repository on GitHub",
+        )
     if await add_initial_installation_member_if_empty(pool, installation_id, github_login, github_login):
         return
     raise HTTPException(
@@ -395,7 +441,7 @@ async def _require_admin_installation(request: Request, org: str, repo: str) -> 
     if installation["plan"] == "free":
         raise HTTPException(status_code=402, detail="this feature requires a paid plan")
     pool = request.app.state.db_pool
-    await _require_seat_if_paid(pool, installation, session["github_login"])
+    await _require_seat_if_paid(pool, installation, session["github_login"], f"{org}/{repo}")
     return installation
 
 
@@ -610,8 +656,27 @@ async def get_billing_portal_url(org: str, repo: str, request: Request):
     """Deliberately not behind _require_admin_installation's plan gate (see
     _require_authorized_installation) - a payment failure has already
     downgraded this installation to free by the time anyone would use this,
-    and that's exactly who needs to reach it."""
-    _, installation = await _require_authorized_installation(request, org, repo)
+    and that's exactly who needs to reach it.
+
+    _require_authorized_installation alone only proves membership in the
+    coarse administered-installations set, which GitHub documents as
+    including anyone with read access to a single repo the app covers -
+    not enough to trust with a session that can view or change a payment
+    method, or cancel the subscription outright. An already-seated member
+    is trusted outright (paid access was already vetted when they were
+    added); anyone else needs their real per-repo GitHub permission
+    verified via _has_real_admin_permission, same bar as claiming the
+    first seat.
+    """
+    session, installation = await _require_authorized_installation(request, org, repo)
+    installation_id = installation["installation_id"]
+    pool = request.app.state.db_pool
+    if not await is_installation_member(pool, installation_id, session["github_login"]):
+        if not await _has_real_admin_permission(installation_id, session["github_login"], f"{org}/{repo}"):
+            raise HTTPException(
+                status_code=403,
+                detail="you do not have admin access to this repository on GitHub",
+            )
     customer_id = installation.get("paddle_customer_id")
     if not customer_id:
         raise HTTPException(
