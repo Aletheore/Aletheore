@@ -200,7 +200,7 @@ async def _require_dashboard_installation(request: Request, org: str, repo: str)
     if installation is not None:
         if installation["plan"] == "free":
             raise HTTPException(status_code=402, detail="the managed dashboard requires a paid plan")
-        await _require_seat_if_paid(pool, installation, session["github_login"])
+        await _require_seat_if_paid(pool, installation, session["github_login"], f"{org}/{repo}")
 
     return session, installation_id
 
