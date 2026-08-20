@@ -292,6 +292,15 @@ def writing_adapter_chain_for_free_tier(
             extra_body={"reasoning_effort": "minimal"},
             on_usage=_on_openai_free_tier_usage,
             before_llm_call=lambda: _reserve_openai_free_tier_budget(redis_conn),
+            # Releases the reservation before_llm_call just made when the
+            # real call then fails (rate limit, auth error, timeout) -
+            # on_usage never fires on a failed call, so without this the
+            # reservation is permanently stuck against a call that used zero
+            # real tokens. See openai_compatible.OpenAICompatibleAdapter's
+            # on_call_failed for why this can't just reuse on_usage(0, 0):
+            # that would misrepresent a failed call as a completed one to
+            # any other on_usage consumer.
+            on_call_failed=lambda: _true_up_openai_free_tier_reservation(redis_conn, 0),
         ))
     else:
         logger.info("free-tier: OPENAI_FREE_TIER_API_KEY not configured, skipping OpenAI free-tier")

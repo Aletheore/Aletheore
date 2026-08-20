@@ -340,6 +340,68 @@ def test_simple_completion_retries_a_transient_rate_limit_error(mock_openai_clas
 
 
 @patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_simple_completion_calls_on_call_failed_when_the_call_fails(mock_openai_class, tmp_path):
+    # Real regression: a caller that reserves real budget before a call
+    # (before_llm_call) needs a way to release it when the call itself then
+    # fails - without this, on_usage never fires (the call never completed)
+    # and the reservation is stuck forever against a call that used zero
+    # real tokens.
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _openai_error(
+        openai.BadRequestError, status_code=400
+    )
+
+    failed_calls = []
+    adapter = _adapter(tmp_path, on_call_failed=lambda: failed_calls.append(1))
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError):
+            adapter.simple_completion("system", "user", cwd=str(tmp_path))
+
+    assert failed_calls == [1]
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_simple_completion_does_not_call_on_call_failed_on_success(mock_openai_class, tmp_path):
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_message = MagicMock()
+    mock_message.content = "ok"
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock(message=mock_message)]
+    mock_response.usage = None
+    mock_client.chat.completions.create.return_value = mock_response
+
+    failed_calls = []
+    adapter = _adapter(tmp_path, on_call_failed=lambda: failed_calls.append(1))
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        adapter.simple_completion("system", "user", cwd=str(tmp_path))
+
+    assert failed_calls == []
+
+
+def test_simple_completion_does_not_call_on_call_failed_when_budget_is_declined_up_front():
+    # _ensure_budget_for_next_call raises before the try block that
+    # on_call_failed lives in is ever entered - before_llm_call declining is
+    # a distinct, already-self-releasing path (see
+    # model_tiers._reserve_openai_free_tier_budget), not a call failure.
+    failed_calls = []
+    adapter = OpenAICompatibleAdapter(
+        name="testprovider",
+        base_url="https://example.test/v1",
+        api_key_env_var="TESTPROVIDER_API_KEY",
+        model="test-model",
+        before_llm_call=lambda: False,
+        on_call_failed=lambda: failed_calls.append(1),
+    )
+
+    with pytest.raises(AdapterInvocationError):
+        adapter.simple_completion("system", "user", cwd="/repo")
+
+    assert failed_calls == []
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
 def test_read_evidence_section_tool_returns_wrapped_data(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": [{"path": "app.py"}]}})
     mock_client = MagicMock()
