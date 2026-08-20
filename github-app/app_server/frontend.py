@@ -346,11 +346,15 @@ table.findings tr:last-child td { border-bottom: none; }
 .wiki-md-list li { font-size: 12.5px; color: var(--slate-600); line-height: 1.6; margin-bottom: 3px; }
 .wiki-md code { font-family: var(--font-mono); font-size: 11.5px; background: var(--slate-100); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
 
-.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
-.settings-block { margin-bottom: 18px; }
-.settings-block-label { font-size: 12px; font-weight: 500; margin-bottom: 7px; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.settings-block { background: var(--paper); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px 18px; box-shadow: var(--shadow-card); margin-bottom: 16px; }
+.settings-block-label { font-size: 13px; font-weight: 600; margin-bottom: 9px; }
 .settings-block-hint { font-size: 11px; color: var(--slate-600); margin-top: 6px; }
-.danger-zone { margin-top: 24px; border: 1px solid var(--critical); border-radius: 6px; padding: 14px 16px; }
+.settings-help-links { display: flex; gap: 14px; margin-top: 8px; }
+.settings-help-links a { font-size: 11px; color: var(--accent-strong); text-decoration: none; font-weight: 500; }
+.settings-help-links a:hover { text-decoration: underline; }
+.danger-zone { margin-top: 16px; border: 1px solid var(--critical); border-radius: 12px; padding: 16px 18px; }
 .danger-zone .settings-block-label { color: var(--critical); }
 .danger-zone .btn-danger { background: var(--critical); border-color: var(--critical); color: #fff; }
 .danger-zone .btn-danger[disabled] { opacity: 0.5; cursor: not-allowed; }
@@ -2191,6 +2195,10 @@ async function loadSettings() {{
           '<input class="field" id="webhook-url-input" placeholder="Slack or Teams webhook URL" value="' + escapeHtml(installation.webhook_url || '') + '">' +
           '<div class="form-row"><button class="btn" onclick="saveWebhook()">Save</button><button class="btn" onclick="sendTestNotification()" style="margin-left:6px;">Send test</button><span id="webhook-status" class="settings-block-hint"></span></div>' +
           '<div class="settings-block-hint">New critical findings are posted here shortly after a scan finishes. Paste a Slack incoming-webhook URL or a Teams workflow webhook URL - both are auto-detected.</div>' +
+          '<div class="settings-help-links">' +
+            '<a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener">Get a Slack webhook &rarr;</a>' +
+            '<a href="https://support.microsoft.com/en-us/office/create-incoming-webhooks-with-workflows-for-microsoft-teams-8ae491c7-0394-4861-ba59-055e33f75498" target="_blank" rel="noopener">Get a Teams webhook &rarr;</a>' +
+          '</div>' +
         '</div>' +
         '<div class="settings-block">' +
           '<div class="settings-block-label">Managed audit content</div>' +

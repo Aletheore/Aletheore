@@ -1,6 +1,9 @@
+import asyncio
 import socket
+import threading
+import time
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -15,6 +18,7 @@ from app_server.admin import (
 )
 from app_server.auth import decrypt_access_token, encrypt_access_token, sign_session_id
 from app_server.url_validation import UnsafeURLError
+from app_server import admin
 from app_server.db import (
     add_paddle_ids_to_installation,
     create_session,
@@ -1001,6 +1005,77 @@ async def test_buy_extra_seat_reports_paddle_api_failure(pool, monkeypatch):
         response = await client.post("/admin/octocat/hello-world/seats/buy")
 
     assert response.status_code == 502
+
+
+def test_concurrent_buy_extra_seat_calls_do_not_lose_an_update():
+    # _adjust_extra_seat_sync does a read-then-write against Paddle's
+    # subscription: get_paddle_subscription, then a delta computed off
+    # whatever it returned, then update_subscription_items. Two concurrent
+    # calls for the same installation can both read the same starting
+    # quantity before either write lands, so the second write silently
+    # clobbers the first instead of stacking - two "buy" clicks net only +1
+    # seat, both requests still reporting success.
+    #
+    # This calls the real buy_extra_seat route function directly (auth,
+    # session and DB-logging dependencies mocked out) rather than
+    # reimplementing its body, so it actually verifies the endpoint wires
+    # _seat_adjustment_lock around the critical section - not just that the
+    # lock helper works in isolation. Asserts peak concurrent entry into the
+    # fake Paddle rather than only the final quantity, since that's a
+    # direct, deterministic measurement of serialization rather than
+    # something that depends on exact read/write interleaving to go wrong
+    # in a specific way. Confirmed this reproduces the bug: temporarily
+    # removing the "async with _seat_adjustment_lock(...)" wrapper from
+    # buy_extra_seat makes this fail with peak_concurrency == 2.
+    fake_paddle_state = {"quantity": 0}
+    concurrency = {"current": 0, "peak": 0}
+    concurrency_lock = threading.Lock()
+
+    def fake_get(api_key, sub_id):
+        with concurrency_lock:
+            concurrency["current"] += 1
+            concurrency["peak"] = max(concurrency["peak"], concurrency["current"])
+        time.sleep(0.3)
+        v = fake_paddle_state["quantity"]
+        with concurrency_lock:
+            concurrency["current"] -= 1
+        return {"items": [{"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": v}]}
+
+    def fake_update(api_key, sub_id, items, proration_billing_mode):
+        fake_paddle_state["quantity"] = items[0]["quantity"]
+        return {}
+
+    fake_installation = {"installation_id": 100, "paddle_subscription_id": "sub_test_seat"}
+
+    async def fake_require_admin_installation(request, org, repo):
+        return fake_installation
+
+    async def fake_get_current_session(request):
+        return {"github_login": "octocat"}
+
+    async def fake_record_admin_action(*args, **kwargs):
+        return None
+
+    with patch("app_server.admin.get_paddle_subscription", fake_get), \
+         patch("app_server.admin.update_paddle_subscription_items", fake_update), \
+         patch("app_server.admin._require_admin_installation", fake_require_admin_installation), \
+         patch("app_server.admin.get_current_session", fake_get_current_session), \
+         patch("app_server.admin.record_admin_action", fake_record_admin_action), \
+         patch("app_server.admin.get_settings", lambda: MagicMock(paddle_api_key="fake-api-key")):
+
+        async def main():
+            fake_request = MagicMock()
+            responses = await asyncio.gather(
+                admin.buy_extra_seat("octocat", "hello-world", fake_request),
+                admin.buy_extra_seat("octocat", "hello-world", fake_request),
+            )
+            return responses
+
+        responses = asyncio.run(main())
+
+    assert responses == [{"ok": True}, {"ok": True}]
+    assert concurrency["peak"] == 1
+    assert fake_paddle_state["quantity"] == 2
 
 
 @pytest.mark.asyncio
