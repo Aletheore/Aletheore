@@ -1541,6 +1541,15 @@ def _run_flash_review(
         pr_context = ""
 
     spend_accumulator = {"total": 0.0}
+    # Verification runs findings concurrently on a bounded thread pool (see
+    # flash_review._verify_findings_with_second_model), so its usage
+    # callback can arrive from multiple threads at once and needs a lock -
+    # same pattern as the live-wiki/live-docs jobs' spend_lock. Generation's
+    # own _on_usage below doesn't currently need one (one call, or a
+    # sequential free-tier fallback chain), but sharing this lock across
+    # both costs nothing and removes the need to reason about whether that
+    # stays true.
+    spend_lock = threading.Lock()
     grounding_result: dict = {}
     # Defined before the branch below so the tail of this function can
     # always read it, whether or not the non-substantive-diff short-circuit
@@ -1623,9 +1632,9 @@ def _run_flash_review(
                 # real free-tier usage is tracked separately, in tokens, not
                 # dollars (see model_tiers.OPENAI_FREE_TIER_DAILY_TOKEN_CAP).
                 return
-            spend_accumulator["total"] += cost_for_usage(
-                flash_review_model, prompt_tokens, completion_tokens
-            )
+            cost = cost_for_usage(flash_review_model, prompt_tokens, completion_tokens)
+            with spend_lock:
+                spend_accumulator["total"] += cost
 
         def _on_verification_usage(prompt_tokens: int, completion_tokens: int) -> None:
             # Verification always runs on deepseek-v4-flash regardless of
@@ -1636,9 +1645,16 @@ def _run_flash_review(
             # tier: this closure is only ever passed to review_diff when
             # verify_with_second_model=True, which is gated to paid plans
             # below.
-            spend_accumulator["total"] += cost_for_usage(
-                VERIFICATION_MODEL, prompt_tokens, completion_tokens
-            )
+            #
+            # Findings are verified concurrently on a bounded thread pool
+            # (see flash_review._verify_findings_with_second_model), so this
+            # callback can run from multiple threads at once - the lock
+            # makes the read-modify-write on spend_accumulator atomic,
+            # matching the pattern live-wiki/live-docs jobs already use for
+            # the same shape of concurrent usage callback.
+            cost = cost_for_usage(VERIFICATION_MODEL, prompt_tokens, completion_tokens)
+            with spend_lock:
+                spend_accumulator["total"] += cost
 
         def _cache_lookup(diff: str) -> list[dict] | None:
             return lookup_cached_flash_review_result(dsn, installation_id, repo_full_name, diff)
@@ -1765,6 +1781,18 @@ def _run_flash_review(
             if suggestion:
                 lines.append(f"  ```\n  {suggestion}\n  ```")
         body = "\n".join(lines)
+    elif kept:
+        # Grounding accepted findings (kept > 0), but the independent
+        # second-model verification step then rejected every one of them
+        # before any was shown to a user (see flash_review.py's
+        # _verify_findings_with_second_model) - distinct from the elif
+        # below, where grounding itself found nothing. Checked first: kept
+        # > 0 implies proposed > 0 too, and this is the more specific,
+        # more accurate diagnosis of the two.
+        body = (
+            f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
+            f"No issues held up under independent verification ({kept} grounded, 0 confirmed by a second model)."
+        )
     elif proposed:
         # The model proposed something but none of it held up against the
         # diff (see flash_review.py's _validate_findings) - distinct from
@@ -1772,7 +1800,7 @@ def _run_flash_review(
         # genuinely clean diff.
         body = (
             f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
-            f"No issues held up under verification ({proposed} proposed, 0 grounded in this diff)."
+            f"No issues held up under grounding ({proposed} proposed, 0 grounded in this diff)."
         )
     else:
         body = (

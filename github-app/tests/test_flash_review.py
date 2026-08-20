@@ -2484,3 +2484,84 @@ def test_review_diff_skips_verification_by_default(mock_verification_adapter, mo
 
     assert findings == [{"file": "app.py", "line": 1, "issue": "a real problem"}]
     mock_verification_adapter.assert_not_called()
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_review_diff_never_reverifies_a_cache_hit(mock_verification_adapter):
+    # Real regression this guards: verification is an LLM call, the same
+    # cost class as generation - the whole point of the similarity cache is
+    # skipping that cost on a repeat/near-repeat diff. Re-verifying on every
+    # cache hit would make hits cost real money again, defeating the cache.
+    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
+    cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding"}]
+
+    findings = review_diff(
+        diff_text,
+        cache_lookup=lambda diff: cached_findings,
+        verify_with_second_model=True,
+    )
+
+    assert findings == cached_findings
+    mock_verification_adapter.assert_not_called()
+
+
+@patch("scan_worker.flash_review.writing_adapter_for")
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_review_diff_never_sends_a_semantic_finding_to_the_llm_verifier(
+    mock_verification_adapter, mock_writing_adapter_for
+):
+    # Real regression this guards: semantic_findings come from
+    # find_semantic_regressions - deterministic, code-verified evidence, not
+    # a model guess. Sending them through the fallible LLM verifier risks a
+    # bad-day REJECT silently dropping a real, evidence-backed finding. The
+    # model here proposes nothing at the semantic finding's own location, so
+    # if the semantic finding survives, it was never sent to the verifier at
+    # all (a REJECT-everything verifier could not have let it through).
+    mock_generation_adapter = MagicMock()
+    mock_generation_adapter.simple_completion.return_value = "[]"
+    mock_writing_adapter_for.return_value = mock_generation_adapter
+
+    mock_verifier = MagicMock()
+    mock_verifier.is_available.return_value = True
+    mock_verifier.simple_completion.return_value = '{"verdict": "REJECT", "reason": "rejects everything"}'
+    mock_verification_adapter.return_value = mock_verifier
+
+    diff_text = "--- app.py ---\n@@ -1,1 +1,1 @@\n+except Exception:\n+    pass"
+    with patch(
+        "scan_worker.flash_review.find_semantic_regressions",
+        return_value=[{"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors"}],
+    ):
+        findings = review_diff(diff_text, verify_with_second_model=True)
+
+    assert findings == [{"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors"}]
+    mock_verifier.simple_completion.assert_not_called()
+
+
+@patch("scan_worker.flash_review.writing_adapter_for")
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_review_diff_verifies_model_findings_but_not_semantic_findings_in_the_same_review(
+    mock_verification_adapter, mock_writing_adapter_for
+):
+    # Both kinds of finding in one review: the semantic one must survive a
+    # REJECT-everything verifier untouched, the model one must actually be
+    # checked and dropped.
+    mock_generation_adapter = MagicMock()
+    mock_generation_adapter.simple_completion.return_value = (
+        '[{"file": "app.py", "line": 1, "issue": "a model-proposed finding"}]'
+    )
+    mock_writing_adapter_for.return_value = mock_generation_adapter
+
+    mock_verifier = MagicMock()
+    mock_verifier.is_available.return_value = True
+    mock_verifier.simple_completion.return_value = '{"verdict": "REJECT", "reason": "not real"}'
+    mock_verification_adapter.return_value = mock_verifier
+
+    diff_text = "--- app.py ---\n@@ -1,1 +1,1 @@\n+x = 1\n+except Exception:\n+    pass"
+    with patch(
+        "scan_worker.flash_review.find_semantic_regressions",
+        return_value=[{"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors"}],
+    ):
+        findings = review_diff(diff_text, verify_with_second_model=True)
+
+    assert findings == [{"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors"}]
+    mock_verifier.simple_completion.assert_called_once()
