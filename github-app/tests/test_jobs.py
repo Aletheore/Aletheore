@@ -2086,11 +2086,59 @@ def test_flash_review_job_reports_zero_grounded_distinctly_from_no_issues_found(
 
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
-    assert "No issues held up under verification (3 proposed, 0 grounded" in posted["body"]
+    assert "No issues held up under grounding (3 proposed, 0 grounded" in posted["body"]
     assert "No issues found in this diff." not in posted["body"]
     # The line above already states the 0-grounded fact - a second
     # "Grounding: 0 of 3..." footer would just repeat it.
     assert "Grounding:" not in posted["body"]
+
+
+def test_flash_review_job_reports_zero_confirmed_distinctly_from_zero_grounded(monkeypatch):
+    # Real regression this guards: grounding accepted findings (kept > 0),
+    # but the second-model verification step rejected all of them, so
+    # review_diff returns []. Before this test existed, that hit the
+    # elif proposed: branch and printed "0 grounded" even though grounding
+    # had actually succeeded - factually wrong, and confusing "verification"
+    # (this message's pre-existing name for grounding) with the new,
+    # distinct second-model verification step.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+
+    def fake_review_diff(diff_text, file_context="", **kwargs):
+        kwargs["on_grounding_result"]({"proposed": 3, "kept": 3})
+        return []
+
+    monkeypatch.setattr("scan_worker.jobs.review_diff", fake_review_diff)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    posted = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda client, token, repo_full_name, pr_number, body, **kwargs: posted.update(body=body),
+    )
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert "No issues held up under independent verification (3 grounded, 0 confirmed" in posted["body"]
+    assert "0 grounded in this diff" not in posted["body"]
+    assert "No issues found in this diff." not in posted["body"]
 
 
 def test_flash_review_job_discloses_files_it_never_reviewed(monkeypatch):

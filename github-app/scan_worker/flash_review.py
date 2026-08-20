@@ -1000,12 +1000,22 @@ def review_diff(
             logger.warning("flash review cache lookup failed (%s); treating as miss", type(exc).__name__)
             cached = None
         if cached is not None:
+            # Deliberately never re-verified here, even when
+            # verify_with_second_model=True: the whole point of the
+            # similarity cache is skipping the expensive model work on a
+            # repeat/near-repeat diff, and verification is exactly that -
+            # an LLM call, same cost class as generation. Re-running it on
+            # every cache hit would make hits cost real money again,
+            # defeating the cache. Grounding still re-runs because it's
+            # free and the current diff can differ from whatever was
+            # cached (similarity match, not exact); verification does not
+            # get that same justification since it isn't diff-shape
+            # sensitive in the same way and its cost is what the cache
+            # exists to avoid paying twice.
             combined = _merge_semantic_findings(cached, semantic_findings)
             kept = _validate_findings(combined, diff_text, file_contents, diff_patches)
             if on_grounding_result is not None:
                 on_grounding_result({"proposed": len(combined), "kept": len(kept)})
-            if verify_with_second_model:
-                kept = _verify_findings_with_second_model(kept, diff_text, on_usage=on_verification_usage)
             return kept
 
     prompt_parts = [diff_text]
@@ -1107,5 +1117,18 @@ def review_diff(
     if on_grounding_result is not None:
         on_grounding_result({"proposed": len(valid), "kept": len(kept)})
     if verify_with_second_model:
-        kept = _verify_findings_with_second_model(kept, diff_text, on_usage=on_verification_usage)
+        # semantic_findings are deterministic, code-verified evidence (see
+        # find_semantic_regressions) - not a model guess, so they must not
+        # be sent through the fallible LLM verifier, which could REJECT a
+        # real, evidence-backed finding on a bad day. Split them back out
+        # of kept by (file, line) identity - the same key
+        # _merge_semantic_findings used to merge them in - verify only the
+        # model-proposed remainder, then recombine.
+        semantic_locations = {(finding["file"], finding["line"]) for finding in semantic_findings}
+        semantic_part = [f for f in kept if (f["file"], f["line"]) in semantic_locations]
+        model_part = [f for f in kept if (f["file"], f["line"]) not in semantic_locations]
+        verified_model_part = _verify_findings_with_second_model(
+            model_part, diff_text, on_usage=on_verification_usage
+        )
+        kept = semantic_part + verified_model_part
     return kept
