@@ -3,6 +3,7 @@ import logging
 from app_server.db import (
     add_installation_member,
     claim_free_to_paid_plan,
+    claim_paid_setup,
     get_installation_by_account_login,
     set_extra_seats,
     set_installation_plan,
@@ -78,7 +79,20 @@ async def handle_marketplace_event(payload: dict, pool, redis_url: str, queue=No
         # One-time Live Wiki build, tier-independent - fires exactly once,
         # on the free -> paid transition. A paid-to-paid plan change (e.g.
         # Team -> Growth) must not re-trigger it.
-        if transitioned_to_paid:
+        #
+        # Deliberately gated on claim_paid_setup, not transitioned_to_paid:
+        # if the handler crashes after claim_free_to_paid_plan's write
+        # commits but before the enqueue below runs, GitHub retries the
+        # same delivery (this handler re-raises on exception specifically
+        # so it will), but claim_free_to_paid_plan now finds plan already
+        # non-free and correctly returns False - so gating on it directly
+        # would skip the initial build forever. claim_paid_setup is an
+        # independent claim that still returns True on that retry, mirroring
+        # the fix already applied to the Paddle webhook path (paddle.py).
+        should_run_paid_setup = new_plan != "free" and await claim_paid_setup(
+            pool, installation_id
+        )
+        if should_run_paid_setup:
             if queue is None:
                 from redis import Redis
                 from rq import Queue
