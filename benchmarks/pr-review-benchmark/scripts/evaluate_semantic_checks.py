@@ -58,6 +58,15 @@ def git_diff_to_review_format(raw_diff: str) -> str:
     parts: list[str] = []
     current_filename: str | None = None
     body_lines: list[str] = []
+    # Real git-diff header lines (index/---/+++) only ever appear between a
+    # `diff --git` marker and that file's first `@@` hunk - never inside a
+    # hunk body. Filtering on prefix alone, with no positional guard, also
+    # matches a genuine removed/added source line shaped like "--- old
+    # constant" (a deleted comment: "-- old constant" renders as "---  old
+    # constant" once diffed) and silently drops it from body_lines,
+    # indistinguishable from a real "--- a/path" header. seen_first_hunk
+    # scopes the filter to only the real header region.
+    seen_first_hunk = False
 
     def flush() -> None:
         if current_filename is not None and body_lines:
@@ -69,9 +78,12 @@ def git_diff_to_review_format(raw_diff: str) -> str:
             flush()
             current_filename = match.group(2)
             body_lines = []
+            seen_first_hunk = False
             continue
-        if line.startswith(("index ", "--- ", "+++ ")):
+        if not seen_first_hunk and line.startswith(("index ", "--- ", "+++ ")):
             continue
+        if line.startswith("@@"):
+            seen_first_hunk = True
         if current_filename is not None:
             body_lines.append(line)
     flush()

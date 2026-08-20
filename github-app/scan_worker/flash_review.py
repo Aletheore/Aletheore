@@ -369,12 +369,26 @@ def build_change_impact_context(diff_text: str) -> str:
     removed_by_file: dict[str, set[str]] = {}
     added_by_file: dict[str, set[str]] = {}
 
+    # Same file-marker collision _diff_valid_lines guards against, just
+    # unguarded here: a removed/added source line shaped like "--- text ---"
+    # (e.g. a deleted comment) is indistinguishable from a real file
+    # separator without requiring it to follow a blank line. Without this,
+    # such a line flips current_file mid-parse and misattributes every
+    # subsequent removed/added line and change-impact-pattern match to the
+    # wrong file.
+    prev_blank = True  # start-of-text counts as a boundary
     for raw_line in diff_text.splitlines():
-        if raw_line.startswith("--- ") and raw_line.endswith(" ---"):
+        if raw_line.startswith("--- ") and raw_line.endswith(" ---") and prev_blank:
             current_file = raw_line[4:-4]
+            prev_blank = False
             continue
-        if raw_line.startswith(("@@", "+++")) or not raw_line:
+        if raw_line.startswith(("@@", "+++")):
+            prev_blank = False
             continue
+        if not raw_line:
+            prev_blank = True
+            continue
+        prev_blank = False
         prefix = raw_line[0] if raw_line[0] in "+- " else " "
         code = raw_line[1:] if prefix in "+- " else raw_line
         if prefix == "-":

@@ -85,11 +85,22 @@ def _diff_hunks_by_file(diff_text: str) -> dict[str, list[_Hunk]]:
     hunks: dict[str, list[_Hunk]] = {}
     current_file = ""
     current_hunk: _Hunk | None = None
+    # A removed/added source line that happens to read exactly like a file
+    # marker (e.g. a deleted comment "-- text ---", which renders as the raw
+    # line "--- text ---" once diffed) is indistinguishable from a real
+    # "--- {file} ---" separator without a positional guard - the real
+    # separator only ever appears after a blank line (or at the very start
+    # of the diff text). Matches flash_review.py's _diff_valid_lines fix for
+    # the identical collision; without this, a matching line here resets
+    # current_file/current_hunk mid-parse, silently misattributing every
+    # subsequent removed/added line to the wrong file.
+    prev_blank = True  # start-of-text counts as a boundary
     for line in diff_text.splitlines():
         file_match = _FILE_MARKER_RE.match(line)
-        if file_match:
+        if file_match and prev_blank:
             current_file = file_match.group(1)
             current_hunk = None
+            prev_blank = False
             continue
         hunk_match = _HUNK_HEADER_RE.match(line)
         if hunk_match:
@@ -101,7 +112,12 @@ def _diff_hunks_by_file(diff_text: str) -> dict[str, list[_Hunk]]:
             # flash_review.py's _diff_valid_lines for the same shape.
             current_hunk = _Hunk(new_start, new_start + max(new_count, 1) - 1)
             hunks.setdefault(current_file, []).append(current_hunk)
+            prev_blank = False
             continue
+        if line == "":
+            prev_blank = True
+            continue
+        prev_blank = False
         if current_hunk is None or not current_file:
             continue
         if line.startswith("-") and not line.startswith("---"):
