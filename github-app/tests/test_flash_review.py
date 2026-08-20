@@ -967,6 +967,28 @@ def test_build_change_impact_context_surfaces_behavioral_change_signals():
     assert "iterator consumption:" in context
 
 
+def test_build_change_impact_context_survives_a_removed_line_shaped_like_a_file_marker():
+    # A removed source line reading "-- old value ---" renders, once
+    # diffed, as the raw line "--- old value ---" (the "-" diff-prefix plus
+    # the line's own leading "--") - indistinguishable from a real
+    # "--- {file} ---" separator without the prev_blank boundary guard
+    # _diff_valid_lines already uses for the identical collision. Without
+    # it, this line flips current_file mid-hunk and every subsequent
+    # removed/added line in the hunk gets misattributed to the wrong file.
+    diff_text = (
+        "--- caller.py ---\n"
+        "@@ -1,3 +1,3 @@\n"
+        "-shared_call()\n"
+        "--- old value ---\n"
+        "+shared_call()\n"
+    )
+
+    context = build_change_impact_context(diff_text)
+
+    assert "caller.py" in context
+    assert "call/order movement" in context
+
+
 def test_build_referenced_symbol_context_adds_observable_contract_signals():
     evidence = _evidence_with_two_modules()
     diff_text = "--- dashboard.py ---\n@@ -1,1 +1,1 @@\n+_github_http_client()\n"
@@ -987,6 +1009,28 @@ def test_build_referenced_symbol_context_adds_observable_contract_signals():
 def test_semantic_checker_finds_removed_exception_handler():
     diff = (
         "--- caller.py ---\n@@ -1,3 +1,2 @@\n"
+        "-except ErrorA:\n"
+        "+    value = op_one(key, store)\n"
+    )
+    refs = "--- referenced definition (not part of this diff): callee.py:op_one ---\nraise ErrorA()"
+    findings = find_semantic_regressions(
+        diff, {"caller.py": "def handler():\n    value = op_one(key, store)"}, refs
+    )
+    assert findings[0]["file"] == "caller.py"
+    assert "removed its exception handler" in findings[0]["issue"]
+
+
+def test_semantic_checker_survives_a_removed_line_shaped_like_a_file_marker():
+    # Same collision _diff_valid_lines (flash_review.py) already guards
+    # against: a removed source line reading "-- old note ---" renders as
+    # the raw line "--- old note ---" once diffed - indistinguishable from
+    # a real "--- {file} ---" marker without the prev_blank boundary guard.
+    # Without it, this line mid-hunk resets current_file/current_hunk to a
+    # fabricated "old note" file with no hunk of its own, and the real
+    # regression on the next line is silently dropped rather than found.
+    diff = (
+        "--- caller.py ---\n@@ -1,3 +1,2 @@\n"
+        "--- old note ---\n"
         "-except ErrorA:\n"
         "+    value = op_one(key, store)\n"
     )
