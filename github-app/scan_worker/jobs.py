@@ -1600,7 +1600,9 @@ def _run_flash_review(
             )
 
         blast_radius_context = build_blast_radius_context(
-            evidence, changed_files, diff_text, lambda p: fetch_file_content(client, token, repo_full_name, p, head_sha)
+            evidence, changed_files, diff_text,
+            lambda p: fetch_file_content(client, token, repo_full_name, p, head_sha),
+            diff_patches=diff_patches,
         )
         if blast_radius_context:
             code_evidence_context = "\n\n".join(

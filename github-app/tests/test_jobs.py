@@ -1521,7 +1521,7 @@ def test_flash_review_job_routes_free_tier_to_free_tier_path(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.build_code_evidence_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_dependency_impact_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_change_impact_context", lambda *a: "")
-    monkeypatch.setattr("scan_worker.jobs.build_blast_radius_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_blast_radius_context", lambda *a, **k: "")
     monkeypatch.setattr("scan_worker.jobs.build_referenced_symbol_context", lambda *a: "")
 
     cost_for_usage_calls = []
@@ -1676,7 +1676,7 @@ def test_flash_review_job_alerts_ops_when_all_free_tier_providers_fail(monkeypat
     monkeypatch.setattr("scan_worker.jobs.build_code_evidence_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_dependency_impact_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_change_impact_context", lambda *a: "")
-    monkeypatch.setattr("scan_worker.jobs.build_blast_radius_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_blast_radius_context", lambda *a, **k: "")
     monkeypatch.setattr("scan_worker.jobs.build_referenced_symbol_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a: 999.0)
     monkeypatch.setattr("scan_worker.jobs.lookup_cached_flash_review_result", lambda *a: None)
@@ -2465,7 +2465,7 @@ def test_flash_review_job_does_not_request_second_model_verification_on_free_tie
     monkeypatch.setattr("scan_worker.jobs.build_code_evidence_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_dependency_impact_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_change_impact_context", lambda *a: "")
-    monkeypatch.setattr("scan_worker.jobs.build_blast_radius_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_blast_radius_context", lambda *a, **k: "")
     monkeypatch.setattr("scan_worker.jobs.build_referenced_symbol_context", lambda *a: "")
     captured = {}
     monkeypatch.setattr(

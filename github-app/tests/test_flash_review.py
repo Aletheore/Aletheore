@@ -2134,6 +2134,53 @@ def test_build_blast_radius_context_finds_real_confirmed_caller():
     assert "caller.py" in context
 
 
+def test_build_blast_radius_context_forwards_diff_patches_to_valid_lines_computation(monkeypatch):
+    # Real regression this guards: build_blast_radius_context had no
+    # diff_patches parameter at all, forcing the less-precise text-parsing
+    # fallback path even though jobs.py already computes diff_patches once
+    # and threads it into review_diff at both of its call sites - blast-
+    # radius citation-line computation was strictly less accurate than the
+    # rest of the same review pipeline for no reason other than the
+    # parameter not being threaded through.
+    from scan_worker import flash_review
+
+    captured = {}
+    real_diff_valid_lines = flash_review._diff_valid_lines
+
+    def spy(diff_text, patches=None):
+        captured["patches"] = patches
+        return real_diff_valid_lines(diff_text, patches)
+
+    monkeypatch.setattr(flash_review, "_diff_valid_lines", spy)
+
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imported_by": ["caller.py"],
+                    "symbols": {
+                        "functions": [{"name": "handler", "start_line": 1, "end_line": 10}],
+                        "classes": [],
+                    },
+                }
+            ]
+        }
+    }
+    diff_text = "--- a.py ---\n@@ -1,10 +1,10 @@\n def handler():\n     pass\n"
+    diff_patches = (("a.py", "@@ -1,10 +1,10 @@\n def handler():\n     pass\n"),)
+
+    def fake_fetch_file_content(candidate_path: str) -> str | None:
+        return "def call_handler():\n    handler()\n" if candidate_path == "caller.py" else None
+
+    context = flash_review.build_blast_radius_context(
+        evidence, ["a.py"], diff_text, fake_fetch_file_content, diff_patches=diff_patches
+    )
+
+    assert captured["patches"] == diff_patches
+    assert "caller.py" in context
+
+
 def test_build_blast_radius_context_omits_symbol_with_no_confirmed_callers():
     """A symbol with imported_by present, but the fake fetcher never returns
     content containing the call shape -> context omitted entirely ("")."""
