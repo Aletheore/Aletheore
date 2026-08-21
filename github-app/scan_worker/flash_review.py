@@ -251,6 +251,7 @@ def build_blast_radius_context(
     changed_files: list[str],
     diff_text: str,
     fetch_file_content: Callable[[str], str | None],
+    diff_patches: tuple[tuple[str, str], ...] | None = None,
 ) -> str:
     """For each symbol this diff actually touches, who else in the repo
     calls it - confirmed by both a real import relationship (evidence's
@@ -270,7 +271,7 @@ def build_blast_radius_context(
         return ""
     modules = evidence.get("repository", {}).get("modules", [])
     by_path = {m["path"]: m for m in modules if m.get("path")}
-    valid_lines = _diff_valid_lines(diff_text)
+    valid_lines = _diff_valid_lines(diff_text, diff_patches)
 
     lines: list[str] = []
     symbols_analyzed = 0
