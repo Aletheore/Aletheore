@@ -3100,23 +3100,27 @@ class _IncrementalSpendBudget:
 
 
 def _live_wiki_naming_adapter(
-    on_usage: Callable[[int, int], None] | None = None
+    on_usage: Callable[[int, int], None] | None = None,
+    before_llm_call: Callable[[], bool] | None = None,
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for(live_wiki.FLASH_MODEL, on_usage=on_usage)
+    return writing_adapter_for(live_wiki.FLASH_MODEL, on_usage=on_usage, before_llm_call=before_llm_call)
 
 
 def _live_wiki_full_build_writing_adapter(
-    plan: str, on_usage: Callable[[int, int], None] | None = None
+    plan: str,
+    on_usage: Callable[[int, int], None] | None = None,
+    before_llm_call: Callable[[], bool] | None = None,
 ) -> OpenAICompatibleAdapter | AnthropicAdapter:
     # The one-time full build uses the same model as managed audits (see
     # model_tiers.py) - Luna (falling back to DeepSeek Pro), for every plan.
-    return writing_adapter_for_plan(plan, on_usage=on_usage)
+    return writing_adapter_for_plan(plan, on_usage=on_usage, before_llm_call=before_llm_call)
 
 
 def _live_wiki_update_writing_adapter(
-    on_usage: Callable[[int, int], None] | None = None
+    on_usage: Callable[[int, int], None] | None = None,
+    before_llm_call: Callable[[], bool] | None = None,
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for(live_wiki.UPDATE_MODEL, on_usage=on_usage)
+    return writing_adapter_for(live_wiki.UPDATE_MODEL, on_usage=on_usage, before_llm_call=before_llm_call)
 
 
 def _real_line_count_fetcher(
@@ -3276,8 +3280,14 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
     plan = installation["plan"] if installation is not None else "free"
     model_used = model_for_plan(plan)
 
-    with installation_spend_lock(dsn, installation_id):
-        cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
+    # Fast-fail hint only, no lock - see _IncrementalSpendBudget's docstring;
+    # real enforcement is its can_start_next_call() reserving atomically per
+    # call below, wired into both adapters so it gates every real network
+    # call generate_subsystems/_attach_wiki_file_pages makes regardless of
+    # how many clusters get batched into one call (see live_wiki.py's
+    # _run_batched_with_retry) - a per-cluster loop check here couldn't do
+    # that cleanly the way Docs' per-module loop check can.
+    cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
     if cap_reached:
         logging.getLogger("scan_worker.jobs").info(
             "live wiki full build skipped for installation=%s repo=%s - monthly spend cap reached (${%.2f})",
@@ -3289,19 +3299,17 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
         )
         return
 
-    spend_accumulator = {"total": 0.0}
-    spend_lock = threading.Lock()
-
-    def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-        # Generation runs on a bounded thread pool, so usage callbacks can
-        # arrive concurrently and need a local accumulator lock.
-        cost = cost_for_usage(model_used, prompt_tokens, completion_tokens)
-        with spend_lock:
-            spend_accumulator["total"] += cost
+    spend_budget = _IncrementalSpendBudget(
+        dsn, installation_id, model_used, monthly_cap, feature="airview_full_build"
+    )
 
     try:
-        naming_adapter = _live_wiki_naming_adapter(on_usage=_on_usage)
-        writing_adapter = _live_wiki_full_build_writing_adapter(plan, on_usage=_on_usage)
+        naming_adapter = _live_wiki_naming_adapter(
+            on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
+        )
+        writing_adapter = _live_wiki_full_build_writing_adapter(
+            plan, on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
+        )
         fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, None)
         records = live_wiki.generate_subsystems(
             evidence,
@@ -3316,11 +3324,6 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
             fetch_line_count=fetch_line_count,
         )
         _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count)
-        with installation_spend_lock(dsn, installation_id):
-            record_llm_spend(
-                dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap,
-                feature="airview_full_build",
-            )
         _store_wiki_generation(
             dsn, installation_id, repo_full_name, evidence, records, writing_adapter, None,
             fetch_line_count=fetch_line_count,
@@ -3416,8 +3419,9 @@ def _maybe_update_live_wiki(
 
     dsn = settings.database_url
     plan = installation["plan"]
-    with installation_spend_lock(dsn, installation_id):
-        cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
+    # Fast-fail hint only, no lock - see _IncrementalSpendBudget's docstring
+    # and run_live_wiki_full_build_job's identical comment above.
+    cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
     if cap_reached:
         logging.getLogger("scan_worker.jobs").info(
             "live wiki incremental update skipped for installation=%s repo=%s - "
@@ -3431,17 +3435,17 @@ def _maybe_update_live_wiki(
         return
 
     update_model = resolve_model(live_wiki.UPDATE_MODEL)
-    spend_accumulator = {"total": 0.0}
-    spend_lock = threading.Lock()
-
-    def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-        cost = cost_for_usage(update_model, prompt_tokens, completion_tokens)
-        with spend_lock:
-            spend_accumulator["total"] += cost
+    spend_budget = _IncrementalSpendBudget(
+        dsn, installation_id, update_model, monthly_cap, feature="airview_incremental"
+    )
 
     try:
-        naming_adapter = _live_wiki_naming_adapter(on_usage=_on_usage)
-        writing_adapter = _live_wiki_update_writing_adapter(on_usage=_on_usage)
+        naming_adapter = _live_wiki_naming_adapter(
+            on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
+        )
+        writing_adapter = _live_wiki_update_writing_adapter(
+            on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
+        )
         fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, head_sha)
         records = live_wiki.generate_subsystems(
             evidence,
@@ -3456,11 +3460,6 @@ def _maybe_update_live_wiki(
             fetch_line_count=fetch_line_count,
         )
         _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count)
-        with installation_spend_lock(dsn, installation_id):
-            record_llm_spend(
-                dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap,
-                feature="airview_incremental",
-            )
         _store_wiki_generation(
             dsn, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
             fetch_line_count=fetch_line_count,
