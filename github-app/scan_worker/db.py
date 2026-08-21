@@ -1372,6 +1372,25 @@ def record_flash_review_cache_hit(dsn: str, row_id: int) -> None:
         conn.commit()
 
 
+def delete_expired_flash_review_cache(dsn: str, retention_days: int = 30) -> int:
+    """Bounds how long a real PR diff (source code, not derived evidence)
+    sits in this table - previously unbounded, since the only thing
+    limiting a lookup's read was list_recent_flash_review_cache_rows'
+    LIMIT 200, which caps what one query returns, not what the table
+    retains. A near-duplicate-diff hit also gets less useful the older the
+    stored diff is, so this doesn't trade away the cache's actual purpose."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM flash_review_cache "
+                "WHERE created_at < now() - make_interval(days => %s)",
+                (retention_days,),
+            )
+            deleted = cur.rowcount
+        conn.commit()
+    return deleted
+
+
 def email_already_sent(dsn: str, dedupe_key: str) -> bool:
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
