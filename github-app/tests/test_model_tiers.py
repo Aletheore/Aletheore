@@ -195,6 +195,23 @@ def test_writing_adapter_chain_for_free_tier_builds_correct_adapter_details(monk
     assert by_name["OpenAI-FreeTier"]._before_llm_call is not None
 
 
+def test_openai_free_tier_budget_exceeded_message_names_the_daily_allowance_not_the_monthly_cap(monkeypatch):
+    # Real regression this guards: OpenAICompatibleAdapter's default
+    # budget_exceeded_message names the monthly LLM spend cap - correct for
+    # every other before_llm_call wiring (e.g. jobs.py's
+    # spend_budget.can_start_next_call), but wrong for this adapter, whose
+    # before_llm_call enforces a different budget entirely (the daily
+    # free-tier token allowance). An engineer paged via _send_ops_alert on
+    # total free-tier exhaustion would misdiagnose a healthy daily
+    # rollover as a billing problem.
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    chain = writing_adapter_chain_for_free_tier(_FakeRedis())
+    openai_adapter = next(a for a in chain if a.name == "OpenAI-FreeTier")
+
+    assert "daily free-tier token allowance" in openai_adapter._budget_exceeded_message
+    assert "monthly LLM spend cap" not in openai_adapter._budget_exceeded_message
+
+
 def test_writing_adapter_chain_for_free_tier_orders_openai_before_openrouter(monkeypatch):
     # Fallback priority order: Groq, Gemini, OpenAI free-tier key,
     # OpenRouter last - OpenRouter is the weakest/most rate-limit-prone
