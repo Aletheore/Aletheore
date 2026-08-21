@@ -488,6 +488,21 @@ def test_mcp_install_prints_pycharm_and_terminal_editor_guidance(tmp_path):
     assert "avante.nvim" in result.stdout or "no native MCP" in result.stdout
 
 
+def test_mcp_install_prints_a_copyable_claude_mcp_add_command(tmp_path):
+    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "claude-code"])
+
+    assert result.exit_code == 0
+    assert "claude mcp add aletheore -- " in result.stdout
+    assert f"mcp {tmp_path.resolve()}" in result.stdout
+
+
+def test_mcp_install_omits_the_claude_mcp_add_command_when_claude_code_not_targeted(tmp_path):
+    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "cursor"])
+
+    assert result.exit_code == 0
+    assert "claude mcp add" not in result.stdout
+
+
 def test_progress_printer_prints_each_distinct_phase_on_its_own_line(capsys):
     report = _make_progress_printer(is_tty=False)
     report("Detecting languages, frameworks, and build tools")

@@ -1115,6 +1115,17 @@ def _mcp_install(path: str, targets: list[str]) -> int:
         "\nRestart or reload your coding tool so it picks up the new MCP server - "
         "Aletheore's tools will then be available without running 'aletheore mcp' yourself."
     )
+    if "claude-code" in selected:
+        console.print(
+            "\n[bold]Claude Code:[/bold] .mcp.json above is picked up automatically on reload - "
+            "no extra step needed. Prefer registering it yourself instead (or want a command to "
+            "verify the same server), paste this:"
+        )
+        # soft_wrap: this is a copy-pasteable shell command containing a full
+        # repo path - Rich's default wrapping inserts a real newline into
+        # long text at the console width, which would corrupt the command if
+        # pasted. Same reasoning as _print_result above.
+        console.print(f"  claude mcp add aletheore -- {_aletheore_command()} mcp {repo_path}", soft_wrap=True)
     console.print(
         "\n[bold]PyCharm / other JetBrains IDEs:[/bold] not auto-configured - there's no single "
         "stable, documented file format to script against yet. Instead: open Settings | Tools | "
