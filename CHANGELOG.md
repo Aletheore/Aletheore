@@ -3,6 +3,29 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.0 — 2026-08-21
+
+- **CLI now tells you when the first scan or index will be slower.** A first
+  run (no cached evidence yet) takes longer than an incremental one - the CLI
+  says so up front instead of leaving you wondering if it's stuck.
+- **Fixed dead-code false positives on RQ-style string-dispatched entry points
+  and pytest's `conftest.py`.** Code invoked via `queue.enqueue("module.func",
+  ...)` or reached only through pytest's filename-based auto-discovery was
+  invisible to static import analysis and got flagged as unreachable.
+- **`aletheore_ownership` (MCP) can now be scoped to a single file** -
+  previously repo-wide only, even though the underlying query already
+  supported a per-file target.
+- **Fixed a secrets-detection gap**: newer Google AI Studio API keys
+  (containing a literal `.`) were silently dropped instead of flagged,
+  because the value pattern's character class didn't include it.
+- **`aletheore_answer` (MCP) now correctly honors withheld external-
+  transmission consent** - it previously ignored the operator's decision on
+  this one tool and could send content to a hosted endpoint regardless.
+- **Fixed a rare embedding-batch duplication bug**: when a hosted embedding
+  call failed on the very first batch of a run, the local fallback could
+  double-embed that batch, silently misaligning the search index for an
+  unknown subset of chunks.
+
 ## 0.8.13 — 2026-08-19
 
 - **License changed from Apache 2.0 to the [PolyForm Noncommercial License
