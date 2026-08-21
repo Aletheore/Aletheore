@@ -71,6 +71,39 @@ def test_build_chunks_slices_real_source_per_symbol(tmp_path):
     assert "def greet():" in chunk["text"]
 
 
+def test_build_chunks_module_head_stops_at_a_class_that_precedes_the_first_function(tmp_path):
+    # Regression: code_symbols concatenates functions then classes - two
+    # independently file-ordered lists, not merged/sorted by start_line - so
+    # symbols[0] is only "the file's true first symbol" when a function
+    # happens to come first textually. Real case: url_validation.py has
+    # `class UnsafeURLError` before its first function - symbols[0] resolved
+    # to the function, and the module-overview "head" chunk swallowed the
+    # whole class declaration and body, content already separately indexed
+    # as its own chunk.
+    (tmp_path / "app.py").write_text(
+        '"""Module docstring."""\n'
+        "\n"
+        "class UnsafeURLError(ValueError):\n"
+        "    pass\n"
+        "\n"
+        "\n"
+        "def is_disallowed_ip(ip):\n"
+        "    return False\n"
+    )
+    evidence = _evidence_with_module(
+        "app.py",
+        functions=[{"name": "is_disallowed_ip", "start_line": 7, "end_line": 8}],
+        classes=[{"name": "UnsafeURLError", "start_line": 3, "end_line": 4}],
+    )
+
+    chunks = build_chunks(evidence, tmp_path)
+
+    module_chunk = next(c for c in chunks if c["symbol_name"] is None)
+    assert module_chunk["end_line"] == 2
+    assert "class UnsafeURLError" not in module_chunk["text"]
+    assert "Module docstring" in module_chunk["text"]
+
+
 def test_build_chunks_falls_back_to_whole_file_when_no_symbols(tmp_path):
     (tmp_path / "config.py").write_text("SETTING = 1\n")
     evidence = _evidence_with_module("config.py", [])
