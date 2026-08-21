@@ -233,6 +233,49 @@ def test_build_module_graph_reuses_the_csharp_prepass_parse_in_the_main_loop(tmp
     assert all(count == 1 for count in read_counts.values())
 
 
+def test_build_module_graph_releases_a_csharp_prepass_tree_once_the_main_loop_consumes_it(tmp_path, monkeypatch):
+    # C# equivalent of the identically-named Java test in test_graph_java.py
+    # - see that test's comment for the full reasoning. csharp_pre_parsed
+    # has the same shape (dict[Path, tuple[bytes, Tree]]) and the same
+    # main-loop consumption site as java_pre_parsed.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AFirst.cs").write_text("namespace Example { class AFirst {} }\n")
+    (repo / "ZLater.js").write_text("const x = 1;\n")
+
+    import sys
+
+    import tree_sitter
+
+    from aletheore.scanner import graph as graph_module
+
+    captured: dict[str, object] = {}
+    original_parse = tree_sitter.Parser.parse
+
+    def tracking_parse(self, source, *a, **k):
+        tree = original_parse(self, source, *a, **k)
+        if b"AFirst" in source:
+            captured["tree"] = tree
+        return tree
+
+    monkeypatch.setattr(tree_sitter.Parser, "parse", tracking_parse)
+
+    refcounts: dict[str, int] = {}
+    original_rel = graph_module._rel
+
+    def tracking_rel(repo_path, path):
+        if path.name == "ZLater.js" and "tree" in captured:
+            refcounts["value"] = sys.getrefcount(captured["tree"])
+        return original_rel(repo_path, path)
+
+    monkeypatch.setattr(graph_module, "_rel", tracking_rel)
+
+    graph_module.build_module_graph(repo)
+
+    assert "value" in refcounts
+    assert refcounts["value"] <= 3
+
+
 def test_csharp_extracts_summary_from_xmldoc(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

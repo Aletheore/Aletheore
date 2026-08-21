@@ -2296,9 +2296,21 @@ def build_module_graph(
             unparseable.append({"path": rel_path, "reason": "file exceeds size limit"})
             continue
         if language_name == "java" and path in java_pre_parsed:
-            source, tree = java_pre_parsed[path]
+            # pop, not a plain lookup: java_pre_parsed/csharp_pre_parsed hold
+            # the full (source, Tree) for every .java/.cs file simultaneously
+            # once the pre-pass above finishes - unavoidable, since the
+            # pre-pass needs every file's package/namespace before it can
+            # infer a source root at all. But nothing forces this loop to
+            # keep holding a file's entry once it's been consumed here -
+            # tree-sitter trees run roughly 37x their source size, so on a
+            # large Java/C# repo this loop's the rest of its run (every
+            # other-language file remaining) previously held every already-
+            # consumed tree alive for no reason. Popping lets each entry's
+            # memory free as soon as this loop passes it, instead of only
+            # when build_module_graph returns.
+            source, tree = java_pre_parsed.pop(path)
         elif language_name == "csharp" and path in csharp_pre_parsed:
-            source, tree = csharp_pre_parsed[path]
+            source, tree = csharp_pre_parsed.pop(path)
         else:
             parser.language = ts_language
             source = path.read_bytes()
