@@ -2060,18 +2060,35 @@ def _fix_suggestion_attachment(
     # Spend-gated like every other LLM call site in this service (F7): this
     # one is reachable up to RUNTIME_EVENT_RATE_LIMIT times/hour per
     # installation via POST /v1/runtime-events, so without a cap check it
-    # bills Aletheore's own key uncapped. installation_spend_lock also
-    # covers a free-plan installation reaching this path (its cap is
-    # $0, so the very first check blocks it) without a separate plan gate.
+    # bills Aletheore's own key uncapped. A free-plan installation reaching
+    # this path has a $0 cap, so can_start_next_call()'s very first
+    # reservation attempt blocks it, without a separate plan gate.
+    #
+    # Reserved atomically via _IncrementalSpendBudget rather than a held
+    # installation_spend_lock spanning the GitHub fetch and the real LLM
+    # call below - the same fix run_flash_review_job's cap check already
+    # applies (see its comment on ADVISORY_LOCK_TIMEOUT): a lock that wide
+    # can't stay held across real network round-trips, and a check-then-
+    # later-record split across two separate lock acquisitions (the
+    # previous shape here) leaves the exact race those two reservations
+    # exist to close - two concurrent runtime events for the same
+    # installation could each pass the cap check before either recorded
+    # spend, both proceeding.
     try:
         settings = get_settings()
         dsn = settings.database_url
         installation = get_installation_row(dsn, installation_id)
         plan = installation["plan"] if installation is not None else "free"
 
-        with installation_spend_lock(dsn, installation_id):
-            cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
+        cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
         if cap_reached:
+            return None
+
+        fix_suggestion_model = model_for_plan(plan)
+        spend_budget = _IncrementalSpendBudget(
+            dsn, installation_id, fix_suggestion_model, monthly_cap, feature="health_fix_suggestion"
+        )
+        if not spend_budget.can_start_next_call():
             return None
 
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
@@ -2094,22 +2111,10 @@ def _fix_suggestion_attachment(
                 "code_context": snippet,
             }
         )
-        fix_suggestion_model = model_for_plan(plan)
-        spend_accumulator = {"total": 0.0}
 
-        def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-            spend_accumulator["total"] += cost_for_usage(
-                fix_suggestion_model, prompt_tokens, completion_tokens
-            )
-
-        raw = _health_fix_suggestion_adapter(on_usage=_on_usage).simple_completion(
+        raw = _health_fix_suggestion_adapter(on_usage=spend_budget.record_usage).simple_completion(
             FIX_SUGGESTION_SYSTEM_PROMPT, user_prompt, cwd="."
         )
-        with installation_spend_lock(dsn, installation_id):
-            record_llm_spend(
-                dsn, installation_id, spend_accumulator["total"], monthly_cap=monthly_cap,
-                feature="health_fix_suggestion",
-            )
         suggestion = raw.strip()
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
@@ -3023,17 +3028,16 @@ def run_weekly_digest_sweep_job() -> None:
 
 
 def _llm_spend_cap_reached(dsn: str, installation_id: int, plan: str) -> tuple[bool, float]:
-    """(cap_reached, monthly_cap) - a plain read, no lock required. For a
-    caller that goes on to gate every real LLM call through an
-    _IncrementalSpendBudget, this is a fast-fail hint only (skip setup work
-    if the cap is obviously already blown); real enforcement is that
-    budget's can_start_next_call() reserving atomically per call. A caller
-    with no such budget (a single LLM call, or none at all downstream)
-    should still treat this as its real enforcement and keep locking around
-    it - see run_flash_review_job's fix-suggestion attachment for that
-    shape. Factored out because AIRview/Docs builds have several call sites
-    needing the identical cap computation, where every existing caller only
-    ever needed it once.
+    """(cap_reached, monthly_cap) - a plain read, no lock required. For
+    every caller, real enforcement is an _IncrementalSpendBudget's
+    can_start_next_call() reserving atomically per call (see
+    _fix_suggestion_attachment for the single-call shape, AIRview/Docs
+    builds for the several-sequential-calls shape) - this is a fast-fail
+    hint only, letting a caller skip setup work (a GitHub fetch, a clone)
+    when the cap is obviously already blown before it even tries to
+    reserve. Factored out because AIRview/Docs builds have several call
+    sites needing the identical cap computation, where every existing
+    caller only ever needed it once.
     """
     extra_seats = get_extra_seats(dsn, installation_id)
     monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)

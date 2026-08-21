@@ -6,6 +6,7 @@ import pytest
 
 from aletheore.evidence_resolution import normalize_resolution
 from scan_worker.jobs import (
+    DEFAULT_LLM_NEXT_CALL_RESERVE_USD,
     GRAPH_BRANCH,
     _attach_recent_commit_for_failure,
     _commit_attachment_from_graph,
@@ -271,10 +272,20 @@ def _patch_fix_suggestion_spend_gate(monkeypatch, plan: str = "air") -> None:
     # F7: _fix_suggestion_attachment now checks and records against the
     # installation's monthly LLM spend cap like every other LLM call site -
     # these were previously the only mocks these tests needed.
+    #
+    # reserve_llm_spend is the real gate now (via _IncrementalSpendBudget,
+    # replacing the old check-under-one-lock/record-under-another-lock
+    # shape - see before_launch_fixes.md finding #2) - default it to
+    # succeed so these tests exercise the same happy path they did before
+    # that migration; test_fix_suggestion_attachment_skips_the_llm_call_when_spend_cap_reached
+    # below still gets its cap-reached behavior from get_llm_spend_this_month,
+    # since _llm_spend_cap_reached's fast-fail hint runs before reserve_llm_spend
+    # is ever attempted.
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": plan})
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
 
 
@@ -374,7 +385,10 @@ def test_fix_suggestion_attachment_records_spend_when_model_succeeds(monkeypatch
     result = _fix_suggestion_attachment(901, "org/repo", "app/handler.py", 15, "GET", "/v1/users", 500, None)
 
     assert result is not None
-    assert recorded == [pytest.approx(0.0017)]
+    # record_llm_spend now receives the true-up delta from the flat
+    # DEFAULT_LLM_NEXT_CALL_RESERVE_USD reservation already made by
+    # can_start_next_call(), not the raw cost - see _IncrementalSpendBudget.record_usage.
+    assert recorded == [pytest.approx(0.0017 - DEFAULT_LLM_NEXT_CALL_RESERVE_USD)]
 
 
 def test_fix_suggestion_attachment_degrades_gracefully_on_any_failure(monkeypatch):

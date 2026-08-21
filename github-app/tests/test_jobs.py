@@ -5052,6 +5052,129 @@ def test_maybe_sync_docs_to_repo_swallows_github_api_errors(monkeypatch):
     _maybe_sync_docs_to_repo("dsn", 1, "octocat/hello-world")
 
 
+def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_calls(monkeypatch):
+    # Regression test for a check-then-act race: _fix_suggestion_attachment
+    # used to check the cap and record spend under two SEPARATE
+    # installation_spend_lock acquisitions, with the real GitHub fetch and
+    # LLM call happening fully unlocked in between - so two concurrent
+    # runtime events for the same installation (this path is reachable up
+    # to RUNTIME_EVENT_RATE_LIMIT times/hour via POST /v1/runtime-events)
+    # could each pass the cap check before either had recorded anything,
+    # both proceeding and overshooting the cap. The barrier below forces
+    # both threads to complete their cap-check read at the same instant -
+    # the exact window the old two-lock shape left open - so this only
+    # passes if the real gate is _IncrementalSpendBudget's
+    # can_start_next_call(), which reserves atomically in one statement
+    # rather than reading a value that can go stale before it's acted on.
+    import threading
+
+    from scan_worker.jobs import DEFAULT_LLM_NEXT_CALL_RESERVE_USD, _fix_suggestion_attachment
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "database_url": "postgresql://unused",
+                "github_app_id": "1",
+                "github_app_private_key": "fake-key",
+            },
+        )(),
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda: object())
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_file_content", lambda *a, **k: "def handler():\n    pass\n"
+    )
+    monkeypatch.setattr("scan_worker.jobs.model_for_plan", lambda *a, **k: "gpt-5.6-luna")
+
+    # Only one reservation of DEFAULT_LLM_NEXT_CALL_RESERVE_USD fits under
+    # this cap - the second concurrent call must be rejected.
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+    )
+
+    # In-memory stand-in for the real atomic llm_spend row, sharing running-
+    # total state the same way concurrent transactions against the same DB
+    # row would - reserve_llm_spend's own lock models the atomicity a real
+    # UPSERT gets from Postgres row-level locking.
+    spend_state = {"total": 0.0}
+    state_lock = threading.Lock()
+    cap_check_barrier = threading.Barrier(2)
+
+    def _get_llm_spend_this_month(dsn, iid):
+        # Two waits on the same (cyclic) barrier: the first forces both
+        # threads to arrive together, the second forces both to finish
+        # reading before either can return and proceed - so neither thread
+        # can complete a full check-then-record cycle before the other has
+        # even done its read. That's the exact check-then-act window the
+        # old two-lock shape left open; without it, GIL scheduling alone
+        # tends to let one thread race through check-unlocked_work-record
+        # before the other's read is even attempted, hiding the bug.
+        cap_check_barrier.wait(timeout=5)
+        with state_lock:
+            value = spend_state["total"]
+        cap_check_barrier.wait(timeout=5)
+        return value
+
+    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
+        with state_lock:
+            if spend_state["total"] + reserve_usd <= monthly_cap:
+                spend_state["total"] += reserve_usd
+                return True
+            return False
+
+    def _record_llm_spend(dsn, iid, delta, **k):
+        with state_lock:
+            spend_state["total"] += delta
+
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", _get_llm_spend_this_month)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
+    # Real cost equal to the flat reservation, so record_usage's true-up
+    # delta is exactly 0 (a no-op) - isolates this test to the reservation
+    # race itself, instead of a coincidental true-up masking it.
+    monkeypatch.setattr(
+        "scan_worker.jobs.cost_for_usage", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+    )
+
+    class _FakeAdapter:
+        def __init__(self, on_usage):
+            self._on_usage = on_usage
+
+        def simple_completion(self, *a, **k):
+            if self._on_usage:
+                self._on_usage(10, 10)
+            return "Wrap the call in a try/except and log the failure."
+
+    monkeypatch.setattr(
+        "scan_worker.jobs._health_fix_suggestion_adapter",
+        lambda on_usage=None: _FakeAdapter(on_usage),
+    )
+
+    results: list[dict | None] = [None, None]
+
+    def _call(idx):
+        results[idx] = _fix_suggestion_attachment(
+            1, "octocat/hello-world", "app.py", 10, "GET", "/x", 500, None,
+        )
+
+    threads = [threading.Thread(target=_call, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    succeeded = [r for r in results if r is not None]
+    assert len(succeeded) == 1
+
+
 def test_health_fix_suggestion_adapter_uses_luna_when_openai_key_configured(monkeypatch):
     from scan_worker.jobs import _health_fix_suggestion_adapter
 
