@@ -2672,9 +2672,13 @@ def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch)
             return json.dumps({"0": "Auth"})
 
     monkeypatch.setattr(
-        "scan_worker.jobs._live_wiki_full_build_writing_adapter", lambda plan, on_usage=None: _SpyAdapter()
+        "scan_worker.jobs._live_wiki_full_build_writing_adapter",
+        lambda plan, on_usage=None, before_llm_call=None: _SpyAdapter(),
     )
-    monkeypatch.setattr("scan_worker.jobs._live_wiki_naming_adapter", lambda on_usage=None: _NamingAdapter())
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_wiki_naming_adapter",
+        lambda on_usage=None, before_llm_call=None: _NamingAdapter(),
+    )
     monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
 
@@ -3749,6 +3753,106 @@ def test_maybe_update_live_wiki_skips_llm_call_when_spend_cap_reached(monkeypatc
     assert "spend cap" in status_calls[0][1]
 
 
+def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pushes(monkeypatch):
+    # Same regression as test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurrent_repos,
+    # for the incremental-update path: _maybe_update_live_wiki had the
+    # identical two-separate-lock-acquisitions shape. Two pushes landing
+    # close together for two different repos under the same paid
+    # installation used to be able to both pass the cap check before either
+    # recorded spend.
+    import threading
+
+    from scan_worker.jobs import DEFAULT_LLM_NEXT_CALL_RESERVE_USD, _maybe_update_live_wiki
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._real_line_count_fetcher", lambda *a, **k: (lambda path: None))
+
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+    )
+
+    spend_state = {"total": 0.0}
+    state_lock = threading.Lock()
+    cap_check_barrier = threading.Barrier(2)
+
+    def _get_llm_spend_this_month(dsn, iid):
+        cap_check_barrier.wait(timeout=5)
+        with state_lock:
+            value = spend_state["total"]
+        cap_check_barrier.wait(timeout=5)
+        return value
+
+    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
+        with state_lock:
+            if spend_state["total"] + reserve_usd <= monthly_cap:
+                spend_state["total"] += reserve_usd
+                return True
+            return False
+
+    def _record_llm_spend(dsn, iid, delta, **k):
+        with state_lock:
+            spend_state["total"] += delta
+
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", _get_llm_spend_this_month)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
+    monkeypatch.setattr(
+        "scan_worker.jobs.cost_for_usage", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+    )
+
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error_message=None: status_calls.append((repo, status, error_message)),
+    )
+
+    def _fake_generate_subsystems(evidence, naming_adapter, writing_adapter, **kwargs):
+        writing_adapter.simple_completion("system", "user", cwd=".")
+        return [{"subsystem_id": "0", "name": "Auth", "description": "d", "files": []}]
+
+    monkeypatch.setattr("scan_worker.jobs.live_wiki.generate_subsystems", _fake_generate_subsystems)
+    monkeypatch.setattr("scan_worker.jobs._attach_wiki_file_pages", lambda *a, **k: a[1])
+
+    class _FakeWikiAdapter:
+        def __init__(self, on_usage=None, before_llm_call=None, **k):
+            self._on_usage = on_usage
+            self._before_llm_call = before_llm_call
+
+        def simple_completion(self, *a, **k):
+            if self._before_llm_call is not None and not self._before_llm_call():
+                raise RuntimeError("monthly LLM spend cap would be exceeded")
+            if self._on_usage:
+                self._on_usage(10, 10)
+            return "some subsystem prose"
+
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_wiki_naming_adapter",
+        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_wiki_update_writing_adapter",
+        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+    )
+
+    def _call(repo):
+        _maybe_update_live_wiki(1, repo, _wiki_evidence(), ["auth/login.py"], "sha1")
+
+    threads = [
+        threading.Thread(target=_call, args=(repo,)) for repo in ("octocat/repo-a", "octocat/repo-b")
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    ready = [repo for repo, status, _ in status_calls if status == "ready"]
+    assert len(ready) == 1
+
+
 def test_run_pr_scan_job_wires_changed_files_into_live_wiki_update(bare_repo_with_two_commits, monkeypatch):
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -4191,6 +4295,125 @@ def test_run_live_wiki_full_build_job_skips_llm_call_when_spend_cap_reached(monk
     assert llm_called == []
     assert build_status_calls[0][0] == "failed"
     assert "spend cap" in build_status_calls[0][1]
+
+
+def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurrent_repos(monkeypatch):
+    # Regression test for a check-then-act race: run_live_wiki_full_build_job
+    # used to check the cap and record spend under two SEPARATE
+    # installation_spend_lock acquisitions, with the real (potentially
+    # many-call) generate_subsystems/_attach_wiki_file_pages work happening
+    # fully unlocked in between - so two full builds for different repos
+    # under the SAME paid installation, landing close together (e.g. both
+    # due for the 48h catch-up sweep at the same tick), could each pass the
+    # cap check before either had recorded anything, both proceeding. The
+    # double-barrier below forces both threads' cap-check reads to land at
+    # the same instant - the exact window the old two-lock shape left open -
+    # so this only passes if the real gate is _IncrementalSpendBudget's
+    # can_start_next_call(), reserving atomically per call rather than
+    # reading a value that can go stale before it's acted on.
+    import threading
+
+    from scan_worker.jobs import DEFAULT_LLM_NEXT_CALL_RESERVE_USD, run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
+    monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._real_line_count_fetcher", lambda *a, **k: (lambda path: None))
+
+    # Only one reservation of DEFAULT_LLM_NEXT_CALL_RESERVE_USD fits under
+    # this cap - the second concurrent repo's build must be rejected.
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+    )
+
+    # In-memory stand-in for the real atomic llm_spend row, shared across
+    # both threads the same way concurrent transactions against the same DB
+    # row would be.
+    spend_state = {"total": 0.0}
+    state_lock = threading.Lock()
+    cap_check_barrier = threading.Barrier(2)
+
+    def _get_llm_spend_this_month(dsn, iid):
+        # Two waits on the same (cyclic) barrier: the first forces both
+        # threads to arrive together, the second forces both to finish
+        # reading before either can return and proceed - see the identical
+        # technique in test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_calls.
+        cap_check_barrier.wait(timeout=5)
+        with state_lock:
+            value = spend_state["total"]
+        cap_check_barrier.wait(timeout=5)
+        return value
+
+    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
+        with state_lock:
+            if spend_state["total"] + reserve_usd <= monthly_cap:
+                spend_state["total"] += reserve_usd
+                return True
+            return False
+
+    def _record_llm_spend(dsn, iid, delta, **k):
+        with state_lock:
+            spend_state["total"] += delta
+
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", _get_llm_spend_this_month)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
+    # Real cost equal to the flat reservation, so record_usage's true-up
+    # delta is exactly 0 (a no-op) - isolates this test to the reservation
+    # race itself, same reasoning as the fix-suggestion regression test.
+    monkeypatch.setattr(
+        "scan_worker.jobs.cost_for_usage", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+    )
+
+    build_status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error=None: build_status_calls.append((repo, status, error)),
+    )
+
+    def _fake_generate_subsystems(evidence, naming_adapter, writing_adapter, **kwargs):
+        writing_adapter.simple_completion("system", "user", cwd=".")
+        return [{"subsystem_id": "0", "name": "Auth", "description": "d", "files": []}]
+
+    monkeypatch.setattr("scan_worker.jobs.live_wiki.generate_subsystems", _fake_generate_subsystems)
+    monkeypatch.setattr("scan_worker.jobs._attach_wiki_file_pages", lambda *a, **k: a[1])
+
+    class _FakeWikiAdapter:
+        def __init__(self, on_usage=None, before_llm_call=None, **k):
+            self._on_usage = on_usage
+            self._before_llm_call = before_llm_call
+
+        def simple_completion(self, *a, **k):
+            if self._before_llm_call is not None and not self._before_llm_call():
+                raise RuntimeError("monthly LLM spend cap would be exceeded")
+            if self._on_usage:
+                self._on_usage(10, 10)
+            return "some subsystem prose"
+
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_wiki_naming_adapter",
+        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_wiki_full_build_writing_adapter",
+        lambda plan, on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+    )
+
+    threads = [
+        threading.Thread(target=run_live_wiki_full_build_job, args=(1, repo))
+        for repo in ("octocat/repo-a", "octocat/repo-b")
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    ready = [repo for repo, status, _ in build_status_calls if status == "ready"]
+    assert len(ready) == 1
 
 
 def test_real_line_count_fetcher_returns_none_when_token_setup_fails(monkeypatch):
