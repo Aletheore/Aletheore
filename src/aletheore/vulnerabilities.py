@@ -40,7 +40,6 @@ def _clean_range_version(version: str) -> str | None:
 
 
 def _parse_pep508_dependency(dependency: str) -> tuple[str, str, str] | None:
-    has_marker = ";" in dependency
     dependency = dependency.split(";", 1)[0].strip()
     name_match = re.match(r"^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?", dependency)
     if not name_match:
@@ -49,10 +48,14 @@ def _parse_pep508_dependency(dependency: str) -> tuple[str, str, str] | None:
     specifiers = dependency[name_match.end():]
     version_match = re.search(r"(?:==|>=|~=)\s*([0-9][^,\s]*)", specifiers)
     # A lower bound is the most useful stable approximation for a range. Keep
-    # unpinned declarations too: downstream checks can query the package as a
-    # whole instead of silently pretending the dependency was absent.
-    if version_match is None and has_marker:
-        return None
+    # unpinned declarations too, marker-qualified or not: downstream checks
+    # can query the package as a whole instead of silently pretending the
+    # dependency was absent. A prior version of this function dropped
+    # unpinned dependencies that also carried an environment marker (e.g.
+    # `typing_extensions; python_version < "3.10"`, an idiomatic and common
+    # PEP 508 shape) - directly contradicting this comment for exactly that
+    # case, and making any marker-qualified unpinned dependency invisible to
+    # CVE scanning, license checking, and unused-dependency detection.
     version = version_match.group(1) if version_match else "*"
     return (name, version, "PyPI")
 
