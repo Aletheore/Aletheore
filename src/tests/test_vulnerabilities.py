@@ -434,7 +434,14 @@ def test_parse_pip_pins_reads_pep621_pyproject_dependencies(tmp_path):
 
     assert ("asgiref", "3.12.1", "PyPI") in pins
     assert ("sqlparse", "0.5.0", "PyPI") in pins
-    assert not any(pin[0] == "tzdata" for pin in pins)
+    # An unpinned, marker-qualified dependency is kept like any other
+    # unpinned dependency (queried by name only, see _query_batch) rather
+    # than dropped - this test used to assert the opposite, predating #230's
+    # explicit "keep unpinned declarations too" fix and left un-reconciled
+    # with it. Dropping it would make this exact conditional-platform
+    # dependency shape invisible to CVE scanning, license checking, and
+    # unused-dependency detection alike.
+    assert ("tzdata", "*", "PyPI") in pins
 
 
 def test_parse_pip_pins_keeps_compound_compatible_and_unpinned_pep508_dependencies(tmp_path):
@@ -456,6 +463,25 @@ def test_parse_pip_pins_keeps_compound_compatible_and_unpinned_pep508_dependenci
     assert ("tree-sitter", "0.24.0", "PyPI") in pins
     assert ("openai", "1.0.0", "PyPI") in pins
     assert ("rich", "*", "PyPI") in pins
+
+
+def test_parse_pep508_dependency_keeps_unpinned_marker_qualified_dependency():
+    # Regression: an unpinned dependency that also carries an environment
+    # marker (e.g. `typing_extensions; python_version < "3.10"` - an
+    # idiomatic and common PEP 508 shape) used to be silently dropped
+    # entirely, directly contradicting this function's own comment that
+    # unpinned declarations are kept rather than treated as absent. This
+    # made any marker-qualified unpinned dependency invisible to CVE
+    # scanning, license checking, and unused-dependency detection.
+    from aletheore.vulnerabilities import _parse_pep508_dependency
+
+    assert _parse_pep508_dependency("typing_extensions") == ("typing-extensions", "*", "PyPI")
+    assert _parse_pep508_dependency(
+        'typing_extensions; python_version < "3.10"'
+    ) == ("typing-extensions", "*", "PyPI")
+    assert _parse_pep508_dependency(
+        'requests>=2.0; python_version < "3.10"'
+    ) == ("requests", "2.0", "PyPI")
 
 
 def test_parse_pip_pins_reads_poetry_dependencies(tmp_path):
