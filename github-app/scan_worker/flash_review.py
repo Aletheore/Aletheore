@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
+from aletheore.dead_code import is_test_file
 from aletheore.evidence_resolution import (
     attach_dependency_evidence,
     attach_risk_evidence,
@@ -152,7 +153,7 @@ def fetch_review_file_context(
         encoded_len = len(content.encode("utf-8"))
         if total_bytes + encoded_len > MAX_CONTEXT_TOTAL_BYTES:
             break
-        label = "test file content" if _looks_like_test_file(path) else "full content"
+        label = "test file content" if is_test_file(path) else "full content"
         parts.append(f"--- {label}: {path} ---\n{content}")
         total_bytes += encoded_len
     file_context = "\n\n".join(parts)
@@ -351,15 +352,6 @@ _CHANGE_IMPACT_PATTERNS = {
         r"\b(?:thread|threads|Thread|Executor|Pool|async|await|lock|mutex|concurrent|parallel)\b"
     ),
 }
-
-
-def _looks_like_test_file(path: str) -> bool:
-    lowered = path.lower()
-    return (
-        "/test" in lowered
-        or lowered.startswith("test_")
-        or lowered.endswith(("_test.py", ".test.js", ".spec.js", ".test.ts", ".spec.ts"))
-    )
 
 
 def build_change_impact_context(diff_text: str) -> str:
