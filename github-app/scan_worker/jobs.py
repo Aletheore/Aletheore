@@ -2839,11 +2839,20 @@ def _latest_backup_age_seconds(backup_dir: Path, now: float) -> float | None:
 
 
 def _check_backup_freshness(redis_conn, now: float) -> None:
+    # Each condition below gets its own source suffix, not a shared
+    # "ops_monitor.backup_freshness" - both _send_ops_alert's Redis
+    # cooldown and send_error_alert's own independent in-memory cooldown
+    # key on source alone, so three genuinely different, differently-
+    # severe conditions sharing one source meant whichever fired first
+    # silently suppressed the other two for the next 15 minutes (e.g. a
+    # stale-backup alert firing, then the backup dir going fully
+    # unavailable five minutes later - a worse condition - with on-call
+    # never hearing about it until the first alert's cooldown expired).
     backup_dir = Path(os.environ.get(OPS_BACKUP_DIR_ENV, OPS_DEFAULT_BACKUP_DIR))
     if not backup_dir.is_dir():
         _send_ops_alert(
             redis_conn,
-            "ops_monitor.backup_freshness",
+            "ops_monitor.backup_freshness.missing_dir",
             "PostgreSQL backup directory is not available",
             f"backup_dir={backup_dir}",
         )
@@ -2853,7 +2862,7 @@ def _check_backup_freshness(redis_conn, now: float) -> None:
     if age_seconds is None:
         _send_ops_alert(
             redis_conn,
-            "ops_monitor.backup_freshness",
+            "ops_monitor.backup_freshness.no_dump",
             "no PostgreSQL backup dump found",
             f"backup_dir={backup_dir} stale_after={OPS_BACKUP_STALE_SECONDS}s",
         )
@@ -2864,7 +2873,7 @@ def _check_backup_freshness(redis_conn, now: float) -> None:
 
     _send_ops_alert(
         redis_conn,
-        "ops_monitor.backup_freshness",
+        "ops_monitor.backup_freshness.stale",
         "latest PostgreSQL backup is stale",
         f"backup_dir={backup_dir} age_seconds={age_seconds:.0f} "
         f"stale_after={OPS_BACKUP_STALE_SECONDS}s",
