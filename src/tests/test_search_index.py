@@ -478,7 +478,7 @@ def test_embed_in_batches_splits_large_inputs():
         return [[0.0]] * len(texts)
 
     with patch("aletheore.search_index.embed_texts", side_effect=fake_embed):
-        vectors = _embed_in_batches([f"t{i}" for i in range(450)], batch_size=200)
+        vectors, _ = _embed_in_batches([f"t{i}" for i in range(450)], batch_size=200)
 
     assert calls == [200, 200, 50]
     assert len(vectors) == 450
@@ -510,7 +510,7 @@ def test_embed_in_batches_on_progress_defaults_to_silent():
         return [[0.0]] * len(texts)
 
     with patch("aletheore.search_index.embed_texts", side_effect=fake_embed):
-        vectors = _embed_in_batches([f"t{i}" for i in range(10)], batch_size=200)
+        vectors, _ = _embed_in_batches([f"t{i}" for i in range(10)], batch_size=200)
 
     assert len(vectors) == 10
 
@@ -1235,7 +1235,7 @@ def test_build_index_drops_chunks_that_no_longer_exist(tmp_path):
 def test_reusable_vectors_survives_an_unreadable_previous_index(tmp_path):
     """An index missing, corrupt, or written before chunk_hash existed must
     degrade to embedding everything - the old behavior - not raise."""
-    assert _reusable_vectors(tmp_path / "nope.lancedb") == {}
+    assert _reusable_vectors(tmp_path / "nope.lancedb") == ({}, None)
 
 
 def test_switching_embedding_provider_rebuilds_instead_of_crashing(tmp_path):
@@ -1303,6 +1303,85 @@ def test_switching_embedding_provider_rebuilds_even_when_nothing_else_changed(tm
     assert calls, "a probe embed must run to detect the provider change"
     rows = open_index(tmp_path).to_arrow().to_pylist()
     assert {len(row["vector"]) for row in rows} == {1536}
+
+
+def test_build_index_does_not_reuse_vectors_from_a_different_embedder_even_when_dimensions_match(tmp_path):
+    """Matching dimension is not proof of a matching vector space: Ollama's
+    nomic-embed-text and the hosted jina-embeddings-v2-base-code both embed
+    to 768 dimensions from unrelated vector spaces. The existing
+    dimension-only reuse guard would happily reuse the local vectors below
+    under a hosted rebuild, since both are 768-dim - this proves the
+    embedder identity itself blocks the reuse, not just the dimension."""
+    (tmp_path / "a.py").write_text("def f():\n    return 1\n")
+    evidence = _evidence_with_module("a.py", [{"name": "f", "start_line": 1, "end_line": 2}])
+
+    with patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.1] * 768] * len(t)):
+        build_index(tmp_path, evidence)
+
+    rows_before = open_index(tmp_path).to_arrow().to_pylist()
+    assert rows_before[0]["vector"] == pytest.approx([0.1] * 768)
+
+    http = MagicMock()
+    http.post.return_value = _hosted_response(200, {"vectors": [[0.9] * 768]})
+    with patch("aletheore.search_index.get_api_key", return_value="tok"), \
+         patch("aletheore.search_index.httpx.Client", return_value=http):
+        # Same content, same chunk_hash, same dimension - only the provider
+        # available underneath it changed.
+        build_index(tmp_path, evidence)
+
+    rows_after = open_index(tmp_path).to_arrow().to_pylist()
+    assert rows_after[0]["vector"] == pytest.approx([0.9] * 768)
+    assert rows_after[0]["embedder"] == "hosted:jina-embeddings-v2-base-code"
+
+
+def test_reusable_vectors_returns_the_embedder_identity_stamped_in_the_index(tmp_path):
+    from aletheore.search_index import _index_path
+
+    (tmp_path / "a.py").write_text("def f():\n    return 1\n")
+    evidence = _evidence_with_module("a.py", [{"name": "f", "start_line": 1, "end_line": 2}])
+    with patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.1] * 768] * len(t)):
+        build_index(tmp_path, evidence)
+
+    _, embedder = _reusable_vectors(_index_path(tmp_path))
+    assert embedder == "local:nomic-embed-text"
+
+
+def test_search_index_raises_when_query_embedder_differs_from_the_indexs_despite_matching_dimension(tmp_path):
+    """A hosted-built index (jina, 768-dim) queried by the local embedder
+    (nomic, also 768-dim) must fail loudly, not silently rank against an
+    unrelated vector space - the dimension-only check above cannot catch
+    this because the two providers happen to share a dimension."""
+    from aletheore.search_index import IndexDimensionMismatchError, TABLE_NAME, _index_path
+    import lancedb
+
+    repo = tmp_path
+    index_path = _index_path(repo)
+    index_path.parent.mkdir(parents=True)
+    db = lancedb.connect(str(index_path))
+    db.create_table(
+        TABLE_NAME,
+        data=[
+            {
+                "module_path": "a.py",
+                "symbol_name": "foo",
+                "start_line": 1,
+                "end_line": 2,
+                "language": "python",
+                "imports": [],
+                "text": "def foo(): pass",
+                "chunk_hash": "abc",
+                "vector": [0.1] * 768,
+                "embedder": "hosted:jina-embeddings-v2-base-code",
+            }
+        ],
+    )
+
+    with patch("aletheore.search_index.get_api_key", return_value=None), \
+         patch("aletheore.search_index.embed_texts", return_value=[[0.0] * 768]):
+        with pytest.raises(
+            IndexDimensionMismatchError, match="hosted:jina.*local:nomic|local:nomic.*hosted:jina"
+        ):
+            search_index(repo, "where is foo")
 
 
 def _hosted_response(status: int, payload: dict | None = None):
@@ -1444,7 +1523,7 @@ def test_hosted_embeddings_are_preferred_when_a_token_exists():
     with patch("aletheore.search_index.get_api_key", return_value="tok"), \
          patch("aletheore.search_index.httpx.Client", return_value=http), \
          patch("aletheore.search_index.embed_texts") as local:
-        vectors = _embed_in_batches(["chunk"])
+        vectors, _ = _embed_in_batches(["chunk"])
 
     assert len(vectors[0]) == 1536
     local.assert_not_called()
@@ -1460,7 +1539,7 @@ def test_a_402_falls_back_to_local_and_says_why(capsys):
     with patch("aletheore.search_index.get_api_key", return_value="tok"), \
          patch("aletheore.search_index.httpx.Client", return_value=http), \
          patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.0] * 768] * len(t)):
-        vectors = _embed_in_batches(["chunk"])
+        vectors, _ = _embed_in_batches(["chunk"])
 
     # One vector for one input text - not two. The local fallback for the
     # batch that just failed on hosted used to also get re-queued as
@@ -1494,7 +1573,7 @@ def test_hosted_failure_on_the_first_of_several_batches_does_not_duplicate_it():
     with patch("aletheore.search_index.get_api_key", return_value="tok"), \
          patch("aletheore.search_index.httpx.Client", return_value=http), \
          patch("aletheore.search_index.embed_texts", side_effect=fake_local_embed):
-        vectors = _embed_in_batches(texts, batch_size=5)
+        vectors, _ = _embed_in_batches(texts, batch_size=5)
 
     assert len(vectors) == 10
     # Every input text embedded exactly once, not twice - flattening
@@ -1538,7 +1617,7 @@ def test_allow_hosted_false_skips_hosted_call_even_with_a_token(capsys):
     with patch("aletheore.search_index.get_api_key", return_value="tok"), \
          patch("aletheore.search_index.httpx.Client", return_value=http), \
          patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.0] * 768] * len(t)):
-        vectors = _embed_in_batches(["chunk"], allow_hosted=False)
+        vectors, _ = _embed_in_batches(["chunk"], allow_hosted=False)
 
     http.post.assert_not_called()
     assert len(vectors[0]) == 768
@@ -1550,7 +1629,7 @@ def test_allow_hosted_true_is_the_default_and_preserves_existing_behavior():
     http.post.return_value = _hosted_response(200, {"vectors": [[0.1] * 1536]})
     with patch("aletheore.search_index.get_api_key", return_value="tok"), \
          patch("aletheore.search_index.httpx.Client", return_value=http):
-        vectors = _embed_in_batches(["chunk"])  # no allow_hosted kwarg at all
+        vectors, _ = _embed_in_batches(["chunk"])  # no allow_hosted kwarg at all
 
     http.post.assert_called_once()
     assert len(vectors[0]) == 1536

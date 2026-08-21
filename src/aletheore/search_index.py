@@ -959,8 +959,16 @@ def _embed_in_batches(
     repo_id: str | None = None,
     allow_hosted: bool = True,
     on_progress: Callable[[int, int], None] | None = None,
-) -> list[list[float]]:
+) -> tuple[list[list[float]], str]:
     """Embed everything, preferring Aletheore's endpoint when entitled.
+
+    Returns (vectors, embedder). embedder labels which provider actually
+    produced them - "hosted:<model>" or "local:<model>" - so a caller can
+    stamp it into the index and later detect a provider swap even when the
+    old and new dimensions happen to match (see IndexDimensionMismatchError:
+    Ollama's nomic-embed-text and the hosted jina-embeddings-v2-base-code
+    both embed to 768 dimensions from unrelated vector spaces, so dimension
+    alone cannot tell them apart).
 
     Hosted first, then local, and never the reverse: someone paying for
     hosted embeddings should not silently have their code sent to their own
@@ -1001,6 +1009,11 @@ def _embed_in_batches(
             file=sys.stderr,
         )
     vectors: list[list[float]] = []
+    # Default for the zero-batch case (empty texts): no embedding call ever
+    # runs, so this label is never actually observed against a real vector -
+    # a caller with reusable vectors to compare against always has at least
+    # one chunk to probe first (see build_index).
+    embedder = f"local:{DEFAULT_EMBEDDING_MODEL}"
     total = len(texts)
 
     # Recomputed when the provider changes: the hosted spans are character-
@@ -1017,6 +1030,7 @@ def _embed_in_batches(
         if use_hosted:
             try:
                 vectors.extend(embed_texts_hosted(batch, token, repo_id=repo_id))
+                embedder = f"hosted:{HOSTED_EMBEDDING_MODEL}"
                 if on_progress is not None:
                     on_progress(len(vectors), total)
                 continue
@@ -1040,10 +1054,11 @@ def _embed_in_batches(
                 spans = [(s, min(s + batch_size, len(texts))) for s in range(end, len(texts), batch_size)]
                 span_index = 0
         vectors.extend(embed_texts(batch))
+        embedder = f"local:{DEFAULT_EMBEDDING_MODEL}"
         if on_progress is not None:
             on_progress(len(vectors), total)
 
-    return vectors
+    return vectors, embedder
 
 
 def _index_path(repo_path: Path) -> Path:
@@ -1062,24 +1077,27 @@ def _chunk_hash(text: str) -> str:
     return hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
 
 
-def _reusable_vectors(index_path: Path) -> dict[str, list[float]]:
-    """chunk_hash -> vector, from the existing index if there is one.
+def _reusable_vectors(index_path: Path) -> tuple[dict[str, list[float]], str | None]:
+    """chunk_hash -> vector, plus the embedder that produced them, from the
+    existing index if there is one.
+
+    The embedder is None for an index written before that column existed -
+    the caller cannot verify it against anything, so it re-embeds rather
+    than guessing, the same conservative default as an unreadable index.
 
     Best-effort: any failure to read the previous index (missing, corrupt,
     or written before chunk_hash existed) just means everything is embedded
     fresh, which is the old behavior rather than an error.
     """
     if not index_path.exists():
-        return {}
+        return {}, None
     try:
-        table = lancedb.connect(str(index_path)).open_table(TABLE_NAME)
-        return {
-            row["chunk_hash"]: row["vector"]
-            for row in table.to_arrow().to_pylist()
-            if row.get("chunk_hash")
-        }
+        rows = lancedb.connect(str(index_path)).open_table(TABLE_NAME).to_arrow().to_pylist()
+        vectors = {row["chunk_hash"]: row["vector"] for row in rows if row.get("chunk_hash")}
+        embedder = next((row["embedder"] for row in rows if row.get("embedder")), None)
+        return vectors, embedder
     except Exception:  # noqa: BLE001
-        return {}
+        return {}, None
 
 
 def _embed_stale_by_hash(
@@ -1087,16 +1105,16 @@ def _embed_stale_by_hash(
     repo_id: str | None = None,
     allow_hosted: bool = True,
     on_progress: Callable[[int, int], None] | None = None,
-) -> dict[str, list[float]]:
+) -> tuple[dict[str, list[float]], str]:
     stale_by_hash = {chunk["chunk_hash"]: chunk["text"] for chunk in stale}
     stale_hashes = list(stale_by_hash)
-    fresh_vectors = _embed_in_batches(
+    fresh_vectors, embedder = _embed_in_batches(
         [stale_by_hash[chunk_hash] for chunk_hash in stale_hashes],
         repo_id=repo_id,
         allow_hosted=allow_hosted,
         on_progress=on_progress,
     )
-    return dict(zip(stale_hashes, fresh_vectors))
+    return dict(zip(stale_hashes, fresh_vectors)), embedder
 
 
 def build_index(
@@ -1123,10 +1141,12 @@ def build_index(
     # free, where an upsert would leave a deleted function searchable
     # forever.
     index_path = _index_path(repo_path)
-    reusable = _reusable_vectors(index_path)
+    reusable, reusable_embedder = _reusable_vectors(index_path)
     stale = [chunk for chunk in chunks if chunk["chunk_hash"] not in reusable]
     repo = _repo_id(repo_path)
-    fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress)
+    fresh, current_embedder = _embed_stale_by_hash(
+        stale, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
+    )
     fresh_vectors = list(fresh.values())
 
     # Vectors from two different embedding models cannot share an index -
@@ -1140,11 +1160,13 @@ def build_index(
     # not comparable to the new ones, so keeping them would return nonsense
     # rankings even if the write succeeded.
     #
-    # Keyed on dimension rather than model name because the dimension is
-    # observable from what embed_texts actually returned, and embed_texts
-    # chooses its provider internally. Two distinct models with matching
-    # dimensions would not be caught; that costs stale-but-valid vectors,
-    # not a crash or a schema error.
+    # Checked on both dimension AND embedder identity. Dimension alone is
+    # not sufficient: Ollama's nomic-embed-text and the hosted
+    # jina-embeddings-v2-base-code both produce 768-dim vectors from
+    # unrelated vector spaces, so a repo indexed locally and then rebuilt
+    # against the hosted provider (or the reverse) passed the old
+    # dimension-only check and silently kept comparing incompatible
+    # vectors - reproduced directly, see this file's git history.
     #
     # This has to run even when stale is empty. If every chunk's hash
     # already matches the previous index, that's the "rebuild with no
@@ -1152,25 +1174,33 @@ def build_index(
     # 0.2s - but the provider can still have changed underneath it with zero
     # code changes in between (this is precisely "index with Ollama, lose
     # Ollama": nothing edited, only the available provider). With
-    # fresh_vectors empty there's nothing to compare reusable's dimension
-    # against, so a one-item probe embed establishes it. Reproduced without
-    # this: the table silently kept 768-dim rows, and the next search()
-    # crashed on the mismatch between the table and the freshly-embedded
-    # 1536-dim query vector instead of degrading.
+    # fresh_vectors empty there's nothing to compare reusable's dimension or
+    # embedder against, so a one-item probe embed establishes both.
+    # Reproduced without this: the table silently kept 768-dim rows, and the
+    # next search() crashed on the mismatch between the table and the
+    # freshly-embedded 1536-dim query vector instead of degrading.
     if reusable:
-        current_dimension = (
-            len(fresh_vectors[0])
-            if fresh_vectors
-            else len(_embed_in_batches([chunks[0]["text"]], repo_id=repo, allow_hosted=allow_hosted)[0])
-        )
+        if fresh_vectors:
+            current_dimension = len(fresh_vectors[0])
+        else:
+            probe_vectors, current_embedder = _embed_in_batches(
+                [chunks[0]["text"]], repo_id=repo, allow_hosted=allow_hosted
+            )
+            current_dimension = len(probe_vectors[0])
         reused_dimensions = {len(vector) for vector in reusable.values()}
-        if reused_dimensions != {current_dimension}:
+        if reused_dimensions != {current_dimension} or reusable_embedder != current_embedder:
             reusable = {}
             stale = chunks
-            fresh = _embed_stale_by_hash(stale, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress)
+            fresh, current_embedder = _embed_stale_by_hash(
+                stale, repo_id=repo, allow_hosted=allow_hosted, on_progress=on_progress
+            )
 
     rows = [
-        {**chunk, "vector": reusable.get(chunk["chunk_hash"]) or fresh[chunk["chunk_hash"]]}
+        {
+            **chunk,
+            "vector": reusable.get(chunk["chunk_hash"]) or fresh[chunk["chunk_hash"]],
+            "embedder": current_embedder,
+        }
         for chunk in chunks
     ]
 
@@ -1382,6 +1412,25 @@ def _detect_query_language(query_text: str) -> str | None:
     return found.pop()
 
 
+def _table_embedder(table) -> str | None:
+    """The embedder identity stamped into this index's rows, or None.
+
+    None both for an index written before the "embedder" column existed and
+    for anything that fails to answer this cheaply (a missing column raises
+    inside LanceDB itself) - either way the caller falls back to the
+    dimension-only check, exactly as before this check existed. Read via a
+    single-row select rather than to_arrow() over the whole table: this
+    runs on every query, and materializing the full index here would undo
+    the in-process speed this path exists for.
+    """
+    try:
+        rows = table.search().select(["embedder"]).limit(1).to_list()
+        value = rows[0].get("embedder") if rows else None
+        return value if isinstance(value, str) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def search_index(
     repo_path: Path,
     query_text: str,
@@ -1405,9 +1454,10 @@ def search_index(
     # then returned nonsense ranked against the wrong vector space, with no
     # error at all. Matching the same provider choice at query time removes
     # the coincidence the guard was accidentally relying on.
-    query_vector = _embed_in_batches(
+    query_vectors, query_embedder = _embed_in_batches(
         [query_text], repo_id=_repo_id(repo_path), allow_hosted=allow_hosted
-    )[0]
+    )
+    query_vector = query_vectors[0]
 
     # The index and the query must come from the same embedding model - see
     # build_index's dimension-drift handling for the mechanism that keeps
@@ -1430,6 +1480,25 @@ def search_index(
             "embedding provider available now differs from the one used to build this "
             f"index. Re-run 'aletheore index {repo_path}' to rebuild it with the "
             "provider currently available"
+        )
+
+    # The dimension check above cannot catch two distinct models that
+    # happen to produce the same-sized vectors - exactly what let a
+    # hosted-jina-built index get silently searched with a local-nomic
+    # query vector (both 768-dim) and return coherent-looking but wrong
+    # results with no error at all. None on either side means "can't
+    # verify" (an index built before this column existed, or a table this
+    # check otherwise can't read) and falls through to trusting the
+    # dimension check alone, unchanged from before this existed.
+    table_embedder = _table_embedder(table)
+    if table_embedder is not None and table_embedder != query_embedder:
+        raise IndexDimensionMismatchError(
+            f"the index at {_index_path(repo_path)} was built with '{table_embedder}' "
+            f"embeddings but this query embedded with '{query_embedder}' - both happen "
+            f"to produce {table_dimension}-dimension vectors, so without this check the "
+            "search would silently rank against an unrelated vector space instead of "
+            f"failing loudly. Re-run 'aletheore index {repo_path}' to rebuild it with "
+            "the provider currently available"
         )
 
     # Over-fetch, then thin by file: the chunks displaced by the per-file cap
