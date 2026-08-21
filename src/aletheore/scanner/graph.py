@@ -2210,6 +2210,11 @@ def build_module_graph(
     # pre-parse before any of them can have their imports resolved.
     java_source_roots: list[Path] = []
     oversized_paths: set[Path] = set()
+    # Reused by the main loop below so every .java file is parsed once per
+    # scan, not twice - this pre-pass already has to parse it to read the
+    # package declaration, and tree-sitter parsing is the expensive part of
+    # this whole function.
+    java_pre_parsed: dict[Path, tuple[bytes, Tree]] = {}
     pre_parser = Parser()
     pre_parser.language = JAVA_LANGUAGE
     for path in _iter_source_files(repo_path, ignored_paths):
@@ -2221,6 +2226,7 @@ def build_module_graph(
             continue
         pre_source = path.read_bytes()
         tree = pre_parser.parse(pre_source)
+        java_pre_parsed[path] = (pre_source, tree)
         package = _extract_java_package(tree.root_node, pre_source)
         root = _java_source_root_for(path, package)
         if root is not None and root not in java_source_roots:
@@ -2237,6 +2243,8 @@ def build_module_graph(
     csharp_source_paths: list[Path] = []
     # Which file declares each type name, for the type-reference edges below.
     csharp_type_owners: dict[str, set[Path]] = {}
+    # Same reasoning as java_pre_parsed above.
+    csharp_pre_parsed: dict[Path, tuple[bytes, Tree]] = {}
     cs_pre_parser = Parser()
     cs_pre_parser.language = CSHARP_LANGUAGE
     for path in _iter_source_files(repo_path, ignored_paths):
@@ -2249,6 +2257,7 @@ def build_module_graph(
         csharp_source_paths.append(path)
         pre_source = path.read_bytes()
         tree = cs_pre_parser.parse(pre_source)
+        csharp_pre_parsed[path] = (pre_source, tree)
         namespace = _extract_csharp_namespace(tree.root_node, pre_source)
         result = _csharp_prefix_and_root_for(path, namespace)
         if result is not None:
@@ -2286,9 +2295,14 @@ def build_module_graph(
             oversized_paths.add(path)
             unparseable.append({"path": rel_path, "reason": "file exceeds size limit"})
             continue
-        parser.language = ts_language
-        source = path.read_bytes()
-        tree = parser.parse(source)
+        if language_name == "java" and path in java_pre_parsed:
+            source, tree = java_pre_parsed[path]
+        elif language_name == "csharp" and path in csharp_pre_parsed:
+            source, tree = csharp_pre_parsed[path]
+        else:
+            parser.language = ts_language
+            source = path.read_bytes()
+            tree = parser.parse(source)
 
         constants: list[dict] = []
         if language_name != "python":
