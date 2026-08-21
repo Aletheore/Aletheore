@@ -348,6 +348,37 @@ async def test_delete_expired_endpoint_health_keeps_rows_inside_the_window(pool)
 
 
 @pytest.mark.asyncio
+async def test_delete_expired_flash_review_cache_keeps_rows_inside_the_window(pool):
+    # flash_review_cache stores a real PR diff (source code) per row, unlike
+    # every other table this cleanup pattern already covers - a real
+    # retention limit, not just an operational-metadata one.
+    await _insert_installation(pool, 415, "cache-retention-org")
+    now = datetime.now(timezone.utc)
+    await pool.execute(
+        """
+        INSERT INTO flash_review_cache
+            (installation_id, repo_full_name, content_hash, embedding,
+             diff_text, findings, model_used, created_at)
+        VALUES
+            (415, 'cache-retention-org/repo', 'old-hash', '{0.1}',
+             'old diff', '[]', 'deepseek-v4-flash', $1),
+            (415, 'cache-retention-org/repo', 'recent-hash', '{0.2}',
+             'recent diff', '[]', 'deepseek-v4-flash', $2)
+        """,
+        now - timedelta(days=31),
+        now - timedelta(days=29),
+    )
+
+    from scan_worker.db import delete_expired_flash_review_cache
+
+    deleted = delete_expired_flash_review_cache(TEST_DATABASE_URL, 30)
+
+    assert deleted == 1
+    remaining = await pool.fetch("SELECT content_hash FROM flash_review_cache")
+    assert {row["content_hash"] for row in remaining} == {"recent-hash"}
+
+
+@pytest.mark.asyncio
 async def test_get_latest_evidence_returns_most_recent(pool):
     await _insert_installation(pool, 301, "a")
     # Version-stamped because get_latest_evidence now refuses evidence written

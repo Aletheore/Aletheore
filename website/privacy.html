@@ -64,7 +64,11 @@
           <li>
             <strong>Flash review</strong> (automated pull request review) sends
             <strong>the pull request's diff</strong> - that is your source code, for the changed
-            lines - along with limited surrounding file context.
+            lines - along with limited surrounding file context. For paid installations, that diff
+            is also kept for up to 30 days in a short-lived cache, so a near-identical diff doesn't
+            get re-reviewed from scratch; it is deleted automatically once that window passes, or
+            immediately on uninstall. Free-tier reviews are never cached - nothing about them is
+            retained beyond the request itself.
           </li>
           <li>
             <strong>Managed audits</strong> and <strong>AIRview</strong> send derived evidence, not

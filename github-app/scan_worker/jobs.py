@@ -60,6 +60,7 @@ from scan_worker.db import (
     delete_docs_symbols_not_in,
     get_docs_symbol_hashes,
     delete_expired_endpoint_health,
+    delete_expired_flash_review_cache,
     delete_expired_sessions,
     delete_expired_webhook_deliveries,
     delete_wiki_subsystems_not_in,
@@ -2543,6 +2544,25 @@ def run_endpoint_health_cleanup_job() -> None:
     deleted = delete_expired_endpoint_health(dsn, ENDPOINT_HEALTH_RETENTION_DAYS)
     logging.getLogger("scan_worker.jobs").info(
         "endpoint health cleanup completed", extra={"deleted_count": deleted}
+    )
+
+
+# flash_review_cache stores a real PR diff (source code, not derived
+# evidence) per row - unlike every other cleanup job here, this one bounds
+# retention of raw customer source code, not just operational metadata. 30
+# days matches ENDPOINT_HEALTH_RETENTION_DAYS's existing convention and
+# comfortably covers the cache's actual purpose (catching a near-duplicate
+# diff reviewed recently) without indefinitely accumulating source code
+# with no further use once that window has passed.
+FLASH_REVIEW_CACHE_RETENTION_DAYS = 30
+
+
+@log_job
+def run_flash_review_cache_cleanup_job() -> None:
+    dsn = get_settings().database_url
+    deleted = delete_expired_flash_review_cache(dsn, FLASH_REVIEW_CACHE_RETENTION_DAYS)
+    logging.getLogger("scan_worker.jobs").info(
+        "flash review cache cleanup completed", extra={"deleted_count": deleted}
     )
 
 
