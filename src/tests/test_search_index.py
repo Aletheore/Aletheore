@@ -618,6 +618,23 @@ def test_is_declaration_only_file_does_not_flag_a_csharp_file_mixing_interface_a
     )
 
 
+def test_is_declaration_only_file_still_flags_an_interface_paired_only_with_an_abstract_class():
+    # Batch 5 finding 9: _JAVA_CSHARP_CLASS_DECL's modifier alternation
+    # included "abstract", so an interface-plus-abstract-class file (no
+    # concrete/instantiable implementation at all - functionally still pure
+    # contract) was treated identically to a file with a genuine concrete
+    # class, contradicting this fix's own stated intent: "demote a Java/C#
+    # file only when it has no CONCRETE class alongside its interface."
+    assert _is_declaration_only_file(
+        "Shape.java", "java",
+        "public interface Shape {\n    double area();\n}\n"
+        "public abstract class AbstractShape implements Shape {\n"
+        "    public abstract double area();\n"
+        "    public String describe() { return \"shape\"; }\n"
+        "}\n",
+    )
+
+
 def test_is_declaration_only_file_detects_path_under_an_interfaces_directory():
     # Path-level signal alone, regardless of language or content - a PHP,
     # Java, or C# codebase commonly puts every interface under one of these
@@ -1709,6 +1726,23 @@ def test_is_test_path_does_not_swallow_ordinary_words_ending_in_test():
     assert not _is_test_path("src/AutoMapper/Mapper.cs")
 
 
+def test_is_test_path_does_not_exclude_ordinary_words_ending_in_tests():
+    # Batch 5 finding 5: the .NET-suffix fix's endswith("tests") ran against
+    # already-lowercased path segments, so it couldn't tell "UnitTests" (a
+    # real .NET test-project name, signalled by the Unit->Tests case
+    # transition) apart from an ordinary word that merely ends in the same
+    # five letters - "Contests", "Protests", "Attests" - which have no such
+    # boundary. This was a hard exclusion (file dropped from the index
+    # entirely), not a rank penalty.
+    assert not _is_test_path("src/Contests/ContestController.cs")
+    assert not _is_test_path("src/Protests/ProtestTracker.java")
+    assert not _is_test_path("src/Attests/Foo.cs")
+    # The real .NET conventions this fix exists for must still be excluded.
+    assert _is_test_path("src/UnitTests/ForAllMembers.cs")
+    assert _is_test_path("src/AutoMapper.DI.Tests/Profiles.cs")
+    assert _is_test_path("src/IntegrationTests/Foo.java")
+
+
 def test_detect_query_language_reads_an_explicit_language_mention():
     """apache/thrift implements TBinaryProtocol in seven languages, so a question
     naming one has a single correct answer and six near-identical wrong ones."""
@@ -1735,6 +1769,21 @@ def test_detect_query_language_declines_when_two_languages_are_named():
 
 def test_detect_query_language_does_not_confuse_java_with_javascript():
     assert _detect_query_language("Where is the JavaScript adapter?") == "javascript"
+
+
+def test_detect_query_language_reads_the_plain_in_cpp_and_in_csharp_phrasing():
+    # Batch 5 finding 6: \bin\s+c\b (meant to catch a bare "C" reference)
+    # also matched inside "in C++"/"in C#", since \b is satisfied by any
+    # non-word character - "+" and "#" both qualify. That collided with the
+    # already-correct unambiguous cpp/csharp match, populating `found` with
+    # two entries ({"cpp", "c"} / {"csharp", "c"}) and tripping the
+    # two-languages-named decline guard - on the exact plain phrasing
+    # ("...implemented in C++?") this feature was built to handle, not a
+    # contrived edge case.
+    assert _detect_query_language("Where is this implemented in C#") == "csharp"
+    assert _detect_query_language("Where is TBinaryProtocol implemented in C++") == "cpp"
+    # The bare-"C" cued match this pattern exists for must still work.
+    assert _detect_query_language("Where is this implemented in C") == "c"
 
 
 def test_hosted_batches_bound_a_request_by_characters_not_just_count():

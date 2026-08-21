@@ -249,6 +249,29 @@ def _truncate_for_embedding(text: str) -> str:
     return text[:MAX_EMBEDDING_CHARS] + "\n... (truncated for embedding)"
 
 
+_DOTNET_TEST_SUFFIX_RE = re.compile(r"Tests?$")
+
+
+def _has_dotnet_test_suffix(raw_part: str) -> bool:
+    """Whether a path segment ends in a .NET-style test-project name -
+    "Tests"/"Test" as its own trailing word, not a bare suffix.
+
+    Must run on the segment's original case, before it's lowered: the
+    signal that separates a real .NET test-project name from an ordinary
+    English word ending in the same five letters ("Contests", "Protests",
+    "Attests") is either a preceding "."/"-"/"_" separator
+    (AutoMapper.DI.Tests) or a lower-to-upper case transition
+    (UnitTests) - both destroyed by lowercasing first.
+    """
+    match = _DOTNET_TEST_SUFFIX_RE.search(raw_part)
+    if match is None:
+        return False
+    prefix = raw_part[: match.start()]
+    if not prefix:
+        return True
+    return prefix[-1] in "._-" or prefix[-1].islower()
+
+
 def _is_test_path(module_path: str) -> bool:
     """Whether a path is test code rather than the implementation.
 
@@ -259,7 +282,8 @@ def _is_test_path(module_path: str) -> bool:
     excluded. Someone asking how something works wants the implementation;
     if they want the test, they ask for the test by name and grep finds it.
     """
-    parts = [part.lower() for part in module_path.split("/")]
+    raw_parts = module_path.split("/")
+    parts = [part.lower() for part in raw_parts]
     if any(part in {"tests", "test", "spec", "__tests__", "testing"} for part in parts):
         return True
     # .NET names test projects after the assembly they cover - "UnitTests",
@@ -268,10 +292,18 @@ def _is_test_path(module_path: str) -> bool:
     # Measured on AutoMapper/AutoMapper: every one of 15 questions returned
     # src/UnitTests/ files ahead of the implementation, for 0.0% top-1.
     #
-    # Matched on the "tests" plural only. "test" as a suffix would swallow
-    # ordinary words - "latest" ends with "test" - while no English word this
-    # matters for ends with "tests".
-    if any(part.endswith("tests") or part.endswith(".test") for part in parts):
+    # Checked against the ORIGINAL-case segment (raw_parts), not the
+    # lowered `parts` above: a bare endswith("tests") on already-lowercased
+    # text can't tell "UnitTests" apart from an ordinary word that merely
+    # ends in the same five letters - "Contests", "Protests", "Attests" -
+    # a real false-positive class, and this is a hard exclusion (file
+    # dropped from the index entirely), not a rank penalty. Matched on the
+    # "Tests"/"Test" plural or singular as its own trailing word, signalled
+    # by a preceding "."/"-"/"_" separator or a lower-to-upper case
+    # transition (AutoMapper.DI.Tests, UnitTests) - not a bare suffix.
+    if any(_has_dotnet_test_suffix(part) for part in raw_parts):
+        return True
+    if any(part.endswith(".test") for part in parts):
         return True
     name = parts[-1]
     stem = name.rsplit(".", 1)[0]
@@ -291,8 +323,14 @@ _INTERFACE_DIR_MARKERS = frozenset({"interfaces", "contracts"})
 
 _PHP_INTERFACE_DECL = re.compile(r"^\s*interface\s+\w", re.MULTILINE)
 _JAVA_CSHARP_INTERFACE_DECL = re.compile(r"^\s*(?:public\s+|internal\s+)?interface\s+\w", re.MULTILINE)
+# "abstract" deliberately excluded from the modifier alternation: this
+# regex is used to decide whether a Java/C# file has a *concrete* class
+# alongside its interface (see _is_declaration_only_file below), and an
+# abstract class has no instantiable implementation of its own - a file
+# with only an interface plus an abstract class is functionally still
+# pure contract, same as interface-only.
 _JAVA_CSHARP_CLASS_DECL = re.compile(
-    r"^\s*(?:public\s+|internal\s+|private\s+|protected\s+|sealed\s+|abstract\s+|static\s+|partial\s+|final\s+)*class\s+\w",
+    r"^\s*(?:public\s+|internal\s+|private\s+|protected\s+|sealed\s+|static\s+|partial\s+|final\s+)*class\s+\w",
     re.MULTILINE,
 )
 _RUST_TRAIT_DECL = re.compile(r"^\s*(?:pub\s+)?trait\s+\w", re.MULTILINE)
@@ -1306,7 +1344,13 @@ _LANGUAGE_CUE = r"(?:library|implementation|impl|module|package|code|side|bindin
 _CUED_QUERY_LANGUAGES = (
     (rf"\bgo\s+{_LANGUAGE_CUE}\b|\bin\s+go\b", "go"),
     (rf"\bjava\s+{_LANGUAGE_CUE}\b|\bin\s+java\b", "java"),
-    (rf"\bc\s+{_LANGUAGE_CUE}\b|\bin\s+c\b", "c"),
+    # (?![+#]) after the bare-"c" match: \b is satisfied by any non-word
+    # character, "+" and "#" included, so \bin\s+c\b alone also matched
+    # inside "in C++"/"in C#" - colliding with the already-correct
+    # unambiguous cpp/csharp match above and tripping the two-languages
+    # decline guard on the exact plain phrasing ("...implemented in C++?")
+    # this feature exists to handle.
+    (rf"\bc\s+{_LANGUAGE_CUE}\b|\bin\s+c\b(?![+#])", "c"),
 )
 
 
