@@ -158,11 +158,36 @@ def test_run_reasoning_phase_does_not_clobber_report_the_agent_wrote_itself(tmp_
 
 
 def test_main_with_no_command_shows_banner_and_exits_cleanly():
-    result = runner.invoke(app, [])
+    with patch("aletheore.cli._check_for_update", return_value="up to date"):
+        result = runner.invoke(app, [])
 
     assert result.exit_code == 0
     assert "ALETHEORE" in result.output
     assert "scan" in result.output and "audit" in result.output
+
+
+def test_main_with_no_command_prints_update_notice_when_available():
+    with patch("aletheore.cli._check_for_update", return_value="update available: 9.9.9"):
+        result = runner.invoke(app, [])
+
+    assert result.exit_code == 0
+    assert "Update available" in result.output
+    assert "9.9.9" in result.output
+    assert "pipx upgrade aletheore" in result.output
+
+
+def test_main_with_no_command_omits_update_notice_when_up_to_date():
+    with patch("aletheore.cli._check_for_update", return_value="up to date"):
+        result = runner.invoke(app, [])
+
+    assert "Update available" not in result.output
+
+
+def test_main_with_no_command_omits_update_notice_when_check_fails():
+    with patch("aletheore.cli._check_for_update", return_value="couldn't check for updates"):
+        result = runner.invoke(app, [])
+
+    assert "Update available" not in result.output
 
 
 def test_version_flag_prints_version_and_exits():

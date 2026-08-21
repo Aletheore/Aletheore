@@ -591,6 +591,29 @@ def _check_for_update(installed_version: str, http_client: httpx.Client | None =
     return f"update available: {latest_version}"
 
 
+def _print_update_notice_if_available() -> None:
+    # Only on the bare invocation - previously the only way to learn a
+    # newer version existed was to already know to run 'aletheore status'.
+    # Deliberately not added to scan/audit/query/diff/verify/mcp/etc.: the
+    # privacy policy promises 'aletheore scan' makes no network calls of
+    # its own, and the same reasoning extends to every other command whose
+    # job is local evidence work, not talking to Aletheore's own infra.
+    # Silent on "up to date" or a failed check - this is a friendly nudge,
+    # not something worth cluttering the banner over when there's nothing
+    # to report.
+    import importlib.metadata
+
+    installed_version = importlib.metadata.version("aletheore")
+    version_note = _check_for_update(installed_version)
+    if not version_note.startswith("update available: "):
+        return
+    latest_version = version_note.removeprefix("update available: ")
+    console.print(
+        f"\n[bold yellow]Update available:[/bold yellow] {installed_version} → {latest_version}. "
+        "Run [cyan]pipx upgrade aletheore[/cyan] (or [cyan]pip install --upgrade aletheore[/cyan])."
+    )
+
+
 def _fetch_whoami(
     token: str,
     api_base_url: str = "https://app.aletheore.com",
@@ -1256,6 +1279,7 @@ def _main_callback(
 ) -> None:
     if ctx.invoked_subcommand is None:
         console.print(_banner_panel())
+        _print_update_notice_if_available()
         raise typer.Exit(code=0)
 
 
