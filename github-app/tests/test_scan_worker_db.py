@@ -150,9 +150,10 @@ async def test_insert_and_list_evidence_packet_cache_rows(pool):
         {"changed_files": ["a.py"]},
         {"description": "does a thing"},
         "deepseek-v4-pro",
+        "test-embedder",
     )
 
-    rows = list_recent_evidence_packet_cache_rows(TEST_DATABASE_URL, 401, "cache-org/repo")
+    rows = list_recent_evidence_packet_cache_rows(TEST_DATABASE_URL, 401, "cache-org/repo", "test-embedder")
 
     assert len(rows) == 1
     assert rows[0]["content_hash"] == "hash-1"
@@ -170,13 +171,13 @@ async def test_list_evidence_packet_cache_rows_never_crosses_installations(pool)
     from scan_worker.db import insert_evidence_packet_cache_row, list_recent_evidence_packet_cache_rows
 
     insert_evidence_packet_cache_row(
-        TEST_DATABASE_URL, 402, "org-a/repo", "hash-a", [1.0], {}, {"description": "a"}, "deepseek-v4-pro"
+        TEST_DATABASE_URL, 402, "org-a/repo", "hash-a", [1.0], {}, {"description": "a"}, "deepseek-v4-pro", "test-embedder"
     )
     insert_evidence_packet_cache_row(
-        TEST_DATABASE_URL, 403, "org-b/repo", "hash-b", [1.0], {}, {"description": "b"}, "deepseek-v4-pro"
+        TEST_DATABASE_URL, 403, "org-b/repo", "hash-b", [1.0], {}, {"description": "b"}, "deepseek-v4-pro", "test-embedder"
     )
 
-    rows = list_recent_evidence_packet_cache_rows(TEST_DATABASE_URL, 402, "org-a/repo")
+    rows = list_recent_evidence_packet_cache_rows(TEST_DATABASE_URL, 402, "org-a/repo", "test-embedder")
 
     assert len(rows) == 1
     assert rows[0]["content_hash"] == "hash-a"
@@ -197,9 +198,10 @@ async def test_insert_and_list_flash_review_cache_rows(pool):
         "--- a.py ---\n@@ -1,1 +1,1 @@\n+x = 1",
         [{"file": "a.py", "line": 1, "issue": "unused variable"}],
         "deepseek-v4-flash",
+        "test-embedder",
     )
 
-    rows = list_recent_flash_review_cache_rows(TEST_DATABASE_URL, 411, "flash-org/repo")
+    rows = list_recent_flash_review_cache_rows(TEST_DATABASE_URL, 411, "flash-org/repo", "test-embedder")
 
     assert len(rows) == 1
     assert rows[0]["content_hash"] == "hash-1"
@@ -217,13 +219,13 @@ async def test_list_flash_review_cache_rows_never_crosses_installations(pool):
     from scan_worker.db import insert_flash_review_cache_row, list_recent_flash_review_cache_rows
 
     insert_flash_review_cache_row(
-        TEST_DATABASE_URL, 412, "org-a/repo", "hash-a", [1.0], "diff a", [], "deepseek-v4-flash"
+        TEST_DATABASE_URL, 412, "org-a/repo", "hash-a", [1.0], "diff a", [], "deepseek-v4-flash", "test-embedder"
     )
     insert_flash_review_cache_row(
-        TEST_DATABASE_URL, 413, "org-b/repo", "hash-b", [1.0], "diff b", [], "deepseek-v4-flash"
+        TEST_DATABASE_URL, 413, "org-b/repo", "hash-b", [1.0], "diff b", [], "deepseek-v4-flash", "test-embedder"
     )
 
-    rows = list_recent_flash_review_cache_rows(TEST_DATABASE_URL, 412, "org-a/repo")
+    rows = list_recent_flash_review_cache_rows(TEST_DATABASE_URL, 412, "org-a/repo", "test-embedder")
 
     assert len(rows) == 1
     assert rows[0]["content_hash"] == "hash-a"
@@ -240,9 +242,9 @@ async def test_record_flash_review_cache_hit_updates_hit_count_and_last_hit_at(p
     )
 
     insert_flash_review_cache_row(
-        TEST_DATABASE_URL, 414, "hit-org/repo", "hash-1", [1.0], "diff", [], "deepseek-v4-flash"
+        TEST_DATABASE_URL, 414, "hit-org/repo", "hash-1", [1.0], "diff", [], "deepseek-v4-flash", "test-embedder"
     )
-    row_id = list_recent_flash_review_cache_rows(TEST_DATABASE_URL, 414, "hit-org/repo")[0]["id"]
+    row_id = list_recent_flash_review_cache_rows(TEST_DATABASE_URL, 414, "hit-org/repo", "test-embedder")[0]["id"]
 
     record_flash_review_cache_hit(TEST_DATABASE_URL, row_id)
 

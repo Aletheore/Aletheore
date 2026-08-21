@@ -1,5 +1,6 @@
 import pytest
 
+from scan_worker.embedding_client import CURRENT_EMBEDDER
 from scan_worker.flash_review_cache import lookup_cached_result, store_result
 
 
@@ -75,7 +76,7 @@ def test_lookup_fails_open_when_db_lookup_raises(monkeypatch):
 def test_store_result_writes_a_row(monkeypatch):
     written = {}
 
-    def fake_insert(dsn, installation_id, repo_full_name, content_hash, embedding, diff_text, findings, model_used):
+    def fake_insert(dsn, installation_id, repo_full_name, content_hash, embedding, diff_text, findings, model_used, embedder):
         written.update(
             installation_id=installation_id,
             repo_full_name=repo_full_name,
@@ -84,6 +85,7 @@ def test_store_result_writes_a_row(monkeypatch):
             diff_text=diff_text,
             findings=findings,
             model_used=model_used,
+            embedder=embedder,
         )
 
     monkeypatch.setattr("scan_worker.flash_review_cache.embed_text", lambda text: [0.5, 0.5])
@@ -103,6 +105,24 @@ def test_store_result_writes_a_row(monkeypatch):
     assert written["embedding"] == [0.5, 0.5]
     assert written["findings"] == [{"file": "a.py", "line": 1, "issue": "fresh finding"}]
     assert written["model_used"] == "deepseek-v4-flash"
+    # Batch 5 finding 8: every write must be tagged with the embedder that
+    # produced the vector.
+    assert written["embedder"] == CURRENT_EMBEDDER
+
+
+def test_lookup_filters_by_the_current_embedder(monkeypatch):
+    captured = {}
+
+    def fake_list(dsn, installation_id, repo_full_name, embedder, limit=200):
+        captured["embedder"] = embedder
+        return []
+
+    monkeypatch.setattr("scan_worker.flash_review_cache.embed_text", lambda text: [1.0, 0.0])
+    monkeypatch.setattr("scan_worker.flash_review_cache.list_recent_flash_review_cache_rows", fake_list)
+
+    lookup_cached_result("postgresql://unused", 1, "org/repo", "some diff")
+
+    assert captured["embedder"] == CURRENT_EMBEDDER
 
 
 def test_store_result_is_noop_when_embedding_unavailable(monkeypatch):
@@ -155,5 +175,34 @@ async def test_lookup_never_returns_a_different_installations_row(pool, monkeypa
     )
 
     result = lookup_cached_result(TEST_DATABASE_URL, 602, "org-b/repo", "diff for org-a")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_lookup_never_matches_a_row_written_under_a_different_embedder(pool, monkeypatch):
+    # Batch 5 finding 8, proven against a real Postgres instance - see
+    # test_packet_cache.py's equivalent test for the full reasoning.
+    from conftest import TEST_DATABASE_URL
+
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login) VALUES ($1, $2)",
+        603,
+        "org-c",
+    )
+
+    monkeypatch.setattr("scan_worker.flash_review_cache.embed_text", lambda text: [1.0, 0.0])
+    monkeypatch.setattr("scan_worker.flash_review_cache.CURRENT_EMBEDDER", "old-embedder:v1")
+    store_result(
+        TEST_DATABASE_URL,
+        603,
+        "org-c/repo",
+        "diff cached under the old embedder",
+        [{"file": "a.py", "line": 1, "issue": "old-embedder finding"}],
+        "deepseek-v4-flash",
+    )
+
+    monkeypatch.setattr("scan_worker.flash_review_cache.CURRENT_EMBEDDER", "new-embedder:v2")
+    result = lookup_cached_result(TEST_DATABASE_URL, 603, "org-c/repo", "diff cached under the old embedder")
 
     assert result is None

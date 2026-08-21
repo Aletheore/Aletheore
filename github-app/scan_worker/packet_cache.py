@@ -14,7 +14,7 @@ from scan_worker.db import (
     list_recent_evidence_packet_cache_rows,
     record_evidence_packet_cache_hit,
 )
-from scan_worker.embedding_client import embed_text
+from scan_worker.embedding_client import CURRENT_EMBEDDER, embed_text
 
 SIMILARITY_THRESHOLD = 0.92
 
@@ -54,7 +54,7 @@ def lookup_cached_result(
         if vector is None:
             return None
 
-        rows = list_recent_evidence_packet_cache_rows(dsn, installation_id, repo_full_name)
+        rows = list_recent_evidence_packet_cache_rows(dsn, installation_id, repo_full_name, CURRENT_EMBEDDER)
         if not rows:
             return None
 
@@ -103,6 +103,7 @@ def store_result(
             packet,
             raw_model_output,
             model_used,
+            CURRENT_EMBEDDER,
         )
     except Exception as exc:
         logger.warning("evidence packet cache write failed (%s); continuing without cache", type(exc).__name__)

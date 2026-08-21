@@ -21,6 +21,16 @@ import httpx
 # regardless of how it was found.
 MAX_EMBEDDING_CHARS = 5000
 
+# Identifies which embedder produced a vector, recorded alongside every
+# similarity-cache row (packet_cache.py, flash_review_cache.py) so a
+# future embedder switch can't silently compare vectors from two
+# different embedding spaces - see before_launch_fixes.md Batch 5 finding
+# 8. Update this whenever the model or serving backend actually changes,
+# in the same change that points JINA_EMBED_BASE_URL (or its replacement)
+# at the new service - it's what makes an old row's cached vector
+# correctly stop matching new queries the moment the embedder does.
+CURRENT_EMBEDDER = "jina-embed:jina-embeddings-v2-base-code"
+
 logger = logging.getLogger(__name__)
 
 
