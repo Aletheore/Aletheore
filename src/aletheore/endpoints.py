@@ -120,13 +120,29 @@ def _collect_fastapi_include_prefixes(
             None,
         )
         if prefix_arg is None:
-            continue
-        value = prefix_arg.child_by_field_name("value")
-        if value is None or value.type != "string":
-            continue
+            # No prefix= at all - an ordinary FastAPI pattern for mounting a
+            # router unprefixed alongside also mounting it elsewhere under a
+            # versioned/admin prefix. Recorded as an explicit empty-string
+            # mount rather than skipped: skipping it left this router's
+            # mounts list empty for this call, and if the same router also
+            # had one explicitly-prefixed mount elsewhere, that non-empty
+            # list silently suppressed the fan-out branch that would have
+            # emitted the implicit mount's own unprefixed path - a real,
+            # reachable endpoint dropped from the map entirely. compose()
+            # below already treats an empty-string mount_prefix as "nothing
+            # to join", so recording it here is enough to fix the fan-out.
+            prefix_text = ""
+        else:
+            value = prefix_arg.child_by_field_name("value")
+            if value is None or value.type != "string":
+                # prefix= given but not a literal string (a variable,
+                # f-string, ...) - can't resolve it statically, so skip only
+                # this mount rather than guessing at its value.
+                continue
+            prefix_text = _string_literal_text(value, source)
         router = source[positional[0].start_byte:positional[0].end_byte].decode()
         defining_file = _resolve_router_definition_file(root, source, router, repo_path, path, source_roots)
-        prefixes.setdefault((defining_file, router), []).append(_string_literal_text(value, source))
+        prefixes.setdefault((defining_file, router), []).append(prefix_text)
     return prefixes
 
 
