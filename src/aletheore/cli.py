@@ -125,12 +125,12 @@ MANUAL_DIR = str(Path(__file__).resolve().parent / "manual")
 console = Console()
 
 # Grouped rather than flat because this list is the CLI's only map of what
-# `query` can actually do - 23 kinds printed as one comma-separated run is
+# `query` can actually do - every kind printed as one comma-separated run is
 # unreadable, and a bare `aletheore query` previously got Typer's "Missing
 # argument 'KIND'" with no kinds named at all. The grouping is also the
 # answer to "why so few commands": every kind below reads the same air.json,
-# which is the point, so they belong under one verb rather than promoted to
-# 23 top-level commands.
+# which is the point, so they belong under one verb rather than each being
+# promoted to its own top-level command.
 QUERY_KIND_GROUPS: dict[str, list[str]] = {
     "Structure": [
         "imports",
@@ -1149,24 +1149,30 @@ def _mcp_install(path: str, targets: list[str]) -> int:
         # long text at the console width, which would corrupt the command if
         # pasted. Same reasoning as _print_result above.
         console.print(f"  claude mcp add aletheore -- {_aletheore_command()} mcp {repo_path}", soft_wrap=True)
-    console.print(
-        "\n[bold]PyCharm / other JetBrains IDEs:[/bold] not auto-configured - there's no single "
-        "stable, documented file format to script against yet. Instead: open Settings | Tools | "
-        "AI Assistant | Model Context Protocol, and use \"Import a Claude MCP config\", pointing "
-        "at the .mcp.json written above."
-    )
+    # Gated on the target that made each note true - these used to print
+    # unconditionally regardless of --target, so e.g. `--target cursor`
+    # claimed "wrote .codex/config.toml" and told the user to point PyCharm
+    # at "the .mcp.json written above" when neither file was ever written.
+    if "claude-code" in selected:
+        console.print(
+            "\n[bold]PyCharm / other JetBrains IDEs:[/bold] not auto-configured - there's no single "
+            "stable, documented file format to script against yet. Instead: open Settings | Tools | "
+            "AI Assistant | Model Context Protocol, and use \"Import a Claude MCP config\", pointing "
+            "at the .mcp.json written above."
+        )
     console.print(
         "[bold]vim / Neovim / Emacs / other terminal editors:[/bold] no native MCP client exists "
         "in any of them - support depends entirely on whichever AI plugin you have installed "
         "(e.g. avante.nvim, codecompanion.nvim). Point that plugin's own MCP config at: "
         f"aletheore mcp {repo_path}"
     )
-    console.print(
-        "[bold]OpenAI Codex CLI:[/bold] wrote .codex/config.toml, but Codex only reads "
-        "project-scoped MCP config for projects it already trusts - if the tools don't show up, "
-        "check Codex's own trust prompt for this directory. Also note: writing this file "
-        "reformats it - any hand-written comments in an existing config.toml are not preserved."
-    )
+    if "codex-cli" in selected:
+        console.print(
+            "[bold]OpenAI Codex CLI:[/bold] wrote .codex/config.toml, but Codex only reads "
+            "project-scoped MCP config for projects it already trusts - if the tools don't show up, "
+            "check Codex's own trust prompt for this directory. Also note: writing this file "
+            "reformats it - any hand-written comments in an existing config.toml are not preserved."
+        )
     return 0
 
 
@@ -1483,12 +1489,15 @@ def index(
 def query(
     # Optional rather than required: a bare `aletheore query` previously hit
     # Typer's "Missing argument 'KIND'", which names no kinds at all, leaving
-    # 23 capabilities discoverable only via --help. Defaulting to None turns
+    # every capability discoverable only via --help. Defaulting to None turns
     # the most likely first invocation into the listing the user was after.
     # Exit code stays 0 - asking what the kinds are is a successful question,
     # not a usage error. An *unknown* kind still exits 1, via _query.
     kind: Optional[str] = typer.Argument(
-        None, help="one of the 23 query kinds; omit to list them by category"
+        # Computed, not a hardcoded count in the help text itself - a
+        # hardcoded "23" here previously drifted to 24 real kinds the
+        # moment one more was added and nobody thought to grep for it.
+        None, help=f"one of the {len(QUERY_KIND_CHOICES)} query kinds; omit to list them by category"
     ),
     target: Optional[str] = typer.Argument(None, help="target for kinds that need one (a file path, branch name, ...)"),
     symbol: Optional[str] = typer.Argument(None, help="symbol name for 'symbol-source'"),
@@ -1630,7 +1639,7 @@ def healthcheck(
 
 @app.command(help="authenticate with GitHub via device flow and save a personal API token")
 def login() -> None:
-    from aletheore.credentials import save_api_token
+    from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, has_api_key, save_api_token
     from aletheore.device_auth import (
         DeviceFlowError,
         mint_cli_token,
@@ -1638,6 +1647,16 @@ def login() -> None:
         request_device_code,
         resolve_installation,
     )
+
+    # A purely local check (no network round-trip, unlike status()'s whoami
+    # call) - just enough to tell the user up front that a token is already
+    # saved, before running the whole device flow. Previously this command
+    # gave no sign it knew a token already existed until after a brand new
+    # one had already been minted and saved.
+    if has_api_key(
+        "ALETHEORE_API_TOKEN", "aletheore-managed-audit", credentials_path=DEFAULT_CREDENTIALS_PATH
+    ):
+        console.print("A token is already saved locally - continuing will replace it.\n")
 
     try:
         code = request_device_code()

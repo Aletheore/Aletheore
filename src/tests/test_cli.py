@@ -528,6 +528,29 @@ def test_mcp_install_omits_the_claude_mcp_add_command_when_claude_code_not_targe
     assert "claude mcp add" not in result.stdout
 
 
+def test_mcp_install_does_not_claim_files_it_never_wrote(tmp_path):
+    # Regression: PyCharm/Codex CLI guidance used to print unconditionally
+    # regardless of --target, so `--target cursor` alone still told the user
+    # "wrote .codex/config.toml" and to point PyCharm at "the .mcp.json
+    # written above" - neither file exists after a cursor-only run.
+    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "cursor"])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / ".codex" / "config.toml").exists()
+    assert not (tmp_path / ".mcp.json").exists()
+    assert "PyCharm" not in result.stdout
+    assert ".codex/config.toml" not in result.stdout
+
+
+def test_mcp_install_codex_only_target_still_prints_its_own_guidance(tmp_path):
+    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "codex-cli"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".codex" / "config.toml").exists()
+    assert "wrote .codex/config.toml" in result.stdout
+    assert "PyCharm" not in result.stdout
+
+
 def test_progress_printer_prints_each_distinct_phase_on_its_own_line(capsys):
     report = _make_progress_printer(is_tty=False)
     report("Detecting languages, frameworks, and build tools")
@@ -1277,8 +1300,40 @@ def test_login_saves_token_when_installation_auto_resolved(tmp_path, monkeypatch
 
     assert result.exit_code == 0
     assert "acme" in result.output
+    assert "already saved" not in result.output.lower()
     saved = json.loads(creds_path.read_text())
     assert saved["aletheore-managed-audit"] == "aletheore-tok-xyz"
+
+
+def test_login_acknowledges_an_already_saved_token_before_replacing_it(tmp_path, monkeypatch):
+    # Regression: login() previously gave no sign it knew a token already
+    # existed until after a brand new one had already been minted and
+    # saved - running it while already logged in looked identical to
+    # running it for the first time.
+    import aletheore.credentials as credentials
+
+    creds_path = tmp_path / "creds.json"
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", creds_path)
+    credentials.save_api_token("aletheore-managed-audit", "old-token", creds_path)
+
+    with patch("aletheore.device_auth.request_device_code") as mock_request_code, \
+         patch("aletheore.device_auth.poll_for_access_token") as mock_poll, \
+         patch("aletheore.device_auth.resolve_installation") as mock_resolve, \
+         patch("aletheore.device_auth.mint_cli_token") as mock_mint:
+        mock_request_code.return_value = MagicMock(
+            verification_uri="https://github.com/login/device",
+            user_code="ABCD-1234",
+        )
+        mock_poll.return_value = "gho_faketoken"
+        mock_resolve.return_value = {"installation_id": 100, "account_login": "acme"}
+        mock_mint.return_value = "aletheore-tok-new"
+
+        result = runner.invoke(app, ["login"])
+
+    assert result.exit_code == 0
+    assert "already saved" in result.output.lower()
+    saved = json.loads(creds_path.read_text())
+    assert saved["aletheore-managed-audit"] == "aletheore-tok-new"
 
 
 def test_login_prompts_when_installation_ambiguous(tmp_path, monkeypatch):
@@ -1980,6 +2035,17 @@ def test_query_kind_groups_cover_every_dispatchable_kind():
     """The grouped listing is the only map of what `query` does, so a kind
     added to QUERY_FUNCTIONS without a group would vanish from it."""
     assert set(QUERY_FUNCTIONS) <= set(QUERY_KIND_CHOICES)
+
+
+def test_query_help_kind_count_matches_the_real_number_of_kinds():
+    # Regression: --help's kind count used to be a hardcoded "23" that
+    # drifted the moment a 24th kind was added and nobody thought to grep
+    # for the stale literal - it's computed from QUERY_KIND_CHOICES now, so
+    # this can't go stale again, but pins the count is still self-consistent.
+    result = runner.invoke(app, ["query", "--help"])
+
+    assert result.exit_code == 0
+    assert f"one of the {len(QUERY_KIND_CHOICES)} query kinds" in result.output
 
 
 def test_unknown_query_kind_suggests_the_closest_match():
