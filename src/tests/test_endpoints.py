@@ -146,7 +146,7 @@ def test_extract_fastapi_composes_router_and_include_prefixes():
     )
 
     entries = _extract_flask_fastapi_routes(
-        root, source, "app/api.py", {"router": ["/internal"]}
+        root, source, "app/api.py", {("app/api.py", "router"): ["/internal"]}
     )
 
     assert entries[0]["method"] == "GET"
@@ -161,6 +161,7 @@ def test_map_api_endpoints_composes_fastapi_prefix_from_another_file(tmp_path):
         'def get_user(user_id: int):\n    pass\n'
     )
     (tmp_path / "main.py").write_text(
+        "from users import router\n"
         'app.include_router(router, prefix="/api/v1")\n'
     )
 
@@ -191,6 +192,7 @@ def test_map_api_endpoints_fans_out_a_router_mounted_at_multiple_prefixes(tmp_pa
         'def get_user(user_id: int):\n    pass\n'
     )
     (tmp_path / "main.py").write_text(
+        "from users import router\n"
         'app.include_router(router, prefix="/api")\n'
         'app.include_router(router, prefix="/admin")\n'
     )
@@ -200,6 +202,47 @@ def test_map_api_endpoints_fans_out_a_router_mounted_at_multiple_prefixes(tmp_pa
     routes = [e for e in result["endpoints"] if e["file"] == "users.py"]
     paths = {route["path"] for route in routes}
     assert paths == {"/api/{user_id}", "/admin/{user_id}"}
+
+
+def test_map_api_endpoints_does_not_cross_contaminate_same_named_routers_in_different_files(tmp_path):
+    # Regression test: "router" is the idiomatic FastAPI variable name, so
+    # two different files' routers, each imported into a different mounting
+    # file under that same conventional bare name, used to be
+    # indistinguishable to cross_file_router_mounts (keyed by bare
+    # identifier text only) - every file's routes got every OTHER router's
+    # mount prefixes too, in addition to its own. Modeled on the idiomatic
+    # `from app.routers.users import router` (no alias) pattern - two
+    # separate mounting files here, matching a real modular app that splits
+    # router registration by domain.
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "__init__.py").write_text("")
+    (tmp_path / "app" / "routers").mkdir()
+    (tmp_path / "app" / "routers" / "__init__.py").write_text("")
+    (tmp_path / "app" / "routers" / "users.py").write_text(
+        'router = APIRouter()\n'
+        '@router.get("/list")\n'
+        'def list_users():\n    pass\n'
+    )
+    (tmp_path / "app" / "routers" / "items.py").write_text(
+        'router = APIRouter()\n'
+        '@router.get("/list")\n'
+        'def list_items():\n    pass\n'
+    )
+    (tmp_path / "app" / "main.py").write_text(
+        "from app.routers.users import router\n"
+        'app.include_router(router, prefix="/users")\n'
+    )
+    (tmp_path / "app" / "admin_setup.py").write_text(
+        "from app.routers.items import router\n"
+        'sub_app.include_router(router, prefix="/items")\n'
+    )
+
+    result = map_api_endpoints(tmp_path)
+
+    users_paths = {e["path"] for e in result["endpoints"] if e["file"] == "app/routers/users.py"}
+    items_paths = {e["path"] for e in result["endpoints"] if e["file"] == "app/routers/items.py"}
+    assert users_paths == {"/users/list"}
+    assert items_paths == {"/items/list"}
 
 
 def test_extract_flask_fastapi_ignores_non_route_decorators():
