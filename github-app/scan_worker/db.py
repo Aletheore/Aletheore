@@ -1240,6 +1240,7 @@ def insert_evidence_packet_cache_row(
     packet: dict,
     model_output: dict,
     model_used: str,
+    embedder: str,
 ) -> None:
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
@@ -1247,8 +1248,8 @@ def insert_evidence_packet_cache_row(
                 """
                 INSERT INTO evidence_packet_cache
                     (installation_id, repo_full_name, content_hash, embedding,
-                     packet_json, model_output, model_used)
-                VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
+                     packet_json, model_output, model_used, embedder)
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
                 """,
                 (
                     installation_id,
@@ -1258,25 +1259,33 @@ def insert_evidence_packet_cache_row(
                     json.dumps(packet),
                     json.dumps(model_output),
                     model_used,
+                    embedder,
                 ),
             )
         conn.commit()
 
 
 def list_recent_evidence_packet_cache_rows(
-    dsn: str, installation_id: int, repo_full_name: str, limit: int = 200
+    dsn: str, installation_id: int, repo_full_name: str, embedder: str, limit: int = 200
 ) -> list[dict]:
+    # Filtered to the currently-configured embedder at the SQL level, not
+    # in Python after fetching: a row written under a different embedder
+    # (an old row from before a switch, or one written mid-rollout) is a
+    # different embedding space entirely, not just a lower-quality match -
+    # see before_launch_fixes.md Batch 5 finding 8. NULL (every row from
+    # before this column existed) never equals embedder in SQL, so those
+    # age out the same way, without a separate migration to purge them.
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
                 """
                 SELECT id, content_hash, embedding, packet_json, model_output, model_used, hit_count
                 FROM evidence_packet_cache
-                WHERE installation_id = %s AND repo_full_name = %s
+                WHERE installation_id = %s AND repo_full_name = %s AND embedder = %s
                 ORDER BY created_at DESC
                 LIMIT %s
                 """,
-                (installation_id, repo_full_name, limit),
+                (installation_id, repo_full_name, embedder, limit),
             )
             return cur.fetchall()
 
@@ -1304,6 +1313,7 @@ def insert_flash_review_cache_row(
     diff_text: str,
     findings: list[dict],
     model_used: str,
+    embedder: str,
 ) -> None:
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
@@ -1311,8 +1321,8 @@ def insert_flash_review_cache_row(
                 """
                 INSERT INTO flash_review_cache
                     (installation_id, repo_full_name, content_hash, embedding,
-                     diff_text, findings, model_used)
-                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
+                     diff_text, findings, model_used, embedder)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s)
                 """,
                 (
                     installation_id,
@@ -1322,25 +1332,28 @@ def insert_flash_review_cache_row(
                     diff_text,
                     json.dumps(findings),
                     model_used,
+                    embedder,
                 ),
             )
         conn.commit()
 
 
 def list_recent_flash_review_cache_rows(
-    dsn: str, installation_id: int, repo_full_name: str, limit: int = 200
+    dsn: str, installation_id: int, repo_full_name: str, embedder: str, limit: int = 200
 ) -> list[dict]:
+    # See list_recent_evidence_packet_cache_rows's comment - same
+    # embedder-identity filter, same reasoning (Batch 5 finding 8).
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
                 """
                 SELECT id, content_hash, embedding, diff_text, findings, model_used, hit_count
                 FROM flash_review_cache
-                WHERE installation_id = %s AND repo_full_name = %s
+                WHERE installation_id = %s AND repo_full_name = %s AND embedder = %s
                 ORDER BY created_at DESC
                 LIMIT %s
                 """,
-                (installation_id, repo_full_name, limit),
+                (installation_id, repo_full_name, embedder, limit),
             )
             return cur.fetchall()
 

@@ -1,5 +1,6 @@
 import pytest
 
+from scan_worker.embedding_client import CURRENT_EMBEDDER
 from scan_worker.packet_cache import lookup_cached_result, store_result
 
 
@@ -68,7 +69,7 @@ def test_lookup_returns_match_above_threshold_and_records_hit(monkeypatch):
 def test_store_result_writes_a_row(monkeypatch):
     written = {}
 
-    def fake_insert(dsn, installation_id, repo_full_name, content_hash, embedding, packet, model_output, model_used):
+    def fake_insert(dsn, installation_id, repo_full_name, content_hash, embedding, packet, model_output, model_used, embedder):
         written.update(
             installation_id=installation_id,
             repo_full_name=repo_full_name,
@@ -77,6 +78,7 @@ def test_store_result_writes_a_row(monkeypatch):
             packet=packet,
             model_output=model_output,
             model_used=model_used,
+            embedder=embedder,
         )
 
     monkeypatch.setattr("scan_worker.packet_cache.embed_text", lambda text: [0.5, 0.5])
@@ -89,6 +91,30 @@ def test_store_result_writes_a_row(monkeypatch):
     assert written["embedding"] == [0.5, 0.5]
     assert written["model_output"] == {"description": "fresh"}
     assert written["model_used"] == "deepseek-v4-pro"
+    # Batch 5 finding 8: every write must be tagged with the embedder that
+    # produced the vector, so a future embedder switch can filter out
+    # mismatched rows at lookup time instead of comparing across two
+    # different embedding spaces.
+    assert written["embedder"] == CURRENT_EMBEDDER
+
+
+def test_lookup_filters_by_the_current_embedder(monkeypatch):
+    # Batch 5 finding 8: the lookup must ask the DB layer for rows tagged
+    # with the currently-configured embedder specifically, not "any row
+    # for this installation/repo" - a row written under a different
+    # embedder is a different embedding space, not just a worse match.
+    captured = {}
+
+    def fake_list(dsn, installation_id, repo_full_name, embedder, limit=200):
+        captured["embedder"] = embedder
+        return []
+
+    monkeypatch.setattr("scan_worker.packet_cache.embed_text", lambda text: [1.0, 0.0])
+    monkeypatch.setattr("scan_worker.packet_cache.list_recent_evidence_packet_cache_rows", fake_list)
+
+    lookup_cached_result("postgresql://unused", 1, "org/repo", _packet())
+
+    assert captured["embedder"] == CURRENT_EMBEDDER
 
 
 def test_store_result_is_noop_when_embedding_unavailable(monkeypatch):
@@ -130,5 +156,40 @@ async def test_lookup_never_returns_a_different_installations_row(pool, monkeypa
     result = lookup_cached_result(
         TEST_DATABASE_URL, 502, "org-b/repo", {"changed_files": ["a.py"], "cache_eligible": True}
     )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_lookup_never_matches_a_row_written_under_a_different_embedder(pool, monkeypatch):
+    # Batch 5 finding 8, proven against a real Postgres instance: a row
+    # written under a different embedder (an old row from before a switch,
+    # or one written mid-rollout) must never be served as a hit, even
+    # though its vector has the identical dimension and would otherwise
+    # pass _cosine_similarity's only check - comparing across two
+    # different embedding spaces is meaningless, not just a worse match.
+    from conftest import TEST_DATABASE_URL
+
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login) VALUES ($1, $2)",
+        503,
+        "org-c",
+    )
+
+    monkeypatch.setattr("scan_worker.packet_cache.embed_text", lambda text: [1.0, 0.0])
+    monkeypatch.setattr("scan_worker.packet_cache.CURRENT_EMBEDDER", "old-embedder:v1")
+    store_result(
+        TEST_DATABASE_URL,
+        503,
+        "org-c/repo",
+        _packet(),
+        {"description": "cached under the old embedder"},
+        "deepseek-v4-pro",
+    )
+
+    # Same repo, same near-identical embedding, but the currently-configured
+    # embedder has moved on - the old-embedder row must not be served.
+    monkeypatch.setattr("scan_worker.packet_cache.CURRENT_EMBEDDER", "new-embedder:v2")
+    result = lookup_cached_result(TEST_DATABASE_URL, 503, "org-c/repo", _packet())
 
     assert result is None
