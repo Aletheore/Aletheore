@@ -34,6 +34,44 @@ jobs:
       - name: Build image
         run: docker build -f "${{ matrix.dockerfile }}" -t "${{ matrix.tag }}" .
 
+      # Every step below builds and scans the image but never runs it - a
+      # missing cross-package COPY line (e.g. #246: dashboard.py gained an
+      # import from scan_worker, but Dockerfile.app-server never copied
+      # that package in) builds fine, since Python doesn't validate imports
+      # at `docker build` time, and only fails at container *start*. That
+      # shipped CI-green and only surfaced on the next real prod redeploy.
+      # This runs the actual entry module's import chain inside the built
+      # image - cheap (no real Postgres/Redis needed, since app-server's
+      # settings are only required, not connected to, at import time) and
+      # catches a missing package the same way the real container would,
+      # instead of finding out on the prod host.
+      - name: Smoke test (import check)
+        run: |
+          case "${{ matrix.image }}" in
+            app-server)
+              docker run --rm \
+                -e DATABASE_URL="postgresql://smoketest:smoketest@localhost/smoketest" \
+                -e REDIS_URL="redis://localhost:6379/0" \
+                -e GITHUB_APP_ID="smoketest" \
+                -e GITHUB_APP_PRIVATE_KEY="smoketest" \
+                -e GITHUB_WEBHOOK_SECRET="smoketest" \
+                -e GITHUB_CLIENT_ID="smoketest" \
+                -e GITHUB_CLIENT_SECRET="smoketest" \
+                -e SESSION_SECRET="smoketest" \
+                -e AUDIT_SIGNING_PRIVATE_KEY="smoketest" \
+                -e PADDLE_WEBHOOK_SECRET="smoketest" \
+                -e PADDLE_CLIENT_TOKEN="smoketest" \
+                -e GITHUB_APP_SLUG="smoketest" \
+                "${{ matrix.tag }}" python -c "import app_server.main"
+              ;;
+            scan-worker)
+              docker run --rm "${{ matrix.tag }}" python -c "import scan_worker.worker"
+              ;;
+            jina-embed)
+              docker run --rm "${{ matrix.tag }}" python -c "import jina_embed.server"
+              ;;
+          esac
+
       - name: Scan image report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
