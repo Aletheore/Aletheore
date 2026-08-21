@@ -204,6 +204,34 @@ def test_map_api_endpoints_fans_out_a_router_mounted_at_multiple_prefixes(tmp_pa
     assert paths == {"/api/{user_id}", "/admin/{user_id}"}
 
 
+def test_map_api_endpoints_keeps_an_implicit_mount_alongside_a_prefixed_one(tmp_path):
+    # Batch 5 finding 4: _collect_fastapi_include_prefixes only recorded a
+    # mount when include_router(...) carried an explicit prefix= kwarg - a
+    # prefix-less app.include_router(router) call (an ordinary FastAPI
+    # pattern for mounting a router unprefixed alongside also mounting it
+    # under a versioned/admin prefix) contributed nothing to the mounts
+    # list, so when the *same* router also had one explicitly-prefixed
+    # mount, the truthy mounts list from that other call suppressed the
+    # fan-out branch that would have emitted the unprefixed path - silently
+    # dropping a real, reachable endpoint from the map.
+    (tmp_path / "users.py").write_text(
+        'router = APIRouter()\n'
+        '@router.get("/{user_id}")\n'
+        'def get_user(user_id: int):\n    pass\n'
+    )
+    (tmp_path / "main.py").write_text(
+        "from users import router\n"
+        "app.include_router(router)\n"
+        'app.include_router(router, prefix="/admin")\n'
+    )
+
+    result = map_api_endpoints(tmp_path)
+
+    routes = [e for e in result["endpoints"] if e["file"] == "users.py"]
+    paths = {route["path"] for route in routes}
+    assert paths == {"/{user_id}", "/admin/{user_id}"}
+
+
 def test_map_api_endpoints_does_not_cross_contaminate_same_named_routers_in_different_files(tmp_path):
     # Regression test: "router" is the idiomatic FastAPI variable name, so
     # two different files' routers, each imported into a different mounting
