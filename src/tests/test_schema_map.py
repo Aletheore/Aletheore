@@ -239,6 +239,87 @@ def test_indexes_are_extracted(tmp_path):
     ]
 
 
+def test_a_comment_inside_a_column_list_does_not_swallow_the_next_column(tmp_path):
+    # Batch 5 finding 1: neither _split_top_level nor
+    # _tokenize_column_definition recognized -- or /* */ comments, so an
+    # ordinary inline comment inside a CREATE TABLE column list got scanned
+    # as if it were column-definition source - fusing the real column that
+    # follows into a bogus "--"-named column, dropping it from the schema
+    # with no trace in `unsupported`.
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE things (
+                id BIGINT PRIMARY KEY,
+                -- deprecated
+                name TEXT
+            );
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert [c["name"] for c in result["tables"][0]["columns"]] == ["id", "name"]
+
+
+def test_an_unbalanced_paren_inside_a_comment_does_not_swallow_the_next_table(tmp_path):
+    # Batch 5 finding 2: _read_parenthesised_body's depth-tracking scan had
+    # no comment awareness, so a stray "(" inside a comment (e.g. "see issue
+    # (#123") bumped depth with nothing to close it until the *next* real
+    # ")" in the file - which can belong to an entirely different, later
+    # CREATE TABLE statement's own column definition, silently merging two
+    # tables' worth of text into one and dropping the second table.
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE users (
+                id BIGINT PRIMARY KEY,
+                -- see issue (#123 for context, not closed here
+                name TEXT NOT NULL
+            );
+
+            CREATE TABLE orders (
+                id BIGINT PRIMARY KEY,
+                user_id BIGINT REFERENCES users(id)
+            );
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    table_names = [t["name"] for t in result["tables"]]
+    assert "orders" in table_names
+    assert [c["name"] for c in result["tables"][table_names.index("users")]["columns"]] == ["id", "name"]
+    assert {"from_table": "orders", "from_column": "user_id", "to_table": "users", "to_column": "id", "on_delete": None} in [
+        {k: v for k, v in r.items() if k != "file" and k != "line"} for r in result["relations"]
+    ]
+
+
+def test_a_semicolon_inside_a_block_comment_does_not_end_the_statement_early(tmp_path):
+    # Batch 5 finding 3: _skip_to_statement_end special-cased -- comments
+    # but had no branch for /* */ block comments, so a ; inside a block
+    # comment was treated as the real statement terminator - splitting one
+    # ALTER TABLE statement into garbage fragments and losing the real
+    # column change.
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE widgets (id BIGINT PRIMARY KEY);
+            ALTER TABLE widgets ADD COLUMN status TEXT /* values: active; inactive; deleted */ DEFAULT 'active';
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    columns = {c["name"]: c for c in result["tables"][0]["columns"]}
+    assert "status" in columns
+    assert columns["status"]["default"] == "'active'"
+    assert result["unsupported"] == []
+
+
 def test_symlinked_migrations_are_not_followed(tmp_path):
     repo = write_migrations(tmp_path, {"001.sql": "CREATE TABLE real (id BIGINT PRIMARY KEY);"})
     outside = tmp_path / "outside.sql"
