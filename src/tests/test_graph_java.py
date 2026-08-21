@@ -225,10 +225,16 @@ def test_build_module_graph_java_import_escaping_repo_root_does_not_crash(tmp_pa
     assert dependency_graph["edges"] == []
 
 
-def test_build_module_graph_reparses_java_without_retaining_prepass_trees(tmp_path):
-    # The source-root pre-pass keeps only the package string. The main loop
-    # therefore reads and parses each file again, trading a small amount of
-    # CPU for bounded memory rather than retaining every tree.
+def test_build_module_graph_reuses_the_java_prepass_parse_in_the_main_loop(tmp_path):
+    # Real regression this guards: the source-root pre-pass already reads
+    # and parses every .java file to extract its package declaration - the
+    # main loop used to read and parse each one again from scratch instead
+    # of reusing that (source, tree) pair, doubling tree-sitter parse cost
+    # for every Java file in a scan for no benefit (the pre-parsed tree is
+    # consumed by the main loop moments later in the same function call,
+    # not retained for the scan's whole lifetime, so caching it costs
+    # nothing extra in memory - the "reparse for bounded memory" framing
+    # this test used to encode was never a real trade-off).
     repo = make_java_repo(tmp_path)
 
     real_read_bytes = Path.read_bytes
@@ -243,7 +249,7 @@ def test_build_module_graph_reparses_java_without_retaining_prepass_trees(tmp_pa
         build_module_graph(repo)
 
     assert read_counts
-    assert all(count == 2 for count in read_counts.values())
+    assert all(count == 1 for count in read_counts.values())
 
 
 def test_java_extracts_javadoc_and_return_type(tmp_path):

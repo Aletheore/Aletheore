@@ -205,10 +205,17 @@ def test_build_module_graph_csharp_using_escaping_repo_root_does_not_crash(tmp_p
     assert dependency_graph["edges"] == []
 
 
-def test_build_module_graph_reparses_csharp_without_retaining_prepass_trees(tmp_path):
-    # The namespace/type pre-pass keeps only extracted strings. The main loop
-    # therefore reads and parses each file again, trading a small amount of
-    # CPU for bounded memory rather than retaining every tree.
+def test_build_module_graph_reuses_the_csharp_prepass_parse_in_the_main_loop(tmp_path):
+    # Real regression this guards: the namespace/type pre-pass already reads
+    # and parses every .cs file to extract its namespace and declared type
+    # names - the main loop used to read and parse each one again from
+    # scratch instead of reusing that (source, tree) pair, doubling
+    # tree-sitter parse cost for every C# file in a scan for no benefit
+    # (the pre-parsed tree is consumed by the main loop moments later in
+    # the same function call, not retained for the scan's whole lifetime,
+    # so caching it costs nothing extra in memory - the "reparse for
+    # bounded memory" framing this test used to encode was never a real
+    # trade-off).
     repo = make_csharp_repo(tmp_path)
 
     real_read_bytes = Path.read_bytes
@@ -223,7 +230,7 @@ def test_build_module_graph_reparses_csharp_without_retaining_prepass_trees(tmp_
         build_module_graph(repo)
 
     assert read_counts
-    assert all(count == 2 for count in read_counts.values())
+    assert all(count == 1 for count in read_counts.values())
 
 
 def test_csharp_extracts_summary_from_xmldoc(tmp_path):
