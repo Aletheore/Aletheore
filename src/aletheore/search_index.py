@@ -497,7 +497,18 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
         # The head of a file is where a docstring, imports and top-level
         # constants live, so it is both the best summary available and the
         # part symbol extraction structurally cannot reach.
-        head_end = min(symbols[0]["start_line"] - 1, MODULE_CHUNK_MAX_LINES)
+        #
+        # `functions` and `classes` are two independently file-ordered lists
+        # concatenated above (code_symbols), not merged/sorted by
+        # start_line - symbols[0] is only "the first symbol in the file" when
+        # a function happens to come first. Whenever a class precedes the
+        # first function (confirmed on this repo's own
+        # github-app/app_server/url_validation.py: UnsafeURLError at line 6,
+        # _is_disallowed_ip at line 13), symbols[0] resolved to the function,
+        # and the "head" chunk swallowed the class's own declaration and body
+        # - content already separately indexed as its own chunk - instead of
+        # stopping where symbol extraction actually starts.
+        head_end = min(min(s["start_line"] for s in symbols) - 1, MODULE_CHUNK_MAX_LINES)
         if head_end > 0:
             head = "\n".join(lines[:head_end]).strip()
             if head:
