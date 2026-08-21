@@ -14,7 +14,9 @@ from aletheore.scanner.graph import (
     TS_LANGUAGE,
     TSX_LANGUAGE,
     _iter_source_files,
+    _python_source_roots,
     _rel,
+    _resolve_python_from_import,
 )
 
 _ROUTE_VERB_METHODS = {"get", "post", "put", "delete", "patch"}
@@ -56,8 +58,49 @@ def _string_literal_text(node: Node, source: bytes) -> str:
     return raw.strip("'\"")
 
 
-def _collect_fastapi_include_prefixes(root: Node, source: bytes) -> dict[str, list[str]]:
-    prefixes: dict[str, list[str]] = {}
+def _resolve_router_definition_file(
+    root: Node, source: bytes, name: str, repo_path: Path, path: Path, source_roots: list[Path]
+) -> str:
+    """Finds which file `name` (the identifier passed as include_router's
+    router argument) actually originates from, by following a `from
+    <module> import name [as alias]` statement in this same file - "router"
+    is the idiomatic FastAPI variable name, so without this, two different
+    files' routers both imported under that same conventional bare name
+    would be indistinguishable to the caller (see before_launch_fixes.md
+    Batch 4 finding #4). Falls back to this file's own rel_path when no
+    such import binds the name - the pre-existing, still-correct same-file
+    case (`router = APIRouter()` and `include_router(router, ...)` both
+    here)."""
+    for n in _walk_tree(root):
+        if n.type != "import_from_statement":
+            continue
+        module_node = n.child_by_field_name("module_name")
+        if module_node is None:
+            continue
+        for name_node in n.children_by_field_name("name"):
+            if name_node.type == "aliased_import":
+                imported_node = name_node.child_by_field_name("name")
+                alias_node = name_node.child_by_field_name("alias")
+                local_name = (
+                    source[alias_node.start_byte:alias_node.end_byte].decode() if alias_node else None
+                )
+            else:
+                imported_node = name_node
+                local_name = source[name_node.start_byte:name_node.end_byte].decode()
+            if local_name != name or imported_node is None:
+                continue
+            module_name = source[module_node.start_byte:module_node.end_byte].decode()
+            imported_name = source[imported_node.start_byte:imported_node.end_byte].decode()
+            target = _resolve_python_from_import(repo_path, module_name, imported_name, path, source_roots)
+            if target is not None:
+                return target
+    return _rel(repo_path, path)
+
+
+def _collect_fastapi_include_prefixes(
+    root: Node, source: bytes, repo_path: Path, path: Path, source_roots: list[Path]
+) -> dict[tuple[str, str], list[str]]:
+    prefixes: dict[tuple[str, str], list[str]] = {}
     for n in _walk_tree(root):
         if n.type != "call":
             continue
@@ -82,7 +125,8 @@ def _collect_fastapi_include_prefixes(root: Node, source: bytes) -> dict[str, li
         if value is None or value.type != "string":
             continue
         router = source[positional[0].start_byte:positional[0].end_byte].decode()
-        prefixes.setdefault(router, []).append(_string_literal_text(value, source))
+        defining_file = _resolve_router_definition_file(root, source, router, repo_path, path, source_roots)
+        prefixes.setdefault((defining_file, router), []).append(_string_literal_text(value, source))
     return prefixes
 
 
@@ -98,7 +142,7 @@ def _extract_flask_fastapi_routes(
     root: Node,
     source: bytes,
     rel_path: str,
-    external_router_mount_prefixes: dict[str, list[str]] | None = None,
+    external_router_mount_prefixes: dict[tuple[str, str], list[str]] | None = None,
 ) -> list[dict]:
     entries: list[dict] = []
 
@@ -115,9 +159,17 @@ def _extract_flask_fastapi_routes(
         return f"/{prefix.strip('/')}/{path.strip('/')}" if path != "/" else f"/{prefix.strip('/')}/"
 
     router_prefixes: dict[str, str] = {}
+    # external_router_mount_prefixes is keyed by (defining_file, router_name)
+    # - "router" is the idiomatic FastAPI variable name, so two different
+    # files' routers both imported under that same conventional bare name
+    # would otherwise collide (see before_launch_fixes.md Batch 4 finding
+    # #4). Filtering to entries whose defining file is THIS file before
+    # dropping down to a bare-name dict is what disambiguates them: this
+    # file's own "router" only ever picks up mounts resolved back to it.
     router_mount_prefixes: dict[str, list[str]] = {
         name: list(prefixes)
-        for name, prefixes in (external_router_mount_prefixes or {}).items()
+        for (defining_file, name), prefixes in (external_router_mount_prefixes or {}).items()
+        if defining_file == rel_path
     }
 
     def collect_static_prefixes(n: Node) -> None:
@@ -1216,14 +1268,18 @@ def map_api_endpoints(
         parser.language = lang
         parsers[name] = parser
 
-    cross_file_router_mounts: dict[str, list[str]] = {}
+    python_source_roots = _python_source_roots(repo_path)
+    cross_file_router_mounts: dict[tuple[str, str], list[str]] = {}
     for path in _iter_source_files(repo_path, ignored_paths):
         if path.suffix != ".py":
             continue
         source = path.read_bytes()
         tree = parsers["py"].parse(source)
-        for router, prefixes in _collect_fastapi_include_prefixes(tree.root_node, source).items():
-            cross_file_router_mounts.setdefault(router, []).extend(prefixes)
+        collected = _collect_fastapi_include_prefixes(
+            tree.root_node, source, repo_path, path, python_source_roots
+        )
+        for key, prefixes in collected.items():
+            cross_file_router_mounts.setdefault(key, []).extend(prefixes)
 
     for path in _iter_source_files(repo_path, ignored_paths):
         rel_path = _rel(repo_path, path)
