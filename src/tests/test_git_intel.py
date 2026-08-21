@@ -365,6 +365,66 @@ def test_analyze_git_repo_age_uses_oldest_of_multiple_root_commits(tmp_path):
     ).days
 
 
+def test_analyze_git_repo_age_excludes_a_root_commit_with_a_malformed_date(tmp_path):
+    # Real regression this guards: parse_commit_date's own epoch fallback
+    # (1970-01-01) is deliberately "very old" so a malformed date never
+    # skews a *most-recent* ranking as if it just happened - but that same
+    # value is exactly wrong fed into _first_commit_at's min(), where it's
+    # the *oldest* value that wins. One root commit with a malformed date
+    # (a corrupted local clock at authorship time - the real #281 case)
+    # among several good ones used to silently set the whole repo's
+    # founding date to 1970-01-01 (reporting it as ~56 years old)
+    # regardless of what the other root commits' real dates said.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run(repo, "init", "-b", "main")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "Alice")
+    (repo / "a.txt").write_text("1")
+    run(repo, "add", "a.txt")
+    commit(repo, "main root", "2026-06-01T00:00:00+00:00")
+
+    run(repo, "checkout", "--orphan", "grafted")
+    run(repo, "reset", "--hard")
+    (repo / "b.txt").write_text("1")
+    run(repo, "add", "b.txt")
+    commit(repo, "older independent root, corrupted clock", "2026-01-01T00:00:00+00:00")
+    malformed_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    run(repo, "checkout", "main")
+    run(repo, "merge", "--allow-unrelated-histories", "-m", "merge", "grafted")
+
+    from aletheore.git_intel import analyzer
+
+    real_run_git_or_raise = analyzer._run_git_or_raise
+
+    def fake_run_git_or_raise(repo_path, *args):
+        result = real_run_git_or_raise(repo_path, *args)
+        if (
+            args[:4] == ("log", "-1", "--format=%ad", "--date=iso-strict")
+            and len(args) == 5
+            and args[4] == malformed_sha
+        ):
+            # Genuinely unparseable, not just a malformed offset (a bad
+            # offset like '+518:00' recovers via parse_commit_date's own
+            # second-tier 19-char-prefix fallback - see incremental.py -
+            # and never reaches the epoch case this test needs to trigger).
+            result = subprocess.CompletedProcess(
+                result.args, result.returncode, "garbage\n", result.stderr
+            )
+        return result
+
+    with patch("aletheore.git_intel.analyzer._run_git_or_raise", side_effect=fake_run_git_or_raise):
+        result = analyze_git(repo, now=datetime(2026, 7, 14, tzinfo=timezone.utc))
+
+    # Falls back to the remaining good (June) root, not epoch (~56 years).
+    assert result["repo_age_days"] == (
+        datetime(2026, 7, 14, tzinfo=timezone.utc) - datetime(2026, 6, 1, tzinfo=timezone.utc)
+    ).days
+
+
 def test_analyze_git_ignores_remote_head_symbolic_ref(tmp_path):
     repo = make_git_repo(tmp_path)
     remote = tmp_path / "remote.git"

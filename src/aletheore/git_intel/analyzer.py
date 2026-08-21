@@ -6,6 +6,7 @@ from aletheore.git_intel.graph_store import GraphSnapshot, RepoGraphStore
 from aletheore.git_intel.incremental import (
     CO_CHANGE_PARTNERS_RETURNED,
     GitLogStreamError,
+    _EPOCH_UTC,
     compute_repo_key,
     parse_commit_date,
     stream_commit_touches,
@@ -324,7 +325,20 @@ def _first_commit_at(repo_path: Path) -> datetime:
     for sha in root_shas:
         date_result = _run_git_or_raise(repo_path, "log", "-1", "--format=%ad", "--date=iso-strict", sha)
         dates.append(parse_commit_date(date_result.stdout.strip()))
-    return min(dates)
+    # parse_commit_date's own epoch fallback is deliberately "very old" so a
+    # malformed date never skews a *most-recent* ranking as if it just
+    # happened (see incremental.py's _EPOCH_UTC comment) - but that same
+    # "very old" value is exactly wrong to feed into this min(), where it's
+    # the *oldest* value that wins. A repo with several root commits (a
+    # merged unrelated history) had a single malformed one silently set the
+    # whole repo's founding date to 1970-01-01, reporting it as ~56 years
+    # old, regardless of what every other root commit's real date said.
+    # Excluding epoch-fallback dates here means one bad commit no longer
+    # poisons a min() across otherwise-good ones; only degrades back to the
+    # epoch value in the genuinely-unrecoverable case where every root
+    # commit's date is unparseable.
+    real_dates = [d for d in dates if d != _EPOCH_UTC]
+    return min(real_dates) if real_dates else min(dates)
 
 
 def analyze_git(
