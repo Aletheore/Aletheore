@@ -2692,6 +2692,7 @@ def _patch_sweep(
     result_entry=None,
     evidence=None,
     retry_result_entry=None,
+    redis_conn=None,
 ):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.time.sleep", lambda *a, **k: None)
@@ -2741,7 +2742,8 @@ def _patch_sweep(
         "scan_worker.jobs.get_last_endpoint_health", lambda dsn, iid, repo, method, path, target_id=None: prior
     )
     monkeypatch.setattr("scan_worker.jobs.insert_endpoint_health", lambda *a, **k: None)
-    monkeypatch.setattr("scan_worker.jobs.was_recently_down", lambda *a, **k: False)
+    active_redis_conn = redis_conn if redis_conn is not None else _FakeRedis()
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: active_redis_conn)
     sent = []
     monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: sent.append(msg))
     return sent
@@ -2929,6 +2931,17 @@ def test_sweep_skips_fix_suggestion_when_endpoint_was_recently_down(monkeypatch)
     # must not pay for a second LLM fix-suggestion call on this flip - the
     # alert (and its deterministic commit/owner attachments) still fires,
     # only the one expensive call is skipped.
+    from scan_worker.jobs import _health_fix_suggestion_cooldown_key
+
+    redis_conn = _FakeRedis()
+    # installation_id/repo_full_name/target_id here match _patch_sweep's own
+    # fixed target fixture (installation_id=1, repo_full_name=
+    # "octocat/hello-world", target_id=900) - pre-populating the exact
+    # cooldown key a real prior suggestion would have set is what actually
+    # exercises the Redis-backed cooldown, not a mocked function.
+    redis_conn.set(
+        _health_fix_suggestion_cooldown_key(1, "octocat/hello-world", "GET", "/x", 900), "1", ex=1800
+    )
     sent = _patch_sweep(
         monkeypatch,
         prior={"reachable": True, "latency_ms": 100.0},
@@ -2945,9 +2958,9 @@ def test_sweep_skips_fix_suggestion_when_endpoint_was_recently_down(monkeypatch)
             "method": "GET", "path": "/x", "reachable": False,
             "status_code": None, "latency_ms": 10.0, "response_shape": None,
         },
+        redis_conn=redis_conn,
     )
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
-    monkeypatch.setattr("scan_worker.jobs.was_recently_down", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs._commit_attachment_from_graph", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._owner_attachment_from_graph", lambda *a, **k: None)
 

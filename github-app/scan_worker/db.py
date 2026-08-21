@@ -719,43 +719,6 @@ def get_last_endpoint_health(
             return result
 
 
-def was_recently_down(
-    dsn: str,
-    installation_id: int,
-    repo_full_name: str,
-    method: str,
-    path: str,
-    target_id: int | None,
-    since: datetime,
-) -> bool:
-    """Whether this exact endpoint (same target, not just same path - a
-    staging and a prod target sharing a path are different incidents) was
-    already recorded unreachable at least once since `since`. Called before
-    the current check's own row is inserted, so this only ever reflects
-    PRIOR checks - a flapping endpoint's second, third, fourth down-flip
-    inside the window reads as "already had a recent incident" rather than
-    a fresh one, which is what lets the fix-suggestion cooldown work.
-    """
-    with get_db_pool(dsn).connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT 1
-                FROM endpoint_health
-                WHERE installation_id = %s
-                  AND repo_full_name = %s
-                  AND endpoint_method = %s
-                  AND endpoint_path = %s
-                  AND target_id IS NOT DISTINCT FROM %s
-                  AND reachable = false
-                  AND checked_at >= %s
-                LIMIT 1
-                """,
-                (installation_id, repo_full_name, method, path, target_id, since),
-            )
-            return cur.fetchone() is not None
-
-
 def list_recent_endpoint_incidents(
     dsn: str,
     installation_id: int,
