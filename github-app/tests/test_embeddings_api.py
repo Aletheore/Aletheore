@@ -5,7 +5,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app_server.db import create_api_token, set_installation_plan, upsert_installation
-from app_server.embeddings_api import EMBEDDING_MODEL, MAX_CHARS_PER_TEXT, get_jina_client
+from app_server.embeddings_api import EMBEDDING_MODEL, MAX_CHARS_PER_TEXT, get_jina_client, is_rate_limited
 from app_server.main import app
 
 
@@ -102,9 +102,19 @@ async def test_embedding_route_uses_cached_jina_client_factory(pool):
 
 @pytest.mark.asyncio
 async def test_embedding_provider_call_is_offloaded_to_thread(pool):
+    # The rate-limit checks now also go through asyncio.to_thread (see
+    # test_rate_limit_checks_are_offloaded_to_thread below), so this mock
+    # dispatches by which callable it's given rather than assuming it's
+    # only ever called once, for the Jina POST.
     await _installation_with_token(pool, 9012, "air", "thread-token")
     client = _fake_jina(count=2)
-    offloaded = AsyncMock(return_value=client.post.return_value)
+
+    async def _dispatch(func, *args, **kwargs):
+        if func is client.post:
+            return client.post.return_value
+        return func(*args, **kwargs)
+
+    offloaded = AsyncMock(side_effect=_dispatch)
 
     with patch("app_server.embeddings_api.get_jina_client", return_value=client), \
          patch("app_server.embeddings_api.asyncio.to_thread", offloaded), \
@@ -112,10 +122,36 @@ async def test_embedding_provider_call_is_offloaded_to_thread(pool):
         response = await _post(pool, "thread-token", ["a", "b"])
 
     assert response.status_code == 200
-    offloaded.assert_awaited_once()
-    call = offloaded.await_args
+    jina_calls = [c for c in offloaded.await_args_list if c.args and c.args[0] is client.post]
+    assert len(jina_calls) == 1
+    call = jina_calls[0]
     assert call.args == (client.post, "/embed_batch")
     assert call.kwargs == {"json": {"texts": ["a", "b"]}}
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_checks_are_offloaded_to_thread(pool):
+    # Real regression this guards: is_rate_limited uses the synchronous
+    # redis-py client and blocks on pipe.execute() - called directly inside
+    # an async def handler, each check stalls the whole event loop (every
+    # other concurrent request on this worker) for its full duration.
+    await _installation_with_token(pool, 9013, "air", "rl-thread-token")
+    client = _fake_jina()
+
+    offloaded_funcs = []
+
+    async def _dispatch(func, *args, **kwargs):
+        offloaded_funcs.append(func)
+        return func(*args, **kwargs)
+
+    with patch("app_server.embeddings_api.get_jina_client", return_value=client), \
+         patch("app_server.embeddings_api.asyncio.to_thread", side_effect=_dispatch):
+        response = await _post(pool, "rl-thread-token", ["x"], repo_id="acme/widgets")
+
+    assert response.status_code == 200
+    # Both the installation-wide and repo-scoped checks went through
+    # asyncio.to_thread, not a direct blocking call.
+    assert offloaded_funcs.count(is_rate_limited) == 2
 
 
 @pytest.mark.asyncio
