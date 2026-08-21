@@ -80,7 +80,13 @@ SECRET_PATTERNS = [
             # google_api_key shape above) - without it, GEMINI_API_KEY=AQ.Ab8R... matched
             # only the 2 characters before the dot, fell under the 16-char minimum, and
             # the whole credential silently went undetected rather than just unredacted.
-            r"(?i)(?:^|[\s_-])(PASSWORD|SECRET|API_KEY)\s*[:=]\s*"
+            #
+            # The left-boundary class includes "." too, alongside the pre-existing "_"
+            # and "-", so a dotted attribute assignment (self.PASSWORD=..., cfg.API_KEY=...
+            # - one of the most common hardcoded-credential shapes in object-oriented
+            # code) isn't silently invisible to this pattern the way a bare "." boundary
+            # was. MYPASSWORD= (no separator at all) still correctly does not match.
+            r"(?i)(?:^|[\s_.-])(PASSWORD|SECRET|API_KEY)\s*[:=]\s*"
             r"['\"]?([A-Za-z0-9+/=_.-]{16,})['\"]?(?=\s|$|[,#;)])"
         ),
         2,

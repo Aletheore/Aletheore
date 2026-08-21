@@ -141,6 +141,26 @@ def test_find_secrets_detects_credential_value_containing_a_dot(tmp_path):
     assert sum(f["pattern"] == "generic_credential_assignment" for f in findings) == 1
 
 
+def test_find_secrets_detects_dotted_attribute_credential_assignment(tmp_path):
+    # Regression: the left-boundary class allowed whitespace, "_", and "-"
+    # before the keyword but not ".", so a dotted attribute assignment
+    # (self.PASSWORD=..., cfg.API_KEY=...) - one of the most common
+    # hardcoded-credential shapes in object-oriented code - was silently
+    # invisible to this pattern. MYPASSWORD= (no separator at all) must
+    # still not match.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "config.py").write_text(
+        "self.PASSWORD = 'Tr0ub4dor4NoSpecialChars'\n"
+        "cfg.API_KEY = 'abcdefghijklmnopqrstuvwx1234'\n"
+        "MYPASSWORD = 'shouldnotmatchatall1234567890'\n"
+    )
+
+    findings = find_secrets(repo)["findings"]
+
+    assert sum(f["pattern"] == "generic_credential_assignment" for f in findings) == 2
+
+
 def test_find_secrets_detects_fine_grained_github_and_sts_aws_tokens(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
