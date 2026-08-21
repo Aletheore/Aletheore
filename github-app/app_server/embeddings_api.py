@@ -178,14 +178,24 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
         else f"ratelimit:embeddings:{installation_id}"
     )
     try:
-        rate_limited = is_rate_limited(
+        # is_rate_limited uses the synchronous redis-py client and blocks on
+        # pipe.execute() - run off the event loop (asyncio.to_thread, same
+        # as the actual embedding call below) so one request's Redis
+        # round-trip doesn't stall every other concurrent request on this
+        # worker. Kept sequential (not pipelined into one round-trip):
+        # skipping the second, repo-scoped check when the installation-wide
+        # one already trips the limit is a real short-circuit worth keeping,
+        # not just an artifact of the two calls being adjacent.
+        rate_limited = await asyncio.to_thread(
+            is_rate_limited,
             get_redis_client(),
             installation_rate_limit_key,
             RATE_LIMIT_REQUESTS,
             RATE_LIMIT_WINDOW_SECONDS,
         )
         if not rate_limited and body.repo_id:
-            rate_limited = is_rate_limited(
+            rate_limited = await asyncio.to_thread(
+                is_rate_limited,
                 get_redis_client(),
                 rate_limit_key,
                 RATE_LIMIT_REQUESTS,
