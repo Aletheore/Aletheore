@@ -33,6 +33,7 @@ FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd
 # at all with "libgomp.so.1: cannot open shared object file", not a
 # degraded-but-working fallback.
 RUN apt-get update -qq \
+    && apt-get upgrade -y -qq \
     && apt-get install -y -qq --no-install-recommends libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 

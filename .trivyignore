@@ -17,24 +17,3 @@
 # for a caller to supply a different model to load.
 CVE-2026-4372
 CVE-2026-5241
-
-# CVE-2026-53615 (bsdutils/libblkid1/liblastlog2-2/libmount1/libsmartcols1/
-# libuuid1/login/mount/util-linux - every image, base OS packages, not an
-# app dependency): integer overflow in libblkid's partition-table parser
-# (dos.c). Fixed version is 2.41.5-0+deb13u1, but not yet published:
-# pulled and scanned the current `python:3.12-slim` tag directly (not just
-# our pinned digest) on 2026-08-17 and it carries the identical vulnerable
-# 2.41-5 build - there is nothing newer to pin to yet, so bumping the
-# digest would not close this.
-#
-# Accepted temporarily because none of these images ever parse a
-# partition table: they're FastAPI/uvicorn services (app-server,
-# jina-embed, scan-worker, demo-scan-worker, demo-sandbox(-runner)) that
-# never mount a filesystem, read a raw block device, or invoke
-# mount/blkid/lsblk as part of any request-handling code path - libblkid
-# is pulled in transitively by util-linux as a base Debian package, not
-# something this application code calls. Revisit once Debian actually
-# ships the patched package - bump the pinned digest and remove this
-# entry then, don't leave it here longer than the fix is actually
-# unavailable.
-CVE-2026-53615

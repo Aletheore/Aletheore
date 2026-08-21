@@ -13,6 +13,7 @@ COPY github-app/app_server ./app_server
 COPY github-app/scan_worker ./scan_worker
 
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 
