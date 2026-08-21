@@ -252,6 +252,68 @@ def test_build_module_graph_reuses_the_java_prepass_parse_in_the_main_loop(tmp_p
     assert all(count == 1 for count in read_counts.values())
 
 
+def test_build_module_graph_releases_a_java_prepass_tree_once_the_main_loop_consumes_it(tmp_path, monkeypatch):
+    # Real regression this guards: java_pre_parsed holds every .java file's
+    # (source, Tree) simultaneously once the pre-pass finishes - tree-sitter
+    # trees run ~37x their source size, so on a large Java repo this is real
+    # memory (measured independently at 82MB RSS on a 512-file C# repo, the
+    # same shape). The main loop used to keep each entry alive via a plain
+    # dict lookup even after consuming it, so the whole cache stayed pinned
+    # until build_module_graph returned - i.e. until every other file in the
+    # repo (every language, not just Java) had also been processed. Popping
+    # instead of indexing releases each entry's memory as soon as the main
+    # loop passes it.
+    #
+    # Refcount, not RSS: RSS is real but flaky/slow to assert on directly in
+    # a unit test. sys.getrefcount() on the specific Tree object is a direct,
+    # reliable proxy for "is java_pre_parsed still holding a reference to
+    # this" - verified by hand that reverting the pop() fix changes the
+    # count this asserts (4 without the fix, 3 with it).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AFirst.java").write_text("package com.example;\nclass AFirst {}\n")
+    (repo / "ZLater.js").write_text("const x = 1;\n")
+
+    import sys
+
+    import tree_sitter
+
+    from aletheore.scanner import graph as graph_module
+
+    captured: dict[str, object] = {}
+    original_parse = tree_sitter.Parser.parse
+
+    def tracking_parse(self, source, *a, **k):
+        tree = original_parse(self, source, *a, **k)
+        if b"AFirst" in source:
+            captured["tree"] = tree
+        return tree
+
+    monkeypatch.setattr(tree_sitter.Parser, "parse", tracking_parse)
+
+    refcounts: dict[str, int] = {}
+    original_rel = graph_module._rel
+
+    def tracking_rel(repo_path, path):
+        # _rel(repo_path, path) is the first thing the main loop does for
+        # each file - by the time it's called for ZLater.js, AFirst.java's
+        # own main-loop iteration (including the java_pre_parsed.pop()) has
+        # already completed.
+        if path.name == "ZLater.js" and "tree" in captured:
+            refcounts["value"] = sys.getrefcount(captured["tree"])
+        return original_rel(repo_path, path)
+
+    monkeypatch.setattr(graph_module, "_rel", tracking_rel)
+
+    graph_module.build_module_graph(repo)
+
+    assert "value" in refcounts
+    # Baseline references at this point: captured["tree"] itself, the local
+    # `tree` parameter inside sys.getrefcount()'s own call frame. Anything
+    # higher means java_pre_parsed is still holding a third reference alive.
+    assert refcounts["value"] <= 3
+
+
 def test_java_extracts_javadoc_and_return_type(tmp_path):
     repo = tmp_path / "repo"
     (repo / "src" / "main" / "java").mkdir(parents=True)
