@@ -78,6 +78,33 @@ class _Cursor:
                 return
 
 
+def _comment_end(text: str, index: int) -> int:
+    """If a `--` or `/* */` comment starts at `index`, the index just past
+    it - otherwise `index` unchanged.
+
+    Shared by every scanner below that walks a plain string (not a
+    _Cursor) rather than duplicating comment detection three times: a
+    `CREATE TABLE` body is read once via _read_parenthesised_body (a
+    _Cursor consumer, handled separately below) but then re-scanned as a
+    plain string by _split_top_level and _tokenize_column_definition, and
+    an inline `--`/`/* */` comment inside a column list is ordinary,
+    common SQL that all three must skip past identically or the comment
+    text gets parsed as if it were column-definition source. Callers are
+    responsible for having already established `index` is not inside a
+    string literal - `--`/`/*` are not comment starts inside a Postgres
+    string literal, but no caller here ever reaches this check from
+    inside one (the `'` branch above it always continues past the whole
+    literal first).
+    """
+    if text[index : index + 2] == "--":
+        newline = text.find("\n", index)
+        return len(text) if newline == -1 else newline
+    if text[index : index + 2] == "/*":
+        end = text.find("*/", index + 2)
+        return len(text) if end == -1 else end + 2
+    return index
+
+
 def _read_identifier(cursor: _Cursor) -> str:
     """A bare or double-quoted identifier, optionally schema-qualified.
 
@@ -134,6 +161,9 @@ def _skip_to_statement_end(cursor: _Cursor) -> None:
             cursor.advance()
             return
         elif char == "-" and cursor.peek(2) == "--":
+            cursor.skip_whitespace_and_comments()
+            continue
+        elif char == "/" and cursor.peek(2) == "/*":
             cursor.skip_whitespace_and_comments()
             continue
         cursor.advance()
@@ -198,6 +228,10 @@ def _split_top_level(body: str) -> list[str]:
             current.append(body[index : end + 1])
             index = end + 1
             continue
+        comment_end = _comment_end(body, index)
+        if comment_end != index:
+            index = comment_end
+            continue
         if char == "(":
             depth += 1
         elif char == ")":
@@ -240,6 +274,10 @@ def _tokenize_column_definition(text: str) -> list[str]:
                 end += 1
             current.append(text[index : end + 1])
             index = end + 1
+            continue
+        comment_end = _comment_end(text, index)
+        if comment_end != index:
+            index = comment_end
             continue
         if char == "(":
             depth += 1
@@ -417,6 +455,10 @@ def _read_parenthesised_body(cursor: _Cursor) -> str | None:
         char = cursor.text[cursor.pos]
         if char == "'":
             _skip_single_quoted(cursor)
+            continue
+        comment_end = _comment_end(cursor.text, cursor.pos)
+        if comment_end != cursor.pos:
+            cursor.advance(comment_end - cursor.pos)
             continue
         if char == "(":
             depth += 1
