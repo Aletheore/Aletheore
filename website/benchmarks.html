@@ -141,11 +141,14 @@ python scripts/score_fallback_judge.py</code></pre>
         </div>
         <p class="dogfood-p">Across those ten cells we lead in seven, tie in two, and lose one
           — jekyll's vocabulary regime, where RepoWise's wiki naming its own symbols overtakes
-          us 80.0% to 66.7%. Two things this deliberately doesn't claim: RepoWise's
+          us 80.0% to 66.7%. One thing this deliberately doesn't claim: RepoWise's
           <code>--mode symbol</code> returned 0.0% on every corpus and is excluded as a
-          misapplied mode, not counted as a loss; and search latencies aren't comparable as
-          measured (RepoWise runs per-query as a CLI process, Aletheore in-process) — the one
-          like-for-like figure, from the flask run, has RepoWise's 68ms beating our 125ms.</p>
+          misapplied mode, not counted as a loss. Search latency, measured in-process for both
+          tools (previously only Aletheore's had a committed script for this — RepoWise's own
+          number was CLI-subprocess time, which pays a real but unrelated Python-import cost
+          each call): Aletheore 40.5ms mean against RepoWise's 52.5ms, reversed from an earlier
+          125ms-vs-68ms figure — see
+          <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/METHODOLOGY.md" rel="noopener">METHODOLOGY.md</a>.</p>
 
         <div class="dogfood-table-wrap">
           <table class="dogfood-table">
@@ -400,16 +403,21 @@ python scripts/score_fallback_judge.py</code></pre>
           <h2>Stated here rather than in a footnote.</h2>
         </div>
         <div class="dogfood-callout">
-          <p>⚠️ RepoWise's generated wiki scores higher on "how does X work?" questions — 2.35
-            vs. our 2.13 on a blind 0-3 judge, though we sit within roughly 0.2 of them at about
-            one-seventh the cost.<br>
-            ⚠️ RepoWise retrieval is faster in-process — 68ms against our 125ms.<br>
-            ⚠️ Five of eight corpora score below 35% top-1 under vocabulary-avoiding phrasing,
+          <p>⚠️ Five of eight corpora score below 35% top-1 under vocabulary-avoiding phrasing,
             though most of that gap is our question authoring, not the product — every one
             recovers 20-47 points when asked in the project's own terms.<br>
             ⚠️ AIRview writes a page for only 21 of 100 changed files on Flask's last 30 commits;
             the rest are served by a deterministic fallback, not the generated wiki this project
-            is named for.</p>
+            is named for.<br>
+            ⚠️ "How does X work?" comprehension is close, not a clean win — averaged across five
+            languages (Python, JavaScript, C#, C++, C) AIRview scores 2.00 against RepoWise's
+            1.77 on a blind 0-3 judge, but most individual per-corpus gaps sit inside that run's
+            own measured judge noise, so read this as "roughly at parity, leaning ahead," not a
+            decisive lead. This reverses an earlier 2.13-vs-2.35 loss, on different code and a
+            different measurement method — see
+            <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/AIRVIEW_GAP.md" rel="noopener">AIRVIEW_GAP.md</a>
+            for the full history, including a real fix that shipped but sat undetected in the
+            benchmark for months.</p>
         </div>
       </section>
 
