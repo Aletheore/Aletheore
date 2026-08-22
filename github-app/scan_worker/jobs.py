@@ -19,7 +19,6 @@ from rq import Queue, get_current_job
 from rq.registry import FailedJobRegistry
 
 from app_server.audit_signing import content_hash, public_key_hex_from_private, sign_report
-from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.code_graph_diff import diff_endpoints, diff_modules
 from aletheore.dead_code import is_test_file
@@ -151,6 +150,7 @@ from scan_worker.model_tiers import (
     model_for_plan,
     resolve_model,
     writing_adapter_for,
+    writing_adapter_for_airview,
     writing_adapter_for_plan,
 )
 from scan_worker.packet_cache import lookup_cached_result, store_result
@@ -3127,24 +3127,29 @@ def _live_wiki_naming_adapter(
     on_usage: Callable[[int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for(live_wiki.FLASH_MODEL, on_usage=on_usage, before_llm_call=before_llm_call)
+    return writing_adapter_for_airview(live_wiki.FLASH_MODEL, on_usage=on_usage, before_llm_call=before_llm_call)
 
 
 def _live_wiki_full_build_writing_adapter(
-    plan: str,
     on_usage: Callable[[int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
-) -> OpenAICompatibleAdapter | AnthropicAdapter:
-    # The one-time full build uses the same model as managed audits (see
-    # model_tiers.py) - Luna (falling back to DeepSeek Pro), for every plan.
-    return writing_adapter_for_plan(plan, on_usage=on_usage, before_llm_call=before_llm_call)
+) -> OpenAICompatibleAdapter:
+    # AIRview's own comprehension benchmark (aletheore-benchmarks,
+    # AIRVIEW_GAP.md, re-measured 2026-08-22) found deepseek-v4-flash tied
+    # RepoWise here while gpt-5.6-luna lost decisively, same corpus, same
+    # day - see writing_adapter_for_airview's docstring for the numbers.
+    # No longer plan-dependent: every plan gets deepseek-v4-flash, not
+    # Luna-falling-back-to-DeepSeek-Pro as before.
+    return writing_adapter_for_airview(
+        live_wiki.FLASH_MODEL, on_usage=on_usage, before_llm_call=before_llm_call
+    )
 
 
 def _live_wiki_update_writing_adapter(
     on_usage: Callable[[int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for(live_wiki.UPDATE_MODEL, on_usage=on_usage, before_llm_call=before_llm_call)
+    return writing_adapter_for_airview(live_wiki.UPDATE_MODEL, on_usage=on_usage, before_llm_call=before_llm_call)
 
 
 def _real_line_count_fetcher(
@@ -3302,7 +3307,8 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
 
     installation = get_installation_row(dsn, installation_id)
     plan = installation["plan"] if installation is not None else "free"
-    model_used = model_for_plan(plan)
+    # No longer plan-dependent - see _live_wiki_full_build_writing_adapter.
+    model_used = live_wiki.FLASH_MODEL
 
     # Fast-fail hint only, no lock - see _IncrementalSpendBudget's docstring;
     # real enforcement is its can_start_next_call() reserving atomically per
@@ -3332,7 +3338,7 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
             on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
         )
         writing_adapter = _live_wiki_full_build_writing_adapter(
-            plan, on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
+            on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
         )
         fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, None)
         records = live_wiki.generate_subsystems(
@@ -3458,7 +3464,8 @@ def _maybe_update_live_wiki(
         )
         return
 
-    update_model = resolve_model(live_wiki.UPDATE_MODEL)
+    # No longer dynamic - see _live_wiki_update_writing_adapter.
+    update_model = live_wiki.UPDATE_MODEL
     spend_budget = _IncrementalSpendBudget(
         dsn, installation_id, update_model, monthly_cap, feature="airview_incremental"
     )
