@@ -39,6 +39,31 @@ def test_build_clusters_finds_two_clusters_with_a_thin_bridge():
     assert bridge["edges"] == [["a.py", "x.py"]]
 
 
+def test_build_clusters_excludes_test_files():
+    """Test files pollute clustering the same way they polluted retrieval -
+    see search_index._is_test_path's own comment. Reproduced directly on
+    AutoMapper/AutoMapper: 420 of 513 dependency-graph nodes (82%) were test
+    files, and clustering produced 119 subsystems for 512 files instead of a
+    handful of real ones - see aletheore-benchmarks, AIRVIEW_GAP.md."""
+    dependency_graph = {
+        "nodes": ["a.py", "b.py", "tests/test_a.py", "UnitTests/MapperTest.cs"],
+        "edges": [
+            ["a.py", "b.py"],
+            ["b.py", "a.py"],
+            ["tests/test_a.py", "a.py"],
+            ["a.py", "tests/test_a.py"],
+        ],
+    }
+
+    clusters, cross_cluster_edges = build_clusters(dependency_graph)
+
+    all_modules = [m for c in clusters for m in c["modules"]]
+    assert "tests/test_a.py" not in all_modules
+    assert "UnitTests/MapperTest.cs" not in all_modules
+    assert set(all_modules) == {"a.py", "b.py"}
+    assert cross_cluster_edges == []
+
+
 def test_build_clusters_handles_isolated_nodes_without_crashing():
     dependency_graph = {"nodes": ["a.py", "b.py", "c.py"], "edges": []}
 
