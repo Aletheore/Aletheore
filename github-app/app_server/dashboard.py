@@ -415,7 +415,7 @@ def _fetch_wiki_file_content_sync(
     settings = get_settings()
     app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
     token = get_installation_token(installation_id, app_jwt)
-    return fetch_file_content(get_github_api_client(), token, repo_full_name, path)
+    return fetch_file_content(_github_http_client(), token, repo_full_name, path)
 
 
 @dashboard_router.get("/app/{org}/{repo}/wiki/file/{file_path:path}")

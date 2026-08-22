@@ -1739,3 +1739,40 @@ async def test_dashboard_docs_export_sanitizes_unsafe_characters_in_filename(poo
 
     assert response.status_code == 200
     assert response.headers["content-disposition"] == 'attachment; filename="weird_repo-api-reference.md"'
+
+
+def test_fetch_wiki_file_content_sync_calls_a_function_that_actually_exists(monkeypatch):
+    # Regression test for docs/audits/Claude_Audit.md finding #23: the real
+    # function body called get_github_api_client(), which is never imported
+    # in dashboard.py (only _github_http_client is) - a pure NameError on
+    # every call. test_dashboard_wiki_file_fetches_unindexed_file_without_llm
+    # monkeypatches this whole function out, so it never exercised the real
+    # body and the bug shipped invisibly. This test calls the real function.
+    import httpx
+
+    from app_server import dashboard
+
+    monkeypatch.setattr(dashboard, "generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr(
+        dashboard, "get_installation_token", lambda installation_id, app_jwt, http_client=None: "fake-token"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/octocat/hello-world/contents/config.toml"
+        return httpx.Response(
+            200,
+            json={
+                "encoding": "base64",
+                "content": "Q29uZmln",  # base64("Config")
+            },
+        )
+
+    monkeypatch.setattr(
+        dashboard,
+        "_github_http_client",
+        lambda: httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com"),
+    )
+
+    result = dashboard._fetch_wiki_file_content_sync(608, "octocat/hello-world", "config.toml")
+
+    assert result == "Config"

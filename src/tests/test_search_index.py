@@ -532,6 +532,28 @@ def test_rrf_fuse_ranks_a_chunk_found_by_both_retrievers_first():
     assert {c["module_path"] for c in fused} == {"shared.py", "vec_only.py", "fts_only.py"}
 
 
+def test_rrf_fuse_preserves_the_vector_distance_on_a_dual_matched_hit():
+    """Regression test for docs/audits/Claude_Audit.md finding #18: fusion
+    used to write by_key[key] = hit unconditionally, so a chunk found by
+    both retrievers ended up holding whichever retriever's dict was
+    processed last (text_hits, which carries _score but not _distance) -
+    silently losing the vector hit's _distance field entirely. search_index
+    then returned "score": None for exactly this case, and answer_question's
+    `results[0]["score"] > confidence_threshold` crashed with a TypeError on
+    its own best-case match. Fusion must preserve fields from both hits."""
+    def chunk(path, name, **extra):
+        return {"module_path": path, "symbol_name": name, "start_line": 1, **extra}
+
+    vector_hit = chunk("shared.py", "f", _distance=0.12)
+    text_hit = chunk("shared.py", "f", _score=8.5)
+
+    fused = _rrf_fuse([vector_hit], [text_hit])
+
+    assert len(fused) == 1
+    assert fused[0]["_distance"] == 0.12
+    assert fused[0]["_score"] == 8.5
+
+
 def test_rrf_fuse_demotes_a_declaration_only_hit_below_an_implementation():
     """A demotion, not an exclusion: slimphp/Slim's interfaces displaced the
     correct implementation on 4 of 6 misses by simply outranking it. Ranked
