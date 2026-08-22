@@ -5755,6 +5755,7 @@ def test_run_ops_monitor_job_alerts_on_second_app_health_failure(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs._fetch_app_health", lambda url: (False, "broken"))
     monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
     monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
     monkeypatch.setenv("ALETHEORE_APP_HEALTH_URL", "http://bad-health.local/healthz")
 
@@ -5784,6 +5785,7 @@ def test_run_ops_monitor_job_broken_app_health_sends_ops_email(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs._fetch_app_health", lambda url: (False, "broken"))
     monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
     monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
     monkeypatch.setattr(
         error_alerts,
         "send_transactional_email",
@@ -5822,6 +5824,7 @@ def test_run_ops_monitor_job_alerts_when_queue_depth_stays_high(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
     monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
     monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
     monkeypatch.setattr("scan_worker.jobs.Queue", FakeQueue)
     monkeypatch.setattr("scan_worker.jobs.FailedJobRegistry", FakeFailedRegistry)
     monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
@@ -5872,6 +5875,7 @@ def test_run_ops_monitor_job_does_not_repeat_alert_within_cooldown(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
     monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
     monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
     monkeypatch.setattr("scan_worker.jobs.Queue", FakeQueue)
     monkeypatch.setattr("scan_worker.jobs.FailedJobRegistry", FakeFailedRegistry)
     monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
@@ -5925,6 +5929,7 @@ def test_run_ops_monitor_job_alerts_when_backup_missing(monkeypatch, tmp_path):
     monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
     monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
     monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_free_tier_provider_keys", lambda redis_conn: None)
     monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
     monkeypatch.setenv("ALETHEORE_BACKUP_DIR", str(missing_dir))
 
@@ -5965,6 +5970,69 @@ def test_check_backup_freshness_missing_dir_and_stale_backup_both_alert_within_c
     _check_backup_freshness(redis_conn, now)  # missing dir: must still alert
 
     assert alerts == ["ops_monitor.backup_freshness.stale", "ops_monitor.backup_freshness.missing_dir"]
+
+
+def test_run_ops_monitor_job_alerts_when_a_free_tier_provider_key_is_missing(monkeypatch):
+    # Real incident this guards: writing_adapter_chain_for_free_tier silently
+    # skips (info-log only) any provider whose key isn't set, so all four
+    # free-tier keys sat unset in production for weeks with free-tier Flash
+    # Review quietly no-op'ing the whole time - no error, no alert. This is
+    # the check that would have caught it in minutes instead of weeks.
+    from scan_worker.jobs import run_ops_monitor_job
+
+    redis_conn = _FakeRedis()
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
+    monkeypatch.setattr("scan_worker.jobs._check_app_health", lambda redis_conn, url: None)
+    monkeypatch.setattr("scan_worker.jobs._check_queue_alerts", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs._check_backup_freshness", lambda redis_conn, now: None)
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append((a, k)))
+
+    def fake_has_api_key(env_var, provider_name, **kwargs):
+        return provider_name != "Groq"
+
+    monkeypatch.setattr("scan_worker.jobs.has_api_key", fake_has_api_key)
+
+    run_ops_monitor_job()
+
+    assert len(alerts) == 1
+    assert alerts[0][0][0] == "ops_monitor.free_tier_key.groq"
+    assert "GROQ_API_KEY" in alerts[0][0][2]
+
+
+def test_check_free_tier_provider_keys_alerts_separately_for_each_missing_provider(monkeypatch):
+    # Same reasoning as the backup-freshness dual-condition test above: each
+    # provider needs its own alert source, or two providers going missing at
+    # once would have the second one silently suppressed by the first's
+    # cooldown.
+    from scan_worker.jobs import _check_free_tier_provider_keys
+
+    redis_conn = _FakeRedis()
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append(a[0]))
+    monkeypatch.setattr("scan_worker.jobs.has_api_key", lambda *a, **k: False)
+
+    _check_free_tier_provider_keys(redis_conn)
+
+    assert alerts == [
+        "ops_monitor.free_tier_key.groq",
+        "ops_monitor.free_tier_key.gemini",
+        "ops_monitor.free_tier_key.openai-freetier",
+        "ops_monitor.free_tier_key.openrouter",
+    ]
+
+
+def test_check_free_tier_provider_keys_sends_no_alert_when_all_keys_present(monkeypatch):
+    from scan_worker.jobs import _check_free_tier_provider_keys
+
+    redis_conn = _FakeRedis()
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append(a[0]))
+    monkeypatch.setattr("scan_worker.jobs.has_api_key", lambda *a, **k: True)
+
+    _check_free_tier_provider_keys(redis_conn)
+
+    assert alerts == []
 
 
 def test_run_git_scrubs_credentialed_url_from_a_failed_clone_error(tmp_path):

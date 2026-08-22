@@ -21,6 +21,7 @@ from rq.registry import FailedJobRegistry
 from app_server.audit_signing import content_hash, public_key_hex_from_private, sign_report
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from aletheore.code_graph_diff import diff_endpoints, diff_modules
+from aletheore.credentials import has_api_key
 from aletheore.dead_code import is_test_file
 from aletheore.evidence import write_evidence
 from aletheore.git_intel.analyzer import analyze_git, compute_hotspots
@@ -2907,6 +2908,40 @@ def _check_backup_freshness(redis_conn, now: float) -> None:
     )
 
 
+# (env var, provider_name) pairs, matching writing_adapter_chain_for_free_tier's
+# own has_api_key calls exactly - keep in sync with that function, not
+# re-derived from it, since it builds adapters (a side effect this check must
+# never trigger) rather than exposing its provider list separately.
+FREE_TIER_PROVIDER_KEYS = (
+    ("GROQ_API_KEY", "Groq"),
+    ("GEMINI_API_KEY", "Gemini"),
+    ("OPENAI_FREE_TIER_API_KEY", "OpenAI-FreeTier"),
+    ("OPENROUTER_API_KEY", "OpenRouter"),
+)
+
+
+def _check_free_tier_provider_keys(redis_conn) -> None:
+    # Real incident: writing_adapter_chain_for_free_tier silently skips any
+    # provider whose key is missing (by design - never hard-fails free-tier
+    # Flash Review on missing infra) and logs nothing louder than an info
+    # line. All four keys were unset in production for weeks with nothing
+    # watching that log, so every free-tier Flash Review quietly no-op'ed
+    # the whole time - no user-facing error, no alert, no signal at all.
+    # Each provider gets its own alert source (same reasoning as
+    # _check_backup_freshness above) so two providers missing at once both
+    # get reported, not just whichever's alert fires first.
+    for env_var, provider_name in FREE_TIER_PROVIDER_KEYS:
+        if has_api_key(env_var, provider_name):
+            continue
+        _send_ops_alert(
+            redis_conn,
+            f"ops_monitor.free_tier_key.{provider_name.lower()}",
+            f"free-tier provider key missing: {provider_name}",
+            f"env_var={env_var} - free-tier Flash Review silently skips this "
+            "provider until it's set, with no other signal",
+        )
+
+
 @log_job
 def run_ops_monitor_job() -> None:
     """Small production-readiness checks that feed the existing ops email
@@ -2921,6 +2956,7 @@ def run_ops_monitor_job() -> None:
     )
     _check_queue_alerts(redis_conn, now)
     _check_backup_freshness(redis_conn, now)
+    _check_free_tier_provider_keys(redis_conn)
 
 
 # Each template function takes exactly one positional string arg
