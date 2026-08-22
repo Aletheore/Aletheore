@@ -47,6 +47,25 @@ As of 2026-08-22, following a redeploy to `master` (`git reset --hard origin/mas
 - No errors, tracebacks, or exceptions found in `app-server` logs after restart (targeted grep for `error|traceback|exception`); the same grep across `scan-worker-1`, `scan-worker-2`, `health-worker`, and `scheduler` logs also came back clean.
 - Not re-verified this pass (out of scope for this redeploy, no relevant Dockerfile/script changes in the diff): Docker socket mount absence on `demo-scan-worker`, non-root user on `app-server`/`scan-worker`, CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill target availability, disk space. Each was last directly verified in the 2026-08-10 deploy (see `git log -p` on this file, or the `github-app-deploy-2026-08-10` tag) - re-check if any host-level or Dockerfile change touches them.
 
+## Free-Tier Flash Review Provider Keys (live server config, not in git)
+
+`writing_adapter_chain_for_free_tier` in `scan_worker/model_tiers.py` builds its fallback chain
+from four env vars (`GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENAI_FREE_TIER_API_KEY`,
+`OPENROUTER_API_KEY`), each silently skipped if unset - the code has no way to tell "no key
+configured" apart from "operator hasn't gotten to this provider yet", so an empty chain fails
+silent, not loud (`jobs.py` logs a warning and returns `False`, no user-facing error, no alert).
+
+As of 2026-08-22, confirmed all four keys are set in production's `github-app/.env` (checked via
+`has_api_key()` boolean return values only - the actual values never appear in any command output,
+log, or file under version control) and `scan-worker`/`health-worker` have been restarted to pick
+them up. Before this, all four had been present in the *local* `.env` for an unknown period but
+never synced to the server, meaning every free-tier Flash Review was silently no-op'ing in
+production despite the feature's code being fully implemented, tested, and deployed. If this
+regresses (e.g. a future server rebuild from a fresh `.env` template), the symptom is the same as
+before: free-tier reviews silently stop happening, with only a log line to notice by. Re-verify with
+the four `has_api_key()` checks above after any `.env`-affecting change, not just after a code
+redeploy - env drift is invisible to `git diff` and to every check in this document above this one.
+
 ## Paddle Webhook Destination (live account config, not in git)
 
 The set of events Paddle actually delivers to `/webhooks/paddle` is configured on Paddle's side

@@ -56,6 +56,21 @@ file is the history; that one is the current state.
   retrieval latency (was 125ms) vs RepoWise's 52.5ms, and 2.00 vs 1.77 average comprehension score
   across 5 language corpora (#354).
 
+## 2026-08-22 (config, not a code deploy)
+
+- **Free-tier Flash Review provider keys added to production.** `writing_adapter_chain_for_free_tier`
+  (the Groq -> Gemini -> OpenAI-FreeTier -> OpenRouter fallback chain, hardened across #304/#314/
+  #316/#319/#344) has been fully implemented and deployed for weeks, but production's `.env` never
+  actually had `GROQ_API_KEY`/`GEMINI_API_KEY`/`OPENAI_FREE_TIER_API_KEY`/`OPENROUTER_API_KEY` set -
+  every provider silently skipped, the chain built empty, and every free-tier Flash Review no-op'd
+  with only a log warning (`jobs.py`'s `if not free_tier_chain: ... return False`), no user-facing
+  error. Found while re-verifying this session's other changes were actually live. Keys were present
+  locally in `github-app/.env` but had never been synced to the server - copied over (values never
+  passed through any tool output or log), `scan-worker` (both replicas) and `health-worker`
+  restarted, confirmed live via `has_api_key()` boolean checks (never the raw values) returning
+  `True` for all four providers. This is a config change, not a code deploy - no new commit or
+  `github-app-deploy-*` tag for it, same as the Paddle webhook destination note below.
+
 ## 2026-08-19
 
 - **AIRview and Docs generation cut down to a fraction of their prior LLM call volume.**
