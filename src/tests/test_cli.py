@@ -731,6 +731,23 @@ def test_audit_shows_consent_prompt_for_api_based_adapter_and_proceeds_on_yes(tm
     fake_adapter.invoke.assert_called_once()
 
 
+def test_audit_sponsor_panel_does_not_claim_nothing_left_the_machine(tmp_path):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    fake_adapter = MagicMock()
+    fake_adapter.name = "openai"
+    fake_adapter.requires_consent = True
+    fake_adapter.invoke.return_value = "## Summary\n\nreport text"
+
+    with patch("aletheore.cli.select_adapter", return_value=fake_adapter):
+        with patch("builtins.input", return_value="y"):
+            result = runner.invoke(app, ["audit", str(repo)])
+
+    assert result.exit_code == 0
+    assert "nothing leaves this machine" not in result.output.lower()
+
+
 def test_audit_cancels_cleanly_when_consent_is_declined(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
