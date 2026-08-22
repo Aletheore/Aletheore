@@ -3,6 +3,7 @@ import subprocess
 import sys
 import time
 import tomllib
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1253,6 +1254,23 @@ def test_main_healthcheck_reports_results(tmp_path):
     assert result.exit_code == 0
     assert "/health" in result.output
     assert "200" in result.output
+
+
+def test_main_healthcheck_fails_when_every_endpoint_is_unreachable(tmp_path):
+    repo = tmp_path
+    (repo / "app.py").write_text('@app.route("/health")\ndef health():\n    pass\n')
+    runner.invoke(app, ["scan", str(repo)])
+
+    with patch(
+        "aletheore.healthcheck._NO_REDIRECT_OPENER.open",
+        side_effect=urllib.error.URLError("connection refused"),
+    ):
+        result = runner.invoke(
+            app, ["healthcheck", str(repo), "--base-url", "http://localhost:5000"]
+        )
+
+    assert result.exit_code == 1
+    assert "0 of 1 endpoint(s) reachable" in result.output
 
 
 def test_main_healthcheck_without_evidence_errors_clearly(tmp_path):

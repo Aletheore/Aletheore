@@ -979,14 +979,24 @@ def _healthcheck(repo_path: str, base_url: str) -> int:
         return 1
     save_healthcheck(result, repo)
 
+    checked = 0
+    reachable = 0
     for entry in result["results"]:
         method = entry.get("method") or "?"
         if entry.get("skipped"):
             print(f"{method:6} {entry['path']:40} SKIPPED ({entry['reason']})")
-        else:
-            status = entry["status_code"] if entry["reachable"] else "UNREACHABLE"
-            note = f" ({entry['note']})" if entry.get("note") else ""
-            print(f"{method:6} {entry['path']:40} {status} {entry['latency_ms']}ms{note}")
+            continue
+        checked += 1
+        if entry["reachable"]:
+            reachable += 1
+        status = entry["status_code"] if entry["reachable"] else "UNREACHABLE"
+        note = f" ({entry['note']})" if entry.get("note") else ""
+        print(f"{method:6} {entry['path']:40} {status} {entry['latency_ms']}ms{note}")
+
+    if checked:
+        print(f"\n{reachable} of {checked} endpoint(s) reachable.")
+        if reachable == 0:
+            return 1
 
     return 0
 
