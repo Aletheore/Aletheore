@@ -2691,7 +2691,7 @@ def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch)
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_full_build_writing_adapter",
-        lambda plan, on_usage=None, before_llm_call=None: _SpyAdapter(),
+        lambda on_usage=None, before_llm_call=None: _SpyAdapter(),
     )
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_naming_adapter",
@@ -4562,7 +4562,7 @@ def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurre
     )
     monkeypatch.setattr(
         "scan_worker.jobs._live_wiki_full_build_writing_adapter",
-        lambda plan, on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
+        lambda on_usage=None, before_llm_call=None: _FakeWikiAdapter(on_usage, before_llm_call),
     )
 
     threads = [
@@ -4840,21 +4840,31 @@ def test_run_live_wiki_full_build_for_installation_job_enqueues_per_repo(monkeyp
     assert repo_names == {"octocat/repo1", "octocat/repo2"}
 
 
-def test_full_build_writing_adapter_uses_the_tier_model_for_the_plan(monkeypatch):
-    # Model-selection logic itself is covered by test_model_tiers.py - this
-    # just checks jobs.py's wrapper actually delegates plan through.
+def test_full_build_writing_adapter_always_uses_deepseek_flash_even_with_openai_key_configured(monkeypatch):
+    # AIRview's own comprehension benchmark (aletheore-benchmarks,
+    # AIRVIEW_GAP.md, re-measured 2026-08-22) found deepseek-v4-flash tied
+    # RepoWise here while gpt-5.6-luna lost decisively - see
+    # writing_adapter_for_airview's docstring. No longer plan-dependent
+    # (was Luna falling back to deepseek-v4-pro per plan).
     from scan_worker.jobs import _live_wiki_full_build_writing_adapter
+    from scan_worker import live_wiki
 
-    adapter = _live_wiki_full_build_writing_adapter("pro")
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+
+    adapter = _live_wiki_full_build_writing_adapter()
     assert adapter.name == "DeepSeek"
-    assert adapter._model == "deepseek-v4-pro"
+    assert adapter._model == live_wiki.FLASH_MODEL
 
 
-def test_full_build_writing_adapter_indie_stays_on_deepseek(monkeypatch):
+def test_full_build_writing_adapter_uses_deepseek_flash_without_openai_key_too(monkeypatch):
     from scan_worker.jobs import _live_wiki_full_build_writing_adapter
+    from scan_worker import live_wiki
 
-    adapter = _live_wiki_full_build_writing_adapter("indie")
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+
+    adapter = _live_wiki_full_build_writing_adapter()
     assert adapter.name == "DeepSeek"
+    assert adapter._model == live_wiki.FLASH_MODEL
 
 
 def _docs_module(path="a.py", functions=None, classes=None) -> dict:
@@ -5582,15 +5592,21 @@ def test_health_fix_suggestion_adapter_falls_back_to_deepseek_pro(monkeypatch):
     assert adapter._model == "deepseek-v4-pro"
 
 
-def test_live_wiki_naming_adapter_uses_luna_when_openai_key_configured(monkeypatch):
+def test_live_wiki_naming_adapter_never_uses_luna_even_when_openai_key_configured(monkeypatch):
+    # AIRview is the one writing surface that must not prefer Luna - see
+    # writing_adapter_for_airview's docstring for the benchmark that
+    # justifies the exception (deepseek-v4-flash tied RepoWise, Luna lost).
     from scan_worker.jobs import _live_wiki_naming_adapter
+    from scan_worker import live_wiki
 
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
 
-    assert _live_wiki_naming_adapter().name == "OpenAI"
+    adapter = _live_wiki_naming_adapter()
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == live_wiki.FLASH_MODEL
 
 
-def test_live_wiki_naming_adapter_falls_back_to_deepseek_flash(monkeypatch):
+def test_live_wiki_naming_adapter_uses_deepseek_flash_without_openai_key_too(monkeypatch):
     from scan_worker.jobs import _live_wiki_naming_adapter
     from scan_worker import live_wiki
 
@@ -5601,15 +5617,18 @@ def test_live_wiki_naming_adapter_falls_back_to_deepseek_flash(monkeypatch):
     assert adapter._model == live_wiki.FLASH_MODEL
 
 
-def test_live_wiki_update_writing_adapter_uses_luna_when_openai_key_configured(monkeypatch):
+def test_live_wiki_update_writing_adapter_never_uses_luna_even_when_openai_key_configured(monkeypatch):
     from scan_worker.jobs import _live_wiki_update_writing_adapter
+    from scan_worker import live_wiki
 
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
 
-    assert _live_wiki_update_writing_adapter().name == "OpenAI"
+    adapter = _live_wiki_update_writing_adapter()
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == live_wiki.UPDATE_MODEL
 
 
-def test_live_wiki_update_writing_adapter_falls_back_to_deepseek_flash(monkeypatch):
+def test_live_wiki_update_writing_adapter_uses_deepseek_flash_without_openai_key_too(monkeypatch):
     from scan_worker.jobs import _live_wiki_update_writing_adapter
     from scan_worker import live_wiki
 

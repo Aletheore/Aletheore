@@ -16,6 +16,7 @@ from scan_worker.model_tiers import (
     verification_adapter,
     writing_adapter_chain_for_free_tier,
     writing_adapter_for,
+    writing_adapter_for_airview,
     writing_adapter_for_plan,
 )
 
@@ -87,6 +88,44 @@ def test_writing_adapter_for_threads_on_usage_through_either_branch(monkeypatch)
         adapter = writing_adapter_for("deepseek-v4-flash", on_usage=lambda p, c: received.append((p, c)))
         adapter._on_usage(10, 20)
         assert received == [(10, 20)], key_configured
+
+
+def test_writing_adapter_for_airview_never_uses_luna_even_when_openai_is_configured(monkeypatch):
+    # AIRview's own comprehension benchmark (aletheore-benchmarks,
+    # AIRVIEW_GAP.md, re-measured 2026-08-22, full 12-question architecture
+    # set, 3 judge repeats) found deepseek-v4-flash tied RepoWise (1.88 vs
+    # 1.99, inside the judge's own noise floor) while gpt-5.6-luna lost
+    # decisively (1.53 vs 2.08, outside it) - same corpus, same day, same
+    # rubric. Unlike writing_adapter_for, this must not switch to Luna just
+    # because OPENAI_API_KEY is configured.
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    adapter = writing_adapter_for_airview("deepseek-v4-flash")
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == "deepseek-v4-flash"
+    assert adapter._base_url == "https://api.deepseek.com"
+    assert adapter._api_key_env_var == "DEEPSEEK_API_KEY"
+
+
+def test_writing_adapter_for_airview_still_uses_deepseek_when_openai_is_not_configured(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    adapter = writing_adapter_for_airview("deepseek-v4-flash")
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == "deepseek-v4-flash"
+
+
+def test_writing_adapter_for_airview_threads_on_usage_and_before_llm_call(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    received = []
+    calls_allowed = []
+    adapter = writing_adapter_for_airview(
+        "deepseek-v4-flash",
+        on_usage=lambda p, c: received.append((p, c)),
+        before_llm_call=lambda: calls_allowed.append(True) or True,
+    )
+    adapter._on_usage(7, 3)
+    assert received == [(7, 3)]
+    assert adapter._before_llm_call() is True
+    assert calls_allowed == [True]
 
 
 def test_verification_adapter_always_uses_deepseek_even_when_openai_is_configured(monkeypatch):

@@ -158,8 +158,9 @@ def writing_adapter_for(
     on_usage: Callable[[int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
     allow_partial_report: bool = False,
+    _prefer_luna: bool = True,
 ) -> OpenAICompatibleAdapter:
-    if _openai_available():
+    if _prefer_luna and _openai_available():
         return OpenAICompatibleAdapter(
             name="OpenAI",
             base_url="https://api.openai.com/v1",
@@ -170,9 +171,15 @@ def writing_adapter_for(
             before_llm_call=before_llm_call,
             allow_partial_report=allow_partial_report,
         )
-    logging.getLogger(__name__).warning(
-        "OPENAI_API_KEY not configured - falling back to DeepSeek (%s)", fallback_model
-    )
+    if not _prefer_luna:
+        logging.getLogger(__name__).info(
+            "using DeepSeek (%s) for this writing surface by explicit preference, "
+            "not an OpenAI fallback", fallback_model,
+        )
+    else:
+        logging.getLogger(__name__).warning(
+            "OPENAI_API_KEY not configured - falling back to DeepSeek (%s)", fallback_model
+        )
     return OpenAICompatibleAdapter(
         name="DeepSeek",
         base_url="https://api.deepseek.com",
@@ -187,6 +194,32 @@ def writing_adapter_for(
         on_usage=on_usage,
         before_llm_call=before_llm_call,
         allow_partial_report=allow_partial_report,
+    )
+
+
+def writing_adapter_for_airview(
+    fallback_model: str,
+    on_usage: Callable[[int, int], None] | None = None,
+    before_llm_call: Callable[[], bool] | None = None,
+) -> OpenAICompatibleAdapter:
+    """Always DeepSeek for AIRview specifically - never Luna, regardless of
+    OPENAI_API_KEY availability.
+
+    Every other writing surface prefers Luna over DeepSeek when available
+    (writing_adapter_for above) because Luna measured better on real-world
+    coding/PR-review benchmarks - that is still true and unchanged here.
+    AIRview's own comprehension benchmark (aletheore-benchmarks,
+    AIRVIEW_GAP.md) measured the opposite for this one surface: the full
+    12-question architecture set, 3 judge repeats, deepseek-v4-flash scored
+    1.88 against RepoWise's 1.99 (a statistical tie, inside the judge's own
+    noise floor) while gpt-5.6-luna scored 1.53 against RepoWise's 2.08 (a
+    real loss, outside it) - same corpus, same day, same rubric. Scoped
+    narrowly to AIRview because that is exactly what was measured; PR
+    review and managed audits were not re-tested and stay on Luna via
+    writing_adapter_for/writing_adapter_for_plan.
+    """
+    return writing_adapter_for(
+        fallback_model, on_usage=on_usage, before_llm_call=before_llm_call, _prefer_luna=False
     )
 
 
