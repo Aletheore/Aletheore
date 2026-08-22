@@ -52,9 +52,34 @@ LAYER_FOLDER_MARKERS = {
 
 
 def build_clusters(dependency_graph: dict, resolution: float = 1.0) -> tuple[list[dict], list[dict]]:
+    """Group dependency_graph's modules into communities by import density.
+
+    Test files are excluded before clustering, not after: they pollute
+    architecture grouping the same way they polluted retrieval accuracy
+    (see search_index._is_test_path's own measurement). Reproduced directly
+    on AutoMapper/AutoMapper - 420 of 513 dependency-graph nodes (82%) are
+    test files, and clustering them alongside real source produced 119
+    subsystems for 512 files instead of a handful of meaningful ones,
+    because modularity clustering has no notion of "this node doesn't count
+    toward the architecture" - every test file becomes its own small
+    community or drags a real one apart. Every consumer of these clusters
+    (AIRview subsystems, the dashboard's dependency graph, aletheore_cluster)
+    wants architecture, not a test suite's own internal structure.
+    """
+    # Deferred: search_index.py pulls in lancedb/openai, which cli.py's
+    # import-time footprint must not carry for every command - see
+    # test_importing_cli_does_not_eagerly_load_heavy_dependencies.
+    from aletheore.search_index import _is_test_path
+
+    nodes = [n for n in dependency_graph["nodes"] if not _is_test_path(n)]
+    kept = set(nodes)
+    edges = [
+        (a, b) for a, b in dependency_graph["edges"] if a in kept and b in kept
+    ]
+
     graph = nx.Graph()
-    graph.add_nodes_from(dependency_graph["nodes"])
-    graph.add_edges_from(dependency_graph["edges"])
+    graph.add_nodes_from(nodes)
+    graph.add_edges_from(edges)
 
     communities = list(greedy_modularity_communities(graph, resolution=resolution))
 
@@ -66,12 +91,12 @@ def build_clusters(dependency_graph: dict, resolution: float = 1.0) -> tuple[lis
             cluster_of[module] = cluster_id
         clusters.append({"id": cluster_id, "modules": modules, "internal_edges": 0})
 
-    for a, b in dependency_graph["edges"]:
+    for a, b in edges:
         if cluster_of.get(a) is not None and cluster_of.get(a) == cluster_of.get(b):
             clusters[cluster_of[a]]["internal_edges"] += 1
 
     cross_pairs: dict[tuple[int, int], list[list[str]]] = {}
-    for a, b in dependency_graph["edges"]:
+    for a, b in edges:
         ca, cb = cluster_of.get(a), cluster_of.get(b)
         if ca is None or cb is None or ca == cb:
             continue
