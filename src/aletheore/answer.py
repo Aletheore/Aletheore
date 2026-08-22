@@ -35,7 +35,12 @@ def answer_question(
     # Aletheore's hosted embedding endpoint whenever a token was configured.
     results = search_index(repo_path, question, k=k, allow_hosted=allow_hosted)
 
-    if not results or results[0]["score"] > confidence_threshold:
+    # A chunk found only by full-text search (never by the vector retriever)
+    # has no distance-based score at all - None means "no signal to gate
+    # on", not "reject": the text match is still real evidence, so it must
+    # not be treated the same as a low-confidence numeric score.
+    top_score = results[0]["score"] if results else None
+    if not results or (top_score is not None and top_score > confidence_threshold):
         return {
             "answer": "Not enough evidence in the indexed codebase to answer this confidently.",
             "cited_chunks": [],

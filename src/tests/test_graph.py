@@ -17,6 +17,25 @@ def test_build_module_graph_records_oversized_source_without_parsing(tmp_path):
     assert unparseable == [{"path": "large.py", "reason": "file exceeds size limit"}]
 
 
+def test_build_module_graph_survives_invalid_utf8_in_one_file(tmp_path):
+    """Regression test for docs/audits/Claude_Audit.md finding #17: every
+    extractor decodes byte-slices with the plain .decode() (no errors=),
+    so one invalid-UTF-8 byte anywhere - an ordinary occurrence in real C/C++
+    code with non-English author names in a comment, since C predates UTF-8
+    - used to abort the entire repo scan with an unhandled
+    UnicodeDecodeError, taking down every other, unrelated file with it."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    bad = b"/* Copyright \xe9 2019 Some Author */\nint foo(int x) {\n    return x;\n}\n"
+    (repo / "bad.c").write_bytes(bad)
+    (repo / "good.py").write_text("def ok():\n    return 1\n")
+
+    modules, _graph, _unparseable = build_module_graph(repo)
+
+    module_paths = {m["path"] for m in modules}
+    assert "good.py" in module_paths
+
+
 def make_python_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     app = repo / "app"

@@ -136,7 +136,7 @@ def _params_text(source: bytes, enclosing_node: Node) -> str | None:
             params_node = declarator.child_by_field_name("parameters")
     if params_node is None:
         return None
-    raw = source[params_node.start_byte:params_node.end_byte].decode()
+    raw = source[params_node.start_byte:params_node.end_byte].decode(errors="ignore")
     return " ".join(raw.split())
 
 
@@ -249,7 +249,7 @@ def _symbol_entry(
     is_pure_declaration: bool = False,
 ) -> dict:
     return {
-        "name": source[name_node.start_byte:name_node.end_byte].decode(),
+        "name": source[name_node.start_byte:name_node.end_byte].decode(errors="ignore"),
         "start_line": enclosing_node.start_point[0] + 1,
         "end_line": enclosing_node.end_point[0] + 1,
         "params": _params_text(source, enclosing_node),
@@ -301,7 +301,7 @@ def _python_docstring(source: bytes, enclosing_node: Node) -> str | None:
     string_node = first.children[0]
     if string_node.type != "string":
         return None
-    raw = source[string_node.start_byte:string_node.end_byte].decode()
+    raw = source[string_node.start_byte:string_node.end_byte].decode(errors="ignore")
     return _strip_docstring_quotes(raw) or None
 
 
@@ -312,7 +312,7 @@ def _python_return_type(source: bytes, enclosing_node: Node) -> str | None:
     return_type_node = enclosing_node.child_by_field_name("return_type")
     if return_type_node is None:
         return None
-    return source[return_type_node.start_byte:return_type_node.end_byte].decode().strip()
+    return source[return_type_node.start_byte:return_type_node.end_byte].decode(errors="ignore").strip()
 
 
 def _extract_python(
@@ -346,7 +346,7 @@ def _extract_python(
             if n.type == "import_from_statement":
                 module_node = n.child_by_field_name("module_name")
                 module_name = (
-                    source[module_node.start_byte:module_node.end_byte].decode()
+                    source[module_node.start_byte:module_node.end_byte].decode(errors="ignore")
                     if module_node is not None
                     else ""
                 )
@@ -355,26 +355,26 @@ def _extract_python(
                     if child == module_node:
                         continue
                     if child.type in ("dotted_name", "identifier"):
-                        names.append(source[child.start_byte:child.end_byte].decode())
+                        names.append(source[child.start_byte:child.end_byte].decode(errors="ignore"))
                     elif child.type == "aliased_import":
                         name_node = child.child_by_field_name("name")
                         if name_node is not None:
-                            names.append(source[name_node.start_byte:name_node.end_byte].decode())
+                            names.append(source[name_node.start_byte:name_node.end_byte].decode(errors="ignore"))
                 from_imports.append((module_name, names))
             elif n.type == "import_statement":
                 for child in n.named_children:
                     if child.type == "dotted_name":
-                        plain_imports.append(source[child.start_byte:child.end_byte].decode())
+                        plain_imports.append(source[child.start_byte:child.end_byte].decode(errors="ignore"))
                     elif child.type == "aliased_import":
                         name_node = child.child_by_field_name("name")
                         if name_node is not None:
                             plain_imports.append(
-                                source[name_node.start_byte:name_node.end_byte].decode()
+                                source[name_node.start_byte:name_node.end_byte].decode(errors="ignore")
                             )
             elif n.type == "function_definition":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    name = source[name_node.start_byte:name_node.end_byte].decode()
+                    name = source[name_node.start_byte:name_node.end_byte].decode(errors="ignore")
                     functions.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_python_docstring(source, n),
@@ -384,7 +384,7 @@ def _extract_python(
             elif n.type == "class_definition":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    name = source[name_node.start_byte:name_node.end_byte].decode()
+                    name = source[name_node.start_byte:name_node.end_byte].decode(errors="ignore")
                     classes.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_python_docstring(source, n),
@@ -403,7 +403,7 @@ def _extract_python(
                     # is not a single identifier a reader could look up.
                     if target is None or target.type != "identifier":
                         continue
-                    name = source[target.start_byte:target.end_byte].decode()
+                    name = source[target.start_byte:target.end_byte].decode(errors="ignore")
                     constants.append(_symbol_entry(
                         source, target, n,
                         is_public=_is_public_symbol(name, "python"),
@@ -608,7 +608,7 @@ def _leading_block_comment(
         candidates.append(enclosing_node.parent.prev_sibling)
     for candidate in candidates:
         if candidate is not None and candidate.type == comment_type:
-            raw = source[candidate.start_byte:candidate.end_byte].decode()
+            raw = source[candidate.start_byte:candidate.end_byte].decode(errors="ignore")
             if raw.startswith(marker):
                 return raw
     return None
@@ -639,7 +639,7 @@ def _ts_return_type(source: bytes, enclosing_node: Node) -> str | None:
     node = enclosing_node.child_by_field_name("return_type")
     if node is None:
         return None
-    text = source[node.start_byte:node.end_byte].decode().strip()
+    text = source[node.start_byte:node.end_byte].decode(errors="ignore").strip()
     return text[1:].strip() if text.startswith(":") else text
 
 
@@ -651,7 +651,7 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
     def string_literal(n: Node | None) -> str | None:
         if n is None or n.type != "string":
             return None
-        raw = source[n.start_byte:n.end_byte].decode()
+        raw = source[n.start_byte:n.end_byte].decode(errors="ignore")
         return raw[1:-1] if len(raw) >= 2 and raw[0] in "'\"" else None
 
     def walk(root: Node):
@@ -662,7 +662,7 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
             if n.type == "import_statement":
                 source_node = n.child_by_field_name("source")
                 if source_node is not None:
-                    raw = source[source_node.start_byte:source_node.end_byte].decode()
+                    raw = source[source_node.start_byte:source_node.end_byte].decode(errors="ignore")
                     imports.append(raw.strip("'\""))
             elif n.type == "export_statement":
                 # Re-export barrels ("export { x } from './x'", "export * from
@@ -695,7 +695,7 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
                     if args is not None:
                         for arg in args.named_children:
                             if arg.type == "string":
-                                spec = source[arg.start_byte:arg.end_byte].decode().strip("'\"`")
+                                spec = source[arg.start_byte:arg.end_byte].decode(errors="ignore").strip("'\"`")
                                 if spec:
                                     imports.append(spec)
                                 break
@@ -800,7 +800,7 @@ def _leading_go_doc_comment(source: bytes, enclosing_node: Node) -> str | None:
     lines: list[str] = []
     expected_end_row = anchor.start_point[0] - 1
     while node is not None and node.type == "comment" and node.end_point[0] == expected_end_row:
-        raw = source[node.start_byte:node.end_byte].decode().strip()
+        raw = source[node.start_byte:node.end_byte].decode(errors="ignore").strip()
         if raw.startswith("//"):
             raw = raw[2:].strip()
         elif raw.startswith("/*") and raw.endswith("*/"):
@@ -824,7 +824,7 @@ def _extract_go(node: Node, source: bytes) -> tuple[list[str], list[dict], list[
     def string_content(n: Node) -> str | None:
         for child in n.children:
             if child.type == "interpreted_string_literal_content":
-                return source[child.start_byte:child.end_byte].decode()
+                return source[child.start_byte:child.end_byte].decode(errors="ignore")
         return None
 
     def walk(root: Node):
@@ -851,7 +851,7 @@ def _extract_go(node: Node, source: bytes) -> tuple[list[str], list[dict], list[
                             name_node = child
                             break
                 if name_node is not None:
-                    name = source[name_node.start_byte:name_node.end_byte].decode()
+                    name = source[name_node.start_byte:name_node.end_byte].decode(errors="ignore")
                     functions.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_leading_go_doc_comment(source, n),
@@ -860,7 +860,7 @@ def _extract_go(node: Node, source: bytes) -> tuple[list[str], list[dict], list[
             elif n.type == "type_spec":
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    name = source[name_node.start_byte:name_node.end_byte].decode()
+                    name = source[name_node.start_byte:name_node.end_byte].decode(errors="ignore")
                     types.append(_symbol_entry(
                         source, name_node, n,
                         docstring=_leading_go_doc_comment(source, n),
@@ -917,7 +917,7 @@ def _rust_use_paths(node: Node, source: bytes) -> list[str]:
     """
 
     def text(n: Node) -> str:
-        return source[n.start_byte:n.end_byte].decode()
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
 
     if node.type == "use_as_clause":
         # "crate::foo::Bar as MyBar" - only the path before "as" matters for
@@ -966,7 +966,7 @@ def _leading_rust_doc_comment(source: bytes, enclosing_node: Node) -> str | None
     node = enclosing_node.prev_sibling
     expected_end_row = enclosing_node.start_point[0]
     while node is not None and node.type == "line_comment" and node.end_point[0] == expected_end_row:
-        raw = source[node.start_byte:node.end_byte].decode().strip()
+        raw = source[node.start_byte:node.end_byte].decode(errors="ignore").strip()
         if not raw.startswith("///"):
             break
         lines.append(raw[3:].strip())
@@ -1009,7 +1009,7 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
                 # possible on-disk shapes.
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
-                    name = source[name_node.start_byte:name_node.end_byte].decode()
+                    name = source[name_node.start_byte:name_node.end_byte].decode(errors="ignore")
                     if name:
                         imports.append(f"self::{name}")
             elif n.type in ("function_item", "function_signature_item"):
@@ -1020,7 +1020,7 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
                         source, name_node, n,
                         docstring=_leading_rust_doc_comment(source, n),
                         return_type=(
-                            source[return_type_node.start_byte:return_type_node.end_byte].decode().strip()
+                            source[return_type_node.start_byte:return_type_node.end_byte].decode(errors="ignore").strip()
                             if return_type_node is not None else None
                         ),
                         is_public=(
@@ -1179,7 +1179,7 @@ def _extract_java_package(node: Node, source: bytes) -> str | None:
         if child.type == "package_declaration":
             for grandchild in child.children:
                 if grandchild.type in ("scoped_identifier", "identifier"):
-                    return source[grandchild.start_byte:grandchild.end_byte].decode()
+                    return source[grandchild.start_byte:grandchild.end_byte].decode(errors="ignore")
             return None
     return None
 
@@ -1192,7 +1192,7 @@ def _java_return_type(source: bytes, enclosing_node: Node) -> str | None:
     node = enclosing_node.child_by_field_name("type")
     if node is None:
         return None
-    return source[node.start_byte:node.end_byte].decode().strip()
+    return source[node.start_byte:node.end_byte].decode(errors="ignore").strip()
 
 
 def _java_is_public(node: Node) -> bool:
@@ -1242,7 +1242,7 @@ def _extract_java(
     types: list[dict] = []
 
     def text(n: Node) -> str:
-        return source[n.start_byte:n.end_byte].decode()
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
 
     def walk(root: Node):
         # Iterative, not recursive - see _extract_python's walk for why.
@@ -1377,7 +1377,7 @@ def _leading_ruby_doc_comment(source: bytes, enclosing_node: Node) -> str | None
     lines: list[str] = []
     expected_end_row = anchor.start_point[0] - 1
     while node is not None and node.type == "comment" and node.end_point[0] == expected_end_row:
-        raw = source[node.start_byte:node.end_byte].decode().strip()
+        raw = source[node.start_byte:node.end_byte].decode(errors="ignore").strip()
         if raw.startswith("#"):
             raw = raw[1:].strip()
         lines.append(raw)
@@ -1397,7 +1397,7 @@ def _extract_ruby(node: Node, source: bytes) -> tuple[list[tuple[str, str]], lis
     types: list[dict] = []
 
     def text(n: Node) -> str:
-        return source[n.start_byte:n.end_byte].decode()
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
 
     def walk(root: Node):
         # Iterative, not recursive - see _extract_python's walk for why.
@@ -1468,7 +1468,7 @@ def _php_string_content(n: Node, source: bytes) -> str | None:
     # PHP string literals - both wrap their text in an identically-named child.
     for child in n.children:
         if child.type == "string_content":
-            return source[child.start_byte:child.end_byte].decode()
+            return source[child.start_byte:child.end_byte].decode(errors="ignore")
     return None
 
 
@@ -1499,7 +1499,7 @@ def _php_return_type(source: bytes, enclosing_node: Node) -> str | None:
     node = enclosing_node.child_by_field_name("return_type")
     if node is None:
         return None
-    return source[node.start_byte:node.end_byte].decode().strip()
+    return source[node.start_byte:node.end_byte].decode(errors="ignore").strip()
 
 
 def _extract_php(node: Node, source: bytes) -> tuple[list[tuple[str, str]], list[dict], list[dict]]:
@@ -1509,7 +1509,7 @@ def _extract_php(node: Node, source: bytes) -> tuple[list[tuple[str, str]], list
     types: list[dict] = []
 
     def text(n: Node) -> str:
-        return source[n.start_byte:n.end_byte].decode()
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
 
     include_keywords = ("require", "require_once", "include", "include_once")
 
@@ -1632,7 +1632,7 @@ def _extract_c_family(node: Node, source: bytes) -> tuple[list[str], list[dict],
     types: list[dict] = []
 
     def text(n: Node) -> str:
-        return source[n.start_byte:n.end_byte].decode()
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
 
     def function_name(declarator: Node) -> str | None:
         # The name-bearing function_declarator can be wrapped in pointer_declarator
@@ -1734,7 +1734,7 @@ def _extract_csharp_namespace(node: Node, source: bytes) -> str | None:
         if child.type in ("namespace_declaration", "file_scoped_namespace_declaration"):
             for grandchild in child.children:
                 if grandchild.type in ("qualified_name", "identifier"):
-                    return source[grandchild.start_byte:grandchild.end_byte].decode()
+                    return source[grandchild.start_byte:grandchild.end_byte].decode(errors="ignore")
             return None
     return None
 
@@ -1757,7 +1757,7 @@ def _leading_csharp_xmldoc(source: bytes, enclosing_node: Node) -> str | None:
     node = enclosing_node.prev_sibling
     expected_end_row = enclosing_node.start_point[0] - 1
     while node is not None and node.type == "comment" and node.end_point[0] == expected_end_row:
-        raw = source[node.start_byte:node.end_byte].decode().strip()
+        raw = source[node.start_byte:node.end_byte].decode(errors="ignore").strip()
         if not raw.startswith("///"):
             break
         lines.append(raw[3:].strip())
@@ -1785,7 +1785,7 @@ def _csharp_return_type(source: bytes, enclosing_node: Node) -> str | None:
     node = enclosing_node.child_by_field_name("returns")
     if node is None:
         return None
-    return source[node.start_byte:node.end_byte].decode().strip()
+    return source[node.start_byte:node.end_byte].decode(errors="ignore").strip()
 
 
 def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
@@ -1794,7 +1794,7 @@ def _extract_csharp(node: Node, source: bytes) -> tuple[list[str], list[dict], l
     types: list[dict] = []
 
     def text(n: Node) -> str:
-        return source[n.start_byte:n.end_byte].decode()
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
 
     def walk(root: Node):
         # Iterative, not recursive - see _extract_python's walk for why.
@@ -1871,7 +1871,7 @@ def _csharp_declared_type_names(node: Node, source: bytes) -> list[str]:
         if n.type in _CSHARP_TYPE_DECLS:
             name_node = n.child_by_field_name("name")
             if name_node is not None:
-                names.append(source[name_node.start_byte:name_node.end_byte].decode())
+                names.append(source[name_node.start_byte:name_node.end_byte].decode(errors="ignore"))
         stack.extend(n.children)
     return names
 

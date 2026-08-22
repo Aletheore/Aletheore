@@ -51,6 +51,37 @@ def test_answer_question_confidence_gate_skips_adapter_call(mock_search_index, t
 
 
 @patch("aletheore.answer.search_index")
+def test_answer_question_does_not_crash_when_top_result_has_no_score(mock_search_index, tmp_path):
+    """Regression test for docs/audits/Claude_Audit.md finding #18: a chunk
+    found only by full-text search (never by the vector retriever) has no
+    _distance at all, so search_index's "score" is None for it - and
+    `results[0]["score"] > confidence_threshold` used to crash with
+    `TypeError: '>' not supported between instances of 'NoneType' and
+    'float'` whenever that chunk ranked first. A missing distance-based
+    score means there's no signal to gate on, not that the match should be
+    rejected - the text match is real evidence either way."""
+    mock_search_index.return_value = [
+        {
+            "module_path": "auth.py",
+            "symbol_name": "login",
+            "start_line": 1,
+            "end_line": 3,
+            "language": "python",
+            "text": "auth.py::login\ndef login():\n    return True",
+            "score": None,
+        }
+    ]
+    adapter = MagicMock()
+    adapter.simple_completion.return_value = "Login is handled in auth.py::login."
+
+    result = answer_question(tmp_path, "how does login work", adapter)
+
+    assert result["confidence_gated"] is False
+    assert result["answer"] == "Login is handled in auth.py::login."
+    adapter.simple_completion.assert_called_once()
+
+
+@patch("aletheore.answer.search_index")
 def test_answer_question_gates_when_nothing_retrieved(mock_search_index, tmp_path):
     mock_search_index.return_value = []
     adapter = MagicMock()

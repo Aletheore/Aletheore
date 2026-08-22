@@ -1322,7 +1322,13 @@ def _rrf_fuse(vector_hits: list[dict], text_hits: list[dict]) -> list[dict]:
             if _is_auxiliary_path(hit.get("module_path") or ""):
                 effective_rank += _AUXILIARY_RANK_PENALTY
             scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_K + effective_rank + 1)
-            by_key[key] = hit
+            # Merge, don't overwrite: vector_hits carries _distance and
+            # text_hits carries _score, never both. A plain `by_key[key] =
+            # hit` on a dual-matched chunk left whichever retriever ran
+            # second (text_hits) clobbering the first, silently dropping
+            # _distance - the field search_index's final "score" is built
+            # from - for exactly the chunks both retrievers agree on.
+            by_key[key] = {**by_key.get(key, {}), **hit}
     return [by_key[key] for key, _ in sorted(scores.items(), key=lambda item: -item[1])]
 
 
