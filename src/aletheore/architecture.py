@@ -5,7 +5,6 @@ import networkx as nx
 from networkx.algorithms.community import greedy_modularity_communities
 
 from aletheore.repo_config import load_repo_config
-from aletheore.search_index import _is_test_path
 
 
 def load_architecture_config(repo_path: Path) -> dict | None:
@@ -67,6 +66,11 @@ def build_clusters(dependency_graph: dict, resolution: float = 1.0) -> tuple[lis
     (AIRview subsystems, the dashboard's dependency graph, aletheore_cluster)
     wants architecture, not a test suite's own internal structure.
     """
+    # Deferred: search_index.py pulls in lancedb/openai, which cli.py's
+    # import-time footprint must not carry for every command - see
+    # test_importing_cli_does_not_eagerly_load_heavy_dependencies.
+    from aletheore.search_index import _is_test_path
+
     nodes = [n for n in dependency_graph["nodes"] if not _is_test_path(n)]
     kept = set(nodes)
     edges = [
