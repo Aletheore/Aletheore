@@ -26,3 +26,4 @@ jobs:
             .github/**/*.md
             docs/**/*.md
             !docs/superpowers/**
+            !docs/audits/**
