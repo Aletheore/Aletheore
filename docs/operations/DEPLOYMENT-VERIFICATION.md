@@ -4,8 +4,8 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-08-10
-**Snapshot Freshness:** CURRENT as of 2026-08-10 - production was redeployed to `master` (commit `1659182`) and re-verified live via SSH the same day.
+**Last Updated:** 2026-08-22
+**Snapshot Freshness:** CURRENT as of 2026-08-22 - production was redeployed to `master` (commit `291819d`) and re-verified live via SSH the same day.
 
 ## Purpose
 
@@ -30,28 +30,22 @@ Before claiming a hardening change is live, verify:
 
 ## Current Server Snapshot
 
-As of 2026-08-10, following a redeploy to `master` (`git reset --hard origin/master` + `docker compose build app-server scan-worker health-worker scheduler` + `docker compose up -d --no-deps` for those four), live inspection found:
+As of 2026-08-22, following a redeploy to `master` (`git reset --hard origin/master` + `docker compose build app-server scan-worker health-worker scheduler` + `docker compose up -d --no-deps` for those four), live inspection found:
 
-- Host: `srv1675832`.
+- Host: `srv1675832` (`root@187.127.169.89`).
 - Deployment path: `/root/aletheore`.
 - Remote: `https://github.com/Aletheore/Aletheore.git`.
 - Branch: `master`.
-- Commit: `1659182c146601a0817059b09d1d70cd99b25889`.
-- Working tree: clean, no local diffs or stashes.
-- Services running: `app-server`, `scan-worker`, `health-worker`, `scheduler`, `autoheal`, `demo-scan-worker`, `demo-sandbox-runner`, `postgres`, `redis`, `caddy`, `ollama` - all `Up`; `app-server`, `scan-worker`, `health-worker`, `scheduler`, `autoheal`, and `postgres` reporting Docker-healthcheck `healthy`. All four rebuilt services show `RestartCount: 0` since redeploy.
-- App server starts via `python scripts/migrate.py && exec uvicorn ...`; this redeploy carried 5 pending migrations (`035_data_deletion_log.sql` through `039_telemetry_retention_index.sql`), all applied cleanly on startup with no errors (`applied 5 migration(s)` in logs). Confirmed live in Postgres afterward: `data_deletion_log`, `webhook_deliveries`, and `installation_access_log` tables exist; `cli_telemetry_events_occurred_at_idx` index exists; `installations.llm_suggestions_enabled` column exists.
-- This redeploy shipped: self-serve data deletion (Settings -> Delete all data, and identically on uninstall) with a plan-independent purge that covers free-plan installations, not just paid seats; AIR evidence schema validation; webhook replay/duplicate protection for GitHub and Paddle; an MCP consent boundary (`ALETHEORE_MCP_ALLOW`) gating tools that transmit repository evidence externally; and body-size/rate-limit/retention controls on the two ingestion endpoints (`/v1/telemetry`, `/v1/runtime-events`).
-- The two new abuse controls were verified live against the public endpoint post-deploy, not just via test suite: an oversized `/v1/telemetry` POST returned `413`; a chunked request with no `Content-Length` returned `411`; a valid small request returned `200` and inserted normally.
-- The data-deletion fix (purging PII for free-plan installations, not just paid seats) was verified pre-deploy via the test suite and a red/green check against a local test database, not re-exercised against a real production installation - deleting a live customer's data to prove the code path would be destructive and out of proportion to what the test suite already demonstrates.
-- `demo-scan-worker` has **no** Docker socket mount (`docker inspect` confirms empty `Mounts`); `demo-sandbox-runner` is the sole holder of `/var/run/docker.sock`, publishes no host ports (internal-only on the Compose network) - unchanged this pass, not re-verified with a fresh TCP connect since neither service nor its Dockerfile was touched by this redeploy.
-- `app-server` and `scan-worker` run as the non-root `aletheore` user (re-confirmed live via `docker compose exec ... whoami`); `demo-sandbox-runner` runs as `root` (required to reach the Docker socket - the one service designed to need it, unchanged).
-- CPU/mem limits present and re-confirmed via `docker inspect`: `app-server` 768MiB, `scan-worker` 1GiB. `demo-scan-worker`/`demo-sandbox-runner` limits not re-checked this pass - neither was touched by this redeploy.
-- `scripts/backup-postgres.sh` present at the expected path, **and its cron schedule (`0 3 * * *` in root's crontab) is now confirmed to actually fire successfully** - previously the crontab entry existed but had never once executed since being installed (no `/var/log/aletheore-backup.log`, no cron-log line for it, both existing `.dump` files were manual runs). Verified 2026-08-10 by adding a temporary `*/2 * * * *` entry, confirming it produced a clean dump under cron's real minimal environment (not just an interactive SSH shell), then removing the temporary entry. "A crontab entry exists" and "the job actually runs" are different claims - re-verify this specific gap (dump file freshness `<24h`, no stale `/var/log/aletheore-backup.log`) after any host-level change (OS upgrade, cron package change, PATH-affecting change), not just after app-level redeploys.
-- `app-server`/`scan-worker` base image digest-pinning not re-verified this pass - neither Dockerfile changed in this redeploy's diff (confirmed via `git diff` against the prior deployed commit), so the prior verification stands.
-- Restore drill target database availability was **not** re-verified this pass - out of scope for a routine redeploy; still needs an explicit check per its own runbook item.
+- Commit: `291819d32d1968646b3604f4ee2b785cd7092d21`.
+- Working tree: clean aside from an untracked `github-app/backups/` directory (expected - backup script output, not repo content), no local diffs or stashes.
+- 24 commits had accumulated unreleased since the prior deploy tag (`github-app-deploy-2026-08-21`) and shipped together in this one - see `github-app/CHANGELOG.md`'s 2026-08-22 entry for the full list. Notably this includes a spend-cap check-and-record race fix (#331, #332) that had been sitting fixed in code since 2026-08-20 but not yet live, and the AIRview deepseek-writer switch (#352) + architecture-clustering test-file fix (#353) from the same-day benchmark re-verification.
+- Services running: `app-server`, `scan-worker` (2 replicas), `health-worker`, `scheduler`, `autoheal`, `demo-scan-worker`, `demo-sandbox-runner`, `postgres`, `redis`, `caddy`, `jina-embed` - all `Up`; `app-server`, both `scan-worker` replicas, `health-worker`, `scheduler`, `autoheal`, `jina-embed`, and `postgres` reporting Docker-healthcheck `healthy`.
+- `docker compose up -d --no-deps scan-worker` recreated only the first replica (`scan-worker-1`); the second replica needed an explicit `--scale scan-worker=2` to be recreated, and doing so left an orphaned old-image container running alongside the new one under a different name (`scan-worker-2-1` vs the new `scan-worker-2`) until it was manually stopped and removed. Re-check both replica names after any future `--no-deps` restart of a scaled service - the plain service-name form does not reliably recreate every replica.
+- App server starts via `python scripts/migrate.py && exec uvicorn ...`; this redeploy carried 1 pending migration (`054_cache_embedder_identity.sql`), applied cleanly on startup with no errors (`applied 1 migration(s)` in logs).
+- Post-deploy, verified live inside `scan-worker-1` (not just that the deploy succeeded) that the two headline fixes are actually present in the running code: `model_tiers.writing_adapter_for_airview` exists and `scan_worker.jobs` calls it; `aletheore.architecture.build_clusters` references `_is_test_path`.
 - Health checks: internal `http://127.0.0.1:8000/healthz` and public `https://app.aletheore.com/healthz` both return `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
-- No errors, tracebacks, or exceptions in `app-server`, `scan-worker`, `health-worker`, or `scheduler` logs since restart.
-- Disk: 129G available of 193G (34% used).
+- No errors, tracebacks, or exceptions found in `app-server` logs after restart (targeted grep for `error|traceback|exception`); the same grep across `scan-worker-1`, `scan-worker-2`, `health-worker`, and `scheduler` logs also came back clean.
+- Not re-verified this pass (out of scope for this redeploy, no relevant Dockerfile/script changes in the diff): Docker socket mount absence on `demo-scan-worker`, non-root user on `app-server`/`scan-worker`, CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill target availability, disk space. Each was last directly verified in the 2026-08-10 deploy (see `git log -p` on this file, or the `github-app-deploy-2026-08-10` tag) - re-check if any host-level or Dockerfile change touches them.
 
 ## Paddle Webhook Destination (live account config, not in git)
 

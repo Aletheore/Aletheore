@@ -12,6 +12,50 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-22
+
+24 commits accumulated since the 8/21 deploy tag and shipped together in this one:
+
+- **AIRview writing surface now always uses deepseek-v4-flash, never GPT-5.6 Luna**, regardless of
+  `OPENAI_API_KEY` availability - a benchmark re-run (5 language corpora, blind judge) found
+  DeepSeek beats Luna specifically for this comprehension-writing surface, the opposite of what
+  holds for PR review and coding benchmarks elsewhere, so the switch is scoped narrowly to AIRview
+  via a new `writing_adapter_for_airview` (#352).
+- **Architecture clustering no longer counts test files as subsystems.** Reproduced on
+  AutoMapper/AutoMapper: 82% of the dependency graph was test files, fragmenting what should have
+  been a handful of subsystems into 119 near-singleton clusters. Fixed by excluding test paths
+  before clustering, the same filter already used for retrieval (#353).
+- Spend-cap check-and-record was two separate lock acquisitions for both fix-suggestion and
+  AIRview live-wiki spend budgets - a race that could let concurrent calls both pass the cap
+  check before either recorded usage. Fixed via atomic reservation (#331, #332).
+- AIRview banner still claimed incremental updates use a fast model after that had changed (#350).
+- Healthcheck sweep exited 0 and printed no summary even when every endpoint was unreachable
+  (#349); CI never actually booted the app-server/scan-worker images before this - the same class
+  of gap that caused the #246 crash-loop incident could have shipped silently again (#342).
+  Real end-to-end integration test added for the health-check sweep (#351).
+- Audit's sponsor panel claimed nothing left the machine after evidence was actually sent out
+  (#348).
+- Local search index now detects an embedder swap even when the new embedder happens to produce
+  the same dimensionality (#347); three other retrieval-quality regressions in `search_index.py`
+  fixed (#340); embedding-cache rows now carry the embedder identity that produced them, closing
+  the gap the above fix needed (#343, migration `049_purge_cache_for_embedder_switch.sql`).
+- Flash review similarity cache retained raw PR diffs indefinitely instead of expiring them
+  (#344).
+- Three CLI UX gaps found while auditing for more issues like the update-notice one (#346); bare
+  CLI invocation now surfaces an available update (#345); `mcp-install` prints a copyable
+  `claude mcp add` command for Claude Code (#341).
+- FastAPI router mounted implicitly alongside a prefixed mount lost its own unprefixed endpoint
+  (#339); router-mount prefixes could cross-contaminate between files (#333).
+- Schema-mapper silently corrupted on ordinary SQL comments (#338).
+- Secret scanner missed dotted-attribute credential assignments (#334).
+- Java/C# pre-parsed trees stayed pinned in memory for the whole scan instead of being released
+  (#337).
+- Module-overview chunk boundary used the wrong "first" symbol (#336).
+- Unpinned marker-qualified PEP 508 dependency was silently dropped (#335).
+- Benchmark numbers on the public site updated to the current, re-verified figures: 40.5ms mean
+  retrieval latency (was 125ms) vs RepoWise's 52.5ms, and 2.00 vs 1.77 average comprehension score
+  across 5 language corpora (#354).
+
 ## 2026-08-19
 
 - **AIRview and Docs generation cut down to a fraction of their prior LLM call volume.**
