@@ -1587,7 +1587,7 @@ async function loadWiki() {{
       ' Showing the last successful build below - it may be stale.</div>';
   }}
   let html = staleBanner +
-    '<div class="wiki-banner"><div class="wiki-banner-text"><b>Built once by a frontier model, kept current by a fast one.</b> Every diagram edge below is a real import in this repo, never inferred.</div></div>' +
+    '<div class="wiki-banner"><div class="wiki-banner-text"><b>Built and kept current by a frontier model.</b> Every diagram edge below is a real import in this repo, never inferred.</div></div>' +
     '<div class="diagram-wrap"><div class="mermaid" id="overview-diagram"></div></div>' +
     '<div class="subsystem-grid" id="subsystem-grid"></div>';
   body.innerHTML = html;

@@ -73,3 +73,13 @@ def test_wiki_markdown_renders_untrusted_html_inert():
     )
     result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_wiki_banner_does_not_claim_a_separate_fast_model_for_incremental_updates():
+    """model_tiers.resolve_model() has routed both the full AIRview build and
+    every incremental update to the same model (Luna, whenever OPENAI_API_KEY
+    is configured) since the 2026-08-09 routing change - see
+    scan_worker/model_tiers.py's module docstring. The banner used to promise
+    a cheap/fast model for updates, which stopped being true that day."""
+    assert "kept current by a fast one" not in frontend.WIKI_HTML
+    assert "frontier model" in frontend.WIKI_HTML
