@@ -12,6 +12,21 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-22 (second deploy)
+
+- **Three crash/broken-feature bugs from the second-pass audit, all live in production:**
+  one invalid-UTF-8 byte anywhere in a scanned repo aborted the *entire* scan
+  (39 unguarded `.decode()` calls in the scanner, all now `errors="ignore"`); AIRview's
+  Q&A path crashed with a `TypeError` on its own best-case (dual-retriever) match, because
+  RRF fusion silently dropped the vector distance score on any chunk found by both
+  retrievers; AIRview's fallback for non-scanned files (docs, configs, Dockerfiles) called
+  a function name that was never imported (`NameError`, silently caught) and 404'd on every
+  request (#360).
+- **Nothing alerted when a free-tier provider key went missing.** The gap found and fixed
+  earlier today (see the "config, not a code deploy" entry below) had no monitoring - a new
+  ops-monitor check now alerts per-provider (Groq/Gemini/OpenAI-FreeTier/OpenRouter) within
+  minutes instead of staying silent for weeks (#357).
+
 ## 2026-08-22
 
 24 commits accumulated since the 8/21 deploy tag and shipped together in this one:
