@@ -4,7 +4,19 @@ File-by-file audit of `github-app/` and `src/aletheore/`, started 2026-08-15.
 Findings are listed most severe first within each pass. Every claim cites
 `file:line` and was verified by reading the code, not inferred.
 
-**Status:** complete for the areas listed below. 16 findings.
+**Status:** complete for the areas listed below. 35 findings (16 from the
+first pass, 19 from the second).
+
+**Second pass, 2026-08-22:** the areas the first pass explicitly left
+uncovered were audited via 5 parallel agents (one per area below), each
+instructed to read the full file(s), cite `file:line`, and verify every
+claim against actual behavior rather than inference alone — most findings
+were confirmed by parsing real code through the actual tree-sitter grammar
+or by running the real function against constructed input, not just reading.
+Every finding was then independently re-verified a second time (by reading
+the cited source directly, and for the highest-severity ones, by
+reproducing the failure) before being recorded here — the same discipline
+the first pass used. Findings #17-35 below are from this pass.
 
 **Covered in full:** the Paddle/Marketplace/push/installation/issue_comment
 webhooks, `auth.py`, `managed_audit_api.py`, `embeddings_api.py`,
@@ -12,17 +24,44 @@ webhooks, `auth.py`, `managed_audit_api.py`, `embeddings_api.py`,
 the Flash Review path (`flash_review.py`, `github_api.py`, `pull_request.py`),
 every `installation_spend_lock` block in `jobs.py`, `credentials.py`,
 `secrets.py`, `mcp_server.py`, `citation_verifier.py`, `vulnerabilities.py`,
-`scanner/detect.py`, and `scanner/graph.py`'s pre-passes, main loop, resolvers
-and all ten extractors.
+`scanner/detect.py`, `scanner/graph.py` in full (pre-passes, main loop,
+resolvers, all extractor bodies including per-language rules), `db.py` in
+both services, `dashboard.py`, `frontend.py`'s route handlers, `cli.py`,
+`endpoints.py`, and `search_index.py` in full.
 
 **Swept mechanically:** all SQL in both services (no injection surface), all 54
 CLI modules by AST (no bare excepts, no mutable defaults), every `innerHTML` sink
 in `frontend.py`.
 
-**Not covered:** `db.py` and `dashboard.py` beyond targeted checks,
-`frontend.py`'s route handlers, `cli.py`, `endpoints.py`, `search_index.py`
-beyond its escaping, and the bodies of `graph.py`'s per-language extractors
-(their walk strategy was verified; their per-language rules were not).
+**Not covered:** nothing outstanding from the original scope (`github-app/`
+and `src/aletheore/`). Not audited at all: `benchmarks/`, `website/`, test
+files themselves, and anything under `docs/`.
+
+| # | severity | area | finding |
+|---|---|---|---|
+| 17 | **critical** | scanner (all languages) | one invalid-UTF-8 byte anywhere in a repo aborts the entire scan with no partial results |
+| 18 | high | search_index | RRF fusion drops the score field on any dual-retriever hit, crashing `answer_question` on its best-case match |
+| 19 | high | endpoints | FastAPI router-prefix collection is scope-blind — a same-named local variable anywhere in the file corrupts the real router's prefix |
+| 20 | high | endpoints | incremental endpoint caching doesn't invalidate when a *different* file's router-mount prefix changes |
+| 21 | high | scanner/Rust | `pub use ...;` extracts the literal string `"pub"` as the import, losing the real re-export target |
+| 22 | high | cli | `audit`'s `--map-schema`/`--no-map-schema` flag is parsed but never forwarded — always inert |
+| 23 | medium-high | app_server/dashboard | AIRview's non-scanned-file fallback always raises `NameError`, caught silently — feature 100% broken |
+| 24 | medium | app_server | health-check-target and API-token creation are check-then-act, unlike the seat-limit fix in the same file |
+| 25 | medium | app_server | `generate_token` discards the real token id and re-derives it with a racy re-query |
+| 26 | medium | cli | `_fetch_whoami`'s `response.json()` sits outside its own try/except, contradicting its documented graceful-degradation contract |
+| 27 | medium | endpoints | Django `urlpatterns += [...]` is a different AST node type than `=` and is silently skipped entirely |
+| 28 | medium | scanner/PHP | grouped `use Foo\Bar\{A, B};` produces zero imports |
+| 29 | medium | scanner/Java | `import static Foo.*;` never resolves, even when the target exists locally |
+| 30 | low-medium | app_server | advisory-lock namespace 3 is independently reused for two unrelated locks across the two `db.py` files |
+| 31 | low-medium | scanner/PHP | `use Foo\Bar as Baz;` also emits a phantom import of the bare alias `Baz` |
+| 32 | low-medium | scanner/TS | `import foo = require('./foo');` produces zero imports |
+| 33 | low-medium | scanner/Rust | nested `use std::{fmt, io::{self, Write}}` drops everything below the first brace level |
+| 34 | low | app_server/dashboard | ownership-check comment claims an ordering the code doesn't have — a repo-existence oracle for any signed-in user |
+| 35 | low | scanner (Python/JS vs. 7 others) | Python and JS/TS don't filter self-import edges the way every other language branch does |
+
+---
+
+## First pass (2026-08-15), findings #1-16
 
 | # | severity | area | finding |
 |---|---|---|---|
@@ -1070,3 +1109,684 @@ Auto-detected values are additionally safe by construction:
 `_detect_query_language` (1093-1118) can only return a value from the fixed
 `_UNAMBIGUOUS_QUERY_LANGUAGES` / `_CUED_QUERY_LANGUAGES` tables, and returns
 `None` unless exactly one language is named.
+
+---
+
+## Second pass (2026-08-22), findings #17-35
+
+### 17. One invalid-UTF-8 byte anywhere in a repo aborts the entire scan
+
+**`src/aletheore/scanner/graph.py`** - systemic, 39 `.decode()` calls, only 2 of
+which use `errors="ignore"` (lines 438, 466). Every other call site -
+`_symbol_entry`, `_params_text`, `_leading_block_comment`, every per-language
+extractor's import handling - decodes raw byte-slices unguarded.
+**Severity: critical.**
+
+`build_module_graph` reads every source file as raw bytes and hands byte-slices
+to `.decode()` throughout. Reproduced directly against the real entry point
+(the one `evidence.py:439` calls, with no surrounding try/except):
+
+```python
+bad = b'/* Copyright \xe9 2019 Some Author */\nint foo(int x) {\n    return x;\n}\n'
+(d / "bad.c").write_bytes(bad)
+(d / "good.py").write_text("def ok():\n    return 1\n")
+build_module_graph(d)
+# UnicodeDecodeError: 'utf-8' codec can't decode byte 0xe9 in position 13
+```
+
+Confirmed by direct reproduction (this audit ran the exact snippet above): a
+single non-UTF-8 byte in a C-style comment - an ordinary occurrence in real
+C/C++ code with non-English author names, since C predates UTF-8 - crashes the
+parse of **every file in the repo**, including the unrelated `good.py`.
+Confirmed `evidence.py:439-440` has no try/except around the call, unlike the
+existing `MAX_SOURCE_FILE_BYTES` guard (lines 2223-2226) which handles
+oversized files gracefully and records them in `unparseable_files` - there is
+no encoding equivalent. `github-app/scan_worker/jobs.py` wraps the scan job in
+broad `except Exception`, so this doesn't crash the worker process, but the
+entire evidence-build for that repo still fails outright, with no partial
+results and no indication of which file or byte caused it.
+
+**Fix:** `source.decode(errors="ignore")` (or `"replace"`) everywhere, matching
+the pattern `_extract_module_constants` already uses. A single shared helper
+(e.g. `_text(source, node)`) would make this consistent instead of ~37
+independent unguarded call sites.
+
+---
+
+### 18. RRF fusion silently drops the score on any dual-retriever hit, crashing `answer_question`
+
+**`src/aletheore/search_index.py:1301-1326`** (`_rrf_fuse`), **`:1538`**
+(`search_index`'s return), **`src/aletheore/answer.py:38`** (the crash site).
+**Severity: high.**
+
+`_rrf_fuse` merges vector and full-text hits into one dict keyed by
+`(module_path, symbol_name, start_line)`, writing `by_key[key] = hit`
+unconditionally on every iteration:
+
+```python
+for hits in (vector_hits, text_hits):
+    for rank, hit in enumerate(hits):
+        key = (...)
+        scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_K + effective_rank + 1)
+        by_key[key] = hit          # last write wins - text_hits processed second
+```
+
+Vector hits carry a `_distance` field; full-text hits (from
+`table.search(query_text, query_type="fts")`, LanceDB's own FTS API) carry
+`_score` instead - confirmed directly against a real LanceDB table, the two
+never overlap. For any chunk found by **both** retrievers, `by_key[key]` ends
+up holding the *text* hit's dict, which has no `_distance` key.
+`search_index` then builds its return with `"score": result.get("_distance")`
+(line 1538) - `None` for exactly this case. `answer_question` does
+`results[0]["score"] > confidence_threshold` with no None-guard, raising
+`TypeError: '>' not supported between instances of 'NoneType' and 'float'`.
+Neither `mcp_server.py`'s `aletheore_answer` tool nor `cli.py`'s `query answer`
+command catches `TypeError` - this is an unhandled crash.
+
+The trigger condition (top result found by both retrievers) is not an edge
+case - it's what a confident, correct match looks like, i.e. exactly the case
+the confidence gate exists to pass cleanly. `test_search_index.py`'s existing
+`test_rrf_fuse_ranks_a_chunk_found_by_both_retrievers_first` passes a single
+shared dict with no field distinction, so it checks ranking order only and
+never exercises the clobbering; `test_answer.py` mocks `search_index` with a
+hardcoded numeric score throughout, so the real integration path is never
+exercised either.
+
+**Fix:** compute a real fused score (carry the RRF score itself, or normalize
+`_distance`/`_score` under a name that survives the merge) instead of relying
+on whichever raw LanceDB row wins the overwrite; and have `answer_question`
+handle `score is None` explicitly rather than assuming a float.
+
+---
+
+### 19. FastAPI router-prefix collection is scope-blind
+
+**`src/aletheore/endpoints.py:191-220`** (`collect_static_prefixes`).
+**Severity: high.**
+
+`collect_static_prefixes` walks the entire file's AST unconditionally
+(`for child in n.children: collect_static_prefixes(child)`, no scope
+tracking) looking for `<identifier> = APIRouter(prefix=...)`, storing the
+result in a flat `dict[str, str]` keyed only by variable name text:
+
+```python
+router_prefixes[source[left.start_byte:left.end_byte].decode()] = prefix
+```
+
+Any later assignment to a variable of the same name - including one local to
+an unrelated function - overwrites the entry, because there is no notion of
+which scope an `identifier` node belongs to. Reproduced directly:
+
+```python
+router = APIRouter(prefix="/api")
+
+@router.get("/x")
+def handler(): pass
+
+def make_test_router():
+    router = APIRouter(prefix="/testing")   # unrelated local, different scope
+    return router
+```
+
+produces `[{'method': 'GET', 'path': '/testing/x', ...}]` - should be `/api/x`.
+This is a common real-world shape: FastAPI factory functions that build a
+sub-router locally frequently reuse the idiomatic `router` name, in the same
+file as the module-level router the decorators actually bind to.
+
+**Fix:** track `router_prefixes` per-scope (keyed by the enclosing
+function/module node, not just the bare name), or restrict this walk to
+module-level statements only.
+
+---
+
+### 20. Incremental endpoint caching doesn't invalidate on a cross-file router-mount change
+
+**`src/aletheore/endpoints.py:1288-1298`** (mount-prefix pre-pass, always
+fresh) vs **`:1303-1305`** (per-file cache reuse, blind to it).
+**`src/aletheore/evidence.py:284-292`** and **`github-app/scan_worker/jobs.py:436-463`**
+(the two cache producers, both hash/diff-per-file). **Severity: high** - live
+on the production per-push/per-PR scan path.
+
+`map_api_endpoints` recomputes `cross_file_router_mounts` fresh every call,
+but the extraction loop skips re-parsing entirely for any file present in
+`unchanged_endpoints`:
+
+```python
+if unchanged_endpoints is not None and rel_path in unchanged_endpoints:
+    endpoints.extend(unchanged_endpoints[rel_path])
+    continue
+```
+
+That cached list has the FastAPI prefix already baked into `"path"`. Both
+cache producers decide "unchanged" purely per-file (content hash locally, git
+diff on the hosted worker) - neither has any notion that a router-defining
+file's composed endpoint paths depend on a *different* file's
+`include_router(..., prefix=...)` call. Reproduced end-to-end against the real
+`map_api_endpoints`: changing `app.py`'s `include_router` prefix from
+`/api/v1` to `/api/v2` while leaving `routers/users.py` byte-identical left
+the cached, now-stale `/api/v1/users` path in place across the second scan.
+
+Concretely: a PR that only touches `app.py` (changing an `include_router`
+prefix) leaves the router-definition file out of the diff, so its previously-
+persisted composed path is reused verbatim in the new evidence/endpoint
+inventory - on every push/PR scan of that repo from then on, until the router
+file itself changes for an unrelated reason. This regresses the deliberate,
+otherwise-correct cross-file prefix composition work documented in
+`_resolve_router_definition_file`/`_collect_fastapi_include_prefixes`'s own
+docstrings - correct at scan time, invalidated by a caching layer added
+afterward that nothing accounts for.
+
+**Fix:** either detect when any *mounting* file changed and force re-parse of
+every file whose router it targets even if that file itself is
+hash/diff-unchanged, or don't cache per-file endpoint lists for files that
+produced any entry attributable to `cross_file_router_mounts`.
+
+---
+
+### 21. Rust `pub use` extracts `"pub"` as the import path, not the re-exported target
+
+**`src/aletheore/scanner/graph.py:993-999`**. **Severity: high** - complete,
+silent loss of the target on one of Rust's most common statements.
+
+```python
+if n.type == "use_declaration":
+    for child in n.children:
+        if child.type not in ("use", ";"):
+            imports.extend(_rust_use_paths(child, source))
+            break
+```
+
+For `pub use crate::foo::Bar;`, tree-sitter-rust's `use_declaration` has
+children `[visibility_modifier("pub"), use, scoped_identifier(...), ;]`. The
+loop's first non-`use`/`;` child is `visibility_modifier`, not the path - and
+`break` fires before the real path node is ever reached. `_rust_use_paths`
+falls through to its default case and returns `["pub"]` (or `["pub(crate)"]`,
+etc.). Reproduced directly against the real installed tree-sitter-rust
+grammar (this audit parsed the snippet and called `_extract_rust` directly):
+
+```
+pub use crate::foo::Bar;        -> imports: ['pub']
+pub(crate) use crate::foo::Bar; -> imports: ['pub(crate)']
+```
+
+`_resolve_rust_path` then fails to resolve `"pub"` (no `crate`/`self`/`super`
+prefix, no file named `pub.rs`), so the edge silently vanishes - both the
+garbage import and the real dependency are lost. Measured on the real `serde`
+repo (`~/.aletheore-bench/multi-serde`): **108 `pub use` statements across 14
+of 208 `.rs` files**, including `serde_core/src/private/mod.rs`, which builds
+its entire public re-export surface this way. `pub use` is the standard Rust
+idiom for constructing a crate's public API - not a corner case.
+
+**Fix:** skip `visibility_modifier` when finding the path child, e.g.
+`if child.type not in ("use", ";", "visibility_modifier")`.
+
+---
+
+### 22. `audit`'s `--map-schema`/`--no-map-schema` is parsed but never forwarded
+
+**`src/aletheore/cli.py:1358-1374`** (call sites) vs **`:1340-1344`** (flag
+definition), vs **`:1410-1411`** (`scan`'s correct forwarding, for
+comparison). **Severity: high.**
+
+`audit` defines the flag identically to `scan`, but neither of its two call
+sites passes it through:
+
+```python
+raise typer.Exit(
+    code=_managed_audit(
+        path, token, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints,
+    )   # map_schema never passed
+)
+...
+raise typer.Exit(
+    code=_audit(path, agent, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints)
+)   # same omission
+```
+
+`_scan`'s handling of `map_schema` is the only place that treats `None`
+differently from `False`:
+
+```python
+if map_schema is False:
+    resolved_schema, schema_reason = False, "skipped (--no-map-schema)"
+else:
+    resolved_schema, schema_reason = _resolve_schema_entitlement()
+```
+
+Because `audit()` never forwards its parsed value, this always takes the
+`else` branch - `--no-map-schema` on `aletheore audit` (managed or BYOK) is
+completely inert, with no way to opt out from `audit` despite the flag
+existing, being documented, and appearing to work exactly like `scan`'s copy.
+Confirmed no test coverage: `grep -rn "map_schema" src/tests/test_cli.py`
+returns nothing.
+
+**Concrete failure scenario:** a user runs `aletheore audit --no-map-schema`
+to keep database schema out of what's sent to an external coding-agent API
+(the command's own consent prompt exists precisely because evidence is sent
+off-machine). Schema mapping runs anyway; the user's explicit opt-out is
+silently ignored.
+
+**Fix:** add `map_schema` to both call sites, matching `scan`'s pattern.
+
+---
+
+### 23. AIRview's non-scanned-file fallback always raises `NameError`, caught silently - feature permanently broken
+
+**`github-app/app_server/dashboard.py:412-418`** (the bug) - **`:460-468`**
+(where it's swallowed). **Severity: medium-high** - not a security bug, a
+complete, deterministic functional break of a shipped feature, invisible to
+monitoring.
+
+```python
+def _fetch_wiki_file_content_sync(installation_id, repo_full_name, path) -> str | None:
+    settings = get_settings()
+    app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
+    token = get_installation_token(installation_id, app_jwt)
+    return fetch_file_content(get_github_api_client(), token, repo_full_name, path)
+```
+
+Confirmed via `grep -n "get_github_api_client\|_github_http_client"
+dashboard.py`: `get_github_api_client` is called here but never imported or
+defined anywhere in this file. The file imports `_github_http_client` (a
+wrapper for the same real client, from `app_server.admin`) and uses it
+correctly elsewhere at line 75 - line 418 is a copy/paste-shaped typo calling
+the wrong, unimported name. This function is only reached for files the scan
+didn't index as a module (the route's own docstring: "one bounded GitHub
+Contents lookup" for docs/config/workflow files). The bare
+`except Exception` two call-frames up catches the resulting `NameError` and
+logs it at `info` level as a generic "fetch failed", indistinguishable from a
+real network/auth failure - the route then always returns
+`404 "file not found in scan or repository"`.
+
+Confirmed this is unexercised, not just unlucky in prod:
+`tests/test_dashboard.py:1531-1554` monkeypatches
+`_fetch_wiki_file_content_sync` itself out with a lambda, so the real
+function body - the one with the bug - is never run by the test suite.
+Because the exception is caught locally rather than propagating to `main.py`'s
+global handler, no error alert ever fires.
+
+**Concrete failure scenario:** a paying customer opens the AIRview wiki and
+clicks any file outside the LLM-selected page set (a workflow YAML, a
+Dockerfile, a config file) expecting the documented structural fallback. They
+get "file not found" instead, every time, with nothing surfacing in
+monitoring.
+
+**Fix:** one-line - `get_github_api_client()` -> `_github_http_client()` at
+line 418 (already imported). Also worth exercising the real function body
+against a stubbed HTTP client instead of monkeypatching the function under
+test.
+
+---
+
+### 24. Health-check-target and API-token creation are check-then-act, unlike the seat-limit fix in the same file
+
+**`github-app/app_server/db.py:877-899`** (`add_health_check_target`) and
+**`:1273-1290`** (`create_api_token`) - no atomic guard.
+**`github-app/app_server/admin.py:865-876`** (health targets), **`:741-747`**
+(`generate_token`), **`:1186-1194`** (`create_cli_token`) - the racy call
+sites. **Severity: medium.**
+
+`add_installation_member_within_seat_limit` (`db.py:719-775`) exists
+specifically because a route-level read/count/insert sequence is race-prone
+under concurrent requests, and fixes it with a per-installation advisory
+lock wrapping a single-transaction CTE. That fix was never extended to the
+two sibling per-installation quotas in the same file - both are a plain
+count-then-insert with no atomicity:
+
+```python
+# admin.py:869-876
+if await count_health_check_targets(pool, installation_id, repo_full_name) >= limit:
+    raise HTTPException(status_code=409, ...)
+target_id = await add_health_check_target(...)   # unconditional INSERT
+```
+
+Confirmed identically shaped at both `generate_token` and `create_cli_token`
+against `max_api_tokens`. **Concrete failure scenario:** two concurrent
+requests for two different URLs/labels, both already one below the limit,
+both read the same under-limit count, both pass, both insert - the
+installation ends up one (or more) over its plan's health-check-target or
+API-token limit.
+
+**Fix:** apply the same advisory-lock-wrapped CTE pattern
+`add_installation_member_within_seat_limit` already uses, to
+`add_health_check_target`/`create_api_token`.
+
+---
+
+### 25. `generate_token` discards the real token id and re-derives it with a racy re-query
+
+**`github-app/app_server/admin.py:735-754`**. **Severity: medium** - verified
+by direct comparison with the sibling route that does it correctly.
+
+`create_api_token` (`db.py:1273-1290`) already returns the new row's id via
+`RETURNING id`, and `create_cli_token` (`admin.py:1192`) uses that correctly.
+`generate_token` does not - it discards the return value and re-derives the
+id from a second, separate query:
+
+```python
+await create_api_token(pool, installation_id, token_hash, body.label, session["github_login"])
+token_id = (await list_api_tokens(pool, installation_id))[0]["id"]
+```
+
+`list_api_tokens` orders by `created_at DESC, id DESC` and this assumes row
+`[0]` is the token just created - an assumption that breaks under concurrent
+creation for the same installation. Confirmed exactly as described by reading
+both functions directly.
+
+**Concrete failure scenario:** two admins on the same installation (or one
+admin, two tabs) each generate a token within the same request window. Each
+response pairs the caller's own freshly-generated raw secret with an `id`
+that may actually belong to the *other* caller's token - and that wrong id is
+then written into `admin_action_log` via `record_admin_action`, corrupting
+the audit trail. The raw secret itself is never wrong (generated locally, not
+read back) - this is a data-integrity defect in the admin audit log, not a
+token leak. `test_generate_token_returns_raw_value_once` only checks the
+token string's length, not the returned id, so this is untested.
+
+**Fix:** `token_id = await create_api_token(...)` - the one-line fix
+`create_cli_token` already demonstrates in the same file.
+
+---
+
+### 26. `_fetch_whoami`'s `response.json()` sits outside its own try/except
+
+**`src/aletheore/cli.py:621-634`**. **Severity: medium.**
+
+```python
+def _fetch_whoami(token, api_base_url=..., http_client=None) -> dict | None:
+    client = http_client or httpx.Client(base_url=api_base_url)
+    try:
+        response = client.get("/v1/whoami", headers={...}, timeout=5.0)
+        response.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    return response.json()
+```
+
+`response.json()` is called after the `try` block exits, so
+`json.JSONDecodeError` (a `ValueError` subclass) it can raise on a 200
+response with a malformed body is not caught - confirmed by reading the
+function directly. This contradicts `_resolve_schema_entitlement`'s (the
+only non-`status` caller) documented contract: "any failure ... is treated
+as unentitled rather than raised". A malformed-200 (plausible from a
+captive portal, misconfigured proxy, or CDN error page returned with a 200
+status) is exactly this class of failure, but propagates as an unhandled
+exception instead of degrading. `status()` hits the same bug directly. The
+neighboring `_check_for_update` (12 lines above, same file) correctly
+includes `ValueError` alongside `httpx.HTTPError` in its own except clause -
+this exact failure mode was already known and handled once in this file, and
+simply missed here.
+
+**Fix:** move `return response.json()` inside the `try`, and add `ValueError`
+to the `except` clause.
+
+---
+
+### 27. Django `urlpatterns += [...]` is silently skipped entirely
+
+**`src/aletheore/endpoints.py:339-354`** (`_extract_django_routes`).
+**Severity: medium.**
+
+```python
+def walk(n: Node) -> None:
+    if n.type == "assignment":
+        ...
+        if is_urlpatterns and right is not None and right.type == "list":
+            for item in right.named_children:
+                entry = _django_call_to_entry(item, source, rel_path)
+```
+
+Only `n.type == "assignment"` is handled - confirmed by reading the full
+function. `urlpatterns += [...]` parses to a distinct node type,
+`augmented_assignment`, which `walk` does recurse into (via the unconditional
+`for child in n.children: walk(child)`) but nothing ever matches it for
+extraction, since only a plain `assignment` node's `right.named_children` is
+scanned. Splitting `urlpatterns` across an initial list plus one or more
+`+=` extensions (e.g. a separate section of API routes, or debug-only
+patterns) is an ordinary, documented Django organizing pattern - every route
+declared this way is missing from the endpoint inventory with no indication
+anything was skipped.
+
+**Fix:** also match `n.type == "augmented_assignment"` with the same
+`is_urlpatterns`/`right.type == "list"` check - the `left`/`right` field
+names are the same for both node types in this grammar.
+
+---
+
+### 28. PHP grouped `use` imports are silently dropped entirely
+
+**`src/aletheore/scanner/graph.py:1531-1536`**. **Severity: medium.**
+
+```python
+elif n.type == "namespace_use_declaration":
+    for clause in n.children:
+        if clause.type == "namespace_use_clause":
+            for grandchild in clause.children:
+                if grandchild.type in ("qualified_name", "name"):
+                    imports.append(("use", text(grandchild)))
+```
+
+Confirmed by reading the block directly: it only looks at
+`namespace_use_declaration`'s *direct* children. For
+`use Foo\Bar\{ClassA, ClassB as B};`, tree-sitter-php nests the individual
+clauses inside a `namespace_use_group` with the shared prefix as a sibling -
+neither is a direct `namespace_use_clause` child, so the loop finds nothing,
+and the walk's generic traversal has no other branch matching the nested
+clauses either. The entire grouped statement is dropped with no signal
+anywhere. Grouped `use` is valid PHP 7+ syntax; real-world frequency varies
+by codebase formatting conventions (PHP-CS-Fixer often expands it back to
+individual lines), but it's common enough that silently zeroing it out is a
+real gap.
+
+**Fix:** walk into `namespace_use_group`'s clauses too, combining each with
+the declaration's own prefix - the same way the Rust `scoped_use_list`
+branch already combines prefix + list for the analogous Rust syntax.
+
+---
+
+### 29. Java static wildcard import (`import static Foo.*;`) never resolves, even locally
+
+**`src/aletheore/scanner/graph.py:1315-1329`**. **Severity: medium.**
+
+```python
+if is_wildcard:
+    for root in source_roots:
+        package_dir = root.joinpath(*segments)
+        if package_dir.is_dir():
+            return sorted(package_dir.glob("*.java"))
+    return []
+
+if is_static:
+    ...
+```
+
+Confirmed the `is_wildcard` branch runs before `is_static` is checked. For
+`import static a.b.C.*;`, extraction correctly produces
+`("a.b.C", is_static=True, is_wildcard=True)`, but this branch treats every
+segment (including the trailing class name `C`) as a package-directory
+component, looking for a directory `a/b/C/` that doesn't exist - the real
+file is `a/b/C.java`. A static wildcard's last segment is a class name, not
+a package path component, so this always returns `[]` even when the target
+is local to the repo. `import static X.*;` patterns are common in test code,
+but those targets are typically external libraries anyway (unresolvable
+regardless); the bug specifically bites internal constants/matcher-factory
+classes, narrower in practice but a real, unconditional miss when it occurs.
+
+**Fix:** check `is_static` before `is_wildcard`, and have static-wildcard
+reuse the `is_static` branch's `segments[:-1]` + class-file lookup instead of
+the plain-wildcard package-directory lookup.
+
+---
+
+### 30. Advisory-lock namespace 3 is independently reused for two unrelated locks
+
+**`github-app/app_server/db.py:497`** (`SEAT_LOCK_NAMESPACE = 3`) and
+**`github-app/scan_worker/db.py:27`** (`REPO_CHECKOUT_LOCK_NAMESPACE = 3`),
+added two days apart. **Severity: low-medium** - real design defect, low
+practical trigger probability.
+
+Both files document that the advisory-lock keyspace is shared and namespace
+values must be coordinated between them ("Keep this namespace value
+identical in both files"). Namespace 1
+(`SCAN_SLOT_LOCK_NAMESPACE`) is correctly kept identical in both, but
+namespace 3 was independently claimed twice for unrelated purposes -
+confirmed by grepping both files for `LOCK_NAMESPACE =`. Postgres advisory
+locks with two int32 args key on the literal `(namespace, key)` pair
+regardless of which function took them, so `pg_advisory_lock(3, hashtext(...))`
+in scan-worker and `pg_advisory_xact_lock(3, installation_id)` in app-server
+genuinely contend for the same lock whenever `hashtext(f"{installation_id}:{repo}")`
+happens to equal a real installation id.
+
+**Concrete failure scenario:** `repo_checkout_lock` is deliberately blocking
+with no timeout and can be held for as long as a checkout+scan takes. If its
+hashed key collides with another installation's numeric id, that
+installation's seat-admission calls (which use a 5s `lock_timeout`) would
+block for up to 5 seconds and then fail, surfacing as an inexplicable,
+intermittent failure to add a team member with no discoverable connection to
+the actual cause. A genuine 32-bit-hash-collision risk, not a certainty, but
+not negligible as the product's number of `(installation, repo)` pairs
+grows.
+
+**Fix:** give one of the two its own unused namespace value (4), and add a
+short cross-referencing comment in each file listing every namespace value
+claimed in the other.
+
+---
+
+### 31. PHP aliased `use X as Y;` also emits a phantom import of the bare alias
+
+**`src/aletheore/scanner/graph.py:1531-1536`** (same block as #28).
+**Severity: low-medium.**
+
+For `use Foo\Bar as Baz;`, `namespace_use_clause`'s children include both the
+path (`qualified_name`) and the alias target, which has the same node
+**type** (`"name"`) as a bare unaliased `use Foo;`'s import target - so the
+existing loop (see #28's code block) matches both and appends two entries:
+the real path and the bare alias string. Most aliased imports target
+external namespaces that won't collide with a project's own PSR-4 prefixes,
+so the phantom entry is usually harmless noise that fails to resolve - but a
+short, common alias could coincide with a real local class name.
+
+**Fix:** only take the clause's first matching child (the real path), or
+explicitly exclude the node reachable via `clause.child_by_field_name("alias")`.
+
+---
+
+### 32. TypeScript `import foo = require('./foo');` produces zero imports
+
+**`src/aletheore/scanner/graph.py:662-666`**. **Severity: low-medium.**
+
+```python
+if n.type == "import_statement":
+    source_node = n.child_by_field_name("source")
+    if source_node is not None:
+        raw = source[source_node.start_byte:source_node.end_byte].decode()
+        imports.append(raw.strip("'\""))
+```
+
+Import-equals (`import X = require('./y')`) is still an `import_statement`
+node, but has no `"source"` field - the path lives inside a nested
+`import_require_clause` two levels down. `child_by_field_name("source")`
+returns `None`, so nothing is appended; this is a declaration form, distinct
+from (and not caught by) the separate `call_expression`-based `require()`
+handling elsewhere in the same function. Confirmed present in real code (3
+occurrences in the `axios` repo).
+
+**Fix:** add a branch checking for an `import_require_clause` child and
+pulling the path string out of its own arguments, the same way `require()`
+calls are handled.
+
+---
+
+### 33. Rust nested `use` groups drop everything below the first brace level
+
+**`src/aletheore/scanner/graph.py:932-940`** (`_rust_use_paths`,
+`scoped_use_list` branch). **Severity: low-medium.**
+
+```python
+if node.type == "scoped_use_list":
+    prefix_node = node.children[0]
+    list_node = node.children[-1]
+    prefix = text(prefix_node)
+    names = [text(c) for c in list_node.children if c.type in ("identifier", "self")]
+    return [f"{prefix}::{name}" for name in names]
+```
+
+For `use std::{fmt, io::{self, Write}};`, the outer list's children are
+`fmt` (an `identifier`) and `io::{self, Write}` (itself a nested
+`scoped_use_list`). The comprehension only keeps `identifier`/`self`
+children - confirmed by reading the function - so the nested
+`scoped_use_list` doesn't match either type and is dropped along with
+everything inside it (`io` and `io::Write` both vanish). Nested `use`
+grouping is valid, idiomatic Rust that `rustfmt` produces by default in many
+configurations.
+
+**Fix:** recurse when a child is itself a `use_as_clause`/`scoped_use_list`/
+`use_list`, prefixing the recursive results with the outer `prefix::`,
+instead of only accepting leaf children.
+
+---
+
+### 34. Ownership-check comment claims an ordering the code doesn't have - a repo-existence oracle
+
+**`github-app/app_server/dashboard.py:185-197`**. **Severity: low** - minor
+information disclosure (tenant existence, not data), requires only a
+self-service GitHub OAuth login.
+
+```python
+async def _require_dashboard_installation(request, org, repo):
+    # Session + ownership check first, before any repo lookup - ...
+    session = await get_current_session(request)
+    if session is None:
+        raise HTTPException(status_code=401, detail="login required")
+
+    installation_id = await _repo_installation_id(pool, org, repo)          # repo lookup
+    administered_ids = await _administered_installation_ids_for_session_or_401(pool, session)
+    if installation_id not in administered_ids:                             # ownership check
+        raise HTTPException(status_code=403, detail="you do not administer this installation")
+```
+
+The comment claims "Session + ownership check first, before any repo
+lookup"; the code only does *session* first - the repo lookup runs before
+the ownership check, confirmed by reading the function directly. Any
+authenticated user (anyone who has completed the app's GitHub OAuth login,
+not necessarily an admin of the target org) gets a status code
+(`404` "no such repo" vs `403` "you do not administer this installation")
+that reveals whether an arbitrary org/repo has ever been scanned by this
+product, before ownership is checked. The codebase treats exactly this
+pattern as worth engineering around elsewhere (`managed_audit_api.py`'s
+job-status route deliberately returns 404 instead of 403 "so it is not an
+existence oracle") - here the comment claims that care was applied but the
+code doesn't do what the comment says. The same ordering also exists in
+`admin.py:409-427`'s `_require_authorized_installation`, so it's a
+repo-wide pattern, not unique to this function.
+
+**Fix:** either reorder (not fully possible, since `_repo_installation_id`
+is what maps org/repo to an installation_id in the first place), or correct
+the comment to state the real, narrower guarantee it actually provides.
+
+---
+
+### 35. Python and JS/TS don't filter self-import edges the way every other language does
+
+**`src/aletheore/scanner/graph.py:2330-2335`** (Python) and **`:2453-2458`**
+(JS/TS), vs. Go (`:2358-2363`), Rust, Java, Ruby, PHP, C/C++, C# - all of
+which explicitly skip an edge where `target == rel_path`. **Severity: low.**
+
+Confirmed by reading each language branch in the main loop: seven of the
+nine explicitly guard against a file importing itself
+(`if target == rel_path: continue`); Python's and JS/TS's resolution loops
+have no equivalent check. This matters because `dead_code.py:172` uses
+`if not module.get("imported_by", [])` as its unreachable-file test - a
+Python or JS/TS file that happens to statically self-import (an absolute
+`import pkg.mod` from inside `pkg/mod.py` itself, or a JS file
+`require`-ing its own path) gets a non-empty `imported_by` purely from
+itself, and silently escapes dead-code detection even if genuinely unused
+by everything else - the exact false-negative class the other seven
+languages' filter exists to prevent. A narrow-trigger case (self-import is
+uncommon in idiomatic code), but a genuine cross-language inconsistency
+against a convention already applied seven other times in the same
+function.
+
+**Fix:** add the same `if target == rel_path: continue` (or equivalent) to
+the Python and JS/TS resolution loops.
