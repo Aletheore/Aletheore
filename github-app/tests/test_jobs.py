@@ -3635,6 +3635,150 @@ def test_health_sweep_rotates_target_order_between_ticks(monkeypatch):
     assert [target["target_id"] for target in second] == [2, 3, 1]
 
 
+@pytest.mark.asyncio
+async def test_sweep_end_to_end_against_real_postgres_redis_and_a_live_http_target(
+    pool, redis_conn, monkeypatch
+):
+    """Every other sweep test in this file mocks list_health_check_targets_all,
+    get_last_endpoint_health, insert_endpoint_health, and _enqueue_health_down_retry
+    away entirely - real coverage of the *decision logic* (when to alert, when to
+    retry), zero coverage of whether that logic is actually wired correctly to the
+    real DB functions and a real RQ/Redis enqueue. This test enqueues the down-retry
+    onto a real Redis-backed queue and runs it via Job.perform() the way RQ's own
+    worker does (same discipline as test_pull_request_webhook_to_pr_comment_end_to_end
+    in test_pr_scan_e2e.py), against a real local HTTP server that starts reachable
+    and then goes down - so an argument-name mismatch between jobs.py and
+    scan_worker/db.py, or a broken RQ serialization round-trip, would fail here
+    instead of only in production.
+    """
+    import http.server
+    import threading
+    from datetime import datetime, timezone
+
+    from rq import Queue
+    from rq.registry import ScheduledJobRegistry
+
+    class _OKHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status": "ok"}')
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _OKHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+
+    try:
+        await pool.execute(
+            "INSERT INTO installations (installation_id, account_login, plan, webhook_url) "
+            "VALUES ($1, $2, $3, $4)",
+            9001, "integration-test-org", "indie", "https://hooks.slack.com/integration-test",
+        )
+        target_id = await pool.fetchval(
+            "INSERT INTO health_check_targets (installation_id, repo_full_name, label, base_url) "
+            "VALUES ($1, $2, $3, $4) RETURNING id",
+            9001, "integration-test-org/repo", "Primary", base_url,
+        )
+
+        monkeypatch.setenv("DATABASE_URL", TEST_DATABASE_URL)
+        from aletheore.evidence import EVIDENCE_VERSION
+        from scan_worker.db import get_last_endpoint_health, insert_repo_history
+
+        test_evidence = {
+            "aletheore_version": EVIDENCE_VERSION,
+            "repository": {
+                "api_endpoints": {"endpoints": [{"method": "GET", "path": "/health"}]}
+            },
+        }
+        insert_repo_history(
+            TEST_DATABASE_URL, 9001, "integration-test-org/repo", datetime.now(timezone.utc),
+            test_evidence,
+        )
+
+        monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: redis_conn)
+        # The one deliberate bypass: real customers can never point a target at
+        # 127.0.0.1 (validate_and_pin_https_url would reject it for real, as its
+        # own dedicated tests cover) - this test's whole point is a real local
+        # server, so only this gate is faked. Everything downstream is real.
+        monkeypatch.setattr(
+            "scan_worker.jobs.validate_and_pin_https_url", lambda url: (url, "127.0.0.1")
+        )
+        alerts_sent = []
+        monkeypatch.setattr(
+            "scan_worker.jobs.send_health_alert", lambda url, msg, **k: alerts_sent.append(msg)
+        )
+
+        from scan_worker.jobs import run_health_check_sweep_job
+
+        # Sweep 1: server is up, this is the first-ever check for this
+        # endpoint - reachable, recorded, no alert (nothing to compare against).
+        run_health_check_sweep_job()
+
+        row = get_last_endpoint_health(
+            TEST_DATABASE_URL, 9001, "integration-test-org/repo", "GET", "/health", target_id=target_id
+        )
+        assert row is not None
+        assert row["reachable"] is True
+        assert alerts_sent == []
+
+        # Take the server down for real.
+        server.shutdown()
+        thread.join(timeout=5)
+
+        # Sweep 2: server is down - a reachability flip. The sweep must defer
+        # to a real down-retry job instead of alerting immediately.
+        run_health_check_sweep_job()
+
+        assert alerts_sent == []
+        health_queue = Queue("health", connection=redis_conn)
+        registry = ScheduledJobRegistry(queue=health_queue)
+        scheduled_ids = registry.get_job_ids()
+        assert len(scheduled_ids) == 1
+        job = health_queue.fetch_job(scheduled_ids[0])
+        assert job.func_name == "scan_worker.jobs.run_health_check_down_retry_job"
+
+        # The main sweep must not have written a "down" row yet - that's the
+        # retry chain's job once it confirms, not this sweep's.
+        row_after_flip = get_last_endpoint_health(
+            TEST_DATABASE_URL, 9001, "integration-test-org/repo", "GET", "/health", target_id=target_id
+        )
+        assert row_after_flip["reachable"] is True
+
+        # Drive the real retry chain exactly as RQ's own worker (started
+        # with_scheduler=True, see health_worker.py) would: the scheduler
+        # removes a due job from the registry before handing it to a worker
+        # to execute - Job.perform() alone doesn't do that removal, so it
+        # has to happen here too or the same stale entry gets replayed
+        # forever instead of the chain actually advancing.
+        for _ in range(5):
+            registry.remove(job)
+            job.perform()
+            remaining = registry.get_job_ids()
+            if not remaining:
+                break
+            job = health_queue.fetch_job(remaining[0])
+        else:
+            pytest.fail("down-retry chain never resolved within 5 hops")
+
+        assert len(alerts_sent) == 1
+        assert "down" in alerts_sent[0]["text"]
+        row_confirmed = get_last_endpoint_health(
+            TEST_DATABASE_URL, 9001, "integration-test-org/repo", "GET", "/health", target_id=target_id
+        )
+        assert row_confirmed["reachable"] is False
+    finally:
+        try:
+            server.shutdown()
+        except Exception:
+            pass
+        thread.join(timeout=5)
+
+
 def _wiki_evidence() -> dict:
     return {
         "repository": {
