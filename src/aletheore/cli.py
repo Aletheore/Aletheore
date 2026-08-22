@@ -221,9 +221,13 @@ def _query_kinds_panel() -> Panel:
 
 
 def _sponsor_panel() -> Panel:
+    # Shown only after 'audit' (see the sole call site below), which always
+    # hands evidence to some external agent - an API Aletheore calls
+    # directly, or a CLI tool the user already authenticated. A "nothing
+    # leaves this machine" claim printed right after that would contradict
+    # the consent prompt (or the CLI-adapter invocation) from the same run.
     body = Text()
-    body.append("Aletheore is 100% open-source, local, and free.\n", style="bold")
-    body.append("No accounts, no tracking — nothing leaves this machine.\n\n")
+    body.append("Aletheore is 100% open-source and free.\n\n", style="bold")
     body.append("If it saved you time, consider supporting development:\n")
     body.append("https://github.com/sponsors/ArihantK15", style="cyan underline")
     return Panel(body, border_style="magenta", width=78)
