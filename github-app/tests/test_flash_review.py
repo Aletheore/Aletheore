@@ -2183,7 +2183,11 @@ def test_build_blast_radius_context_forwards_diff_patches_to_valid_lines_computa
 
 def test_build_blast_radius_context_omits_symbol_with_no_confirmed_callers():
     """A symbol with imported_by present, but the fake fetcher never returns
-    content containing the call shape -> context omitted entirely ("")."""
+    content containing the call shape -> context omitted entirely ("").
+    Every candidate's fetch fails here (returns None), so none was actually
+    checked - distinct from test_..._states_a_bounded_negative_when_checked_
+    but_no_caller_found below, where fetches succeed but the pattern doesn't
+    match."""
     from scan_worker.flash_review import build_blast_radius_context
 
     evidence = {
@@ -2210,6 +2214,81 @@ def test_build_blast_radius_context_omits_symbol_with_no_confirmed_callers():
 
     context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
     assert context == ""
+
+
+def test_build_blast_radius_context_states_a_bounded_negative_when_checked_but_no_caller_found():
+    """docs/audits history: a real false positive was traced to this exact
+    gap - build_blast_radius_context only ever emitted a line for a
+    confirmed caller; when a candidate's content was actually fetched and
+    searched but the call shape wasn't found, it said nothing at all. On
+    the compact-context arm (no raw file content to verify against), the
+    model had no way to check a symbol's usage itself and would guess
+    "not used anywhere in the codebase" - a claim broader than what was
+    actually checked. This must state the bounded truth instead: what was
+    checked, and that no caller was found within that bound - never total
+    silence, which reads as "nothing to report" rather than "checked and
+    found nothing"."""
+    from scan_worker.flash_review import build_blast_radius_context
+
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imported_by": ["other.py"],
+                    "symbols": {
+                        "functions": [
+                            {"name": "handler", "start_line": 1, "end_line": 5}
+                        ],
+                        "classes": [],
+                    },
+                }
+            ]
+        }
+    }
+
+    diff_text = "--- a.py ---\n@@ -1,5 +1,5 @@\n def handler():\n     pass\n"
+
+    def fake_fetch_file_content(candidate_path: str) -> str | None:
+        # Fetch succeeds - other.py's real content is available - but it
+        # never actually calls handler().
+        return "def unrelated():\n    pass\n"
+
+    context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
+    assert "no confirmed caller found among the 1 file(s) that import a.py" in context
+
+
+def test_build_blast_radius_context_bounded_negative_scope_names_only_checked_files():
+    """imported_by has 2 files, only 1 fetch succeeds - the bounded-negative
+    line must say "1 of the 2 files", not overclaim both were checked."""
+    from scan_worker.flash_review import build_blast_radius_context
+
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imported_by": ["checked.py", "unreachable.py"],
+                    "symbols": {
+                        "functions": [
+                            {"name": "handler", "start_line": 1, "end_line": 5}
+                        ],
+                        "classes": [],
+                    },
+                }
+            ]
+        }
+    }
+
+    diff_text = "--- a.py ---\n@@ -1,5 +1,5 @@\n def handler():\n     pass\n"
+
+    def fake_fetch_file_content(candidate_path: str) -> str | None:
+        if candidate_path == "checked.py":
+            return "def unrelated():\n    pass\n"
+        return None  # unreachable.py's fetch fails - never actually checked
+
+    context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
+    assert "no confirmed caller found among 1 of the 2 files" in context
 
 
 def test_build_blast_radius_context_does_not_flag_untouched_symbol():
