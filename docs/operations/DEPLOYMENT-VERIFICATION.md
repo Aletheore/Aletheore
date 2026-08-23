@@ -4,8 +4,8 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-08-22 (second deploy)
-**Snapshot Freshness:** CURRENT as of 2026-08-22 - production was redeployed to `master` (commit `09cfdda`) and re-verified live via SSH the same day.
+**Last Updated:** 2026-08-23
+**Snapshot Freshness:** CURRENT as of 2026-08-23 - production was redeployed to `master` (commit `f992751`) and re-verified live via SSH the same day.
 
 ## Purpose
 
@@ -29,6 +29,48 @@ Before claiming a hardening change is live, verify:
 - Restore drill target database availability.
 
 ## Current Server Snapshot
+
+As of 2026-08-23, following a redeploy to `master` (`git reset --hard origin/master` + `docker compose build app-server scan-worker health-worker scheduler` + `docker compose up -d --no-deps --scale scan-worker=2` for those four), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `f992751`.
+- Working tree: clean aside from the expected untracked `github-app/backups/` directory.
+- 5 commits since the previous deploy tag (`github-app-deploy-2026-08-22-2`) - triggered by a user
+  report of the `ops_monitor.failed_jobs.scans` alert repeatedly hitting `support@aletheore.com`.
+  Root-caused to two compounding bugs, both fixed this deploy: AIRview/Docs incremental updates
+  sharing the PR/push scan job's 300s `job_timeout` and getting killed mid-flight by RQ on large
+  repos (#364), and the ops/error alert cooldown being 900s (15min) instead of the intended 6
+  hours (#365) - see `github-app/CHANGELOG.md`'s 2026-08-23 entry for the full writeup.
+- `--scale scan-worker=2` on `up -d` again recreated both replicas cleanly under their expected
+  names, no orphan.
+- Services running: same set as the 2026-08-22 snapshot below, all `Up`; the four rebuilt services
+  and `scan-worker`'s second replica reporting Docker-healthcheck `healthy`.
+- No pending migrations - a code-only deploy.
+- Post-deploy, verified live (not just that the deploy succeeded): `scan_worker.jobs.OPS_ALERT_COOLDOWN_SECONDS == 21600`,
+  `app_server.error_alerts._ALERT_COOLDOWN_SECONDS == 21600`, `LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS ==
+  LIVE_DOCS_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS == 600`, and both `run_live_wiki_incremental_update_job` /
+  `run_live_docs_incremental_update_job` exist and are callable - all checked by importing directly
+  in the running `scan-worker` container, not by re-reading source.
+- Inspected the `scans` queue's `FailedJobRegistry` directly (not assumed): found 5 stale entries
+  predating this deploy (2 from an already-explained orphan-container artifact of the first
+  2026-08-22 deploy, 3 from the timeout bug just fixed) - cleared all 5 so the new 6h cooldown
+  didn't start by re-alerting on already-resolved history. Confirmed both monitored queues
+  (`scans`, `health`) at `depth=0 failed=0` after clearing.
+- Watched a live `run_ops_monitor_job` execution in `scan-worker`'s logs mid-verification (it runs
+  every ~3min on the `scans` queue): one alert legitimately fired during the window before the
+  stale registry was cleared (Resend `POST /emails` returned `200 OK`), then set a ~6h Redis
+  cooldown key (`ops_monitor:alert_cooldown:ops_monitor.failed_jobs.scans`, confirmed via `TTL`)
+  - the exact "one alert, then quiet" behavior #365 was meant to produce, observed directly rather
+  than inferred from the diff.
+- Health checks: internal and public `/healthz` both return `200 {"status":"ok",...}`.
+- No errors, tracebacks, or exceptions in `app-server`, `scan-worker-1`, `scan-worker-2`,
+  `health-worker`, or `scheduler` logs after restart, aside from the one expected ops-alert log
+  line above.
+- Not re-verified this pass (no relevant Dockerfile/host changes): Docker socket mount absence,
+  non-root users, CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill
+  target availability, disk space - each last directly verified 2026-08-10.
+
+## 2026-08-22 (second deploy) Snapshot
 
 As of 2026-08-22 (second deploy), following a redeploy to `master` (`git reset --hard origin/master` + `docker compose build app-server scan-worker health-worker scheduler` + `docker compose up -d --no-deps --scale scan-worker=2` for those four), live inspection found:
 
