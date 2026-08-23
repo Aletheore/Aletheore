@@ -8,6 +8,8 @@ import pytest
 
 from scan_worker.jobs import (
     FLASH_REVIEW_SPEND_RESERVE_USD,
+    LIVE_DOCS_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS,
+    LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS,
     MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH,
     run_pr_scan_job,
 )
@@ -4015,7 +4017,121 @@ def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pus
     assert len(ready) == 1
 
 
-def test_run_pr_scan_job_wires_changed_files_into_live_wiki_update(bare_repo_with_two_commits, monkeypatch):
+def test_run_live_wiki_incremental_update_job_reloads_evidence_and_delegates(monkeypatch):
+    """run_live_wiki_incremental_update_job is the new, separately-timed job
+    that run_pr_scan_job/run_push_scan_job now enqueue instead of calling
+    _maybe_update_live_wiki inline. It doesn't receive evidence directly -
+    the calling scan job already persisted it via _insert_history before
+    enqueueing this job, so this reloads it from repo_history instead of
+    needing the (potentially large) evidence blob passed through the queue."""
+    from scan_worker.jobs import run_live_wiki_incremental_update_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    evidence = _wiki_evidence()
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda dsn, iid, repo: evidence)
+    called = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs._maybe_update_live_wiki",
+        lambda installation_id, repo_full_name, ev, changed_files, head_sha: called.update(
+            installation_id=installation_id, repo_full_name=repo_full_name,
+            evidence=ev, changed_files=changed_files, head_sha=head_sha,
+        ),
+    )
+
+    run_live_wiki_incremental_update_job(
+        installation_id=1, repo_full_name="octocat/hello-world",
+        changed_files=["auth/login.py"], head_sha="sha1",
+    )
+
+    assert called["installation_id"] == 1
+    assert called["repo_full_name"] == "octocat/hello-world"
+    assert called["evidence"] is evidence
+    assert called["changed_files"] == ["auth/login.py"]
+    assert called["head_sha"] == "sha1"
+
+
+def test_run_live_wiki_incremental_update_job_noop_when_no_evidence_yet(monkeypatch):
+    from scan_worker.jobs import run_live_wiki_incremental_update_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda dsn, iid, repo: None)
+    called = []
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: called.append(True))
+
+    run_live_wiki_incremental_update_job(
+        installation_id=1, repo_full_name="octocat/hello-world",
+        changed_files=["auth/login.py"], head_sha="sha1",
+    )
+
+    assert called == []
+
+
+def test_run_live_docs_incremental_update_job_reloads_evidence_and_delegates(monkeypatch):
+    from scan_worker.jobs import run_live_docs_incremental_update_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    evidence = _wiki_evidence()
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda dsn, iid, repo: evidence)
+    called = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs._maybe_update_live_docs",
+        lambda installation_id, repo_full_name, ev, changed_files, head_sha: called.update(
+            installation_id=installation_id, repo_full_name=repo_full_name,
+            evidence=ev, changed_files=changed_files, head_sha=head_sha,
+        ),
+    )
+
+    run_live_docs_incremental_update_job(
+        installation_id=1, repo_full_name="octocat/hello-world",
+        changed_files=["auth/login.py"], head_sha="sha1",
+    )
+
+    assert called["installation_id"] == 1
+    assert called["repo_full_name"] == "octocat/hello-world"
+    assert called["evidence"] is evidence
+    assert called["changed_files"] == ["auth/login.py"]
+    assert called["head_sha"] == "sha1"
+
+
+def test_run_live_docs_incremental_update_job_noop_when_no_evidence_yet(monkeypatch):
+    from scan_worker.jobs import run_live_docs_incremental_update_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda dsn, iid, repo: None)
+    called = []
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_docs", lambda *a, **k: called.append(True))
+
+    run_live_docs_incremental_update_job(
+        installation_id=1, repo_full_name="octocat/hello-world",
+        changed_files=["auth/login.py"], head_sha="sha1",
+    )
+
+    assert called == []
+
+
+class _FakeScansQueue:
+    """Records enqueue() calls instead of touching real Redis - see
+    test_run_pr_scan_job_enqueues_live_wiki_and_docs_update_jobs for why
+    this replaced monkeypatching _maybe_update_live_wiki directly."""
+
+    def __init__(self):
+        self.enqueued = []
+
+    def enqueue(self, func_name, **kwargs):
+        self.enqueued.append({"func_name": func_name, **kwargs})
+
+
+def test_run_pr_scan_job_enqueues_live_wiki_and_docs_update_jobs(bare_repo_with_two_commits, monkeypatch):
+    """Regression test for docs/audits history: run_pr_scan_job used to call
+    _maybe_update_live_wiki/_maybe_update_live_docs inline, sharing the
+    scan job's own 300s job_timeout - real production incidents showed
+    AIRview's real LLM calls (with retries) on a large repo pushing total
+    time past that budget, and RQ killing the whole job mid-flight
+    ("Work-horse terminated unexpectedly"), losing the wiki/docs update
+    entirely with no partial result and no signal to the customer. Now
+    enqueued as their own jobs with their own, more generous timeout,
+    decoupled from the scan job's critical path (which has already posted
+    the PR diff comment - its primary deliverable - by this point)."""
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
@@ -4033,16 +4149,15 @@ def test_run_pr_scan_job_wires_changed_files_into_live_wiki_update(bare_repo_wit
     monkeypatch.setattr(
         "scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"]
     )
-    called = {}
+    direct_calls = []
     monkeypatch.setattr(
-        "scan_worker.jobs._maybe_update_live_wiki",
-        lambda installation_id, repo_full_name, evidence, changed_files, head_sha: called.update(
-            installation_id=installation_id,
-            repo_full_name=repo_full_name,
-            changed_files=changed_files,
-            head_sha=head_sha,
-        ),
+        "scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: direct_calls.append("wiki")
     )
+    monkeypatch.setattr(
+        "scan_worker.jobs._maybe_update_live_docs", lambda *a, **k: direct_calls.append("docs")
+    )
+    fake_queue = _FakeScansQueue()
+    monkeypatch.setattr("scan_worker.jobs._scans_queue", lambda redis_url: fake_queue)
 
     run_pr_scan_job(
         installation_id=1,
@@ -4052,10 +4167,26 @@ def test_run_pr_scan_job_wires_changed_files_into_live_wiki_update(bare_repo_wit
         head_sha=head_sha,
     )
 
-    assert called["installation_id"] == 1
-    assert called["repo_full_name"] == "octocat/hello-world"
-    assert called["changed_files"] == ["app.py"]
-    assert called["head_sha"] == head_sha
+    # Never called inline - only as separately-enqueued jobs.
+    assert direct_calls == []
+
+    wiki_job = next(e for e in fake_queue.enqueued if "live_wiki_incremental" in e["func_name"])
+    assert wiki_job["func_name"] == "scan_worker.jobs.run_live_wiki_incremental_update_job"
+    assert wiki_job["installation_id"] == 1
+    assert wiki_job["repo_full_name"] == "octocat/hello-world"
+    assert wiki_job["changed_files"] == ["app.py"]
+    assert wiki_job["head_sha"] == head_sha
+    assert wiki_job["job_timeout"] == LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS
+    assert wiki_job["job_timeout"] > 300  # strictly more headroom than the scan job's own budget
+
+    docs_job = next(e for e in fake_queue.enqueued if "live_docs_incremental" in e["func_name"])
+    assert docs_job["func_name"] == "scan_worker.jobs.run_live_docs_incremental_update_job"
+    assert docs_job["installation_id"] == 1
+    assert docs_job["repo_full_name"] == "octocat/hello-world"
+    assert docs_job["changed_files"] == ["app.py"]
+    assert docs_job["head_sha"] == head_sha
+    assert docs_job["job_timeout"] == LIVE_DOCS_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS
+    assert docs_job["job_timeout"] > 300
 
 
 def test_run_pr_scan_job_logs_slack_alert_failure_instead_of_swallowing_it(
@@ -4098,7 +4229,9 @@ def test_run_pr_scan_job_logs_slack_alert_failure_instead_of_swallowing_it(
     )
 
 
-def test_run_push_scan_job_scans_and_reconciles_wiki(bare_repo_with_two_commits, monkeypatch):
+def test_run_push_scan_job_enqueues_live_wiki_and_docs_update_jobs(bare_repo_with_two_commits, monkeypatch):
+    """See test_run_pr_scan_job_enqueues_live_wiki_and_docs_update_jobs -
+    same fix, same reasoning, the push-scan path."""
     from scan_worker.jobs import run_push_scan_job
 
     bare_path, _base_sha, head_sha = bare_repo_with_two_commits
@@ -4109,17 +4242,15 @@ def test_run_push_scan_job_scans_and_reconciles_wiki(bare_repo_with_two_commits,
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
-
-    called = {}
+    direct_calls = []
     monkeypatch.setattr(
-        "scan_worker.jobs._maybe_update_live_wiki",
-        lambda installation_id, repo_full_name, evidence, changed_files, head_sha: called.update(
-            installation_id=installation_id,
-            repo_full_name=repo_full_name,
-            changed_files=changed_files,
-            head_sha=head_sha,
-        ),
+        "scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: direct_calls.append("wiki")
     )
+    monkeypatch.setattr(
+        "scan_worker.jobs._maybe_update_live_docs", lambda *a, **k: direct_calls.append("docs")
+    )
+    fake_queue = _FakeScansQueue()
+    monkeypatch.setattr("scan_worker.jobs._scans_queue", lambda redis_url: fake_queue)
 
     run_push_scan_job(
         installation_id=1,
@@ -4128,10 +4259,21 @@ def test_run_push_scan_job_scans_and_reconciles_wiki(bare_repo_with_two_commits,
         changed_files=["app.py"],
     )
 
-    assert called["installation_id"] == 1
-    assert called["repo_full_name"] == "octocat/hello-world"
-    assert called["changed_files"] == ["app.py"]
-    assert called["head_sha"] == head_sha
+    assert direct_calls == []
+
+    wiki_job = next(e for e in fake_queue.enqueued if "live_wiki_incremental" in e["func_name"])
+    assert wiki_job["installation_id"] == 1
+    assert wiki_job["repo_full_name"] == "octocat/hello-world"
+    assert wiki_job["changed_files"] == ["app.py"]
+    assert wiki_job["head_sha"] == head_sha
+    assert wiki_job["job_timeout"] == LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS
+
+    docs_job = next(e for e in fake_queue.enqueued if "live_docs_incremental" in e["func_name"])
+    assert docs_job["installation_id"] == 1
+    assert docs_job["repo_full_name"] == "octocat/hello-world"
+    assert docs_job["changed_files"] == ["app.py"]
+    assert docs_job["head_sha"] == head_sha
+    assert docs_job["job_timeout"] == LIVE_DOCS_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS
 
 
 def test_run_push_scan_job_skips_wiki_update_for_free_plan(bare_repo_with_two_commits, monkeypatch):
@@ -4144,8 +4286,8 @@ def test_run_push_scan_job_skips_wiki_update_for_free_plan(bare_repo_with_two_co
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
-    called = []
-    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: called.append(True))
+    fake_queue = _FakeScansQueue()
+    monkeypatch.setattr("scan_worker.jobs._scans_queue", lambda redis_url: fake_queue)
 
     run_push_scan_job(
         installation_id=1,
@@ -4154,7 +4296,7 @@ def test_run_push_scan_job_skips_wiki_update_for_free_plan(bare_repo_with_two_co
         changed_files=["app.py"],
     )
 
-    assert called == []
+    assert fake_queue.enqueued == []
 
 
 def test_run_push_scan_job_skips_paid_repo_past_monthly_scan_cap(bare_repo_with_two_commits, monkeypatch):

@@ -175,7 +175,15 @@ FLASH_REVIEW_MARKER = "<!-- aletheore-flash-review -->"
 # subsystem plus the overview, deliberately the most expensive step in
 # the whole Live Wiki pipeline - see scan_worker/live_wiki.py.
 LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS = 1800
-LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS = 300
+# Real production incidents (Aug 2026) showed the incremental update - real
+# LLM calls, with retries, riding along inside run_pr_scan_job/
+# run_push_scan_job's own 300s job_timeout - getting killed mid-flight on a
+# large repo, losing the whole update with no partial result. This constant
+# existed but was never actually wired to its own job/enqueue call until
+# that was fixed - twice the old shared budget, dedicated solely to this
+# step now that it's decoupled from the scan job's critical path.
+LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS = 600
+LIVE_DOCS_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS = 600
 HEALTH_CHECK_DOWN_RETRY_ATTEMPTS = 2
 HEALTH_CHECK_DOWN_RETRY_DELAY_SECONDS = 2.0
 # A flapping endpoint (down -> up -> down -> ...) re-triggers
@@ -927,24 +935,39 @@ def run_pr_scan_job(
         except Exception:  # noqa: BLE001
             changed_files = None
         if changed_files is not None:
+            # Enqueued as their own jobs rather than called inline - see
+            # run_live_wiki_incremental_update_job's docstring for why: real
+            # LLM calls here could push total time past this scan job's own
+            # 300s job_timeout on a large repo, and RQ would kill this whole
+            # job mid-flight when that happened, losing the update with no
+            # partial result. The PR diff comment above (this job's primary
+            # deliverable) is already posted by this point regardless.
             try:
-                _maybe_update_live_wiki(installation_id, repo_full_name, new, changed_files, head_sha)
+                _scans_queue(settings.redis_url).enqueue(
+                    "scan_worker.jobs.run_live_wiki_incremental_update_job",
+                    job_timeout=LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS,
+                    installation_id=installation_id,
+                    repo_full_name=repo_full_name,
+                    changed_files=changed_files,
+                    head_sha=head_sha,
+                )
             except Exception as exc:  # noqa: BLE001
-                # _maybe_update_live_wiki already records failures to
-                # wiki_build_status itself; this only catches something
-                # failing before that handling could run (e.g. get_settings).
                 logging.getLogger("scan_worker.jobs").warning(
-                    "live wiki incremental update failed for installation=%s repo=%s (%s)",
+                    "could not enqueue live wiki incremental update for installation=%s repo=%s (%s)",
                     installation_id, repo_full_name, exc,
                 )
             try:
-                _maybe_update_live_docs(installation_id, repo_full_name, new, changed_files, head_sha)
+                _scans_queue(settings.redis_url).enqueue(
+                    "scan_worker.jobs.run_live_docs_incremental_update_job",
+                    job_timeout=LIVE_DOCS_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS,
+                    installation_id=installation_id,
+                    repo_full_name=repo_full_name,
+                    changed_files=changed_files,
+                    head_sha=head_sha,
+                )
             except Exception as exc:  # noqa: BLE001
-                # _maybe_update_live_docs already records failures to
-                # docs_build_status itself; this only catches something
-                # failing before that handling could run (e.g. get_settings).
                 logging.getLogger("scan_worker.jobs").warning(
-                    "live docs incremental update failed for installation=%s repo=%s (%s)",
+                    "could not enqueue live docs incremental update for installation=%s repo=%s (%s)",
                     installation_id, repo_full_name, exc,
                 )
             try:
@@ -1094,18 +1117,34 @@ def run_push_scan_job(
         _insert_history(installation_id, repo_full_name, evidence)
 
         if installation is not None and installation["plan"] != "free":
+            # Enqueued as their own jobs, not called inline - see
+            # run_live_wiki_incremental_update_job's docstring.
             try:
-                _maybe_update_live_wiki(installation_id, repo_full_name, evidence, changed_files, head_sha)
+                _scans_queue(settings.redis_url).enqueue(
+                    "scan_worker.jobs.run_live_wiki_incremental_update_job",
+                    job_timeout=LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS,
+                    installation_id=installation_id,
+                    repo_full_name=repo_full_name,
+                    changed_files=changed_files,
+                    head_sha=head_sha,
+                )
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger("scan_worker.jobs").warning(
-                    "live wiki reconciliation after push failed for installation=%s repo=%s (%s)",
+                    "could not enqueue live wiki reconciliation after push for installation=%s repo=%s (%s)",
                     installation_id, repo_full_name, exc,
                 )
             try:
-                _maybe_update_live_docs(installation_id, repo_full_name, evidence, changed_files, head_sha)
+                _scans_queue(settings.redis_url).enqueue(
+                    "scan_worker.jobs.run_live_docs_incremental_update_job",
+                    job_timeout=LIVE_DOCS_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS,
+                    installation_id=installation_id,
+                    repo_full_name=repo_full_name,
+                    changed_files=changed_files,
+                    head_sha=head_sha,
+                )
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger("scan_worker.jobs").warning(
-                    "live docs reconciliation after push failed for installation=%s repo=%s (%s)",
+                    "could not enqueue live docs reconciliation after push for installation=%s repo=%s (%s)",
                     installation_id, repo_full_name, exc,
                 )
     except Exception as exc:  # noqa: BLE001
@@ -3978,3 +4017,50 @@ def _maybe_update_live_docs(
         if last_error is not None else None,
     )
     _maybe_sync_docs_to_repo(dsn, installation_id, repo_full_name)
+
+
+@log_job
+def run_live_wiki_incremental_update_job(
+    installation_id: int, repo_full_name: str, changed_files: list[str], head_sha: str
+) -> None:
+    """_maybe_update_live_wiki as its own job, enqueued by run_pr_scan_job/
+    run_push_scan_job instead of called inline.
+
+    Real production incidents traced a class of "Work-horse terminated
+    unexpectedly" scan-job failures to this exact call: AIRview's real LLM
+    calls (with retries) riding along inside the scan job's own 300s
+    job_timeout could push total time past that budget on a large repo,
+    and RQ kills the whole scan job mid-flight when that happens - losing
+    the wiki update entirely, with no partial result and no signal to the
+    customer about why. The scan job's own primary deliverable (the PR diff
+    comment) is already posted before this point regardless, so decoupling
+    this into its own job with its own, more generous timeout
+    (LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS) doesn't change what
+    a customer sees for the PR review itself - only what happens to the
+    wiki update when it runs long.
+
+    Evidence isn't passed through the queue - the calling scan job already
+    persisted this exact evidence via _insert_history before enqueueing
+    this job, so it's reloaded from repo_history here instead, keeping the
+    job payload small regardless of repo size."""
+    dsn = get_settings().database_url
+    evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
+    if evidence is None:
+        return  # nothing scanned for this repo yet - nothing to update from
+    _maybe_update_live_wiki(installation_id, repo_full_name, evidence, changed_files, head_sha)
+
+
+@log_job
+def run_live_docs_incremental_update_job(
+    installation_id: int, repo_full_name: str, changed_files: list[str], head_sha: str
+) -> None:
+    """See run_live_wiki_incremental_update_job's docstring - same
+    reasoning, the live docs path. A separate job (not bundled with the
+    wiki one above) so one's own timeout or failure doesn't affect the
+    other, matching how their full-build counterparts are already separate
+    jobs."""
+    dsn = get_settings().database_url
+    evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
+    if evidence is None:
+        return
+    _maybe_update_live_docs(installation_id, repo_full_name, evidence, changed_files, head_sha)
