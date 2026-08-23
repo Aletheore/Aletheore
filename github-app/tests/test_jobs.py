@@ -6049,14 +6049,23 @@ def test_run_ops_monitor_job_does_not_repeat_alert_within_cooldown(monkeypatch):
     # Once the cooldown has genuinely elapsed (anchored to when it was
     # actually set - alert_fired_at - not to whatever t happens to be now),
     # a still-persisting condition should alert again as a "this is still
-    # ongoing" reminder, not stay silent forever. Must land before
-    # _check_threshold_duration's own first_seen state (set at t=1000,
-    # TTL OPS_THRESHOLD_DURATION_SECONDS*3=1800s, expires at t=2800) also
-    # expires - otherwise this test would exercise a second, different
-    # pre-existing behavior (first_seen resetting) instead of the cooldown
-    # clearing.
+    # ongoing" reminder, not stay silent forever. OPS_ALERT_COOLDOWN_SECONDS
+    # (6h) is now far longer than _check_threshold_duration's own
+    # first_seen state-key TTL (OPS_THRESHOLD_DURATION_SECONDS*3=1800s), so
+    # by the time the cooldown clears that state key has long since expired
+    # - in production, continuous ~3-minute ops_monitor runs keep
+    # re-seeding it the whole time, so a "seasoned" (>=600s old) first_seen
+    # is already in place the moment the cooldown clears. This test only
+    # jumps in time, so it reproduces that same two-step shape explicitly:
+    # one run to re-seed first_seen after its old value expired, then one
+    # more run past OPS_THRESHOLD_DURATION_SECONDS later to actually
+    # re-cross the duration threshold with the cooldown now clear.
     t = alert_fired_at + OPS_ALERT_COOLDOWN_SECONDS + 1
-    assert t < 1000.0 + 1800  # stay inside first_seen's own TTL window
+    monkeypatch.setattr(jobs.time, "time", lambda: t)
+    run_ops_monitor_job()
+    assert len(alerts) == 1  # first_seen re-seeded, not yet past the duration threshold again
+
+    t += OPS_THRESHOLD_DURATION_SECONDS + 1
     monkeypatch.setattr(jobs.time, "time", lambda: t)
     run_ops_monitor_job()
     assert len(alerts) == 2

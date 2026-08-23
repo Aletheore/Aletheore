@@ -2784,18 +2784,27 @@ def _fetch_app_health(url: str) -> tuple[bool, str]:
     return False, f"HTTP {response.status_code}: {response.text[:200]}"
 
 
-# Must stay comfortably under _check_threshold_duration's own state-key TTL
-# (OPS_THRESHOLD_DURATION_SECONDS * 3 = 1800s, never refreshed once set,
-# counted from the condition's original detection - not from when an
-# alert fires) - a cooldown too close to that window risks the underlying
-# "how long has this persisted" tracking expiring and resetting before the
-# cooldown clears, which would silently skip the next legitimate reminder
-# alert instead of sending it. 900s (15min) leaves real margin: the
-# earliest an alert (and so a cooldown) can start is
-# OPS_THRESHOLD_DURATION_SECONDS (600s) after first detection, so the
-# latest a cooldown started then could still clear before the 1800s
-# state-key TTL is 1800 - 600 = 1200s - 900s has real headroom under that.
-OPS_ALERT_COOLDOWN_SECONDS = 900
+# Deliberately much longer than _check_threshold_duration's own state-key
+# TTL (OPS_THRESHOLD_DURATION_SECONDS * 3 = 1800s, never refreshed once
+# set). That's fine, not a bug: once this cooldown blocks a send, the
+# state key can expire and reset ("first seen" restarts) any number of
+# times without causing an extra alert, since _send_ops_alert's own
+# cooldown key is what actually gates the email - the state key only
+# gates how quickly a *persisting* condition is allowed to re-qualify for
+# an attempt. Worst case is the reminder landing up to one
+# OPS_THRESHOLD_DURATION_SECONDS + one ops_monitor cycle late, never
+# early and never skipped.
+#
+# Real incident: a persisting scan-timeout bug (see run_pr_scan_job /
+# run_push_scan_job's live-wiki/live-docs decoupling) kept
+# ops_monitor.failed_jobs.scans above threshold continuously for over a
+# day. At the old 900s (15min) cooldown that meant a fresh alert email
+# roughly every 15-30 minutes the whole time - confirmed against the
+# actual inbox. The intended policy (already the working assumption
+# elsewhere) is: alert once, then only send a reminder every 6 hours for
+# as long as the same condition keeps recurring - not nag every ops_monitor
+# cycle just because nobody has fixed it yet.
+OPS_ALERT_COOLDOWN_SECONDS = 6 * 60 * 60
 
 
 def _send_ops_alert(redis_conn, source: str, message: str, context: str) -> None:

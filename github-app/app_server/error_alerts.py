@@ -24,7 +24,11 @@ logger = logging.getLogger("app_server.error_alerts")
 # bug during the same window should still get its own alert. Process-local
 # and reset on restart, which is fine: the goal is "don't flood," not a
 # durable dedupe ledger.
-_ALERT_COOLDOWN_SECONDS = 900
+#
+# 6 hours, matching ops_monitor's OPS_ALERT_COOLDOWN_SECONDS - same
+# policy in both places: alert once, then only remind every 6 hours for
+# as long as the same issue keeps recurring, not on every occurrence.
+_ALERT_COOLDOWN_SECONDS = 6 * 60 * 60
 _last_alert_at: dict[str, float] = {}
 
 
