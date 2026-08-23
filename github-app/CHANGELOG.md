@@ -12,6 +12,24 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-23
+
+- **AIRview/Docs incremental updates were sharing the PR/push scan job's 300s `job_timeout`,**
+  and RQ's watchdog killed the whole scan job mid-flight on large repos once the writing stage
+  ran long - "Work-horse terminated unexpectedly" in the `scans` queue. Decoupled both updates
+  into their own separately-timed jobs (`run_live_wiki_incremental_update_job` /
+  `run_live_docs_incremental_update_job`, 600s each), enqueued instead of called inline, reloading
+  evidence from the DB rather than passing it through the queue (#364).
+- **The ops/error alert cooldown was 15 minutes, not the agreed 6 hours.** Confirmed against the
+  live inbox: `ops_monitor.failed_jobs.scans` re-alerted roughly every 15-30 minutes throughout
+  2026-08-22 while the timeout bug above kept the `scans` queue's failed-jobs count continuously
+  above threshold. Both `OPS_ALERT_COOLDOWN_SECONDS` and `error_alerts._ALERT_COOLDOWN_SECONDS`
+  were still at the original 900s from #286; bumped both to 6 hours so a persisting issue gets one
+  alert and periodic reminders, not one every cycle (#365). Cleared 5 stale entries from the
+  `scans` `FailedJobRegistry` post-deploy (2 an orphan-container artifact from the first 08-22
+  deploy, already explained in that day's changelog entry; 3 the timeout bug above) so the new
+  cooldown didn't start by re-alerting on already-resolved history.
+
 ## 2026-08-22 (second deploy)
 
 - **Three crash/broken-feature bugs from the second-pass audit, all live in production:**
