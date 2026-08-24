@@ -171,11 +171,12 @@ installations that currently exist:**
   destination - its subscribed events exactly match what `paddle.py`
   handles. Found a second, stray "simulation"-traffic-source destination
   (`ntfset_01kzpj06abyhg1jc0b8pr6gne2`) also active and pointed at the
-  real prod webhook URL. It can't actually inject fake data into
-  production (it signs with its own distinct secret, which the app
-  doesn't recognize, so anything from it gets rejected by
-  `verify_paddle_signature`) - low severity, but dead/confusing config
-  worth deleting.
+  real prod webhook URL. It couldn't actually inject fake data into
+  production (it signed with its own distinct secret, which the app
+  didn't recognize, so anything from it would have been rejected by
+  `verify_paddle_signature`) - low severity, but dead/confusing config.
+  **Deleted** (2026-08-24); confirmed via `notificationSettings.list` that
+  only the real "platform" destination remains.
 - **Invariants 4 & 5:** not yet exercisable - 0 affiliate commissions and
   0 referrals exist in production, since no discount codes have been
   minted yet (waiting on affiliate replies, per the top of this file).
@@ -186,9 +187,9 @@ installations that currently exist:**
 
 **Verdict: the invariants that could be checked right now all hold, once
 the one genuinely intentional exception is accounted for.** No launch
-blockers. One small cleanup item (the stray simulation notification
-destination) and two invariants that simply can't be verified yet for
-lack of real data to check against.
+blockers. The one cleanup item found (the stray simulation notification
+destination) is already resolved; the remaining two invariants simply
+can't be verified yet for lack of real data to check against.
 
 ## 4. 16 remaining findings from the second-pass audit - not launch blockers individually
 
