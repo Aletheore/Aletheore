@@ -12,6 +12,28 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-24
+
+- **Live-wiki/docs incremental update jobs could reload evidence from a different, newer scan.**
+  Found by our own Flash Review, dogfooded on #364 itself (which decoupled these jobs from the
+  scan job's timeout the day before): they reloaded evidence via `get_latest_evidence` -
+  "whatever's newest right now" - rather than the exact row the enqueuing scan persisted. A second
+  scan for the same repo persisting first would make the job combine that newer evidence with the
+  older scan's `changed_files`/`head_sha`, applying an incremental update against a mismatched
+  revision. Fixed by threading the specific `repo_history` row id through the queue and reloading
+  by that exact id (`get_evidence_by_id`) instead (#369).
+- **5 remaining findings from the second-pass audit, all real, all fixed with tests (#19, #22,
+  #24, #25, #26):** a local `router = APIRouter(...)` in an unrelated FastAPI factory function
+  could silently overwrite the real module-level router's prefix (scope-blind AST walk, no code
+  fix needed here - this one lives in the `aletheore` CLI package, not this backend); `audit`'s
+  `--no-map-schema` flag was parsed but never forwarded, so it was completely inert (also CLI
+  package); health-check-target and API-token creation were check-then-act under concurrent
+  requests, unlike the seat-limit fix already in this same file - fixed with the same
+  advisory-lock-wrapped CTE pattern; `generate_token` discarded the real token id and re-derived
+  it via a racy re-query, folded into the same fix; `_fetch_whoami`'s JSON parsing sat outside its
+  own try/except (CLI package). Backend-relevant pieces (the concurrency fixes) deployed here;
+  the three CLI-only fixes ship with the next `aletheore` PyPI release, not this deploy.
+
 ## 2026-08-23
 
 - **AIRview/Docs incremental updates were sharing the PR/push scan job's 300s `job_timeout`,**
