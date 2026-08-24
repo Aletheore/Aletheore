@@ -11,7 +11,7 @@ before minting discount codes via /admin/affiliates.
 
 ---
 
-## 1. Load testing - scan-worker and app-server done (2026-08-24), free-tier LLM burst not yet tested
+## 1. Load testing - all three pieces done (2026-08-24)
 
 Production is a single server (`srv1675832`, per
 `docs/operations/DEPLOYMENT-VERIFICATION.md`). Rather than risk hitting it
@@ -49,32 +49,72 @@ exact startup command):**
   concurrent deliveries) is orders of magnitude above any realistic
   launch-day webhook volume. **Verdict: not a capacity risk for launch.**
 
-**Not yet tested: free-tier Flash Review under a burst of new free
-installations hitting Groq/Gemini/OpenAI-nano rate limits simultaneously.**
-This is the one part of the original plan still open, and it's a genuinely
-different bottleneck class (external provider TPM ceilings, which neither
-more local compute nor a second server does anything for) - worth running
-before closing this item out.
+**Free-tier LLM burst (`writing_adapter_chain_for_free_tier` /
+`run_with_free_tier_fallback`, `scan_worker/model_tiers.py`), a genuinely
+different bottleneck class - external provider rate limits, not local
+compute, so neither more CPU nor a second server touches it either way:**
+- Deliberately did **not** hit the real Groq/Gemini/OpenAI/OpenRouter APIs -
+  hammering shared free-tier quota from a load test risks degrading real
+  users' reviews while claiming to test for exactly that failure mode, and
+  today's exact headroom isn't independently knowable without burning real
+  quota to find it. Instead, `openai.OpenAI` was mocked with per-provider
+  rate limits as explicit, stated assumptions (Groq's 6,000 TPM is from
+  this doc; the other three are reasoned estimates, not verified live
+  numbers) - what's tested is the fallback chain's own correctness under
+  real concurrency, using the real code path end to end. The one piece of
+  genuinely shared state (OpenAI free-tier's Redis-backed daily-budget
+  reservation, `_reserve_openai_free_tier_budget`) ran for real against
+  real Redis, not mocked - that's the actual TOCTOU concern the code's own
+  comments flag, worth exercising for real.
+- **Realistic burst (30 concurrent new-install reviews):** 100% served (28
+  by Gemini, 2 by Groq before its tight simulated cap kicked in), 0
+  exhausted. Healthy.
+- **Deliberately extreme burst (500 simultaneous, well beyond any plausible
+  single-second launch spike):** cascade correctly reached all 4 providers
+  (Gemini 333, Groq 2, OpenAI-FreeTier 18, OpenRouter 20 - hit its
+  simulated 20-req/min cap exactly), but 127/500 (25.4%) got
+  `FreeTierFallbackExhausted` once every provider's simulated limit was
+  saturated at once. **The real-world question this leaves open is
+  Gemini's actual headroom** - it absorbed the overwhelming majority of
+  overflow in this simulation because it was assumed far more generous
+  than Groq; if that assumption is wrong, the exhaustion rate at a genuine
+  burst would look very different. Worth confirming Gemini's actual
+  documented free-tier limits before trusting this number as more than
+  "the fallback mechanism itself works correctly."
+- **The Redis-backed daily budget stayed correctly bounded under real
+  concurrent access in both runs** (574,000/2,400,000 tokens after the
+  500-burst, zero overshoot) - the atomic-INCRBY design holds up under
+  genuine thread-level concurrency, not just in isolation.
+- **Verdict: the fallback mechanism itself is sound and degrades gracefully
+  (errors out cleanly for the unservable fraction, doesn't corrupt shared
+  state) even at an artificially extreme burst size; a realistic burst size
+  shows no problem at all.** Not a launch blocker. The one real follow-up
+  is verifying Gemini's actual free-tier ceiling against its current
+  published limits, since that number was assumed, not measured.
 
-## 2. Second server as a launch buffer - reconsider given load test results
+## 2. Second server as a launch buffer - leaning "not needed" after all three load tests
 
 Original decision: stand up a second server (8GB RAM / 2 vCPUs) for the
 first 2 months post-launch as a safety margin. The load test was meant to
-settle whether this is needed; results above point away from it for the two
-bottlenecks tested so far - neither scan-worker capacity nor app-server
-capacity is compute/memory-bound on the current single server, and the one
-real bottleneck found (Postgres write contention under app-server load)
-would not be fixed by a second server anyway, only by a query-level change.
+settle whether this is needed; all three pieces (scan-worker, app-server,
+free-tier LLM burst - item 1) now point away from it: none of the three
+bottlenecks tested is compute/memory-bound on the current single server,
+and the one real bottleneck found (Postgres write contention under
+app-server load) would not be fixed by a second server anyway, only by a
+query-level change. The free-tier LLM path is the one where "more compute"
+was never going to be the fix regardless (external provider ceilings), and
+its own fallback mechanism held up fine under a deliberately extreme
+simulated burst.
 
-**Still open before finalizing "no second server":**
-- The free-tier LLM-rate-limit burst test above hasn't run yet - if *that*
-  turns out to be the real launch-day risk, it's also not something a
-  second compute server fixes (it's an external provider ceiling), which
-  would argue for skipping the second server entirely rather than just
-  deferring the decision.
+**Still open before treating "no second server" as fully settled:**
+- The free-tier test's one real gap - Gemini's *actual* free-tier rate
+  limit was assumed, not measured, and it absorbed most of the simulated
+  burst's overflow. Worth a quick check against Gemini's current published
+  limits before fully trusting the 25.4%-exhaustion number at the extreme
+  end; doesn't change the "mechanism is sound" conclusion either way.
 - If a second server is still wanted purely as basic redundancy (not a
   capacity fix), that's a separate, smaller decision than the one this load
-  test was scoped to answer.
+  test was scoped to answer - worth deciding on its own merits if desired.
 
 **Estimated effort:** half a day to provision and wire into the deploy
 process, if still wanted after the free-tier burst test.
@@ -149,7 +189,8 @@ Everything here assumes no major surprises. The load test is the one item
 that could genuinely move the date if it finds something structural - it
 should run first, not last.
 
-**Update 2026-08-24:** scan-worker and app-server load tests both ran, no
-structural surprises - see item 1. Second server (item 2) is now leaning
-"probably not needed" rather than "needed, just provision it," pending the
-free-tier LLM burst test.
+**Update 2026-08-24:** all three load-testing pieces (scan-worker,
+app-server, free-tier LLM burst) ran - see item 1. No structural surprises.
+Second server (item 2) is now leaning "probably not needed" rather than
+"needed, just provision it," with one small follow-up (verifying Gemini's
+real rate limit) before calling that fully settled.
