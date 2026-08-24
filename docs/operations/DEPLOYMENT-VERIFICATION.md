@@ -4,8 +4,8 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-08-23
-**Snapshot Freshness:** CURRENT as of 2026-08-23 - production was redeployed to `master` (commit `f992751`) and re-verified live via SSH the same day.
+**Last Updated:** 2026-08-24
+**Snapshot Freshness:** CURRENT as of 2026-08-24 - production was redeployed to `master` (commit `23a94ab`) and re-verified live via SSH the same day.
 
 ## Purpose
 
@@ -29,6 +29,46 @@ Before claiming a hardening change is live, verify:
 - Restore drill target database availability.
 
 ## Current Server Snapshot
+
+As of 2026-08-24, following a redeploy to `master` (`git reset --hard origin/master` + `docker compose build app-server scan-worker health-worker scheduler` + `docker compose up -d --no-deps --scale scan-worker=2` for those four), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `23a94ab`.
+- Working tree: clean aside from the expected untracked `github-app/backups/` directory.
+- 6 commits since the previous deploy tag (`github-app-deploy-2026-08-23`) - two real fixes plus
+  docs. #369: live-wiki/docs incremental update jobs could reload evidence from a *different,
+  newer* scan than the one that enqueued them (`get_latest_evidence` read "whatever's newest
+  right now" instead of the exact row persisted by the enqueuing scan) - found by our own Flash
+  Review dogfooded on #364 the day before. Fixed by threading the specific `repo_history` row id
+  through the queue and reloading by that exact id (`get_evidence_by_id`). #370: the concurrency-
+  relevant two of five remaining second-pass-audit findings - health-check-target and API-token
+  creation were check-then-act under concurrent requests (#24), and `generate_token` re-derived
+  its id via a racy re-query instead of using `create_api_token`'s own return value (#25) - fixed
+  with the same advisory-lock-wrapped CTE pattern `add_installation_member_within_seat_limit`
+  already used, new lock namespaces 4/5 deliberately chosen to avoid the existing namespace-3
+  collision (a separate, unfixed finding, #30). The other three findings in #370 (#19, #22, #26)
+  live in the `aletheore` CLI package, not this backend - they ship with the next PyPI release,
+  not this deploy. See `github-app/CHANGELOG.md`'s 2026-08-24 entry for the full writeup.
+- `--scale scan-worker=2` on `up -d` again recreated both replicas cleanly under their expected
+  names, no orphan.
+- Services running: same set as the 2026-08-23 snapshot below, all `Up`; the four rebuilt services
+  and `scan-worker`'s second replica reporting Docker-healthcheck `healthy`.
+- No pending migrations - a code-only deploy.
+- Post-deploy, verified live (not just that the deploy succeeded): `scan_worker.db.get_evidence_by_id`
+  exists and is callable; both `run_live_wiki_incremental_update_job`/`run_live_docs_incremental_update_job`
+  take a `history_id` parameter; `app_server.db.add_health_check_target_within_limit`/
+  `create_api_token_within_limit` exist with `HEALTH_CHECK_TARGET_LOCK_NAMESPACE == 4`/
+  `API_TOKEN_LOCK_NAMESPACE == 5`; `app_server.admin.generate_token`'s source confirmed calling
+  `create_api_token_within_limit` and no longer referencing `list_api_tokens` - all checked by
+  importing directly / inspecting source in the running containers, not by re-reading the repo.
+- Health checks: internal and public `/healthz` both return `200 {"status":"ok",...}`.
+- No errors, tracebacks, or exceptions in `app-server`, `scan-worker-1`, `scan-worker-2`,
+  `health-worker`, or `scheduler` logs in the 5 minutes after restart.
+- Not re-verified this pass (no relevant Dockerfile/host changes): Docker socket mount absence,
+  non-root users, CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill
+  target availability, disk space - each last directly verified 2026-08-10.
+
+## 2026-08-23 Snapshot
 
 As of 2026-08-23, following a redeploy to `master` (`git reset --hard origin/master` + `docker compose build app-server scan-worker health-worker scheduler` + `docker compose up -d --no-deps --scale scan-worker=2` for those four), live inspection found:
 
