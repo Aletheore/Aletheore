@@ -154,6 +154,34 @@ def test_extract_fastapi_composes_router_and_include_prefixes():
     assert entries[0]["unresolved"] is False
 
 
+def test_extract_fastapi_module_level_prefix_not_shadowed_by_a_same_named_local():
+    # Real bug (Claude_Audit.md finding 19): collect_static_prefixes walked
+    # the entire file's AST with no scope tracking, keyed only by variable
+    # name text - a local `router = APIRouter(...)` inside an unrelated
+    # function (a common FastAPI factory-function shape reusing the
+    # idiomatic "router" name) silently overwrote the module-level
+    # router's real prefix. Reproduced exactly as documented: the
+    # module-level router's real "/api" prefix must survive a later,
+    # unrelated local "router" in a factory function.
+    root, source = parse_python(
+        'router = APIRouter(prefix="/api")\n'
+        '\n'
+        '@router.get("/x")\n'
+        'def handler():\n'
+        '    pass\n'
+        '\n'
+        'def make_test_router():\n'
+        '    router = APIRouter(prefix="/testing")\n'
+        '    return router\n'
+    )
+
+    entries = _extract_flask_fastapi_routes(root, source, "app/api.py")
+
+    assert entries[0]["path"] == "/api/x"
+    assert entries[0]["method"] == "GET"
+    assert entries[0]["unresolved"] is False
+
+
 def test_map_api_endpoints_composes_fastapi_prefix_from_another_file(tmp_path):
     (tmp_path / "users.py").write_text(
         'router = APIRouter(prefix="/users")\n'

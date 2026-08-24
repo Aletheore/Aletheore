@@ -661,7 +661,7 @@ def test_main_audit_invokes_audit_flow(tmp_path):
         result = runner.invoke(app, ["audit", str(tmp_path), "--agent", "claude"])
 
     assert result.exit_code == 0
-    mock_audit.assert_called_once_with(str(tmp_path), "claude", None, None, None, None)
+    mock_audit.assert_called_once_with(str(tmp_path), "claude", None, None, None, None, None)
 
 
 def test_scan_command_reports_git_analysis_error_cleanly(tmp_path):
@@ -899,6 +899,38 @@ def test_main_audit_threads_no_check_licenses_flag(tmp_path):
     evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
     assert evidence["security"]["dependency_licenses"]["checked"] is False
     assert evidence["security"]["dependency_licenses"]["reason"] == "skipped (--no-check-licenses)"
+
+
+def test_main_audit_threads_no_map_schema_flag(tmp_path):
+    # audit defines --map-schema/--no-map-schema identically to scan, but
+    # never forwarded it to _audit at either call site - --no-map-schema on
+    # `aletheore audit` was completely inert, silently ignoring the user's
+    # explicit opt-out from sending schema off-machine.
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    runner.invoke(app, ["audit", str(repo), "--no-map-schema", "--agent", "nonexistent"])
+
+    evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
+    assert evidence["repository"]["database"]["schema"]["checked"] is False
+    assert evidence["repository"]["database"]["schema"]["reason"] == "skipped (--no-map-schema)"
+
+
+def test_main_managed_audit_threads_no_map_schema_flag(tmp_path):
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    with patch("aletheore.cli.get_api_key", return_value="fake-token"), patch(
+        "aletheore.cli.run_managed_audit_request", return_value="fake report"
+    ):
+        runner.invoke(
+            app,
+            ["audit", str(repo), "--managed", "--no-map-schema"],
+        )
+
+    evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
+    assert evidence["repository"]["database"]["schema"]["checked"] is False
+    assert evidence["repository"]["database"]["schema"]["reason"] == "skipped (--no-map-schema)"
 
 
 def test_audit_warns_when_token_passed_without_managed(tmp_path):
@@ -1527,6 +1559,21 @@ def test_fetch_whoami_returns_none_on_invalid_token():
         transport=httpx.MockTransport(handler), base_url="https://app.aletheore.com"
     )
     assert _fetch_whoami("bad-token", http_client=client) is None
+
+
+def test_fetch_whoami_returns_none_on_malformed_json_body():
+    # A 200 with a body that isn't valid JSON (captive portal, misconfigured
+    # proxy, CDN error page returned with a 200 status) must degrade to None
+    # like any other failure, not raise json.JSONDecodeError uncaught.
+    from aletheore.cli import _fetch_whoami
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<html>not json</html>")
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://app.aletheore.com"
+    )
+    assert _fetch_whoami("real-token", http_client=client) is None
 
 
 def test_status_reports_not_logged_in(monkeypatch):

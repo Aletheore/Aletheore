@@ -7,12 +7,14 @@ from app_server.evidence_limits import EvidenceTooLargeError, MAX_EVIDENCE_BYTES
 from app_server.db import (
     add_installation_member_within_seat_limit,
     add_health_check_target,
+    add_health_check_target_within_limit,
     add_installation_member,
     check_and_reserve_managed_audit,
     count_active_tokens,
     count_health_check_targets,
     count_installation_members,
     create_api_token,
+    create_api_token_within_limit,
     create_session,
     delete_installation,
     delete_session,
@@ -296,6 +298,69 @@ async def test_concurrent_api_token_creation_returns_each_inserted_id(pool):
     )
     assert {row["id"] for row in rows} == set(results)
     assert {row["token_hash"] for row in rows} == {f"hash-{index}" for index in range(10)}
+
+
+@pytest.mark.asyncio
+async def test_create_api_token_within_limit_is_concurrency_safe(pool):
+    # Real bug this guards (Claude_Audit.md finding 24): the route-level
+    # count-then-create_api_token sequence let two concurrent requests both
+    # read the same under-limit count before either insert committed,
+    # letting an installation end up over its plan's token limit. Mirrors
+    # test_add_installation_member_within_seat_limit_is_concurrency_safe's
+    # shape - 10 concurrent callers, limit 2, exactly 2 must win.
+    await upsert_installation(pool, 612, "octocat")
+
+    results = await asyncio.gather(
+        *(
+            create_api_token_within_limit(pool, 612, f"hash-{index}", f"token-{index}", "octocat", limit=2)
+            for index in range(10)
+        )
+    )
+
+    assert sum(1 for token_id in results if token_id is not None) == 2
+    rows = await pool.fetch("SELECT id FROM api_tokens WHERE installation_id = $1", 612)
+    assert len(rows) == 2
+    assert {row["id"] for row in rows} == {token_id for token_id in results if token_id is not None}
+
+
+@pytest.mark.asyncio
+async def test_add_health_check_target_within_limit_is_concurrency_safe(pool):
+    # Same fix, same reasoning as test_create_api_token_within_limit_is_concurrency_safe,
+    # the health-check-target quota.
+    await upsert_installation(pool, 613, "octocat")
+
+    results = await asyncio.gather(
+        *(
+            add_health_check_target_within_limit(
+                pool, 613, "octocat/repo1", f"target-{index}", f"https://{index}.example.com", None, limit=2
+            )
+            for index in range(10)
+        )
+    )
+
+    assert sum(1 for target_id in results if target_id is not None) == 2
+    assert await count_health_check_targets(pool, 613, "octocat/repo1") == 2
+
+
+@pytest.mark.asyncio
+async def test_add_health_check_target_within_limit_allows_updating_an_existing_target_over_the_limit(pool):
+    # An existing target (same installation/repo/base_url) must always be
+    # updatable - only a genuinely new insert counts against the limit,
+    # matching add_health_check_target's existing upsert semantics.
+    await upsert_installation(pool, 614, "octocat")
+    first_id = await add_health_check_target_within_limit(
+        pool, 614, "octocat/repo1", "Primary", "https://a.example.com", None, limit=1
+    )
+    assert first_id is not None
+
+    updated_id = await add_health_check_target_within_limit(
+        pool, 614, "octocat/repo1", "Primary (renamed)", "https://a.example.com", 500, limit=1
+    )
+
+    assert updated_id == first_id
+    row = await pool.fetchrow("SELECT label, latency_threshold_ms FROM health_check_targets WHERE id = $1", first_id)
+    assert row["label"] == "Primary (renamed)"
+    assert row["latency_threshold_ms"] == 500
 
 
 @pytest.mark.asyncio

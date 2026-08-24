@@ -26,14 +26,12 @@ from app_server.db import (
     DEFAULT_SEAT_LIMIT,
     INCLUDED_HEALTH_CHECK_TARGETS,
     INCLUDED_SEATS,
-    add_health_check_target,
+    add_health_check_target_within_limit,
     add_initial_installation_member_if_empty,
     add_installation_member_within_seat_limit,
     consume_deletion_otp_code,
-    count_active_tokens,
-    count_health_check_targets,
     count_installation_members,
-    create_api_token,
+    create_api_token_within_limit,
     create_deletion_otp_code,
     delete_session,
     get_docs_repo_commit_settings,
@@ -739,13 +737,13 @@ async def generate_token(org: str, repo: str, request: Request, body: GenerateTo
     installation_id = installation["installation_id"]
 
     max_tokens = await get_max_tokens(pool, installation_id)
-    if await count_active_tokens(pool, installation_id) >= max_tokens:
-        raise HTTPException(status_code=409, detail=f"token limit reached ({max_tokens})")
-
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    await create_api_token(pool, installation_id, token_hash, body.label, session["github_login"])
-    token_id = (await list_api_tokens(pool, installation_id))[0]["id"]
+    token_id = await create_api_token_within_limit(
+        pool, installation_id, token_hash, body.label, session["github_login"], max_tokens
+    )
+    if token_id is None:
+        raise HTTPException(status_code=409, detail=f"token limit reached ({max_tokens})")
     # Label only - never the raw token or its hash.
     await record_admin_action(
         pool, installation_id, session["github_login"], "api_token_created",
@@ -867,15 +865,14 @@ async def add_health_check_target_route(org: str, repo: str, request: Request, b
     installation_id = installation["installation_id"]
     repo_full_name = f"{org}/{repo}"
     limit = INCLUDED_HEALTH_CHECK_TARGETS.get(installation["plan"], DEFAULT_HEALTH_CHECK_TARGET_LIMIT)
-    if await count_health_check_targets(pool, installation_id, repo_full_name) >= limit:
+    target_id = await add_health_check_target_within_limit(
+        pool, installation_id, repo_full_name, body.label, body.base_url, body.latency_threshold_ms, limit
+    )
+    if target_id is None:
         raise HTTPException(
             status_code=409,
             detail=f"health check target limit reached ({limit} for the {installation['plan']} plan)",
         )
-
-    target_id = await add_health_check_target(
-        pool, installation_id, repo_full_name, body.label, body.base_url, body.latency_threshold_ms
-    )
     session = await get_current_session(request)
     await record_admin_action(
         pool, installation_id, session["github_login"], "health_check_target_added",
@@ -1184,14 +1181,13 @@ async def create_cli_token(request: Request, body: CreateCliTokenRequest):
         raise HTTPException(status_code=402, detail="this feature requires a paid plan")
 
     max_tokens = await get_max_tokens(pool, installation_id)
-    if await count_active_tokens(pool, installation_id) >= max_tokens:
-        raise HTTPException(status_code=409, detail=f"token limit reached ({max_tokens})")
-
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
-    token_id = await create_api_token(
-        pool, installation_id, token_hash, body.label, installation["account_login"]
+    token_id = await create_api_token_within_limit(
+        pool, installation_id, token_hash, body.label, installation["account_login"], max_tokens
     )
+    if token_id is None:
+        raise HTTPException(status_code=409, detail=f"token limit reached ({max_tokens})")
     return {"token": raw_token, "id": token_id, "label": body.label}
 
 

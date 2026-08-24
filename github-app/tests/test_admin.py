@@ -367,6 +367,40 @@ async def test_generate_token_returns_raw_value_once(pool, monkeypatch):
     async with client:
         response = await client.post("/admin/octocat/hello-world/tokens", json={"label": "laptop"})
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_generate_token_returns_the_id_create_api_token_actually_created(pool, monkeypatch):
+    # Real incident this guards: generate_token used to discard
+    # create_api_token's own RETURNING id and re-derive it via
+    # list_api_tokens(...)[0]["id"] - an assumption that breaks under
+    # concurrent token creation for the same installation, since a second
+    # caller's newer row could sort first. Now that generate_token calls
+    # create_api_token_within_limit directly (also closing the separate
+    # count-then-insert race over the token limit), there's no second query
+    # left to race - this asserts the id it returns is used verbatim.
+    client = await _logged_in_client(pool, monkeypatch)
+
+    async def fake_create_api_token_within_limit(pool, installation_id, token_hash, label, created_by, limit):
+        return 42
+
+    monkeypatch.setattr(
+        "app_server.admin.create_api_token_within_limit", fake_create_api_token_within_limit
+    )
+
+    recorded_actions = []
+
+    async def fake_record_admin_action(pool, installation_id, github_login, action, details):
+        recorded_actions.append((action, details))
+
+    monkeypatch.setattr("app_server.admin.record_admin_action", fake_record_admin_action)
+
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/tokens", json={"label": "laptop"})
+
+    assert response.status_code == 200
+    assert response.json()["id"] == 42
+    assert recorded_actions[-1][1]["token_id"] == 42
     assert len(response.json()["token"]) > 20
 
 
