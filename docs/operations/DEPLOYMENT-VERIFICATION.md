@@ -65,8 +65,10 @@ As of 2026-08-24, following a redeploy to `master` (`git reset --hard origin/mas
 - No errors, tracebacks, or exceptions in `app-server`, `scan-worker-1`, `scan-worker-2`,
   `health-worker`, or `scheduler` logs in the 5 minutes after restart.
 - Not re-verified this pass (no relevant Dockerfile/host changes): Docker socket mount absence,
-  non-root users, CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill
-  target availability, disk space - each last directly verified 2026-08-10.
+  non-root users, CPU/mem limits, backup cron execution, base-image digest pinning, disk space -
+  each last directly verified 2026-08-10. **Restore drill upgraded beyond "target availability"
+  this same day (2026-08-24) - see the dedicated section below**, a real restore-and-verify, not
+  just confirming a target database is reachable.
 
 ## 2026-08-23 Snapshot
 
@@ -128,6 +130,35 @@ As of 2026-08-22 (second deploy), following a redeploy to `master` (`git reset -
 - Health checks: internal `http://127.0.0.1:8000/healthz` and public `https://app.aletheore.com/healthz` both return `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
 - No errors, tracebacks, or exceptions found in `app-server`, `scan-worker-1`, `scan-worker-2`, `health-worker`, or `scheduler` logs after restart (targeted grep for `error|traceback|exception`).
 - Not re-verified this pass (out of scope, no relevant Dockerfile/script changes in the diff): Docker socket mount absence, non-root users, CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill target availability, disk space. Each was last directly verified in the 2026-08-10 deploy - re-check if any host-level or Dockerfile change touches them.
+
+## Restore Drill (2026-08-24)
+
+Previously only "the backup file gets created on schedule" (2026-08-10) and "the restore-drill
+target database is reachable" (last checked with every deploy above) had been verified - neither
+proves a restore actually *works*. This is the first real restore-and-verify:
+
+Copied the latest real backup (`aletheore_app_2026-08-24T03-00-01Z.dump`, 35.7MB) off the
+production server via `scp`, confirmed byte-identical transfer (`md5sum` matched server vs. local
+copy before touching it), restored into a fresh, empty, throwaway local Postgres 16 container
+(matching prod's Postgres version) via `pg_restore`. Verified against live production, not just
+that the restore "looked" successful:
+
+- All 49 tables restored, zero `pg_restore` errors.
+- Row counts for 8 spot-checked tables matched live production exactly
+  (`installations`, `api_tokens`, `repo_history`, `affiliates`, `affiliate_referrals`, `sessions`,
+  `sent_emails`, `schema_migrations`).
+- Actual values matched too: all 3 `installations` rows identical (id/login/plan); the restored
+  snapshot's most-recent `repo_history` row confirmed (by exact timestamp) to still exist in live
+  prod's full history - proving real continuity, not coincidentally-equal counts.
+- Ran the app's real `scripts/migrate.py` against the restored DB: **"no pending migrations"** -
+  the restored schema is genuinely current with what the running application code expects.
+- Spot-checked a 273KB `evidence` JSONB blob for corruption: valid `jsonb_typeof`, real
+  `aletheore_version` field intact.
+- Local copy and throwaway container both destroyed immediately after verification - the dump
+  contains real production data and wasn't left lying around.
+
+**The backup-and-restore path genuinely works.** Re-run this drill if the backup script, Postgres
+major version, or schema-migration tooling changes in a way that could affect restorability.
 
 ## Free-Tier Flash Review Provider Keys (live server config, not in git)
 
