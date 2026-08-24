@@ -172,19 +172,38 @@ more than product correctness):**
 **Estimated effort:** 3-4 days for the first group, the second group can
 reasonably slip past launch and get picked off afterward.
 
-## 5. Restore drill - not re-verified recently
+## 5. Restore drill - done and passed (2026-08-24)
 
-`docs/operations/DEPLOYMENT-VERIFICATION.md` flags this as outstanding
-across the last several deploys. Before a launch that's supposed to bring
-in real paying customers at higher volume, need actual proof a restore
-from backup works, not just that the backup file gets created on schedule
-(that part was verified 2026-08-10).
+Copied the latest real backup (`aletheore_app_2026-08-24T03-00-01Z.dump`,
+35.7MB) off the production server via `scp`, confirmed byte-identical
+transfer (`md5sum` matched between server and local copy before touching
+it), restored it into a fresh, empty, throwaway local Postgres 16 container
+(matching prod's Postgres version) via `pg_restore`, then verified against
+live production rather than just checking the restore "looked" successful:
 
-**Plan:** spin up a throwaway Postgres instance, restore the latest real
-backup into it, verify the data is actually intact and queryable (spot
-check a few tables against known values from the live DB).
+- All 49 tables restored, no `pg_restore` errors.
+- Row counts for 8 spot-checked tables (`installations`, `api_tokens`,
+  `repo_history`, `affiliates`, `affiliate_referrals`, `sessions`,
+  `sent_emails`, `schema_migrations`) matched live production exactly.
+- Actual values matched too, not just counts: all 3 `installations` rows
+  identical (id/login/plan); the restored snapshot's most-recent
+  `repo_history` row (by exact timestamp) confirmed to still exist in
+  live prod's full history - proving real continuity between the backup
+  and the live database, not coincidentally-equal counts. Live prod's 3
+  newest `repo_history` rows postdate the 03:00 UTC backup (from today's
+  deploy activity) - expected and correctly absent from the restored copy.
+- Ran the app's real `scripts/migrate.py` against the restored DB:
+  **"no pending migrations"** - the restored schema is genuinely current
+  with what the running application code expects, not just structurally
+  similar.
+- Spot-checked a large `evidence` JSONB blob (273KB) for corruption:
+  valid `jsonb_typeof`, real `aletheore_version` field intact.
+- Local copy and throwaway container both destroyed immediately after
+  verification - the dump contains real production data (installation
+  logins, session state) and wasn't left lying around.
 
-**Estimated effort:** half a day.
+**Verdict: the backup-and-restore path genuinely works**, not just "the
+file gets created on schedule" (verified separately, 2026-08-10).
 
 ---
 
