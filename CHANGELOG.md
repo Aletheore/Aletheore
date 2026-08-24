@@ -3,6 +3,89 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.1 — 2026-08-24
+
+- **Three endpoint-mapping scoping bugs, all affecting the accuracy of "what's
+  reachable" for a security review.** A router variable named inside an
+  unrelated function (the idiomatic FastAPI name `router` reused in a
+  factory) could silently overwrite the real module-level router's prefix.
+  Two different files' routers both named `router` (also idiomatic) could
+  cross-contaminate each other's mount prefixes, producing phantom endpoint
+  entries. And a router mounted with `include_router(router)` (no explicit
+  `prefix=`) had its own unprefixed endpoint dropped entirely whenever that
+  same router also had a prefixed mount elsewhere - a real, reachable,
+  unauthenticated-by-default endpoint invisible to the map.
+- **Secret scanner missed dotted-attribute credential assignments** -
+  `self.PASSWORD = ...`, `cfg.API_KEY = ...` - one of the most common
+  hardcoded-credential shapes in object-oriented code, invisible because
+  `.` wasn't in the scanner's left-boundary character class.
+- **Schema mapper silently corrupted on ordinary SQL comments.** An inline
+  `-- comment` inside a `CREATE TABLE` column list fused the following real
+  column into a bogus one and dropped it with no trace; a stray `(` inside a
+  comment could merge two tables into one and drop the second entirely; a
+  `;` inside a `/* */` block comment ended a statement early.
+- **Three crash bugs fixed**: one invalid UTF-8 byte anywhere in a repo
+  aborted the entire scan; a chunk found by both retrievers in search's RRF
+  fusion could lose its score entirely and crash `aletheore_answer` with a
+  `TypeError`; AIRview's non-scanned-file wiki fallback called a function
+  never imported into that module, a guaranteed `NameError` on every use
+  that a bare `except` was silently swallowing.
+- **Architecture clustering no longer counts test files toward
+  subsystems.** A repo whose dependency graph is mostly test files (one
+  real corpus was 82% by node count) fragmented into hundreds of
+  near-singleton "subsystems" instead of a handful of meaningful ones -
+  same fix already applied to retrieval, now shared with clustering too.
+- **Local search index now detects an embedder swap even when vector
+  dimensions match.** Two different embedding models can both produce
+  768-dimension vectors from unrelated vector spaces; an index built under
+  one and searched under the other passed the existing dimension check
+  silently and returned coherent-looking but wrong rankings, with no error.
+- **Three retrieval-quality regressions fixed**: a `.NET`-suffix test-path
+  exclusion matched ordinary words ending in "tests" (`Contests`,
+  `Protests`); the "in C" language-detection pattern matched inside
+  `in C++`/`in C#` too; a Java/C# demotion rule kept demoting
+  interface-plus-abstract-class files even though its own stated intent was
+  "no concrete class alongside its interface."
+- **Fixed an unpinned, marker-qualified dependency (e.g.
+  `typing_extensions; python_version < "3.10"`) being silently dropped**
+  from CVE scanning, license checking, and unused-dependency detection - a
+  regression against an earlier fix's own stated intent.
+- **Fixed the module-overview chunk boundary** using the textually-first
+  symbol instead of the actually-first-by-line-number one - a class
+  declared before a repo's first function had its entire body swallowed
+  into the overview chunk, duplicating content already indexed separately.
+- **`aletheore audit --no-map-schema` was parsed but never forwarded** to
+  either call site, so it was completely inert despite being documented and
+  already working on `aletheore scan`.
+- **`aletheore login`'s whoami check no longer crashes on a malformed
+  response body** (captive portal, misconfigured proxy, CDN error page) -
+  it now degrades to "unknown" like every other failure mode instead of
+  raising an uncaught `JSONDecodeError`.
+- **The audit sponsor panel no longer claims nothing left the machine** on
+  a run that actually sent evidence to a third-party API (with consent) or
+  used an already-authenticated local adapter - it previously printed
+  unconditionally, contradicting the consent prompt shown moments earlier
+  in the same run.
+- **`aletheore healthcheck` no longer exits 0 with no summary when every
+  endpoint is unreachable** - a completely-down target looked identical to
+  a healthy one to any script or CI job checking the exit code.
+- **Bare `aletheore` invocation now surfaces an available update**,
+  matching what `aletheore status` already showed - silent when already up
+  to date or when the check fails, so nothing changes for anyone who
+  doesn't need to see it.
+- **`mcp-install` prints a copyable `claude mcp add` command for Claude
+  Code** targets, and no longer prints setup guidance for targets it didn't
+  actually configure (PyCharm/Codex notes shown regardless of `--target`).
+  `aletheore login` also now tells you when a saved token already exists
+  before replacing it, and `query --help`'s "one of the 23 query kinds"
+  count is computed dynamically instead of the stale hardcoded number
+  (there are 24, and counting).
+- **Perf: Java/C# pre-parsed trees no longer stay pinned in memory for the
+  whole scan.** Both languages need a whole-repo pre-pass before the main
+  loop can infer a source root; the cache holding those parses now releases
+  each entry as soon as the main loop consumes it, instead of holding all
+  of them until the entire scan (every file, every language) finishes.
+
 ## 0.9.0 — 2026-08-21
 
 - **CLI now tells you when the first scan or index will be slower.** A first
