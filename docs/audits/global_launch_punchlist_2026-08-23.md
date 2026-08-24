@@ -134,18 +134,61 @@ simulated burst.
 **Estimated effort:** half a day to provision and wire into the deploy
 process, if still wanted after the free-tier burst test.
 
-## 3. Congruency checks - scope to confirm
+## 3. Congruency checks - scoped and audited (2026-08-24)
 
-Read as: cross-system consistency checks - billing state matches Paddle's
-actual state, affiliate commission records match real transactions,
-installation plan matches what the dashboard shows the user, free-tier
-counts match what's actually been consumed. Not yet scoped precisely;
-first task here is nailing down the exact list of "these two things must
-always agree" invariants worth checking before launch, then writing checks
-for each.
+Five real, code-grounded invariants (dashboard plan display isn't a
+separate one - it reads `installations.plan` directly, congruent by
+construction):
 
-**Estimated effort:** half a day to scope, 1-2 days to implement checks,
-depending on what the scoping turns up.
+1. `installations.plan` vs Paddle's actual current subscription status.
+2. `installations` existence vs GitHub's actual installation list (no
+   ghost row left by a missed `installation.deleted` webhook).
+3. Paddle webhook destination's subscribed events vs what `paddle.py`
+   actually handles.
+4. `affiliate_commissions` vs real Paddle transactions (correct 15%-of-
+   collected-total math, traceable to a real transaction).
+5. `affiliate_referrals` vs the discount code genuinely used at checkout.
+
+**Audited against live Paddle + live GitHub + live DB, all 3 real
+installations that currently exist:**
+
+- **Invariant 1, `ArihantK15` (free, has stored Paddle ids):** holds.
+  Confirmed against live Paddle - the subscription genuinely is
+  `status: canceled` (a failed payment converted it to free), so
+  `plan=free` is exactly correct.
+- **Invariant 1, `Aletheore/Aletheore` (plan=`air`):** initially flagged -
+  neither its stored `paddle_subscription_id` nor `paddle_customer_id`
+  resolve in live Paddle. **Confirmed intentional, not a bug**: this
+  installation (and previously the founder's personal account, before its
+  own trial's failed payment downgraded it - see the row above) was
+  manually granted `air` for free, for dogfooding. Documented here so a
+  future congruency check doesn't flag it as drift: this specific
+  installation's paid access is *not* expected to be backed by a live
+  Paddle subscription.
+- **Invariant 2:** holds. All 3 DB installations confirmed still active on
+  GitHub (`suspended_at` null for all three).
+- **Invariant 3:** holds for the real ("platform" traffic-source)
+  destination - its subscribed events exactly match what `paddle.py`
+  handles. Found a second, stray "simulation"-traffic-source destination
+  (`ntfset_01kzpj06abyhg1jc0b8pr6gne2`) also active and pointed at the
+  real prod webhook URL. It can't actually inject fake data into
+  production (it signs with its own distinct secret, which the app
+  doesn't recognize, so anything from it gets rejected by
+  `verify_paddle_signature`) - low severity, but dead/confusing config
+  worth deleting.
+- **Invariants 4 & 5:** not yet exercisable - 0 affiliate commissions and
+  0 referrals exist in production, since no discount codes have been
+  minted yet (waiting on affiliate replies, per the top of this file).
+  Code logic read and looks structurally sound (idempotent on
+  `paddle_transaction_id`, correct 15%-of-collected-total math via
+  `_handle_transaction_completed`) - real end-to-end verification has to
+  wait until a real referred customer actually converts.
+
+**Verdict: the invariants that could be checked right now all hold, once
+the one genuinely intentional exception is accounted for.** No launch
+blockers. One small cleanup item (the stray simulation notification
+destination) and two invariants that simply can't be verified yet for
+lack of real data to check against.
 
 ## 4. 16 remaining findings from the second-pass audit - not launch blockers individually
 
