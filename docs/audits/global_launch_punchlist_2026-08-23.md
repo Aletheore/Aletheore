@@ -88,13 +88,27 @@ compute, so neither more CPU nor a second server touches it either way:**
 - **Verdict: the fallback mechanism itself is sound and degrades gracefully
   (errors out cleanly for the unservable fraction, doesn't corrupt shared
   state) even at an artificially extreme burst size; a realistic burst size
-  shows no problem at all.** Not a launch blocker. The one real follow-up
-  is verifying Gemini's actual free-tier ceiling against its current
-  published limits, since that number was assumed, not measured.
+  shows no problem at all.** Not a launch blocker.
+- **Follow-up checked (2026-08-24): can't be resolved further.** Google no
+  longer publishes a static per-model RPM/RPD free-tier table on
+  `ai.google.dev/gemini-api/docs/rate-limits` (confirmed live, page last
+  updated 2026-08-18) - the page now just says "View your active rate
+  limits in AI Studio," which is account-specific and sits behind auth we
+  don't have for a generic "Gemini's free tier" number. Third-party
+  aggregator sites still quote static RPM/RPD figures, but they read as
+  stale/scraped SEO content, not an authoritative source - not citing them
+  here. The assumed number in this test's simulation is therefore still an
+  assumption, not a measured or sourced fact; doesn't change the "fallback
+  mechanism is sound" verdict either way, since that held even at an
+  artificially extreme burst size regardless of the exact ceiling. Also
+  noted in passing, untouched: the code pins `gemini-3.5-flash`
+  (`scan_worker/model_tiers.py:302`, `src/aletheore/cli.py:106`) while
+  Google's current stable default is `gemini-3.7-flash` - not evaluated
+  further, just flagged for whoever next touches model pins.
 
-**Gap found dogfooding (Aletheore Flash review on PR #368, 2026-08-24):**
-the original plan's four scope items were concurrent installation
-onboarding, concurrent scan jobs, and free-tier LLM burst under
+**Gap found dogfooding (Aletheore Flash review on PR #368, 2026-08-24) - now
+closed (2026-08-24):** the original plan's four scope items were concurrent
+installation onboarding, concurrent scan jobs, and free-tier LLM burst under
 simultaneous new free installs - **concurrent installation onboarding was
 never actually tested as its own path.** What was tested is two proxies for
 it, not the thing itself: scan-worker capacity used `scan_repository()`
@@ -104,8 +118,51 @@ throughput used `push`/`pull_request` events, never a signed `installation`
 event. A real onboarding burst also triggers `run_live_wiki_full_build_job`/
 `run_live_docs_full_build_job` for paid installs - full LLM builds, a much
 heavier load than the incremental updates the free-tier burst test covered.
-Not run this session (out of scope for today's work); flagged honestly
-rather than left implied-covered by the three tests above.
+
+Timing reason this moved up: the first real affiliate deal closed the same
+day (a creator, ~12.8K followers, $70/reel) with free paid-plan access
+promised within days - a real fresh installation about to hit exactly this
+untested path for the first time in the wild.
+
+**Now run for real** (real signed `installation`(`created`) webhook
+deliveries via HMAC-SHA256, against a real `uvicorn app_server.main:app`
+process, real Postgres + Redis, two real `rq` workers on the `scans` queue
+matching prod's `scan-worker=2`, 10 concurrent simulated new installations -
+6 free, 4 paid to exercise the wiki/docs full-build branch - each cloning a
+real local git repo built from this repo's own real source files):
+- Faked only what a load test genuinely can't have: no real GitHub App
+  installation exists to authenticate as, so repo enumeration, installation
+  token exchange, default-branch sha lookup, and the raw `git clone`
+  target were redirected to local `file://` repos and dummy tokens: same
+  "can't hit what isn't real" category as the free-tier test's own mocking,
+  not a new precedent. The LLM client
+  (`aletheore.adapters.openai_compatible.OpenAI`) was mocked the same way
+  the free-tier burst test mocked it - real retry/spend-budget code ran
+  for real around a placeholder response, not real generated content.
+- **10/10 webhook deliveries succeeded**, fired concurrently, ~62ms each
+  (0.11s wall for all 10 - HMAC verification and routing are cheap).
+- **10/10 real clone+scan+DB-write pipelines completed**, 38s wall to
+  drain the full burst across 2 real concurrent workers (real `git clone`
+  from local repos, real `_run_scan`, real `repo_history` rows).
+- **All 4 paid installs' wiki AND docs full builds reached a real terminal
+  "ready" status** - found and fixed one test-harness gap along the way:
+  Docs' full-build path fetches each module's source via a *separate*
+  GitHub Contents API call (`fetch_file_content`, not covered by the clone
+  mock above); the first run correctly surfaced a real `401 Unauthorized`
+  for all 4 (caught per-module, no crash, no hang, clear error message,
+  correctly aggregated to `status=failed` since 0/N modules succeeded -
+  the code's own error handling is sound here, this was a test-mock gap,
+  not a product bug). Re-mocked that one additional call and reran: clean
+  `ready` for all 4, no errors in either worker's logs.
+- **Per-installation LLM spend tracking (`llm_spend`) stayed correctly
+  isolated under real concurrent access** - 4 distinct, plausible,
+  non-overlapping dollar amounts for the 4 paid installations building
+  simultaneously across 2 processes, no cross-installation bleed, no
+  negative/overshot values.
+- **Verdict: the real, previously-untested pipeline (signed webhook -> real
+  enqueue -> real clone/scan -> conditional full LLM builds) holds up
+  cleanly under a realistic concurrent-onboarding burst.** Not a launch
+  blocker; closes the one gap item 1 above was honestly left open on.
 
 ## 2. Second server as a launch buffer - leaning "not needed" after all three load tests
 
@@ -121,12 +178,15 @@ was never going to be the fix regardless (external provider ceilings), and
 its own fallback mechanism held up fine under a deliberately extreme
 simulated burst.
 
-**Still open before treating "no second server" as fully settled:**
+**Checked and closed (2026-08-24):**
 - The free-tier test's one real gap - Gemini's *actual* free-tier rate
-  limit was assumed, not measured, and it absorbed most of the simulated
-  burst's overflow. Worth a quick check against Gemini's current published
-  limits before fully trusting the 25.4%-exhaustion number at the extreme
-  end; doesn't change the "mechanism is sound" conclusion either way.
+  limit was assumed, not measured. Checked against Google's current docs:
+  they no longer publish a static per-model table (account-specific,
+  behind AI Studio auth as of 2026-08-18). Can't be resolved further
+  without account access we don't have; doesn't change the "mechanism is
+  sound" conclusion either way, since that held even at an artificially
+  extreme burst size regardless of the exact ceiling. See item 1 for the
+  full detail.
 - If a second server is still wanted purely as basic redundancy (not a
   capacity fix), that's a separate, smaller decision than the one this load
   test was scoped to answer - worth deciding on its own merits if desired.
@@ -198,7 +258,8 @@ Full detail in `docs/audits/Claude_Audit.md`, findings #19-22 and #24-35
 None of these are crashes; all are real, verified, silent-failure or
 data-integrity bugs. Grouped by rough priority:
 
-**Worth fixing before launch (real correctness bugs, cheap fixes):**
+**Worth fixing before launch (real correctness bugs, cheap fixes) - DONE
+(2026-08-24, PR #370, TDD'd tests for all five):**
 - #22: `cli audit --no-map-schema` is silently inert
 - #24, #25: two check-then-act races in `db.py` (health-check-target/API-token
   limits, and `generate_token`'s racy id re-derivation)
@@ -206,15 +267,15 @@ data-integrity bugs. Grouped by rough priority:
 - #19: FastAPI router-prefix collection scope bug in `endpoints.py`
 
 **Lower urgency (narrow trigger conditions, or affect scanning accuracy
-more than product correctness):**
+more than product correctness) - still open, deferred past launch:**
 - #20 (cross-file endpoint-cache invalidation), #21 (Rust `pub use`), #27
   (Django `+=` routes), #28 (PHP grouped `use{}`), #29 (Java static
   wildcards), #30 (advisory-lock namespace collision), #31-33 (PHP alias/TS
   import-equals/Rust nested `use`), #34 (dashboard comment/ordering
   mismatch), #35 (Python/JS self-import filter gap)
 
-**Estimated effort:** 3-4 days for the first group, the second group can
-reasonably slip past launch and get picked off afterward.
+**Estimated effort:** first group done. The second group can reasonably
+slip past launch and get picked off afterward.
 
 ## 5. Restore drill - done and passed (2026-08-24)
 
@@ -270,5 +331,6 @@ should run first, not last.
 **Update 2026-08-24:** all three load-testing pieces (scan-worker,
 app-server, free-tier LLM burst) ran - see item 1. No structural surprises.
 Second server (item 2) is now leaning "probably not needed" rather than
-"needed, just provision it," with one small follow-up (verifying Gemini's
-real rate limit) before calling that fully settled.
+"needed, just provision it" - fully settled, with the Gemini rate-limit
+follow-up checked and closed (unresolvable further without AI Studio
+account access, doesn't change the conclusion).
