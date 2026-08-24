@@ -11,47 +11,73 @@ before minting discount codes via /admin/affiliates.
 
 ---
 
-## 1. Load testing - blocks the date, not started
+## 1. Load testing - scan-worker and app-server done (2026-08-24), free-tier LLM burst not yet tested
 
 Production is a single server (`srv1675832`, per
-`docs/operations/DEPLOYMENT-VERIFICATION.md`), never load tested. A
-coordinated launch is exactly the traffic shape that would find a capacity
-problem first - simultaneous signups, simultaneous scans, simultaneous
-free-tier Flash Review calls hitting Groq's 6,000 TPM ceiling.
+`docs/operations/DEPLOYMENT-VERIFICATION.md`). Rather than risk hitting it
+directly, both load tests ran locally against the real code (`scan_repository()`
+for scan-worker, a real `uvicorn app_server.main:app` process for app-server)
+resource-matched to prod's exact `docker-compose.yml` limits, with real
+Postgres/Redis.
 
-**Plan:**
-- Script a realistic signup + scan burst against a staging/local copy of the
-  stack (or carefully against prod off-peak, load-test tooling TBD - k6 or
-  locust are the obvious choices given this is mostly HTTP + webhook traffic).
-- Specifically measure: concurrent installation onboarding, concurrent scan
-  jobs (scan-worker queue depth under load), free-tier Flash Review under a
-  burst of new free installations hitting Groq/Gemini/OpenAI-nano rate
-  limits simultaneously.
-- Find the actual breaking point, not just "it seemed fine."
+**scan-worker (12-job burst, 8 small + 4 large real repos - one is Aletheore's
+own 634-file codebase - each job isolated with zero cache reuse to model a
+genuine "new install" cold scan, 2 concurrent workers matching `scan-worker=2`):**
+- All 12 succeeded. Total wall time to drain the burst: 63s.
+- Peak memory per job: 226-237MB against the actual 1GB per-worker cap -
+  only ~23% utilized, well over 4x headroom.
+- **Verdict: comfortable margin for this bottleneck at this burst size.**
 
-**Estimated effort:** 2-3 days (script + run + analyze), assuming no major
-capacity surprises. Longer if the first run finds a real bottleneck that
-needs a code fix, not just more hardware.
+**app-server (real HMAC-signed `push`/`pull_request` webhook deliveries,
+concurrency swept 2 -> 50 -> 200, single uvicorn process matching prod's
+exact startup command):**
+- 2000 concurrent deliveries (concurrency=200): 100% success (0/2000
+  failures), p50=135ms, p99=5.0s, sustained ~366 req/s. CPU never exceeded
+  ~72% of the 1-CPU cap; memory peaked at 143MB against the 768MB cap.
+- **The real ceiling isn't app-server CPU/memory - it's Postgres write
+  contention on the webhook-delivery dedup table.** Counterintuitive finding,
+  verified with a controlled fresh-table A/B: widening the default asyncpg
+  pool (10 -> 50 connections) made throughput *worse* (366 -> ~103-135 req/s,
+  p99 climbing to 6.5s), not better - more concurrent connections increased
+  lock/WAL contention faster than they added parallelism, confirmed via
+  Postgres's own container CPU staying under 12% throughout (not a raw
+  Postgres compute limit). **Do not "fix" this by bumping the pool size** -
+  if it ever becomes a real bottleneck, the fix is query/schema-level
+  (e.g. moving delivery-cleanup out of the per-request hot path), not a
+  bigger pool and not more hardware.
+- Even the unmodified default (366 req/s sustained, 0 failures up to 2000
+  concurrent deliveries) is orders of magnitude above any realistic
+  launch-day webhook volume. **Verdict: not a capacity risk for launch.**
 
-## 2. Second server as a launch buffer - decided, not provisioned
+**Not yet tested: free-tier Flash Review under a burst of new free
+installations hitting Groq/Gemini/OpenAI-nano rate limits simultaneously.**
+This is the one part of the original plan still open, and it's a genuinely
+different bottleneck class (external provider TPM ceilings, which neither
+more local compute nor a second server does anything for) - worth running
+before closing this item out.
 
-Decision: stand up a second server (8GB RAM / 2 vCPUs) for the first 2
-months post-launch as a safety margin, not a permanent architecture change.
-Cheapest real hedge against a load-test surprise or a genuine launch-day
-spike that the single-server setup can't absorb.
+## 2. Second server as a launch buffer - reconsider given load test results
 
-**Open questions before provisioning:**
-- Same provider/region as the current box, or deliberately different for
-  basic redundancy?
-- Split by function (e.g. move scan-worker replicas there, keep app-server
-  on the primary) or a hot standby / load-balanced pair?
-- This decision should follow the load test, not precede it - the load test
-  tells us whether 8GB/2vCPU is even enough, or whether the bottleneck is
-  somewhere load balancing doesn't fix (e.g. Groq's per-key rate limit,
-  which more compute does nothing for).
+Original decision: stand up a second server (8GB RAM / 2 vCPUs) for the
+first 2 months post-launch as a safety margin. The load test was meant to
+settle whether this is needed; results above point away from it for the two
+bottlenecks tested so far - neither scan-worker capacity nor app-server
+capacity is compute/memory-bound on the current single server, and the one
+real bottleneck found (Postgres write contention under app-server load)
+would not be fixed by a second server anyway, only by a query-level change.
+
+**Still open before finalizing "no second server":**
+- The free-tier LLM-rate-limit burst test above hasn't run yet - if *that*
+  turns out to be the real launch-day risk, it's also not something a
+  second compute server fixes (it's an external provider ceiling), which
+  would argue for skipping the second server entirely rather than just
+  deferring the decision.
+- If a second server is still wanted purely as basic redundancy (not a
+  capacity fix), that's a separate, smaller decision than the one this load
+  test was scoped to answer.
 
 **Estimated effort:** half a day to provision and wire into the deploy
-process, once the shape of what it needs to run is known from the load test.
+process, if still wanted after the free-tier burst test.
 
 ## 3. Congruency checks - scope to confirm
 
@@ -122,3 +148,8 @@ check a few tables against known values from the live DB).
 Everything here assumes no major surprises. The load test is the one item
 that could genuinely move the date if it finds something structural - it
 should run first, not last.
+
+**Update 2026-08-24:** scan-worker and app-server load tests both ran, no
+structural surprises - see item 1. Second server (item 2) is now leaning
+"probably not needed" rather than "needed, just provision it," pending the
+free-tier LLM burst test.
