@@ -11,7 +11,7 @@ before minting discount codes via /admin/affiliates.
 
 ---
 
-## 1. Load testing - all three pieces done (2026-08-24)
+## 1. Load testing - three of four original scope items done (2026-08-24), one gap
 
 Production is a single server (`srv1675832`, per
 `docs/operations/DEPLOYMENT-VERIFICATION.md`). Rather than risk hitting it
@@ -91,6 +91,21 @@ compute, so neither more CPU nor a second server touches it either way:**
   shows no problem at all.** Not a launch blocker. The one real follow-up
   is verifying Gemini's actual free-tier ceiling against its current
   published limits, since that number was assumed, not measured.
+
+**Gap found dogfooding (Aletheore Flash review on PR #368, 2026-08-24):**
+the original plan's four scope items were concurrent installation
+onboarding, concurrent scan jobs, and free-tier LLM burst under
+simultaneous new free installs - **concurrent installation onboarding was
+never actually tested as its own path.** What was tested is two proxies for
+it, not the thing itself: scan-worker capacity used `scan_repository()`
+directly (bypassing the `installation` webhook, `handle_installation_event`,
+and `run_initial_scan_job`'s full pipeline entirely), and app-server
+throughput used `push`/`pull_request` events, never a signed `installation`
+event. A real onboarding burst also triggers `run_live_wiki_full_build_job`/
+`run_live_docs_full_build_job` for paid installs - full LLM builds, a much
+heavier load than the incremental updates the free-tier burst test covered.
+Not run this session (out of scope for today's work); flagged honestly
+rather than left implied-covered by the three tests above.
 
 ## 2. Second server as a launch buffer - leaning "not needed" after all three load tests
 
