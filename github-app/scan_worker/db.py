@@ -44,7 +44,7 @@ def insert_repo_history(
     scanned_at: datetime,
     evidence: dict,
     keep: int = 20,
-) -> None:
+) -> int:
     encoded = json.dumps(evidence)
     check_evidence_size(encoded)
 
@@ -54,9 +54,11 @@ def insert_repo_history(
                 """
                 INSERT INTO repo_history (installation_id, repo_full_name, scanned_at, evidence)
                 VALUES (%s, %s, %s, %s::jsonb)
+                RETURNING id
                 """,
                 (installation_id, repo_full_name, scanned_at, encoded),
             )
+            new_id = cur.fetchone()[0]
             cur.execute(
                 """
                 DELETE FROM repo_history
@@ -71,6 +73,7 @@ def insert_repo_history(
                 (installation_id, repo_full_name, keep),
             )
         conn.commit()
+    return new_id
 
 
 def managed_audit_definitely_still_cooling_down(
@@ -641,6 +644,39 @@ def list_repos_for_installation(dsn: str, installation_id: int) -> list[str]:
             return [row[0] for row in cur.fetchall()]
 
 
+def _version_gated_evidence(
+    installation_id: int, repo_full_name: str, raw: object
+) -> dict | None:
+    """Shared by get_latest_evidence and get_evidence_by_id.
+
+    repo_history rows outlive the schema that wrote them. The CLI, MCP
+    server and dashboard all version-check evidence before reading it; this
+    path did not, so after an EVIDENCE_VERSION bump every consumer here
+    (AIRview, Flash review, health checks - 5+ call sites) would keep
+    reading old-shaped rows as if current, and KeyError the moment new code
+    indexed a key the old shape lacks. That is exactly the silent drift
+    AIR-SCHEMA.md's migration rules describe.
+
+    Treated as "no evidence yet" rather than raising: every caller already
+    handles None (it is the normal never-scanned-yet case) and the next
+    scan overwrites the row anyway, so a stale row costs one skipped
+    enrichment rather than a failed job.
+    """
+    evidence = json.loads(raw) if isinstance(raw, str) else raw
+    if not is_evidence_version_compatible(
+        evidence.get("aletheore_version") if isinstance(evidence, dict) else None
+    ):
+        logging.getLogger("scan_worker.db").info(
+            "ignoring stored evidence for installation=%s repo=%s - written by "
+            "aletheore_version=%r, incompatible with this build; awaiting re-scan",
+            installation_id,
+            repo_full_name,
+            evidence.get("aletheore_version") if isinstance(evidence, dict) else None,
+        )
+        return None
+    return evidence
+
+
 def get_latest_evidence(dsn: str, installation_id: int, repo_full_name: str) -> dict | None:
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
@@ -657,32 +693,41 @@ def get_latest_evidence(dsn: str, installation_id: int, repo_full_name: str) -> 
             row = cur.fetchone()
             if row is None:
                 return None
-            evidence = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+    return _version_gated_evidence(installation_id, repo_full_name, row[0])
 
-    # repo_history rows outlive the schema that wrote them. The CLI, MCP
-    # server and dashboard all version-check evidence before reading it; this
-    # path did not, so after an EVIDENCE_VERSION bump every consumer here
-    # (AIRview, Flash review, health checks - 5 call sites) would keep
-    # reading old-shaped rows as if current, and KeyError the moment new code
-    # indexed a key the old shape lacks. That is exactly the silent drift
-    # AIR-SCHEMA.md's migration rules describe.
-    #
-    # Treated as "no evidence yet" rather than raising: every caller already
-    # handles None (it is the normal never-scanned-yet case) and the next
-    # scan overwrites the row anyway, so a stale row costs one skipped
-    # enrichment rather than a failed job.
-    if not is_evidence_version_compatible(
-        evidence.get("aletheore_version") if isinstance(evidence, dict) else None
-    ):
-        logging.getLogger("scan_worker.db").info(
-            "ignoring stored evidence for installation=%s repo=%s - written by "
-            "aletheore_version=%r, incompatible with this build; awaiting re-scan",
-            installation_id,
-            repo_full_name,
-            evidence.get("aletheore_version") if isinstance(evidence, dict) else None,
-        )
-        return None
-    return evidence
+
+def get_evidence_by_id(
+    dsn: str, installation_id: int, repo_full_name: str, history_id: int
+) -> dict | None:
+    """Fetch the exact evidence row a scan persisted, not whatever is
+    currently latest for this repo.
+
+    Exists so a queued follow-up job (e.g. a live-wiki/docs incremental
+    update enqueued separately from the scan that computed its evidence -
+    see run_live_wiki_incremental_update_job) can reload the specific
+    evidence that scan produced, rather than get_latest_evidence's
+    "whatever is newest right now." Without this, a second scan for the
+    same repo persisting before the queued job runs would make it combine
+    that newer evidence with the older scan's changed_files/head_sha -
+    applying an incremental update against a mismatched revision. Scoped
+    by installation_id and repo_full_name in addition to history_id (not
+    just the id) so a caller can never read another installation's row
+    even if history_id were somehow wrong.
+    """
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT evidence
+                FROM repo_history
+                WHERE id = %s AND installation_id = %s AND repo_full_name = %s
+                """,
+                (history_id, installation_id, repo_full_name),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+    return _version_gated_evidence(installation_id, repo_full_name, row[0])
 
 
 def get_last_endpoint_health(
