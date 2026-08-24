@@ -74,6 +74,7 @@ from scan_worker.db import (
     get_installation as get_installation_row,
     get_last_endpoint_health,
     get_last_reviewed_sha,
+    get_evidence_by_id,
     get_latest_evidence,
     get_llm_spend_this_month,
     get_seconds_since_last_health_check,
@@ -589,9 +590,9 @@ def _sync_code_graph(installation_id: int, repo_full_name: str, head_sha: str, e
         )
 
 
-def _insert_history(installation_id: int, repo_full_name: str, evidence: dict) -> None:
+def _insert_history(installation_id: int, repo_full_name: str, evidence: dict) -> int:
     settings = get_settings()
-    insert_repo_history(
+    return insert_repo_history(
         settings.database_url,
         installation_id,
         repo_full_name,
@@ -913,7 +914,7 @@ def run_pr_scan_job(
             upsert_pr_comment(client, token, repo_full_name, pr_number, format_diff_comment(diff))
             new = _sync_persistent_git_graph(installation_id, repo_full_name, head_dir, new)
         _sync_code_graph(installation_id, repo_full_name, head_sha, new)
-        _insert_history(installation_id, repo_full_name, new)
+        history_id = _insert_history(installation_id, repo_full_name, new)
 
         # These are side effects, not the primary deliverable above - a failure in
         # either (e.g. a missing Slack webhook or missing Checks permission) must
@@ -950,6 +951,7 @@ def run_pr_scan_job(
                     repo_full_name=repo_full_name,
                     changed_files=changed_files,
                     head_sha=head_sha,
+                    history_id=history_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger("scan_worker.jobs").warning(
@@ -964,6 +966,7 @@ def run_pr_scan_job(
                     repo_full_name=repo_full_name,
                     changed_files=changed_files,
                     head_sha=head_sha,
+                    history_id=history_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger("scan_worker.jobs").warning(
@@ -1114,7 +1117,7 @@ def run_push_scan_job(
             evidence = json.loads(evidence_path.read_text())
             evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
         _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
-        _insert_history(installation_id, repo_full_name, evidence)
+        history_id = _insert_history(installation_id, repo_full_name, evidence)
 
         if installation is not None and installation["plan"] != "free":
             # Enqueued as their own jobs, not called inline - see
@@ -1127,6 +1130,7 @@ def run_push_scan_job(
                     repo_full_name=repo_full_name,
                     changed_files=changed_files,
                     head_sha=head_sha,
+                    history_id=history_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger("scan_worker.jobs").warning(
@@ -1141,6 +1145,7 @@ def run_push_scan_job(
                     repo_full_name=repo_full_name,
                     changed_files=changed_files,
                     head_sha=head_sha,
+                    history_id=history_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger("scan_worker.jobs").warning(
@@ -4030,7 +4035,7 @@ def _maybe_update_live_docs(
 
 @log_job
 def run_live_wiki_incremental_update_job(
-    installation_id: int, repo_full_name: str, changed_files: list[str], head_sha: str
+    installation_id: int, repo_full_name: str, changed_files: list[str], head_sha: str, history_id: int
 ) -> None:
     """_maybe_update_live_wiki as its own job, enqueued by run_pr_scan_job/
     run_push_scan_job instead of called inline.
@@ -4051,9 +4056,15 @@ def run_live_wiki_incremental_update_job(
     Evidence isn't passed through the queue - the calling scan job already
     persisted this exact evidence via _insert_history before enqueueing
     this job, so it's reloaded from repo_history here instead, keeping the
-    job payload small regardless of repo size."""
+    job payload small regardless of repo size. Reloaded by history_id (the
+    id _insert_history returned for that exact scan), not
+    get_latest_evidence's "whatever's newest right now" - a second scan for
+    this repo persisting before this job runs would otherwise make it
+    combine that newer evidence with this job's own, older
+    changed_files/head_sha, applying an incremental update against a
+    mismatched revision. See get_evidence_by_id's docstring."""
     dsn = get_settings().database_url
-    evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
+    evidence = get_evidence_by_id(dsn, installation_id, repo_full_name, history_id)
     if evidence is None:
         return  # nothing scanned for this repo yet - nothing to update from
     _maybe_update_live_wiki(installation_id, repo_full_name, evidence, changed_files, head_sha)
@@ -4061,7 +4072,7 @@ def run_live_wiki_incremental_update_job(
 
 @log_job
 def run_live_docs_incremental_update_job(
-    installation_id: int, repo_full_name: str, changed_files: list[str], head_sha: str
+    installation_id: int, repo_full_name: str, changed_files: list[str], head_sha: str, history_id: int
 ) -> None:
     """See run_live_wiki_incremental_update_job's docstring - same
     reasoning, the live docs path. A separate job (not bundled with the
@@ -4069,7 +4080,7 @@ def run_live_docs_incremental_update_job(
     other, matching how their full-build counterparts are already separate
     jobs."""
     dsn = get_settings().database_url
-    evidence = get_latest_evidence(dsn, installation_id, repo_full_name)
+    evidence = get_evidence_by_id(dsn, installation_id, repo_full_name, history_id)
     if evidence is None:
         return
     _maybe_update_live_docs(installation_id, repo_full_name, evidence, changed_files, head_sha)

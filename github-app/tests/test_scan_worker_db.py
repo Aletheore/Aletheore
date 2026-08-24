@@ -425,6 +425,72 @@ async def test_get_latest_evidence_ignores_rows_from_an_incompatible_version(poo
 
 
 @pytest.mark.asyncio
+async def test_insert_repo_history_returns_the_new_rows_id(pool):
+    await _insert_installation(pool, 303, "a")
+    history_id = insert_repo_history(
+        TEST_DATABASE_URL, 303, "a/repo1", datetime(2026, 1, 1, tzinfo=timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": 1},
+    )
+    row = await pool.fetchrow("SELECT id FROM repo_history WHERE installation_id = 303")
+    assert history_id == row["id"]
+
+
+@pytest.mark.asyncio
+async def test_get_evidence_by_id_returns_the_exact_row_not_the_latest(pool):
+    # Real bug this guards: a queued follow-up job that reloaded evidence
+    # via get_latest_evidence (rather than the specific row its own scan
+    # persisted) would silently pick up a newer, unrelated scan's evidence
+    # if one landed first - see run_live_wiki_incremental_update_job's
+    # docstring for the production incident this caused.
+    from scan_worker.db import get_evidence_by_id
+
+    await _insert_installation(pool, 304, "a")
+    first_id = insert_repo_history(
+        TEST_DATABASE_URL, 304, "a/repo1", datetime(2026, 1, 1, tzinfo=timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "first"},
+    )
+    insert_repo_history(
+        TEST_DATABASE_URL, 304, "a/repo1", datetime(2026, 1, 2, tzinfo=timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "second-and-latest"},
+    )
+
+    evidence = get_evidence_by_id(TEST_DATABASE_URL, 304, "a/repo1", first_id)
+
+    assert evidence["v"] == "first"
+    # Confirms this isn't accidentally equivalent to get_latest_evidence.
+    assert get_latest_evidence(TEST_DATABASE_URL, 304, "a/repo1")["v"] == "second-and-latest"
+
+
+@pytest.mark.asyncio
+async def test_get_evidence_by_id_returns_none_for_wrong_installation_or_repo(pool):
+    from scan_worker.db import get_evidence_by_id
+
+    await _insert_installation(pool, 305, "a")
+    await _insert_installation(pool, 306, "b")
+    history_id = insert_repo_history(
+        TEST_DATABASE_URL, 305, "a/repo1", datetime(2026, 1, 1, tzinfo=timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "belongs-to-305"},
+    )
+
+    assert get_evidence_by_id(TEST_DATABASE_URL, 306, "a/repo1", history_id) is None
+    assert get_evidence_by_id(TEST_DATABASE_URL, 305, "b/repo1", history_id) is None
+    assert get_evidence_by_id(TEST_DATABASE_URL, 305, "a/repo1", history_id)["v"] == "belongs-to-305"
+
+
+@pytest.mark.asyncio
+async def test_get_evidence_by_id_ignores_an_incompatible_version(pool):
+    from scan_worker.db import get_evidence_by_id
+
+    await _insert_installation(pool, 307, "a")
+    history_id = insert_repo_history(
+        TEST_DATABASE_URL, 307, "a/repo1", datetime(2026, 1, 1, tzinfo=timezone.utc),
+        {"aletheore_version": "0.1.0", "repository": {}},
+    )
+
+    assert get_evidence_by_id(TEST_DATABASE_URL, 307, "a/repo1", history_id) is None
+
+
+@pytest.mark.asyncio
 async def test_insert_and_get_last_endpoint_health(pool):
     await _insert_installation(pool, 301, "a")
 
