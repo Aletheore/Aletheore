@@ -495,6 +495,13 @@ MAX_SCANNED_REPOS_PER_MONTH = 10
 # the second key is the installation id.
 SCAN_SLOT_LOCK_NAMESPACE = 1
 SEAT_LOCK_NAMESPACE = 3
+# scan_worker/db.py separately claims 1 (shared, intentional - see above), 2
+# (SPEND_LOCK_NAMESPACE), and 3 (REPO_CHECKOUT_LOCK_NAMESPACE, an
+# independent, unintentional collision with SEAT_LOCK_NAMESPACE above - see
+# docs/audits/Claude_Audit.md finding 30). 4 and 5 chosen here specifically
+# because neither file has claimed them yet.
+HEALTH_CHECK_TARGET_LOCK_NAMESPACE = 4
+API_TOKEN_LOCK_NAMESPACE = 5
 ADVISORY_LOCK_TIMEOUT = "5s"
 
 
@@ -899,6 +906,78 @@ async def add_health_check_target(
     return row["id"]
 
 
+async def add_health_check_target_within_limit(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    repo_full_name: str,
+    label: str,
+    base_url: str,
+    latency_threshold_ms: int | None,
+    limit: int,
+) -> int | None:
+    """Atomic version of the route's former count-then-add_health_check_target
+    sequence, same concurrency pattern as add_installation_member_within_seat_limit.
+
+    The route-level read/count/insert was race-prone: two concurrent
+    requests for two different URLs, both already one below the limit,
+    could both read the same under-limit count before either insert
+    committed, leaving the installation over its plan's health-check-target
+    limit. A per-installation advisory transaction lock serializes the
+    count-bound upsert instead.
+
+    Returns the target's id (new or updated) if allowed, None if a
+    genuinely new target would have exceeded the limit. An existing target
+    (matched on installation_id, repo_full_name, base_url) is always
+    allowed to update - only a real new insert counts against the limit,
+    matching add_health_check_target's existing upsert semantics.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('lock_timeout', $1, true)", ADVISORY_LOCK_TIMEOUT)
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1, $2)",
+                HEALTH_CHECK_TARGET_LOCK_NAMESPACE,
+                installation_id,
+            )
+            row = await conn.fetchrow(
+                """
+                WITH existing AS (
+                    SELECT id
+                    FROM health_check_targets
+                    WHERE installation_id = $1 AND repo_full_name = $2 AND base_url = $3
+                ),
+                updated AS (
+                    UPDATE health_check_targets
+                    SET label = $4, latency_threshold_ms = $5
+                    WHERE id IN (SELECT id FROM existing)
+                    RETURNING id
+                ),
+                inserted AS (
+                    INSERT INTO health_check_targets
+                        (installation_id, repo_full_name, label, base_url, latency_threshold_ms)
+                    SELECT $1, $2, $4, $3, $5
+                    WHERE NOT EXISTS (SELECT 1 FROM existing)
+                      AND (
+                          SELECT count(*)
+                          FROM health_check_targets
+                          WHERE installation_id = $1 AND repo_full_name = $2
+                      ) < $6
+                    RETURNING id
+                )
+                SELECT id FROM updated
+                UNION ALL
+                SELECT id FROM inserted
+                """,
+                installation_id,
+                repo_full_name,
+                base_url,
+                label,
+                latency_threshold_ms,
+                limit,
+            )
+    return row["id"] if row is not None else None
+
+
 async def remove_health_check_target(pool: asyncpg.Pool, installation_id: int, repo_full_name: str, target_id: int) -> None:
     await pool.execute(
         "DELETE FROM health_check_targets WHERE id = $1 AND installation_id = $2 AND repo_full_name = $3",
@@ -1288,6 +1367,48 @@ async def create_api_token(
         label,
         created_by_github_login,
     )
+
+
+async def create_api_token_within_limit(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    token_hash: str,
+    label: str,
+    created_by_github_login: str,
+    limit: int,
+) -> int | None:
+    """Atomic version of the route's former count-then-create_api_token
+    sequence, same concurrency pattern as add_installation_member_within_seat_limit
+    and add_health_check_target_within_limit. Unlike those two, every call
+    here is a genuinely new row (no natural key to upsert against - each
+    token is unique by its random hash), so the CTE only needs the
+    count-bound insert, not an existing/insert split.
+
+    Returns the new token's id if allowed, None if it would have exceeded
+    the limit.
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT set_config('lock_timeout', $1, true)", ADVISORY_LOCK_TIMEOUT)
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1, $2)",
+                API_TOKEN_LOCK_NAMESPACE,
+                installation_id,
+            )
+            row = await conn.fetchrow(
+                """
+                INSERT INTO api_tokens (installation_id, token_hash, label, created_by_github_login)
+                SELECT $1, $2, $3, $4
+                WHERE (SELECT count(*) FROM api_tokens WHERE installation_id = $1 AND revoked_at IS NULL) < $5
+                RETURNING id
+                """,
+                installation_id,
+                token_hash,
+                label,
+                created_by_github_login,
+                limit,
+            )
+    return row["id"] if row is not None else None
 
 
 async def revoke_api_token(pool: asyncpg.Pool, installation_id: int, token_id: int) -> None:

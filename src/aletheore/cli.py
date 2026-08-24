@@ -629,9 +629,9 @@ def _fetch_whoami(
             "/v1/whoami", headers={"Authorization": f"Bearer {token}"}, timeout=5.0
         )
         response.raise_for_status()
-    except httpx.HTTPError:
+        return response.json()
+    except (httpx.HTTPError, ValueError):
         return None
-    return response.json()
 
 
 def _query_schema(repo_path: str) -> int:
@@ -1363,6 +1363,7 @@ def audit(
                 scan_git_history,
                 check_licenses,
                 map_endpoints,
+                map_schema,
             )
         )
     if token is not None:
@@ -1370,7 +1371,9 @@ def audit(
             "[bold yellow]warning:[/bold yellow] --token has no effect without --managed - ignored."
         )
     raise typer.Exit(
-        code=_audit(path, agent, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints)
+        code=_audit(
+            path, agent, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema
+        )
     )
 
 

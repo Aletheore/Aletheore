@@ -198,6 +198,21 @@ def _extract_flask_fastapi_routes(
         # (e.g. router = APIRouter(...); ...; app.include_router(router, prefix=...)
         # all in one module) - confirmed via a real map_api_endpoints() run:
         # "/internal" was applied twice, producing .../internal/internal/....
+        #
+        # Restricted to module scope: router_prefixes is a flat dict keyed
+        # only by variable name text, with no notion of which scope an
+        # identifier belongs to. Descending into function/class bodies let
+        # an unrelated local `router = APIRouter(...)` (the idiomatic
+        # FastAPI factory-function shape reusing the "router" name)
+        # silently overwrite the real module-level router's prefix -
+        # confirmed directly: a `make_test_router()` helper building its
+        # own local router flipped every `@router.get(...)` in the module
+        # onto the local router's prefix instead. The router a decorator
+        # actually binds to is always resolved from module scope (a
+        # decorator can only reference a name already in scope at that
+        # point), so nothing below module level is ever a real match here.
+        if n.type in ("function_definition", "class_definition"):
+            return
         if n.type == "call":
             function = n.child_by_field_name("function")
             args = n.child_by_field_name("arguments")
