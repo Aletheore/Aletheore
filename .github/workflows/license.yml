@@ -25,12 +25,12 @@ jobs:
         working-directory: src
         run: |
           pip install -e .
-          pip install pip-licenses
+          pip install --require-hashes -r ../requirements-ci-license-check.lock.txt
           pip-licenses --fail-on "GPL;AGPL" --format=plain-vertical
       - name: Check github-app dependency licenses
         working-directory: github-app
         run: |
           pip install ../src
-          pip install -r requirements.txt
-          pip install pip-licenses
+          pip install --require-hashes -r requirements.lock.txt
+          pip install --require-hashes -r ../requirements-ci-license-check.lock.txt
           pip-licenses --fail-on "GPL;AGPL" --format=plain-vertical

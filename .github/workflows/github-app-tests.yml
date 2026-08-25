@@ -59,7 +59,7 @@ jobs:
 
       - name: Install github-app dependencies
         working-directory: github-app
-        run: pip install -r requirements-dev.txt
+        run: pip install --require-hashes -r requirements-dev.lock.txt
 
       - name: Run tests
         working-directory: github-app

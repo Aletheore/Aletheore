@@ -1,3 +1,7 @@
 fastapi==0.141.1
 uvicorn==0.52.3
 llama-cpp-python==0.3.34
+# Not a direct runtime need of anything above - pinned explicitly because
+# llama-cpp-python's own build-time chain otherwise pulls in a setuptools
+# vulnerable to CVE-2025-47273 (path traversal in PackageIndex).
+setuptools>=78.1.1

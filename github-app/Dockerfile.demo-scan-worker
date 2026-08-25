@@ -2,7 +2,8 @@ FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir "redis>=5.0.0" "rq>=1.16.0"
+COPY github-app/requirements-demo-scan-worker.lock.txt .
+RUN pip install --no-cache-dir --require-hashes -r requirements-demo-scan-worker.lock.txt
 
 # No Docker CLI, no socket mount - the actual `docker run` invocation
 # happens in the separate demo-sandbox-runner service (see

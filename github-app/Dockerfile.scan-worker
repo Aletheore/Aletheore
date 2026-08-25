@@ -6,8 +6,8 @@ COPY src/pyproject.toml src/pyproject.toml
 COPY src/aletheore src/aletheore
 RUN pip install --no-cache-dir ./src
 
-COPY github-app/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY github-app/requirements.lock.txt .
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock.txt
 
 COPY github-app/app_server ./app_server
 COPY github-app/scan_worker ./scan_worker

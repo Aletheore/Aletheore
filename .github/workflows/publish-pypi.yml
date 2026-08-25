@@ -25,7 +25,7 @@ jobs:
       - name: Build
         working-directory: src
         run: |
-          pip install build
+          pip install --require-hashes -r ../requirements-ci-build.lock.txt
           python -m build
 
       - name: Attest build provenance
