@@ -3,7 +3,9 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 
 import asyncpg
@@ -20,6 +22,7 @@ from app_server.github_auth import generate_app_jwt, get_installation_token, get
 from app_server.github_pagination import fetch_paginated_github_collection
 from app_server.http_client import get_github_api_client
 from app_server.email_client import send_transactional_email
+from app_server.email_queue import enqueue_transactional_email
 from app_server.email_templates import deletion_otp_email
 from app_server.db import (
     DEFAULT_HEALTH_CHECK_TARGET_LIMIT,
@@ -58,6 +61,7 @@ from app_server.db import (
     set_docs_repo_commit_enabled,
     set_llm_suggestions_enabled,
     set_public_status_enabled,
+    set_alert_email,
     set_webhook_url,
     update_session_tokens,
 )
@@ -89,6 +93,13 @@ class GenerateTokenRequest(BaseModel):
 
 class SetWebhookURLRequest(BaseModel):
     webhook_url: str | None = None
+
+
+_EMAIL_ADDRESS_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class SetAlertEmailRequest(BaseModel):
+    alert_email: str | None = None
 
 
 class SetDocsRepoCommitRequest(BaseModel):
@@ -822,6 +833,52 @@ async def test_webhook_url_route(org: str, repo: str, request: Request):
         # distinguishing "connection refused" from "timed out" from an
         # actual response body/status from whatever the URL resolved to.
         raise HTTPException(status_code=502, detail="could not reach that webhook URL") from None
+    return {"ok": True}
+
+
+@admin_router.put("/admin/{org}/{repo}/alert-email")
+async def set_alert_email_route(org: str, repo: str, request: Request, body: SetAlertEmailRequest):
+    installation = await _require_admin_installation(request, org, repo)
+    if body.alert_email and not _EMAIL_ADDRESS_PATTERN.match(body.alert_email):
+        raise HTTPException(status_code=400, detail="that doesn't look like a valid email address")
+    pool = request.app.state.db_pool
+    await set_alert_email(pool, installation["installation_id"], body.alert_email)
+    session = await get_current_session(request)
+    await record_admin_action(
+        pool, installation["installation_id"], session["github_login"], "alert_email_changed",
+        {"cleared": body.alert_email is None},
+    )
+    return {"ok": True}
+
+
+@admin_router.post("/admin/{org}/{repo}/alert-email/test")
+async def test_alert_email_route(org: str, repo: str, request: Request):
+    # Same reasoning as test_webhook_url_route above - a customer has no
+    # way to confirm the address is right short of waiting for a real
+    # incident to fire one.
+    installation = await _require_admin_installation(request, org, repo)
+    alert_email = installation.get("alert_email")
+    if not alert_email:
+        raise HTTPException(status_code=400, detail="no alert email is configured yet")
+
+    settings = get_settings()
+    # dedupe_key includes wall-clock time, not just the installation - a
+    # static key would silently no-op every click after the first, since
+    # email_already_sent's record is permanent (see scan_worker/db.py).
+    # The Slack/Teams test button doesn't have this problem (it sends
+    # synchronously with no dedup at all); this reproduces the same
+    # "always actually resends" behavior for email instead.
+    enqueue_transactional_email(
+        settings.redis_url,
+        dedupe_key=f"health_alert_test:{installation['installation_id']}:{time.time()}",
+        template_name="health_alert",
+        template_arg=(
+            f"*Aletheore*: test notification for `{org}/{repo}` - "
+            "your alert email is configured correctly."
+        ),
+        to_email=alert_email,
+        installation_id=installation["installation_id"],
+    )
     return {"ok": True}
 
 

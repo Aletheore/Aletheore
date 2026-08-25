@@ -30,7 +30,7 @@ async def upsert_installation(pool: asyncpg.Pool, installation_id: int, account_
 async def get_installation(pool: asyncpg.Pool, installation_id: int) -> dict | None:
     row = await pool.fetchrow(
         """
-        SELECT installation_id, account_login, plan, webhook_url, max_api_tokens,
+        SELECT installation_id, account_login, plan, webhook_url, alert_email, max_api_tokens,
                health_check_base_url, health_check_latency_threshold_ms,
                paddle_subscription_id, paddle_customer_id, llm_suggestions_enabled
         FROM installations
@@ -47,7 +47,7 @@ async def get_installation_by_account_login(pool: asyncpg.Pool, account_login: s
     # row here would have made this an arbitrary pick.
     row = await pool.fetchrow(
         """
-        SELECT installation_id, account_login, plan, webhook_url, max_api_tokens,
+        SELECT installation_id, account_login, plan, webhook_url, alert_email, max_api_tokens,
                health_check_base_url, health_check_latency_threshold_ms,
                paddle_subscription_id, paddle_customer_id, llm_suggestions_enabled
         FROM installations
@@ -1326,6 +1326,14 @@ async def set_webhook_url(pool: asyncpg.Pool, installation_id: int, url: str | N
         "UPDATE installations SET webhook_url = $2, updated_at = now() WHERE installation_id = $1",
         installation_id,
         url,
+    )
+
+
+async def set_alert_email(pool: asyncpg.Pool, installation_id: int, email: str | None) -> None:
+    await pool.execute(
+        "UPDATE installations SET alert_email = $2, updated_at = now() WHERE installation_id = $1",
+        installation_id,
+        email,
     )
 
 

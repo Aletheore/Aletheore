@@ -9,6 +9,8 @@ renders consistently in Outlook desktop's Word engine as well as modern
 webmail/mobile clients - not just the ones a browser preview would show.
 """
 
+import re
+
 _LOGO_URL = "https://www.aletheore.com/assets/logo-mark.png"
 _PRICING_URL = "https://aletheore.com/pricing.html"
 _DASHBOARD_URL = "https://app.aletheore.com/dashboard"
@@ -188,6 +190,15 @@ def deletion_otp_email(account_login: str, code: str) -> dict:
     return {"subject": subject, "html": html, "text": text}
 
 
+def _slack_markdown_to_html(text: str) -> str:
+    # Only the two markdown patterns scan_worker/slack.py's format_* alert
+    # builders actually produce (*bold* and `code`) - not a general markdown
+    # parser, since there's nothing else to convert.
+    converted = re.sub(r"`([^`]+)`", rf'<code style="background:{_BODY_BG};padding:2px 6px;border-radius:4px;">\1</code>', text)
+    converted = re.sub(r"\*([^*]+)\*", r"<strong>\1</strong>", converted)
+    return converted.replace("\n", "<br>")
+
+
 def weekly_digest_email(
     account_login: str,
     scans_this_week: int,
@@ -283,5 +294,20 @@ def subscription_canceled_email(account_login: str) -> dict:
         'mistake, or something didn\'t work the way you expected? Just reply '
         '&mdash; we\'d genuinely like to know why.</p>'
     )
+    html = _shell(preheader, body_html)
+    return {"subject": subject, "html": html, "text": text}
+
+
+def health_alert_email(alert_text: str) -> dict:
+    # alert_text is exactly what scan_worker/slack.py's format_reachability_alert/
+    # format_latency_alert/format_shape_change_alert already built for
+    # Slack/Teams - reused verbatim as the email's plain-text body (the
+    # *bold*/`code` markdown reads fine unconverted as plain text) and
+    # converted to HTML for the html body, rather than writing parallel
+    # copy for a second channel.
+    subject = "Aletheore endpoint alert"
+    preheader = re.sub(r"[`*]", "", alert_text.split("\n", 1)[0])[:140]
+    text = f"{alert_text}{_FOOTER_TEXT}"
+    body_html = f'<p style="margin:0;">{_slack_markdown_to_html(alert_text)}</p>'
     html = _shell(preheader, body_html)
     return {"subject": subject, "html": html, "text": text}
