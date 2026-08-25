@@ -4366,6 +4366,29 @@ def test_run_initial_scan_job_logs_and_reraises_on_inner_failure(monkeypatch, ca
     assert any("initial scan job failed" in record.message for record in caplog.records)
 
 
+def test_run_initial_scan_job_skips_silently_for_a_repo_with_no_commits_yet(monkeypatch, caplog):
+    from scan_worker.jobs import run_initial_scan_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda *a, **k: object())
+    # A genuinely empty repo (no commits) - fetch_default_branch_head_sha
+    # returns None for this rather than raising (see test_github_api.py's
+    # 409 test); run_initial_scan_job's own docstring already says it's
+    # "best-effort and silent on failure" for exactly this kind of case.
+    monkeypatch.setattr("scan_worker.jobs.fetch_default_branch_head_sha", lambda *a, **k: None)
+    clone_calls = []
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda *a, **k: clone_calls.append(1))
+
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        run_initial_scan_job(1, "octocat/hello-world")
+
+    assert clone_calls == []
+    assert not any("initial scan job failed" in record.message for record in caplog.records)
+
+
 def test_run_push_scan_job_logs_and_reraises_on_scan_failure(bare_repo_with_two_commits, monkeypatch, caplog):
     from scan_worker.jobs import run_push_scan_job
 
