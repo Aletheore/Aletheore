@@ -95,7 +95,25 @@ class SetWebhookURLRequest(BaseModel):
     webhook_url: str | None = None
 
 
-_EMAIL_ADDRESS_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+def _looks_like_email(value: str) -> bool:
+    # Deliberately not a regex. `^[^@\s]+@[^@\s]+\.[^@\s]+$` (the obvious
+    # first attempt) is a real, exploitable polynomial-time ReDoS: CodeQL
+    # flagged it, and a crafted ~100KB string ("!@!" + "!." * 50000) took
+    # nearly 20 seconds to reject on this Python version, scaling
+    # quadratically with input length - both [^@\s]+ groups can absorb '.'
+    # characters, so a failing match forces backtracking across every
+    # combination of '@' and '.' split points. Plain string operations
+    # can't backtrack, so there's no equivalent attack surface. This is a
+    # typo check, not full RFC 5321 validation - that job belongs to
+    # Resend's own delivery attempt, not this endpoint.
+    if not value or any(ch.isspace() for ch in value):
+        return False
+    local, at, domain = value.partition("@")
+    if not local or at != "@" or "@" in domain:
+        return False
+    if not domain or domain.startswith(".") or domain.endswith("."):
+        return False
+    return "." in domain
 
 
 class SetAlertEmailRequest(BaseModel):
@@ -839,7 +857,7 @@ async def test_webhook_url_route(org: str, repo: str, request: Request):
 @admin_router.put("/admin/{org}/{repo}/alert-email")
 async def set_alert_email_route(org: str, repo: str, request: Request, body: SetAlertEmailRequest):
     installation = await _require_admin_installation(request, org, repo)
-    if body.alert_email and not _EMAIL_ADDRESS_PATTERN.match(body.alert_email):
+    if body.alert_email and not _looks_like_email(body.alert_email):
         raise HTTPException(status_code=400, detail="that doesn't look like a valid email address")
     pool = request.app.state.db_pool
     await set_alert_email(pool, installation["installation_id"], body.alert_email)

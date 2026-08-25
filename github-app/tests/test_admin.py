@@ -15,6 +15,7 @@ from app_server.admin import (
     _administered_installation_ids_for_session_or_401,
     _build_updated_seat_items,
     _has_real_admin_permission,
+    _looks_like_email,
     _repo_installation_id,
 )
 from app_server.auth import decrypt_access_token, encrypt_access_token, sign_session_id
@@ -433,6 +434,41 @@ async def test_set_webhook_url(pool, monkeypatch):
             json={"webhook_url": "https://hooks.slack.com/services/x"},
         )
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("ops@example.com", True),
+        ("ops@sub.example.com", True),
+        ("not-an-email", False),
+        ("", False),
+        ("@example.com", False),
+        ("ops@", False),
+        ("ops@example", False),
+        ("ops@.com", False),
+        ("ops@example.", False),
+        ("ops has spaces@example.com", False),
+        ("a@b@c.com", False),
+    ],
+)
+def test_looks_like_email(value, expected):
+    assert _looks_like_email(value) is expected
+
+
+def test_looks_like_email_rejects_a_pathological_input_quickly():
+    # Regression test for a real CodeQL-flagged, empirically-confirmed
+    # ReDoS: the regex this replaced (`^[^@\s]+@[^@\s]+\.[^@\s]+$`) took
+    # ~20 seconds to reject a 100KB crafted string on this Python version,
+    # scaling quadratically. _looks_like_email is plain string operations
+    # with no backtracking, so this must stay fast regardless of input
+    # shape or size.
+    payload = "!@!." + ("!." * 50_000)
+    start = time.monotonic()
+    result = _looks_like_email(payload)
+    elapsed = time.monotonic() - start
+    assert result is False
+    assert elapsed < 1.0
 
 
 @pytest.mark.asyncio
