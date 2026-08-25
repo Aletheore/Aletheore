@@ -12,6 +12,32 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-25
+
+- **Endpoint-monitoring alerts gained two new delivery channels: email and Pushover,**
+  alongside the existing Slack/Teams webhook - configure any combination
+  (`installations.alert_email`, `installations.pushover_user_key`). Pushover down-alerts use
+  emergency priority (repeats and requires acknowledgement until dismissed); every other alert
+  stays at normal priority. `PUSHOVER_API_TOKEN` is a new, optional server-wide secret (#389,
+  #390).
+- **Aletheore's own Flash Review caught a real high-severity ReDoS in the alert-email format
+  check** (`^[^@\s]+@[^@\s]+\.[^@\s]+$`, quadratic blowup on a crafted string) on #389's own CI
+  run - replaced with plain string checks, no backtracking possible. Its own regression test
+  initially didn't reproduce the bug either (payload accidentally matched the old regex instead of
+  triggering it) - fixed in a follow-up (#392, #393). Flash Review also caught a second real
+  issue: `health_alert_email` interpolated repository-controlled evidence text (commit subjects,
+  symbol names) into HTML with no escaping - same bug class the wiki renderer already guards
+  against, fixed the same way (escape first, then promote markdown) (#393).
+- **`run_initial_scan_job` crashed on a repo with no commits yet** - GitHub's commits endpoint
+  returns 409 for a genuinely empty repo, not an error, but the fetch called `raise_for_status()`
+  unconditionally, firing a spurious ops alert for what was never a failure (#387).
+- **A Paddle subscription event whose `installation_token` failed to unsign silently no-op'd**
+  (200 to Paddle, no retry, nothing else surfaced it) - now fires an ops alert instead (#384).
+- **The backup-freshness ops alert false-positived on the daily cron/dump-duration race** - the
+  check's own polling loop isn't wall-clock-anchored to the backup cron, so a sample could land in
+  the few-second gap after yesterday's dump crosses the staleness threshold but before today's
+  lands. Padded the threshold by 10 minutes to absorb the jitter (#383).
+
 ## 2026-08-24
 
 - **Live-wiki/docs incremental update jobs could reload evidence from a different, newer scan.**
