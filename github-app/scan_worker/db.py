@@ -578,8 +578,8 @@ def get_installation(dsn: str, installation_id: int) -> dict | None:
             cur.execute(
                 """
                 SELECT installation_id, account_login, plan, webhook_url, alert_email,
-                       health_check_base_url, health_check_latency_threshold_ms,
-                       llm_suggestions_enabled
+                       pushover_user_key, health_check_base_url,
+                       health_check_latency_threshold_ms, llm_suggestions_enabled
                 FROM installations
                 WHERE installation_id = %s
                 """,
@@ -624,7 +624,8 @@ def list_health_check_targets_all(dsn: str) -> list[dict]:
             cur.execute(
                 """
                 SELECT t.id AS target_id, t.installation_id, t.repo_full_name, t.label,
-                       t.base_url, t.latency_threshold_ms, i.webhook_url, i.alert_email
+                       t.base_url, t.latency_threshold_ms, i.webhook_url, i.alert_email,
+                       i.pushover_user_key
                 FROM health_check_targets t
                 JOIN installations i ON i.installation_id = t.installation_id
                 WHERE i.plan != 'free'

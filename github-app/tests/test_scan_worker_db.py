@@ -125,6 +125,16 @@ async def test_list_health_check_targets_all_includes_alert_email(pool):
 
 
 @pytest.mark.asyncio
+async def test_list_health_check_targets_all_includes_pushover_user_key(pool):
+    await _insert_installation(pool, 307, "g", plan="indie", pushover_user_key="user-key-g")
+    await _insert_health_target(pool, 307, "g/repo1", "https://g.example.com")
+
+    targets = list_health_check_targets_all(TEST_DATABASE_URL)
+    row = next(t for t in targets if t["installation_id"] == 307)
+    assert row["pushover_user_key"] == "user-key-g"
+
+
+@pytest.mark.asyncio
 async def test_list_health_check_targets_all_returns_one_row_per_target(pool):
     await _insert_installation(pool, 305, "e", plan="indie")
     await _insert_health_target(pool, 305, "e/repo1", "https://staging.example.com")

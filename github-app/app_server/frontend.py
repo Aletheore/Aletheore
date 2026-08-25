@@ -1988,6 +1988,27 @@ async function sendTestAlertEmail() {{
   status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
 }}
 
+async function savePushoverKey() {{
+  const input = document.getElementById('pushover-key-input');
+  const status = document.getElementById('pushover-key-status');
+  const res = await fetch(adminBase + '/pushover-user-key', {{
+    method: 'PUT', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ pushover_user_key: input.value.trim() || null }}),
+  }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  status.textContent = res.ok ? 'Saved.' : (data.detail || 'Could not save.');
+  status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
+}}
+
+async function sendTestPushover() {{
+  const status = document.getElementById('pushover-key-status');
+  status.textContent = 'Sending...';
+  status.style.color = 'var(--slate-600)';
+  const res = await fetch(adminBase + '/pushover-user-key/test', {{ method: 'POST' }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  status.textContent = res.ok ? 'Test notification sent.' : (data.detail || 'Could not send test notification.');
+  status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
+}}
+
 async function buySeat() {{
   const status = document.getElementById('seat-billing-status');
   status.textContent = 'Updating billing...';
@@ -2251,6 +2272,15 @@ async function loadSettings() {{
           '<input class="field" id="alert-email-input" placeholder="ops@yourcompany.com" value="' + escapeHtml(installation.alert_email || '') + '">' +
           '<div class="form-row"><button class="btn" onclick="saveAlertEmail()">Save</button><button class="btn" onclick="sendTestAlertEmail()" style="margin-left:6px;">Send test</button><span id="alert-email-status" class="settings-block-hint"></span></div>' +
           '<div class="settings-block-hint">Same endpoint-monitoring alerts as the webhook above, delivered by email too - configure either, both, or neither.</div>' +
+        '</div>' +
+        '<div class="settings-block">' +
+          '<div class="settings-block-label">Pushover</div>' +
+          '<input class="field" id="pushover-key-input" placeholder="Your Pushover user key" value="' + escapeHtml(installation.pushover_user_key || '') + '">' +
+          '<div class="form-row"><button class="btn" onclick="savePushoverKey()">Save</button><button class="btn" onclick="sendTestPushover()" style="margin-left:6px;">Send test</button><span id="pushover-key-status" class="settings-block-hint"></span></div>' +
+          '<div class="settings-block-hint">Same endpoint-monitoring alerts, delivered as a phone push notification - a down alert repeats until you acknowledge it.</div>' +
+          '<div class="settings-help-links">' +
+            '<a href="https://pushover.net" target="_blank" rel="noopener">Get your Pushover user key &rarr;</a>' +
+          '</div>' +
         '</div>' +
         '<div class="settings-block">' +
           '<div class="settings-block-label">Managed audit content</div>' +

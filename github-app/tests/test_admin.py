@@ -544,6 +544,104 @@ async def test_send_test_alert_email_enqueues_to_saved_address(pool, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_set_pushover_user_key(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.put(
+            "/admin/octocat/hello-world/pushover-user-key",
+            json={"pushover_user_key": "u" * 30},
+        )
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_set_pushover_user_key_rejects_malformed_key(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.put(
+            "/admin/octocat/hello-world/pushover-user-key",
+            json={"pushover_user_key": "too-short"},
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_send_test_pushover_requires_a_saved_key(pool, monkeypatch):
+    monkeypatch.setenv("PUSHOVER_API_TOKEN", "server-app-token")
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/pushover-user-key/test")
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_send_test_pushover_requires_server_token_configured(pool, monkeypatch):
+    # PUSHOVER_API_TOKEN is Aletheore's own credential, not something any
+    # one installation controls - if the founder hasn't configured it
+    # server-wide yet, every installation's test click must fail with a
+    # clear reason, not a raw exception from send_pushover_alert.
+    monkeypatch.delenv("PUSHOVER_API_TOKEN", raising=False)
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        await client.put(
+            "/admin/octocat/hello-world/pushover-user-key",
+            json={"pushover_user_key": "u" * 30},
+        )
+        response = await client.post("/admin/octocat/hello-world/pushover-user-key/test")
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_saved_pushover_user_key_is_reflected_back_on_the_admin_page(pool, monkeypatch):
+    # Same class of bug as alert_email's regression test above: an explicit
+    # SELECT column list in get_installation that doesn't include the new
+    # column means a save is silently invisible everywhere that reads the
+    # installation dict, despite the UPDATE itself succeeding.
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        await client.put(
+            "/admin/octocat/hello-world/pushover-user-key",
+            json={"pushover_user_key": "u" * 30},
+        )
+        response = await client.get("/admin/octocat/hello-world")
+    assert response.status_code == 200
+    assert response.json()["installation"]["pushover_user_key"] == "u" * 30
+
+
+@pytest.mark.asyncio
+async def test_send_test_pushover_sends_to_saved_key(pool, monkeypatch):
+    monkeypatch.setenv("PUSHOVER_API_TOKEN", "server-app-token")
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+    client = await _logged_in_client(pool, monkeypatch)
+    sent = []
+    monkeypatch.setattr(
+        "app_server.admin.send_pushover_alert",
+        lambda token, user_key, message, **k: sent.append((token, user_key, message)),
+    )
+    async with client:
+        put_response = await client.put(
+            "/admin/octocat/hello-world/pushover-user-key",
+            json={"pushover_user_key": "u" * 30},
+        )
+        assert put_response.status_code == 200
+        response = await client.post("/admin/octocat/hello-world/pushover-user-key/test")
+
+    assert response.status_code == 200
+    assert len(sent) == 1
+    token, user_key, _message = sent[0]
+    assert token == "server-app-token"
+    assert user_key == "u" * 30
+
+
+@pytest.mark.asyncio
 async def test_docs_repo_commit_defaults_to_disabled(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch)
     async with client:

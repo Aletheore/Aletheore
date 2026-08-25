@@ -27,6 +27,7 @@ class Settings:
     email_from_address: str
     email_reply_to_address: str
     affiliate_admin_token: str | None
+    pushover_api_token: str | None
 
 
 def _required_env(name: str) -> str:
@@ -136,4 +137,10 @@ def get_settings() -> Settings:
         # and see revenue, a different privilege level than read-only queue
         # stats.
         affiliate_admin_token=os.environ.get("AFFILIATE_ADMIN_TOKEN", "").strip() or None,
+        # Optional, not required: the endpoint-monitoring Pushover channel is
+        # additive, same as resend_api_key above - an installation can still
+        # have a pushover_user_key saved from before this was configured (or
+        # after it's removed), and _send_alerts_if_configured just skips
+        # that channel rather than the server refusing to start.
+        pushover_api_token=os.environ.get("PUSHOVER_API_TOKEN", "").strip() or None,
     )
