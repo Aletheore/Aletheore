@@ -769,6 +769,31 @@ def test_audit_sponsor_panel_does_not_claim_nothing_left_the_machine(tmp_path):
     assert "nothing leaves this machine" not in result.output.lower()
 
 
+def test_audit_helper_itself_does_not_print_the_free_tier_nudge(tmp_path, capsys):
+    # The nudge must live in the top-level `audit` command body, not inside
+    # _audit() - _audit() has exactly one caller today, but a comment
+    # claiming "top-level command bodies only" that's only true by
+    # coincidence of call-site count isn't actually enforcing anything.
+    # Flagged by Aletheore's own Flash Review on PR #385.
+    from aletheore.cli import _audit
+
+    repo = tmp_path
+    (repo / "main.py").write_text("x = 1\n")
+
+    fake_adapter = MagicMock()
+    fake_adapter.name = "openai"
+    fake_adapter.requires_consent = True
+    fake_adapter.invoke.return_value = "## Summary\n\nreport text"
+
+    with patch("aletheore.cli.select_adapter", return_value=fake_adapter):
+        with patch("builtins.input", return_value="y"):
+            exit_code = _audit(str(repo), None, None, None, None, None, None)
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "github.com/apps/aletheore/installations/new" not in captured.out
+
+
 def test_audit_command_nudges_free_tier_users_toward_the_github_app(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")

@@ -235,9 +235,15 @@ def _sponsor_panel() -> Panel:
 
 def _free_pr_review_nudge() -> str:
     # Lives in the top-level 'scan'/'audit' command bodies, not inside the
-    # shared _scan()/_audit() helpers - 'watch' also calls those helpers on
-    # every re-scan cycle, and printing this on every cycle would be exactly
-    # the naggy behavior this is meant to avoid.
+    # shared _scan()/_audit() helpers those commands call - a helper's
+    # call count isn't this function's to assume, today or later, and a
+    # promotional nudge printed from inside a reusable helper repeats
+    # anywhere that helper gets reused. ('watch' was considered as an
+    # example of exactly that risk, then checked and ruled out - it drives
+    # re-indexing through its own aletheore.watch module, not _scan()/
+    # _audit(), so it was never actually a live case here. Still the right
+    # place for this to live, on the general principle, not that specific
+    # example.)
     return (
         "\n[dim]You're on the free tier - Aletheore also does free, "
         "evidence-grounded PR reviews on your pull requests, globally "
@@ -550,7 +556,6 @@ def _audit(
     _print_result("Audit complete", result_lines)
     console.print()
     console.print(_sponsor_panel())
-    console.print(_free_pr_review_nudge())
     return 0
 
 
@@ -1384,11 +1389,12 @@ def audit(
         console.print(
             "[bold yellow]warning:[/bold yellow] --token has no effect without --managed - ignored."
         )
-    raise typer.Exit(
-        code=_audit(
-            path, agent, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema
-        )
+    exit_code = _audit(
+        path, agent, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema
     )
+    if exit_code == 0:
+        console.print(_free_pr_review_nudge())
+    raise typer.Exit(code=exit_code)
 
 
 @app.command(help="run only the deterministic scan phase")
