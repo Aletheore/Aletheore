@@ -77,6 +77,9 @@ def test_format_reachability_alert_down():
     assert "abcdef12" in body["text"]
     assert "UserService" in body["text"]
     assert "recently unreachable" in body["text"]
+    # Down is the "blaring, can't-ignore" case - Pushover's emergency
+    # priority (repeats until acknowledged), not a single quiet ping.
+    assert body["pushover_priority"] == 2
 
 
 def test_format_reachability_alert_recovered():
@@ -90,6 +93,7 @@ def test_format_reachability_alert_recovered():
     )
     assert "recovered" in body["text"]
     assert "controllers/user.controller.ts:42" in body["text"]
+    assert body["pushover_priority"] == 0
 
 
 def test_format_latency_alert_over():

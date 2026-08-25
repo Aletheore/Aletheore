@@ -168,7 +168,11 @@ def format_reachability_alert(
             f"`{method} {path}` is unreachable (was reachable as of the last check){location}"
             f"{_format_evidence_context(evidence_resolution)}"
         )
-    return {"text": text}
+    # Read by _send_alerts_if_configured for the Pushover channel only -
+    # down is the one endpoint-monitoring event worth an emergency-priority
+    # (repeats until acknowledged) push; every other alert defaults to a
+    # single normal-priority notification.
+    return {"text": text, "pushover_priority": 0 if now_reachable else 2}
 
 
 def format_latency_alert(

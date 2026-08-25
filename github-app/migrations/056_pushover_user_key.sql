@@ -1,0 +1,11 @@
+-- A third alert delivery channel for endpoint monitoring, alongside the
+-- existing installations.webhook_url (Slack/Teams) and installations.
+-- alert_email. Installation-level, not per-target, matching those columns'
+-- own scope - one configured key covers every health check target on the
+-- installation.
+--
+-- Only the recipient's key lives here. The sending side's credential (the
+-- Pushover Application API Token identifying Aletheore as the sender) is a
+-- server-wide secret (PUSHOVER_API_TOKEN), not a per-installation value -
+-- same split as RESEND_API_KEY vs. alert_email.
+ALTER TABLE installations ADD COLUMN IF NOT EXISTS pushover_user_key TEXT;
