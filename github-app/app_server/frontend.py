@@ -359,9 +359,7 @@ table.findings tr:last-child td { border-bottom: none; }
 .settings-help-links { display: flex; gap: 14px; margin-top: 8px; }
 .settings-help-links a { font-size: 11px; color: var(--accent-strong); text-decoration: none; font-weight: 500; }
 .settings-help-links a:hover { text-decoration: underline; }
-.alert-channel { padding-top: 16px; }
-.alert-channel:first-of-type { padding-top: 0; }
-.alert-channel + .alert-channel { border-top: 1px solid var(--border); }
+.alert-channel + .alert-channel { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
 .alert-channel-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--slate-400); font-weight: 600; margin-bottom: 9px; }
 .danger-zone { margin-top: 16px; border: 1px solid var(--critical); border-radius: 12px; padding: 16px 18px; }
