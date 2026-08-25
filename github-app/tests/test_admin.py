@@ -463,7 +463,16 @@ def test_looks_like_email_rejects_a_pathological_input_quickly():
     # scaling quadratically. _looks_like_email is plain string operations
     # with no backtracking, so this must stay fast regardless of input
     # shape or size.
-    payload = "!@!." + ("!." * 50_000)
+    #
+    # Aletheore's own Flash Review caught a real bug in an earlier version
+    # of this test: without the trailing space, the payload actually
+    # *matches* the old regex (via the second-to-last dot as the "@...\."
+    # separator and the final dot as the one-character suffix) - fast, not
+    # slow, and accepted rather than rejected. A trailing space is required
+    # so no split of the string can ever satisfy the old regex's final
+    # [^@\s]+$, forcing it to exhaust every '@'/'.' combination before
+    # giving up.
+    payload = "!@!." + ("!." * 50_000) + " "
     start = time.monotonic()
     result = _looks_like_email(payload)
     elapsed = time.monotonic() - start
