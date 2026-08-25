@@ -2773,6 +2773,73 @@ def _patch_sweep(
     return sent
 
 
+def test_send_alerts_if_configured_sends_email_when_alert_email_set(monkeypatch):
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda *a, **k: None)
+    enqueued = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **k: enqueued.append(k),
+    )
+
+    _send_alerts_if_configured(
+        {"installation_id": 1, "target_id": 900, "alert_email": "ops@example.com"},
+        {"text": "*Aletheore*: endpoint down on `octocat/hello-world`"},
+    )
+
+    assert len(enqueued) == 1
+    assert enqueued[0]["to_email"] == "ops@example.com"
+    assert enqueued[0]["template_name"] == "health_alert"
+    assert enqueued[0]["template_arg"] == "*Aletheore*: endpoint down on `octocat/hello-world`"
+    assert enqueued[0]["installation_id"] == 1
+
+
+def test_send_alerts_if_configured_sends_both_channels_when_both_set(monkeypatch):
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    slack_sent = []
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: slack_sent.append(msg))
+    email_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **k: email_sent.append(k),
+    )
+
+    _send_alerts_if_configured(
+        {
+            "installation_id": 1,
+            "target_id": 900,
+            "webhook_url": "https://hooks.slack.com/x",
+            "alert_email": "ops@example.com",
+        },
+        {"text": "down"},
+    )
+
+    assert len(slack_sent) == 1
+    assert len(email_sent) == 1
+
+
+def test_send_alerts_if_configured_sends_neither_when_unconfigured(monkeypatch):
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    slack_sent = []
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: slack_sent.append(msg))
+    email_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **k: email_sent.append(k),
+    )
+
+    _send_alerts_if_configured({"installation_id": 1, "target_id": 900}, {"text": "down"})
+
+    assert slack_sent == []
+    assert email_sent == []
+
+
 def test_sweep_sends_reachability_down_alert(monkeypatch):
     sent = _patch_sweep(
         monkeypatch,
