@@ -284,6 +284,54 @@ async def test_missing_installation_id_returns_200_but_writes_nothing(pool, monk
 
 
 @pytest.mark.asyncio
+async def test_missing_installation_token_fires_an_ops_alert(pool, monkeypatch):
+    """Real gap this closes: a subscription event with a missing/invalid
+    installation_token used to only logger.warning() and return - no
+    retry (still 200 to Paddle), no alert, so a real payer's plan-flip
+    silently failing looked identical to a successful transaction from
+    the outside. This is a real-money path (about to onboard a real
+    affiliate's referral) - it needs to page someone, not just log."""
+    from app_server.webhooks import paddle as paddle_module
+
+    alerts = []
+    monkeypatch.setattr(paddle_module, "send_error_alert", lambda *a, **k: alerts.append((a, k)))
+
+    payload = _subscription_created_payload(
+        "pri_01kyhevc8bkcghfpwjymz16y2h", 104, event_id="evt_missing_token"
+    )
+    del payload["data"]["custom_data"]["installation_token"]
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert len(alerts) == 1
+    args, kwargs = alerts[0]
+    assert args[0] == "paddle_webhook"
+    assert "evt_missing_token" in (args[2] if len(args) > 2 else kwargs.get("context", ""))
+
+
+@pytest.mark.asyncio
+async def test_invalid_installation_token_fires_an_ops_alert(pool, monkeypatch):
+    """Same as the missing-token case above, but for a token that's
+    present and well-formed yet fails to unsign (tampered, forged, or
+    for a different secret) - unsign_checkout_installation_id returns
+    None for all of these, hitting the exact same silent-failure path."""
+    from app_server.webhooks import paddle as paddle_module
+
+    alerts = []
+    monkeypatch.setattr(paddle_module, "send_error_alert", lambda *a, **k: alerts.append((a, k)))
+
+    payload = _subscription_event_payload(
+        "subscription.canceled", "canceled", 951, event_id="evt_invalid_token"
+    )
+    payload["data"]["custom_data"]["installation_token"] = "not-a-real-token"
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    assert len(alerts) == 1
+    assert alerts[0][0][0] == "paddle_webhook"
+
+
+@pytest.mark.asyncio
 async def test_a_raw_unsigned_installation_id_is_rejected_not_trusted(pool):
     """The actual vulnerability this closes: custom_data is set by the
     browser calling Paddle.Checkout.open(), which nothing stops from being
