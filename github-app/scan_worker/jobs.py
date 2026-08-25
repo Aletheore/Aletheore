@@ -159,6 +159,7 @@ from scan_worker.model_tiers import (
 from scan_worker.packet_cache import lookup_cached_result, store_result
 from scan_worker.code_graph_store import CodeGraphStore
 from scan_worker.postgres_graph_store import PostgresRepoGraphStore
+from scan_worker.pushover import send_pushover_alert
 from scan_worker.slack import (
     format_latency_alert,
     format_reachability_alert,
@@ -1871,15 +1872,19 @@ def _run_flash_review(
 
 def _send_alerts_if_configured(installation: dict, message: dict) -> None:
     """Fires on every configured channel independently - Slack/Teams via
-    installations.webhook_url, email via installations.alert_email. Either,
-    both, or neither may be set; nothing here requires the other.
+    installations.webhook_url, email via installations.alert_email,
+    Pushover via installations.pushover_user_key. Any combination may be
+    set; nothing here requires any other.
 
     The email send goes through the same async, RQ-queued path as every
     other transactional email (see email_queue.enqueue_transactional_email)
     rather than send_transactional_email directly - a slow/down Resend
     must never delay the next target's check in this sweep, same reasoning
     as the health sweep's own queue split from "scans" (see
-    send_transactional_email_job's docstring).
+    send_transactional_email_job's docstring). Pushover stays a direct,
+    synchronous call like Slack/Teams (both are already fire-and-forget,
+    single-request webhooks with no comparable "queue or don't" decision
+    to make).
 
     dedupe_key includes wall-clock time down to the second: a genuine
     retry of the outer job re-sending the same flip is an accepted, rare
@@ -1903,6 +1908,24 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
             to_email=alert_email,
             installation_id=installation.get("installation_id"),
         )
+
+    pushover_user_key = installation.get("pushover_user_key")
+    if pushover_user_key:
+        settings = get_settings()
+        if settings.pushover_api_token:
+            send_pushover_alert(settings.pushover_api_token, pushover_user_key, message)
+        else:
+            # A saved user key with no server-side app token configured -
+            # not an error in the installation's own config, so it
+            # degrades silently like the other two channels do when
+            # their own config is missing, rather than raising into the
+            # sweep loop's per-target isolation (see run_health_check_
+            # sweep_job's own comment on why one target's failure must
+            # not take down the rest).
+            logging.getLogger("scan_worker.jobs").warning(
+                "pushover_user_key is set for installation=%s but PUSHOVER_API_TOKEN is not configured",
+                installation.get("installation_id"),
+            )
 
 
 def _endpoint_results(evidence: dict, base_url: str, pinned_ip: str) -> list[dict]:

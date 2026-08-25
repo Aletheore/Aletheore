@@ -2833,11 +2833,70 @@ def test_send_alerts_if_configured_sends_neither_when_unconfigured(monkeypatch):
         "scan_worker.jobs.enqueue_transactional_email",
         lambda *a, **k: email_sent.append(k),
     )
+    pushover_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_pushover_alert",
+        lambda *a, **k: pushover_sent.append(k),
+    )
 
     _send_alerts_if_configured({"installation_id": 1, "target_id": 900}, {"text": "down"})
 
     assert slack_sent == []
     assert email_sent == []
+    assert pushover_sent == []
+
+
+def test_send_alerts_if_configured_sends_pushover_when_user_key_set(monkeypatch):
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("PUSHOVER_API_TOKEN", "server-app-token")
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+    pushover_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_pushover_alert",
+        lambda token, user_key, message, **k: pushover_sent.append((token, user_key, message)),
+    )
+
+    _send_alerts_if_configured(
+        {"installation_id": 1, "target_id": 900, "pushover_user_key": "user-key-y"},
+        {"text": "*Aletheore*: endpoint down on `octocat/hello-world`", "pushover_priority": 2},
+    )
+
+    assert len(pushover_sent) == 1
+    token, user_key, message = pushover_sent[0]
+    assert token == "server-app-token"
+    assert user_key == "user-key-y"
+    assert message["pushover_priority"] == 2
+
+
+def test_send_alerts_if_configured_skips_pushover_when_server_token_unset(monkeypatch):
+    # An installation can have pushover_user_key set (from before the
+    # server-side token was ever configured, or after it was later
+    # removed) - this must degrade silently, the same as the other two
+    # channels degrade when their own config is missing, not raise into
+    # the sweep loop.
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.delenv("PUSHOVER_API_TOKEN", raising=False)
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+    pushover_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_pushover_alert",
+        lambda *a, **k: pushover_sent.append(k),
+    )
+
+    _send_alerts_if_configured(
+        {"installation_id": 1, "target_id": 900, "pushover_user_key": "user-key-y"},
+        {"text": "down"},
+    )
+
+    assert pushover_sent == []
 
 
 def test_sweep_sends_reachability_down_alert(monkeypatch):

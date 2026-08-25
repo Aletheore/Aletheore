@@ -24,6 +24,7 @@ from app_server.http_client import get_github_api_client
 from app_server.email_client import send_transactional_email
 from app_server.email_queue import enqueue_transactional_email
 from app_server.email_templates import deletion_otp_email
+from scan_worker.pushover import send_pushover_alert
 from app_server.db import (
     DEFAULT_HEALTH_CHECK_TARGET_LIMIT,
     DEFAULT_SEAT_LIMIT,
@@ -62,6 +63,7 @@ from app_server.db import (
     set_llm_suggestions_enabled,
     set_public_status_enabled,
     set_alert_email,
+    set_pushover_user_key,
     set_webhook_url,
     update_session_tokens,
 )
@@ -118,6 +120,18 @@ def _looks_like_email(value: str) -> bool:
 
 class SetAlertEmailRequest(BaseModel):
     alert_email: str | None = None
+
+
+# Pushover user/group keys are always exactly 30 characters from this
+# charset (https://pushover.net/api#identifiers) - same "catch an obvious
+# typo before it's saved" purpose as _looks_like_email above, not an
+# attempt to verify the key is real (only Pushover's own API can do that,
+# which is exactly what the /test route is for).
+_PUSHOVER_KEY_PATTERN = re.compile(r"^[A-Za-z0-9]{30}$")
+
+
+class SetPushoverUserKeyRequest(BaseModel):
+    pushover_user_key: str | None = None
 
 
 class SetDocsRepoCommitRequest(BaseModel):
@@ -897,6 +911,49 @@ async def test_alert_email_route(org: str, repo: str, request: Request):
         to_email=alert_email,
         installation_id=installation["installation_id"],
     )
+    return {"ok": True}
+
+
+@admin_router.put("/admin/{org}/{repo}/pushover-user-key")
+async def set_pushover_user_key_route(org: str, repo: str, request: Request, body: SetPushoverUserKeyRequest):
+    installation = await _require_admin_installation(request, org, repo)
+    if body.pushover_user_key and not _PUSHOVER_KEY_PATTERN.match(body.pushover_user_key):
+        raise HTTPException(status_code=400, detail="that doesn't look like a valid Pushover user key")
+    pool = request.app.state.db_pool
+    await set_pushover_user_key(pool, installation["installation_id"], body.pushover_user_key)
+    session = await get_current_session(request)
+    await record_admin_action(
+        pool, installation["installation_id"], session["github_login"], "pushover_user_key_changed",
+        {"cleared": body.pushover_user_key is None},
+    )
+    return {"ok": True}
+
+
+@admin_router.post("/admin/{org}/{repo}/pushover-user-key/test")
+async def test_pushover_user_key_route(org: str, repo: str, request: Request):
+    # Same reasoning as test_webhook_url_route/test_alert_email_route above
+    # - a customer has no way to confirm the key is right short of waiting
+    # for a real incident to fire one.
+    installation = await _require_admin_installation(request, org, repo)
+    pushover_user_key = installation.get("pushover_user_key")
+    if not pushover_user_key:
+        raise HTTPException(status_code=400, detail="no Pushover user key is configured yet")
+
+    settings = get_settings()
+    if not settings.pushover_api_token:
+        # This installation's config is fine - Aletheore's own server-wide
+        # Pushover Application token just isn't set yet. A generic 502 here
+        # would look like the customer's key is wrong when it isn't.
+        raise HTTPException(status_code=400, detail="push notifications aren't enabled on this server yet")
+
+    try:
+        send_pushover_alert(
+            settings.pushover_api_token,
+            pushover_user_key,
+            {"text": f"*Aletheore*: test notification for `{org}/{repo}` - your Pushover key is configured correctly."},
+        )
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="could not send a Pushover notification to that key") from None
     return {"ok": True}
 
 
