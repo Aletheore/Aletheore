@@ -2703,7 +2703,21 @@ OPS_DEFAULT_BACKUP_DIR = "/app/backups"
 OPS_DEFAULT_QUEUE_DEPTH_THRESHOLD = 25
 OPS_DEFAULT_FAILED_JOBS_THRESHOLD = 0
 OPS_THRESHOLD_DURATION_SECONDS = 600
-OPS_BACKUP_STALE_SECONDS = 86400
+# Not a bare 24h (86400s): the backup cron fires at a fixed wall-clock time
+# (0 3 * * * UTC) and pg_dump takes several seconds to finish - a dump's
+# mtime is only set once it completes and is renamed into place, see
+# backup-postgres.sh - while this check runs on its own independent
+# ~180s-interval loop (scheduler.py) with no wall-clock anchoring to the
+# cron at all. A zero-tolerance 86400s threshold means the two schedules
+# will eventually land a sample in the few-second gap after yesterday's
+# dump crosses exactly 24h old but before today's fresh dump lands, purely
+# by chance of where the independent loop's cadence happens to drift to -
+# confirmed in production 2026-08-25 (age_seconds=86403, 3s past the old
+# threshold, while every day's backup that week actually succeeded). +10
+# minutes absorbs that structural jitter without weakening what this check
+# actually exists to catch (a backup that's genuinely missing or days
+# stale) by any operationally meaningful amount.
+OPS_BACKUP_STALE_SECONDS = 86400 + 600
 OPS_APP_HEALTH_CONSECUTIVE_FAILURES = 2
 OPS_MONITORED_QUEUES = ("scans", "health")
 

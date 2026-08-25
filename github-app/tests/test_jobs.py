@@ -6148,6 +6148,43 @@ def test_check_backup_freshness_missing_dir_and_stale_backup_both_alert_within_c
     assert alerts == ["ops_monitor.backup_freshness.stale", "ops_monitor.backup_freshness.missing_dir"]
 
 
+def test_check_backup_freshness_tolerates_normal_cron_and_dump_duration_jitter(monkeypatch, tmp_path):
+    # Real false positive from prod, 2026-08-25: the backup cron fires at a
+    # fixed wall-clock time (0 3 * * * UTC) and pg_dump takes ~7-11s to
+    # finish (mtime is only set once the dump completes and is renamed into
+    # place - see backup-postgres.sh), while this check runs on its own
+    # independent ~180s-interval loop (scan_worker/scheduler.py) with no
+    # wall-clock anchoring at all. The two schedules aren't correlated, so
+    # over enough days a sample eventually lands in the few-second gap
+    # after yesterday's dump crosses exactly 24h old but before today's
+    # fresh dump lands - exactly what happened: the real alert reported
+    # age_seconds=86403, just 3 seconds past the old threshold, while every
+    # single day's backup in the preceding week actually succeeded. A
+    # threshold with zero tolerance for this structural (cron latency +
+    # dump duration) jitter will keep re-triggering this false positive
+    # indefinitely, regardless of which specific day it next lands on.
+    from scan_worker.jobs import _check_backup_freshness
+
+    redis_conn = _FakeRedis()
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append(a[0]))
+
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    dump = backup_dir / "aletheore_app_20260101.dump"
+    dump.write_text("x")
+    os.utime(dump, (0, 0))
+    monkeypatch.setenv("ALETHEORE_BACKUP_DIR", str(backup_dir))
+
+    # The real incident's literal age_seconds from the alert body - a bare
+    # 24h (86400s) constant, not derived from OPS_BACKUP_STALE_SECONDS
+    # itself, so this test actually pins the real-world scenario rather
+    # than trivially tracking whatever the threshold is currently set to.
+    _check_backup_freshness(redis_conn, 86400 + 3)
+
+    assert alerts == []
+
+
 def test_run_ops_monitor_job_alerts_when_a_free_tier_provider_key_is_missing(monkeypatch):
     # Real incident this guards: writing_adapter_chain_for_free_tier silently
     # skips (info-log only) any provider whose key isn't set, so all four
