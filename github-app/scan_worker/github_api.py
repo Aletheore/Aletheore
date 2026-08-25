@@ -156,7 +156,7 @@ def fetch_default_branch_head_sha(
     client: httpx.Client,
     token: str,
     repo_full_name: str,
-) -> str:
+) -> str | None:
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
@@ -169,6 +169,12 @@ def fetch_default_branch_head_sha(
         f"/repos/{repo_full_name}/commits/{default_branch}",
         headers=headers,
     )
+    # 409 is GitHub's actual response for "this repository has no commits
+    # yet" on the commits endpoint - a normal state for a freshly created
+    # or freshly connected repo, not an error. Distinct from a 404 (repo
+    # or ref doesn't exist at all), which still raises below.
+    if commit_response.status_code == 409:
+        return None
     commit_response.raise_for_status()
     return commit_response.json()["sha"]
 

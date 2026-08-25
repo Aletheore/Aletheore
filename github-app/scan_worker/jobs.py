@@ -1038,6 +1038,13 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
         client = get_github_api_client()
 
         head_sha = fetch_default_branch_head_sha(client, token, repo_full_name)
+        if head_sha is None:
+            # Repo has no commits yet (a freshly created or freshly
+            # connected empty repo) - nothing to scan, and not a failure:
+            # matches this job's own "best-effort and silent" contract
+            # above, and the dashboard's "Initialization required" state
+            # is still an honest description of a repo with no code in it.
+            return
         clone_url = _clone_url(repo_full_name, token)
         repo_dir = job_dir / "repo"
         _clone_ref(clone_url, head_sha, repo_dir)
