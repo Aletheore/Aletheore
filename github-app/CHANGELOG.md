@@ -12,6 +12,15 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-25-2
+
+- **Redesigned the settings page's three alert-channel blocks** (Slack/Teams, email, Pushover)
+  into one consolidated "Alert channels" card with labeled sub-sections instead of three separate
+  bordered blocks repeating near-identical copy - also rebalanced the two-column layout (previously
+  5 blocks in one column vs. 3 in the other). Flash Review caught a real CSS bug in the same PR:
+  `.alert-channel:first-of-type` matches by tag name, not class, so it never matched anything;
+  replaced with an adjacent-sibling selector (#397).
+
 ## 2026-08-25
 
 - **Endpoint-monitoring alerts gained two new delivery channels: email and Pushover,**
