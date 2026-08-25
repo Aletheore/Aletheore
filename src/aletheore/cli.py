@@ -233,6 +233,19 @@ def _sponsor_panel() -> Panel:
     return Panel(body, border_style="magenta", width=78)
 
 
+def _free_pr_review_nudge() -> str:
+    # Lives in the top-level 'scan'/'audit' command bodies, not inside the
+    # shared _scan()/_audit() helpers - 'watch' also calls those helpers on
+    # every re-scan cycle, and printing this on every cycle would be exactly
+    # the naggy behavior this is meant to avoid.
+    return (
+        "\n[dim]You're on the free tier - Aletheore also does free, "
+        "evidence-grounded PR reviews on your pull requests, globally "
+        "rate-limited and subject to availability. Install the app: "
+        "https://github.com/apps/aletheore/installations/new[/dim]"
+    )
+
+
 def _print_result(title: str, lines: list[str], color: str = "green") -> None:
     """No box: these lines are almost always absolute file paths of
     unpredictable length, and a boxed panel's normal wrapping breaks a
@@ -537,6 +550,7 @@ def _audit(
     _print_result("Audit complete", result_lines)
     console.print()
     console.print(_sponsor_panel())
+    console.print(_free_pr_review_nudge())
     return 0
 
 
@@ -1413,6 +1427,8 @@ def scan(
     exit_code, _evidence, _evidence_path = _scan(
         path, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema
     )
+    if exit_code == 0:
+        console.print(_free_pr_review_nudge())
     raise typer.Exit(code=exit_code)
 
 
