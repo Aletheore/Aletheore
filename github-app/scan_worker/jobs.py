@@ -138,6 +138,7 @@ from scan_worker.github_api import (
     upsert_pr_comment,
 )
 from app_server.email_templates import (
+    health_alert_email,
     payment_failed_email,
     subscription_canceled_email,
     weekly_digest_email,
@@ -1868,10 +1869,40 @@ def _run_flash_review(
     return review_ran
 
 
-def _send_if_webhook_configured(installation: dict, message: dict) -> None:
+def _send_alerts_if_configured(installation: dict, message: dict) -> None:
+    """Fires on every configured channel independently - Slack/Teams via
+    installations.webhook_url, email via installations.alert_email. Either,
+    both, or neither may be set; nothing here requires the other.
+
+    The email send goes through the same async, RQ-queued path as every
+    other transactional email (see email_queue.enqueue_transactional_email)
+    rather than send_transactional_email directly - a slow/down Resend
+    must never delay the next target's check in this sweep, same reasoning
+    as the health sweep's own queue split from "scans" (see
+    send_transactional_email_job's docstring).
+
+    dedupe_key includes wall-clock time down to the second: a genuine
+    retry of the outer job re-sending the same flip is an accepted, rare
+    risk here, same as send_health_alert already accepts for Slack/Teams
+    (it has no dedup at all) - this isn't solving a harder problem than
+    the channel it's sitting next to already tolerates.
+    """
     webhook_url = installation.get("webhook_url")
     if webhook_url:
         send_health_alert(webhook_url, message)
+
+    alert_email = installation.get("alert_email")
+    if alert_email:
+        settings = get_settings()
+        target_id = installation.get("target_id")
+        enqueue_transactional_email(
+            settings.redis_url,
+            dedupe_key=f"health_alert:{target_id}:{time.time()}",
+            template_name="health_alert",
+            template_arg=message["text"],
+            to_email=alert_email,
+            installation_id=installation.get("installation_id"),
+        )
 
 
 def _endpoint_results(evidence: dict, base_url: str, pinned_ip: str) -> list[dict]:
@@ -2413,7 +2444,7 @@ def _run_health_check_sweep_for_target(
                     source_line=source_line,
                     include_fix_suggestion=not recently_down,
                 )
-            _send_if_webhook_configured(
+            _send_alerts_if_configured(
                 target,
                 format_reachability_alert(
                     repo_full_name,
@@ -2427,7 +2458,7 @@ def _run_health_check_sweep_for_target(
             )
 
         if _latency_flipped(prior, reachable, latency_ms, threshold_ms):
-            _send_if_webhook_configured(
+            _send_alerts_if_configured(
                 target,
                 format_latency_alert(
                     repo_full_name,
@@ -2452,7 +2483,7 @@ def _run_health_check_sweep_for_target(
             and prior["response_shape"] != response_shape
         )
         if shape_changed:
-            _send_if_webhook_configured(
+            _send_alerts_if_configured(
                 target,
                 format_shape_change_alert(
                     repo_full_name,
@@ -2551,7 +2582,7 @@ def run_health_check_down_retry_job(target: dict, entry: dict, attempt: int) -> 
                 source_line=source_line,
                 include_fix_suggestion=not recently_down,
             )
-        _send_if_webhook_configured(
+        _send_alerts_if_configured(
             target,
             format_reachability_alert(
                 repo_full_name,
@@ -3041,6 +3072,7 @@ _EMAIL_TEMPLATES = {
     "payment_failed": payment_failed_email,
     "subscription_canceled": subscription_canceled_email,
     "weekly_digest": weekly_digest_email,
+    "health_alert": health_alert_email,
 }
 
 

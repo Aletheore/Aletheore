@@ -115,6 +115,16 @@ async def test_list_health_check_targets_all_includes_webhook_url_and_repo(pool)
 
 
 @pytest.mark.asyncio
+async def test_list_health_check_targets_all_includes_alert_email(pool):
+    await _insert_installation(pool, 306, "f", plan="indie", alert_email="ops@f.example.com")
+    await _insert_health_target(pool, 306, "f/repo1", "https://f.example.com")
+
+    targets = list_health_check_targets_all(TEST_DATABASE_URL)
+    row = next(t for t in targets if t["installation_id"] == 306)
+    assert row["alert_email"] == "ops@f.example.com"
+
+
+@pytest.mark.asyncio
 async def test_list_health_check_targets_all_returns_one_row_per_target(pool):
     await _insert_installation(pool, 305, "e", plan="indie")
     await _insert_health_target(pool, 305, "e/repo1", "https://staging.example.com")

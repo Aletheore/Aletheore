@@ -1967,6 +1967,27 @@ async function sendTestNotification() {{
   status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
 }}
 
+async function saveAlertEmail() {{
+  const input = document.getElementById('alert-email-input');
+  const status = document.getElementById('alert-email-status');
+  const res = await fetch(adminBase + '/alert-email', {{
+    method: 'PUT', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ alert_email: input.value.trim() || null }}),
+  }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  status.textContent = res.ok ? 'Saved.' : (data.detail || 'Could not save.');
+  status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
+}}
+
+async function sendTestAlertEmail() {{
+  const status = document.getElementById('alert-email-status');
+  status.textContent = 'Sending...';
+  status.style.color = 'var(--slate-600)';
+  const res = await fetch(adminBase + '/alert-email/test', {{ method: 'POST' }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  status.textContent = res.ok ? 'Test email sent.' : (data.detail || 'Could not send test email.');
+  status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
+}}
+
 async function buySeat() {{
   const status = document.getElementById('seat-billing-status');
   status.textContent = 'Updating billing...';
@@ -2224,6 +2245,12 @@ async function loadSettings() {{
             '<a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener">Get a Slack webhook &rarr;</a>' +
             '<a href="https://support.microsoft.com/en-us/office/create-incoming-webhooks-with-workflows-for-microsoft-teams-8ae491c7-0394-4861-ba59-055e33f75498" target="_blank" rel="noopener">Get a Teams webhook &rarr;</a>' +
           '</div>' +
+        '</div>' +
+        '<div class="settings-block">' +
+          '<div class="settings-block-label">Alert email</div>' +
+          '<input class="field" id="alert-email-input" placeholder="ops@yourcompany.com" value="' + escapeHtml(installation.alert_email || '') + '">' +
+          '<div class="form-row"><button class="btn" onclick="saveAlertEmail()">Save</button><button class="btn" onclick="sendTestAlertEmail()" style="margin-left:6px;">Send test</button><span id="alert-email-status" class="settings-block-hint"></span></div>' +
+          '<div class="settings-block-hint">Same endpoint-monitoring alerts as the webhook above, delivered by email too - configure either, both, or neither.</div>' +
         '</div>' +
         '<div class="settings-block">' +
           '<div class="settings-block-label">Managed audit content</div>' +
