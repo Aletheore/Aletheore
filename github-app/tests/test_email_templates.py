@@ -59,6 +59,28 @@ def test_health_alert_email_converts_slack_markdown_to_html():
     assert "`octocat/hello-world`" not in message["html"]
 
 
+def test_health_alert_email_escapes_html_in_repo_controlled_alert_text():
+    # Aletheore's own Flash Review caught this on PR #390: alert_text is
+    # built from format_reachability_alert/format_latency_alert/format_
+    # shape_change_alert, which interpolate repo-controlled content (commit
+    # subjects, symbol names, risk summaries) - a malicious repo could
+    # smuggle live HTML into this transactional email's body. Same bug
+    # class as the wiki markdown renderer already guards against (see
+    # test_wiki_markdown_renders_untrusted_html_inert in
+    # test_frontend_js_syntax.py) - escape first, only then promote the
+    # *bold*/`code` markdown.
+    alert_text = "*Aletheore*: endpoint down on `<img src=x onerror=alert(1)>`"
+    message = health_alert_email(alert_text)
+    # Every email already contains a legitimate <img> for the logo, so
+    # check the specific attacker-controlled tag rather than the bare
+    # "<img" substring.
+    assert "<img src=x onerror" not in message["html"]
+    assert "onerror" in message["html"]
+    assert "&lt;img src=x onerror" in message["html"]
+    # Escaping must not break the legitimate markdown-to-HTML conversion.
+    assert "<strong>Aletheore</strong>" in message["html"]
+
+
 def test_subscription_canceled_email_names_account_and_lists_what_is_lost():
     message = subscription_canceled_email("acme-corp")
     assert "acme-corp" in message["text"]

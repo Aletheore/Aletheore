@@ -9,6 +9,7 @@ renders consistently in Outlook desktop's Word engine as well as modern
 webmail/mobile clients - not just the ones a browser preview would show.
 """
 
+import html
 import re
 
 _LOGO_URL = "https://www.aletheore.com/assets/logo-mark.png"
@@ -191,10 +192,20 @@ def deletion_otp_email(account_login: str, code: str) -> dict:
 
 
 def _slack_markdown_to_html(text: str) -> str:
-    # Only the two markdown patterns scan_worker/slack.py's format_* alert
-    # builders actually produce (*bold* and `code`) - not a general markdown
-    # parser, since there's nothing else to convert.
-    converted = re.sub(r"`([^`]+)`", rf'<code style="background:{_BODY_BG};padding:2px 6px;border-radius:4px;">\1</code>', text)
+    # text is built from scan_worker/slack.py's format_* alert functions,
+    # which interpolate repository-controlled content (commit subjects,
+    # symbol names, risk summaries) - escape first, then promote markdown
+    # on the escaped text, same ordering the wiki markdown renderer already
+    # uses for the same reason (see test_wiki_markdown_escapes_before_
+    # promoting_tags in test_frontend_js_syntax.py). Escaping first also
+    # means the *bold*/`code` markers below still match literally, since
+    # html.escape doesn't touch '*' or '`'.
+    #
+    # Only the two markdown patterns those builders actually produce
+    # (*bold* and `code`) - not a general markdown parser, since there's
+    # nothing else to convert.
+    escaped = html.escape(text)
+    converted = re.sub(r"`([^`]+)`", rf'<code style="background:{_BODY_BG};padding:2px 6px;border-radius:4px;">\1</code>', escaped)
     converted = re.sub(r"\*([^*]+)\*", r"<strong>\1</strong>", converted)
     return converted.replace("\n", "<br>")
 
@@ -306,8 +317,11 @@ def health_alert_email(alert_text: str) -> dict:
     # converted to HTML for the html body, rather than writing parallel
     # copy for a second channel.
     subject = "Aletheore endpoint alert"
-    preheader = re.sub(r"[`*]", "", alert_text.split("\n", 1)[0])[:140]
+    # Truncate/strip the raw text first, escape last - escaping expands
+    # characters into multi-character entities, so escaping before
+    # truncating risks slicing an entity in half.
+    preheader = html.escape(re.sub(r"[`*]", "", alert_text.split("\n", 1)[0])[:140])
     text = f"{alert_text}{_FOOTER_TEXT}"
     body_html = f'<p style="margin:0;">{_slack_markdown_to_html(alert_text)}</p>'
-    html = _shell(preheader, body_html)
-    return {"subject": subject, "html": html, "text": text}
+    rendered_html = _shell(preheader, body_html)
+    return {"subject": subject, "html": rendered_html, "text": text}
