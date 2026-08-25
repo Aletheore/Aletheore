@@ -3,6 +3,20 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.2 — 2026-08-25
+
+- **`scan` and `audit` now point free-tier users at the GitHub App** after a
+  successful run - a single line noting that Aletheore also does free,
+  evidence-grounded PR reviews, with the install link. Only shown on
+  success, and lives in the top-level command bodies rather than the
+  shared scan helper, so it can't repeat on every cycle of `watch`'s
+  internal re-scanning.
+- **Corrected "during early access" framing on the pricing page.** Free AI
+  PR reviews are routed across multiple providers' free tiers rather than
+  depending on any single company's quota, so the real constraint is
+  rate limits under load, not a fixed expiration date - the copy
+  previously implied a countdown that isn't actually there.
+
 ## 0.9.1 — 2026-08-24
 
 - **Three endpoint-mapping scoping bugs, all affecting the accuracy of "what's
