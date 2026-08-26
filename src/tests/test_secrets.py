@@ -95,6 +95,74 @@ def test_find_secrets_flags_a_documented_example_value_under_a_test_path(tmp_pat
     assert result["findings"][0]["likely_placeholder"] is True
 
 
+def test_find_secrets_flags_a_documented_example_value_outside_a_test_path(tmp_path):
+    # Same AKIAIOSFODNN7EXAMPLE value as above, but in a README at the repo
+    # root - the single most common place a student README pastes AWS's own
+    # setup-docs example key, and nowhere near a path containing
+    # "test"/"example"/"fixture"/"mock". The module docstring for
+    # PLACEHOLDER_VALUE_MARKERS claims this is caught "independent of where
+    # the file lives" - this is the case that claim was never actually true
+    # for, since _is_likely_placeholder gates every value-shape check behind
+    # a path check first.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("Example AWS creds from the docs:\nAKIAIOSFODNN7EXAMPLE\n")
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["likely_placeholder"] is True
+
+
+def test_find_secrets_flags_a_hand_typed_repeated_pattern_as_placeholder(tmp_path):
+    # A student hand-typing a fake example key (or padding one out) tends to
+    # repeat a short unit rather than produce true randomness - this value
+    # contains no PLACEHOLDER_VALUE_MARKERS word and has high raw Shannon
+    # entropy (the character alphabet is diverse), so neither existing check
+    # catches it, even though "abcdefghij1234567890" repeated twice is about
+    # as far from a real credential generator's output as a value can get.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text(
+        "OPENAI_API_KEY=sk-proj-abcdefghij1234567890abcdefghij1234567890abcd\n"
+    )
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["likely_placeholder"] is True
+
+
+def test_find_secrets_does_not_flag_a_genuinely_random_secret_as_repeated(tmp_path):
+    # Guards the new repetition check against the false-negative risk it
+    # introduces: a real secret must never accidentally look "repeated"
+    # just because it happens to contain some structure. This one repeats
+    # no substring and isn't in any PLACEHOLDER_PATH_MARKERS-flagged path.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "config.py").write_text(
+        'API_KEY = "RL9hCO7ulHXlasHeRNJ24lFwlUgDIj86dJMMYTSu"\n'
+    )
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["likely_placeholder"] is False
+
+
+def test_find_secrets_recognizes_stripes_own_published_test_key(tmp_path):
+    # sk_test_4eC39HqLyjWDarjtT1zdp7dc is Stripe's own documentation
+    # example key (developer docs, countless tutorials) - genuinely
+    # high-entropy and non-repeating, so neither the marker-word nor the
+    # repetition check catches it. It's specific enough (an exact,
+    # official, publicly known value) to recognize directly rather than
+    # try to generalize a pattern for it.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "notes.md").write_text("stripe test key: sk_test_4eC39HqLyjWDarjtT1zdp7dc\n")
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["likely_placeholder"] is True
+
+
 def test_find_secrets_detects_github_token_and_private_key_header(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
