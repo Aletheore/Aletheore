@@ -12,6 +12,24 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-26-2
+
+- **Deployed the secret-scanner false-positive fixes** (#402) to every
+  image bundling `src/aletheore`: `app-server`, `scan-worker`,
+  `scan-worker-2`, and `demo-sandbox` (the build-only image ephemeral demo
+  scans run from - easy to miss since it has no long-running container of
+  its own to recreate; rebuilt explicitly and verified against a one-off
+  `docker run`). `scan-worker-2` needed its own explicit rebuild too -
+  despite sharing `Dockerfile.scan-worker` with `scan-worker`, compose
+  tags it as a separately-named image, so rebuilding `scan-worker` alone
+  left it on the old image until force-recreated against its own fresh
+  build. `demo-scan-worker` and `demo-sandbox-runner` don't bundle
+  `aletheore` at all (the former only coordinates queued jobs, the latter
+  only shells out to `docker run --runtime=runsc` against the
+  `demo-sandbox` image) and needed no change. Verified live on all four:
+  `KNOWN_VENDOR_EXAMPLE_VALUES` present in each container's
+  `secrets.py`/installed package.
+
 ## 2026-08-26
 
 - **Dependency bumps deployed to `app-server` and `jina-embed`**: uvicorn
