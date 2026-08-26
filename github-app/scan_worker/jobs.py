@@ -1799,6 +1799,19 @@ def _run_flash_review(
             verify_with_second_model=not is_free_tier,
             on_verification_usage=_on_verification_usage,
         )
+    # Every free-tier provider failed mid-review (see
+    # _on_free_tier_exhausted above) - this review never actually ran, the
+    # same as the no-free-tier-keys-configured branch earlier in this
+    # function. Bail out the same way that branch does, before posting
+    # anything or touching last_reviewed_sha: posting the "no issues found"
+    # body below would falsely tell the user this diff was checked and
+    # found clean, and advancing last_reviewed_sha would silently and
+    # permanently skip re-reviewing the diff that just failed. The
+    # caller (run_flash_review_job) releases this review's reservation
+    # when it sees False returned here.
+    if free_tier_exhausted["value"]:
+        return False
+
     # The review-count reservation already happened atomically up front (see
     # run_flash_review_job); nothing left to do for it here on the success
     # path. The dollar reservation was a conservative flat estimate, not the
@@ -1806,14 +1819,10 @@ def _run_flash_review(
     # record_llm_spend's own UPSERT is already atomic per call, and it was
     # only ever paired with the (now-removed) count increment for the
     # illusion of atomicity, not because either write needed one on its own.
-    # Skipped entirely when free-tier was fully exhausted before producing a
-    # result - that reservation gets released, not trued up, by the caller.
-    review_ran = not free_tier_exhausted["value"]
-    if review_ran:
-        record_llm_spend(
-            settings.database_url, installation_id, spend_accumulator["total"] - reserved_spend,
-            monthly_cap=monthly_cap, feature="flash_review",
-        )
+    record_llm_spend(
+        settings.database_url, installation_id, spend_accumulator["total"] - reserved_spend,
+        monthly_cap=monthly_cap, feature="flash_review",
+    )
 
     proposed = grounding_result.get("proposed", 0)
     kept = grounding_result.get("kept", 0)
@@ -1880,7 +1889,7 @@ def _run_flash_review(
     set_last_reviewed_sha(
         settings.database_url, installation_id, repo_full_name, pr_number, head_sha
     )
-    return review_ran
+    return True
 
 
 def _send_alerts_if_configured(installation: dict, message: dict) -> None:

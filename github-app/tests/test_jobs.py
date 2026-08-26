@@ -1818,6 +1818,81 @@ def test_flash_review_job_alerts_ops_when_all_free_tier_providers_fail(monkeypat
     assert ops_alert_calls[0][1] == "flash_review.free_tier_exhausted"
 
 
+def test_flash_review_does_not_post_or_advance_sha_when_free_tier_exhausted(monkeypatch):
+    # Same all-providers-failed scenario as
+    # test_flash_review_job_alerts_ops_when_all_free_tier_providers_fail,
+    # but checking the other half of the contract: a review that never
+    # actually ran must not tell the user their PR is clean, and must not
+    # advance last_reviewed_sha - doing either would silently and
+    # permanently skip reviewing the diff that failed. The
+    # no-free-tier-keys-configured branch a few lines up in
+    # _run_flash_review already bails before touching either; this
+    # confirms the mid-review-exhaustion branch does the same.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"}
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0
+    )
+    from unittest.mock import MagicMock
+    failing_adapter = MagicMock()
+    failing_adapter.name = "Groq"
+    failing_adapter.simple_completion.side_effect = RuntimeError("rate limited")
+    monkeypatch.setattr(
+        "scan_worker.model_tiers.writing_adapter_chain_for_free_tier",
+        lambda *a, **k: [failing_adapter],
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_redis_client", lambda: _FakeRedis())
+    monkeypatch.setattr("scan_worker.jobs.resolve_model", lambda *a: "gpt-5.6-luna")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- a.py ---\n+real change\n")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["a.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_context", lambda *a, **k: "")
+    monkeypatch.setattr("scan_worker.jobs.is_non_substantive_diff", lambda *a: False)
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs.build_code_evidence_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_dependency_impact_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_change_impact_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.build_blast_radius_context", lambda *a, **k: "")
+    monkeypatch.setattr("scan_worker.jobs.build_referenced_symbol_context", lambda *a: "")
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a: 999.0)
+    monkeypatch.setattr("scan_worker.jobs.lookup_cached_flash_review_result", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs.store_flash_review_result", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._send_ops_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+
+    comment_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.upsert_pr_comment",
+        lambda *a, **k: comment_calls.append(a),
+    )
+    sha_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_last_reviewed_sha",
+        lambda *a, **k: sha_calls.append(a),
+    )
+
+    from scan_worker.jobs import run_flash_review_job
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert comment_calls == []
+    assert sha_calls == []
+
+
 def test_flash_review_job_skips_when_debounced(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(
