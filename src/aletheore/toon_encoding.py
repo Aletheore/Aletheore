@@ -48,6 +48,24 @@ def _sanitize_for_toon(data: object) -> object:
 
 def to_toon(data: object) -> str:
     try:
-        return toon.encode(_sanitize_for_toon(data))
+        sanitized = _sanitize_for_toon(data)
+        encoded = toon.encode(sanitized)
+        # toon.encode() can succeed while producing output toon.decode()
+        # then rejects - confirmed live and reproducibly:
+        # {"nested": [[1, [2, 3]], [4, 5]]} encodes cleanly, but
+        # toon.decode() on that exact output raises
+        # ToonDecodeError("Expected 2 items, but got 0"). A heterogeneous
+        # nested-list shape like this would otherwise slip past every
+        # try/except in this codebase - they all catch ToonEncodingError,
+        # but encode() itself never raises here, so the corruption would
+        # sit silently in a written air.toon/MCP result until something
+        # else calls decode() on it, possibly much later and with no way
+        # to trace the failure back to this specific write. Verifying the
+        # round trip here, once, means every existing call site's handling
+        # also catches this class - not just the shapes where the
+        # underlying library happens to raise on encode.
+        if toon.decode(encoded) != sanitized:
+            raise ValueError("encoded output does not round-trip back to the original data")
+        return encoded
     except Exception as exc:
         raise ToonEncodingError(str(exc)) from exc

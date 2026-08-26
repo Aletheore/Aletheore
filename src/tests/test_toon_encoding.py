@@ -102,3 +102,19 @@ def test_to_toon_raises_toon_encoding_error_on_failure(monkeypatch):
 
     with pytest.raises(ToonEncodingError):
         to_toon({"x": 1})
+
+
+def test_to_toon_catches_encode_success_decode_failure_asymmetry():
+    # Real, reproducible bug in the underlying library (not hypothetical):
+    # toon.encode({"nested": [[1, [2, 3]], [4, 5]]}) succeeds and returns
+    # output that toon.decode() then rejects with
+    # ToonDecodeError("Expected 2 items, but got 0") - a heterogeneous
+    # nested-list shape where encode() itself never raises. Without a
+    # self-verifying round trip inside to_toon(), this class of corruption
+    # would slip past every try/except in the codebase (they all catch
+    # ToonEncodingError, which encode() alone never produces here) and sit
+    # silently in a written air.toon/MCP result until something else
+    # eventually calls decode() on it.
+    data = {"nested": [[1, [2, 3]], [4, 5]]}
+    with pytest.raises(ToonEncodingError):
+        to_toon(data)
