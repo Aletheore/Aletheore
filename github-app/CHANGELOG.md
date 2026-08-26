@@ -12,6 +12,13 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-26
+
+- **Dependency bumps deployed to `app-server` and `jina-embed`**: uvicorn
+  0.52.3 → 0.52.4, llama-cpp-python 0.3.34 → 0.3.35 (both dependabot-driven,
+  no code changes). Verified live: `pip show` on both containers matches the
+  new pinned versions, both healthchecks pass post-recreate.
+
 ## 2026-08-25-2
 
 - **Redesigned the settings page's three alert-channel blocks** (Slack/Teams, email, Pushover)
