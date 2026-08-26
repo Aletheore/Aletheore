@@ -1,5 +1,5 @@
 fastapi==0.141.1
-uvicorn==0.52.3
+uvicorn==0.52.4
 llama-cpp-python==0.3.35
 # Not a direct runtime need of anything above - pinned explicitly because
 # llama-cpp-python's own build-time chain otherwise pulls in a setuptools
