@@ -12,6 +12,7 @@ from openai import OpenAI
 
 from aletheore.adapters.base import AdapterInvocationError, AgentAdapter
 from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api_key
+from aletheore.toon_encoding import ToonEncodingError, to_toon
 
 MAX_TOOL_ROUNDS = 20
 REQUEST_TIMEOUT_SECONDS = 120
@@ -85,7 +86,9 @@ READ_EVIDENCE_TOOL = {
         "name": "read_evidence_section",
         "description": (
             "Read a specific section of the repository evidence by dot-path. "
-            "Array items use zero-based brackets, such as repository.modules[0].path."
+            "Array items use zero-based brackets, such as repository.modules[0].path. "
+            "Returns the entire matched section with no size limit - prefer a "
+            "specific, narrow path over a broad one like a large top-level array."
         ),
         "parameters": {
             "type": "object",
@@ -367,6 +370,10 @@ class OpenAICompatibleAdapter(AgentAdapter):
             evidence = toon.decode(evidence_path.read_text())
         except OSError as exc:
             raise AdapterInvocationError(f"could not read evidence at {evidence_path}") from exc
+        except toon.ToonDecodeError as exc:
+            raise AdapterInvocationError(
+                f"could not decode evidence at {evidence_path}: {exc}"
+            ) from exc
 
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             evidence_schema_map=EVIDENCE_SCHEMA_MAP,
@@ -501,4 +508,8 @@ class OpenAICompatibleAdapter(AgentAdapter):
         value = _get_by_dot_path(evidence, path)
         if value is None:
             return f"no such path: {path}"
-        return f'<evidence path="{path}">\n{toon.encode(value)}\n</evidence>'
+        try:
+            encoded = to_toon(value)
+        except ToonEncodingError as exc:
+            return f"could not encode section {path}: {exc}"
+        return f'<evidence path="{path}">\n{encoded}\n</evidence>'

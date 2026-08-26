@@ -40,7 +40,7 @@ from aletheore.query import (
 from aletheore.repo_config import load_repo_config
 from aletheore.secrets import iter_all_files
 from aletheore.search_index import IndexDimensionMismatchError, IndexNotFoundError, search_index
-from aletheore.toon_encoding import to_toon
+from aletheore.toon_encoding import ToonEncodingError, to_toon
 
 
 # repo_path -> ((mtime, size) of the evidence file at load time, parsed
@@ -88,8 +88,13 @@ def _toon_result(data: object) -> str:
     # (which MCPServer would otherwise auto-serialize to JSON) - this is the
     # actual token-cost surface for whatever agent is calling these tools,
     # and evidence's own shape (uniform arrays of same-shaped objects almost
-    # everywhere) is exactly TOON's best case.
-    return to_toon({"result": data})
+    # everywhere) is exactly TOON's best case. Falls back to plain JSON on a
+    # TOON encoding failure rather than raising - a tool call returning a
+    # slightly less compact result beats it crashing outright.
+    try:
+        return to_toon({"result": data})
+    except ToonEncodingError:
+        return json.dumps({"result": data})
 
 
 _TOOL_NAME_TO_QUERY_KIND = {

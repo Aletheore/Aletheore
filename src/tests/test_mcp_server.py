@@ -319,6 +319,20 @@ async def test_answer_tool_present_with_adapter(tmp_path):
     assert "aletheore_answer" in names
 
 
+def test_toon_result_falls_back_to_json_on_encoding_failure(monkeypatch):
+    from aletheore.mcp_server import _toon_result
+    from aletheore.toon_encoding import ToonEncodingError
+
+    def _boom(_data):
+        raise ToonEncodingError("simulated failure")
+
+    monkeypatch.setattr("aletheore.mcp_server.to_toon", _boom)
+
+    result = _toon_result({"symbols": ["a", "b"]})
+
+    assert json.loads(result) == {"result": {"symbols": ["a", "b"]}}
+
+
 @pytest.mark.asyncio
 async def test_aletheore_search_codebase_returns_toon_results(tmp_path):
     repo = make_repo_with_evidence(tmp_path)

@@ -2,7 +2,7 @@ import time
 
 import httpx
 
-from aletheore.toon_encoding import to_toon
+from aletheore.toon_encoding import ToonEncodingError, to_toon
 
 
 class ManagedAuditError(Exception):
@@ -28,9 +28,14 @@ def run_managed_audit_request(
     client = http_client or httpx.Client(base_url=api_base_url)
     headers = {"Authorization": f"Bearer {token}"}
 
+    try:
+        encoded_evidence = to_toon(evidence)
+    except ToonEncodingError as exc:
+        raise ManagedAuditError(f"could not encode evidence for managed audit: {exc}") from exc
+
     response = client.post(
         "/v1/managed-audit",
-        json={"evidence": to_toon(evidence), "repo_full_name": repo_full_name},
+        json={"evidence": encoded_evidence, "repo_full_name": repo_full_name},
         headers=headers,
     )
     if response.status_code in (401, 402, 429):

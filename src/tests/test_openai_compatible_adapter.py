@@ -476,6 +476,51 @@ def test_read_evidence_section_tool_returns_wrapped_data(mock_openai_class, tmp_
     assert "</evidence>" in tool_message["content"]
 
 
+def test_invoke_raises_clean_error_on_undecodable_evidence(tmp_path):
+    # Confirmed bug: ToonDecodeError does not inherit from OSError, so the
+    # old `except OSError` around toon.decode() let a malformed/empty
+    # air.toon crash with a raw traceback instead of the intended clean
+    # AdapterInvocationError.
+    repo = tmp_path / "repo"
+    (repo / ".aletheore").mkdir(parents=True)
+    (repo / ".aletheore" / "air.toon").write_text("x[3]: not enough items")
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with pytest.raises(AdapterInvocationError, match="could not decode evidence"):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_read_evidence_section_reports_encoding_failure_instead_of_crashing(
+    mock_openai_class, tmp_path
+):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": [{"path": "app.py"}]}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    responses = [
+        _mock_response(
+            tool_calls=[_mock_tool_call("read_evidence_section", {"path": "repository.modules"})]
+        )
+    ]
+    responses += _write_all_sections_then_finish_responses()
+    mock_client.chat.completions.create.side_effect = responses
+
+    from aletheore.toon_encoding import ToonEncodingError
+
+    def _boom(_data):
+        raise ToonEncodingError("simulated failure")
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        with patch("aletheore.adapters.openai_compatible.to_toon", _boom):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    second_call = mock_client.chat.completions.create.call_args_list[1]
+    tool_message = next(m for m in second_call.kwargs["messages"] if m.get("role") == "tool")
+    assert "could not encode section repository.modules" in tool_message["content"]
+
+
 @patch("aletheore.adapters.openai_compatible.OpenAI")
 def test_read_evidence_section_missing_path_reports_clearly(mock_openai_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})

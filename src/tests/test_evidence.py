@@ -613,6 +613,28 @@ def test_write_evidence_also_writes_a_toon_copy(tmp_path):
     assert toon.decode(toon_path.read_text()) == evidence
 
 
+def test_write_evidence_survives_a_toon_encoding_failure(tmp_path, monkeypatch):
+    import pytest
+
+    from aletheore.toon_encoding import ToonEncodingError
+
+    def _boom(_data):
+        raise ToonEncodingError("simulated failure")
+
+    monkeypatch.setattr("aletheore.evidence.to_toon", _boom)
+
+    repo = make_repo(tmp_path)
+    evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+
+    with pytest.warns(UserWarning, match="could not write .aletheore/air.toon"):
+        written_path = write_evidence(evidence, repo)
+
+    # air.json (the file that actually matters) is written regardless -
+    # a TOON encoding failure must never take scan down with it.
+    assert written_path.exists()
+    assert not (repo / ".aletheore" / "air.toon").exists()
+
+
 def test_write_evidence_adds_aletheore_dir_to_a_missing_gitignore(tmp_path):
     repo = make_repo(tmp_path)
     evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)

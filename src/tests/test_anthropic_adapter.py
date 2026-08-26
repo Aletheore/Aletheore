@@ -120,6 +120,60 @@ def test_read_evidence_section_tool_returns_wrapped_data(mock_anthropic_class, t
     assert "app.py" in tool_result_content["content"]
 
 
+def test_invoke_raises_clean_error_on_undecodable_evidence(tmp_path):
+    # Confirmed bug: ToonDecodeError does not inherit from OSError, so the
+    # old `except OSError` around toon.decode() let a malformed/empty
+    # air.toon crash with a raw traceback instead of the intended clean
+    # AdapterInvocationError.
+    repo = tmp_path / "repo"
+    (repo / ".aletheore").mkdir(parents=True)
+    (repo / ".aletheore" / "air.toon").write_text("x[3]: not enough items")
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value="sk-ant-test"):
+        with pytest.raises(AdapterInvocationError, match="could not decode evidence"):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+
+@patch("aletheore.adapters.anthropic_native.Anthropic")
+def test_read_evidence_section_reports_encoding_failure_instead_of_crashing(
+    mock_anthropic_class, tmp_path
+):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": [{"path": "app.py"}]}})
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    read_response = MagicMock()
+    read_response.content = [
+        _tool_use_block("read_evidence_section", {"path": "repository.modules"})
+    ]
+    responses = [read_response] + _write_all_sections_then_finish_responses()
+    mock_client.messages.create.side_effect = responses
+
+    from aletheore.toon_encoding import ToonEncodingError
+
+    def _boom(_data):
+        raise ToonEncodingError("simulated failure")
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value="sk-ant-test"):
+        with patch("aletheore.adapters.anthropic_native.to_toon", _boom):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    second_call = mock_client.messages.create.call_args_list[1]
+    messages = second_call.kwargs["messages"]
+    tool_results = [
+        content
+        for message in messages
+        if message["role"] == "user" and isinstance(message["content"], list)
+        for content in message["content"]
+        if content["type"] == "tool_result"
+    ]
+    tool_result_content = next(
+        result for result in tool_results if "could not encode section" in result["content"]
+    )
+    assert "could not encode section repository.modules" in tool_result_content["content"]
+
+
 @patch("aletheore.adapters.anthropic_native.Anthropic")
 def test_invoke_raises_if_never_finishes_within_max_rounds(mock_anthropic_class, tmp_path):
     repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
