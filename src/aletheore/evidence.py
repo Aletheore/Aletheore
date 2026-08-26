@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import warnings
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +34,7 @@ from aletheore.secrets import (
     find_secrets_in_history,
     load_secrets_baseline,
 )
-from aletheore.toon_encoding import to_toon
+from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.vulnerabilities import check_vulnerabilities as check_dependency_vulnerabilities
 
 EVIDENCE_VERSION = "0.4.0"
@@ -622,7 +623,18 @@ def write_evidence(evidence: dict, repo_path: Path) -> Path:
     # shape (uniform arrays of same-shaped objects almost everywhere) is
     # exactly TOON's best case. air.json stays the canonical machine-
     # readable copy (the dashboard's JS and any external tooling need real
-    # JSON), so this is additive, not a replacement.
-    (aletheore_dir / "air.toon").write_text(to_toon(evidence))
+    # JSON), so this is additive, not a replacement - a TOON encoding
+    # failure must never take scan down with it, since air.json (the file
+    # that actually matters) is already written by this point.
+    try:
+        (aletheore_dir / "air.toon").write_text(to_toon(evidence))
+    except ToonEncodingError as exc:
+        warnings.warn(
+            f"could not write .aletheore/air.toon ({exc}) - air.json (the canonical "
+            "evidence file) was written successfully; only 'aletheore audit' needs "
+            "the TOON copy, and it will fail with a clear error if it's missing "
+            "when audit next runs",
+            stacklevel=2,
+        )
 
     return output_path

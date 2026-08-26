@@ -42,6 +42,22 @@ def test_pending_then_finished_polls_until_done():
     assert report == "done"
 
 
+def test_encoding_failure_raises_managed_audit_error_not_a_raw_exception(monkeypatch):
+    def _boom(_data):
+        from aletheore.toon_encoding import ToonEncodingError
+
+        raise ToonEncodingError("simulated failure")
+
+    monkeypatch.setattr("aletheore.managed_audit_client.to_toon", _boom)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("should never reach the network on an encoding failure")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://aletheore.com")
+    with pytest.raises(ManagedAuditError, match="could not encode evidence"):
+        run_managed_audit_request({"scanned_at": "x"}, "real-token", http_client=client)
+
+
 def test_unauthorized_raises_managed_audit_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"detail": "invalid or revoked token"})

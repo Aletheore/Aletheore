@@ -21,6 +21,7 @@ from aletheore.cli import (
     _MCP_CLIENT_CONFIGS,
     _make_progress_printer,
     _opencode_entry,
+    _print_query_result,
     _stdio_entry,
     _write_json_mcp_client_config,
     _write_toml_mcp_client_config,
@@ -40,6 +41,24 @@ from aletheore.report import (
 )
 
 runner = CliRunner()
+
+
+def test_print_query_result_falls_back_to_json_on_encoding_failure(capsys, monkeypatch):
+    from aletheore.toon_encoding import ToonEncodingError
+
+    def _boom(_data):
+        raise ToonEncodingError("simulated failure")
+
+    monkeypatch.setattr("aletheore.cli.to_toon", _boom)
+
+    _print_query_result({"symbols": ["a", "b"]})
+
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "falling back to JSON" in combined
+    assert '"symbols"' in combined
+    assert '"a"' in combined
+    assert '"b"' in combined
 
 
 def test_importing_cli_does_not_eagerly_load_heavy_dependencies():

@@ -61,7 +61,7 @@ from aletheore.report import (
     run_reasoning_phase,
     select_adapter,
 )
-from aletheore.toon_encoding import to_toon
+from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.watch import DEBOUNCE_SECONDS as WATCH_DEBOUNCE_SECONDS
 
 KNOWN_ADAPTERS = [
@@ -262,6 +262,16 @@ def _print_result(title: str, lines: list[str], color: str = "green") -> None:
     console.print(f"[bold {color}]✓ {title}[/bold {color}]")
     for line in lines:
         console.print(f"  {line}", soft_wrap=True)
+
+
+def _print_query_result(result: object) -> None:
+    # Falls back to plain JSON on a TOON encoding failure rather than
+    # crashing `query` outright - a less compact result beats no result.
+    try:
+        print(to_toon({"result": result}))
+    except ToonEncodingError as exc:
+        console.print(f"[yellow]warning: TOON encoding failed ({exc}); falling back to JSON[/yellow]")
+        print(json.dumps({"result": result}, indent=2, default=str))
 
 
 _COMMAND_SUMMARIES = [
@@ -801,7 +811,7 @@ def _query(
         except IndexDimensionMismatchError as exc:
             console.print(f"[bold red]error:[/bold red] {exc}")
             return 1
-        print(to_toon({"result": result}))
+        _print_query_result(result)
         return 0
 
     if kind == "answer":
@@ -834,7 +844,7 @@ def _query(
         except IndexDimensionMismatchError as exc:
             console.print(f"[bold red]error:[/bold red] {exc}")
             return 1
-        print(to_toon({"result": result}))
+        _print_query_result(result)
         return 0
 
     repo = Path(repo_path).resolve()
@@ -853,7 +863,7 @@ def _query(
         except (ModuleNotFoundInEvidenceError, SymbolNotFoundInEvidenceError) as exc:
             print(f"error: {exc}")
             return 1
-        print(to_toon({"result": result}))
+        _print_query_result(result)
         return 0
 
     func, requires_target = QUERY_FUNCTIONS[kind]
