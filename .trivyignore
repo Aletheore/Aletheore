@@ -17,3 +17,15 @@
 # for a caller to supply a different model to load.
 CVE-2026-4372
 CVE-2026-5241
+
+# stripe-secret-token: src/aletheore/secrets.py's KNOWN_VENDOR_EXAMPLE_VALUES
+# set intentionally contains Stripe's own published API-docs test key
+# (sk_test_4eC39HqLyjWDarjtT1zdp7dc) verbatim, so the secrets scanner can
+# recognize that exact value as a documented placeholder rather than flag it
+# as a real leaked credential (see that file's comment for the false-positive
+# this fixes). Trivy's own secret scanner then flags this literal string
+# inside the built image for the same reason it looks like a real key -
+# expected, not a leak: it's a real vendor-published test-mode key with no
+# live funds behind it, already publicly known in Stripe's own docs and in
+# GitHub's push-protection allowlist for this exact value in this repo.
+stripe-secret-token
