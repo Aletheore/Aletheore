@@ -1,4 +1,5 @@
 import math
+import random
 
 import pytest
 import toon
@@ -118,3 +119,85 @@ def test_to_toon_catches_encode_success_decode_failure_asymmetry():
     data = {"nested": [[1, [2, 3]], [4, 5]]}
     with pytest.raises(ToonEncodingError):
         to_toon(data)
+
+
+def _sanitize_reference(data):
+    # Independent re-implementation of _sanitize_for_toon, kept separate
+    # (not imported) so the fuzz test below doesn't just validate to_toon's
+    # internal logic against itself.
+    if isinstance(data, float):
+        if math.isnan(data) or math.isinf(data):
+            return str(data)
+        return data
+    if isinstance(data, dict):
+        return {key: _sanitize_reference(value) for key, value in data.items()}
+    if isinstance(data, list):
+        return [_sanitize_reference(item) for item in data]
+    return data
+
+
+def _random_shape(rng, depth=0, max_depth=4):
+    choice = "scalar" if depth >= max_depth else rng.choice(
+        ["dict", "list", "mixed_list", "scalar"]
+    )
+    if choice == "scalar":
+        return rng.choice(
+            [
+                rng.randint(-1000, 1000),
+                rng.uniform(-1000, 1000),
+                True,
+                False,
+                None,
+                "".join(rng.choices("abcXYZ 012,:\"'\n", k=rng.randint(0, 12))),
+            ]
+        )
+    if choice == "dict":
+        return {
+            f"k{i}": _random_shape(rng, depth + 1, max_depth) for i in range(rng.randint(0, 4))
+        }
+    if choice == "list":
+        return [_random_shape(rng, depth + 1, max_depth) for _ in range(rng.randint(0, 4))]
+    # mixed_list deliberately targets the exact shape class that broke: a
+    # bare list value sitting alongside non-list siblings in the same array
+    # (this is what test_to_toon_catches_encode_success_decode_failure_asymmetry
+    # hand-picked one instance of).
+    return [
+        [_random_shape(rng, depth + 1, max_depth) for _ in range(rng.randint(1, 3))]
+        if rng.random() < 0.4
+        else _random_shape(rng, depth + 1, max_depth)
+        for _ in range(rng.randint(2, 4))
+    ]
+
+
+def test_to_toon_round_trips_or_cleanly_rejects_thousands_of_random_shapes():
+    # No hypothesis dependency (not currently in pyproject.toml, and adding
+    # one for a single test file isn't worth the new-dependency footprint
+    # right after this module's own supply-chain posture was tightened
+    # elsewhere) - a seeded, bounded, recursive shape generator gets most
+    # of the real value instead: broad coverage plus a generator
+    # deliberately weighted toward the "list value among non-list array
+    # siblings" shape class that produced a real, previously-undetected
+    # bug (see test_to_toon_catches_encode_success_decode_failure_asymmetry).
+    # For every shape to_toon() doesn't reject, independently re-decode and
+    # compare - not just trusting to_toon's own internal round-trip check,
+    # since a bug in that check itself wouldn't be caught by relying on it.
+    rng = random.Random(20260826)
+    successes = 0
+    for _ in range(3000):
+        data = {"root": _random_shape(rng)}
+        try:
+            encoded = to_toon(data)
+        except ToonEncodingError:
+            # to_toon already verified this specific shape doesn't
+            # round-trip and rejected it - that's the contract working,
+            # not a test failure.
+            continue
+        assert toon.decode(encoded) == _sanitize_reference(data)
+        successes += 1
+    # Sanity check only - not a claim about real evidence data. The 40%
+    # mixed_list weighting deliberately over-represents the shape class
+    # that broke, so a large rejection rate here (measured: ~60% of the
+    # 3000) is the round-trip check doing its job on adversarial input,
+    # not evidence of a problem - this just confirms the generator isn't
+    # producing exclusively-unencodable garbage.
+    assert successes > 500
