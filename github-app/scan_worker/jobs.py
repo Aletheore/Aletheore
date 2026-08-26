@@ -879,18 +879,20 @@ def run_pr_scan_job(
         # scan-worker replica racing this same repo needs to wait for the
         # whole thing, not just the initial checkout.
         #
-        # Deliberately does NOT call _sync_persistent_git_graph: head_dir is
-        # checked out at this PR's head_sha, which may sit on a feature
-        # branch that never merges. _sync_persistent_git_graph always writes
-        # under the fixed GRAPH_BRANCH="default" key that run_push_scan_job/
+        # Deliberately does NOT call _sync_persistent_git_graph or
+        # _sync_code_graph: head_dir is checked out at this PR's head_sha,
+        # which may sit on a feature branch that never merges. Both
+        # functions write unconditionally under the fixed
+        # GRAPH_BRANCH="default" key that run_push_scan_job/
         # run_initial_scan_job use for the repo's real default branch -
         # syncing a PR head into that same bucket would permanently fold
-        # unmerged, possibly-rejected commits into the persisted "default"
-        # branch ownership/churn/cadence graph the dashboard and future
-        # incremental syncs read from. This evidence keeps whichever git
-        # data `aletheore scan` computed locally for this PR's own checkout
-        # instead (see _sync_persistent_git_graph's docstring) - correct for
-        # describing this one scan, just not persisted or incremental.
+        # unmerged, possibly-rejected commits/module-endpoint deltas into
+        # the persisted "default" branch graphs the dashboard, several MCP
+        # tools, and future incremental syncs read from. This evidence
+        # keeps whichever git/code data `aletheore scan` computed locally
+        # for this PR's own checkout instead (see _sync_persistent_git_graph
+        # and _sync_code_graph's docstrings) - correct for describing this
+        # one scan, just not persisted or incremental.
         with repo_checkout_lock(settings.database_url, installation_id, repo_full_name):
             head_dir = _prepare_head_checkout(
                 clone_url, head_sha, installation_id, repo_full_name, job_dir / "head"
@@ -927,7 +929,6 @@ def run_pr_scan_job(
 
             client = get_github_api_client()
             upsert_pr_comment(client, token, repo_full_name, pr_number, format_diff_comment(diff))
-        _sync_code_graph(installation_id, repo_full_name, head_sha, new)
         history_id = _insert_history(installation_id, repo_full_name, new)
 
         # These are side effects, not the primary deliverable above - a failure in
