@@ -15,6 +15,7 @@ from app_server.admin import (
     _administered_installation_ids_for_session_or_401,
     _build_updated_seat_items,
     _has_real_admin_permission,
+    _looks_like_email,
     _repo_installation_id,
 )
 from app_server.auth import decrypt_access_token, encrypt_access_token, sign_session_id
@@ -433,6 +434,220 @@ async def test_set_webhook_url(pool, monkeypatch):
             json={"webhook_url": "https://hooks.slack.com/services/x"},
         )
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("ops@example.com", True),
+        ("ops@sub.example.com", True),
+        ("not-an-email", False),
+        ("", False),
+        ("@example.com", False),
+        ("ops@", False),
+        ("ops@example", False),
+        ("ops@.com", False),
+        ("ops@example.", False),
+        ("ops has spaces@example.com", False),
+        ("a@b@c.com", False),
+    ],
+)
+def test_looks_like_email(value, expected):
+    assert _looks_like_email(value) is expected
+
+
+def test_looks_like_email_rejects_a_pathological_input_quickly():
+    # Regression test for a real CodeQL-flagged, empirically-confirmed
+    # ReDoS: the regex this replaced (`^[^@\s]+@[^@\s]+\.[^@\s]+$`) took
+    # ~20 seconds to reject a 100KB crafted string on this Python version,
+    # scaling quadratically. _looks_like_email is plain string operations
+    # with no backtracking, so this must stay fast regardless of input
+    # shape or size.
+    #
+    # Aletheore's own Flash Review caught a real bug in an earlier version
+    # of this test: without the trailing space, the payload actually
+    # *matches* the old regex (via the second-to-last dot as the "@...\."
+    # separator and the final dot as the one-character suffix) - fast, not
+    # slow, and accepted rather than rejected. A trailing space is required
+    # so no split of the string can ever satisfy the old regex's final
+    # [^@\s]+$, forcing it to exhaust every '@'/'.' combination before
+    # giving up.
+    payload = "!@!." + ("!." * 50_000) + " "
+    start = time.monotonic()
+    result = _looks_like_email(payload)
+    elapsed = time.monotonic() - start
+    assert result is False
+    assert elapsed < 1.0
+
+
+@pytest.mark.asyncio
+async def test_set_alert_email(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.put(
+            "/admin/octocat/hello-world/alert-email",
+            json={"alert_email": "ops@example.com"},
+        )
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_set_alert_email_rejects_malformed_address(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.put(
+            "/admin/octocat/hello-world/alert-email",
+            json={"alert_email": "not-an-email"},
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_send_test_alert_email_requires_a_saved_address(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/alert-email/test")
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_saved_alert_email_is_reflected_back_on_the_admin_page(pool, monkeypatch):
+    # Regression test for a real bug found while building this: get_installation
+    # (app_server/db.py) used an explicit column list that didn't include the
+    # new alert_email column, so a save would silently never be visible to
+    # the settings page (or to test_alert_email_route's own "is one
+    # configured?" check) despite the UPDATE itself succeeding.
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        await client.put(
+            "/admin/octocat/hello-world/alert-email",
+            json={"alert_email": "ops@example.com"},
+        )
+        response = await client.get("/admin/octocat/hello-world")
+    assert response.status_code == 200
+    assert response.json()["installation"]["alert_email"] == "ops@example.com"
+
+
+@pytest.mark.asyncio
+async def test_send_test_alert_email_enqueues_to_saved_address(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    enqueued = []
+
+    def fake_enqueue(*args, **kwargs):
+        enqueued.append((args, kwargs))
+
+    monkeypatch.setattr("app_server.admin.enqueue_transactional_email", fake_enqueue)
+    async with client:
+        put_response = await client.put(
+            "/admin/octocat/hello-world/alert-email",
+            json={"alert_email": "ops@example.com"},
+        )
+        assert put_response.status_code == 200
+        response = await client.post("/admin/octocat/hello-world/alert-email/test")
+
+    assert response.status_code == 200
+    assert len(enqueued) == 1
+    _args, kwargs = enqueued[0]
+    assert kwargs["to_email"] == "ops@example.com"
+    assert kwargs["template_name"] == "health_alert"
+
+
+@pytest.mark.asyncio
+async def test_set_pushover_user_key(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.put(
+            "/admin/octocat/hello-world/pushover-user-key",
+            json={"pushover_user_key": "u" * 30},
+        )
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_set_pushover_user_key_rejects_malformed_key(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.put(
+            "/admin/octocat/hello-world/pushover-user-key",
+            json={"pushover_user_key": "too-short"},
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_send_test_pushover_requires_a_saved_key(pool, monkeypatch):
+    monkeypatch.setenv("PUSHOVER_API_TOKEN", "server-app-token")
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.post("/admin/octocat/hello-world/pushover-user-key/test")
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_send_test_pushover_requires_server_token_configured(pool, monkeypatch):
+    # PUSHOVER_API_TOKEN is Aletheore's own credential, not something any
+    # one installation controls - if the founder hasn't configured it
+    # server-wide yet, every installation's test click must fail with a
+    # clear reason, not a raw exception from send_pushover_alert.
+    monkeypatch.delenv("PUSHOVER_API_TOKEN", raising=False)
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        await client.put(
+            "/admin/octocat/hello-world/pushover-user-key",
+            json={"pushover_user_key": "u" * 30},
+        )
+        response = await client.post("/admin/octocat/hello-world/pushover-user-key/test")
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_saved_pushover_user_key_is_reflected_back_on_the_admin_page(pool, monkeypatch):
+    # Same class of bug as alert_email's regression test above: an explicit
+    # SELECT column list in get_installation that doesn't include the new
+    # column means a save is silently invisible everywhere that reads the
+    # installation dict, despite the UPDATE itself succeeding.
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        await client.put(
+            "/admin/octocat/hello-world/pushover-user-key",
+            json={"pushover_user_key": "u" * 30},
+        )
+        response = await client.get("/admin/octocat/hello-world")
+    assert response.status_code == 200
+    assert response.json()["installation"]["pushover_user_key"] == "u" * 30
+
+
+@pytest.mark.asyncio
+async def test_send_test_pushover_sends_to_saved_key(pool, monkeypatch):
+    monkeypatch.setenv("PUSHOVER_API_TOKEN", "server-app-token")
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+    client = await _logged_in_client(pool, monkeypatch)
+    sent = []
+    monkeypatch.setattr(
+        "app_server.admin.send_pushover_alert",
+        lambda token, user_key, message, **k: sent.append((token, user_key, message)),
+    )
+    async with client:
+        put_response = await client.put(
+            "/admin/octocat/hello-world/pushover-user-key",
+            json={"pushover_user_key": "u" * 30},
+        )
+        assert put_response.status_code == 200
+        response = await client.post("/admin/octocat/hello-world/pushover-user-key/test")
+
+    assert response.status_code == 200
+    assert len(sent) == 1
+    token, user_key, _message = sent[0]
+    assert token == "server-app-token"
+    assert user_key == "u" * 30
 
 
 @pytest.mark.asyncio

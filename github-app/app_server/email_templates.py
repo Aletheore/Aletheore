@@ -9,6 +9,9 @@ renders consistently in Outlook desktop's Word engine as well as modern
 webmail/mobile clients - not just the ones a browser preview would show.
 """
 
+import html
+import re
+
 _LOGO_URL = "https://www.aletheore.com/assets/logo-mark.png"
 _PRICING_URL = "https://aletheore.com/pricing.html"
 _DASHBOARD_URL = "https://app.aletheore.com/dashboard"
@@ -188,6 +191,25 @@ def deletion_otp_email(account_login: str, code: str) -> dict:
     return {"subject": subject, "html": html, "text": text}
 
 
+def _slack_markdown_to_html(text: str) -> str:
+    # text is built from scan_worker/slack.py's format_* alert functions,
+    # which interpolate repository-controlled content (commit subjects,
+    # symbol names, risk summaries) - escape first, then promote markdown
+    # on the escaped text, same ordering the wiki markdown renderer already
+    # uses for the same reason (see test_wiki_markdown_escapes_before_
+    # promoting_tags in test_frontend_js_syntax.py). Escaping first also
+    # means the *bold*/`code` markers below still match literally, since
+    # html.escape doesn't touch '*' or '`'.
+    #
+    # Only the two markdown patterns those builders actually produce
+    # (*bold* and `code`) - not a general markdown parser, since there's
+    # nothing else to convert.
+    escaped = html.escape(text)
+    converted = re.sub(r"`([^`]+)`", rf'<code style="background:{_BODY_BG};padding:2px 6px;border-radius:4px;">\1</code>', escaped)
+    converted = re.sub(r"\*([^*]+)\*", r"<strong>\1</strong>", converted)
+    return converted.replace("\n", "<br>")
+
+
 def weekly_digest_email(
     account_login: str,
     scans_this_week: int,
@@ -285,3 +307,21 @@ def subscription_canceled_email(account_login: str) -> dict:
     )
     html = _shell(preheader, body_html)
     return {"subject": subject, "html": html, "text": text}
+
+
+def health_alert_email(alert_text: str) -> dict:
+    # alert_text is exactly what scan_worker/slack.py's format_reachability_alert/
+    # format_latency_alert/format_shape_change_alert already built for
+    # Slack/Teams - reused verbatim as the email's plain-text body (the
+    # *bold*/`code` markdown reads fine unconverted as plain text) and
+    # converted to HTML for the html body, rather than writing parallel
+    # copy for a second channel.
+    subject = "Aletheore endpoint alert"
+    # Truncate/strip the raw text first, escape last - escaping expands
+    # characters into multi-character entities, so escaping before
+    # truncating risks slicing an entity in half.
+    preheader = html.escape(re.sub(r"[`*]", "", alert_text.split("\n", 1)[0])[:140])
+    text = f"{alert_text}{_FOOTER_TEXT}"
+    body_html = f'<p style="margin:0;">{_slack_markdown_to_html(alert_text)}</p>'
+    rendered_html = _shell(preheader, body_html)
+    return {"subject": subject, "html": rendered_html, "text": text}

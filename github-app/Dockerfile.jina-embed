@@ -11,11 +11,8 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /build
-COPY github-app/requirements-jina-embed.txt .
-RUN pip install --no-cache-dir -r requirements-jina-embed.txt \
-    # pulled in transitively; carries the same setuptools CVE-2025-47273
-    # (path traversal) the old torch-based image upgraded explicitly.
-    && pip install --no-cache-dir --upgrade "setuptools>=78.1.1"
+COPY github-app/requirements-jina-embed.lock.txt .
+RUN pip install --no-cache-dir --require-hashes -r requirements-jina-embed.lock.txt
 
 # Baked into the image at build time rather than downloaded on first
 # request, same reasoning as the old sentence-transformers weights: a cold

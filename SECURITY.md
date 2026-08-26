@@ -25,7 +25,7 @@ Security reports may cover:
 
 Do not report suspected vulnerabilities through public issues.
 
-Use GitHub private vulnerability reporting when available for this repository. If private reporting is unavailable, contact the project owner directly and include enough detail to reproduce the issue without exposing third-party secrets.
+Preferred: [open a private security advisory](https://github.com/Aletheore/Aletheore/security/advisories/new) for this repository (enabled). If that's unavailable, email [support@aletheore.com](mailto:support@aletheore.com). Include enough detail to reproduce the issue without exposing third-party secrets.
 
 Include:
 

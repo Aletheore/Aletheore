@@ -2773,6 +2773,132 @@ def _patch_sweep(
     return sent
 
 
+def test_send_alerts_if_configured_sends_email_when_alert_email_set(monkeypatch):
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda *a, **k: None)
+    enqueued = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **k: enqueued.append(k),
+    )
+
+    _send_alerts_if_configured(
+        {"installation_id": 1, "target_id": 900, "alert_email": "ops@example.com"},
+        {"text": "*Aletheore*: endpoint down on `octocat/hello-world`"},
+    )
+
+    assert len(enqueued) == 1
+    assert enqueued[0]["to_email"] == "ops@example.com"
+    assert enqueued[0]["template_name"] == "health_alert"
+    assert enqueued[0]["template_arg"] == "*Aletheore*: endpoint down on `octocat/hello-world`"
+    assert enqueued[0]["installation_id"] == 1
+
+
+def test_send_alerts_if_configured_sends_both_channels_when_both_set(monkeypatch):
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    slack_sent = []
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: slack_sent.append(msg))
+    email_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **k: email_sent.append(k),
+    )
+
+    _send_alerts_if_configured(
+        {
+            "installation_id": 1,
+            "target_id": 900,
+            "webhook_url": "https://hooks.slack.com/x",
+            "alert_email": "ops@example.com",
+        },
+        {"text": "down"},
+    )
+
+    assert len(slack_sent) == 1
+    assert len(email_sent) == 1
+
+
+def test_send_alerts_if_configured_sends_neither_when_unconfigured(monkeypatch):
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    slack_sent = []
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: slack_sent.append(msg))
+    email_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **k: email_sent.append(k),
+    )
+    pushover_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_pushover_alert",
+        lambda *a, **k: pushover_sent.append(k),
+    )
+
+    _send_alerts_if_configured({"installation_id": 1, "target_id": 900}, {"text": "down"})
+
+    assert slack_sent == []
+    assert email_sent == []
+    assert pushover_sent == []
+
+
+def test_send_alerts_if_configured_sends_pushover_when_user_key_set(monkeypatch):
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("PUSHOVER_API_TOKEN", "server-app-token")
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+    pushover_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_pushover_alert",
+        lambda token, user_key, message, **k: pushover_sent.append((token, user_key, message)),
+    )
+
+    _send_alerts_if_configured(
+        {"installation_id": 1, "target_id": 900, "pushover_user_key": "user-key-y"},
+        {"text": "*Aletheore*: endpoint down on `octocat/hello-world`", "pushover_priority": 2},
+    )
+
+    assert len(pushover_sent) == 1
+    token, user_key, message = pushover_sent[0]
+    assert token == "server-app-token"
+    assert user_key == "user-key-y"
+    assert message["pushover_priority"] == 2
+
+
+def test_send_alerts_if_configured_skips_pushover_when_server_token_unset(monkeypatch):
+    # An installation can have pushover_user_key set (from before the
+    # server-side token was ever configured, or after it was later
+    # removed) - this must degrade silently, the same as the other two
+    # channels degrade when their own config is missing, not raise into
+    # the sweep loop.
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.delenv("PUSHOVER_API_TOKEN", raising=False)
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+    pushover_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_pushover_alert",
+        lambda *a, **k: pushover_sent.append(k),
+    )
+
+    _send_alerts_if_configured(
+        {"installation_id": 1, "target_id": 900, "pushover_user_key": "user-key-y"},
+        {"text": "down"},
+    )
+
+    assert pushover_sent == []
+
+
 def test_sweep_sends_reachability_down_alert(monkeypatch):
     sent = _patch_sweep(
         monkeypatch,
@@ -4364,6 +4490,29 @@ def test_run_initial_scan_job_logs_and_reraises_on_inner_failure(monkeypatch, ca
             run_initial_scan_job(1, "octocat/hello-world")
 
     assert any("initial scan job failed" in record.message for record in caplog.records)
+
+
+def test_run_initial_scan_job_skips_silently_for_a_repo_with_no_commits_yet(monkeypatch, caplog):
+    from scan_worker.jobs import run_initial_scan_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda *a, **k: object())
+    # A genuinely empty repo (no commits) - fetch_default_branch_head_sha
+    # returns None for this rather than raising (see test_github_api.py's
+    # 409 test); run_initial_scan_job's own docstring already says it's
+    # "best-effort and silent on failure" for exactly this kind of case.
+    monkeypatch.setattr("scan_worker.jobs.fetch_default_branch_head_sha", lambda *a, **k: None)
+    clone_calls = []
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda *a, **k: clone_calls.append(1))
+
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        run_initial_scan_job(1, "octocat/hello-world")
+
+    assert clone_calls == []
+    assert not any("initial scan job failed" in record.message for record in caplog.records)
 
 
 def test_run_push_scan_job_logs_and_reraises_on_scan_failure(bare_repo_with_two_commits, monkeypatch, caplog):
@@ -6146,6 +6295,43 @@ def test_check_backup_freshness_missing_dir_and_stale_backup_both_alert_within_c
     _check_backup_freshness(redis_conn, now)  # missing dir: must still alert
 
     assert alerts == ["ops_monitor.backup_freshness.stale", "ops_monitor.backup_freshness.missing_dir"]
+
+
+def test_check_backup_freshness_tolerates_normal_cron_and_dump_duration_jitter(monkeypatch, tmp_path):
+    # Real false positive from prod, 2026-08-25: the backup cron fires at a
+    # fixed wall-clock time (0 3 * * * UTC) and pg_dump takes ~7-11s to
+    # finish (mtime is only set once the dump completes and is renamed into
+    # place - see backup-postgres.sh), while this check runs on its own
+    # independent ~180s-interval loop (scan_worker/scheduler.py) with no
+    # wall-clock anchoring at all. The two schedules aren't correlated, so
+    # over enough days a sample eventually lands in the few-second gap
+    # after yesterday's dump crosses exactly 24h old but before today's
+    # fresh dump lands - exactly what happened: the real alert reported
+    # age_seconds=86403, just 3 seconds past the old threshold, while every
+    # single day's backup in the preceding week actually succeeded. A
+    # threshold with zero tolerance for this structural (cron latency +
+    # dump duration) jitter will keep re-triggering this false positive
+    # indefinitely, regardless of which specific day it next lands on.
+    from scan_worker.jobs import _check_backup_freshness
+
+    redis_conn = _FakeRedis()
+    alerts = []
+    monkeypatch.setattr("scan_worker.jobs.send_error_alert", lambda *a, **k: alerts.append(a[0]))
+
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    dump = backup_dir / "aletheore_app_20260101.dump"
+    dump.write_text("x")
+    os.utime(dump, (0, 0))
+    monkeypatch.setenv("ALETHEORE_BACKUP_DIR", str(backup_dir))
+
+    # The real incident's literal age_seconds from the alert body - a bare
+    # 24h (86400s) constant, not derived from OPS_BACKUP_STALE_SECONDS
+    # itself, so this test actually pins the real-world scenario rather
+    # than trivially tracking whatever the threshold is currently set to.
+    _check_backup_freshness(redis_conn, 86400 + 3)
+
+    assert alerts == []
 
 
 def test_run_ops_monitor_job_alerts_when_a_free_tier_provider_key_is_missing(monkeypatch):

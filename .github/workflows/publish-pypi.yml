@@ -12,7 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
+      contents: read
       id-token: write # trusted publishing (OIDC) - no PyPI token stored anywhere
+      attestations: write # build provenance for the release artifacts below
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -23,8 +25,18 @@ jobs:
       - name: Build
         working-directory: src
         run: |
-          pip install build
+          pip install --require-hashes -r ../requirements-ci-build.lock.txt
           python -m build
+
+      - name: Attest build provenance
+        # Same OIDC identity as the trusted-publishing step below - a
+        # verifiable, signed record of exactly which workflow run and
+        # source commit produced these artifacts (SLSA provenance), so
+        # a downloaded wheel/sdist can be checked with `gh attestation
+        # verify` instead of trusted on faith.
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "src/dist/*"
 
       - name: Publish to PyPI
         # Pinned to a commit SHA rather than the release/v1 branch - this

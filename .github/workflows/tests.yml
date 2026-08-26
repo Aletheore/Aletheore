@@ -12,6 +12,9 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC, so Codecov upload below needs no stored token
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -40,3 +43,12 @@ jobs:
           name: coverage-src-py${{ matrix.python-version }}
           path: src/coverage.xml
           retention-days: 14
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          use_oidc: true
+          files: src/coverage.xml
+          flags: cli-py${{ matrix.python-version }}
+          fail_ci_if_error: false

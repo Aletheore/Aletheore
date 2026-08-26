@@ -1,5 +1,6 @@
 from app_server.email_templates import (
     deletion_otp_email,
+    health_alert_email,
     payment_failed_email,
     subscription_canceled_email,
     weekly_digest_email,
@@ -35,6 +36,49 @@ def test_deletion_otp_email_includes_the_code_and_a_10_minute_expiry():
     assert "10 minutes" in message["text"]
     for key in ("subject", "html", "text"):
         assert message[key]
+
+
+def test_health_alert_email_reuses_the_slack_alert_text_verbatim():
+    # No parallel copywriting - the email carries exactly what
+    # format_reachability_alert/format_latency_alert/format_shape_change_alert
+    # already built for Slack/Teams, just re-rendered for email.
+    alert_text = "*Aletheore*: endpoint down on `octocat/hello-world`\n`GET /users` is unreachable"
+    message = health_alert_email(alert_text)
+    assert alert_text in message["text"]
+    for key in ("subject", "html", "text"):
+        assert message[key]
+
+
+def test_health_alert_email_converts_slack_markdown_to_html():
+    alert_text = "*Aletheore*: endpoint down on `octocat/hello-world`\n`GET /users` is unreachable"
+    message = health_alert_email(alert_text)
+    assert "<strong>Aletheore</strong>" in message["html"]
+    assert "<code" in message["html"] and "octocat/hello-world" in message["html"]
+    # The literal markdown characters must not leak into the rendered HTML.
+    assert "*Aletheore*" not in message["html"]
+    assert "`octocat/hello-world`" not in message["html"]
+
+
+def test_health_alert_email_escapes_html_in_repo_controlled_alert_text():
+    # Aletheore's own Flash Review caught this on PR #390: alert_text is
+    # built from format_reachability_alert/format_latency_alert/format_
+    # shape_change_alert, which interpolate repo-controlled content (commit
+    # subjects, symbol names, risk summaries) - a malicious repo could
+    # smuggle live HTML into this transactional email's body. Same bug
+    # class as the wiki markdown renderer already guards against (see
+    # test_wiki_markdown_renders_untrusted_html_inert in
+    # test_frontend_js_syntax.py) - escape first, only then promote the
+    # *bold*/`code` markdown.
+    alert_text = "*Aletheore*: endpoint down on `<img src=x onerror=alert(1)>`"
+    message = health_alert_email(alert_text)
+    # Every email already contains a legitimate <img> for the logo, so
+    # check the specific attacker-controlled tag rather than the bare
+    # "<img" substring.
+    assert "<img src=x onerror" not in message["html"]
+    assert "onerror" in message["html"]
+    assert "&lt;img src=x onerror" in message["html"]
+    # Escaping must not break the legitimate markdown-to-HTML conversion.
+    assert "<strong>Aletheore</strong>" in message["html"]
 
 
 def test_subscription_canceled_email_names_account_and_lists_what_is_lost():

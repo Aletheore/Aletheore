@@ -20,6 +20,7 @@ from app_server.db import (
     set_paid_installation_plan,
 )
 from app_server.email_queue import enqueue_transactional_email
+from app_server.error_alerts import send_error_alert
 from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for, is_known_paddle_ip
 from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID, resolve_plan_for_price_id
 from app_server.paddle_webhook_verify import verify_paddle_signature
@@ -54,6 +55,11 @@ _ACTIVE_SUBSCRIPTION_STATUSES = {"active", "trialing"}
 _AFFILIATE_COMMISSION_RATE = Decimal("0.15")
 
 
+class PaddleWebhookAttributionError(RuntimeError):
+    """A real, signature-verified Paddle webhook that can't be attributed
+    to any installation - see the installation_id is None branch below."""
+
+
 async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue=None) -> None:
     event_type = payload.get("event_type")
     if event_type == "transaction.completed":
@@ -86,7 +92,20 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
         else None
     )
     if installation_id is None:
+        # A real, signature-verified Paddle event (not a spoofed/tampered
+        # token - those are legitimately silent, see the tests covering
+        # them above) whose plan-flip can't be attributed to anyone. Still
+        # returns 200 below (no reason to make Paddle retry a payload that
+        # will never carry a valid token no matter how many times it's
+        # redelivered), so nothing else would ever surface this - a real
+        # payer's subscription silently not activating would otherwise look
+        # identical to a successful transaction from the outside.
         logger.warning("%s missing or invalid installation_token in custom_data", event_type)
+        send_error_alert(
+            "paddle_webhook",
+            PaddleWebhookAttributionError(f"{event_type} missing or invalid installation_token"),
+            f"event_id={payload.get('event_id')} subscription_id={data.get('id')}",
+        )
         return
 
     items = data.get("items") or []

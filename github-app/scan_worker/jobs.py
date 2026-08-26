@@ -138,6 +138,7 @@ from scan_worker.github_api import (
     upsert_pr_comment,
 )
 from app_server.email_templates import (
+    health_alert_email,
     payment_failed_email,
     subscription_canceled_email,
     weekly_digest_email,
@@ -158,6 +159,7 @@ from scan_worker.model_tiers import (
 from scan_worker.packet_cache import lookup_cached_result, store_result
 from scan_worker.code_graph_store import CodeGraphStore
 from scan_worker.postgres_graph_store import PostgresRepoGraphStore
+from scan_worker.pushover import send_pushover_alert
 from scan_worker.slack import (
     format_latency_alert,
     format_reachability_alert,
@@ -1038,6 +1040,13 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
         client = get_github_api_client()
 
         head_sha = fetch_default_branch_head_sha(client, token, repo_full_name)
+        if head_sha is None:
+            # Repo has no commits yet (a freshly created or freshly
+            # connected empty repo) - nothing to scan, and not a failure:
+            # matches this job's own "best-effort and silent" contract
+            # above, and the dashboard's "Initialization required" state
+            # is still an honest description of a repo with no code in it.
+            return
         clone_url = _clone_url(repo_full_name, token)
         repo_dir = job_dir / "repo"
         _clone_ref(clone_url, head_sha, repo_dir)
@@ -1861,10 +1870,62 @@ def _run_flash_review(
     return review_ran
 
 
-def _send_if_webhook_configured(installation: dict, message: dict) -> None:
+def _send_alerts_if_configured(installation: dict, message: dict) -> None:
+    """Fires on every configured channel independently - Slack/Teams via
+    installations.webhook_url, email via installations.alert_email,
+    Pushover via installations.pushover_user_key. Any combination may be
+    set; nothing here requires any other.
+
+    The email send goes through the same async, RQ-queued path as every
+    other transactional email (see email_queue.enqueue_transactional_email)
+    rather than send_transactional_email directly - a slow/down Resend
+    must never delay the next target's check in this sweep, same reasoning
+    as the health sweep's own queue split from "scans" (see
+    send_transactional_email_job's docstring). Pushover stays a direct,
+    synchronous call like Slack/Teams (both are already fire-and-forget,
+    single-request webhooks with no comparable "queue or don't" decision
+    to make).
+
+    dedupe_key includes wall-clock time down to the second: a genuine
+    retry of the outer job re-sending the same flip is an accepted, rare
+    risk here, same as send_health_alert already accepts for Slack/Teams
+    (it has no dedup at all) - this isn't solving a harder problem than
+    the channel it's sitting next to already tolerates.
+    """
     webhook_url = installation.get("webhook_url")
     if webhook_url:
         send_health_alert(webhook_url, message)
+
+    alert_email = installation.get("alert_email")
+    if alert_email:
+        settings = get_settings()
+        target_id = installation.get("target_id")
+        enqueue_transactional_email(
+            settings.redis_url,
+            dedupe_key=f"health_alert:{target_id}:{time.time()}",
+            template_name="health_alert",
+            template_arg=message["text"],
+            to_email=alert_email,
+            installation_id=installation.get("installation_id"),
+        )
+
+    pushover_user_key = installation.get("pushover_user_key")
+    if pushover_user_key:
+        settings = get_settings()
+        if settings.pushover_api_token:
+            send_pushover_alert(settings.pushover_api_token, pushover_user_key, message)
+        else:
+            # A saved user key with no server-side app token configured -
+            # not an error in the installation's own config, so it
+            # degrades silently like the other two channels do when
+            # their own config is missing, rather than raising into the
+            # sweep loop's per-target isolation (see run_health_check_
+            # sweep_job's own comment on why one target's failure must
+            # not take down the rest).
+            logging.getLogger("scan_worker.jobs").warning(
+                "pushover_user_key is set for installation=%s but PUSHOVER_API_TOKEN is not configured",
+                installation.get("installation_id"),
+            )
 
 
 def _endpoint_results(evidence: dict, base_url: str, pinned_ip: str) -> list[dict]:
@@ -2406,7 +2467,7 @@ def _run_health_check_sweep_for_target(
                     source_line=source_line,
                     include_fix_suggestion=not recently_down,
                 )
-            _send_if_webhook_configured(
+            _send_alerts_if_configured(
                 target,
                 format_reachability_alert(
                     repo_full_name,
@@ -2420,7 +2481,7 @@ def _run_health_check_sweep_for_target(
             )
 
         if _latency_flipped(prior, reachable, latency_ms, threshold_ms):
-            _send_if_webhook_configured(
+            _send_alerts_if_configured(
                 target,
                 format_latency_alert(
                     repo_full_name,
@@ -2445,7 +2506,7 @@ def _run_health_check_sweep_for_target(
             and prior["response_shape"] != response_shape
         )
         if shape_changed:
-            _send_if_webhook_configured(
+            _send_alerts_if_configured(
                 target,
                 format_shape_change_alert(
                     repo_full_name,
@@ -2544,7 +2605,7 @@ def run_health_check_down_retry_job(target: dict, entry: dict, attempt: int) -> 
                 source_line=source_line,
                 include_fix_suggestion=not recently_down,
             )
-        _send_if_webhook_configured(
+        _send_alerts_if_configured(
             target,
             format_reachability_alert(
                 repo_full_name,
@@ -2703,7 +2764,21 @@ OPS_DEFAULT_BACKUP_DIR = "/app/backups"
 OPS_DEFAULT_QUEUE_DEPTH_THRESHOLD = 25
 OPS_DEFAULT_FAILED_JOBS_THRESHOLD = 0
 OPS_THRESHOLD_DURATION_SECONDS = 600
-OPS_BACKUP_STALE_SECONDS = 86400
+# Not a bare 24h (86400s): the backup cron fires at a fixed wall-clock time
+# (0 3 * * * UTC) and pg_dump takes several seconds to finish - a dump's
+# mtime is only set once it completes and is renamed into place, see
+# backup-postgres.sh - while this check runs on its own independent
+# ~180s-interval loop (scheduler.py) with no wall-clock anchoring to the
+# cron at all. A zero-tolerance 86400s threshold means the two schedules
+# will eventually land a sample in the few-second gap after yesterday's
+# dump crosses exactly 24h old but before today's fresh dump lands, purely
+# by chance of where the independent loop's cadence happens to drift to -
+# confirmed in production 2026-08-25 (age_seconds=86403, 3s past the old
+# threshold, while every day's backup that week actually succeeded). +10
+# minutes absorbs that structural jitter without weakening what this check
+# actually exists to catch (a backup that's genuinely missing or days
+# stale) by any operationally meaningful amount.
+OPS_BACKUP_STALE_SECONDS = 86400 + 600
 OPS_APP_HEALTH_CONSECUTIVE_FAILURES = 2
 OPS_MONITORED_QUEUES = ("scans", "health")
 
@@ -3020,6 +3095,7 @@ _EMAIL_TEMPLATES = {
     "payment_failed": payment_failed_email,
     "subscription_canceled": subscription_canceled_email,
     "weekly_digest": weekly_digest_email,
+    "health_alert": health_alert_email,
 }
 
 

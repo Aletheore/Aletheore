@@ -12,6 +12,7 @@ from scan_worker.github_api import (
     ensure_branch_at,
     ensure_docs_pull_request,
     fetch_default_branch_and_head_sha,
+    fetch_default_branch_head_sha,
     fetch_file_content,
     fetch_pr_changed_files,
     fetch_pr_diff,
@@ -307,6 +308,21 @@ def test_fetch_default_branch_and_head_sha_returns_name_and_sha():
     assert len(calls) == 2
     assert calls[0].endswith("/repos/octocat/hello-world")
     assert calls[1].endswith("/repos/octocat/hello-world/commits/trunk")
+
+
+def test_fetch_default_branch_head_sha_returns_none_for_empty_repo_409():
+    # Found live: a real installation's fresh, genuinely-empty repo (no
+    # commits pushed yet) sent run_initial_scan_job an unhandled
+    # HTTPStatusError, firing an ops alert for what's actually a normal,
+    # expected state - GitHub's commits endpoint 409s specifically for a
+    # repo with no commits at all, distinct from a 404 (missing repo/ref).
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/repos/octocat/hello-world"):
+            return httpx.Response(200, json={"default_branch": "main"})
+        return httpx.Response(409, json={"message": "Git Repository is empty."})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    assert fetch_default_branch_head_sha(client, "token", "octocat/hello-world") is None
 
 
 def test_ensure_branch_at_creates_ref_when_missing():

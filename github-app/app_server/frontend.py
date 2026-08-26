@@ -359,6 +359,9 @@ table.findings tr:last-child td { border-bottom: none; }
 .settings-help-links { display: flex; gap: 14px; margin-top: 8px; }
 .settings-help-links a { font-size: 11px; color: var(--accent-strong); text-decoration: none; font-weight: 500; }
 .settings-help-links a:hover { text-decoration: underline; }
+.alert-channel + .alert-channel { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.alert-channel-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--slate-400); font-weight: 600; margin-bottom: 9px; }
 .danger-zone { margin-top: 16px; border: 1px solid var(--critical); border-radius: 12px; padding: 16px 18px; }
 .danger-zone .settings-block-label { color: var(--critical); }
 .danger-zone .btn-danger { background: var(--critical); border-color: var(--critical); color: #fff; }
@@ -1967,6 +1970,48 @@ async function sendTestNotification() {{
   status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
 }}
 
+async function saveAlertEmail() {{
+  const input = document.getElementById('alert-email-input');
+  const status = document.getElementById('alert-email-status');
+  const res = await fetch(adminBase + '/alert-email', {{
+    method: 'PUT', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ alert_email: input.value.trim() || null }}),
+  }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  status.textContent = res.ok ? 'Saved.' : (data.detail || 'Could not save.');
+  status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
+}}
+
+async function sendTestAlertEmail() {{
+  const status = document.getElementById('alert-email-status');
+  status.textContent = 'Sending...';
+  status.style.color = 'var(--slate-600)';
+  const res = await fetch(adminBase + '/alert-email/test', {{ method: 'POST' }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  status.textContent = res.ok ? 'Test email sent.' : (data.detail || 'Could not send test email.');
+  status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
+}}
+
+async function savePushoverKey() {{
+  const input = document.getElementById('pushover-key-input');
+  const status = document.getElementById('pushover-key-status');
+  const res = await fetch(adminBase + '/pushover-user-key', {{
+    method: 'PUT', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ pushover_user_key: input.value.trim() || null }}),
+  }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  status.textContent = res.ok ? 'Saved.' : (data.detail || 'Could not save.');
+  status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
+}}
+
+async function sendTestPushover() {{
+  const status = document.getElementById('pushover-key-status');
+  status.textContent = 'Sending...';
+  status.style.color = 'var(--slate-600)';
+  const res = await fetch(adminBase + '/pushover-user-key/test', {{ method: 'POST' }});
+  const data = await res.json().catch(function () {{ return {{}}; }});
+  status.textContent = res.ok ? 'Test notification sent.' : (data.detail || 'Could not send test notification.');
+  status.style.color = res.ok ? 'var(--success)' : 'var(--critical)';
+}}
+
 async function buySeat() {{
   const status = document.getElementById('seat-billing-status');
   status.textContent = 'Updating billing...';
@@ -2216,14 +2261,35 @@ async function loadSettings() {{
       '</div>' +
       '<div>' +
         '<div class="settings-block">' +
-          '<div class="settings-block-label">Alert webhook</div>' +
-          '<input class="field" id="webhook-url-input" placeholder="Slack or Teams webhook URL" value="' + escapeHtml(installation.webhook_url || '') + '">' +
-          '<div class="form-row"><button class="btn" onclick="saveWebhook()">Save</button><button class="btn" onclick="sendTestNotification()" style="margin-left:6px;">Send test</button><span id="webhook-status" class="settings-block-hint"></span></div>' +
-          '<div class="settings-block-hint">New critical findings are posted here shortly after a scan finishes. Paste a Slack incoming-webhook URL or a Teams workflow webhook URL - both are auto-detected.</div>' +
-          '<div class="settings-help-links">' +
-            '<a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener">Get a Slack webhook &rarr;</a>' +
-            '<a href="https://support.microsoft.com/en-us/office/create-incoming-webhooks-with-workflows-for-microsoft-teams-8ae491c7-0394-4861-ba59-055e33f75498" target="_blank" rel="noopener">Get a Teams webhook &rarr;</a>' +
+          '<div class="settings-block-label">Alert channels</div>' +
+          '<div class="settings-block-hint" style="margin-top:0;margin-bottom:14px;">New critical findings and endpoint-monitoring alerts go out on any combination you configure below - each channel is independent.</div>' +
+          '<div class="alert-channel">' +
+            '<div class="alert-channel-label">Slack / Teams</div>' +
+            '<input class="field" id="webhook-url-input" placeholder="Slack or Teams webhook URL" value="' + escapeHtml(installation.webhook_url || '') + '">' +
+            '<div class="form-row"><button class="btn" onclick="saveWebhook()">Save</button><button class="btn" onclick="sendTestNotification()" style="margin-left:6px;">Send test</button><span id="webhook-status" class="settings-block-hint"></span></div>' +
+            '<div class="settings-help-links">' +
+              '<a href="https://api.slack.com/messaging/webhooks" target="_blank" rel="noopener">Get a Slack webhook &rarr;</a>' +
+              '<a href="https://support.microsoft.com/en-us/office/create-incoming-webhooks-with-workflows-for-microsoft-teams-8ae491c7-0394-4861-ba59-055e33f75498" target="_blank" rel="noopener">Get a Teams webhook &rarr;</a>' +
+            '</div>' +
           '</div>' +
+          '<div class="alert-channel">' +
+            '<div class="alert-channel-label">Email</div>' +
+            '<input class="field" id="alert-email-input" placeholder="ops@yourcompany.com" value="' + escapeHtml(installation.alert_email || '') + '">' +
+            '<div class="form-row"><button class="btn" onclick="saveAlertEmail()">Save</button><button class="btn" onclick="sendTestAlertEmail()" style="margin-left:6px;">Send test</button><span id="alert-email-status" class="settings-block-hint"></span></div>' +
+          '</div>' +
+          '<div class="alert-channel">' +
+            '<div class="alert-channel-label">Pushover</div>' +
+            '<input class="field" id="pushover-key-input" placeholder="Your Pushover user key" value="' + escapeHtml(installation.pushover_user_key || '') + '">' +
+            '<div class="form-row"><button class="btn" onclick="savePushoverKey()">Save</button><button class="btn" onclick="sendTestPushover()" style="margin-left:6px;">Send test</button><span id="pushover-key-status" class="settings-block-hint"></span></div>' +
+            '<div class="settings-block-hint">A down alert repeats until you acknowledge it - the other two channels send once.</div>' +
+            '<div class="settings-help-links">' +
+              '<a href="https://pushover.net" target="_blank" rel="noopener">Get your Pushover user key &rarr;</a>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="settings-block">' +
+          '<div class="settings-block-label">Endpoint health targets</div>' +
+          '<div class="settings-block-hint">Configure staging/production URLs and see live results on the <a data-href="/health">Endpoint health</a> page.</div>' +
         '</div>' +
         '<div class="settings-block">' +
           '<div class="settings-block-label">Managed audit content</div>' +
@@ -2239,10 +2305,6 @@ async function loadSettings() {{
           'appended after the evidence-backed findings and labelled as such. Turn it off to have audits ' +
           'contain only cited findings - the signed report and its verification page will then confirm ' +
           'the report is fully evidence-backed.</div>' +
-        '</div>' +
-        '<div class="settings-block">' +
-          '<div class="settings-block-label">Endpoint health targets</div>' +
-          '<div class="settings-block-hint">Configure staging/production URLs and see live results on the <a data-href="/health">Endpoint health</a> page.</div>' +
         '</div>' +
       '</div>' +
     '</div>' +

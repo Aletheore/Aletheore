@@ -12,6 +12,9 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC, so Codecov upload below needs no stored token
 
     services:
       postgres:
@@ -59,7 +62,7 @@ jobs:
 
       - name: Install github-app dependencies
         working-directory: github-app
-        run: pip install -r requirements-dev.txt
+        run: pip install --require-hashes -r requirements-dev.lock.txt
 
       - name: Run tests
         working-directory: github-app
@@ -74,3 +77,12 @@ jobs:
           name: coverage-github-app
           path: github-app/coverage.xml
           retention-days: 14
+
+      - name: Upload coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          use_oidc: true
+          files: github-app/coverage.xml
+          flags: github-app
+          fail_ci_if_error: false
