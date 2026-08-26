@@ -3,6 +3,28 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.4 — 2026-08-26
+
+- **Fixed three real secret-scanner false positives**, all the same root
+  shape: a value that should read as an obvious placeholder only got that
+  treatment when it also lived at a path containing
+  "test"/"example"/"fixture"/"mock" - contradicting the scanner's own
+  stated intent that marker words are recognized "independent of where the
+  file lives."
+  - AWS's own documented example key (`AKIAIOSFODNN7EXAMPLE`) wasn't
+    recognized outside a test-ish path - a student README pasting AWS's
+    setup-docs example key verbatim would have triggered a false "new
+    secret" PR comment.
+  - A hand-typed or padded-out fake value built from a repeated unit (e.g.
+    `abcdefghij1234567890` doubled) now gets caught by a new
+    zlib-compression-ratio check - real credential generators don't
+    produce repeated substrings, so a value that compresses well below its
+    own length is an unambiguous signal on its own. Threshold picked
+    empirically against 1,000 real random secrets.
+  - Stripe's own published test key
+    (`sk_test_4eC39HqLyjWDarjtT1zdp7dc`, from their docs) is now
+    recognized directly via a small, exact-match known-vendor-values set.
+
 ## 0.9.3 — 2026-08-26
 
 - **Fixed a real, silent TOON encoding/decoding bug**: certain nested-list
