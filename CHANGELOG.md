@@ -3,6 +3,23 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.3 — 2026-08-26
+
+- **Fixed a real, silent TOON encoding/decoding bug**: certain nested-list
+  shapes (a list value sitting alongside non-list siblings in the same
+  array) encoded cleanly but then failed to decode - `to_toon()` now
+  round-trip-verifies its own output before returning, so this class of
+  corruption raises `ToonEncodingError` at write time instead of silently
+  writing a broken `.aletheore/air.toon` that only fails later, confusingly,
+  when `audit` tries to read it. Every call site (`write_evidence`, the MCP
+  server, the managed-audit client, `query`'s TOON output, both coding-agent
+  adapters) now degrades cleanly on a TOON failure instead of crashing.
+  Also fixes a separate bug where `ToonDecodeError` isn't an `OSError`, so a
+  malformed evidence file crashed the coding-agent adapters with a raw
+  traceback instead of a clean error. Covered by a new seeded fuzz test
+  (3,000 random nested shapes) alongside the targeted regression tests.
+- Bumped the `anthropic` dependency floor to `>=0.40,<2.0`.
+
 ## 0.9.2 — 2026-08-25
 
 - **`scan` and `audit` now point free-tier users at the GitHub App** after a
