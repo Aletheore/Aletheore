@@ -872,12 +872,25 @@ def run_pr_scan_job(
         base_dir = job_dir / "base"
         _clone_ref(clone_url, base_sha, base_dir)
 
-        # Locked for the whole checkout-through-git-graph-sync span, not just
-        # the checkout call: _ensure_persistent_checkout has no filesystem
+        # Locked for the whole checkout-through-scan span, not just the
+        # checkout call: _ensure_persistent_checkout has no filesystem
         # locking of its own (see repo_checkout_lock's docstring), and
-        # _sync_persistent_git_graph also runs git commands against head_dir.
-        # A second scan-worker replica racing this same repo needs to wait
-        # for the whole thing, not just the initial checkout.
+        # _run_scan below also runs git commands against head_dir. A second
+        # scan-worker replica racing this same repo needs to wait for the
+        # whole thing, not just the initial checkout.
+        #
+        # Deliberately does NOT call _sync_persistent_git_graph: head_dir is
+        # checked out at this PR's head_sha, which may sit on a feature
+        # branch that never merges. _sync_persistent_git_graph always writes
+        # under the fixed GRAPH_BRANCH="default" key that run_push_scan_job/
+        # run_initial_scan_job use for the repo's real default branch -
+        # syncing a PR head into that same bucket would permanently fold
+        # unmerged, possibly-rejected commits into the persisted "default"
+        # branch ownership/churn/cadence graph the dashboard and future
+        # incremental syncs read from. This evidence keeps whichever git
+        # data `aletheore scan` computed locally for this PR's own checkout
+        # instead (see _sync_persistent_git_graph's docstring) - correct for
+        # describing this one scan, just not persisted or incremental.
         with repo_checkout_lock(settings.database_url, installation_id, repo_full_name):
             head_dir = _prepare_head_checkout(
                 clone_url, head_sha, installation_id, repo_full_name, job_dir / "head"
@@ -914,7 +927,6 @@ def run_pr_scan_job(
 
             client = get_github_api_client()
             upsert_pr_comment(client, token, repo_full_name, pr_number, format_diff_comment(diff))
-            new = _sync_persistent_git_graph(installation_id, repo_full_name, head_dir, new)
         _sync_code_graph(installation_id, repo_full_name, head_sha, new)
         history_id = _insert_history(installation_id, repo_full_name, new)
 
