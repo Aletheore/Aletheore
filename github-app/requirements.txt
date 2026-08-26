@@ -1,5 +1,5 @@
 fastapi>=0.141.1,<0.142.0
-uvicorn[standard]>=0.52.3,<1.0
+uvicorn[standard]>=0.52.4,<1.0
 asyncpg>=0.31.0,<1.0
 psycopg[binary]>=3.3.4,<4.0
 psycopg-pool>=3.3.1,<4.0
