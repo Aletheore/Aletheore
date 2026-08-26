@@ -192,7 +192,12 @@ def _make_git_repo(path: Path, files: dict[str, str]) -> str:
 def bare_repo_with_two_commits(tmp_path):
     work = tmp_path / "work"
     base_sha = _make_git_repo(work, {"app.py": "print('hello')\n"})
-    (work / "app.py").write_text("password = 'sk-abcdef1234567890abcdef1234567890'\n")
+    # A genuinely non-repeating value, deliberately - "sk-abcdef1234567890
+    # abcdef1234567890" (the previous fixture) repeats a 16-char unit, which
+    # aletheore.secrets' synthetic-repetition check now correctly recognizes
+    # as a fabricated placeholder rather than a real-looking secret, and
+    # this fixture exists specifically to exercise the non-placeholder path.
+    (work / "app.py").write_text("password = 'sk-9fK2mQ7vXzL4pR8wT1cH6dY3jN0bE5aG'\n")
     subprocess.run(["git", "add", "."], cwd=work, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "add secret"], cwd=work, check=True)
     head_sha = subprocess.run(
