@@ -343,6 +343,54 @@ def test_run_pr_scan_job_uses_persistent_checkout_and_unchanged_cache_for_head(
     assert cache_calls[0][4] == head_sha  # current_sha
 
 
+def test_run_pr_scan_job_never_syncs_the_pr_head_checkout_into_the_persistent_git_graph(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # head_dir is checked out at this PR's head_sha, which may sit on a
+    # feature branch that never merges. _sync_persistent_git_graph always
+    # persists under the fixed GRAPH_BRANCH="default" key that
+    # run_push_scan_job/run_initial_scan_job use for the repo's real
+    # default branch, so calling it here would permanently fold unmerged,
+    # possibly-rejected PR commits into the persisted "default" branch
+    # ownership/churn/cadence graph (confirmed directly: see
+    # test_jobs_git_graph_sync.py's
+    # test_sync_persistent_git_graph_does_not_fold_unmerged_pr_commits_into_default_branch_stats).
+    # run_pr_scan_job must never call it.
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._sync_code_graph", lambda *a, **k: None)
+
+    sync_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._sync_persistent_git_graph",
+        lambda *a, **k: sync_calls.append(a) or (a[3] if len(a) > 3 else k.get("evidence")),
+    )
+
+    run_pr_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        pr_number=7,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert sync_calls == []
+
+
 def test_happy_path_posts_comment_and_writes_history(bare_repo_with_two_commits, monkeypatch):
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     posted = {}
