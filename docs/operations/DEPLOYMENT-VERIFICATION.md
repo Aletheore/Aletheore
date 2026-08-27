@@ -5,7 +5,7 @@
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
 **Last Updated:** 2026-08-27
-**Snapshot Freshness:** CURRENT as of 2026-08-27 - production was redeployed to `master` (commit `084d5d2`) and re-verified live via SSH the same day.
+**Snapshot Freshness:** CURRENT as of 2026-08-27 - production was redeployed to `master` (commit `17ffd99`) and re-verified live via SSH the same day.
 
 ## Purpose
 
@@ -29,6 +29,62 @@ Before claiming a hardening change is live, verify:
 - Restore drill target database availability.
 
 ## Current Server Snapshot
+
+As of 2026-08-27 (fifth deploy), following a redeploy to `master` (`git fetch` + `git reset --hard origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `17ffd99`.
+- Working tree: clean aside from the expected untracked `github-app/backups/` directory.
+- 2 commits since the previous deploy tag (`github-app-deploy-2026-08-27-4`): a docs-only deploy
+  record (#436, no-op for running services) and #437 - a second Claude session (`veridion-68`)
+  found `handle_installation_event` had no branch at all for `installation_repositories`/`removed`
+  (deselecting one repo from the GitHub App's repo list without uninstalling the whole app): the
+  repo's dashboard entry, scan history, and every scheduled/webhook-triggered work path stayed live
+  indefinitely, with no purge path anywhere in the codebase. Flagged as a real design decision
+  (hard-purge vs. soft-hide) rather than patched unilaterally; Arihant's call was soft-hide -
+  reversible, but a hidden repo must actually stop being processed, not just disappear from the
+  dashboard, since a hidden-but-still-scanning repo keeps burning real LLM spend. New `hidden_repos`
+  table (migration 057); `hide_repo`/`unhide_repo`/`is_repo_hidden` in `app_server/db.py`; gates
+  `list_repos_for_installations` (dashboard), the PR/push/`/aletheore audit` webhook paths
+  (`pull_request.py`, `push.py`, `issue_comment.py` - push specifically skips its compare-API call
+  too, since access is already revoked), and all three scheduled sweeps that generate new per-repo
+  work (health-check, docs catch-up, wiki catch-up, via a `hidden_repos` join in `scan_worker/db.py`);
+  reversed by `installation_repositories/added`. Independently re-reviewed line-by-line before
+  merge (not just the report taken at face value, per Arihant's explicit ask given this webhook
+  surface had been stable) - cross-checked every scheduled sweep in `scan_worker/jobs.py` against
+  its worklist function in `scan_worker/db.py` to confirm no sweep was missed, verified the
+  `hide_repo` branch runs after `upsert_installation` so `hidden_repos`' FK is always satisfied
+  regardless of webhook arrival order, and confirmed every changed test is additive (new hidden-repo
+  cases or a mechanical `pool`-param thread-through) with no existing assertion changed. Full suite:
+  1551 passed, 8 skipped, 0 failed. See `github-app/CHANGELOG.md` for the full writeup.
+- All five app-relevant services rebuilt (`app-server` for the webhook gating in
+  `app_server/webhooks/*.py`; `scan-worker`, `scan-worker-2`, `health-worker`, `scheduler` since
+  all four run off the same image as `scan_worker/db.py`, which changed) - `demo-scan-worker` and
+  `demo-sandbox-runner` left untouched since neither's own source changed.
+- `scan-worker`/`scan-worker-2` have a deliberate 30m30s `stop_grace_period` (lets an in-flight scan
+  job finish rather than killing it mid-run) and `health-worker` an 11m one - the recreate command
+  waited on this rather than being force-killed early; this run's old containers had no in-flight
+  job blocking it, so all five came up within seconds regardless.
+- Services running: same set as the previous snapshot, all `Up`; all five rebuilt services
+  reporting Docker-healthcheck `healthy` within seconds of recreation.
+- No pending migrations - `app-server`'s startup log shows `no pending migrations`; live-queried
+  `information_schema.columns` for the new `hidden_repos` table and confirmed its three columns
+  (`installation_id bigint`, `repo_full_name text`, `hidden_at timestamptz`) exist exactly as the
+  migration defines them.
+- Post-deploy, verified live (not just that the deploy succeeded) by executing directly inside the
+  running containers, not by re-reading the repo: `app_server.db.hide_repo`/`unhide_repo`/
+  `is_repo_hidden` import cleanly; `inspect.getsource` on all four `app_server.webhooks.*` handlers
+  confirms each contains the `is_repo_hidden`/`hide_repo` gating; `inspect.getsource` on all three
+  `scan_worker.db` sweep-worklist functions confirms each joins `hidden_repos`.
+- Health checks: internal `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
+- No errors, tracebacks, or exceptions in `app-server`, `scan-worker`, `scan-worker-2`,
+  `health-worker`, or `scheduler` logs in the 3 minutes after restart.
+- Not re-verified this pass (no relevant Dockerfile/host changes): Docker socket mount absence,
+  non-root users, CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill
+  target availability, disk space - each last directly verified 2026-08-10 (restore drill itself
+  upgraded 2026-08-24, see below).
+
+## 2026-08-27 (fourth deploy) Snapshot
 
 As of 2026-08-27 (fourth deploy), following a redeploy to `master` (`git fetch` + `git reset --hard origin/master` + `docker compose build app-server` + `docker compose up -d --no-deps --force-recreate app-server`), live inspection found:
 
