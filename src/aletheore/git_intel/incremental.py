@@ -249,7 +249,25 @@ def fold(snapshot: GraphSnapshot, commits: list[CommitTouch]) -> GraphSnapshot:
         for path, f in snapshot.file_churn.items()
     }
 
-    for commit in commits:
+    # Reversed, not `commits` in its natural order: every caller feeds this
+    # `git log`'s own default order, newest commit first (stream_commit_touches
+    # issues no --reverse, and analyzer.py's list(stream_commit_touches(...))
+    # doesn't add one either). Every OTHER aggregate below is order-independent
+    # (a running sum, or a set union) - recent_commits is the one exception:
+    # insert(0, recent) puts each processed commit at the front, so processing
+    # newest-first ends with the OLDEST commit at index 0 and the newest
+    # buried at the back, exactly backwards from what "recent" means. Once a
+    # file's touches in one batch exceed RECENT_COMMITS_PER_FILE, the
+    # truncation below then keeps the oldest ones and drops the genuinely
+    # recent ones. Confirmed directly against fold() itself, not just traced:
+    # three commits newest-to-oldest in, recent_commits[0] came back as the
+    # oldest of the three. Iterating oldest-of-this-batch-first instead makes
+    # the last insert(0, ...) - the real newest commit - land at index 0,
+    # matching every reader of recent_commits[0] (jobs.py's
+    # _commit_attachment_from_graph/_owner_attachment_from_graph, both of
+    # which treat it as "the latest commit" for health-check-failure
+    # correlation and likely-owner inference).
+    for commit in reversed(commits):
         email_key = commit.author_email.lower()
         total = ownership.get(email_key)
         if total is None:
