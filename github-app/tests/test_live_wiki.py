@@ -1115,6 +1115,23 @@ def test_strip_unverified_lines_does_not_strip_a_different_valid_line_number():
     assert "app.py:100." in result
 
 
+def test_strip_unverified_lines_does_not_strip_a_different_file_sharing_a_path_suffix():
+    # Mirror-image of the digit-suffix guard above: "helpers.py:5" is also a
+    # suffix of "core/utils/helpers.py:5" - a different, valid citation to a
+    # different file that just happens to share a path tail. A bad citation
+    # to "utils/helpers.py:5" must not strip a good citation to
+    # "core/utils/helpers.py:5".
+    detail = (
+        "Bad at utils/helpers.py:5.\n"
+        "Good at core/utils/helpers.py:5.\n"
+        "Also good at app.py:1.\n"
+    )
+    result = _strip_unverified_lines(detail, [{"file": "utils/helpers.py", "line": 5}])
+    assert "Bad at utils/helpers.py:5." not in result
+    assert "Good at core/utils/helpers.py:5." in result
+    assert "Also good at app.py:1." in result
+
+
 def test_subsystem_files_survive_a_truncated_model_response():
     """The file list is structural. When the prompt grows large enough that the
     model stops finishing its output, the wiki must not silently lose files -
