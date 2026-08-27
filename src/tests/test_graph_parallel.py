@@ -106,6 +106,48 @@ def test_a_single_available_core_never_invokes_the_process_pool(tmp_path, monkey
     assert {m["path"] for m in modules} == {"app/__init__.py", "app/config.py", "app/auth.py", "app/main.py"}
 
 
+def test_disable_parallel_parse_env_var_forces_sequential_even_above_threshold(tmp_path, monkeypatch):
+    # The hosted scan-worker's containers are memory-constrained (observed
+    # OOM kills on huge repos) - spawning os.cpu_count() worker processes
+    # there could make things worse, not faster. This env var is how
+    # scan_worker/jobs.py's _run_scan opts the hosted subprocess out,
+    # without a CLI flag and without changing the default for local users.
+    repo = _make_multi_file_python_repo(tmp_path)
+    monkeypatch.setattr(graph_module, "PARALLEL_PARSE_MIN_FILES", 0)
+    monkeypatch.setenv("ALETHEORE_DISABLE_PARALLEL_PARSE", "1")
+
+    calls = []
+    monkeypatch.setattr(
+        graph_module,
+        "_parse_many_in_parallel",
+        lambda *a, **k: calls.append(True) or [],
+    )
+
+    modules, _graph, _unparseable = build_module_graph(repo)
+
+    assert calls == []
+    assert {m["path"] for m in modules} == {"app/__init__.py", "app/config.py", "app/auth.py", "app/main.py"}
+
+
+def test_parallel_parse_env_var_unset_does_not_disable_the_pool(tmp_path, monkeypatch):
+    repo = _make_multi_file_python_repo(tmp_path)
+    monkeypatch.setattr(graph_module, "PARALLEL_PARSE_MIN_FILES", 0)
+    monkeypatch.delenv("ALETHEORE_DISABLE_PARALLEL_PARSE", raising=False)
+
+    calls = []
+    real_parse_many = graph_module._parse_many_in_parallel
+
+    def _tracking(*a, **k):
+        calls.append(True)
+        return real_parse_many(*a, **k)
+
+    monkeypatch.setattr(graph_module, "_parse_many_in_parallel", _tracking)
+
+    build_module_graph(repo)
+
+    assert calls == [True]
+
+
 def test_parallel_parse_min_files_default_is_reasonable():
     # Not asserting an exact number (the design doc calls this an
     # implementation-time empirical choice, not a fixed contract) - just

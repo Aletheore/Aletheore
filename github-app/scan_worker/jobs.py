@@ -505,6 +505,14 @@ def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> 
     env["ALETHEORE_DISABLE_LOCAL_SCAN_CACHE"] = "1"
     if unchanged_scan_cache_path is not None:
         env["ALETHEORE_UNCHANGED_SCAN_CACHE"] = str(unchanged_scan_cache_path)
+    # This container is memory-constrained (observed OOM kills on huge repos
+    # under existing limits) - the CLI's parallel scan parsing spawns
+    # os.cpu_count() worker processes, each independently loading the
+    # tree-sitter grammar libraries and holding its own in-flight ASTs,
+    # which could make memory pressure worse here even though it's a clear
+    # win on a developer's own machine. Left unset for a developer running
+    # `aletheore scan` directly, same as the depth caps above.
+    env["ALETHEORE_DISABLE_PARALLEL_PARSE"] = "1"
     subprocess.run(["aletheore", "scan", str(repo_dir)], check=True, env=env)
     return repo_dir / ".aletheore" / "air.json"
 
