@@ -43,9 +43,15 @@ async def test_load_returns_empty_snapshot_for_unknown_repo(pool):
 async def test_apply_commits_then_load_round_trips_correctly(pool):
     await _insert_installation(pool, 602, "org")
     store = PostgresRepoGraphStore(TEST_DATABASE_URL, 602, "org/repo")
+    # Newest first (s2, then s1) - matching git log's real default order.
+    # See src/tests/test_incremental.py's
+    # test_fold_caps_recent_commits_per_file_newest_first for why this
+    # matters: an oldest-first fixture here masked a real bug in fold()'s
+    # recent_commits ordering, on this exact hosted-production code path
+    # (PostgresRepoGraphStore also calls the same shared fold()).
     commits = [
-        _touch("s1", "Alice", "a@example.com", "2026-06-01T00:00:00", ("a.txt", "b.txt")),
         _touch("s2", "Bob", "b@example.com", "2026-06-08T00:00:00", ("a.txt",)),
+        _touch("s1", "Alice", "a@example.com", "2026-06-01T00:00:00", ("a.txt", "b.txt")),
     ]
 
     store.apply_commits(

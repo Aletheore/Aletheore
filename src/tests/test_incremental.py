@@ -249,9 +249,18 @@ def test_fold_bumping_an_already_tracked_partner_never_evicts():
 
 
 def test_fold_caps_recent_commits_per_file_newest_first():
+    # Newest-first, matching git log's real default order (no --reverse is
+    # ever passed - see stream_commit_touches) - the exact order every real
+    # caller (analyzer.py's list(stream_commit_touches(...))) actually feeds
+    # fold(). Regression: this fixture used to build commits oldest-first
+    # (ascending dates, s0..s14), which is backwards from reality and made
+    # the old, buggy insert(0, ...)-in-forward-order code look correct
+    # purely because the test's input order happened to be the mirror image
+    # of what real git log produces - confirmed directly against fold()
+    # itself before fixing either the code or this fixture.
     commits = [
         _touch(f"s{i}", "Alice", "a@example.com", f"2026-06-{i + 1:02d}T00:00:00+00:00", ("a.txt",))
-        for i in range(15)
+        for i in reversed(range(15))
     ]
     result = fold(GraphSnapshot.empty(), commits)
     recent = result.file_churn["a.txt"].recent_commits

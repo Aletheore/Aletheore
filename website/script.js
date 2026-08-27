@@ -61,5 +61,42 @@ function animateTokenCounters() {
   });
 }
 
+function revealOnScroll() {
+  const targets = document.querySelectorAll("[data-reveal]");
+  if (!targets.length) return;
+
+  if (!window.IntersectionObserver) {
+    targets.forEach((el) => el.classList.add("is-visible"));
+    return;
+  }
+
+  const observer = new IntersectionObserver(
+    (entries, obs) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("is-visible");
+          obs.unobserve(entry.target);
+        }
+      });
+    },
+    { threshold: 0.15, rootMargin: "0px 0px -40px 0px" }
+  );
+
+  targets.forEach((el) => observer.observe(el));
+}
+
+function shadeNavOnScroll() {
+  const nav = document.querySelector(".site-nav");
+  if (!nav) return;
+
+  const update = () => {
+    nav.classList.toggle("is-scrolled", window.scrollY > 40);
+  };
+  update();
+  window.addEventListener("scroll", update, { passive: true });
+}
+
 renderShowcaseCards();
 animateProofZoneOnScroll();
+revealOnScroll();
+shadeNavOnScroll();

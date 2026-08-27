@@ -25,9 +25,13 @@ def test_load_returns_empty_snapshot_for_unknown_repo(tmp_path):
 
 def test_apply_commits_then_load_round_trips_correctly(tmp_path):
     store = _store(tmp_path)
+    # Newest first (s2, then s1) - matching git log's real default order
+    # (see test_fold_caps_recent_commits_per_file_newest_first for why this
+    # matters: the old oldest-first fixture order masked a real bug in
+    # fold()'s recent_commits ordering).
     commits = [
-        _touch("s1", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", ("a.txt", "b.txt")),
         _touch("s2", "Bob", "b@example.com", "2026-06-08T00:00:00+00:00", ("a.txt",)),
+        _touch("s1", "Alice", "a@example.com", "2026-06-01T00:00:00+00:00", ("a.txt", "b.txt")),
     ]
     store.apply_commits(
         "repo-1", "main", commits, new_sync_sha="s2", new_sync_at=datetime(2026, 6, 8), reset=True
