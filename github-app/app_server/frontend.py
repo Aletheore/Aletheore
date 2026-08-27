@@ -82,42 +82,47 @@ STYLE = """
   --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, monospace;
   --page-bg: var(--slate-50);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --page-bg: #17140F; --paper: #201B14; --slate-50: #17140F; --slate-100: #221D15;
-    --slate-200: #332B1F; --slate-400: #8A8377; --slate-500: #A49B8D; --slate-600: #B9B1A4;
-    --ink-900: #F3EEE3; --ink-700: #D8D2C5;
-    --accent: #E0863A; --accent-strong: #EFA262; --accent-soft: #3A2A18; --accent-soft-strong: #4A3620;
-    --success: #6FBE7E; --success-soft: #23331F; --warning: #D2A83C; --warning-soft: #3A301A;
-    --critical: #E37972; --critical-soft: #3A211D;
-    --border: rgba(243, 238, 227, 0.12); --border-strong: rgba(243, 238, 227, 0.22);
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35); --shadow-card-hover: 0 6px 18px rgba(0, 0, 0, 0.45);
-    --shadow-lift: 0 22px 70px rgba(0, 0, 0, 0.38);
-  }
+/* Light is now the permanent default (matches the marketing site's
+   direction) rather than automatically following prefers-color-scheme -
+   with the new translucent glass cards, an OS-dark-triggered dark palette
+   under a still-light body produced washed-out, low-contrast cards. The
+   dark palette itself is kept, gated behind an explicit opt-in attribute,
+   in case a real theme toggle is ever added later. */
+:root[data-theme="dark"] {
+  --page-bg: #17140F; --paper: #201B14; --slate-50: #17140F; --slate-100: #221D15;
+  --slate-200: #332B1F; --slate-400: #8A8377; --slate-500: #A49B8D; --slate-600: #B9B1A4;
+  --ink-900: #F3EEE3; --ink-700: #D8D2C5;
+  --accent: #E0863A; --accent-strong: #EFA262; --accent-soft: #3A2A18; --accent-soft-strong: #4A3620;
+  --success: #6FBE7E; --success-soft: #23331F; --warning: #D2A83C; --warning-soft: #3A301A;
+  --critical: #E37972; --critical-soft: #3A211D;
+  --border: rgba(243, 238, 227, 0.12); --border-strong: rgba(243, 238, 227, 0.22);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35); --shadow-card-hover: 0 6px 18px rgba(0, 0, 0, 0.45);
+  --shadow-lift: 0 22px 70px rgba(0, 0, 0, 0.38);
 }
 * { box-sizing: border-box; }
 body { margin: 0; font-family: var(--font-sans); color: var(--ink-900); background-color: var(--page-bg);
-  background-image:
-    radial-gradient(circle at 12% 0%, rgba(224, 134, 58, 0.12), transparent 30%),
-    radial-gradient(var(--border-strong) 1px, transparent 1px);
-  background-size: auto, 22px 22px; }
+  position: relative; overflow-x: hidden; }
+/* Soft color blobs the glass panels blur/refract - same treatment as the
+   marketing site, replacing the old dot-grid texture that read as clutter. */
+body::before, body::after { content: ""; position: fixed; z-index: -1; width: 620px; height: 620px;
+  border-radius: 50%; filter: blur(90px); pointer-events: none; }
+body::before { top: -220px; left: -180px; background: rgba(217, 119, 44, 0.16); }
+body::after { top: 260px; right: -220px; background: rgba(111, 190, 130, 0.14); }
 a { color: var(--accent); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 /* ---- Sign-in ---- */
-.signin { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 4rem 1.5rem;
-  background:
-    radial-gradient(circle at 50% 0%, rgba(224, 134, 58, 0.16), transparent 38%),
-    linear-gradient(180deg, #17140F, #0E0C09); }
-.signin-card { width: 100%; max-width: 430px; background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.025)); border: 1px solid rgba(237,241,238,0.13); border-radius: 18px; padding: 2.5rem 2.2rem; text-align: center; box-shadow: 0 30px 90px rgba(0,0,0,0.34); }
-.wordmark { font-family: var(--font-sans); font-weight: 760; font-size: 25px; color: #F2F5F3; margin: 0 0 7px; }
-.tagline { font-size: 13.5px; color: #B9B1A4; margin: 0 0 2rem; line-height: 1.6; }
-.gh-btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; background: #F2F5F3; color: #14181B;
+.signin { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 4rem 1.5rem; }
+.signin-card { width: 100%; max-width: 430px; background: rgba(255,255,255,0.65); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border); border-radius: 18px; padding: 2.5rem 2.2rem; text-align: center; box-shadow: var(--shadow-lift); }
+.wordmark { font-family: var(--font-sans); font-weight: 760; font-size: 25px; color: var(--ink-900); margin: 0 0 7px; }
+.tagline { font-size: 13.5px; color: var(--slate-600); margin: 0 0 2rem; line-height: 1.6; }
+.gh-btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--ink-900); color: var(--paper);
   border: none; border-radius: 9px; font-family: var(--font-sans); font-size: 14px; font-weight: 650; padding: 12px 16px; cursor: pointer; text-decoration: none; }
-.gh-btn:hover { background: #FFFFFF; }
+.gh-btn:hover { background: var(--ink-700); }
 .gh-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.scope-note { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid rgba(237,241,238,0.1); font-size: 12px; color: #9A9388; line-height: 1.6; text-align: left; }
-.scope-note code { font-family: var(--font-mono); font-size: 11px; color: #A7B2AC; }
+.scope-note { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--border); font-size: 12px; color: var(--slate-600); line-height: 1.6; text-align: left; }
+.scope-note code { font-family: var(--font-mono); font-size: 11px; color: var(--slate-500); }
 
 /* ---- Repo picker ---- */
 .picker-wrap { max-width: 980px; margin: 0 auto; padding: 3.4rem 1.75rem; }
@@ -371,11 +376,9 @@ table.findings tr:last-child td { border-bottom: none; }
 .token-row:last-child { border-bottom: none; }
 .token-label { font-weight: 500; }
 .token-meta { font-size: 11px; color: var(--slate-600); }
-.claim-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 1.5rem;
-  background:
-    radial-gradient(circle at 50% 0%, rgba(224, 134, 58, 0.13), transparent 36%),
-    radial-gradient(var(--border-strong) 1px, transparent 1px); background-size: auto, 22px 22px; }
-.claim-card { width: 100%; max-width: 560px; background: var(--paper); border: 1px solid var(--border); border-radius: 16px; padding: 2.15rem; box-shadow: var(--shadow-lift); }
+.claim-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 3rem 1.5rem; }
+.claim-card { width: 100%; max-width: 560px; background: rgba(255,255,255,0.65); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border); border-radius: 16px; padding: 2.15rem; box-shadow: var(--shadow-lift); }
 .claim-card h1 { margin: 0 0 0.7rem; font-size: 26px; font-weight: 720; }
 .claim-card p { color: var(--slate-600); line-height: 1.6; font-size: 14px; margin: 0 0 1.2rem; }
 .claim-options { display: flex; flex-direction: column; gap: 8px; margin: 1rem 0; }
@@ -398,6 +401,21 @@ table.findings tr:last-child td { border-bottom: none; }
   .diagram-zoom-toolbar { left: 14px; right: 14px; transform: none; justify-content: center; flex-wrap: wrap; border-radius: 14px; }
   .diagram-zoom-hint { order: 2; width: 100%; text-align: center; }
 }
+
+/* ---- Glass treatment ---- */
+/* Every surface that sits on var(--paper) as a floating card gets a
+   translucent version of it plus blur, so it reads as frosted glass over
+   the body's color blobs instead of an opaque card - var(--paper) itself
+   stays solid white since it's also used inside color-mix() expressions
+   throughout this file, which a transparent value would break. */
+.sidebar, .org-switch, .plan-card, .picker-card, .stat-card, .section,
+.dashboard-summary, .docs-module-card, .docs-stat-pill, .settings-block,
+.subsystem-card {
+  background-color: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+.section-head { background-color: rgba(255, 255, 255, 0.35); }
 </style>
 """
 
