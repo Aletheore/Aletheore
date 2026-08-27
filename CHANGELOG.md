@@ -3,6 +3,52 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.5 — 2026-08-27
+
+- **`aletheore scan` is up to 4.5x faster on large repos** — real, measured,
+  not projected. Two separate fixes, discovered by profiling a real ~4-minute
+  scan of ERPNext (~1M LOC) rather than guessing where the time went:
+  - **Parsing is now parallelized** (`ProcessPoolExecutor`, one process per
+    core) — `build_module_graph`'s tree-sitter parsing held the GIL under
+    threading, so this needed real multiprocessing, with each worker
+    returning plain dicts/lists since `Tree`/`Node` objects aren't picklable.
+    Measured on ERPNext: parsing itself went from 10.47s to 7.18s (~30%
+    faster) — real, but a small piece of the total.
+  - **Dead-code detection's dotted-string reference check was the actual
+    bottleneck** — 77% of total scan wall-clock, invisible until profiled.
+    The old check compiled a fresh regex per unreachable-module candidate
+    and scanned every other file's full source for it —
+    O(candidates × files × avg file length). Replaced with a single-pass
+    dotted-string token index (O(total source size) to build, O(1) per
+    candidate lookup after) — same matching semantics, verified via parity
+    tests against a deliberately naive reimplementation of the original
+    algorithm, plus exact set-equality on real ERPNext output (not just
+    matching counts).
+  - Combined, real end-to-end effect on the same pinned ERPNext checkout:
+    **236.02s → 52.41s total wall-clock scan time**, confirmed by actually
+    running it before and after, not estimated.
+  - A pre-release audit of this same rewrite caught and fixed a real
+    correctness regression before it shipped: the new index treated the
+    full captured quoted-string token as always boundary-valid, but the
+    original per-candidate regex only accepted a `.` or a closing quote as
+    the terminating boundary — a quoted string like `"pkg.mod completed
+    successfully"` wrongly registered `pkg.mod` as referenced, which could
+    silently "rescue" a genuinely dead module from being reported. Fixed
+    (only the closing-quote case counts now); parity tests extended to
+    cover this exact shape.
+- **Secret scanner missed the single most common hardcoded-credential
+  shape: a quoted key in JSON/YAML/dict-literal config** —
+  `{"API_KEY": "sk-..."}`, `{'password': '...'}`, a docker-compose
+  `environment:` block, a `terraform.tfvars` value. The keyword's own
+  closing quote sat between it and the `:`/`=` separator, which the
+  pattern's boundary classes couldn't skip over — completely invisible,
+  not a partial miss. Same audit that caught the dead-code regression
+  above, found by systematically checking other boundary-condition regexes
+  in the codebase for the same class of gap. Fixed: left-boundary class now
+  includes quote characters, an optional quote is consumed after the
+  keyword, and `}`/`]` were added to the right-boundary lookahead alongside
+  the existing whitespace/end-of-line/`,#;)` set.
+
 ## 0.9.4 — 2026-08-26
 
 - **Fixed three real secret-scanner false positives**, all the same root
