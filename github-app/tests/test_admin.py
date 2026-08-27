@@ -1128,7 +1128,7 @@ async def test_first_admin_to_arrive_is_auto_seated(pool, monkeypatch):
         response = await client.get("/admin/octocat/hello-world")
     assert response.status_code == 200
     assert [m["github_login"] for m in response.json()["members"]] == ["octocat"]
-    assert response.json()["seat_limit"] == 5
+    assert response.json()["seat_limit"] == 3
 
 
 @pytest.mark.asyncio
