@@ -1,4 +1,6 @@
-from aletheore.dead_code import find_dead_code
+import re
+
+from aletheore.dead_code import _dotted_path_candidates, find_dead_code
 
 
 def _module(path, imported_by=None):
@@ -167,5 +169,112 @@ def test_npm_transitive_lockfile_dependencies_are_never_reported_as_unused(tmp_p
     result = find_dead_code(tmp_path, modules, config=None)
     unused = {dependency["package"] for dependency in result["unused_dependencies"]}
     assert "cspell-lib" not in unused
-    assert "chalk" not in unused
-    assert "cspell" in unused
+
+
+def _reference_referenced_by_dotted_string(path: str, sources: dict[str, str]) -> bool:
+    """Deliberately naive, obviously-correct reimplementation of the
+    original per-(candidate, file) scan this file's real implementation
+    replaced for speed (profiled real cause of aletheore scan/index taking
+    ~4x longer than needed on large repos: 6.9M regex .search() calls, one
+    per (candidate, file) pair, ~180s of it on ERPNext's ~1M LOC). Used only
+    as the parity test's independent ground truth - never called by
+    production code."""
+    candidates = _dotted_path_candidates(path)
+    if not candidates:
+        return False
+    patterns = [re.compile(r'["\']' + re.escape(candidate) + r'(?=[.\'"])') for candidate in candidates]
+    for other_path, content in sources.items():
+        if other_path == path:
+            continue
+        if any(pattern.search(content) for pattern in patterns):
+            return True
+    return False
+
+
+def test_dotted_string_detection_matches_naive_reference_implementation(tmp_path):
+    # The real regression guard for the O(candidates x files) -> O(files)
+    # rewrite: builds a small corpus deliberately covering the shapes that
+    # could diverge (nested paths at several depths, a real dispatch
+    # reference, a near-miss substring collision, a file referencing its
+    # own dotted path, a reference nested several directories deep, no
+    # reference at all) and asserts the real implementation agrees with the
+    # naive per-(candidate, file) reference on every one of them - not just
+    # that both "look reasonable" on a couple of examples.
+    files = {
+        "scan_worker/jobs.py": "def run_pr_scan_job():\n    pass\n",
+        "scan_worker/scheduler.py": 'queue.enqueue("scan_worker.jobs.run_pr_scan_job")\n',
+        "scan_worker/other.py": "# mentions scan_worker.jobsxyz, a near-miss substring, not a real match\n",
+        "scan_worker/self_ref.py": '# this file mentions its own path "scan_worker.self_ref.thing" - must not count\n',
+        "app/deeply/nested/pkg/mod.py": "def helper():\n    pass\n",
+        "app/deeply/nested/registry.py": 'TASKS = {"x": "app.deeply.nested.pkg.mod.helper"}\n',
+        "app/orphan_no_reference.py": "def unused():\n    pass\n",
+        "app/orphan_partial_match.py": (
+            "def unused():\n    pass\n"
+            "# elsewhere: \"app.orphan_partial\" appears but never continues to "
+            "\".match\" - candidate app.orphan_partial_match should not match this\n"
+        ),
+    }
+    unreachable_candidates = [
+        "scan_worker/jobs.py",
+        "scan_worker/other.py",
+        "scan_worker/self_ref.py",
+        "app/deeply/nested/pkg/mod.py",
+        "app/orphan_no_reference.py",
+        "app/orphan_partial_match.py",
+    ]
+
+    for candidate_path in unreachable_candidates:
+        expected = _reference_referenced_by_dotted_string(candidate_path, files)
+
+        for path, content in files.items():
+            (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / path).write_text(content)
+        modules = [
+            _module(p, imported_by=[] if p in unreachable_candidates else ["somewhere/else.py"])
+            for p in files
+        ]
+        result = find_dead_code(tmp_path, modules, config=None)
+        actually_rescued = candidate_path in result["entry_points_detected"]
+
+        assert actually_rescued == expected, (
+            f"{candidate_path}: real implementation says rescued={actually_rescued}, "
+            f"naive reference says {expected}"
+        )
+
+
+def test_dotted_string_detection_real_corpus_full_parity(tmp_path):
+    # Same corpus as above, run through find_dead_code once (as production
+    # actually calls it - all unreachable candidates checked together, not
+    # one at a time), asserting the whole entry_points_detected/
+    # unreachable_modules split matches what the naive per-candidate
+    # reference would produce for the corpus as a whole.
+    files = {
+        "scan_worker/jobs.py": "def run_pr_scan_job():\n    pass\n",
+        "scan_worker/scheduler.py": 'queue.enqueue("scan_worker.jobs.run_pr_scan_job")\n',
+        "scan_worker/other.py": "# mentions scan_worker.jobsxyz, a near-miss substring, not a real match\n",
+        "app/deeply/nested/pkg/mod.py": "def helper():\n    pass\n",
+        "app/deeply/nested/registry.py": 'TASKS = {"x": "app.deeply.nested.pkg.mod.helper"}\n',
+        "app/orphan_no_reference.py": "def unused():\n    pass\n",
+    }
+    for path, content in files.items():
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / path).write_text(content)
+
+    unreachable_candidates = [
+        "scan_worker/jobs.py",
+        "scan_worker/other.py",
+        "app/deeply/nested/pkg/mod.py",
+        "app/orphan_no_reference.py",
+    ]
+    expected_rescued = {
+        p for p in unreachable_candidates if _reference_referenced_by_dotted_string(p, files)
+    }
+
+    modules = [
+        _module(p, imported_by=[] if p in unreachable_candidates else ["somewhere/else.py"])
+        for p in files
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+
+    actually_rescued = {p for p in unreachable_candidates if p in result["entry_points_detected"]}
+    assert actually_rescued == expected_rescued

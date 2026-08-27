@@ -67,15 +67,45 @@ def _dotted_path_candidates(path: str) -> list[str]:
     return [".".join(parts[start:]) for start in range(max(span, 0))]
 
 
-def _referenced_by_dotted_string(path: str, sources: dict[str, str]) -> bool:
-    candidates = _dotted_path_candidates(path)
-    if not candidates:
-        return False
-    patterns = [re.compile(r'["\']' + re.escape(candidate) + r'(?=[.\'"])') for candidate in candidates]
-    for other_path, content in sources.items():
-        if other_path == path:
-            continue
-        if any(pattern.search(content) for pattern in patterns):
+# Matches a quote character immediately followed by a run of identifier/dot
+# characters - the same shape _referenced_by_dotted_string used to look for
+# per (candidate, file) pair (a literal candidate string immediately after
+# an opening quote, ending at the next '.' or closing quote), captured once
+# per file instead. Confirmed by direct profile (2026-08-27): the old
+# per-candidate approach spent 180 of 184 seconds in re.Pattern.search,
+# 6.9M calls, on a real ~1M LOC repo (ERPNext) where most files have no
+# static importer (Frappe's ORM loads doctype controllers by dotted-string
+# name, not `import`) and so become dotted-string-check candidates.
+_QUOTED_WORD_DOT_RUN_RE = re.compile(r'["\']([\w][\w.]*)')
+
+
+def _dot_boundary_prefixes(token: str) -> set[str]:
+    # "pkg.mod.func" -> {"pkg", "pkg.mod", "pkg.mod.func"} - every prefix
+    # ending exactly at a '.' boundary, the same set of strings the old
+    # regex's `(?=[.\'"])` lookahead would each independently match against
+    # this same quoted run.
+    parts = token.split(".")
+    return {".".join(parts[:k]) for k in range(1, len(parts) + 1)}
+
+
+def _dotted_string_token_index(sources: dict[str, str]) -> dict[str, set[str]]:
+    """dotted-string token -> set of file paths whose content references it
+    (quote-adjacent, at a '.'-or-closing-quote boundary) - built once for
+    the whole corpus, replacing what used to be a fresh regex scan of every
+    file per candidate. O(total source size) instead of
+    O(candidates x total source size)."""
+    index: dict[str, set[str]] = {}
+    for path, content in sources.items():
+        for match in _QUOTED_WORD_DOT_RUN_RE.finditer(content):
+            for prefix in _dot_boundary_prefixes(match.group(1)):
+                index.setdefault(prefix, set()).add(path)
+    return index
+
+
+def _referenced_by_dotted_string(path: str, token_index: dict[str, set[str]]) -> bool:
+    for candidate in _dotted_path_candidates(path):
+        owners = token_index.get(candidate)
+        if owners and owners - {path}:
             return True
     return False
 
@@ -188,9 +218,10 @@ def find_dead_code(
                 )
             except OSError:
                 continue
+        token_index = _dotted_string_token_index(py_sources)
         still_unreachable = []
         for entry in unreachable_modules:
-            if entry["path"].endswith(".py") and _referenced_by_dotted_string(entry["path"], py_sources):
+            if entry["path"].endswith(".py") and _referenced_by_dotted_string(entry["path"], token_index):
                 entry_points_detected.append(entry["path"])
             else:
                 still_unreachable.append(entry)
