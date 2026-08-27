@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -2405,6 +2406,100 @@ def _worker_parse_and_extract_one(path: Path) -> dict:
     )
 
 
+# Explicit override, matching PARALLEL_PARSE_MIN_FILES's "no CLI flag"
+# convention for scan-tuning knobs. Always wins over every auto-detected
+# signal below.
+_PARALLEL_PARSE_JOBS_ENV = "ALETHEORE_PARALLEL_PARSE_JOBS"
+
+_CGROUP_V2_CPU_MAX_PATH = Path("/sys/fs/cgroup/cpu.max")
+_CGROUP_V1_CFS_QUOTA_PATH = Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+_CGROUP_V1_CFS_PERIOD_PATH = Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+
+
+def _cgroup_v2_cpu_quota(path: Path = _CGROUP_V2_CPU_MAX_PATH) -> int | None:
+    """cgroup v2's own CPU quota (Docker `--cpus`, most Kubernetes CPU
+    *limits*) - the only signal that reflects a quota-based restriction
+    (CPU time throttling), verified directly against real containers
+    (2026-08-27): a container capped at `docker run --cpus=2` on a
+    10-core host still reports os.cpu_count() == 10 AND
+    len(os.sched_getaffinity(0)) == 10 - sched_getaffinity only sees
+    explicit core pinning (`--cpuset-cpus`), a different, rarer
+    mechanism (see _combined_cpu_quota below). cpu.max holds
+    "<quota> <period>" in microseconds, or "max <period>" when
+    unrestricted.
+    """
+    try:
+        raw = path.read_text().split()
+    except OSError:
+        return None
+    if len(raw) != 2 or raw[0] == "max":
+        return None
+    try:
+        quota, period = int(raw[0]), int(raw[1])
+    except ValueError:
+        return None
+    if period <= 0:
+        return None
+    return max(1, math.ceil(quota / period))
+
+
+def _cgroup_v1_cpu_quota(
+    quota_path: Path = _CGROUP_V1_CFS_QUOTA_PATH, period_path: Path = _CGROUP_V1_CFS_PERIOD_PATH
+) -> int | None:
+    """cgroup v1 fallback (cpu.max is v2-only) - same quota/period shape,
+    split across two files instead of one, quota=-1 meaning unrestricted."""
+    try:
+        quota = int(quota_path.read_text().strip())
+        period = int(period_path.read_text().strip())
+    except (OSError, ValueError):
+        return None
+    if quota <= 0 or period <= 0:
+        return None
+    return max(1, math.ceil(quota / period))
+
+
+def _available_parallelism() -> int:
+    """How many worker processes it's actually sensible to spawn.
+
+    os.cpu_count() (ProcessPoolExecutor's own default) reports the
+    host/VM's raw core count - not what this process is actually allowed
+    to use inside a resource-limited container. A repo scanned inside a
+    CI job capped at 2 CPUs on a 32-core host would otherwise spawn 32
+    worker processes, each independently loading the tree-sitter grammar
+    libraries, for a container that can only actually run 2 of them at
+    once - wasted memory and no real speedup, the opposite of this
+    feature's purpose.
+
+    Takes the tightest of every real restriction mechanism, since a
+    container can have any combination active: a cgroup CPU quota
+    (invisible to both os.cpu_count() and os.sched_getaffinity - see
+    _cgroup_v2_cpu_quota's docstring) and CPU-set pinning
+    (os.sched_getaffinity - k8s static CPU manager policy, invisible to
+    the cgroup quota check). Verified directly against real `docker run`
+    containers across all 4 combinations (unrestricted, quota-only,
+    pinning-only, both together) before this was written, not guessed.
+
+    ALETHEORE_PARALLEL_PARSE_JOBS always wins over all of this when set.
+    """
+    override = os.environ.get(_PARALLEL_PARSE_JOBS_ENV)
+    if override:
+        try:
+            parsed = int(override)
+        except ValueError:
+            parsed = None
+        if parsed is not None and parsed > 0:
+            return parsed
+
+    candidates = [os.cpu_count() or 1]
+    for quota_fn in (_cgroup_v2_cpu_quota, _cgroup_v1_cpu_quota):
+        quota = quota_fn()
+        if quota is not None:
+            candidates.append(quota)
+    if hasattr(os, "sched_getaffinity"):
+        candidates.append(len(os.sched_getaffinity(0)))
+    return max(1, min(candidates))
+
+
 def _parse_many_in_parallel(
     paths: list[Path],
     repo_path: Path,
@@ -2414,6 +2509,7 @@ def _parse_many_in_parallel(
     php_psr4_map: dict[str, Path],
 ) -> list[dict]:
     with ProcessPoolExecutor(
+        max_workers=_available_parallelism(),
         initializer=_init_worker,
         initargs=(repo_path, python_source_roots, go_module_prefix, has_rust_crate_root, php_psr4_map),
     ) as executor:
