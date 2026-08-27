@@ -575,6 +575,21 @@ async def test_set_pushover_user_key_rejects_malformed_key(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_set_pushover_user_key_rejects_a_trailing_newline(pool, monkeypatch):
+    # Regression: the validation regex used a bare $ instead of \Z -
+    # without re.MULTILINE, $ matches either the true end of the string OR
+    # right before a single trailing newline, so 30 valid characters plus
+    # a trailing "\n" incorrectly passed. Confirmed directly before fixing.
+    client = await _logged_in_client(pool, monkeypatch)
+    async with client:
+        response = await client.put(
+            "/admin/octocat/hello-world/pushover-user-key",
+            json={"pushover_user_key": "u" * 30 + "\n"},
+        )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_send_test_pushover_requires_a_saved_key(pool, monkeypatch):
     monkeypatch.setenv("PUSHOVER_API_TOKEN", "server-app-token")
     from app_server.config import get_settings
