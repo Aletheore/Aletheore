@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from app_server.config import get_settings
-from app_server.db import purge_installation_data, upsert_installation
+from app_server.db import hide_repo, purge_installation_data, unhide_repo, upsert_installation
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.github_pagination import fetch_paginated_github_collection
 from app_server.http_client import get_github_api_client
@@ -69,6 +69,20 @@ async def handle_installation_event(
 
     await upsert_installation(pool, installation_id, account_login)
 
+    if event_name == "installation_repositories" and action == "removed":
+        # Deselecting a repo from an existing installation, distinct from
+        # uninstalling the whole app (handled above) - GitHub revokes the
+        # app's access to it, but the customer didn't ask us to forget it.
+        # Soft-hide rather than purge: gone from the dashboard and a no-op
+        # for any new scan/review trigger (see is_repo_hidden's call
+        # sites), reversible if they reselect it later. upsert_installation
+        # runs first (just above) so hidden_repos' FK to installations is
+        # always satisfied, even for a "removed" event somehow arriving
+        # before this installation's own "created" event was processed.
+        for repo in payload.get("repositories_removed", []):
+            await hide_repo(pool, installation_id, repo["full_name"])
+        return
+
     # Without this, a repo with no open pull requests never gets scanned
     # at all - run_pr_scan_job is the only other thing that writes a
     # repo_history row, and it only fires on a PR event. A freshly
@@ -90,6 +104,11 @@ async def handle_installation_event(
         repo_full_names = [
             repo["full_name"] for repo in payload.get("repositories_added", [])
         ]
+        # A repo can only be re-selected here if it was previously
+        # deselected under this same installation (a brand new repo was
+        # never hidden) - unhide is a no-op DELETE otherwise.
+        for repo_full_name in repo_full_names:
+            await unhide_repo(pool, installation_id, repo_full_name)
 
     if not repo_full_names:
         return

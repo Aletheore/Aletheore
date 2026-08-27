@@ -60,7 +60,7 @@ async def test_webhook_dispatches_pull_request_enqueue(monkeypatch, pool):
     body = json.dumps(payload).encode()
     called = {}
 
-    async def fake_handle(payload_arg, redis_url):
+    async def fake_handle(payload_arg, pool_arg, redis_url):
         called["payload"] = payload_arg
         called["redis_url"] = redis_url
 
@@ -96,7 +96,7 @@ async def test_webhook_dispatches_push_enqueue(monkeypatch, pool):
     body = json.dumps(payload).encode()
     called = {}
 
-    async def fake_handle(payload_arg, redis_url):
+    async def fake_handle(payload_arg, pool_arg, redis_url):
         called["payload"] = payload_arg
         called["redis_url"] = redis_url
 

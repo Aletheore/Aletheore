@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app_server.db import upsert_installation, set_installation_plan
+from app_server.db import hide_repo, set_installation_plan, upsert_installation
 from app_server.webhooks.issue_comment import handle_issue_comment_event
 
 
@@ -175,6 +175,23 @@ async def test_audit_command_on_a_free_plan_installation_never_reaches_the_permi
     # The plan gate is checked first and is cheap (one DB read) - a free
     # installation shouldn't cost a GitHub API round trip to reject.
     await upsert_installation(pool, 111, "octocat")
+    permission_check = MagicMock()
+    monkeypatch.setattr(
+        "app_server.webhooks.issue_comment.get_repo_permission_for_user", permission_check
+    )
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(_payload("/aletheore audit"), pool, "redis://unused", queue=fake_queue)
+    permission_check.assert_not_called()
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_audit_command_on_a_hidden_repo_does_not_reach_the_permission_check(pool, monkeypatch):
+    # A repo the customer deselected from the installation - GitHub access
+    # is already revoked, so stay quiet rather than spend a GitHub API
+    # round trip verifying a commenter's permission on it.
+    await _seed_paid_installation(pool)
+    await hide_repo(pool, 111, "octocat/hello-world")
     permission_check = MagicMock()
     monkeypatch.setattr(
         "app_server.webhooks.issue_comment.get_repo_permission_for_user", permission_check

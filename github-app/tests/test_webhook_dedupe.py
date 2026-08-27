@@ -60,7 +60,7 @@ async def test_replayed_delivery_is_not_handled_twice(pool, monkeypatch):
     app.state.db_pool = pool
     handled = []
 
-    async def fake_handle(payload_arg, redis_url):
+    async def fake_handle(payload_arg, pool_arg, redis_url):
         handled.append(payload_arg)
 
     monkeypatch.setattr("app_server.webhooks.push.handle_push_event", fake_handle)
@@ -86,7 +86,7 @@ async def test_a_genuinely_new_delivery_still_runs(pool, monkeypatch):
     app.state.db_pool = pool
     handled = []
 
-    async def fake_handle(payload_arg, redis_url):
+    async def fake_handle(payload_arg, pool_arg, redis_url):
         handled.append(payload_arg)
 
     monkeypatch.setattr("app_server.webhooks.push.handle_push_event", fake_handle)
@@ -142,7 +142,7 @@ async def test_failed_handler_releases_the_claim_so_github_can_retry(pool, monke
     app.state.db_pool = pool
     attempts = []
 
-    async def failing_handle(payload_arg, redis_url):
+    async def failing_handle(payload_arg, pool_arg, redis_url):
         attempts.append(payload_arg)
         raise RuntimeError("redis unavailable")
 
@@ -156,7 +156,7 @@ async def test_failed_handler_releases_the_claim_so_github_can_retry(pool, monke
 
         # GitHub's automatic retry reuses the same GUID. If the claim had
         # stuck, this would be discarded as a duplicate and the event lost.
-        async def working_handle(payload_arg, redis_url):
+        async def working_handle(payload_arg, pool_arg, redis_url):
             attempts.append(payload_arg)
 
         monkeypatch.setattr("app_server.webhooks.push.handle_push_event", working_handle)
