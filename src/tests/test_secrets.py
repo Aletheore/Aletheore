@@ -229,6 +229,29 @@ def test_find_secrets_detects_dotted_attribute_credential_assignment(tmp_path):
     assert sum(f["pattern"] == "generic_credential_assignment" for f in findings) == 2
 
 
+def test_find_secrets_detects_quoted_key_credential_assignment(tmp_path):
+    # Regression: neither the left-boundary class nor the post-keyword gap
+    # before ':'/'=' accounted for the keyword's own closing quote, and the
+    # right-boundary lookahead didn't include '}' or ']' - so a JSON/YAML/
+    # dict-literal quoted-key credential ("API_KEY": "...", 'password': '...')
+    # was completely invisible, whether or not it was the last key in the
+    # object. This is the single most common real shape a hardcoded secret
+    # takes in config files (docker-compose environment blocks, terraform
+    # .tfvars, settings.json, a Python/JS dict literal) - not an edge case.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "config.json").write_text(
+        '{"API_KEY": "sk-abcdefghijklmnopqrstuv"}\n'
+        '{"password": "abcdefghijklmnopqrstuv", "x": 1}\n'
+        "{'API_KEY': 'sk-abcdefghijklmnopqrstuv'}\n"
+        '["API_KEY=sk-abcdefghijklmnopqrstuv"]\n'
+    )
+
+    findings = find_secrets(repo)["findings"]
+
+    assert sum(f["pattern"] == "generic_credential_assignment" for f in findings) == 4
+
+
 def test_find_secrets_detects_fine_grained_github_and_sts_aws_tokens(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
