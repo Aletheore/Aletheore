@@ -5797,6 +5797,44 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(mon
     assert status_calls == [("failed", "model provider unavailable")]
 
 
+def test_run_live_docs_full_build_job_reports_failed_when_every_fetch_returns_none(monkeypatch):
+    # Regression: fetch_file_content returning None (a 404, or a malformed
+    # content response) is a real failure, not "nothing to do" - but
+    # _run_docs_build_for_modules used to `continue` without recording it
+    # as last_error. If every module in the batch hit this (e.g. GitHub's
+    # Contents API lagging right after the push that triggered this job),
+    # succeeded stayed 0 and last_error stayed None, so the caller's
+    # `succeeded == 0 and last_error is not None` failed-status check never
+    # fired - a build that did nothing got reported "ready" with no detail.
+    # Same shape of bug as #405 (free-tier Flash Review claiming a diff was
+    # clean when it never ran).
+    _patch_no_spend_cap(monkeypatch)
+    from scan_worker.jobs import run_live_docs_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    module = _docs_module(functions=[{"name": "f", "is_public": True, "docstring": None}])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([module]))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+
+    run_live_docs_full_build_job(1, "octocat/hello-world")
+
+    assert status_calls[0][0] == "failed"
+    assert status_calls[0][1] is not None
+
+
 def test_maybe_update_live_docs_skips_llm_call_when_spend_cap_reached(monkeypatch):
     from scan_worker.jobs import _maybe_update_live_docs
 

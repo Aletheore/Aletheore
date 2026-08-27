@@ -3863,6 +3863,25 @@ def _run_docs_build_for_modules(
         try:
             content = fetch_file_content(client, token, repo_full_name, module["path"], ref)
             if content is None:
+                # fetch_file_content returns None on a 404 or a malformed
+                # content response - a real failure signal, not "nothing to
+                # do here" (unlike _module_has_uncovered_docs_work's own
+                # skip cases, which are legitimate no-ops). Recording it as
+                # last_error matters most when every module in this batch
+                # hits it (e.g. GitHub's Contents API lagging right after
+                # the push that triggered this job, or a token missing
+                # contents:read): without this, succeeded stays 0 and
+                # last_error stays None, and the caller's `succeeded == 0
+                # and last_error is not None` failed-status check never
+                # fires - a build that did nothing gets reported "ready"
+                # with no detail, the same shape of bug #405 already fixed
+                # for free-tier Flash Review claiming a diff was clean when
+                # it never ran.
+                last_error = f"could not fetch content for {module['path']}"
+                logger.warning(
+                    "live docs: %s for installation=%s repo=%s - continuing with the remaining modules",
+                    last_error, installation_id, repo_full_name,
+                )
                 continue
             _store_docs_generation_for_module(
                 dsn, installation_id, repo_full_name, module, writing_adapter,
