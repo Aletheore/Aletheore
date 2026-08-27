@@ -14,6 +14,20 @@ file is the history; that one is the current state.
 
 ## 2026-08-27
 
+- **Soft-hide a repo removed from the installation, and stop processing it** (#437) -
+  `handle_installation_event` had no branch at all for `installation_repositories`/`removed`
+  (deselecting one repo from the GitHub App's repo list without uninstalling the whole app): the
+  repo's dashboard entry, scan history, and every scheduled/webhook-triggered work path stayed
+  live indefinitely, with no purge path anywhere in the codebase. Found by a second Claude session
+  (`veridion-68`) during the ongoing `jobs.py`-adjacent hardening sweep; flagged as a design
+  decision (hard-purge vs. soft-hide) rather than patched unilaterally, since it's new
+  data-deletion logic on a webhook path with production customer data at stake. Arihant's call:
+  soft-hide - reversible if the repo is reselected later, but must actually stop being processed
+  (not just disappear from the dashboard), since a hidden-but-still-scanning repo keeps burning
+  real LLM spend and billed capacity for a repo the customer explicitly walked away from. New
+  `hidden_repos` table (migration 057); gates the dashboard repo list, the PR/push/`/aletheore
+  audit` webhook paths, and all three scheduled sweeps that generate new per-repo work
+  (health-check, docs catch-up, wiki catch-up); reversed by `installation_repositories/added`.
 - **Reduced Aletheore AIR's included seats from 5 to 3, repriced the extra-seat add-on from
   $4.99 to $6.99/month** (#435) - a real pricing change, not a bug fix: 5 seats was more value
   than the $29.99/mo base price should bundle. `db.py`'s `INCLUDED_SEATS["air"]` dropped to 3;
