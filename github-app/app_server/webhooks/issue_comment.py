@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from app_server.config import get_settings
-from app_server.db import get_installation
+from app_server.db import get_installation, is_repo_hidden
 from app_server.github_auth import generate_app_jwt, get_installation_token, get_repo_permission_for_user
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,12 @@ async def handle_issue_comment_event(payload: dict, pool, redis_url: str, queue=
             AUDIT_COMMAND,
             repo_full_name,
         )
+        return
+
+    # A repo deselected from the installation (webhooks/installation.py's
+    # hide_repo) - our access is already revoked; stay quiet rather than
+    # verify a commenter's permission on a repo we can't act on anyway.
+    if await is_repo_hidden(pool, installation_id, repo_full_name):
         return
 
     settings = get_settings()

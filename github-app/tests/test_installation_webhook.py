@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from app_server.db import get_installation, upsert_installation
+from app_server.db import get_installation, hide_repo, is_repo_hidden, upsert_installation
 from app_server.webhooks.installation import _fetch_installation_repos_sync, handle_installation_event
 
 
@@ -166,3 +166,53 @@ async def test_installation_repositories_removed_does_not_enqueue_a_scan(pool, m
     )
 
     fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_installation_repositories_removed_hides_the_repo(pool, monkeypatch):
+    payload = {
+        "action": "removed",
+        "installation": {"id": 561, "account": {"login": "someorg"}},
+        "repositories_removed": [{"full_name": "someorg/gone"}],
+    }
+    await handle_installation_event(
+        "installation_repositories", payload, pool, "redis://unused", queue=MagicMock()
+    )
+
+    assert await is_repo_hidden(pool, 561, "someorg/gone") is True
+
+
+@pytest.mark.asyncio
+async def test_installation_repositories_removed_creates_the_installation_row_first(pool):
+    # hidden_repos.installation_id has a foreign key on installations - a
+    # "removed" event must never arrive before this installation has any
+    # row of its own (a bare INSERT would otherwise raise a constraint
+    # violation instead of hiding the repo).
+    payload = {
+        "action": "removed",
+        "installation": {"id": 562, "account": {"login": "someorg"}},
+        "repositories_removed": [{"full_name": "someorg/gone"}],
+    }
+    await handle_installation_event(
+        "installation_repositories", payload, pool, "redis://unused", queue=MagicMock()
+    )
+
+    assert await get_installation(pool, 562) is not None
+
+
+@pytest.mark.asyncio
+async def test_installation_repositories_added_unhides_a_previously_removed_repo(pool):
+    await upsert_installation(pool, 563, "someorg")
+    await hide_repo(pool, 563, "someorg/back-again")
+    fake_queue = MagicMock()
+    payload = {
+        "action": "added",
+        "installation": {"id": 563, "account": {"login": "someorg"}},
+        "repositories_added": [{"full_name": "someorg/back-again"}],
+    }
+    await handle_installation_event(
+        "installation_repositories", payload, pool, "redis://unused", queue=fake_queue
+    )
+
+    assert await is_repo_hidden(pool, 563, "someorg/back-again") is False
+    fake_queue.enqueue.assert_called_once()

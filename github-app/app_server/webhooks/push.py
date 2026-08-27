@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from app_server.config import get_settings
+from app_server.db import is_repo_hidden
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.http_client import get_github_api_client
 
@@ -98,7 +99,7 @@ async def _changed_files_for_push(payload: dict) -> set[str]:
         raise
 
 
-async def handle_push_event(payload: dict, redis_url: str, queue=None) -> None:
+async def handle_push_event(payload: dict, pool, redis_url: str, queue=None) -> None:
     # Every branch/tag push fires this event - only a push that actually
     # lands on the repository's default branch is "what's on main" for
     # AIRview's purposes. Branch deletions carry after == "0000...0" and
@@ -109,6 +110,15 @@ async def handle_push_event(payload: dict, redis_url: str, queue=None) -> None:
     ref = payload.get("ref", "")
     default_branch = payload.get("repository", {}).get("default_branch", "")
     if ref != f"refs/heads/{default_branch}":
+        return
+
+    installation_id = payload["installation"]["id"]
+    repo_full_name = payload["repository"]["full_name"]
+
+    # Checked before _changed_files_for_push, which can make a live GitHub
+    # API call (the truncated-commit-list path) - access to a hidden repo
+    # is already revoked, so that call would just fail; skip it entirely.
+    if await is_repo_hidden(pool, installation_id, repo_full_name):
         return
 
     changed_files = await _changed_files_for_push(payload)
@@ -122,8 +132,8 @@ async def handle_push_event(payload: dict, redis_url: str, queue=None) -> None:
     queue.enqueue(
         "scan_worker.jobs.run_push_scan_job",
         job_timeout=300,
-        installation_id=payload["installation"]["id"],
-        repo_full_name=payload["repository"]["full_name"],
+        installation_id=installation_id,
+        repo_full_name=repo_full_name,
         head_sha=payload["after"],
         changed_files=sorted(changed_files),
     )

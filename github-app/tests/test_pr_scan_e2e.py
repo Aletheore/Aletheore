@@ -1,9 +1,16 @@
 import asyncio
+import os
 from contextlib import contextmanager
 
+import asyncpg
 from rq import Queue
 
 from app_server.webhooks.pull_request import handle_pull_request_event
+
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql://postgres:test@localhost:55433/aletheore_test",
+)
 
 
 @contextmanager
@@ -12,7 +19,7 @@ def _noop_repo_checkout_lock(*args, **kwargs):
 
 
 def test_pull_request_webhook_to_pr_comment_end_to_end(
-    bare_repo_with_two_commits, redis_conn, monkeypatch
+    bare_repo_with_two_commits, redis_conn, pool, monkeypatch
 ):
     """Every other webhook/job test mocks the RQ queue entirely (a
     MagicMock captures the enqueue call) or calls run_pr_scan_job directly
@@ -57,14 +64,27 @@ def test_pull_request_webhook_to_pr_comment_end_to_end(
     }
 
     queue = Queue("scans", connection=redis_conn)
-    # handle_pull_request_event is async, but the job it enqueues resolves
-    # its GitHub token via asyncio.run() internally (see
-    # scan_worker.jobs._token_sync) - that raises if called from inside an
-    # already-running event loop. Keep this test's own loop scoped to just
-    # the enqueue call and closed before .perform() runs the job, exactly
-    # as happens in production (webhook request handling and job execution
-    # are different processes, never sharing a loop).
-    asyncio.run(handle_pull_request_event(payload, "unused", queue=queue))
+
+    async def _dispatch():
+        # A fresh pool, not the `pool` fixture's - that pool is bound to
+        # pytest-asyncio's own event loop, and asyncpg pools can't be used
+        # from a different loop than the one they were created on (surfaces
+        # as "another operation is in progress" / a closed-connection
+        # error). handle_pull_request_event is async, but the job it
+        # enqueues resolves its GitHub token via asyncio.run() internally
+        # (see scan_worker.jobs._token_sync), which raises if called from
+        # inside an already-running event loop - so this whole dispatch
+        # (pool included) has to live inside its own asyncio.run(), scoped
+        # to just the enqueue call and closed before .perform() runs the
+        # job, exactly as happens in production (webhook request handling
+        # and job execution are different processes, never sharing a loop).
+        dispatch_pool = await asyncpg.create_pool(TEST_DATABASE_URL)
+        try:
+            await handle_pull_request_event(payload, dispatch_pool, "unused", queue=queue)
+        finally:
+            await dispatch_pool.close()
+
+    asyncio.run(_dispatch())
 
     pr_scan_jobs = [j for j in queue.jobs if j.func_name == "scan_worker.jobs.run_pr_scan_job"]
     assert len(pr_scan_jobs) == 1
