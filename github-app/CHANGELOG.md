@@ -12,6 +12,43 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-27
+
+- **Three real bugs found and fixed in `scan_worker/jobs.py`** (the repo's own
+  worst code-health hotspot: 1.65/10 defect risk, 38 prior bug-fixes in 6
+  months), from a proactive dual-pass audit (this session plus a second
+  independent Claude session, `veridion-68`, auditing the same file with
+  fresh eyes):
+  - **#405** — when every free-tier LLM provider failed mid-review,
+    `_run_flash_review` correctly skipped billing but still posted "No
+    issues found in this diff." to the PR and advanced `last_reviewed_sha`
+    — falsely telling the user their PR was reviewed clean, and
+    permanently skipping the diff range that actually failed to review.
+  - **#406** — `run_pr_scan_job` was calling `_sync_persistent_git_graph`
+    against a PR's own head checkout, which always writes under the fixed
+    `GRAPH_BRANCH="default"` key — permanently folding unmerged, possibly-
+    rejected PR commits into the persisted default-branch git graph
+    (ownership/churn/cadence) the dashboard and future incremental syncs
+    read from.
+  - **#407** — the direct sibling of #406, found immediately after by
+    re-auditing code adjacent to the fix: `_sync_code_graph` (its own
+    docstring calls itself "the counterpart to `_sync_persistent_git_graph`
+    ... for the code model rather than git history") had the exact same
+    unconditional-`GRAPH_BRANCH`-write bug, corrupting the durable
+    `code_graph_files/symbols/dependency_edges/endpoints` tables that back
+    several MCP tools.
+  - Deployed to every service that actually executes `scan_worker/jobs.py`:
+    `scan-worker`, `scan-worker-2`, `health-worker`, and `scheduler` — all
+    four share `Dockerfile.scan-worker` but compose tags them as separate
+    images, so each needed its own explicit rebuild (same gotcha as the
+    prior secrets-fix deploy). `app-server` also bundles a copy of
+    `scan_worker/` but only ever references these job names as string
+    literals for RQ enqueue, never imports/executes them directly, so it
+    needed no rebuild for this fix. Verified live: the new bail-out and
+    call-site-removal comments are present in the deployed
+    `scan-worker` container's `jobs.py`, and all four containers came up
+    healthy.
+
 ## 2026-08-26-2
 
 - **Deployed the secret-scanner false-positive fixes** (#402) to every

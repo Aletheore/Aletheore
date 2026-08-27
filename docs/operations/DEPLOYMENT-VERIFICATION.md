@@ -4,8 +4,8 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-08-24
-**Snapshot Freshness:** CURRENT as of 2026-08-24 - production was redeployed to `master` (commit `23a94ab`) and re-verified live via SSH the same day.
+**Last Updated:** 2026-08-27
+**Snapshot Freshness:** CURRENT as of 2026-08-27 - production was redeployed to `master` (commit `3b89249`) and re-verified live via SSH the same day.
 
 ## Purpose
 
@@ -29,6 +29,49 @@ Before claiming a hardening change is live, verify:
 - Restore drill target database availability.
 
 ## Current Server Snapshot
+
+As of 2026-08-27, following a redeploy to `master` (`git pull origin master` + `docker compose build scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those four - `app-server` deliberately left untouched, see below), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `3b89249`.
+- Working tree: clean aside from the expected untracked `github-app/backups/` directory.
+- 5 commits since the previous deploy tag (`github-app-deploy-2026-08-26-2`) - three real bugs in
+  `scan_worker/jobs.py`, found by a proactive dual-pass audit (this session plus a second,
+  independent Claude session auditing the same file for a fresh set of eyes) rather than a bug
+  report: #405 (free-tier Flash Review falsely claiming a diff was reviewed clean, and advancing
+  `last_reviewed_sha`, when every free-tier provider actually failed mid-review), #406 (PR scans
+  permanently polluting the persisted default-branch git graph with unmerged commits via
+  `_sync_persistent_git_graph`), and #407 (the direct sibling of #406 - `_sync_code_graph` had the
+  identical unconditional-`GRAPH_BRANCH="default"`-write bug, corrupting the durable code graph).
+  See `github-app/CHANGELOG.md`'s 2026-08-27 entry for the full writeup.
+- Only `scan-worker`, `scan-worker-2`, `health-worker`, and `scheduler` were rebuilt - all four
+  share `Dockerfile.scan-worker` and actually execute `scan_worker/jobs.py`, and (same gotcha as
+  every prior multi-image deploy) compose tags each as its own separately-built image despite the
+  shared Dockerfile, so each needed an explicit rebuild. `app-server` also bundles a copy of
+  `scan_worker/` in its image, but its own source was grepped directly: every reference to these
+  job functions is a string literal handed to RQ's `queue.enqueue(...)` (job name resolved and
+  imported by the *worker* process that dequeues it, never by `app-server` itself) - confirmed no
+  rebuild was needed for this fix to take effect.
+- Services running: same set as the 2026-08-24 snapshot below, all `Up`; the four rebuilt services
+  reporting Docker-healthcheck `healthy` within seconds of recreation.
+- No pending migrations - a code-only deploy, and `app-server` (the only service that runs
+  `scripts/migrate.py`) wasn't even restarted this time.
+- Post-deploy, verified live (not just that the deploy succeeded) by importing `scan_worker.jobs`
+  directly inside the running `scan-worker` container and inspecting real source via
+  `inspect.getsource`, not by re-reading the repo: `run_pr_scan_job`'s source contains no call to
+  `_sync_persistent_git_graph(` or `_sync_code_graph(` (both #406 and #407's fixes), and
+  `_run_flash_review`'s source contains the `if free_tier_exhausted["value"]: return False` bail-out
+  added by #405, ahead of the comment-posting/`set_last_reviewed_sha` calls it used to reach
+  unconditionally.
+- Health checks: internal `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
+- No errors, tracebacks, or exceptions in `scan-worker`, `scan-worker-2`, `health-worker`, or
+  `scheduler` logs in the 5 minutes after restart (targeted grep for `error|traceback|exception`).
+- Not re-verified this pass (no relevant Dockerfile/host changes, and `app-server` wasn't touched):
+  Docker socket mount absence, non-root users, CPU/mem limits, backup cron execution, base-image
+  digest pinning, restore-drill target availability, disk space - each last directly verified
+  2026-08-10 (restore drill itself upgraded 2026-08-24, see below).
+
+## 2026-08-24 Snapshot
 
 As of 2026-08-24, following a redeploy to `master` (`git reset --hard origin/master` + `docker compose build app-server scan-worker health-worker scheduler` + `docker compose up -d --no-deps --scale scan-worker=2` for those four), live inspection found:
 
