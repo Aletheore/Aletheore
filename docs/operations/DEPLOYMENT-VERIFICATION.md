@@ -5,7 +5,7 @@
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
 **Last Updated:** 2026-08-27
-**Snapshot Freshness:** CURRENT as of 2026-08-27 - production was redeployed to `master` (commit `3b89249`) and re-verified live via SSH the same day.
+**Snapshot Freshness:** CURRENT as of 2026-08-27 - production was redeployed to `master` (commit `12baf31`) and re-verified live via SSH the same day.
 
 ## Purpose
 
@@ -30,7 +30,86 @@ Before claiming a hardening change is live, verify:
 
 ## Current Server Snapshot
 
-As of 2026-08-27, following a redeploy to `master` (`git pull origin master` + `docker compose build scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those four - `app-server` deliberately left untouched, see below), live inspection found:
+As of 2026-08-27 (third deploy), following a redeploy to `master` (`git fetch` + `git reset --hard origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `12baf31`.
+- Working tree: clean aside from the expected untracked `github-app/backups/` directory.
+- 2 commits since the previous deploy tag (`github-app-deploy-2026-08-27-2`): #428 fixed
+  `_PUSHOVER_KEY_PATTERN`'s bare `$` (which, without `re.MULTILINE`, matches just before a single
+  trailing newline as well as true end-of-string) to `\Z`, so a 30-character Pushover key with a
+  copy-paste trailing newline is now correctly rejected instead of silently accepted; #430 fixed
+  `git_intel/incremental.py`'s `fold()` iterating `commits` in caller order (newest-first, matching
+  real `git log`) while building `recent_commits` with `insert(0, ...)` - the two compounded to put
+  the *oldest* commit at `recent_commits[0]` instead of the newest, which `jobs.py`'s
+  `_commit_attachment_from_graph`/`_owner_attachment_from_graph` read directly as "the latest
+  commit" for health-check-failure correlation and likely-owner inference on the hosted path.
+  #430's own CI catalogued and fixed three test fixtures with an oldest-first mirror-image ordering
+  bug that had been masking this; a fourth fixture (`github-app/tests/test_correlation.py`) was
+  found and fixed the same way after the first CI run on this session's push still failed against
+  it, verified locally against a real Postgres round-trip before re-pushing. See
+  `github-app/CHANGELOG.md` for the full per-PR writeup.
+- Rebuilt the same five services as the previous deploy (`admin.py` changed for #428;
+  `git_intel/incremental.py` - part of the shared `aletheore` package `scan_worker` installs -
+  changed for #430) - `demo-scan-worker` and `demo-sandbox-runner` again left untouched, neither's
+  own source changed.
+- Services running: same set as the previous snapshot, all `Up`; all five rebuilt services
+  reporting Docker-healthcheck `healthy` within seconds of recreation.
+- No pending migrations - `app-server`'s startup log shows `no pending migrations`.
+- Post-deploy, verified live (not just that the deploy succeeded) by executing directly inside the
+  running containers: `app_server.admin`'s live `_PUSHOVER_KEY_PATTERN` source contains `\Z`;
+  `aletheore.git_intel.incremental.fold`'s live source contains `reversed(commits)`.
+- Health checks: internal `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
+- No errors, tracebacks, or exceptions in `app-server`, `scan-worker`, `scan-worker-2`,
+  `health-worker`, or `scheduler` logs in the 2 minutes after restart.
+- Not re-verified this pass (no relevant Dockerfile/host changes): Docker socket mount absence,
+  non-root users, CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill
+  target availability, disk space - each last directly verified 2026-08-10 (restore drill itself
+  upgraded 2026-08-24, see below).
+
+## 2026-08-27 (second deploy) Snapshot
+
+As of 2026-08-27 (second deploy), following a redeploy to `master` (`git reset --hard origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `d90bd87`.
+- Working tree: clean aside from the expected untracked `github-app/backups/` directory.
+- 20 commits since the previous deploy tag (`github-app-deploy-2026-08-27`) - the headline changes:
+  #426 caps `ProcessPoolExecutor` parallel-parse worker count to the real available CPU quota
+  (cgroup-aware, not raw `os.cpu_count()`); #427 redesigns the marketing site and the hosted
+  dashboard's sign-in/repo-picker/overview with a light glass theme (dark mode changed from
+  OS-auto to an explicit `data-theme="dark"` opt-in); #429 fixes FastAPI endpoint-mapping missing
+  the mount prefix entirely for `include_router(module.router, prefix=...)`-style calls (only bare
+  identifiers were handled before), which fed both the dashboard's endpoint list and the hosted
+  health-check monitor with wrong paths; plus #409's `stop_grace_period` fix (`docker-compose.yml`,
+  30m30s on scan-worker/scan-worker-2, 11m on health-worker) and #410's spend-cap check-then-act
+  race fix were both already live at the previous deploy's commit but are included here for
+  completeness. See `github-app/CHANGELOG.md` for the full per-PR writeup.
+- Rebuilt all five app-relevant services this time (`app-server` included, unlike the previous
+  deploy) since both `app_server/frontend.py` and `app_server/demo_scan_api.py` changed alongside
+  `scan_worker/jobs.py` and `scan_worker/live_wiki.py` - `demo-scan-worker` and
+  `demo-sandbox-runner` were left untouched since neither's own source changed (they build from
+  separate Dockerfiles, confirmed via `docker-compose.yml`, not assumed).
+- Services running: same set as the previous snapshot, all `Up`; all five rebuilt services
+  reporting Docker-healthcheck `healthy` within a minute of recreation.
+- No pending migrations - `app-server`'s startup log shows `no pending migrations`.
+- Post-deploy, verified live (not just that the deploy succeeded) by executing directly inside the
+  running containers, not by re-reading the repo: `app_server.frontend`'s live source contains
+  `data-theme="dark"` (the explicit opt-in, replacing the old `@media (prefers-color-scheme: dark)`
+  auto-follow) and the light-glass sign-in background (`rgba(255, 255, 255, 0.65)`); `app_server.demo_scan_api`
+  imports cleanly; `scan_worker.jobs` has `_run_scan`.
+- Health checks: internal `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
+- No errors, tracebacks, or exceptions in `app-server`, `scan-worker`, `scan-worker-2`,
+  `health-worker`, or `scheduler` logs in the 2 minutes after restart (targeted grep for
+  `error|traceback|exception`).
+- Not re-verified this pass (no relevant Dockerfile/host changes): Docker socket mount absence,
+  non-root users, CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill
+  target availability, disk space - each last directly verified 2026-08-10 (restore drill itself
+  upgraded 2026-08-24, see below).
+
+## 2026-08-27 (first deploy) Snapshot
+
+As of 2026-08-27 (first deploy), following a redeploy to `master` (`git pull origin master` + `docker compose build scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those four - `app-server` deliberately left untouched, see below), live inspection found:
 
 - Host: `srv1675832` (`root@187.127.169.89`).
 - Commit: `3b89249`.
