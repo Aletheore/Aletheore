@@ -2687,7 +2687,16 @@ def build_module_graph(
             )
         )
 
-    if len(paths_needing_parse) >= PARALLEL_PARSE_MIN_FILES:
+    # _available_parallelism() > 1, not just the file-count threshold: a
+    # container whose real CPU quota only allows one worker anyway (see
+    # _available_parallelism's docstring - confirmed against this
+    # project's own hosted scan-worker containers, cpus: "1.0" in
+    # docker-compose.yml) gets zero benefit from a pool sized at 1 - only
+    # the ~150ms pool-creation cost plus a second process independently
+    # loading every tree-sitter grammar library, for exactly the same
+    # work the sequential path below already does in this process. Below
+    # that quota, staying sequential is strictly better, not just equal.
+    if len(paths_needing_parse) >= PARALLEL_PARSE_MIN_FILES and _available_parallelism() > 1:
         modules.extend(
             _parse_many_in_parallel(
                 paths_needing_parse,

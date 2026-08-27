@@ -80,6 +80,32 @@ def test_small_repo_never_invokes_the_process_pool(tmp_path, monkeypatch):
     assert {m["path"] for m in modules} == {"app/__init__.py", "app/config.py", "app/auth.py", "app/main.py"}
 
 
+def test_a_single_available_core_never_invokes_the_process_pool(tmp_path, monkeypatch):
+    # Regression: a repo well over PARALLEL_PARSE_MIN_FILES still must not
+    # spawn a pool when _available_parallelism() says only one worker is
+    # actually usable (confirmed against this project's own hosted
+    # scan-worker containers: cpus: "1.0" in docker-compose.yml) - a pool
+    # sized at 1 pays the ~150ms creation cost plus a second process
+    # independently loading every tree-sitter grammar, for zero
+    # parallelism benefit over staying sequential.
+    monkeypatch.setattr(graph_module, "PARALLEL_PARSE_MIN_FILES", 0)
+    monkeypatch.setattr(graph_module, "_available_parallelism", lambda: 1)
+
+    repo = _make_multi_file_python_repo(tmp_path)
+
+    calls = []
+    monkeypatch.setattr(
+        graph_module,
+        "_parse_many_in_parallel",
+        lambda *a, **k: calls.append(True) or [],
+    )
+
+    modules, _graph, _unparseable = build_module_graph(repo)
+
+    assert calls == []
+    assert {m["path"] for m in modules} == {"app/__init__.py", "app/config.py", "app/auth.py", "app/main.py"}
+
+
 def test_parallel_parse_min_files_default_is_reasonable():
     # Not asserting an exact number (the design doc calls this an
     # implementation-time empirical choice, not a fixed contract) - just
