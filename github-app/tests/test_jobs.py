@@ -3466,6 +3466,59 @@ def test_run_runtime_event_job_skips_when_no_webhook_configured(monkeypatch):
     assert called == []
 
 
+def test_run_runtime_event_job_sends_via_email_when_no_webhook_configured(monkeypatch):
+    # Regression: run_runtime_event_job used to call send_health_alert
+    # directly and gate the whole job on webhook_url alone - predating
+    # email/Pushover as alert channels (_send_alerts_if_configured) and
+    # never updated when those landed. An installation with only
+    # alert_email configured got every health-check alert correctly but
+    # silently zero runtime-error alerts.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "alert_email": "ops@example.com"},
+    )
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._attach_recent_commit_for_failure", lambda *a, **k: None)
+    enqueued = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **k: enqueued.append(k),
+    )
+
+    from scan_worker.jobs import run_runtime_event_job
+
+    run_runtime_event_job(1, "octocat/hello-world", "ZeroDivisionError", "division by zero", "a.py", 1)
+
+    assert len(enqueued) == 1
+    assert enqueued[0]["to_email"] == "ops@example.com"
+    assert "ZeroDivisionError" in enqueued[0]["template_arg"]
+
+
+def test_run_runtime_event_job_sends_via_pushover_when_no_webhook_configured(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("PUSHOVER_API_TOKEN", "server-app-token")
+    from app_server.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "pushover_user_key": "u1"},
+    )
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._attach_recent_commit_for_failure", lambda *a, **k: None)
+    pushover_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_pushover_alert", lambda *a, **k: pushover_sent.append(a)
+    )
+
+    from scan_worker.jobs import run_runtime_event_job
+
+    run_runtime_event_job(1, "octocat/hello-world", "ZeroDivisionError", "division by zero", "a.py", 1)
+
+    assert len(pushover_sent) == 1
+
+
 def test_sweep_sends_shape_change_alert_while_still_reachable(monkeypatch):
     sent = _patch_sweep(
         monkeypatch,
@@ -5795,6 +5848,44 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(mon
     run_live_docs_full_build_job(1, "octocat/hello-world")
 
     assert status_calls == [("failed", "model provider unavailable")]
+
+
+def test_run_live_docs_full_build_job_reports_failed_when_every_fetch_returns_none(monkeypatch):
+    # Regression: fetch_file_content returning None (a 404, or a malformed
+    # content response) is a real failure, not "nothing to do" - but
+    # _run_docs_build_for_modules used to `continue` without recording it
+    # as last_error. If every module in the batch hit this (e.g. GitHub's
+    # Contents API lagging right after the push that triggered this job),
+    # succeeded stayed 0 and last_error stayed None, so the caller's
+    # `succeeded == 0 and last_error is not None` failed-status check never
+    # fired - a build that did nothing got reported "ready" with no detail.
+    # Same shape of bug as #405 (free-tier Flash Review claiming a diff was
+    # clean when it never ran).
+    _patch_no_spend_cap(monkeypatch)
+    from scan_worker.jobs import run_live_docs_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    module = _docs_module(functions=[{"name": "f", "is_public": True, "docstring": None}])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([module]))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+
+    run_live_docs_full_build_job(1, "octocat/hello-world")
+
+    assert status_calls[0][0] == "failed"
+    assert status_calls[0][1] is not None
 
 
 def test_maybe_update_live_docs_skips_llm_call_when_spend_cap_reached(monkeypatch):
