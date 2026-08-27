@@ -3021,6 +3021,31 @@ def test_send_alerts_if_configured_sends_both_channels_when_both_set(monkeypatch
     assert len(email_sent) == 1
 
 
+def test_send_alerts_if_configured_email_dedupe_key_collapses_within_the_same_second(monkeypatch):
+    # Regression: the docstring says the dedupe_key includes wall-clock
+    # time "down to the second" specifically so a genuine retry of the
+    # outer job re-sending the same flip collapses into one email - but
+    # time.time() carries microsecond precision, so two calls a
+    # millisecond apart (an actual retry) each got their own unique key
+    # and dedup never fired at all. A retried flip must produce the same
+    # dedupe_key when it happens within the same second.
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    enqueued = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **k: enqueued.append(k),
+    )
+
+    installation = {"installation_id": 1, "target_id": 900, "alert_email": "ops@example.com"}
+    _send_alerts_if_configured(installation, {"text": "down"})
+    _send_alerts_if_configured(installation, {"text": "down"})
+
+    assert len(enqueued) == 2
+    assert enqueued[0]["dedupe_key"] == enqueued[1]["dedupe_key"]
+
+
 def test_send_alerts_if_configured_sends_neither_when_unconfigured(monkeypatch):
     from scan_worker.jobs import _send_alerts_if_configured
 
