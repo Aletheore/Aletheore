@@ -106,6 +106,21 @@ def test_run_scan_disables_the_local_scan_cache_even_with_an_unchanged_cache_pat
     assert kwargs["env"]["ALETHEORE_UNCHANGED_SCAN_CACHE"] == str(cache_path)
 
 
+def test_run_scan_disables_parallel_parse(tmp_path):
+    # The scan-worker container is memory-constrained (observed OOM kills on
+    # huge repos under existing limits) - spawning os.cpu_count() worker
+    # processes for the CLI's own parallel scan parsing could make memory
+    # pressure worse, not faster, there. Left unset for a developer running
+    # `aletheore scan` directly on their own machine, same as the depth caps
+    # above.
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    with patch("scan_worker.jobs.subprocess.run") as mock_run:
+        _run_scan(repo_dir)
+    _, kwargs = mock_run.call_args
+    assert kwargs["env"]["ALETHEORE_DISABLE_PARALLEL_PARSE"] == "1"
+
+
 def _fake_evidence() -> dict:
     return {
         "git": {"available": True},
