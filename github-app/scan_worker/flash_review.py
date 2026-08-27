@@ -1107,11 +1107,21 @@ def review_diff(
 
     valid: list[dict] = []
     for finding in findings:
+        # isinstance(..., int), not just a truthy/falsy check: bool is a
+        # subclass of int in Python (isinstance(True, int) is True), so a
+        # malformed "line": true/false in the model's JSON would otherwise
+        # pass this gate and later render as a literal "app.py:True" in the
+        # posted PR comment (f"{file}:{line}" on a bool prints "True"/
+        # "False", not "1"/"0") - confirmed directly. Narrow and unlikely to
+        # actually fire (the prompt asks for a numeric line), but cheap and
+        # correct to exclude outright rather than accept a shape the field
+        # was never meant to hold.
         if not (
             isinstance(finding, dict)
             and isinstance(finding.get("file"), str)
             and finding.get("file")
             and isinstance(finding.get("line"), int)
+            and not isinstance(finding.get("line"), bool)
             and isinstance(finding.get("issue"), str)
             and finding.get("issue")
         ):
