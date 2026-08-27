@@ -5,6 +5,7 @@ import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app_server.demo_scan_api import DEMO_SCAN_MAX_QUEUE_DEPTH
 from app_server.main import app
 
 
@@ -258,6 +259,35 @@ async def test_queue_at_max_depth_returns_503(pool, monkeypatch):
             "/v1/demo-scan", json={"repo_url": "https://github.com/octocat/Hello-World"}
         )
     assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_rejected_due_to_full_queue_does_not_consume_rate_limit_slot(pool, monkeypatch):
+    # Same invariant as test_rejected_oversized_repo_does_not_consume_rate_limit_slot
+    # above, for the other rejection path: a visitor turned away because the
+    # demo is busy right now never actually got scanned either, so it
+    # shouldn't cost them their one scan every 20 minutes - the next request
+    # from the same IP, once the demo isn't busy anymore, must still be
+    # allowed.
+    _mock_github_response(monkeypatch, 200, size_kb=100)
+    fake_queue = _mock_queue(monkeypatch, count=DEMO_SCAN_MAX_QUEUE_DEPTH, started_count=0)
+    app.state.db_pool = pool
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"x-forwarded-for": "203.0.113.201"},
+    ) as client:
+        busy = await client.post(
+            "/v1/demo-scan", json={"repo_url": "https://github.com/torvalds/linux"}
+        )
+        assert busy.status_code == 503
+
+        fake_queue.count = 0
+        retry = await client.post(
+            "/v1/demo-scan", json={"repo_url": "https://github.com/octocat/Hello-World"}
+        )
+    assert retry.status_code == 202
+    assert fake_queue.enqueue.call_count == 1
 
 
 @pytest.mark.asyncio

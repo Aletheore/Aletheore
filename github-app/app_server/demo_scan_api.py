@@ -161,8 +161,18 @@ async def start_demo_scan(request: Request, body: StartDemoScanRequest):
     # Size (and existence) is checked before the rate-limit slot is
     # reserved - a repo that gets rejected here never reaches a worker, so
     # it shouldn't cost the visitor their one scan every 20 minutes. Only a
-    # request that's actually eligible to run consumes the cooldown.
+    # request that's actually eligible to run consumes the cooldown - which
+    # is why the queue-depth check below also runs before the reservation,
+    # not after: check_and_reserve_demo_scan stamps last_run_at the moment
+    # it succeeds, with no release/undo path, so a request rejected as
+    # "demo is busy" after that point would burn the visitor's cooldown for
+    # a scan that never ran.
     await _check_repo_size(owner, repo, settings.github_demo_readonly_token)
+
+    queue = _get_queue(settings.redis_url)
+    in_flight = queue.count + queue.started_job_registry.count
+    if in_flight >= DEMO_SCAN_MAX_QUEUE_DEPTH:
+        raise HTTPException(status_code=503, detail="demo is busy right now - try again shortly")
 
     allowed = await check_and_reserve_demo_scan(pool, client_ip, DEMO_SCAN_COOLDOWN_SECONDS)
     if not allowed:
@@ -173,11 +183,6 @@ async def start_demo_scan(request: Request, body: StartDemoScanRequest):
                 "try again shortly"
             ),
         )
-
-    queue = _get_queue(settings.redis_url)
-    in_flight = queue.count + queue.started_job_registry.count
-    if in_flight >= DEMO_SCAN_MAX_QUEUE_DEPTH:
-        raise HTTPException(status_code=503, detail="demo is busy right now - try again shortly")
 
     job = queue.enqueue(
         DEMO_SCAN_JOB_FUNCTION,
