@@ -1,14 +1,15 @@
 :root {
-  --bg-cream: #17140f;
-  --bg-dark: #0e0c09;
-  --text-primary: #f3eee3;
-  --text-muted: #b9b1a4;
-  --accent: #e0863a;
-  --accent-hover: #c96f26;
-  --accent-soft: #3a2a18;
-  --success: #6fbe7e;
-  --card-bg: #201b14;
-  --border-subtle: rgba(243, 238, 227, 0.12);
+  --bg-cream: #ffffff;
+  --bg-dark: #18140f;
+  --text-primary: #18140f;
+  --text-muted: #6b6459;
+  --accent: #d9772c;
+  --accent-hover: #b85f1c;
+  --accent-soft: #fdf0e2;
+  --success: #2f9e52;
+  --card-bg: rgba(255, 255, 255, 0.6);
+  --border-subtle: rgba(24, 20, 15, 0.1);
+  --glass-blur: blur(20px);
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
 }
 
@@ -25,13 +26,58 @@ html {
 body {
   min-width: 320px;
   font-family: var(--font);
-  background:
-    radial-gradient(circle at 12% 0%, rgba(224, 134, 58, 0.12), transparent 30%),
-    radial-gradient(rgba(243, 238, 227, 0.16) 1px, transparent 1px),
-    var(--bg-cream);
-  background-size: auto, 22px 22px, auto;
+  background: var(--bg-cream);
   color: var(--text-primary);
   line-height: 1.5;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Soft color blobs the glass panels blur/refract - fixed so they read
+   through every sticky/translucent surface as you scroll, not just the
+   hero. Kept subtle and off to the sides so body text never sits directly
+   on top of one. */
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  width: 620px;
+  height: 620px;
+  border-radius: 50%;
+  filter: blur(90px);
+  pointer-events: none;
+}
+
+body::before {
+  top: -220px;
+  left: -180px;
+  background: rgba(217, 119, 44, 0.16);
+  animation: drift-a 24s ease-in-out infinite;
+}
+
+body::after {
+  top: 260px;
+  right: -220px;
+  background: rgba(111, 190, 130, 0.14);
+  animation: drift-b 28s ease-in-out infinite;
+}
+
+@keyframes drift-a {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(40px, 60px) scale(1.08); }
+}
+
+@keyframes drift-b {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-50px, -40px) scale(1.06); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::before,
+  body::after {
+    animation: none;
+  }
 }
 
 a {
@@ -51,11 +97,21 @@ code {
 }
 
 .site-nav {
+  position: sticky;
+  top: 16px;
+  z-index: 50;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 20px 0;
+  margin: 16px 0;
+  padding: 14px 20px;
+  border-radius: 16px;
+  border: 1px solid var(--border-subtle);
+  background: var(--card-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: 0 8px 30px rgba(24, 20, 15, 0.06);
 }
 
 .nav-links {
@@ -150,6 +206,41 @@ code {
   padding: 70px 0 42px;
 }
 
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.hero > div:first-child > * {
+  opacity: 0;
+  animation: rise-in 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.hero > div:first-child > *:nth-child(1) { animation-delay: 0.05s; }
+.hero > div:first-child > *:nth-child(2) { animation-delay: 0.15s; }
+.hero > div:first-child > *:nth-child(3) { animation-delay: 0.25s; }
+.hero > div:first-child > *:nth-child(4) { animation-delay: 0.35s; }
+.hero > div:first-child > *:nth-child(5) { animation-delay: 0.45s; }
+
+.hero .evidence-preview {
+  opacity: 0;
+  animation: rise-in 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.3s forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero > div:first-child > *,
+  .hero .evidence-preview {
+    opacity: 1;
+    animation: none;
+  }
+}
+
 .hero h1 {
   max-width: 760px;
   font-size: clamp(40px, 6vw, 68px);
@@ -185,7 +276,7 @@ code {
 .hero-trust span {
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(24, 20, 15, 0.04);
   padding: 7px 12px;
   color: var(--text-muted);
   font-size: 13px;
@@ -193,6 +284,14 @@ code {
 }
 
 .evidence-preview {
+  /* Deliberately its own self-contained dark widget (a terminal/demo
+     card), not part of the page's light glass theme - scoped local
+     overrides so its children's var(--accent-soft)/var(--text-muted)
+     reads stay legible instead of picking up the page's light-theme
+     values (var(--bg-dark) itself is already dark at the root). */
+  --accent-soft: #3a2a18;
+  --border-subtle: rgba(243, 238, 227, 0.13);
+  --text-muted: #b9b1a4;
   position: relative;
   overflow: hidden;
   border: 1px solid rgba(243, 238, 227, 0.13);
@@ -277,7 +376,7 @@ code {
   margin: 0 24px 22px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(24, 20, 15, 0.04);
   padding: 14px;
   font-family: "SF Mono", Menlo, Consolas, monospace;
   font-size: 13px;
@@ -304,7 +403,7 @@ code {
 }
 
 .evidence-grid div {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(24, 20, 15, 0.04);
   padding: 14px;
 }
 
@@ -377,7 +476,7 @@ section h2 {
   border-radius: 12px;
   background:
     radial-gradient(circle at 92% 0%, rgba(224, 134, 58, 0.12), transparent 32%),
-    rgba(255, 255, 255, 0.035);
+    rgba(24, 20, 15, 0.035);
   padding: 22px;
 }
 
@@ -396,7 +495,7 @@ section h2 {
 .evidence-strip span {
   border: 1px solid rgba(224, 134, 58, 0.22);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(24, 20, 15, 0.04);
   padding: 7px 11px;
   color: var(--text-primary);
   font-family: "SF Mono", Menlo, Consolas, monospace;
@@ -433,7 +532,7 @@ section h2 {
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.018)),
+    linear-gradient(180deg, rgba(24, 20, 15, 0.05), rgba(24, 20, 15, 0.018)),
     var(--card-bg);
   padding: 24px;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
@@ -521,7 +620,7 @@ section h2 {
 
 .workflow-grid article {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.016)),
+    linear-gradient(180deg, rgba(24, 20, 15, 0.045), rgba(24, 20, 15, 0.016)),
     var(--card-bg);
   padding: 24px;
 }
@@ -630,7 +729,7 @@ pre {
   border: 1px solid var(--border-subtle);
   border-radius: 16px;
   background:
-    linear-gradient(rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.02)),
+    linear-gradient(rgba(24, 20, 15, 0.045), rgba(24, 20, 15, 0.02)),
     radial-gradient(circle at 12% 0%, rgba(224, 134, 58, 0.16), transparent 32%);
   padding: 18px;
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.2);
@@ -685,7 +784,7 @@ pre {
 
 .query-board div {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.016)),
+    linear-gradient(180deg, rgba(24, 20, 15, 0.045), rgba(24, 20, 15, 0.016)),
     var(--card-bg);
   padding: 24px;
 }
@@ -742,7 +841,7 @@ pre {
   gap: 0;
   border: 1px solid var(--border-subtle);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.035);
+  background: rgba(24, 20, 15, 0.035);
   padding: 18px;
 }
 
@@ -1385,7 +1484,7 @@ pre {
   padding: 34px;
   border-radius: 16px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+    linear-gradient(180deg, rgba(24, 20, 15, 0.055), rgba(24, 20, 15, 0.018)),
     var(--card-bg);
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22);
 }
@@ -1394,7 +1493,7 @@ pre {
   border-color: var(--accent);
   background:
     radial-gradient(circle at 85% 4%, rgba(224, 134, 58, 0.2), transparent 32%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.018)),
+    linear-gradient(180deg, rgba(24, 20, 15, 0.065), rgba(24, 20, 15, 0.018)),
     var(--card-bg);
   box-shadow: 0 24px 70px rgba(224, 134, 58, 0.18);
 }
@@ -1491,7 +1590,7 @@ pre {
 .pricing-proof span {
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(24, 20, 15, 0.04);
   padding: 8px 12px;
   color: var(--text-muted);
   font-size: 13px;
@@ -1822,7 +1921,7 @@ footer a:hover {
     padding: 8px 11px;
     border: 1px solid rgba(23, 20, 15, 0.08);
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.34);
+    background: rgba(24, 20, 15, 0.34);
     font-size: 14px;
     line-height: 1.2;
   }
@@ -2076,4 +2175,101 @@ footer a:hover {
   font-size: 13px;
   margin-top: 40px;
   padding-bottom: 8px;
+}
+
+/* Glass treatment: every surface that sits on var(--card-bg) gets the
+   blur too, consolidated here rather than repeated at each declaration -
+   var(--card-bg) alone is just a translucent color, backdrop-filter is
+   what actually reads as frosted glass over the color blobs above. */
+.pillar-card,
+.workflow-grid article,
+.command-grid article,
+.query-board div,
+.contract-list article,
+.price-card,
+.feature-card,
+.billing-toggle,
+.dogfood-table tbody,
+.bench-details,
+.bench-chart,
+.status-banner,
+.status-table tbody {
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  /* Panels far from a color blob (the fixed background glows only reach
+     the upper viewport) still need to read as glass, not vanish into a
+     flat white section - a soft shadow + slightly firmer border carries
+     the effect on its own everywhere else. */
+  box-shadow: 0 8px 30px rgba(24, 20, 15, 0.05);
+}
+
+.pillar-card,
+.workflow-grid article,
+.command-grid article,
+.contract-list article,
+.price-card,
+.feature-card {
+  border-color: rgba(24, 20, 15, 0.14);
+}
+
+/* Glass card hover lift - reinforces the tactile "frosted panel" feel;
+   transform/shadow only, layout untouched, so it can't cause reflow. */
+.pillar-card,
+.workflow-grid article,
+.command-grid article,
+.contract-list article,
+.price-card,
+.feature-card {
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
+.pillar-card:hover,
+.workflow-grid article:hover,
+.command-grid article:hover,
+.contract-list article:hover,
+.price-card:hover,
+.feature-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 16px 40px rgba(24, 20, 15, 0.1);
+  border-color: rgba(24, 20, 15, 0.22);
+}
+
+/* Nav gains a touch more shadow once scrolled - .is-scrolled toggled by
+   script.js past the hero, pure decoration so pages without the script
+   (no JS, or the class never applied) just keep the resting shadow. */
+.site-nav.is-scrolled {
+  box-shadow: 0 12px 34px rgba(24, 20, 15, 0.1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pillar-card,
+  .workflow-grid article,
+  .command-grid article,
+  .contract-list article,
+  .price-card,
+  .feature-card,
+  .site-nav {
+    transition: none;
+  }
+}
+
+/* Scroll-reveal targets: hidden until .is-visible is added by
+   script.js's IntersectionObserver. */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1), transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-reveal].is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
 }
