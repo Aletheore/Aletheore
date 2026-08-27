@@ -24,8 +24,8 @@ MODEL_RATES_PER_MILLION_USD = {
 STALE_PRICE_MAX_AGE_DAYS = 90
 
 # What a seat actually bills at (paddle_pricing.EXTRA_SEAT_PRICE_ID,
-# pricing.html's "+$4.99/mo per additional team member").
-EXTRA_SEAT_PRICE_USD = 4.99
+# pricing.html's "+$6.99/mo per additional team member").
+EXTRA_SEAT_PRICE_USD = 6.99
 
 # How much of that a seat is allowed to add to the LLM spend cap. Kept
 # deliberately below EXTRA_SEAT_PRICE_USD (not equal to it, as this used to
