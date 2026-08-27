@@ -67,15 +67,66 @@ def _dotted_path_candidates(path: str) -> list[str]:
     return [".".join(parts[start:]) for start in range(max(span, 0))]
 
 
-def _referenced_by_dotted_string(path: str, sources: dict[str, str]) -> bool:
-    candidates = _dotted_path_candidates(path)
-    if not candidates:
-        return False
-    patterns = [re.compile(r'["\']' + re.escape(candidate) + r'(?=[.\'"])') for candidate in candidates]
-    for other_path, content in sources.items():
-        if other_path == path:
-            continue
-        if any(pattern.search(content) for pattern in patterns):
+# Matches a quote character immediately followed by a run of identifier/dot
+# characters - the same shape _referenced_by_dotted_string used to look for
+# per (candidate, file) pair (a literal candidate string immediately after
+# an opening quote, ending at the next '.' or closing quote), captured once
+# per file instead. Confirmed by direct profile (2026-08-27): the old
+# per-candidate approach spent 180 of 184 seconds in re.Pattern.search,
+# 6.9M calls, on a real ~1M LOC repo (ERPNext) where most files have no
+# static importer (Frappe's ORM loads doctype controllers by dotted-string
+# name, not `import`) and so become dotted-string-check candidates.
+_QUOTED_WORD_DOT_RUN_RE = re.compile(r'["\']([\w][\w.]*)')
+
+
+def _dot_boundary_prefixes(token: str) -> set[str]:
+    # "pkg.mod.func" -> {"pkg", "pkg.mod"} - every STRICT prefix, i.e.
+    # shorter than the full token. Each one is immediately followed by a
+    # literal '.' inside the captured run itself, which is always a valid
+    # boundary per the old regex's `(?=[.\'"])` lookahead, regardless of
+    # what comes after the run in the source. The full token is deliberately
+    # excluded here: its validity depends on what character follows the run
+    # in the source (only a closing quote counts - see
+    # _dotted_string_token_index), which this function has no access to.
+    parts = token.split(".")
+    return {".".join(parts[:k]) for k in range(1, len(parts))}
+
+
+def _dotted_string_token_index(sources: dict[str, str]) -> dict[str, set[str]]:
+    """dotted-string token -> set of file paths whose content references it
+    (quote-adjacent, at a '.'-or-closing-quote boundary) - built once for
+    the whole corpus, replacing what used to be a fresh regex scan of every
+    file per candidate. O(total source size) instead of
+    O(candidates x total source size).
+
+    _QUOTED_WORD_DOT_RUN_RE greedily consumes every '.' as part of the run,
+    so the run can never stop right before a '.' - it only stops at a
+    non-word-non-dot character (or end of string). That means the full
+    captured token's closing boundary is never a '.': it has to be checked
+    against the literal next character in the source, and only a quote
+    character satisfies the old regex's [.\'"] boundary class here. Without
+    this check, a quoted string like "pkg.mod completed successfully" would
+    wrongly register "pkg.mod" as referenced - the old regex required the
+    next character to be '.', "'", or '"', and a space is none of those.
+    Confirmed as a real divergence (not hypothetical) by direct comparison
+    against the old per-candidate regex on that exact string.
+    """
+    index: dict[str, set[str]] = {}
+    for path, content in sources.items():
+        for match in _QUOTED_WORD_DOT_RUN_RE.finditer(content):
+            token = match.group(1)
+            for prefix in _dot_boundary_prefixes(token):
+                index.setdefault(prefix, set()).add(path)
+            next_char = content[match.end() : match.end() + 1]
+            if next_char in ("'", '"'):
+                index.setdefault(token, set()).add(path)
+    return index
+
+
+def _referenced_by_dotted_string(path: str, token_index: dict[str, set[str]]) -> bool:
+    for candidate in _dotted_path_candidates(path):
+        owners = token_index.get(candidate)
+        if owners and owners - {path}:
             return True
     return False
 
@@ -188,9 +239,10 @@ def find_dead_code(
                 )
             except OSError:
                 continue
+        token_index = _dotted_string_token_index(py_sources)
         still_unreachable = []
         for entry in unreachable_modules:
-            if entry["path"].endswith(".py") and _referenced_by_dotted_string(entry["path"], py_sources):
+            if entry["path"].endswith(".py") and _referenced_by_dotted_string(entry["path"], token_index):
                 entry_points_detected.append(entry["path"])
             else:
                 still_unreachable.append(entry)

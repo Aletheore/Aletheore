@@ -1328,11 +1328,19 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                 f"{cooldown_seconds // 3600} hours. Try again later."
             )
         else:
-            with installation_spend_lock(settings.database_url, installation_id):
-                extra_seats = get_extra_seats(settings.database_url, installation_id)
-                monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
-                current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
-                cap_reached = current_spend >= monthly_cap
+            extra_seats = get_extra_seats(settings.database_url, installation_id)
+            monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
+            # No lock: this is a fast-fail hint (skip straight to a clear PR
+            # comment when the cap is obviously already blown), not the
+            # enforcement itself - real enforcement is spend_budget.
+            # can_start_next_call() below, reserving atomically against the
+            # live total before every real LLM call this (possibly
+            # multi-call) audit makes. Same discipline as
+            # run_managed_audit_api_job - a stale read here has no
+            # financial-integrity consequence, just a possibly-later-than-
+            # ideal rejection.
+            current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
+            cap_reached = current_spend >= monthly_cap
 
             if cap_reached:
                 body = (
@@ -1341,30 +1349,33 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                     "Resumes next month, or email support@aletheore.com to raise the limit sooner."
                 )
             else:
-                spend_accumulator = {"total": 0.0, "model": model_for_plan(plan)}
-
-                def _on_usage(prompt_tokens: int, completion_tokens: int) -> None:
-                    spend_accumulator["total"] += cost_for_usage(
-                        spend_accumulator["model"], prompt_tokens, completion_tokens
-                    )
-
-                # LLM call, measured to take minutes for large repos - must not
-                # run while installation_spend_lock is held (see
-                # run_flash_review_job's comment on the same pattern).
+                # run_managed_audit can make several sequential LLM calls and
+                # has been observed to take minutes. The old
+                # installation_spend_lock check-then-record pair around the
+                # whole call left a real window: two concurrent managed
+                # audits for the same installation (different repos -
+                # check_and_reserve_managed_audit above is scoped per-repo,
+                # not per-installation) could both pass this check before
+                # either recorded a cost, and even a single run had no gate
+                # between its own individual LLM calls.
+                # _IncrementalSpendBudget closes both - the same atomic
+                # reserve-per-call primitive run_managed_audit_api_job
+                # already uses (see its own comment at this same call).
+                spend_budget = _IncrementalSpendBudget(
+                    settings.database_url,
+                    installation_id,
+                    model_for_plan(plan),
+                    monthly_cap,
+                    feature="managed_audit",
+                )
                 report_text = run_managed_audit(
                     repo_dir,
-                    on_usage=_on_usage,
+                    on_usage=spend_budget.record_usage,
+                    before_llm_call=spend_budget.can_start_next_call,
+                    allow_partial_report=True,
                     plan=plan,
                     include_llm_suggestions=include_suggestions,
                 )
-                with installation_spend_lock(settings.database_url, installation_id):
-                    record_llm_spend(
-                        settings.database_url,
-                        installation_id,
-                        spend_accumulator["total"],
-                        monthly_cap=monthly_cap,
-                        feature="managed_audit",
-                    )
                 verification_token = _sign_and_persist_audit_report(
                     settings,
                     installation_id,
@@ -1913,6 +1924,13 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
     risk here, same as send_health_alert already accepts for Slack/Teams
     (it has no dedup at all) - this isn't solving a harder problem than
     the channel it's sitting next to already tolerates.
+
+    int(time.time()), not the raw float: time.time() carries microsecond
+    precision, so two calls a millisecond apart (a real retry) would each
+    get their own unique key and neither would ever collide with the
+    other - the same-second collapse this docstring describes never
+    actually happened. Confirmed directly: two time.time() calls back to
+    back differed at the 6th decimal place, never equal.
     """
     webhook_url = installation.get("webhook_url")
     if webhook_url:
@@ -1924,7 +1942,7 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
         target_id = installation.get("target_id")
         enqueue_transactional_email(
             settings.redis_url,
-            dedupe_key=f"health_alert:{target_id}:{time.time()}",
+            dedupe_key=f"health_alert:{target_id}:{int(time.time())}",
             template_name="health_alert",
             template_arg=message["text"],
             to_email=alert_email,
@@ -3845,6 +3863,25 @@ def _run_docs_build_for_modules(
         try:
             content = fetch_file_content(client, token, repo_full_name, module["path"], ref)
             if content is None:
+                # fetch_file_content returns None on a 404 or a malformed
+                # content response - a real failure signal, not "nothing to
+                # do here" (unlike _module_has_uncovered_docs_work's own
+                # skip cases, which are legitimate no-ops). Recording it as
+                # last_error matters most when every module in this batch
+                # hits it (e.g. GitHub's Contents API lagging right after
+                # the push that triggered this job, or a token missing
+                # contents:read): without this, succeeded stays 0 and
+                # last_error stays None, and the caller's `succeeded == 0
+                # and last_error is not None` failed-status check never
+                # fires - a build that did nothing gets reported "ready"
+                # with no detail, the same shape of bug #405 already fixed
+                # for free-tier Flash Review claiming a diff was clean when
+                # it never ran.
+                last_error = f"could not fetch content for {module['path']}"
+                logger.warning(
+                    "live docs: %s for installation=%s repo=%s - continuing with the remaining modules",
+                    last_error, installation_id, repo_full_name,
+                )
                 continue
             _store_docs_generation_for_module(
                 dsn, installation_id, repo_full_name, module, writing_adapter,

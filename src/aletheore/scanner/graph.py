@@ -2,6 +2,7 @@ import json
 import os
 import re
 import xml.etree.ElementTree as ET
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import tree_sitter_c as tsc
@@ -2180,6 +2181,250 @@ def _resolve_js_import(repo_path: Path, from_file: Path, spec: str) -> str | Non
     return None
 
 
+def _extract_module(
+    path: Path,
+    repo_path: Path,
+    tree: Tree,
+    source: bytes,
+    language_name: str,
+    *,
+    python_source_roots: list[Path] | None = None,
+    go_module_prefix: str | None = None,
+    has_rust_crate_root: bool = False,
+    java_source_roots: list[Path] | None = None,
+    php_psr4_map: dict[str, Path] | None = None,
+    csharp_prefix_map: dict[str, Path] | None = None,
+    csharp_type_owners: dict[str, set[Path]] | None = None,
+    csharp_implicit_usings: dict[Path, list[str]] | None = None,
+) -> dict:
+    """Turns one already-parsed (tree, source) into a module dict - the
+    per-language dispatch every file eventually goes through, whether it
+    got here via the sequential path, a parallel worker, or the inline
+    java/csharp handling in build_module_graph's main loop (the only three
+    callers). Deliberately has no side effects on any caller's edges/
+    imported_by_map - those are reconstructed uniformly from every
+    collected module's own "imports" list afterward, the same way the
+    unchanged_modules cache-hit path already did before this function
+    existed, so a module produced here needs no special-casing at the
+    merge step regardless of which path produced it.
+    """
+    rel_path = _rel(repo_path, path)
+    resolved_imports: list[str] = []
+
+    constants: list[dict] = []
+    if language_name != "python":
+        # Python's bindings come out of _extract_python, which already has
+        # the walk; every other language gets the shared pass.
+        constants = _extract_module_constants(tree.root_node, source, language_name)
+
+    if language_name == "python":
+        plain_imports, from_imports, functions, classes, constants = _extract_python(tree.root_node, source)
+
+        for dotted in plain_imports:
+            target = _resolve_python_module(repo_path, dotted, path, python_source_roots)
+            if target is not None:
+                resolved_imports.append(target)
+
+        for module_name, names in from_imports:
+            targets: set[str] = set()
+            if names:
+                for name in names:
+                    target = _resolve_python_from_import(
+                        repo_path, module_name, name, path, python_source_roots
+                    )
+                    if target is not None:
+                        targets.add(target)
+            else:
+                target = _resolve_python_module(repo_path, module_name, path, python_source_roots)
+                if target is not None:
+                    targets.add(target)
+            resolved_imports.extend(sorted(targets))
+    elif language_name == "go":
+        raw_imports, functions, classes = _extract_go(tree.root_node, source)
+        for spec in raw_imports:
+            for target in _resolve_go_import(repo_path, go_module_prefix, spec):
+                if target != rel_path:
+                    resolved_imports.append(target)
+    elif language_name == "rust":
+        raw_imports, functions, classes = _extract_rust(tree.root_node, source)
+        if has_rust_crate_root:
+            for use_path in raw_imports:
+                target = _resolve_rust_path(repo_path, path, use_path)
+                if target is not None and target != rel_path:
+                    resolved_imports.append(target)
+    elif language_name == "java":
+        raw_imports, functions, classes = _extract_java(tree.root_node, source)
+        for dotted, is_static, is_wildcard in raw_imports:
+            for target_path in _resolve_java_import(java_source_roots, dotted, is_static, is_wildcard):
+                target = _rel(repo_path, target_path)
+                if target is not None and target != rel_path:
+                    resolved_imports.append(target)
+    elif language_name == "ruby":
+        raw_imports, functions, classes = _extract_ruby(tree.root_node, source)
+        for kind, spec in raw_imports:
+            target_path = _resolve_ruby_require(repo_path, path, kind, spec)
+            if target_path is not None:
+                target = _rel(repo_path, target_path)
+                if target is not None and target != rel_path:
+                    resolved_imports.append(target)
+    elif language_name == "php":
+        raw_imports, functions, classes = _extract_php(tree.root_node, source)
+        for kind, spec in raw_imports:
+            target_path = (
+                _resolve_php_use(php_psr4_map, spec) if kind == "use" else _resolve_php_include(path, spec)
+            )
+            if target_path is not None:
+                target = _rel(repo_path, target_path)
+                if target is not None and target != rel_path:
+                    resolved_imports.append(target)
+    elif language_name in ("c", "cpp"):
+        raw_imports, functions, classes = _extract_c_family(tree.root_node, source)
+        for spec in raw_imports:
+            target_path = _resolve_c_include(path, spec)
+            if target_path is not None:
+                target = _rel(repo_path, target_path)
+                if target is not None and target != rel_path:
+                    resolved_imports.append(target)
+    elif language_name == "csharp":
+        raw_imports, functions, classes = _extract_csharp(tree.root_node, source)
+        raw_imports.extend((csharp_implicit_usings or {}).get(path, []))
+        for dotted in raw_imports:
+            for target_path in _resolve_csharp_using(csharp_prefix_map or {}, dotted):
+                target = _rel(repo_path, target_path)
+                if target is not None and target != rel_path:
+                    resolved_imports.append(target)
+        # Same-namespace references need no `using`, so usings alone leave
+        # the graph near-empty - see _csharp_type_reference_targets.
+        own_type_names = {c["name"] for c in classes if c.get("name")}
+        already = set(resolved_imports)
+        for target_path in _csharp_type_reference_targets(source, own_type_names, csharp_type_owners or {}):
+            target = _rel(repo_path, target_path)
+            if target is not None and target != rel_path and target not in already:
+                already.add(target)
+                resolved_imports.append(target)
+    else:
+        raw_imports, functions, classes = _extract_javascript(tree.root_node, source)
+        for spec in raw_imports:
+            target = _resolve_js_import(repo_path, path, spec)
+            if target is not None:
+                resolved_imports.append(target)
+
+    return {
+        "path": rel_path,
+        "language": language_name,
+        "imports": resolved_imports,
+        "imported_by": [],
+        "symbols": {"functions": functions, "classes": classes, "constants": constants},
+    }
+
+
+def _read_and_parse(path: Path, parser: Parser, ts_language: Language) -> tuple[bytes, Tree]:
+    parser.language = ts_language
+    source = path.read_bytes()
+    return source, parser.parse(source)
+
+
+def _parse_and_extract_one(
+    path: Path,
+    repo_path: Path,
+    parser: Parser,
+    python_source_roots: list[Path],
+    go_module_prefix: str | None,
+    has_rust_crate_root: bool,
+    php_psr4_map: dict[str, Path],
+) -> dict:
+    """Reads, parses, and extracts one file - java/csharp excluded by
+    construction (see build_module_graph: only non-java/csharp paths ever
+    reach this function, whether called directly for the sequential
+    fallback or via _worker_parse_and_extract_one inside a pool worker),
+    so no java_source_roots/csharp_* state is threaded through here."""
+    language_name, ts_language = LANGUAGE_BY_EXTENSION[path.suffix]
+    source, tree = _read_and_parse(path, parser, ts_language)
+    return _extract_module(
+        path,
+        repo_path,
+        tree,
+        source,
+        language_name,
+        python_source_roots=python_source_roots,
+        go_module_prefix=go_module_prefix,
+        has_rust_crate_root=has_rust_crate_root,
+        php_psr4_map=php_psr4_map,
+    )
+
+
+# Below this many files still needing a fresh parse, build_module_graph stays
+# fully sequential (no ProcessPoolExecutor at all) - measured directly
+# (2026-08-27): creating and tearing down a pool costs ~150ms fixed, wall
+# clock, regardless of how little work is inside it, while a typical source
+# file's own parse+extract (measured on this project's own files) runs
+# 0.5-30ms depending on size. A repo with only a couple hundred files to
+# parse would finish sequentially before a pool even finishes spinning up;
+# this threshold keeps that common case on exactly today's code path, with
+# real parallelism only kicking in where there's enough work for process-
+# spawn overhead to be clearly worth it.
+PARALLEL_PARSE_MIN_FILES = 200
+
+# Set once per worker process by _init_worker, read by
+# _worker_parse_and_extract_one - never touched by the main process. Module-
+# level rather than passed as a function argument because every argument to
+# a function submitted to ProcessPoolExecutor gets pickled on every single
+# call; this way the read-only per-scan state (source roots, prefix maps)
+# and the worker's own Parser are pickled once at pool-startup time via
+# initargs, not once per file.
+_worker_state: dict = {}
+
+
+def _init_worker(
+    repo_path: Path,
+    python_source_roots: list[Path],
+    go_module_prefix: str | None,
+    has_rust_crate_root: bool,
+    php_psr4_map: dict[str, Path],
+) -> None:
+    _worker_state["repo_path"] = repo_path
+    _worker_state["python_source_roots"] = python_source_roots
+    _worker_state["go_module_prefix"] = go_module_prefix
+    _worker_state["has_rust_crate_root"] = has_rust_crate_root
+    _worker_state["php_psr4_map"] = php_psr4_map
+    # One Parser per worker process, reused across every file that worker
+    # ever handles - not recreated per file, same discipline the sequential
+    # path's own single `parser` variable already follows today.
+    _worker_state["parser"] = Parser()
+
+
+def _worker_parse_and_extract_one(path: Path) -> dict:
+    return _parse_and_extract_one(
+        path,
+        _worker_state["repo_path"],
+        _worker_state["parser"],
+        _worker_state["python_source_roots"],
+        _worker_state["go_module_prefix"],
+        _worker_state["has_rust_crate_root"],
+        _worker_state["php_psr4_map"],
+    )
+
+
+def _parse_many_in_parallel(
+    paths: list[Path],
+    repo_path: Path,
+    python_source_roots: list[Path],
+    go_module_prefix: str | None,
+    has_rust_crate_root: bool,
+    php_psr4_map: dict[str, Path],
+) -> list[dict]:
+    with ProcessPoolExecutor(
+        initializer=_init_worker,
+        initargs=(repo_path, python_source_roots, go_module_prefix, has_rust_crate_root, php_psr4_map),
+    ) as executor:
+        # map (not submit+as_completed) so results come back in input order -
+        # not load-bearing for correctness (module/edge order was already
+        # unasserted anywhere - see the design doc), just keeps output
+        # deterministic across runs rather than depending on which worker
+        # happens to finish first.
+        return list(executor.map(_worker_parse_and_extract_one, paths))
+
+
 def build_module_graph(
     repo_path: Path,
     *,
@@ -2268,16 +2513,22 @@ def build_module_graph(
     csharp_implicit_usings = _load_csharp_implicit_usings(repo_path, csharp_source_paths)
 
     parser = Parser()
+    # Non-java/csharp files still needing a fresh parse - collected here
+    # instead of being parsed inline, so they can go through the process
+    # pool below (in one batch) when there's enough of them, or the
+    # sequential fallback otherwise. Java/C# are never added here: they're
+    # either resolved from their pre-parsed tree below, or (the rare
+    # pre-pass/main-walk-saw-different-filesystem-state case) parsed
+    # inline immediately, in both cases without ever leaving this process -
+    # the worker pool has no java_source_roots/csharp_prefix_map to resolve
+    # those two languages' imports with, by design (see the design doc).
+    paths_needing_parse: list[Path] = []
 
     for path in _iter_source_files(repo_path, ignored_paths):
         rel_path = _rel(repo_path, path)
 
         if unchanged_modules is not None and rel_path in unchanged_modules:
-            cached_module = unchanged_modules[rel_path]
-            modules.append(cached_module)
-            for target in cached_module.get("imports", []):
-                edges.append([rel_path, target])
-                imported_by_map.setdefault(target, []).append(rel_path)
+            modules.append(unchanged_modules[rel_path])
             continue
 
         language_info = LANGUAGE_BY_EXTENSION.get(path.suffix)
@@ -2295,6 +2546,7 @@ def build_module_graph(
             oversized_paths.add(path)
             unparseable.append({"path": rel_path, "reason": "file exceeds size limit"})
             continue
+
         if language_name == "java" and path in java_pre_parsed:
             # pop, not a plain lookup: java_pre_parsed/csharp_pre_parsed hold
             # the full (source, Tree) for every .java/.cs file simultaneously
@@ -2311,161 +2563,70 @@ def build_module_graph(
             source, tree = java_pre_parsed.pop(path)
         elif language_name == "csharp" and path in csharp_pre_parsed:
             source, tree = csharp_pre_parsed.pop(path)
-        else:
+        elif language_name in ("java", "csharp"):
+            # Rare: the pre-pass above and this walk saw different
+            # filesystem state (e.g. the file appeared/disappeared between
+            # the two _iter_source_files calls). Falls back to a fresh
+            # parse right here, exactly like every file did before this
+            # function had a parallel path at all - never routed through
+            # paths_needing_parse/the worker pool.
             parser.language = ts_language
             source = path.read_bytes()
             tree = parser.parse(source)
-
-        constants: list[dict] = []
-        if language_name != "python":
-            # Python's bindings come out of _extract_python, which already has
-            # the walk; every other language gets the shared pass.
-            constants = _extract_module_constants(tree.root_node, source, language_name)
-        if language_name == "python":
-            plain_imports, from_imports, functions, classes, constants = _extract_python(
-                tree.root_node, source
-            )
-            resolved_imports: list[str] = []
-
-            for dotted in plain_imports:
-                target = _resolve_python_module(repo_path, dotted, path, python_source_roots)
-                if target is not None:
-                    resolved_imports.append(target)
-                    edges.append([rel_path, target])
-                    imported_by_map.setdefault(target, []).append(rel_path)
-
-            for module_name, names in from_imports:
-                targets: set[str] = set()
-                if names:
-                    for name in names:
-                        target = _resolve_python_from_import(
-                            repo_path, module_name, name, path, python_source_roots
-                        )
-                        if target is not None:
-                            targets.add(target)
-                else:
-                    target = _resolve_python_module(repo_path, module_name, path, python_source_roots)
-                    if target is not None:
-                        targets.add(target)
-                for target in sorted(targets):
-                    resolved_imports.append(target)
-                    edges.append([rel_path, target])
-                    imported_by_map.setdefault(target, []).append(rel_path)
-        elif language_name == "go":
-            raw_imports, functions, classes = _extract_go(tree.root_node, source)
-            resolved_imports = []
-            for spec in raw_imports:
-                for target in _resolve_go_import(repo_path, go_module_prefix, spec):
-                    if target == rel_path:
-                        continue
-                    resolved_imports.append(target)
-                    edges.append([rel_path, target])
-                    imported_by_map.setdefault(target, []).append(rel_path)
-        elif language_name == "rust":
-            raw_imports, functions, classes = _extract_rust(tree.root_node, source)
-            resolved_imports = []
-            if has_rust_crate_root:
-                for use_path in raw_imports:
-                    target = _resolve_rust_path(repo_path, path, use_path)
-                    if target is not None and target != rel_path:
-                        resolved_imports.append(target)
-                        edges.append([rel_path, target])
-                        imported_by_map.setdefault(target, []).append(rel_path)
-        elif language_name == "java":
-            raw_imports, functions, classes = _extract_java(tree.root_node, source)
-            resolved_imports = []
-            for dotted, is_static, is_wildcard in raw_imports:
-                for target_path in _resolve_java_import(
-                    java_source_roots, dotted, is_static, is_wildcard
-                ):
-                    target = _rel(repo_path, target_path)
-                    if target is None or target == rel_path:
-                        continue
-                    resolved_imports.append(target)
-                    edges.append([rel_path, target])
-                    imported_by_map.setdefault(target, []).append(rel_path)
-        elif language_name == "ruby":
-            raw_imports, functions, classes = _extract_ruby(tree.root_node, source)
-            resolved_imports = []
-            for kind, spec in raw_imports:
-                target_path = _resolve_ruby_require(repo_path, path, kind, spec)
-                if target_path is not None:
-                    target = _rel(repo_path, target_path)
-                    if target is not None and target != rel_path:
-                        resolved_imports.append(target)
-                        edges.append([rel_path, target])
-                        imported_by_map.setdefault(target, []).append(rel_path)
-        elif language_name == "php":
-            raw_imports, functions, classes = _extract_php(tree.root_node, source)
-            resolved_imports = []
-            for kind, spec in raw_imports:
-                target_path = (
-                    _resolve_php_use(php_psr4_map, spec)
-                    if kind == "use"
-                    else _resolve_php_include(path, spec)
-                )
-                if target_path is not None:
-                    target = _rel(repo_path, target_path)
-                    if target is not None and target != rel_path:
-                        resolved_imports.append(target)
-                        edges.append([rel_path, target])
-                        imported_by_map.setdefault(target, []).append(rel_path)
-        elif language_name in ("c", "cpp"):
-            raw_imports, functions, classes = _extract_c_family(tree.root_node, source)
-            resolved_imports = []
-            for spec in raw_imports:
-                target_path = _resolve_c_include(path, spec)
-                if target_path is not None:
-                    target = _rel(repo_path, target_path)
-                    if target is not None and target != rel_path:
-                        resolved_imports.append(target)
-                        edges.append([rel_path, target])
-                        imported_by_map.setdefault(target, []).append(rel_path)
-        elif language_name == "csharp":
-            raw_imports, functions, classes = _extract_csharp(tree.root_node, source)
-            raw_imports.extend(csharp_implicit_usings.get(path, []))
-            resolved_imports = []
-            for dotted in raw_imports:
-                for target_path in _resolve_csharp_using(csharp_prefix_map, dotted):
-                    target = _rel(repo_path, target_path)
-                    if target is None or target == rel_path:
-                        continue
-                    resolved_imports.append(target)
-                    edges.append([rel_path, target])
-                    imported_by_map.setdefault(target, []).append(rel_path)
-            # Same-namespace references need no `using`, so usings alone leave
-            # the graph near-empty - see _csharp_type_reference_targets.
-            own_type_names = {c["name"] for c in classes if c.get("name")}
-            already = set(resolved_imports)
-            for target_path in _csharp_type_reference_targets(
-                source, own_type_names, csharp_type_owners
-            ):
-                target = _rel(repo_path, target_path)
-                if target is None or target == rel_path or target in already:
-                    continue
-                already.add(target)
-                resolved_imports.append(target)
-                edges.append([rel_path, target])
-                imported_by_map.setdefault(target, []).append(rel_path)
         else:
-            raw_imports, functions, classes = _extract_javascript(tree.root_node, source)
-            resolved_imports = []
-            for spec in raw_imports:
-                target = _resolve_js_import(repo_path, path, spec)
-                if target is not None:
-                    resolved_imports.append(target)
-                    edges.append([rel_path, target])
-                    imported_by_map.setdefault(target, []).append(rel_path)
+            paths_needing_parse.append(path)
+            continue
 
         modules.append(
-            {
-                "path": rel_path,
-                "language": language_name,
-                "imports": resolved_imports,
-                "imported_by": [],
-                "symbols": {"functions": functions, "classes": classes, "constants": constants},
-            }
+            _extract_module(
+                path,
+                repo_path,
+                tree,
+                source,
+                language_name,
+                java_source_roots=java_source_roots,
+                csharp_prefix_map=csharp_prefix_map,
+                csharp_type_owners=csharp_type_owners,
+                csharp_implicit_usings=csharp_implicit_usings,
+            )
         )
+
+    if len(paths_needing_parse) >= PARALLEL_PARSE_MIN_FILES:
+        modules.extend(
+            _parse_many_in_parallel(
+                paths_needing_parse,
+                repo_path,
+                python_source_roots,
+                go_module_prefix,
+                has_rust_crate_root,
+                php_psr4_map,
+            )
+        )
+    else:
+        for path in paths_needing_parse:
+            modules.append(
+                _parse_and_extract_one(
+                    path,
+                    repo_path,
+                    parser,
+                    python_source_roots,
+                    go_module_prefix,
+                    has_rust_crate_root,
+                    php_psr4_map,
+                )
+            )
+
+    # edges/imported_by_map reconstructed uniformly from every module's own
+    # "imports" list, regardless of which of the four paths above produced
+    # it (cache hit, java/csharp pre-parsed, java/csharp rare-fallback, or
+    # sequential/parallel fresh parse) - the same reconstruction the
+    # unchanged_modules cache-hit branch always did, just applied once here
+    # instead of inline per module.
+    for module in modules:
+        rel_path = module["path"]
+        for target in module.get("imports", []):
+            edges.append([rel_path, target])
+            imported_by_map.setdefault(target, []).append(rel_path)
 
     for module in modules:
         module["imported_by"] = sorted(imported_by_map.get(module["path"], []))

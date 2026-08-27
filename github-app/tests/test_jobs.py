@@ -1238,17 +1238,16 @@ def test_managed_audit_pr_job_clones_pr_head_runs_audit_and_replies(monkeypatch,
     assert posted["marker"] == AUDIT_COMMENT_MARKER
 
 
-def test_managed_audit_pr_job_releases_lock_during_audit(monkeypatch, tmp_path):
-    lock_state = {"held": False, "observed_during_audit": None}
-
-    @contextmanager
-    def _tracking_spend_lock(*args, **kwargs):
-        lock_state["held"] = True
-        try:
-            yield
-        finally:
-            lock_state["held"] = False
-
+def test_managed_audit_pr_job_records_each_call_and_stops_mid_run_when_cap_reached(monkeypatch, tmp_path):
+    # Mirrors test_managed_audit_api_job_records_each_call_and_exposes_budget_stop:
+    # run_managed_audit_pr_job must gate on the same atomic per-call
+    # reservation (_IncrementalSpendBudget/reserve_llm_spend) that
+    # run_managed_audit_api_job, run_flash_review_job, and AIRview/Docs
+    # builds already use - not the old check-once-then-record-once pattern
+    # around installation_spend_lock, which left the entire (possibly
+    # multi-call) audit run, and any other job racing the same
+    # installation's cap concurrently, completely ungated between the one
+    # check and the one record.
     def _clone_pr_head(url, pr_number, dest):
         dest.mkdir(parents=True, exist_ok=True)
         (dest / "app.py").write_text("print('hello')\n")
@@ -1270,22 +1269,52 @@ def test_managed_audit_pr_job_releases_lock_during_audit(monkeypatch, tmp_path):
     monkeypatch.setattr("scan_worker.jobs._clone_pr_head", _clone_pr_head)
     monkeypatch.setattr("scan_worker.jobs._run_scan", _run_scan)
     monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda: object())
-    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _tracking_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
-    monkeypatch.setattr("scan_worker.jobs.run_managed_audit", lambda *a, **k: (
-        lock_state.update(observed_during_audit=lock_state["held"]) or "# Managed Audit"
-    ))
-    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.0012)
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.0006)
     monkeypatch.setattr("scan_worker.jobs._sign_and_persist_audit_report", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+
+    # In-memory stand-in for the real atomic reserve_llm_spend/record_llm_spend
+    # pair, sharing running-total state the same way the real DB row does -
+    # same shape as the API-job test this mirrors.
+    spend_state = {"total": 0.0}
+    recorded_deltas = []
+
+    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
+        if spend_state["total"] + reserve_usd <= monthly_cap:
+            spend_state["total"] += reserve_usd
+            return True
+        return False
+
+    def _record_llm_spend(dsn, iid, delta, **k):
+        spend_state["total"] += delta
+        recorded_deltas.append(delta)
+
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
+
+    budget_checks = []
+
+    def fake_run_managed_audit(repo_dir, *, on_usage, before_llm_call=None, **kwargs):
+        assert before_llm_call is not None, (
+            "run_managed_audit_pr_job must thread an atomic before_llm_call gate into "
+            "run_managed_audit, not just a single check before the whole run"
+        )
+        budget_checks.append(before_llm_call())
+        on_usage(1, 1)
+        budget_checks.append(before_llm_call())
+        return "# Managed Audit"
+
+    monkeypatch.setattr("scan_worker.jobs.run_managed_audit", fake_run_managed_audit)
 
     from scan_worker.jobs import run_managed_audit_pr_job
 
     run_managed_audit_pr_job(1, "octocat/hello-world", 42)
 
-    assert lock_state["observed_during_audit"] is False
-    assert lock_state["held"] is False
+    assert recorded_deltas == [pytest.approx(-0.0004)]
+    assert budget_checks == [True, False]
 
 
 def test_managed_audit_pr_job_persists_and_signs_the_report(monkeypatch, tmp_path):
@@ -2990,6 +3019,31 @@ def test_send_alerts_if_configured_sends_both_channels_when_both_set(monkeypatch
 
     assert len(slack_sent) == 1
     assert len(email_sent) == 1
+
+
+def test_send_alerts_if_configured_email_dedupe_key_collapses_within_the_same_second(monkeypatch):
+    # Regression: the docstring says the dedupe_key includes wall-clock
+    # time "down to the second" specifically so a genuine retry of the
+    # outer job re-sending the same flip collapses into one email - but
+    # time.time() carries microsecond precision, so two calls a
+    # millisecond apart (an actual retry) each got their own unique key
+    # and dedup never fired at all. A retried flip must produce the same
+    # dedupe_key when it happens within the same second.
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    enqueued = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **k: enqueued.append(k),
+    )
+
+    installation = {"installation_id": 1, "target_id": 900, "alert_email": "ops@example.com"}
+    _send_alerts_if_configured(installation, {"text": "down"})
+    _send_alerts_if_configured(installation, {"text": "down"})
+
+    assert len(enqueued) == 2
+    assert enqueued[0]["dedupe_key"] == enqueued[1]["dedupe_key"]
 
 
 def test_send_alerts_if_configured_sends_neither_when_unconfigured(monkeypatch):
@@ -5741,6 +5795,44 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(mon
     run_live_docs_full_build_job(1, "octocat/hello-world")
 
     assert status_calls == [("failed", "model provider unavailable")]
+
+
+def test_run_live_docs_full_build_job_reports_failed_when_every_fetch_returns_none(monkeypatch):
+    # Regression: fetch_file_content returning None (a 404, or a malformed
+    # content response) is a real failure, not "nothing to do" - but
+    # _run_docs_build_for_modules used to `continue` without recording it
+    # as last_error. If every module in the batch hit this (e.g. GitHub's
+    # Contents API lagging right after the push that triggered this job),
+    # succeeded stayed 0 and last_error stayed None, so the caller's
+    # `succeeded == 0 and last_error is not None` failed-status check never
+    # fired - a build that did nothing got reported "ready" with no detail.
+    # Same shape of bug as #405 (free-tier Flash Review claiming a diff was
+    # clean when it never ran).
+    _patch_no_spend_cap(monkeypatch)
+    from scan_worker.jobs import run_live_docs_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    module = _docs_module(functions=[{"name": "f", "is_public": True, "docstring": None}])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([module]))
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
+    status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_docs_build_status",
+        lambda dsn, iid, repo, status, error=None: status_calls.append((status, error)),
+    )
+
+    run_live_docs_full_build_job(1, "octocat/hello-world")
+
+    assert status_calls[0][0] == "failed"
+    assert status_calls[0][1] is not None
 
 
 def test_maybe_update_live_docs_skips_llm_call_when_spend_cap_reached(monkeypatch):
