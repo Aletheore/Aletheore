@@ -1,13 +1,18 @@
 """Paddle price ID to Aletheore plan mapping."""
 
-# The AIR add-on for a seat beyond the plan's included count ($4.99/mo,
-# pricing.html's "+$4.99/mo per additional team member"). Added as a second
+# The AIR add-on for a seat beyond the plan's included count ($6.99/mo,
+# pricing.html's "+$6.99/mo per additional team member"). Added as a second
 # line item (by quantity) on a customer's existing AIR subscription, not a
-# separate subscription of its own. Replaces the original $3.99 price
-# (pri_01kym2q99kevmdg7h71nwpm4ej, now archived in Paddle) - archived rather
-# than mutated in place so any pre-existing $3.99 subscribers (there were
-# none at the time of the swap) would never have been silently repriced.
-EXTRA_SEAT_PRICE_ID = "pri_01kzks8ccwf6h5bxxtmjfdy1fg"
+# separate subscription of its own. Replaces the $4.99 price
+# (pri_01kzks8ccwf6h5bxxtmjfdy1fg, now archived in Paddle), which itself
+# replaced the original $3.99 price (pri_01kym2q99kevmdg7h71nwpm4ej, also
+# archived) - each swap archived the old price rather than mutating it in
+# place, and each was only done after confirming zero live subscribers on
+# it, so no pre-existing subscriber was ever silently repriced. The included
+# seat count for the "air" plan also dropped from 5 to 3 alongside this
+# price change (db.py's INCLUDED_SEATS) - 5 seats was too much value to
+# bundle into the base $29.99/mo price.
+EXTRA_SEAT_PRICE_ID = "pri_01m123rwvvtgbm6bmmxcbav4hh"
 
 PADDLE_PRICE_TO_PLAN: dict[str, str] = {
     "pri_01kyhevc8bkcghfpwjymz16y2h": "air",
