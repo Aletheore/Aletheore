@@ -1,6 +1,8 @@
 import hashlib
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -9,7 +11,7 @@ from pathlib import Path
 import httpx
 import lancedb
 from lancedb.index import FTS
-from openai import OpenAI
+from openai import APIConnectionError, NotFoundError, OpenAI
 
 from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api_key
 
@@ -740,6 +742,64 @@ def _detail_of(response: httpx.Response) -> str:
         return response.reason_phrase
 
 
+# Real download time for an embedding model over an ordinary connection -
+# generous rather than tight, since failing this just means falling back to
+# the same "ask the user to run it themselves" messaging as before this
+# existed, not a hard error on its own.
+OLLAMA_PULL_TIMEOUT_SECONDS = 300
+
+
+def _try_auto_pull_ollama_model(model: str) -> bool:
+    """Ollama is reachable but doesn't have `model` pulled yet - a normal
+    first-run state, not a real failure - so pull it automatically instead
+    of making the user run a separate command before trying again. Returns
+    True if the pull succeeded (the caller should retry the embedding call),
+    False if it didn't (no `ollama` CLI on PATH, network failure, pull
+    itself failed) - the caller falls back to the same unavailable-provider
+    handling as any other failure in that case."""
+    if shutil.which("ollama") is None:
+        return False
+    print(
+        f"aletheore: local embedding model '{model}' isn't pulled yet - running "
+        f"'ollama pull {model}' now (this only happens once)...",
+        file=sys.stderr,
+    )
+    try:
+        result = subprocess.run(
+            ["ollama", "pull", model],
+            capture_output=True,
+            text=True,
+            timeout=OLLAMA_PULL_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(
+            f"aletheore: 'ollama pull {model}' failed ({type(exc).__name__}); continuing without it",
+            file=sys.stderr,
+        )
+        return False
+    if result.returncode != 0:
+        print(
+            f"aletheore: 'ollama pull {model}' failed: {result.stderr.strip()}",
+            file=sys.stderr,
+        )
+        return False
+    print(f"aletheore: pulled '{model}'", file=sys.stderr)
+    return True
+
+
+def _ollama_setup_instructions(model: str, base_url: str) -> str:
+    return (
+        f"could not reach a local embedding model at {base_url} - Ollama doesn't "
+        "appear to be running.\n\n"
+        "To use local, private embeddings (nothing leaves your machine):\n"
+        "  1. Install Ollama: https://ollama.com/download\n"
+        "  2. Start it (it usually starts automatically after install; if not, run "
+        "'ollama serve')\n"
+        f"  3. Pull the embedding model: 'ollama pull {model}'\n"
+        "  4. Run 'aletheore index' again"
+    )
+
+
 def embed_texts(
     texts: list[str],
     base_url: str = DEFAULT_EMBEDDING_BASE_URL,
@@ -752,11 +812,24 @@ def embed_texts(
         response = client.embeddings.create(model=model, input=texts)
         return [item.embedding for item in response.data]
     except Exception as ollama_exc:
-        ollama_hint = (
-            f"could not reach embedding model '{model}' at {base_url} "
-            f"({type(ollama_exc).__name__}) - try 'ollama pull {model}' and confirm "
-            "ollama is running"
-        )
+        if isinstance(ollama_exc, NotFoundError) and _try_auto_pull_ollama_model(model):
+            try:
+                response = client.embeddings.create(model=model, input=texts)
+                return [item.embedding for item in response.data]
+            except Exception as retry_exc:  # noqa: BLE001
+                # Replaces the original for every message/chain below - the
+                # pull succeeded but the retry still failed for some other
+                # reason, so that's the failure actually worth reporting.
+                ollama_exc = retry_exc
+
+        if isinstance(ollama_exc, APIConnectionError):
+            ollama_hint = _ollama_setup_instructions(model, base_url)
+        else:
+            ollama_hint = (
+                f"could not reach embedding model '{model}' at {base_url} "
+                f"({type(ollama_exc).__name__}) - try 'ollama pull {model}' and confirm "
+                "ollama is running"
+            )
         if not has_api_key("OPENAI_API_KEY", "OpenAI", credentials_path):
             raise EmbeddingProviderUnavailableError(ollama_hint) from ollama_exc
 

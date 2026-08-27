@@ -1,6 +1,8 @@
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+from openai import APIConnectionError, NotFoundError
 
 import aletheore.search_index as search_index_module
 
@@ -23,6 +25,7 @@ from aletheore.search_index import (
     _repo_id,
     _reusable_vectors,
     _rrf_fuse,
+    _try_auto_pull_ollama_model,
     build_chunks,
     build_index,
     embed_texts,
@@ -147,6 +150,109 @@ def test_embed_texts_raises_actionable_error_when_model_unavailable(mock_openai_
 
     with pytest.raises(EmbeddingProviderUnavailableError, match="ollama pull nomic-embed-text"):
         embed_texts(["chunk one"])
+
+
+def _ollama_not_found_error(model: str = "nomic-embed-text") -> NotFoundError:
+    request = httpx.Request("POST", "http://localhost:11434/v1/embeddings")
+    response = httpx.Response(
+        404, request=request, json={"error": {"message": f'model "{model}" not found'}}
+    )
+    return NotFoundError(f'model "{model}" not found', response=response, body=None)
+
+
+def _ollama_connection_error() -> APIConnectionError:
+    request = httpx.Request("POST", "http://localhost:11434/v1/embeddings")
+    return APIConnectionError(request=request)
+
+
+@patch("aletheore.search_index._try_auto_pull_ollama_model")
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_auto_pulls_and_retries_when_model_not_found(
+    mock_openai_class, mock_auto_pull
+):
+    # Ollama is reachable but doesn't have the model yet - a real, common
+    # first-run state - so this should pull it automatically and retry
+    # rather than making the user run a separate command first.
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.embeddings.create.side_effect = [
+        _ollama_not_found_error(),
+        MagicMock(data=[MagicMock(embedding=[0.1, 0.2])]),
+    ]
+    mock_auto_pull.return_value = True
+
+    result = embed_texts(["chunk one"])
+
+    assert result == [[0.1, 0.2]]
+    mock_auto_pull.assert_called_once_with("nomic-embed-text")
+    assert mock_client.embeddings.create.call_count == 2
+
+
+@patch("aletheore.search_index.has_api_key", return_value=False)
+@patch("aletheore.search_index._try_auto_pull_ollama_model", return_value=False)
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_raises_actionable_error_when_auto_pull_fails(
+    mock_openai_class, mock_auto_pull, mock_has_api_key
+):
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.embeddings.create.side_effect = _ollama_not_found_error()
+
+    with pytest.raises(EmbeddingProviderUnavailableError, match="ollama pull nomic-embed-text"):
+        embed_texts(["chunk one"])
+
+    mock_auto_pull.assert_called_once_with("nomic-embed-text")
+
+
+@patch("aletheore.search_index.has_api_key", return_value=False)
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_shows_setup_instructions_when_ollama_unreachable(
+    mock_openai_class, mock_has_api_key
+):
+    # Distinct from the model-not-found case above: Ollama itself isn't
+    # running (or isn't installed) at all, so pulling a model would just
+    # fail too - point the user at real setup steps instead.
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.embeddings.create.side_effect = _ollama_connection_error()
+
+    with pytest.raises(EmbeddingProviderUnavailableError) as exc_info:
+        embed_texts(["chunk one"])
+
+    message = str(exc_info.value)
+    assert "ollama.com" in message
+    assert "ollama pull nomic-embed-text" in message
+    assert "ollama serve" in message
+
+
+@patch("aletheore.search_index.shutil.which", return_value=None)
+def test_try_auto_pull_returns_false_when_ollama_cli_not_on_path(mock_which):
+    assert _try_auto_pull_ollama_model("nomic-embed-text") is False
+
+
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_try_auto_pull_returns_true_on_successful_pull(mock_which, mock_run):
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    assert _try_auto_pull_ollama_model("nomic-embed-text") is True
+
+    args = mock_run.call_args[0][0]
+    assert args == ["ollama", "pull", "nomic-embed-text"]
+
+
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_try_auto_pull_returns_false_on_nonzero_exit(mock_which, mock_run):
+    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="pull failed: EOF")
+
+    assert _try_auto_pull_ollama_model("nomic-embed-text") is False
+
+
+@patch("aletheore.search_index.subprocess.run", side_effect=OSError("no such file"))
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_try_auto_pull_returns_false_when_subprocess_raises(mock_which, mock_run):
+    assert _try_auto_pull_ollama_model("nomic-embed-text") is False
 
 
 @patch("aletheore.search_index.has_api_key", return_value=False)
