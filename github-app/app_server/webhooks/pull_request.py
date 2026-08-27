@@ -1,3 +1,5 @@
+from app_server.db import is_repo_hidden
+
 ENQUEUE_ACTIONS = ("opened", "reopened", "synchronize")
 
 PR_SCAN_JOB_TIMEOUT_SECONDS = 300
@@ -12,8 +14,18 @@ PR_SCAN_JOB_TIMEOUT_SECONDS = 300
 FLASH_REVIEW_JOB_TIMEOUT_SECONDS = 900
 
 
-async def handle_pull_request_event(payload: dict, redis_url: str, queue=None) -> None:
+async def handle_pull_request_event(payload: dict, pool, redis_url: str, queue=None) -> None:
     if payload.get("action") not in ENQUEUE_ACTIONS:
+        return
+
+    installation_id = payload["installation"]["id"]
+    repo_full_name = payload["repository"]["full_name"]
+
+    # A repo the customer deselected from the installation (see
+    # webhooks/installation.py's hide_repo) - GitHub already revoked our
+    # access, but the point of hiding is a clean no-op here rather than a
+    # scan job that starts and then fails partway through.
+    if await is_repo_hidden(pool, installation_id, repo_full_name):
         return
 
     if queue is None:
@@ -25,8 +37,8 @@ async def handle_pull_request_event(payload: dict, redis_url: str, queue=None) -
     queue.enqueue(
         "scan_worker.jobs.run_pr_scan_job",
         job_timeout=PR_SCAN_JOB_TIMEOUT_SECONDS,
-        installation_id=payload["installation"]["id"],
-        repo_full_name=payload["repository"]["full_name"],
+        installation_id=installation_id,
+        repo_full_name=repo_full_name,
         pr_number=payload["number"],
         base_sha=payload["pull_request"]["base"]["sha"],
         head_sha=payload["pull_request"]["head"]["sha"],
@@ -34,8 +46,8 @@ async def handle_pull_request_event(payload: dict, redis_url: str, queue=None) -
     queue.enqueue(
         "scan_worker.jobs.run_flash_review_job",
         job_timeout=FLASH_REVIEW_JOB_TIMEOUT_SECONDS,
-        installation_id=payload["installation"]["id"],
-        repo_full_name=payload["repository"]["full_name"],
+        installation_id=installation_id,
+        repo_full_name=repo_full_name,
         pr_number=payload["number"],
         base_sha=payload["pull_request"]["base"]["sha"],
         head_sha=payload["pull_request"]["head"]["sha"],

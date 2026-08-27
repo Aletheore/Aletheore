@@ -7,6 +7,7 @@ from httpx import ASGITransport, AsyncClient
 from app_server.auth import encrypt_access_token, sign_session_id
 from app_server.db import (
     create_session,
+    hide_repo,
     insert_repo_history,
     set_installation_plan,
     set_public_status_enabled,
@@ -244,6 +245,31 @@ async def test_list_my_repos_excludes_free_plan_installations(pool, monkeypatch)
 
     assert response.status_code == 200
     assert response.json()["repos"] == []
+
+
+@pytest.mark.asyncio
+async def test_list_my_repos_excludes_a_hidden_repo(pool, monkeypatch):
+    # A repo the customer deselected from the installation
+    # (installation_repositories/removed - see webhooks/installation.py's
+    # hide_repo) must disappear from the dashboard immediately, without
+    # its scan history being deleted.
+    await upsert_installation(pool, 705, "octocat")
+    await set_installation_plan(pool, 705, "indie")
+    await insert_repo_history(
+        pool, 705, "octocat/kept", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    await insert_repo_history(
+        pool, 705, "octocat/hidden", datetime.now(timezone.utc), {"repository": {"modules": []}}
+    )
+    await hide_repo(pool, 705, "octocat/hidden")
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[705])
+    async with client:
+        response = await client.get("/app/repos")
+
+    assert response.status_code == 200
+    full_names = {r["repo_full_name"] for r in response.json()["repos"]}
+    assert full_names == {"octocat/kept"}
 
 
 @pytest.mark.asyncio

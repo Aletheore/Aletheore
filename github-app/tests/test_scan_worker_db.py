@@ -8,6 +8,7 @@ import scan_worker.db as scan_worker_db
 from datetime import timedelta
 
 from aletheore.evidence import EVIDENCE_VERSION
+from app_server.db import hide_repo
 from app_server.evidence_limits import EvidenceTooLargeError, MAX_EVIDENCE_BYTES
 from scan_worker.db import (
     check_and_reserve_flash_review_attempt,
@@ -143,6 +144,20 @@ async def test_list_health_check_targets_all_returns_one_row_per_target(pool):
     targets = [t for t in list_health_check_targets_all(TEST_DATABASE_URL) if t["installation_id"] == 305]
     assert len(targets) == 2
     assert {t["base_url"] for t in targets} == {"https://staging.example.com", "https://prod.example.com"}
+
+
+@pytest.mark.asyncio
+async def test_list_health_check_targets_all_excludes_hidden_repos(pool):
+    # A repo deselected from the installation (installation_repositories/
+    # removed) must stop being actively monitored - no new checks against
+    # it, matching the "stop processing" half of soft-hiding a repo, not
+    # just its removal from the dashboard list.
+    await _insert_installation(pool, 308, "h", plan="indie")
+    await _insert_health_target(pool, 308, "h/repo1", "https://h.example.com")
+    await hide_repo(pool, 308, "h/repo1")
+
+    targets = list_health_check_targets_all(TEST_DATABASE_URL)
+    assert all(t["installation_id"] != 308 for t in targets)
 
 
 @pytest.mark.asyncio
@@ -1428,6 +1443,17 @@ async def test_record_docs_catchup_swept_upserts_on_conflict(pool):
 
 
 @pytest.mark.asyncio
+async def test_docs_catchup_due_list_excludes_hidden_repos(pool):
+    await _insert_installation(pool, 508, "hidden-docs-org", plan="indie")
+    insert_repo_history(TEST_DATABASE_URL, 508, "hidden-docs-org/repo", datetime.now(timezone.utc), {"v": 1})
+    await hide_repo(pool, 508, "hidden-docs-org/repo")
+
+    due = list_paid_repos_due_for_docs_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (508, "hidden-docs-org/repo") not in due
+
+
+@pytest.mark.asyncio
 async def test_wiki_catchup_due_list_excludes_free_plan_repos(pool):
     await _insert_installation(pool, 518, "free-wiki-org", plan="free")
     insert_repo_history(TEST_DATABASE_URL, 518, "free-wiki-org/repo", datetime.now(timezone.utc), {"v": 1})
@@ -1504,6 +1530,17 @@ async def test_wiki_catchup_due_list_includes_repo_swept_long_ago_with_new_activ
     due = list_paid_repos_due_for_wiki_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
 
     assert (516, "active-wiki-org/repo") in due
+
+
+@pytest.mark.asyncio
+async def test_wiki_catchup_due_list_excludes_hidden_repos(pool):
+    await _insert_installation(pool, 519, "hidden-wiki-org", plan="indie")
+    insert_repo_history(TEST_DATABASE_URL, 519, "hidden-wiki-org/repo", datetime.now(timezone.utc), {"v": 1})
+    await hide_repo(pool, 519, "hidden-wiki-org/repo")
+
+    due = list_paid_repos_due_for_wiki_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (519, "hidden-wiki-org/repo") not in due
 
 
 @pytest.mark.asyncio

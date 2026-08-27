@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from app_server.db import hide_repo, upsert_installation
 from app_server.webhooks.push import handle_push_event
 
 
@@ -24,9 +25,9 @@ def _payload(ref="refs/heads/main", default_branch="main", deleted=False, after=
 
 
 @pytest.mark.asyncio
-async def test_push_to_default_branch_enqueues_scan_job():
+async def test_push_to_default_branch_enqueues_scan_job(pool):
     fake_queue = MagicMock()
-    await handle_push_event(_payload(), "redis://unused", queue=fake_queue)
+    await handle_push_event(_payload(), pool, "redis://unused", queue=fake_queue)
 
     fake_queue.enqueue.assert_called_once()
     args, kwargs = fake_queue.enqueue.call_args
@@ -39,7 +40,7 @@ async def test_push_to_default_branch_enqueues_scan_job():
 
 
 @pytest.mark.asyncio
-async def test_truncated_push_payload_uses_compare_api_for_complete_changed_files(monkeypatch):
+async def test_truncated_push_payload_uses_compare_api_for_complete_changed_files(pool, monkeypatch):
     payload_commits = [
         {"added": [f"payload-{i}.py"], "removed": [], "modified": []} for i in range(20)
     ]
@@ -70,7 +71,7 @@ async def test_truncated_push_payload_uses_compare_api_for_complete_changed_file
     monkeypatch.setattr("app_server.webhooks.push.get_github_api_client", lambda: client)
 
     fake_queue = MagicMock()
-    await handle_push_event(payload, "redis://unused", queue=fake_queue)
+    await handle_push_event(payload, pool, "redis://unused", queue=fake_queue)
 
     fake_queue.enqueue.assert_called_once()
     _, kwargs = fake_queue.enqueue.call_args
@@ -80,26 +81,48 @@ async def test_truncated_push_payload_uses_compare_api_for_complete_changed_file
 
 
 @pytest.mark.asyncio
-async def test_push_to_non_default_branch_does_not_enqueue():
+async def test_push_to_non_default_branch_does_not_enqueue(pool):
     fake_queue = MagicMock()
     await handle_push_event(
-        _payload(ref="refs/heads/feature-x", default_branch="main"), "redis://unused", queue=fake_queue
+        _payload(ref="refs/heads/feature-x", default_branch="main"), pool, "redis://unused", queue=fake_queue
     )
     fake_queue.enqueue.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_branch_deletion_does_not_enqueue():
+async def test_branch_deletion_does_not_enqueue(pool):
     fake_queue = MagicMock()
-    await handle_push_event(_payload(deleted=True), "redis://unused", queue=fake_queue)
+    await handle_push_event(_payload(deleted=True), pool, "redis://unused", queue=fake_queue)
     fake_queue.enqueue.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_push_with_no_file_changes_enqueues_empty_changed_files():
+async def test_push_with_no_file_changes_enqueues_empty_changed_files(pool):
     fake_queue = MagicMock()
-    await handle_push_event(_payload(commits=[]), "redis://unused", queue=fake_queue)
+    await handle_push_event(_payload(commits=[]), pool, "redis://unused", queue=fake_queue)
 
     fake_queue.enqueue.assert_called_once()
     _, kwargs = fake_queue.enqueue.call_args
     assert kwargs["changed_files"] == []
+
+
+@pytest.mark.asyncio
+async def test_hidden_repo_does_not_enqueue_or_call_compare_api(pool, monkeypatch):
+    # A repo the customer deselected from the installation - GitHub access
+    # is already revoked, so this must be a clean no-op, including
+    # skipping the (would-fail-anyway) compare API call on a truncated
+    # payload.
+    await upsert_installation(pool, 111, "octocat")
+    await hide_repo(pool, 111, "octocat/hello-world")
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("compare API should never be reached for a hidden repo")
+
+    monkeypatch.setattr("app_server.webhooks.push.get_github_api_client", _fail_if_called)
+
+    payload = _payload(commits=[{"added": [f"payload-{i}.py"], "removed": [], "modified": []} for i in range(20)])
+    payload["size"] = 101  # forces the truncated-payload compare-API path if not short-circuited
+    fake_queue = MagicMock()
+    await handle_push_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    fake_queue.enqueue.assert_not_called()
