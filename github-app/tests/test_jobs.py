@@ -391,6 +391,53 @@ def test_run_pr_scan_job_never_syncs_the_pr_head_checkout_into_the_persistent_gi
     assert sync_calls == []
 
 
+def test_run_pr_scan_job_never_syncs_the_pr_head_checkout_into_the_persistent_code_graph(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # Direct sibling of the git-graph bug fixed above: _sync_code_graph is
+    # its own docstring's "counterpart to _sync_persistent_git_graph...for
+    # the code model rather than git history" - it too writes unconditionally
+    # under the fixed GRAPH_BRANCH="default" key (apply_module_deltas/
+    # apply_endpoint_deltas), the same key run_push_scan_job/
+    # run_initial_scan_job use for the repo's real default branch. Calling it
+    # here with this PR's own head_sha/evidence would permanently fold that
+    # PR's file/symbol/dependency-edge/endpoint deltas into the durable code
+    # graph several MCP tools and future incremental syncs read from, even
+    # for PRs closed without merging. run_pr_scan_job must never call it.
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_create_check_run", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
+
+    sync_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._sync_code_graph",
+        lambda *a, **k: sync_calls.append(a),
+    )
+
+    run_pr_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        pr_number=7,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert sync_calls == []
+
+
 def test_happy_path_posts_comment_and_writes_history(bare_repo_with_two_commits, monkeypatch):
     bare_path, base_sha, head_sha = bare_repo_with_two_commits
     posted = {}
