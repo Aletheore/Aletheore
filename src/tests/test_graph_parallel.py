@@ -247,6 +247,16 @@ def test_available_parallelism_ignores_a_malformed_env_override(monkeypatch):
     monkeypatch.setattr(graph_module, "_cgroup_v2_cpu_quota", lambda: None)
     monkeypatch.setattr(graph_module, "_cgroup_v1_cpu_quota", lambda: None)
     monkeypatch.setattr(graph_module.os, "cpu_count", lambda: 8)
+    # Real bug caught in CI (GitHub Actions runner, not this local
+    # environment): the malformed override falls through to real
+    # auto-detection, which also takes os.sched_getaffinity into account
+    # when the platform has it (Linux does, macOS doesn't) - without
+    # mocking it too, this test's result depended on that CI runner's
+    # actual affinity mask (4, not 8) instead of being isolated to just
+    # the cpu_count() signal it claims to test. Same guard the two
+    # sibling auto-detection tests below already use.
+    if hasattr(graph_module.os, "sched_getaffinity"):
+        monkeypatch.setattr(graph_module.os, "sched_getaffinity", lambda pid: set(range(8)))
     assert _available_parallelism() == 8
 
 
