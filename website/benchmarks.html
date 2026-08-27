@@ -469,10 +469,12 @@ python scripts/score_fallback_judge.py</code></pre>
             <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/AIRVIEW_GAP.md" rel="noopener">AIRVIEW_GAP.md</a>
             for the full history, including a real fix that shipped but sat undetected in the
             benchmark for months.<br>
-            ⚠️ Our local setup is slower than Graphify's — scanning and indexing ERPNext takes
-            us ~23 minutes against their ~1 minute. A fix that shipped during this benchmark's
-            development closes only ~1.3% of that gap; the real bottleneck (dead-code detection,
-            77% of scan time) is still open.</p>
+            ⚠️ Our local setup was slower than Graphify's — scanning and indexing ERPNext took
+            ~23 minutes against their ~1 minute. We found the real bottleneck (dead-code
+            detection, 77% of scan time, not parsing) and fixed it: shipped in aletheore 0.9.5,
+            verified live against the installed PyPI release at 53.23s vs the old 236.02s -
+            4.4x faster, real and confirmed. Indexing (~19min, a separate I/O-bound step) is
+            now the honest remaining gap, not scan.</p>
         </div>
       </section>
 
