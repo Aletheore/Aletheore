@@ -3,6 +3,9 @@ from pathlib import Path
 from aletheore.scanner import graph as graph_module
 from aletheore.scanner.graph import (
     PARALLEL_PARSE_MIN_FILES,
+    _available_parallelism,
+    _cgroup_v1_cpu_quota,
+    _cgroup_v2_cpu_quota,
     _extract_module,
     _parse_and_extract_one,
     build_module_graph,
@@ -74,6 +77,32 @@ def test_small_repo_never_invokes_the_process_pool(tmp_path, monkeypatch):
     assert calls == []
     # Every file still got parsed via the sequential fallback - the pool
     # being skipped isn't silently dropping work.
+    assert {m["path"] for m in modules} == {"app/__init__.py", "app/config.py", "app/auth.py", "app/main.py"}
+
+
+def test_a_single_available_core_never_invokes_the_process_pool(tmp_path, monkeypatch):
+    # Regression: a repo well over PARALLEL_PARSE_MIN_FILES still must not
+    # spawn a pool when _available_parallelism() says only one worker is
+    # actually usable (confirmed against this project's own hosted
+    # scan-worker containers: cpus: "1.0" in docker-compose.yml) - a pool
+    # sized at 1 pays the ~150ms creation cost plus a second process
+    # independently loading every tree-sitter grammar, for zero
+    # parallelism benefit over staying sequential.
+    monkeypatch.setattr(graph_module, "PARALLEL_PARSE_MIN_FILES", 0)
+    monkeypatch.setattr(graph_module, "_available_parallelism", lambda: 1)
+
+    repo = _make_multi_file_python_repo(tmp_path)
+
+    calls = []
+    monkeypatch.setattr(
+        graph_module,
+        "_parse_many_in_parallel",
+        lambda *a, **k: calls.append(True) or [],
+    )
+
+    modules, _graph, _unparseable = build_module_graph(repo)
+
+    assert calls == []
     assert {m["path"] for m in modules} == {"app/__init__.py", "app/config.py", "app/auth.py", "app/main.py"}
 
 
@@ -198,3 +227,104 @@ def test_parse_and_extract_one_matches_extract_module(tmp_path):
     assert result["path"] == "a.py"
     assert result["language"] == "python"
     assert result["symbols"]["functions"][0]["name"] == "foo"
+
+
+def test_cgroup_v2_cpu_quota_parses_a_real_restriction(tmp_path):
+    cpu_max = tmp_path / "cpu.max"
+    cpu_max.write_text("200000 100000\n")
+    assert _cgroup_v2_cpu_quota(cpu_max) == 2
+
+
+def test_cgroup_v2_cpu_quota_rounds_a_fractional_quota_up(tmp_path):
+    # 1.5 effective cores - a real shape (`docker run --cpus=1.5`), confirmed
+    # directly. Rounds up rather than down: a container with 1.5 CPUs' worth
+    # of quota can still usefully run 2 workers some of the time, and
+    # truncating to 1 would waste half a core's worth of real parallelism.
+    cpu_max = tmp_path / "cpu.max"
+    cpu_max.write_text("150000 100000\n")
+    assert _cgroup_v2_cpu_quota(cpu_max) == 2
+
+
+def test_cgroup_v2_cpu_quota_returns_none_when_unrestricted(tmp_path):
+    cpu_max = tmp_path / "cpu.max"
+    cpu_max.write_text("max 100000\n")
+    assert _cgroup_v2_cpu_quota(cpu_max) is None
+
+
+def test_cgroup_v2_cpu_quota_returns_none_when_file_is_absent(tmp_path):
+    # Non-Linux (macOS, Windows) or a cgroup v1 host - both real, both
+    # must degrade to "no v2 signal", not raise.
+    assert _cgroup_v2_cpu_quota(tmp_path / "does-not-exist") is None
+
+
+def test_cgroup_v1_cpu_quota_parses_a_real_restriction(tmp_path):
+    quota_path = tmp_path / "cfs_quota_us"
+    period_path = tmp_path / "cfs_period_us"
+    quota_path.write_text("200000\n")
+    period_path.write_text("100000\n")
+    assert _cgroup_v1_cpu_quota(quota_path, period_path) == 2
+
+
+def test_cgroup_v1_cpu_quota_returns_none_when_unrestricted():
+    # cgroup v1's unrestricted marker is quota=-1, not a missing file.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        quota_path = Path(d) / "cfs_quota_us"
+        period_path = Path(d) / "cfs_period_us"
+        quota_path.write_text("-1\n")
+        period_path.write_text("100000\n")
+        assert _cgroup_v1_cpu_quota(quota_path, period_path) is None
+
+
+def test_available_parallelism_env_override_wins_over_everything(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_PARALLEL_PARSE_JOBS", "3")
+    monkeypatch.setattr(graph_module, "_cgroup_v2_cpu_quota", lambda: 1)
+    monkeypatch.setattr(graph_module, "_cgroup_v1_cpu_quota", lambda: 1)
+    assert _available_parallelism() == 3
+
+
+def test_available_parallelism_ignores_a_malformed_env_override(monkeypatch):
+    monkeypatch.setenv("ALETHEORE_PARALLEL_PARSE_JOBS", "not-a-number")
+    monkeypatch.setattr(graph_module, "_cgroup_v2_cpu_quota", lambda: None)
+    monkeypatch.setattr(graph_module, "_cgroup_v1_cpu_quota", lambda: None)
+    monkeypatch.setattr(graph_module.os, "cpu_count", lambda: 8)
+    # Real bug caught in CI (GitHub Actions runner, not this local
+    # environment): the malformed override falls through to real
+    # auto-detection, which also takes os.sched_getaffinity into account
+    # when the platform has it (Linux does, macOS doesn't) - without
+    # mocking it too, this test's result depended on that CI runner's
+    # actual affinity mask (4, not 8) instead of being isolated to just
+    # the cpu_count() signal it claims to test. Same guard the two
+    # sibling auto-detection tests below already use.
+    if hasattr(graph_module.os, "sched_getaffinity"):
+        monkeypatch.setattr(graph_module.os, "sched_getaffinity", lambda pid: set(range(8)))
+    assert _available_parallelism() == 8
+
+
+def test_available_parallelism_takes_the_tightest_of_cpu_count_and_cgroup_quota(monkeypatch):
+    monkeypatch.delenv("ALETHEORE_PARALLEL_PARSE_JOBS", raising=False)
+    monkeypatch.setattr(graph_module.os, "cpu_count", lambda: 32)
+    monkeypatch.setattr(graph_module, "_cgroup_v2_cpu_quota", lambda: 2)
+    monkeypatch.setattr(graph_module, "_cgroup_v1_cpu_quota", lambda: None)
+    if hasattr(graph_module.os, "sched_getaffinity"):
+        monkeypatch.setattr(graph_module.os, "sched_getaffinity", lambda pid: set(range(32)))
+    assert _available_parallelism() == 2
+
+
+def test_available_parallelism_falls_back_to_cpu_count_when_unrestricted(monkeypatch):
+    monkeypatch.delenv("ALETHEORE_PARALLEL_PARSE_JOBS", raising=False)
+    monkeypatch.setattr(graph_module.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(graph_module, "_cgroup_v2_cpu_quota", lambda: None)
+    monkeypatch.setattr(graph_module, "_cgroup_v1_cpu_quota", lambda: None)
+    if hasattr(graph_module.os, "sched_getaffinity"):
+        monkeypatch.setattr(graph_module.os, "sched_getaffinity", lambda pid: set(range(8)))
+    assert _available_parallelism() == 8
+
+
+def test_available_parallelism_never_returns_less_than_one(monkeypatch):
+    monkeypatch.delenv("ALETHEORE_PARALLEL_PARSE_JOBS", raising=False)
+    monkeypatch.setattr(graph_module.os, "cpu_count", lambda: None)
+    monkeypatch.setattr(graph_module, "_cgroup_v2_cpu_quota", lambda: None)
+    monkeypatch.setattr(graph_module, "_cgroup_v1_cpu_quota", lambda: None)
+    assert _available_parallelism() >= 1
