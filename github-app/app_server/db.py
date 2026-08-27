@@ -706,7 +706,7 @@ async def set_extra_seats(pool: asyncpg.Pool, installation_id: int, extra_seats:
     )
 
 
-INCLUDED_SEATS = {"air": 5}
+INCLUDED_SEATS = {"air": 3}
 DEFAULT_SEAT_LIMIT = 5
 
 

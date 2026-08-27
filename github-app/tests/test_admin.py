@@ -1128,7 +1128,7 @@ async def test_first_admin_to_arrive_is_auto_seated(pool, monkeypatch):
         response = await client.get("/admin/octocat/hello-world")
     assert response.status_code == 200
     assert [m["github_login"] for m in response.json()["members"]] == ["octocat"]
-    assert response.json()["seat_limit"] == 5
+    assert response.json()["seat_limit"] == 3
 
 
 @pytest.mark.asyncio
@@ -1176,12 +1176,12 @@ async def test_removing_a_member_revokes_access(pool, monkeypatch):
 async def test_add_member_enforces_seat_cap(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch)
     async with client:
-        await client.get("/admin/octocat/hello-world")  # seats octocat (1 of 5)
-        await client.post("/admin/octocat/hello-world/members", json={"github_login": "alice"})  # 2 of 5
-        await client.post("/admin/octocat/hello-world/members", json={"github_login": "bob"})  # 3 of 5
-        await client.post("/admin/octocat/hello-world/members", json={"github_login": "carol"})  # 4 of 5
-        await client.post("/admin/octocat/hello-world/members", json={"github_login": "dave"})  # 5 of 5
-        response = await client.post("/admin/octocat/hello-world/members", json={"github_login": "erin"})
+        await client.get("/admin/octocat/hello-world")  # seats octocat (1 of 3, INCLUDED_SEATS["air"])
+        alice = await client.post("/admin/octocat/hello-world/members", json={"github_login": "alice"})  # 2 of 3
+        bob = await client.post("/admin/octocat/hello-world/members", json={"github_login": "bob"})  # 3 of 3
+        response = await client.post("/admin/octocat/hello-world/members", json={"github_login": "carol"})
+    assert alice.status_code == 200
+    assert bob.status_code == 200
     assert response.status_code == 409
     assert "seat limit reached" in response.json()["detail"]
 
