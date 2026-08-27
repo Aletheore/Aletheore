@@ -2365,6 +2365,20 @@ def _parse_and_extract_one(
 # spawn overhead to be clearly worth it.
 PARALLEL_PARSE_MIN_FILES = 200
 
+# Escape hatch for memory-constrained hosts: spawning os.cpu_count() worker
+# processes multiplies memory (each independently loads the tree-sitter
+# grammar libraries and holds its own in-flight ASTs), which is a clear win
+# on a developer's own machine but can be a net negative on a container with
+# a tight memory limit. No CLI flag for this - scan_worker/jobs.py's
+# _run_scan sets this env var on the hosted scan subprocess specifically
+# (same convention as ALETHEORE_DISABLE_LOCAL_SCAN_CACHE and friends
+# alongside it), leaving local CLI users on the parallel default untouched.
+_DISABLE_PARALLEL_PARSE_ENV = "ALETHEORE_DISABLE_PARALLEL_PARSE"
+
+
+def _parallel_parse_disabled() -> bool:
+    return bool(os.environ.get(_DISABLE_PARALLEL_PARSE_ENV))
+
 # Set once per worker process by _init_worker, read by
 # _worker_parse_and_extract_one - never touched by the main process. Module-
 # level rather than passed as a function argument because every argument to
@@ -2591,7 +2605,7 @@ def build_module_graph(
             )
         )
 
-    if len(paths_needing_parse) >= PARALLEL_PARSE_MIN_FILES:
+    if len(paths_needing_parse) >= PARALLEL_PARSE_MIN_FILES and not _parallel_parse_disabled():
         modules.extend(
             _parse_many_in_parallel(
                 paths_needing_parse,
