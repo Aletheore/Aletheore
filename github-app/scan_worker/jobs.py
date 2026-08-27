@@ -1924,6 +1924,13 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
     risk here, same as send_health_alert already accepts for Slack/Teams
     (it has no dedup at all) - this isn't solving a harder problem than
     the channel it's sitting next to already tolerates.
+
+    int(time.time()), not the raw float: time.time() carries microsecond
+    precision, so two calls a millisecond apart (a real retry) would each
+    get their own unique key and neither would ever collide with the
+    other - the same-second collapse this docstring describes never
+    actually happened. Confirmed directly: two time.time() calls back to
+    back differed at the 6th decimal place, never equal.
     """
     webhook_url = installation.get("webhook_url")
     if webhook_url:
@@ -1935,7 +1942,7 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
         target_id = installation.get("target_id")
         enqueue_transactional_email(
             settings.redis_url,
-            dedupe_key=f"health_alert:{target_id}:{time.time()}",
+            dedupe_key=f"health_alert:{target_id}:{int(time.time())}",
             template_name="health_alert",
             template_arg=message["text"],
             to_email=alert_email,
