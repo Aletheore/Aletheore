@@ -58,19 +58,15 @@ def _string_literal_text(node: Node, source: bytes) -> str:
     return raw.strip("'\"")
 
 
-def _resolve_router_definition_file(
+def _resolve_from_import_binding(
     root: Node, source: bytes, name: str, repo_path: Path, path: Path, source_roots: list[Path]
-) -> str:
-    """Finds which file `name` (the identifier passed as include_router's
-    router argument) actually originates from, by following a `from
-    <module> import name [as alias]` statement in this same file - "router"
-    is the idiomatic FastAPI variable name, so without this, two different
-    files' routers both imported under that same conventional bare name
-    would be indistinguishable to the caller (see before_launch_fixes.md
-    Batch 4 finding #4). Falls back to this file's own rel_path when no
-    such import binds the name - the pre-existing, still-correct same-file
-    case (`router = APIRouter()` and `include_router(router, ...)` both
-    here)."""
+) -> str | None:
+    """Finds which file `name` is bound to by a `from <module> import name
+    [as alias]` statement in this same file - None if no such import binds
+    it (the caller decides what that means: a same-file definition for a
+    bare router name, or an unresolvable reference for a module alias -
+    see _resolve_router_definition_file and the attribute-access branch of
+    _collect_fastapi_include_prefixes)."""
     for n in _walk_tree(root):
         if n.type != "import_from_statement":
             continue
@@ -94,7 +90,24 @@ def _resolve_router_definition_file(
             target = _resolve_python_from_import(repo_path, module_name, imported_name, path, source_roots)
             if target is not None:
                 return target
-    return _rel(repo_path, path)
+    return None
+
+
+def _resolve_router_definition_file(
+    root: Node, source: bytes, name: str, repo_path: Path, path: Path, source_roots: list[Path]
+) -> str:
+    """Finds which file `name` (the identifier passed as include_router's
+    router argument) actually originates from, by following a `from
+    <module> import name [as alias]` statement in this same file - "router"
+    is the idiomatic FastAPI variable name, so without this, two different
+    files' routers both imported under that same conventional bare name
+    would be indistinguishable to the caller (see before_launch_fixes.md
+    Batch 4 finding #4). Falls back to this file's own rel_path when no
+    such import binds the name - the pre-existing, still-correct same-file
+    case (`router = APIRouter()` and `include_router(router, ...)` both
+    here)."""
+    target = _resolve_from_import_binding(root, source, name, repo_path, path, source_roots)
+    return target if target is not None else _rel(repo_path, path)
 
 
 def _collect_fastapi_include_prefixes(
@@ -112,7 +125,43 @@ def _collect_fastapi_include_prefixes(
         if name is None or source[name.start_byte:name.end_byte].decode() != "include_router":
             continue
         positional = [arg for arg in args.named_children if arg.type != "keyword_argument"]
-        if not positional or positional[0].type != "identifier":
+        if not positional:
+            continue
+        router_arg = positional[0]
+        if router_arg.type == "identifier":
+            router = source[router_arg.start_byte:router_arg.end_byte].decode()
+            defining_file: str | None = _resolve_router_definition_file(
+                root, source, router, repo_path, path, source_roots
+            )
+        elif router_arg.type == "attribute":
+            # include_router(users.router, prefix="/users") - the exact
+            # namespacing pattern this whole feature exists to disambiguate
+            # (a bare "router" collides across files) done properly, and
+            # previously invisible to this scan entirely: positional[0].type
+            # was required to be a plain identifier, so this branch never
+            # matched and the call was silently skipped - the mount prefix
+            # never applied, producing a real, reachable endpoint's path
+            # with its mount prefix missing. Confirmed directly: a router
+            # mounted this way reported "/list" instead of "/users/list".
+            #
+            # No same-file fallback here (unlike the identifier case above):
+            # a locally-defined router is always referenced by its own bare
+            # name, never via module.attribute, so if the module alias
+            # can't be resolved to a real import, this mount is genuinely
+            # unknown rather than "must be this file" - skip only this
+            # mount, same discipline as the non-literal-prefix case below.
+            object_node = router_arg.child_by_field_name("object")
+            attribute_node = router_arg.child_by_field_name("attribute")
+            if object_node is None or object_node.type != "identifier" or attribute_node is None:
+                continue
+            module_alias = source[object_node.start_byte:object_node.end_byte].decode()
+            router = source[attribute_node.start_byte:attribute_node.end_byte].decode()
+            defining_file = _resolve_from_import_binding(
+                root, source, module_alias, repo_path, path, source_roots
+            )
+            if defining_file is None:
+                continue
+        else:
             continue
         prefix_arg = next(
             (arg for arg in args.named_children if arg.type == "keyword_argument"
@@ -140,8 +189,6 @@ def _collect_fastapi_include_prefixes(
                 # this mount rather than guessing at its value.
                 continue
             prefix_text = _string_literal_text(value, source)
-        router = source[positional[0].start_byte:positional[0].end_byte].decode()
-        defining_file = _resolve_router_definition_file(root, source, router, repo_path, path, source_roots)
         prefixes.setdefault((defining_file, router), []).append(prefix_text)
     return prefixes
 
