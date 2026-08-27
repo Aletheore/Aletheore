@@ -74,12 +74,18 @@ async def test_owner_attachment_from_graph_uses_most_recent_committer(pool, monk
 
     from aletheore.git_intel.graph_store import CommitTouch
 
+    # Newest first (s2, then s1) - matching git log's real default order.
+    # See src/tests/test_incremental.py's
+    # test_fold_caps_recent_commits_per_file_newest_first (and PR #430) for
+    # why this matters: an oldest-first fixture here masked the same
+    # fold()/recent_commits ordering bug three sibling fixtures had, purely
+    # by feeding backwards input to backwards logic.
     store.apply_commits(
         "unused",
         GRAPH_BRANCH,
         [
-            CommitTouch("s1", "Alice", "a@example.com", datetime(2026, 6, 1), ("app/handler.py",)),
             CommitTouch("s2", "Bob", "b@example.com", datetime(2026, 6, 8), ("app/handler.py",)),
+            CommitTouch("s1", "Alice", "a@example.com", datetime(2026, 6, 1), ("app/handler.py",)),
         ],
         new_sync_sha="s2",
         new_sync_at=datetime(2026, 6, 8),
@@ -120,12 +126,14 @@ async def test_commit_attachment_from_graph_uses_most_recent_commit(pool, monkey
 
     from aletheore.git_intel.graph_store import CommitTouch
 
+    # Newest first (s2, then s1) - see the identical comment on
+    # test_owner_attachment_from_graph_uses_most_recent_committer above.
     store.apply_commits(
         "unused",
         GRAPH_BRANCH,
         [
-            CommitTouch("s1", "Alice", "a@example.com", datetime(2026, 6, 1), ("app/handler.py",), "initial handler"),
             CommitTouch("s2", "Bob", "b@example.com", datetime(2026, 6, 8), ("app/handler.py",), "fix null check"),
+            CommitTouch("s1", "Alice", "a@example.com", datetime(2026, 6, 1), ("app/handler.py",), "initial handler"),
         ],
         new_sync_sha="s2",
         new_sync_at=datetime(2026, 6, 8),
