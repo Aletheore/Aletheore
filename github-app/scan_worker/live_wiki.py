@@ -976,7 +976,16 @@ def _strip_unverified_lines(detail: str, unverified: list[dict]) -> str | None:
     # "foo.py:10" or "foo.py:100", silently stripping a different, valid
     # citation's line too. The (?!\d) boundary stops a shorter bad line
     # number from matching as a prefix of a longer one.
-    bad_patterns = [re.compile(re.escape(b) + r"(?!\d)") for b in bad]
+    #
+    # The mirror-image gap on the left side is just as real: "helpers.py:5"
+    # is also a suffix of "core/utils/helpers.py:5" - two different files
+    # that happen to share a path tail, not uncommon in a real repo with
+    # nested directories. Without a left guard, a bad citation to one file
+    # would wrongly strip a valid citation to a different file. (?<![\w./-])
+    # requires the character immediately before the match (if any) not be
+    # part of a longer path/filename - confirmed directly:
+    # "core/utils/helpers.py:5" no longer matches "utils/helpers.py:5".
+    bad_patterns = [re.compile(r"(?<![\w./-])" + re.escape(b) + r"(?!\d)") for b in bad]
     kept = [ln for ln in detail.splitlines() if not any(p.search(ln) for p in bad_patterns)]
     if not kept:
         return None
