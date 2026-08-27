@@ -3,6 +3,43 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.6 — 2026-08-27
+
+- **Parallel-parse worker count is now capped to the real available CPU
+  quota, not raw `os.cpu_count()`.** In a CPU-limited container (CI runner,
+  Docker `--cpus`, a Kubernetes pod), `os.cpu_count()` reports the host's
+  total core count, not what the container is actually allotted, so the
+  0.9.5 parallel-parse feature could over-spawn workers and thrash rather
+  than speed anything up. `_available_parallelism()` now takes the minimum
+  of `os.cpu_count()`, a cgroup v1/v2 CPU quota read, and
+  `os.sched_getaffinity(0)` where available, overridable via
+  `ALETHEORE_PARALLEL_PARSE_JOBS`. Verified against real Docker containers
+  across quota/affinity combinations, and against a real CI runner failure
+  this surfaced (a 4-affinity-core runner reporting 8 via `os.cpu_count()`).
+- **The hosted scan-worker can now opt out of parallel parsing entirely**
+  via `ALETHEORE_DISABLE_PARALLEL_PARSE`, set automatically on Aletheore's
+  own memory-constrained hosted infrastructure without changing the default
+  for local CLI users.
+- **`aletheore index`'s local embedding setup no longer dead-ends** when
+  Ollama is running but the embedding model isn't pulled yet. It now
+  auto-pulls the model and shows real setup steps instead of a bare
+  connection error.
+- **FastAPI endpoint mapping no longer misses `include_router` calls that
+  reference a router by module attribute** (`include_router(users.router,
+  prefix="/users")`), only bare identifiers before. Confirmed this
+  previously produced a real, reachable endpoint's path with its mount
+  prefix silently dropped.
+- **`git_intel`'s incrementally-synced `recent_commits` ordering was
+  inverted** for every caller that feeds commits in real `git log` order
+  (newest first): `fold()` iterated forward while building the list with
+  `insert(0, ...)`, so the truncation after a busy file's 10-commit cap
+  kept the oldest commits and dropped the genuinely recent ones. Anything
+  reading `recent_commits[0]` as "the latest commit" (hosted health-check
+  correlation, likely-owner inference) was pointing at stale data on
+  high-churn files. Fixed by reversing the iteration order; four affected
+  test fixtures (three built oldest-first, the mirror image of real git log
+  output, which had been masking the bug) corrected to match reality.
+
 ## 0.9.5 — 2026-08-27
 
 - **`aletheore scan` is up to 4.5x faster on large repos** — real, measured,
