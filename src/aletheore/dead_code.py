@@ -80,12 +80,16 @@ _QUOTED_WORD_DOT_RUN_RE = re.compile(r'["\']([\w][\w.]*)')
 
 
 def _dot_boundary_prefixes(token: str) -> set[str]:
-    # "pkg.mod.func" -> {"pkg", "pkg.mod", "pkg.mod.func"} - every prefix
-    # ending exactly at a '.' boundary, the same set of strings the old
-    # regex's `(?=[.\'"])` lookahead would each independently match against
-    # this same quoted run.
+    # "pkg.mod.func" -> {"pkg", "pkg.mod"} - every STRICT prefix, i.e.
+    # shorter than the full token. Each one is immediately followed by a
+    # literal '.' inside the captured run itself, which is always a valid
+    # boundary per the old regex's `(?=[.\'"])` lookahead, regardless of
+    # what comes after the run in the source. The full token is deliberately
+    # excluded here: its validity depends on what character follows the run
+    # in the source (only a closing quote counts - see
+    # _dotted_string_token_index), which this function has no access to.
     parts = token.split(".")
-    return {".".join(parts[:k]) for k in range(1, len(parts) + 1)}
+    return {".".join(parts[:k]) for k in range(1, len(parts))}
 
 
 def _dotted_string_token_index(sources: dict[str, str]) -> dict[str, set[str]]:
@@ -93,12 +97,29 @@ def _dotted_string_token_index(sources: dict[str, str]) -> dict[str, set[str]]:
     (quote-adjacent, at a '.'-or-closing-quote boundary) - built once for
     the whole corpus, replacing what used to be a fresh regex scan of every
     file per candidate. O(total source size) instead of
-    O(candidates x total source size)."""
+    O(candidates x total source size).
+
+    _QUOTED_WORD_DOT_RUN_RE greedily consumes every '.' as part of the run,
+    so the run can never stop right before a '.' - it only stops at a
+    non-word-non-dot character (or end of string). That means the full
+    captured token's closing boundary is never a '.': it has to be checked
+    against the literal next character in the source, and only a quote
+    character satisfies the old regex's [.\'"] boundary class here. Without
+    this check, a quoted string like "pkg.mod completed successfully" would
+    wrongly register "pkg.mod" as referenced - the old regex required the
+    next character to be '.', "'", or '"', and a space is none of those.
+    Confirmed as a real divergence (not hypothetical) by direct comparison
+    against the old per-candidate regex on that exact string.
+    """
     index: dict[str, set[str]] = {}
     for path, content in sources.items():
         for match in _QUOTED_WORD_DOT_RUN_RE.finditer(content):
-            for prefix in _dot_boundary_prefixes(match.group(1)):
+            token = match.group(1)
+            for prefix in _dot_boundary_prefixes(token):
                 index.setdefault(prefix, set()).add(path)
+            next_char = content[match.end() : match.end() + 1]
+            if next_char in ("'", '"'):
+                index.setdefault(token, set()).add(path)
     return index
 
 

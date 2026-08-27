@@ -397,6 +397,57 @@ python scripts/score_fallback_judge.py</code></pre>
           <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/DETERMINISTIC_VS_LLM.md" rel="noopener">DETERMINISTIC_VS_LLM.md</a>.</p>
       </section>
 
+      <section class="developer-section dogfood-repo dogfood-repo-alt">
+        <div class="section-heading dogfood-heading">
+          <p class="eyebrow">Head-to-head against Graphify · on their own primary-source corpus</p>
+          <h2>We ran their benchmark, not just ours.</h2>
+          <p><a href="https://github.com/Graphify-Labs/graphify" rel="noopener">Graphify</a> publishes
+            its own primary-source benchmark on <strong>ERPNext</strong> — a real ~1M-LOC Python
+            codebase, and the exact same corpus their own <code>BENCHMARKS.md</code> uses. Rather
+            than cite either tool's own numbers, we cloned ERPNext ourselves, ran both tools
+            ourselves under one shared agent loop and one anonymized judge, and published what
+            actually happened. A widely-circulated "70%/71.5x token reduction" figure attributed
+            to Graphify doesn't appear anywhere in their own repository — we don't use it here.</p>
+        </div>
+
+        <div class="toon-counters">
+          <div class="toon-counter">
+            <div class="toon-counter-value">100%</div>
+            <div class="toon-counter-label">coverage, tied with Graphify<br>once a bad ground-truth fact we caught was fixed</div>
+          </div>
+          <div class="toon-counter">
+            <div class="toon-counter-value">−36%</div>
+            <div class="toon-counter-label">tokens per query vs. Graphify,<br>the real, robust win</div>
+          </div>
+          <div class="toon-counter">
+            <div class="toon-counter-value">$0.19</div>
+            <div class="toon-counter-label">total real cost of the run,<br>45 harness + 90 judge calls</div>
+          </div>
+        </div>
+
+        <div class="dogfood-table-wrap">
+          <table class="dogfood-table">
+            <thead>
+              <tr><th></th><th>baseline (grep/read/list)</th><th>+ Aletheore</th><th>+ Graphify</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Coverage (30 samples)</td><td>92.2%</td><td><strong>100.0%</strong></td><td>93.3%</td></tr>
+              <tr><td>Tokens/query, excl. one MAX_TURNS timeout</td><td>9,157</td><td>9,803</td><td>15,296</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="dogfood-p">A pre-publish review caught and fixed two real problems before this
+          shipped: one question's ground truth was factually wrong (all three tools had answered
+          it correctly and were wrongly capped), and the raw coverage gap was driven almost
+          entirely by one question where baseline and Graphify both hit their turn limit without
+          converging — a real, specific result, not a distributed lead. Only 2 of 15 questions
+          discriminate between Aletheore and Graphify at all once the ground truth is fixed —
+          honestly, that's a tie on quality. The number that holds up consistently, not as an
+          artifact of one question, is token cost: Aletheore answers for 36% fewer tokens than
+          Graphify. Full writeup, raw results, and the corrections themselves, in
+          <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/graphify_comparison/README.md" rel="noopener">graphify_comparison/README.md</a>.</p>
+      </section>
+
       <section class="developer-section">
         <div class="section-heading dogfood-heading">
           <p class="eyebrow">Where we lose</p>
@@ -417,7 +468,13 @@ python scripts/score_fallback_judge.py</code></pre>
             different measurement method — see
             <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/AIRVIEW_GAP.md" rel="noopener">AIRVIEW_GAP.md</a>
             for the full history, including a real fix that shipped but sat undetected in the
-            benchmark for months.</p>
+            benchmark for months.<br>
+            ⚠️ Our local setup was slower than Graphify's — scanning and indexing ERPNext took
+            ~23 minutes against their ~1 minute. We found the real bottleneck (dead-code
+            detection, 77% of scan time, not parsing) and fixed it: shipped in aletheore 0.9.5,
+            verified live against the installed PyPI release at 53.23s vs the old 236.02s -
+            4.4x faster, real and confirmed. Indexing (~19min, a separate I/O-bound step) is
+            now the honest remaining gap, not scan.</p>
         </div>
       </section>
 

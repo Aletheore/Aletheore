@@ -213,6 +213,10 @@ def test_dotted_string_detection_matches_naive_reference_implementation(tmp_path
             "# elsewhere: \"app.orphan_partial\" appears but never continues to "
             "\".match\" - candidate app.orphan_partial_match should not match this\n"
         ),
+        "app/prose_false_positive.py": "def unused():\n    pass\n",
+        "app/prose_false_positive_ref.py": (
+            'log.info("app.prose_false_positive completed successfully")\n'
+        ),
     }
     unreachable_candidates = [
         "scan_worker/jobs.py",
@@ -221,6 +225,7 @@ def test_dotted_string_detection_matches_naive_reference_implementation(tmp_path
         "app/deeply/nested/pkg/mod.py",
         "app/orphan_no_reference.py",
         "app/orphan_partial_match.py",
+        "app/prose_false_positive.py",
     ]
 
     for candidate_path in unreachable_candidates:
@@ -255,6 +260,10 @@ def test_dotted_string_detection_real_corpus_full_parity(tmp_path):
         "app/deeply/nested/pkg/mod.py": "def helper():\n    pass\n",
         "app/deeply/nested/registry.py": 'TASKS = {"x": "app.deeply.nested.pkg.mod.helper"}\n',
         "app/orphan_no_reference.py": "def unused():\n    pass\n",
+        "app/prose_false_positive.py": "def unused():\n    pass\n",
+        "app/prose_false_positive_ref.py": (
+            'log.info("app.prose_false_positive completed successfully")\n'
+        ),
     }
     for path, content in files.items():
         (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
@@ -265,6 +274,7 @@ def test_dotted_string_detection_real_corpus_full_parity(tmp_path):
         "scan_worker/other.py",
         "app/deeply/nested/pkg/mod.py",
         "app/orphan_no_reference.py",
+        "app/prose_false_positive.py",
     ]
     expected_rescued = {
         p for p in unreachable_candidates if _reference_referenced_by_dotted_string(p, files)
