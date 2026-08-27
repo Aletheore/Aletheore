@@ -127,7 +127,12 @@ class SetAlertEmailRequest(BaseModel):
 # typo before it's saved" purpose as _looks_like_email above, not an
 # attempt to verify the key is real (only Pushover's own API can do that,
 # which is exactly what the /test route is for).
-_PUSHOVER_KEY_PATTERN = re.compile(r"^[A-Za-z0-9]{30}$")
+# \Z, not the bare $ a first attempt reaches for: without re.MULTILINE, $
+# matches either the true end of the string OR right before a single
+# trailing newline - so "u"*30 + "\n" (30 valid characters plus a trailing
+# newline) incorrectly passed this check, confirmed directly. \Z only ever
+# matches the true end of the string, no such exception.
+_PUSHOVER_KEY_PATTERN = re.compile(r"^[A-Za-z0-9]{30}\Z")
 
 
 class SetPushoverUserKeyRequest(BaseModel):
