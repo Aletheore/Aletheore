@@ -14,6 +14,16 @@ file is the history; that one is the current state.
 
 ## 2026-08-27
 
+- **Reduced Aletheore AIR's included seats from 5 to 3, repriced the extra-seat add-on from
+  $4.99 to $6.99/month** (#435) - a real pricing change, not a bug fix: 5 seats was more value
+  than the $29.99/mo base price should bundle. `db.py`'s `INCLUDED_SEATS["air"]` dropped to 3;
+  `paddle_pricing.py`'s `EXTRA_SEAT_PRICE_ID` points at a new $6.99 Paddle price (the old $4.99
+  price was archived, not mutated, after confirming zero live subscribers on it). A second Claude
+  session (`veridion-68`) reviewed the branch for other places the price change could hit and
+  found one the PR's own diff had missed: `llm_cost.py`'s `EXTRA_SEAT_PRICE_USD` - a separate
+  constant read directly by the dashboard's "Buy extra seat" button and by the seat-cap-reached
+  error message - was still 4.99, which would have shown customers the wrong price at the exact
+  moment they were about to be charged the new one. Fixed same-day before merge.
 - **Three real bugs found and fixed in `scan_worker/jobs.py`** (the repo's own
   worst code-health hotspot: 1.65/10 defect risk, 38 prior bug-fixes in 6
   months), from a proactive dual-pass audit (this session plus a second
