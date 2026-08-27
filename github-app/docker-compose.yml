@@ -66,6 +66,18 @@ services:
     restart: unless-stopped
     labels:
       - autoheal=true
+    # Longer than the longest job this worker can run
+    # (LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS = 1800s, scan_worker/jobs.py)
+    # plus a margin, not the 10s Docker default. Without this, any redeploy
+    # that lands mid-job sends SIGKILL before RQ's own graceful-shutdown
+    # (which waits for the current job to finish) can complete, and RQ
+    # marks that job AbandonedJobError - a false ops_monitor.failed_jobs
+    # alert with nothing actually wrong, that then has to be manually
+    # cleared from FailedJobRegistry every time it happens. With this in
+    # place, a real hang still gets a clean, correctly-alertable
+    # JobTimeoutException from RQ itself well before Docker would ever need
+    # to force-kill the container.
+    stop_grace_period: 30m30s
     # No HTTP server here (RQ worker) - see app_server/heartbeat.py. A
     # background thread touches /tmp/heartbeat every ~30s; this fails once
     # that file goes stale, e.g. the process is hung. See app-server's
@@ -139,6 +151,10 @@ services:
     restart: unless-stopped
     labels:
       - autoheal=true
+    # See scan-worker's identical stop_grace_period comment above - keep
+    # both blocks in sync, per this file's own existing convention for
+    # these two services.
+    stop_grace_period: 30m30s
     healthcheck:
       test: ["CMD-SHELL", "find /tmp/heartbeat -mmin -2 | grep -q ."]
       interval: 30s
@@ -191,6 +207,12 @@ services:
     restart: unless-stopped
     labels:
       - autoheal=true
+    # Same reasoning as scan-worker's identical comment above, scaled to
+    # this worker's own queue: it only ever consumes "health", whose
+    # longest job is HEALTH_SWEEP_JOB_TIMEOUT_SECONDS = 600s
+    # (scan_worker/jobs.py), not the 1800s "scans" jobs scan-worker
+    # handles - so a shorter margin is correct here, not copy-pasted.
+    stop_grace_period: 11m
     # See scan-worker's healthcheck comment above - same mechanism, this
     # container's own /tmp/heartbeat, checked independently.
     healthcheck:
