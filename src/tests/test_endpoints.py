@@ -301,6 +301,55 @@ def test_map_api_endpoints_does_not_cross_contaminate_same_named_routers_in_diff
     assert items_paths == {"/items/list"}
 
 
+def test_map_api_endpoints_applies_mount_prefix_for_attribute_style_include_router(tmp_path):
+    # Regression: include_router(users.router, prefix="/users") - routers
+    # namespaced by module attribute access instead of a bare imported
+    # name, the idiomatic way to avoid exactly the bare-"router"-name
+    # collision the test above guards against - was invisible to this scan
+    # entirely. positional[0] was required to be a plain identifier, so an
+    # attribute node (`users.router`) never matched and the whole
+    # include_router call was silently skipped: the mount prefix never
+    # applied, and a real, reachable endpoint reported its path without it
+    # ("/list" instead of "/users/list"). Confirmed directly before fixing.
+    (tmp_path / "routers").mkdir()
+    (tmp_path / "routers" / "__init__.py").write_text("")
+    (tmp_path / "routers" / "users.py").write_text(
+        'router = APIRouter()\n'
+        '@router.get("/list")\n'
+        'def list_users():\n    pass\n'
+    )
+    (tmp_path / "main.py").write_text(
+        "from routers import users\n"
+        'app.include_router(users.router, prefix="/users")\n'
+    )
+
+    result = map_api_endpoints(tmp_path)
+
+    paths = {e["path"] for e in result["endpoints"] if e["file"] == "routers/users.py"}
+    assert paths == {"/users/list"}
+
+
+def test_map_api_endpoints_skips_attribute_style_include_router_when_module_unresolved(tmp_path):
+    # The module-alias analog of the non-literal-prefix case: if the object
+    # in `module.router` can't be traced back to a real import, this mount
+    # is genuinely unknown - skip only this mount rather than guessing, and
+    # never fall back to "this file", unlike the bare-identifier case where
+    # a same-file local definition is a real, common possibility.
+    (tmp_path / "users.py").write_text(
+        'router = APIRouter()\n'
+        '@router.get("/list")\n'
+        'def list_users():\n    pass\n'
+    )
+    (tmp_path / "main.py").write_text(
+        'app.include_router(some_dynamically_built_module.router, prefix="/users")\n'
+    )
+
+    result = map_api_endpoints(tmp_path)
+
+    paths = {e["path"] for e in result["endpoints"] if e["file"] == "users.py"}
+    assert paths == {"/list"}
+
+
 def test_extract_flask_fastapi_ignores_non_route_decorators():
     root, source = parse_python("@staticmethod\ndef helper():\n    pass\n")
 
