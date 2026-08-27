@@ -505,6 +505,14 @@ def _run_scan(repo_dir: Path, unchanged_scan_cache_path: Path | None = None) -> 
     env["ALETHEORE_DISABLE_LOCAL_SCAN_CACHE"] = "1"
     if unchanged_scan_cache_path is not None:
         env["ALETHEORE_UNCHANGED_SCAN_CACHE"] = str(unchanged_scan_cache_path)
+    # This container is memory-constrained (observed OOM kills on huge repos
+    # under existing limits) - the CLI's parallel scan parsing spawns
+    # os.cpu_count() worker processes, each independently loading the
+    # tree-sitter grammar libraries and holding its own in-flight ASTs,
+    # which could make memory pressure worse here even though it's a clear
+    # win on a developer's own machine. Left unset for a developer running
+    # `aletheore scan` directly, same as the depth caps above.
+    env["ALETHEORE_DISABLE_PARALLEL_PARSE"] = "1"
     subprocess.run(["aletheore", "scan", str(repo_dir)], check=True, env=env)
     return repo_dir / ".aletheore" / "air.json"
 
@@ -1924,6 +1932,13 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
     risk here, same as send_health_alert already accepts for Slack/Teams
     (it has no dedup at all) - this isn't solving a harder problem than
     the channel it's sitting next to already tolerates.
+
+    int(time.time()), not the raw float: time.time() carries microsecond
+    precision, so two calls a millisecond apart (a real retry) would each
+    get their own unique key and neither would ever collide with the
+    other - the same-second collapse this docstring describes never
+    actually happened. Confirmed directly: two time.time() calls back to
+    back differed at the 6th decimal place, never equal.
     """
     webhook_url = installation.get("webhook_url")
     if webhook_url:
@@ -1935,7 +1950,7 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
         target_id = installation.get("target_id")
         enqueue_transactional_email(
             settings.redis_url,
-            dedupe_key=f"health_alert:{target_id}:{time.time()}",
+            dedupe_key=f"health_alert:{target_id}:{int(time.time())}",
             template_name="health_alert",
             template_arg=message["text"],
             to_email=alert_email,
@@ -2330,14 +2345,26 @@ def run_runtime_event_job(
     "zero-hop debugging" for a second real trigger, not a second
     implementation. See app_server/runtime_events.py for the inbound
     webhook this is enqueued from.
+
+    Delivery itself must be the same second implementation too: this used
+    to call send_health_alert(webhook_url, ...) directly and gate the
+    whole job on webhook_url alone, from before email/Pushover existed as
+    alert channels (see _send_alerts_if_configured). Never updated when
+    those landed - an installation with only alert_email or
+    pushover_user_key configured (no Slack/Teams webhook) got every
+    health-check alert through those channels correctly, but silently
+    zero runtime-error alerts, with no signal anything was missing.
     """
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
     if installation is None or installation["plan"] == "free":
         return
 
-    webhook_url = installation.get("webhook_url")
-    if not webhook_url:
+    if not (
+        installation.get("webhook_url")
+        or installation.get("alert_email")
+        or installation.get("pushover_user_key")
+    ):
         return
 
     evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
@@ -2362,7 +2389,19 @@ def run_runtime_event_job(
         path=path,
         evidence_resolution=evidence_resolution,
     )
-    send_health_alert(webhook_url, message)
+    # target_id distinguishes both the installation and the specific error
+    # location - health_check_targets.id (the health-check sweep's own
+    # dedupe scope) is a globally unique DB primary key, not per-
+    # installation, so leaving this as None here (no target concept exists
+    # for a runtime event) would let two different installations' alerts
+    # landing in the same wall-clock second collide on the exact same
+    # email dedupe_key and silently suppress one of them - confirmed via
+    # email_already_sent's dedupe_key-only WHERE clause, no installation_id
+    # in it at all.
+    _send_alerts_if_configured(
+        {**installation, "target_id": f"runtime:{installation_id}:{source_file}:{source_line}"},
+        message,
+    )
 
 
 @log_job
@@ -3856,6 +3895,25 @@ def _run_docs_build_for_modules(
         try:
             content = fetch_file_content(client, token, repo_full_name, module["path"], ref)
             if content is None:
+                # fetch_file_content returns None on a 404 or a malformed
+                # content response - a real failure signal, not "nothing to
+                # do here" (unlike _module_has_uncovered_docs_work's own
+                # skip cases, which are legitimate no-ops). Recording it as
+                # last_error matters most when every module in this batch
+                # hits it (e.g. GitHub's Contents API lagging right after
+                # the push that triggered this job, or a token missing
+                # contents:read): without this, succeeded stays 0 and
+                # last_error stays None, and the caller's `succeeded == 0
+                # and last_error is not None` failed-status check never
+                # fires - a build that did nothing gets reported "ready"
+                # with no detail, the same shape of bug #405 already fixed
+                # for free-tier Flash Review claiming a diff was clean when
+                # it never ran.
+                last_error = f"could not fetch content for {module['path']}"
+                logger.warning(
+                    "live docs: %s for installation=%s repo=%s - continuing with the remaining modules",
+                    last_error, installation_id, repo_full_name,
+                )
                 continue
             _store_docs_generation_for_module(
                 dsn, installation_id, repo_full_name, module, writing_adapter,
