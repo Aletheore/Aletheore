@@ -1924,6 +1924,13 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
     risk here, same as send_health_alert already accepts for Slack/Teams
     (it has no dedup at all) - this isn't solving a harder problem than
     the channel it's sitting next to already tolerates.
+
+    int(time.time()), not the raw float: time.time() carries microsecond
+    precision, so two calls a millisecond apart (a real retry) would each
+    get their own unique key and neither would ever collide with the
+    other - the same-second collapse this docstring describes never
+    actually happened. Confirmed directly: two time.time() calls back to
+    back differed at the 6th decimal place, never equal.
     """
     webhook_url = installation.get("webhook_url")
     if webhook_url:
@@ -1935,7 +1942,7 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
         target_id = installation.get("target_id")
         enqueue_transactional_email(
             settings.redis_url,
-            dedupe_key=f"health_alert:{target_id}:{time.time()}",
+            dedupe_key=f"health_alert:{target_id}:{int(time.time())}",
             template_name="health_alert",
             template_arg=message["text"],
             to_email=alert_email,
@@ -3856,6 +3863,25 @@ def _run_docs_build_for_modules(
         try:
             content = fetch_file_content(client, token, repo_full_name, module["path"], ref)
             if content is None:
+                # fetch_file_content returns None on a 404 or a malformed
+                # content response - a real failure signal, not "nothing to
+                # do here" (unlike _module_has_uncovered_docs_work's own
+                # skip cases, which are legitimate no-ops). Recording it as
+                # last_error matters most when every module in this batch
+                # hits it (e.g. GitHub's Contents API lagging right after
+                # the push that triggered this job, or a token missing
+                # contents:read): without this, succeeded stays 0 and
+                # last_error stays None, and the caller's `succeeded == 0
+                # and last_error is not None` failed-status check never
+                # fires - a build that did nothing gets reported "ready"
+                # with no detail, the same shape of bug #405 already fixed
+                # for free-tier Flash Review claiming a diff was clean when
+                # it never ran.
+                last_error = f"could not fetch content for {module['path']}"
+                logger.warning(
+                    "live docs: %s for installation=%s repo=%s - continuing with the remaining modules",
+                    last_error, installation_id, repo_full_name,
+                )
                 continue
             _store_docs_generation_for_module(
                 dsn, installation_id, repo_full_name, module, writing_adapter,

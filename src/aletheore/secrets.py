@@ -110,8 +110,24 @@ SECRET_PATTERNS = [
             # - one of the most common hardcoded-credential shapes in object-oriented
             # code) isn't silently invisible to this pattern the way a bare "." boundary
             # was. MYPASSWORD= (no separator at all) still correctly does not match.
-            r"(?i)(?:^|[\s_.-])(PASSWORD|SECRET|API_KEY)\s*[:=]\s*"
-            r"['\"]?([A-Za-z0-9+/=_.-]{16,})['\"]?(?=\s|$|[,#;)])"
+            #
+            # The left-boundary class also includes '"' and "'", and an optional quote
+            # is now consumed right after the keyword too (['\"]? before \s*[:=]) - without
+            # both, a quoted-key credential ("API_KEY": "...", 'password': '...') was
+            # completely invisible: the keyword's own closing quote sat between it and
+            # the ':', which \s*[:=]\s* alone can't skip over. This is the single most
+            # common real shape a hardcoded secret takes in JSON/YAML/dict-literal config
+            # (docker-compose environment blocks, terraform.tfvars, settings.json, a
+            # Python/JS dict literal) - confirmed as a real, silent false negative by
+            # direct testing, not hypothetical: '{"API_KEY": "sk-..."}' never matched.
+            #
+            # The right-boundary class includes "}" and "]" alongside the pre-existing
+            # whitespace/end-of-line/",#;)" set, for the same reason: a quoted value that
+            # closes a JSON object or array (the overwhelmingly common case - the key is
+            # rarely the last thing on the line followed by nothing) was invisible too,
+            # since neither character was in the original lookahead's boundary set.
+            r"(?i)(?:^|[\s_.'\"-])(PASSWORD|SECRET|API_KEY)['\"]?\s*[:=]\s*"
+            r"['\"]?([A-Za-z0-9+/=_.-]{16,})['\"]?(?=\s|$|[,#;)}\]])"
         ),
         2,
     ),
