@@ -18,6 +18,9 @@ async def test_request_otp_requires_login(pool, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_request_otp_rejects_non_administrator(pool, monkeypatch):
+    # 404, not 403 - a real installation the caller doesn't administer must
+    # be indistinguishable from one that doesn't exist at all
+    # (docs/audits/Claude_Audit.md finding 34).
     from app_server.db import upsert_installation
 
     client = await _logged_in_client(pool, monkeypatch, installation_id=100)
@@ -25,7 +28,7 @@ async def test_request_otp_rejects_non_administrator(pool, monkeypatch):
     async with client:
         response = await client.post("/admin/globex/web/delete-all-data/request-otp")
 
-    assert response.status_code == 403
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio

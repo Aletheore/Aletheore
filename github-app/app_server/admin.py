@@ -201,7 +201,7 @@ def _github_http_client() -> httpx.Client:
     return get_github_api_client()
 
 
-async def _repo_installation_id(pool, org: str, repo: str) -> int:
+async def _repo_installation_id(pool, org: str, repo: str) -> int | None:
     # A GitHub App installation covers exactly one account (org or user) -
     # a repo's owner in the URL is always that same account - so this
     # resolves without ever touching repo_history, which used to be the
@@ -212,6 +212,13 @@ async def _repo_installation_id(pool, org: str, repo: str) -> int:
     # never be reached, since this raised first). repo_history stays as
     # a fallback for account_login drift (e.g. a GitHub account rename
     # landing after this row was written), not the primary path anymore.
+    #
+    # Returns None rather than raising 404 itself - a genuinely nonexistent
+    # repo and one that exists but the caller doesn't administer need to
+    # produce the identical response (see both callers' merged not-found
+    # check), or the status code alone is a repo-existence oracle for any
+    # authenticated user, not just an admin of the target org
+    # (docs/audits/Claude_Audit.md finding 34).
     row = await pool.fetchrow(
         "SELECT installation_id FROM installations WHERE account_login = $1",
         org,
@@ -227,9 +234,7 @@ async def _repo_installation_id(pool, org: str, repo: str) -> int:
         """,
         f"{org}/{repo}",
     )
-    if row is None:
-        raise HTTPException(status_code=404, detail="no such repo")
-    return row["installation_id"]
+    return row["installation_id"] if row is not None else None
 
 
 def _fetch_administered_installation_ids(github_token: str) -> set[int]:
@@ -469,8 +474,15 @@ async def _require_authorized_installation(request: Request, org: str, repo: str
     pool = request.app.state.db_pool
     installation_id = await _repo_installation_id(pool, org, repo)
     administered_ids = await _administered_installation_ids_for_session_or_401(pool, session)
-    if installation_id not in administered_ids:
-        raise HTTPException(status_code=403, detail="you do not administer this installation")
+    # A real repo the caller doesn't administer and a repo that's never been
+    # connected at all get the identical 404 - neither status code nor body
+    # reveals which one it is to an authenticated caller who isn't an admin
+    # of the target org (docs/audits/Claude_Audit.md finding 34). The repo
+    # lookup above still has to happen before ownership can be checked
+    # against it - that ordering isn't what changed, only what a caller who
+    # fails the check gets told.
+    if installation_id is None or installation_id not in administered_ids:
+        raise HTTPException(status_code=404, detail="no such repo")
 
     installation = await get_installation(pool, installation_id)
     if installation is None:

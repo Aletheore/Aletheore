@@ -1132,6 +1132,29 @@ async def test_first_admin_to_arrive_is_auto_seated(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_admin_page_rejects_an_unadministered_installation_with_the_same_404_as_a_nonexistent_repo(
+    pool, monkeypatch
+):
+    # A real repo (installation 100, octocat/hello-world) the caller's
+    # GitHub account genuinely doesn't administer at all - distinct from
+    # test_second_github_admin_without_a_seat_is_rejected below, where the
+    # caller *does* administer it on GitHub but hasn't been seated yet (a
+    # different check, still correctly 403). 404, not 403, here: a real
+    # repo the caller doesn't administer must be indistinguishable from a
+    # repo that was never connected at all, or the status code alone is a
+    # repo-existence oracle for any authenticated user
+    # (docs/audits/Claude_Audit.md finding 34).
+    await _logged_in_client(pool, monkeypatch)  # sets up installation 100 + real repo_history
+    await _mock_github_installations(monkeypatch, [999])  # this session administers 999, not 100
+
+    signed = sign_session_id("sess-1", "test-session-secret")
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", cookies={"session": signed}) as client:
+        response = await client.get("/admin/octocat/hello-world")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_second_github_admin_without_a_seat_is_rejected(pool, monkeypatch):
     first = await _logged_in_client(pool, monkeypatch)
     async with first:
@@ -1649,8 +1672,9 @@ async def test_repo_installation_id_falls_back_to_repo_history(pool):
 
 
 @pytest.mark.asyncio
-async def test_repo_installation_id_raises_404_when_truly_unresolvable(pool):
-    with pytest.raises(HTTPException) as exc_info:
-        await _repo_installation_id(pool, "no-such-account", "no-such-repo")
-
-    assert exc_info.value.status_code == 404
+async def test_repo_installation_id_returns_none_when_truly_unresolvable(pool):
+    # Returns None rather than raising - the caller merges this with the
+    # ownership check into a single 404, so a nonexistent repo and one the
+    # caller doesn't administer are indistinguishable (see
+    # test_admin_page_rejects_an_unadministered_installation_with_the_same_404_as_a_nonexistent_repo).
+    assert await _repo_installation_id(pool, "no-such-account", "no-such-repo") is None

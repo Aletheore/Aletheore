@@ -564,7 +564,9 @@ async def test_dashboard_returns_404_for_unknown_repo(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_dashboard_rejects_unadministered_installation(pool, monkeypatch):
+async def test_dashboard_rejects_unadministered_installation_with_the_same_404_as_a_nonexistent_repo(
+    pool, monkeypatch
+):
     await upsert_installation(pool, 1, "octocat")
     await insert_repo_history(
         pool,
@@ -575,11 +577,16 @@ async def test_dashboard_rejects_unadministered_installation(pool, monkeypatch):
     )
     # The caller is logged in, but their GitHub account administers a
     # different installation (999), not the one that owns this repo (1) -
-    # this is the exact cross-tenant case the fix closes.
+    # this is the exact cross-tenant case the fix closes. 404, not 403: a
+    # real repo the caller doesn't administer must be indistinguishable
+    # from a repo that was never connected at all (see
+    # test_dashboard_returns_404_for_unknown_repo just above) - otherwise
+    # the status code alone is a repo-existence oracle for any
+    # authenticated user (docs/audits/Claude_Audit.md finding 34).
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[999])
     async with client:
         response = await client.get("/app/octocat/hello-world")
-    assert response.status_code == 403
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -1160,6 +1167,8 @@ async def test_dashboard_health_history_respects_limit(pool, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_dashboard_health_history_rejects_unadministered_installation(pool, monkeypatch):
+    # 404, not 403 - see test_dashboard_rejects_unadministered_installation_
+    # with_the_same_404_as_a_nonexistent_repo for why (finding 34).
     await upsert_installation(pool, 506, "octocat")
     await insert_repo_history(
         pool, 506, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
@@ -1169,11 +1178,13 @@ async def test_dashboard_health_history_rejects_unadministered_installation(pool
         response = await client.get(
             "/app/octocat/hello-world/health/history", params={"method": "GET", "path": "/api/users"}
         )
-    assert response.status_code == 403
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_dashboard_health_rejects_unadministered_installation(pool, monkeypatch):
+    # 404, not 403 - see test_dashboard_rejects_unadministered_installation_
+    # with_the_same_404_as_a_nonexistent_repo for why (finding 34).
     await upsert_installation(pool, 501, "octocat")
     await insert_repo_history(
         pool,
@@ -1193,7 +1204,7 @@ async def test_dashboard_health_rejects_unadministered_installation(pool, monkey
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[999])
     async with client:
         response = await client.get("/app/octocat/hello-world/health")
-    assert response.status_code == 403
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
