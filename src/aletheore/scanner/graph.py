@@ -2737,11 +2737,20 @@ def build_module_graph(
     # pre-parse before any of them can have their imports resolved.
     java_source_roots: list[Path] = []
     oversized_paths: set[Path] = set()
-    # Reused by the main loop below so every .java file is parsed once per
-    # scan, not twice - this pre-pass already has to parse it to read the
-    # package declaration, and tree-sitter parsing is the expensive part of
-    # this whole function.
-    java_pre_parsed: dict[Path, tuple[bytes, Tree]] = {}
+    # Every .java file's (source, Tree) used to be kept alive here for the
+    # main loop below to reuse, parsing each file once per scan instead of
+    # twice - real, but the wrong trade for a hosted worker: it means every
+    # tree in the repo is held simultaneously the moment this pre-pass
+    # finishes, before the main loop has consumed even one of them.
+    # tree-sitter trees run ~37x their source size; scan-worker/scan-worker-2
+    # are capped at a 1GB container memory limit (docker-compose.yml), so a
+    # large enough Java repo could OOM-crash the whole scan right here,
+    # before any partial result exists to fall back to - a strictly worse
+    # failure mode than the extra CPU cost of parsing twice (audit finding
+    # 15). Nothing here is retained past its own loop iteration now - each
+    # file's tree is parsed, its package read, and then falls out of scope
+    # to be freed before the next file's parse even starts, so peak memory
+    # stays roughly one file's tree, not every file's.
     pre_parser = Parser()
     pre_parser.language = JAVA_LANGUAGE
     for path in _iter_source_files(repo_path, ignored_paths):
@@ -2753,7 +2762,6 @@ def build_module_graph(
             continue
         pre_source = path.read_bytes()
         tree = pre_parser.parse(pre_source)
-        java_pre_parsed[path] = (pre_source, tree)
         package = _extract_java_package(tree.root_node, pre_source)
         root = _java_source_root_for(path, package)
         if root is not None and root not in java_source_roots:
@@ -2778,8 +2786,9 @@ def build_module_graph(
     csharp_source_paths: list[Path] = []
     # Which file declares each type name, for the type-reference edges below.
     csharp_type_owners: dict[str, set[Path]] = {}
-    # Same reasoning as java_pre_parsed above.
-    csharp_pre_parsed: dict[Path, tuple[bytes, Tree]] = {}
+    # Same reasoning as java_source_roots' pre-pass above - nothing here is
+    # retained past its own loop iteration either, for the same audit
+    # finding 15 memory-peak reason.
     cs_pre_parser = Parser()
     cs_pre_parser.language = CSHARP_LANGUAGE
     for path in _iter_source_files(repo_path, ignored_paths):
@@ -2792,7 +2801,6 @@ def build_module_graph(
         csharp_source_paths.append(path)
         pre_source = path.read_bytes()
         tree = cs_pre_parser.parse(pre_source)
-        csharp_pre_parsed[path] = (pre_source, tree)
         namespace = _extract_csharp_namespace(tree.root_node, pre_source)
         result = _csharp_prefix_and_root_for(path, namespace)
         if result is not None:
@@ -2837,29 +2845,14 @@ def build_module_graph(
             unparseable.append({"path": rel_path, "reason": "file exceeds size limit"})
             continue
 
-        if language_name == "java" and path in java_pre_parsed:
-            # pop, not a plain lookup: java_pre_parsed/csharp_pre_parsed hold
-            # the full (source, Tree) for every .java/.cs file simultaneously
-            # once the pre-pass above finishes - unavoidable, since the
-            # pre-pass needs every file's package/namespace before it can
-            # infer a source root at all. But nothing forces this loop to
-            # keep holding a file's entry once it's been consumed here -
-            # tree-sitter trees run roughly 37x their source size, so on a
-            # large Java/C# repo this loop's the rest of its run (every
-            # other-language file remaining) previously held every already-
-            # consumed tree alive for no reason. Popping lets each entry's
-            # memory free as soon as this loop passes it, instead of only
-            # when build_module_graph returns.
-            source, tree = java_pre_parsed.pop(path)
-        elif language_name == "csharp" and path in csharp_pre_parsed:
-            source, tree = csharp_pre_parsed.pop(path)
-        elif language_name in ("java", "csharp"):
-            # Rare: the pre-pass above and this walk saw different
-            # filesystem state (e.g. the file appeared/disappeared between
-            # the two _iter_source_files calls). Falls back to a fresh
-            # parse right here, exactly like every file did before this
-            # function had a parallel path at all - never routed through
-            # paths_needing_parse/the worker pool.
+        if language_name in ("java", "csharp"):
+            # Re-parsed here rather than reusing a tree the pre-pass above
+            # held onto - see that pre-pass's own comment (audit finding
+            # 15). The pre-pass already had to parse every .java/.cs file
+            # once to read its package/namespace before any of them could
+            # have a source root inferred at all; this is deliberately a
+            # second parse per file, trading CPU for never holding more
+            # than about one file's tree in memory at a time.
             parser.language = ts_language
             source = path.read_bytes()
             tree = parser.parse(source)
