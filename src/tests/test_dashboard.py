@@ -169,16 +169,23 @@ def test_build_graph_summary_handles_unclustered_node():
     assert result["nodes"] == [{"id": "orphan.py", "cluster": None}]
 
 
-def test_build_graph_summary_excludes_ambiguous_edges():
-    # Same reasoning as wiki_diagrams.py's mermaid builders: this graph is
-    # rendered as fact ("a.py depends on b.py"), a stronger claim than a
-    # citable-but-uncertain evidence edge should make.
+def test_build_graph_summary_marks_ambiguous_edges_rather_than_excluding_them():
+    # Unlike wiki_diagrams.py's static mermaid builders (which exclude these
+    # entirely), this graph is interactive - an ambiguous edge is still
+    # drawn, just marked so the frontend can dim/dash it instead of
+    # presenting it identically to a certain edge.
     evidence = {
         "repository": {
-            "modules": [{"path": "a.py", "imports": ["b.py"], "import_confidence": {"b.py": "ambiguous"}}],
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imports": ["b.py", "c.py"],
+                    "import_confidence": {"b.py": "ambiguous"},
+                }
+            ],
             "dependency_graph": {
-                "nodes": ["a.py", "b.py"],
-                "edges": [["a.py", "b.py"]],
+                "nodes": ["a.py", "b.py", "c.py"],
+                "edges": [["a.py", "b.py"], ["a.py", "c.py"]],
             },
         },
         "architecture": {"clusters": []},
@@ -186,7 +193,10 @@ def test_build_graph_summary_excludes_ambiguous_edges():
 
     result = build_graph_summary(evidence)
 
-    assert result["edges"] == []
+    assert result["edges"] == [
+        {"source": "a.py", "target": "b.py", "ambiguous": True},
+        {"source": "a.py", "target": "c.py"},
+    ]
 
 
 def _deep_merge(base: dict, overrides: dict) -> dict:
