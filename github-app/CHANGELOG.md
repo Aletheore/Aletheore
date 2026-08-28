@@ -12,6 +12,30 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+## 2026-08-28
+
+- **`managed_audit` switched off Luna/deepseek-v4-pro onto deepseek-v4-flash** (#451) - measured
+  directly across three full audit runs against this repo, same evidence and manual each time: Luna
+  ($0.15/run) missed a real circular import, deepseek-v4-pro ($1.15/run) caught it but at 3x the
+  per-token rate for no extra work done, deepseek-v4-flash ($0.40/run) caught the same finding at a
+  fraction of pro's cost. Flash is the only one of the three that's both accurate and cheap for this
+  task. Also fixed a real crash this exposed: every Luna-routed `managed_audit` run had been
+  crashing on its first LLM call (`OpenAICompatibleAdapter.invoke()` missing `extra_body`, see the
+  root `CHANGELOG.md`'s 0.9.8 entry) - `audit_reports` had been empty across every installation ever
+  as a result, which is how this got found in the first place.
+- **Paddle webhook plan-change writes made atomic** (#449, audit finding 11) - three separate DB
+  writes on a plan change (installation row, subscription record, billing history) previously ran as
+  independent statements; a crash mid-sequence could leave billing state half-written. Now wrapped
+  in a single transaction.
+- **Repo-existence oracle closed** (#450, audit finding 12) - an admin/dashboard route that 404'd
+  for "you don't have access" but returned a different status for "this repo doesn't exist at all"
+  let anyone probe which private repos exist on an installation they have no access to, just from
+  the response shape. Both cases now return the identical 404.
+- **Scanner-side fixes** (Java/C# pre-pass memory bound, 8 import-resolution correctness bugs,
+  endpoint cache cross-file invalidation) shipped via the `src/aletheore` rebuild that comes bundled
+  with every scan-worker image - see the root [`CHANGELOG.md`](../CHANGELOG.md)'s 0.9.8 entry for
+  the full detail on each.
+
 ## 2026-08-27
 
 - **Soft-hide a repo removed from the installation, and stop processing it** (#437) -
