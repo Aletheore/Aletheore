@@ -325,9 +325,13 @@ async def test_delete_all_data_route_works_on_the_free_plan(pool, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_delete_all_data_route_rejects_non_administrator(pool, monkeypatch):
-    # 403 fires inside _require_authorized_installation, before the OTP is
-    # ever looked at - "000000" just needs to be syntactically valid so
-    # Pydantic doesn't 422 the request before that check even runs.
+    # 404, not 403, fires inside _require_authorized_installation, before
+    # the OTP is ever looked at - "000000" just needs to be syntactically
+    # valid so Pydantic doesn't 422 the request before that check even
+    # runs. A real installation the caller doesn't administer must be
+    # indistinguishable from one that doesn't exist at all
+    # (docs/audits/Claude_Audit.md finding 34) - otherwise the status code
+    # is a repo-existence oracle for any authenticated user.
     client = await _logged_in_client(pool, monkeypatch, installation_id=100)
     # A second installation this session does not administer - the mocked
     # GitHub /user/installations response only ever returns id 100.
@@ -338,7 +342,7 @@ async def test_delete_all_data_route_rejects_non_administrator(pool, monkeypatch
             json={"confirm": "globex", "otp_code": "000000"},
         )
 
-    assert response.status_code == 403
+    assert response.status_code == 404
     assert await get_installation(pool, 101) is not None
 
 

@@ -183,8 +183,15 @@ async def list_my_repos(request: Request):
 
 
 async def _require_dashboard_installation(request: Request, org: str, repo: str) -> tuple[dict, int]:
-    # Session + ownership check first, before any repo lookup - an unauthenticated
-    # caller should not learn whether a given org/repo has scan history at all.
+    # Session first - an unauthenticated caller learns nothing. The repo
+    # lookup below still has to run before ownership can be checked against
+    # it (_repo_installation_id is what resolves org/repo to an
+    # installation_id in the first place); what's closed is the response
+    # itself: a real repo the caller doesn't administer and a repo that's
+    # never been connected at all now get the identical 404, so an
+    # authenticated-but-unauthorized caller can't use the status code to
+    # learn which org/repos this product has ever seen
+    # (docs/audits/Claude_Audit.md finding 34).
     session = await get_current_session(request)
     if session is None:
         raise HTTPException(status_code=401, detail="login required")
@@ -193,8 +200,8 @@ async def _require_dashboard_installation(request: Request, org: str, repo: str)
     installation_id = await _repo_installation_id(pool, org, repo)
 
     administered_ids = await _administered_installation_ids_for_session_or_401(pool, session)
-    if installation_id not in administered_ids:
-        raise HTTPException(status_code=403, detail="you do not administer this installation")
+    if installation_id is None or installation_id not in administered_ids:
+        raise HTTPException(status_code=404, detail="no such repo")
 
     installation = await get_installation(pool, installation_id)
     if installation is not None:
