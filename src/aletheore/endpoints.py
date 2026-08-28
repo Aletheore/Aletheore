@@ -1361,10 +1361,29 @@ def map_api_endpoints(
         for key, prefixes in collected.items():
             cross_file_router_mounts.setdefault(key, []).extend(prefixes)
 
+    # A router-defining file's composed endpoint paths depend on every
+    # include_router(..., prefix=...) call that targets it, which can live
+    # in a different file entirely - this loop is unconditional above (no
+    # unchanged_endpoints check), so cross_file_router_mounts is always
+    # fresh, but the cache-reuse skip below used to trust a defining file's
+    # own hash/diff as if that were the whole story. Confirmed live: bumping
+    # app.py's include_router prefix from /api/v1 to /api/v2 while
+    # routers/users.py stayed byte-identical left the cached, now-stale
+    # /api/v1/users path in place, since routers/users.py alone "looked"
+    # unchanged. Excluding every defining file from cache-reuse trades a
+    # little incremental-scan speed for those specific files for
+    # correctness that doesn't depend on tracking which mounting file
+    # changed - see docs/audits/Claude_Audit.md finding 20.
+    cross_file_mount_defining_files = {defining_file for defining_file, _router in cross_file_router_mounts}
+
     for path in _iter_source_files(repo_path, ignored_paths):
         rel_path = _rel(repo_path, path)
 
-        if unchanged_endpoints is not None and rel_path in unchanged_endpoints:
+        if (
+            unchanged_endpoints is not None
+            and rel_path in unchanged_endpoints
+            and rel_path not in cross_file_mount_defining_files
+        ):
             endpoints.extend(unchanged_endpoints[rel_path])
             continue
 
