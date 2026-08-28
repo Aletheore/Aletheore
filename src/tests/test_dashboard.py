@@ -169,6 +169,26 @@ def test_build_graph_summary_handles_unclustered_node():
     assert result["nodes"] == [{"id": "orphan.py", "cluster": None}]
 
 
+def test_build_graph_summary_excludes_ambiguous_edges():
+    # Same reasoning as wiki_diagrams.py's mermaid builders: this graph is
+    # rendered as fact ("a.py depends on b.py"), a stronger claim than a
+    # citable-but-uncertain evidence edge should make.
+    evidence = {
+        "repository": {
+            "modules": [{"path": "a.py", "imports": ["b.py"], "import_confidence": {"b.py": "ambiguous"}}],
+            "dependency_graph": {
+                "nodes": ["a.py", "b.py"],
+                "edges": [["a.py", "b.py"]],
+            },
+        },
+        "architecture": {"clusters": []},
+    }
+
+    result = build_graph_summary(evidence)
+
+    assert result["edges"] == []
+
+
 def _deep_merge(base: dict, overrides: dict) -> dict:
     for key, value in overrides.items():
         if isinstance(value, dict) and isinstance(base.get(key), dict):

@@ -22,6 +22,28 @@ def _file_to_cluster_map(clusters: list[dict]) -> dict[str, int]:
     return mapping
 
 
+def _ambiguous_edges(modules: list[dict]) -> set[tuple[str, str]]:
+    """(source, target) pairs whose resolution was genuinely uncertain - a C#
+    type-reference edge kept despite more than one file declaring that type
+    name (see scanner/graph.py's _csharp_type_reference_targets). Excluded
+    from diagrams, not from the underlying evidence: a diagram asserts "this
+    relationship exists" more strongly than a citable-but-uncertain graph
+    edge should. "inferred" edges (a source-root/prefix tiebreak among
+    multiple real candidates, still likely correct) are drawn as normal -
+    only a name that could equally be any of several files is excluded.
+    """
+    pairs: set[tuple[str, str]] = set()
+    for module in modules:
+        confidence = module.get("import_confidence")
+        if not confidence:
+            continue
+        source = module.get("path")
+        for target, level in confidence.items():
+            if level == "ambiguous":
+                pairs.add((source, target))
+    return pairs
+
+
 def build_overview_diagram(evidence: dict, cluster_names: dict[int, str] | None = None) -> str:
     """One node per subsystem (cluster), edges for inter-cluster dependencies.
 
@@ -35,16 +57,23 @@ def build_overview_diagram(evidence: dict, cluster_names: dict[int, str] | None 
     where nothing happens to import across cluster boundaries yet), there
     is no meaningful subset to narrow down to - showing every cluster is
     strictly better than showing none.
+
+    Ambiguous edges (see _ambiguous_edges) are excluded - see
+    build_subsystem_diagram's own docstring for why.
     """
     cluster_names = cluster_names or {}
     clusters = evidence.get("architecture", {}).get("clusters", [])
+    modules = evidence.get("repository", {}).get("modules", [])
     edges = evidence.get("repository", {}).get("dependency_graph", {}).get("edges", [])
+    ambiguous = _ambiguous_edges(modules)
 
     file_to_cluster = _file_to_cluster_map(clusters)
 
     cluster_edges: set[tuple[int, int]] = set()
     for edge in edges:
         source_file, target_file = edge[0], edge[1]
+        if (source_file, target_file) in ambiguous:
+            continue
         source_cluster = file_to_cluster.get(source_file)
         target_cluster = file_to_cluster.get(target_file)
         if source_cluster is None or target_cluster is None or source_cluster == target_cluster:
@@ -72,6 +101,18 @@ def build_subsystem_diagram(evidence: dict, cluster: dict) -> str:
     file the scanner doesn't track, e.g. a third-party package) are not
     drawn - this diagram is intentionally scoped to the subsystem's own
     internal structure, not the whole repo.
+
+    Edges flagged "ambiguous" in import_confidence (currently only C#
+    type-reference edges kept despite more than one file declaring that
+    type name - see scanner/graph.py's _csharp_type_reference_targets) are
+    excluded here even though they remain in the underlying evidence. A
+    diagram is a stronger claim than a citable graph edge - "this file
+    depends on that one" read as fact, not as "probably, among a few
+    candidates" - and measured on a real C#-heavy corpus (AutoMapper),
+    keeping instead of dropping these added roughly a third more raw edges
+    than existed before. "inferred" edges (a source-root/prefix tiebreak
+    among multiple real candidates, generally still correct) are drawn as
+    normal; only genuine "which-of-several-files" uncertainty is excluded.
     """
     member_files = cluster.get("modules", [])
     member_set = set(member_files)
@@ -88,8 +129,11 @@ def build_subsystem_diagram(evidence: dict, cluster: dict) -> str:
         module = modules_by_path.get(path)
         if module is None:
             continue
+        confidence = module.get("import_confidence") or {}
         for imported in module.get("imports", []):
             if imported not in member_set:
+                continue
+            if confidence.get(imported) == "ambiguous":
                 continue
             edge = (path, imported)
             if edge in drawn_edges:

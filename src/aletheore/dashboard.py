@@ -14,6 +14,7 @@ from aletheore.evidence import (
 )
 from aletheore.history import list_snapshots
 from aletheore.mcp_server import build_server, read_evidence
+from aletheore.wiki_diagrams import _ambiguous_edges
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -87,6 +88,14 @@ def build_history_summary(repo_path: Path) -> list[dict]:
 def build_graph_summary(evidence: dict) -> dict:
     dependency_graph = evidence["repository"]["dependency_graph"]
     clusters = evidence["architecture"]["clusters"]
+    # Same exclusion, same reasoning, as wiki_diagrams.py's mermaid builders:
+    # a rendered edge in this interactive graph reads as "this file depends
+    # on that one," a stronger claim than a citable-but-uncertain evidence
+    # edge should make. Only genuine multi-candidate uncertainty (currently
+    # C# type-reference edges - see scanner/graph.py's
+    # _csharp_type_reference_targets) is excluded; a source-root/prefix
+    # tiebreak among real candidates ("inferred") is still drawn.
+    ambiguous = _ambiguous_edges(evidence["repository"].get("modules", []))
 
     node_to_cluster: dict[str, int] = {}
     for cluster in clusters:
@@ -98,7 +107,9 @@ def build_graph_summary(evidence: dict) -> dict:
         for node in dependency_graph["nodes"]
     ]
     edges = [
-        {"source": edge[0], "target": edge[1]} for edge in dependency_graph["edges"]
+        {"source": edge[0], "target": edge[1]}
+        for edge in dependency_graph["edges"]
+        if (edge[0], edge[1]) not in ambiguous
     ]
 
     return {"nodes": nodes, "edges": edges, "clusters": clusters}
