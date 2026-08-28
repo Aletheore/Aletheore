@@ -35,6 +35,10 @@ alone.
 Version `0.4.0` adds `git.file_ownership`, a current-source-file keyed
 ownership breakdown used by file-scoped ownership queries.
 
+Version `0.5.0` adds `repository.modules[].import_confidence`, an optional
+per-module map from a resolved import target to `"inferred"` or
+`"ambiguous"` - see the changelog entry below.
+
 ## Migration rules
 
 1. **Any change to `AIR_JSON_SCHEMA` requires an `EVIDENCE_VERSION` MINOR bump.**
@@ -98,5 +102,6 @@ architecture config, which is the common case.
 
 | Version | Change |
 | --- | --- |
+| `0.5.0` | Added `repository.modules[].import_confidence` (optional): a map from a resolved import target already present in that module's own `imports` to `"inferred"` (a source-root/namespace-prefix/PSR-4-prefix tiebreak among genuinely multiple candidates picked a winner) or `"ambiguous"` (C# only - a type-reference edge kept despite more than one file declaring that type name, rather than the previous behavior of dropping it outright). Omitted for a module with no non-exact edges - every module in six of the eleven supported languages (js/ts, go, rust, ruby, c/cpp), whose resolvers are never ambiguous, plus the common single-candidate case in the other five. Also fixed a real non-determinism bug found while adding this: Java's multi-source-root tiebreak previously picked whichever root came first in filesystem walk order (not guaranteed stable across runs/platforms), now sorted the same shallowest-first way Python's own source roots already were. |
 | `0.3.0` | Added `repository.database.schema`: tables, columns, foreign-key relations, and indexes replayed from Postgres DDL migrations, each citing the file:line that introduced it. Gated — present with `checked: false` when the installation is not entitled, so the section's keys are identical for every user and only `checked` varies. |
 | `0.2.0` | Contract formalized: JSON Schema extracted, published, and enforced in CI. No shape change from the `0.2.0` documents already in the wild — this version documents the existing shape rather than altering it. |
