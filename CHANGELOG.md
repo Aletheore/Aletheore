@@ -3,6 +3,49 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.7 — 2026-08-28
+
+- **The Anthropic adapter now retries transient errors** (auth hiccups,
+  rate limits, connection drops, timeouts, 5xx) up to 3x with backoff,
+  same as the OpenAI-compatible adapter already did - previously a
+  transient error killed the whole `aletheore audit` run instantly instead
+  of quietly recovering. Found by a second Claude session auditing the
+  adapters for the same sibling-parity gap already found and fixed
+  elsewhere this project. CLI-only (`aletheore audit` with an Anthropic
+  key); no hosted-service exposure.
+- **Import edges now carry an optional confidence tag** when their
+  resolution wasn't a single deterministic outcome - `"inferred"` for a
+  source-root/namespace-prefix/PSR-4-prefix tiebreak among genuinely
+  multiple real candidates (Python, Java, PHP), `"ambiguous"` for a C#
+  type-reference edge kept despite more than one file declaring that type
+  name, which previously was **dropped silently** instead. Adapted from
+  researching a competitor's own graph schema, then adjusted for
+  Aletheore's token-cost constraints: omitted entirely for the common
+  exact-resolution case and for the six languages whose resolvers are
+  never ambiguous at all (js/ts, go, rust, ruby, c/cpp), so this costs
+  nothing in evidence-packet size for the large majority of edges.
+  Benchmarked against real, pinned per-language corpora - on the real
+  AutoMapper (C#) corpus, 738 type-reference edges that used to vanish
+  silently are now kept and honestly flagged. An ambiguous edge is
+  excluded from the static wiki diagrams (a diagram reads as fact, a
+  stronger claim than an uncertain edge should make) but shown dimmed
+  and dashed in the CLI's own interactive dependency graph, matching how
+  the competitor's own visualization handles lower-confidence edges.
+  Also fixed a real correctness bug found while wiring this up: Java's
+  multi-source-root tiebreak picked whichever root came first in raw
+  filesystem walk order (not stable across runs/platforms) instead of a
+  sorted, deterministic order like Python's roots already used.
+  AIR schema bumped 0.4.0 → 0.5.0 (see `docs/AIR-SCHEMA.md`).
+- **The MCP server now sends real getting-started guidance in the
+  connection handshake itself** (`instructions`, not a resource an agent
+  has to separately fetch) - covers the scan → index → search/answer
+  ordering, that scan/index report live progress rather than hanging
+  silently, and a benchmark-grounded note that phrasing a semantic
+  question in the codebase's own vocabulary measurably beats a
+  paraphrase (several corpora scored under 35% top-1 accuracy on
+  vocabulary-avoiding phrasing in Aletheore's own published benchmark,
+  recovering 20-47 points in the project's own terms).
+
 ## 0.9.6 — 2026-08-27
 
 - **Parallel-parse worker count is now capped to the real available CPU
