@@ -4201,6 +4201,83 @@ def _wiki_evidence() -> dict:
     }
 
 
+def test_attach_wiki_file_pages_scopes_planned_pages_to_changed_files(monkeypatch):
+    from scan_worker import jobs
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.select_file_page_paths",
+        lambda evidence, **k: ["auth/login.py", "auth/tokens.py"],
+    )
+    captured = {}
+
+    def _fake_generate_file_pages(evidence, writing_adapter, *, paths, subsystem_by_path, fetch_line_count):
+        captured["paths"] = paths
+        return {p: f"page for {p}" for p in paths}
+
+    monkeypatch.setattr("scan_worker.jobs.live_wiki.generate_file_pages", _fake_generate_file_pages)
+
+    records = [
+        {
+            "subsystem_id": "0",
+            "name": "Authentication",
+            "files": [
+                {"path": "auth/login.py", "role": "", "key_symbols": []},
+                {
+                    "path": "auth/tokens.py",
+                    "role": "Issues tokens.",
+                    "key_symbols": [],
+                    "detail": "prior detail",
+                },
+            ],
+        }
+    ]
+
+    result = jobs._attach_wiki_file_pages(
+        {}, records, writing_adapter=None, fetch_line_count=None, changed_files=["auth/login.py"]
+    )
+
+    assert captured["paths"] == ["auth/login.py"]
+    by_path = {f["path"]: f for f in result[0]["files"]}
+    assert by_path["auth/login.py"]["detail"] == "page for auth/login.py"
+    # Untouched file keeps whatever detail it already carries (spliced from
+    # the prior stored record by generate_subsystems) rather than losing it -
+    # attach_file_pages only overwrites paths present in `pages`.
+    assert by_path["auth/tokens.py"]["detail"] == "prior detail"
+
+
+def test_attach_wiki_file_pages_regenerates_every_page_when_changed_files_is_none(monkeypatch):
+    # changed_files=None is the full-build default - must reproduce today's
+    # behavior exactly, no narrowing.
+    from scan_worker import jobs
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.select_file_page_paths",
+        lambda evidence, **k: ["auth/login.py", "auth/tokens.py"],
+    )
+    captured = {}
+
+    def _fake_generate_file_pages(evidence, writing_adapter, *, paths, subsystem_by_path, fetch_line_count):
+        captured["paths"] = paths
+        return {}
+
+    monkeypatch.setattr("scan_worker.jobs.live_wiki.generate_file_pages", _fake_generate_file_pages)
+
+    records = [
+        {
+            "subsystem_id": "0",
+            "name": "Authentication",
+            "files": [
+                {"path": "auth/login.py", "role": "", "key_symbols": []},
+                {"path": "auth/tokens.py", "role": "", "key_symbols": []},
+            ],
+        }
+    ]
+
+    jobs._attach_wiki_file_pages({}, records, writing_adapter=None, fetch_line_count=None)
+
+    assert captured["paths"] == ["auth/login.py", "auth/tokens.py"]
+
+
 def test_maybe_update_live_wiki_skips_for_free_plan(monkeypatch):
     from scan_worker.jobs import _maybe_update_live_wiki
 
@@ -4237,6 +4314,7 @@ def test_maybe_update_live_wiki_generates_and_stores_for_affected_clusters(monke
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
 
     fake_record = {
         "subsystem_id": "0",
@@ -4269,12 +4347,42 @@ def test_maybe_update_live_wiki_generates_and_stores_for_affected_clusters(monke
     assert status_calls == ["ready"]
 
 
+def test_maybe_update_live_wiki_fetches_and_threads_prior_records_through(monkeypatch):
+    # prior_records must be read BEFORE generate_subsystems writes anything -
+    # it's what an untouched file's content gets spliced from, so it has to
+    # reflect the state as of before this push, not after.
+    _patch_no_spend_cap(monkeypatch)
+    from scan_worker.jobs import _maybe_update_live_wiki
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    stored_prior = [{"subsystem_id": "0", "files": [{"path": "auth/login.py", "role": "Old.", "key_symbols": []}]}]
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: stored_prior)
+
+    captured = {}
+
+    def _fake_generate_subsystems(evidence, naming_adapter, writing_adapter, **kwargs):
+        captured["changed_files"] = kwargs.get("changed_files")
+        captured["prior_records"] = kwargs.get("prior_records")
+        return []
+
+    monkeypatch.setattr("scan_worker.jobs.live_wiki.generate_subsystems", _fake_generate_subsystems)
+    monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
+
+    _maybe_update_live_wiki(1, "octocat/hello-world", _wiki_evidence(), ["auth/login.py"], "sha1")
+
+    assert captured["changed_files"] == ["auth/login.py"]
+    assert captured["prior_records"] == {"0": stored_prior[0]}
+
+
 def test_maybe_update_live_wiki_records_failure_status_on_exception(monkeypatch):
     _patch_no_spend_cap(monkeypatch)
     from scan_worker.jobs import _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
 
     def _boom(*a, **k):
         raise RuntimeError("LLM API unavailable")
@@ -4334,6 +4442,7 @@ def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pus
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
     monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._real_line_count_fetcher", lambda *a, **k: (lambda path: None))
 
@@ -5392,6 +5501,7 @@ def test_maybe_update_live_wiki_passes_fetch_line_count_through(monkeypatch):
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
     sentinel = lambda path: 42  # noqa: E731
     monkeypatch.setattr("scan_worker.jobs._real_line_count_fetcher", lambda *a, **k: sentinel)
 

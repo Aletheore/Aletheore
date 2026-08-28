@@ -3496,7 +3496,7 @@ def _clusters_with_uncovered_wiki_work(
     return set(uncovered[:limit])
 
 
-def _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count):
+def _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count, changed_files=None):
     """Adds a per-file reference page to the subsystems just generated.
 
     Scoped to files belonging to `records` on purpose: an incremental update
@@ -3504,6 +3504,16 @@ def _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count
     subsystem did not change would make every push cost like a full build.
     `_store_wiki_generation` merges these records over the stored ones, so a
     subsystem left untouched keeps the page text it already had.
+
+    changed_files (incremental updates only - None for full builds, the
+    default): narrows `planned` further, to only the specific files that
+    actually changed within a touched subsystem. A subsystem can have one
+    file touched and nine untouched; regenerating all ten pages every time
+    re-pays for nine pages nothing changed in. The nine keep whatever
+    `detail` they already carry on `records` (spliced from the prior stored
+    record by generate_subsystems) - attach_file_pages only overwrites a
+    path present in `pages`, so an untouched path's existing detail is left
+    alone, never blanked.
 
     Spend rides the caller's on_usage-wired adapter, so these calls count
     against the same accumulator and monthly cap as the subsystem prose.
@@ -3513,7 +3523,11 @@ def _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count
     subsystem_by_path = {
         f["path"]: r["name"] for r in records for f in (r.get("files") or []) if f.get("path")
     }
-    planned = [p for p in live_wiki.select_file_page_paths(evidence) if p in subsystem_by_path]
+    planned = [
+        p
+        for p in live_wiki.select_file_page_paths(evidence)
+        if p in subsystem_by_path and (changed_files is None or p in changed_files)
+    ]
     pages = live_wiki.generate_file_pages(
         evidence,
         writing_adapter,
@@ -3715,6 +3729,12 @@ def _maybe_update_live_wiki(
             on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
         )
         fetch_line_count = _real_line_count_fetcher(installation_id, repo_full_name, head_sha)
+        # Fetched before generate_subsystems writes anything - these are the
+        # records as they stood BEFORE this push, what an untouched file's
+        # role/key_symbols/detail gets spliced from instead of re-written.
+        prior_records = {
+            r["subsystem_id"]: r for r in list_wiki_subsystems(dsn, installation_id, repo_full_name)
+        }
         records = live_wiki.generate_subsystems(
             evidence,
             naming_adapter,
@@ -3726,8 +3746,10 @@ def _maybe_update_live_wiki(
             ),
             model_used=update_model,
             fetch_line_count=fetch_line_count,
+            changed_files=changed_files,
+            prior_records=prior_records,
         )
-        _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count)
+        _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count, changed_files=changed_files)
         _store_wiki_generation(
             dsn, installation_id, repo_full_name, evidence, records, writing_adapter, head_sha,
             fetch_line_count=fetch_line_count,
