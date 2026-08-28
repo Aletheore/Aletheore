@@ -390,10 +390,26 @@ class OpenAICompatibleAdapter(AgentAdapter):
         finished = False
         consecutive_no_tool_calls = 0
 
+        # gpt-5.6-luna rejects function tools on /v1/chat/completions unless
+        # reasoning_effort is explicitly "none" - a hard API requirement for
+        # tool use (confirmed directly: tools+tool_choice="required" only
+        # succeeds with this present; fails identically without it,
+        # regardless of tool_choice). This is NOT the same knob as
+        # model_tiers.AIRVIEW_REASONING - that's an opt-in cost-saving
+        # toggle for simple_completion's prose calls, off by default, so
+        # self._extra_body can't be relied on to carry it here. invoke() is
+        # the only caller in this codebase that ever sends tools (see
+        # report.py's single call site), so forcing this is unconditional
+        # and scoped to exactly the call shape that needs it.
+        tool_call_extra_body = dict(self._extra_body)
+        if self.name == "OpenAI":
+            tool_call_extra_body["reasoning_effort"] = "none"
+
         create_kwargs = {
             "model": self._model,
             "tools": TOOLS,
             "timeout": self._request_timeout_seconds,
+            **({"extra_body": tool_call_extra_body} if tool_call_extra_body else {}),
         }
         if self._supports_tool_choice:
             create_kwargs["tool_choice"] = "required"
