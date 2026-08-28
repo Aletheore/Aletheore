@@ -73,19 +73,17 @@ def _run_audit(monkeypatch, tmp_path, *, include: bool):
     monkeypatch.setattr(managed_audit, "run_reasoning_phase", lambda *a, **k: str(report_path))
     monkeypatch.setattr(managed_audit, "_citation_verification_section", lambda *a, **k: "")
     monkeypatch.setattr(
-        managed_audit, "writing_adapter_for_plan", lambda *a, **k: MagicMock()
+        managed_audit, "writing_adapter_for_managed_audit", lambda *a, **k: MagicMock()
     )
     calls = []
 
-    def fake_section(report_text, plan, on_usage=None):
+    def fake_section(report_text, on_usage=None):
         calls.append(report_text)
         return f"\n\n---\n\n{LLM_SUGGESTION_HEADING}\n\n**Overall rating: 7/10**\n"
 
     monkeypatch.setattr(managed_audit, "_llm_based_suggestion_section", fake_section)
 
-    text = managed_audit.run_managed_audit(
-        tmp_path, plan="air", include_llm_suggestions=include
-    )
+    text = managed_audit.run_managed_audit(tmp_path, include_llm_suggestions=include)
     return text, calls
 
 
@@ -120,7 +118,7 @@ def test_the_heading_constant_matches_what_the_writer_emits(monkeypatch, tmp_pat
     import scan_worker.managed_audit as managed_audit
 
     monkeypatch.setattr(
-        managed_audit, "writing_adapter_for_plan", lambda *a, **k: MagicMock()
+        managed_audit, "writing_adapter_for_managed_audit", lambda *a, **k: MagicMock()
     )
     monkeypatch.setattr(
         managed_audit.json,
@@ -128,7 +126,7 @@ def test_the_heading_constant_matches_what_the_writer_emits(monkeypatch, tmp_pat
         lambda _raw: {"rating": 7, "rating_justification": "ok", "suggestions": ["do a thing"]},
     )
 
-    section = managed_audit._llm_based_suggestion_section("report", "air")
+    section = managed_audit._llm_based_suggestion_section("report")
 
     assert contains_non_evidence_backed_section(section)
 

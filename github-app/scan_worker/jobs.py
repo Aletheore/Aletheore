@@ -148,6 +148,7 @@ from app_server.email_queue import enqueue_transactional_email
 from app_server.email_client import send_transactional_email
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.model_tiers import (
+    MANAGED_AUDIT_MODEL,
     PRO_MODEL,
     VERIFICATION_MODEL,
     model_for_plan,
@@ -1372,7 +1373,7 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                 spend_budget = _IncrementalSpendBudget(
                     settings.database_url,
                     installation_id,
-                    model_for_plan(plan),
+                    MANAGED_AUDIT_MODEL,
                     monthly_cap,
                     feature="managed_audit",
                 )
@@ -1381,7 +1382,6 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                     on_usage=spend_budget.record_usage,
                     before_llm_call=spend_budget.can_start_next_call,
                     allow_partial_report=True,
-                    plan=plan,
                     include_llm_suggestions=include_suggestions,
                 )
                 verification_token = _sign_and_persist_audit_report(
@@ -1471,7 +1471,7 @@ def run_managed_audit_api_job(
         spend_budget = _IncrementalSpendBudget(
             settings.database_url,
             installation_id,
-            model_for_plan(plan),
+            MANAGED_AUDIT_MODEL,
             monthly_cap,
             feature="managed_audit",
         )
@@ -1481,7 +1481,6 @@ def run_managed_audit_api_job(
             on_usage=spend_budget.record_usage,
             before_llm_call=spend_budget.can_start_next_call,
             allow_partial_report=True,
-            plan=plan,
             include_llm_suggestions=include_suggestions,
         )
         verification_token = _sign_and_persist_audit_report(
