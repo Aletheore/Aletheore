@@ -24,6 +24,7 @@ from scan_worker.live_wiki import (
     _drop_test_only_briefs,
     _run_concurrently,
     _strip_unverified_lines,
+    _splice_prior_files,
 )
 
 
@@ -553,6 +554,157 @@ def test_build_subsystem_record_without_cache_callables_is_unchanged():
     writing_adapter.simple_completion.assert_called_once()
 
 
+def test_splice_prior_files_fills_blank_entries_from_prior_record():
+    sanitized = [
+        {"path": "auth/login.py", "role": "", "key_symbols": []},
+        {"path": "auth/tokens.py", "role": "Fresh role.", "key_symbols": []},
+    ]
+    prior_record = {
+        "files": [
+            {
+                "path": "auth/login.py",
+                "role": "Old role.",
+                "key_symbols": [{"name": "do_login", "line": 10, "explanation": "old"}],
+            }
+        ]
+    }
+
+    result = _splice_prior_files(sanitized, prior_record)
+
+    assert result[0]["role"] == "Old role."
+    assert result[0]["key_symbols"] == [{"name": "do_login", "line": 10, "explanation": "old"}]
+    assert result[1]["role"] == "Fresh role."
+
+
+def test_splice_prior_files_leaves_a_freshly_written_entry_untouched_even_with_a_prior_match():
+    sanitized = [{"path": "auth/login.py", "role": "New role.", "key_symbols": []}]
+    prior_record = {"files": [{"path": "auth/login.py", "role": "Old role.", "key_symbols": []}]}
+
+    result = _splice_prior_files(sanitized, prior_record)
+
+    assert result[0]["role"] == "New role."
+
+
+def test_splice_prior_files_carries_over_detail_when_present():
+    sanitized = [{"path": "auth/login.py", "role": "", "key_symbols": []}]
+    prior_record = {
+        "files": [
+            {"path": "auth/login.py", "role": "Old role.", "key_symbols": [], "detail": "## Overview\nOld page."}
+        ]
+    }
+
+    result = _splice_prior_files(sanitized, prior_record)
+
+    assert result[0]["detail"] == "## Overview\nOld page."
+
+
+def test_splice_prior_files_new_file_with_no_prior_match_stays_blank():
+    sanitized = [{"path": "auth/new_file.py", "role": "", "key_symbols": []}]
+    prior_record = {"files": [{"path": "auth/login.py", "role": "Old role.", "key_symbols": []}]}
+
+    result = _splice_prior_files(sanitized, prior_record)
+
+    assert result[0] == {"path": "auth/new_file.py", "role": "", "key_symbols": []}
+
+
+def test_splice_prior_files_no_prior_record_is_noop():
+    sanitized = [{"path": "auth/login.py", "role": "", "key_symbols": []}]
+
+    assert _splice_prior_files(sanitized, None) == sanitized
+
+
+def test_build_subsystem_record_sends_skip_files_to_model():
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    adapter = _adapter(json.dumps({"description": "Handles login.", "files": []}))
+
+    build_subsystem_record(
+        evidence, cluster, brief, "Authentication", adapter, skip_files=["auth/tokens.py"]
+    )
+
+    sent = json.loads(adapter.simple_completion.call_args[0][1])
+    assert sent["skip_files"] == ["auth/tokens.py"]
+
+
+def test_build_subsystem_record_omits_skip_files_key_when_not_given():
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    adapter = _adapter(json.dumps({"description": "Handles login.", "files": []}))
+
+    build_subsystem_record(evidence, cluster, brief, "Authentication", adapter)
+
+    sent = json.loads(adapter.simple_completion.call_args[0][1])
+    assert sent["skip_files"] == []
+
+
+def test_build_subsystem_record_splices_prior_content_for_a_skipped_file():
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    # Model only writes the touched file - auth/tokens.py was in skip_files.
+    adapter = _adapter(
+        json.dumps(
+            {
+                "description": "Handles login.",
+                "files": [{"path": "auth/login.py", "role": "New login logic.", "key_symbols": []}],
+            }
+        )
+    )
+    prior_record = {
+        "files": [
+            {
+                "path": "auth/tokens.py",
+                "role": "Issues and verifies tokens.",
+                "key_symbols": [],
+                "detail": "## Overview\nToken details.",
+            }
+        ]
+    }
+
+    record = build_subsystem_record(
+        evidence, cluster, brief, "Authentication", adapter,
+        skip_files=["auth/tokens.py"], prior_record=prior_record,
+    )
+
+    by_path = {f["path"]: f for f in record["files"]}
+    assert by_path["auth/login.py"]["role"] == "New login logic."
+    assert by_path["auth/tokens.py"]["role"] == "Issues and verifies tokens."
+    assert by_path["auth/tokens.py"]["detail"] == "## Overview\nToken details."
+
+
+def test_build_subsystem_record_caches_the_merged_files_not_the_partial_response():
+    # Caching the model's raw (skip_files-trimmed) response would make a
+    # future cache hit for a *different* trigger serve that partial content
+    # as if it were the whole page - the cache must always store complete
+    # content.
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    adapter = _adapter(
+        json.dumps(
+            {
+                "description": "Handles login.",
+                "files": [{"path": "auth/login.py", "role": "New login logic.", "key_symbols": []}],
+            }
+        )
+    )
+    prior_record = {"files": [{"path": "auth/tokens.py", "role": "Issues tokens.", "key_symbols": []}]}
+    cache_write = MagicMock()
+
+    build_subsystem_record(
+        evidence, cluster, brief, "Authentication", adapter,
+        cache_lookup=lambda packet: None,
+        cache_write=cache_write,
+        skip_files=["auth/tokens.py"], prior_record=prior_record,
+    )
+
+    cached_files = cache_write.call_args[0][1]["files"]
+    by_path = {f["path"]: f for f in cached_files}
+    assert by_path["auth/tokens.py"]["role"] == "Issues tokens."
+
+
 def test_generate_subsystems_full_build_covers_every_cluster():
     evidence = make_evidence()
     naming_adapter = _adapter(json.dumps({"0": "Authentication"}))
@@ -573,6 +725,65 @@ def test_generate_subsystems_incremental_filters_to_given_clusters():
 
     assert records == []
     naming_adapter.simple_completion.assert_not_called()
+
+
+def test_generate_subsystems_incremental_only_writes_changed_files_within_a_cluster():
+    # cluster 0 (make_evidence) has two files: auth/login.py and
+    # auth/tokens.py. Only login.py is in changed_files, so tokens.py
+    # should be skipped in the ask and spliced from prior_records instead.
+    evidence = make_evidence()
+    naming_adapter = _adapter(json.dumps({"0": "Authentication"}))
+    captured_payload = {}
+
+    def _respond(_system_prompt, user_prompt, cwd):
+        captured_payload.update(json.loads(user_prompt))
+        return json.dumps(
+            {
+                "description": "Handles login.",
+                "files": [{"path": "auth/login.py", "role": "New login logic.", "key_symbols": []}],
+            }
+        )
+
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = _respond
+    prior_records = {
+        "0": {
+            "subsystem_id": "0",
+            "files": [{"path": "auth/tokens.py", "role": "Issues tokens.", "key_symbols": []}],
+        }
+    }
+
+    records = generate_subsystems(
+        evidence, naming_adapter, writing_adapter,
+        changed_files=["auth/login.py"], prior_records=prior_records,
+    )
+
+    assert captured_payload["skip_files"] == ["auth/tokens.py"]
+    by_path = {f["path"]: f for f in records[0]["files"]}
+    assert by_path["auth/login.py"]["role"] == "New login logic."
+    assert by_path["auth/tokens.py"]["role"] == "Issues tokens."
+
+
+def test_generate_subsystems_full_build_sends_no_skip_files_even_with_a_prior_record():
+    # changed_files=None (the full-build default) must ignore prior_records
+    # entirely and write every file fresh, matching today's behavior - this
+    # is what makes the optimization opt-in per call, not a silent always-on
+    # change to full builds.
+    evidence = make_evidence()
+    naming_adapter = _adapter(json.dumps({"0": "Authentication"}))
+    captured_payload = {}
+
+    def _respond(_system_prompt, user_prompt, cwd):
+        captured_payload.update(json.loads(user_prompt))
+        return json.dumps({"description": "Auth stuff.", "files": []})
+
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = _respond
+    prior_records = {"0": {"subsystem_id": "0", "files": [{"path": "auth/login.py", "role": "Old.", "key_symbols": []}]}}
+
+    generate_subsystems(evidence, naming_adapter, writing_adapter, prior_records=prior_records)
+
+    assert captured_payload["skip_files"] == []
 
 
 def _two_cluster_evidence() -> dict:
@@ -618,6 +829,39 @@ def test_generate_subsystems_preserves_cluster_order_under_concurrency():
     records = generate_subsystems(evidence, naming_adapter, writing_adapter)
 
     assert [r["name"] for r in records] == ["Auth", "Billing"]
+
+
+def test_generate_subsystems_computes_skip_files_per_cluster_in_a_batched_call():
+    # Both clusters land in one batched call. Only billing/charge.py is in
+    # changed_files, so cluster 0 (auth/login.py, untouched) should carry
+    # its own file in skip_files while cluster 1 (billing/charge.py,
+    # touched) carries none - and neither item's skip_files should leak
+    # into the other's.
+    evidence = _two_cluster_evidence()
+    naming_adapter = _adapter(json.dumps({"0": "Auth", "1": "Billing"}))
+    captured_items = {}
+
+    def _respond(_system_prompt, user_prompt, cwd):
+        items = json.loads(user_prompt)
+        captured_items.update({item["id"]: item for item in items})
+        return json.dumps({
+            item["id"]: {"description": f"{item['name']} stuff.", "files": []} for item in items
+        })
+
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = _respond
+    prior_records = {
+        "0": {"subsystem_id": "0", "files": [{"path": "auth/login.py", "role": "Old.", "key_symbols": []}]},
+        "1": {"subsystem_id": "1", "files": [{"path": "billing/charge.py", "role": "Old.", "key_symbols": []}]},
+    }
+
+    generate_subsystems(
+        evidence, naming_adapter, writing_adapter,
+        changed_files=["billing/charge.py"], prior_records=prior_records,
+    )
+
+    assert captured_items["0"]["skip_files"] == ["auth/login.py"]
+    assert captured_items["1"]["skip_files"] == []
 
 
 def _n_cluster_evidence(n: int) -> dict:

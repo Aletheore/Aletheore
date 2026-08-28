@@ -166,6 +166,12 @@ repository that this subsystem imports or is imported by. Respond with ONLY a JS
  brief>", "line": <exact start_line from the brief>, "explanation": "1-2 sentences on what it does
  and when it runs"}]}]}
 
+You may also be given a `skip_files` list - paths from the brief that already have an up-to-date
+page and were not changed. Omit those paths from your `files` array entirely; do not write role or
+key_symbols entries for them, even though they still appear in the brief for your own context (you
+may still need them to write an accurate description). Write full entries only for brief files NOT
+in `skip_files`. If `skip_files` is absent or empty, write every file in the brief as before.
+
 The description must be 4-8 sentences and must cover, in this order:
 1. What this subsystem does.
 2. WHY it exists as a separate unit - the design problem it solves. This is the most valuable
@@ -252,7 +258,7 @@ what's given. No markdown fences."""
 # With related_symbols added and the cap left at 250-400: 2.04 vs RepoWise
 # 2.00 - AIRview ahead for the first time on this benchmark. Ships as the data
 # fix, not the length change.
-AIRVIEW_PROMPT_VERSION = "5"
+AIRVIEW_PROMPT_VERSION = "6"
 
 # How many files get their own reference page, at most. Deliberately far below
 # a page-per-file: the top of the importance ranking is where a reader spends
@@ -504,6 +510,41 @@ def _sanitize_written_files(written_files, brief_files: list[dict]) -> list[dict
     return sanitized
 
 
+def _splice_prior_files(sanitized_files: list[dict], prior_record: dict | None) -> list[dict]:
+    """Fills a blank entry (role="" and no key_symbols - either because the
+    file was in that item's skip_files, or because the model omitted it
+    despite being asked) with the same path's entry from the last stored
+    record, including `detail` if that file already has its own reference
+    page. This is what makes skip_files free: the caller doesn't have to
+    tell the difference between "deliberately skipped" and "model dropped
+    it" - both degrade to the last known-good content instead of blank,
+    which is only ever an improvement over today's blank-on-omission
+    behavior. A path with no matching prior entry (new to this subsystem,
+    or predates the last stored record) is left exactly as sanitized_files
+    had it.
+    """
+    if not prior_record:
+        return sanitized_files
+    prior_by_path = {
+        f["path"]: f for f in (prior_record.get("files") or []) if isinstance(f, dict) and f.get("path")
+    }
+    result = []
+    for entry in sanitized_files:
+        prior_entry = prior_by_path.get(entry["path"])
+        if entry["role"] == "" and not entry["key_symbols"] and prior_entry is not None:
+            spliced = {
+                "path": entry["path"],
+                "role": prior_entry.get("role", ""),
+                "key_symbols": prior_entry.get("key_symbols", []),
+            }
+            if prior_entry.get("detail"):
+                spliced["detail"] = prior_entry["detail"]
+            result.append(spliced)
+        else:
+            result.append(entry)
+    return result
+
+
 def _validate_written_output(
     parsed: dict | None,
     evidence: dict,
@@ -544,7 +585,12 @@ def build_subsystem_record(
     cache_write: Callable[[dict, dict, str], None] | None = None,
     model_used: str = "",
     fetch_line_count: Callable[[str], int | None] | None = None,
+    skip_files: list[str] | None = None,
+    prior_record: dict | None = None,
 ) -> dict | None:
+    """skip_files/prior_record: incremental-update optimization - see
+    _splice_prior_files. Both default to None (full-build behavior,
+    unchanged): every file in the brief is written fresh."""
     packet = build_evidence_packet(
         evidence,
         cluster,
@@ -572,7 +618,12 @@ def build_subsystem_record(
 
     if parsed is None:
         user_prompt = json.dumps(
-            {"name": name, "brief": brief, "related_files": _related_files(evidence, brief)}
+            {
+                "name": name,
+                "brief": brief,
+                "related_files": _related_files(evidence, brief),
+                "skip_files": skip_files or [],
+            }
         )
         raw_parsed = None
         for attempt in range(1, SUBSYSTEM_WRITE_ATTEMPTS + 1):
@@ -607,8 +658,17 @@ def build_subsystem_record(
             parsed = raw_parsed if isinstance(raw_parsed, dict) else {}
             description = SUBSYSTEM_DESCRIPTION_UNAVAILABLE
         elif cache_write is not None:
+            # Cache the merged (splice-applied) files, not the model's raw
+            # response - a raw response written under skip_files is only
+            # partial, and a future cache hit for a *different* trigger
+            # would otherwise serve that partial content as if it were
+            # complete, silently blanking whatever files this run skipped.
+            merged_for_cache = _splice_prior_files(
+                _sanitize_written_files(raw_parsed.get("files") if isinstance(raw_parsed, dict) else None, brief["files"]),
+                prior_record,
+            )
             try:
-                cache_write(packet, raw_parsed, model_used)
+                cache_write(packet, {**raw_parsed, "files": merged_for_cache}, model_used)
             except Exception as exc:
                 logger.warning("AIRview cache write failed (%s); continuing without cache", type(exc).__name__)
 
@@ -616,7 +676,9 @@ def build_subsystem_record(
         "subsystem_id": str(cluster["id"]),
         "name": name,
         "description": description,
-        "files": _sanitize_written_files(parsed.get("files"), brief["files"]),
+        "files": _splice_prior_files(
+            _sanitize_written_files(parsed.get("files"), brief["files"]), prior_record
+        ),
         "diagram_mermaid": build_subsystem_diagram(evidence, cluster),
     }
 
@@ -638,6 +700,13 @@ You are given a JSON array of subsystem items, each with an "id" (echo this back
 key in your response - never invent your own id), "name", a "brief" listing its files and each
 file's key functions/classes with line numbers, and a "related_files" list naming files elsewhere
 in the repository that this subsystem imports or is imported by.
+
+An item may also carry a "skip_files" list - paths from that item's own brief that already have an
+up-to-date page and were not changed. Omit those paths from that item's "files" array entirely; do
+not write role or key_symbols entries for them, even though they still appear in the brief for your
+own context. Write full entries only for that item's brief files NOT in its own "skip_files". If an
+item has no "skip_files" or it is empty, write every file in that item's brief as before. Never use
+one item's "skip_files" for a different item.
 
 Respond with ONLY a single JSON object with one entry per item you were given, keyed by that
 item's "id" (as a string): {"<id>": {"description": "<see below>", "files": [{"path": "<exact
@@ -669,13 +738,22 @@ given."""
 
 
 class _SubsystemWriteTarget:
-    __slots__ = ("cluster", "brief", "name", "cluster_id_str")
+    __slots__ = ("cluster", "brief", "name", "cluster_id_str", "skip_files", "prior_record")
 
-    def __init__(self, cluster: dict, brief: dict, name: str) -> None:
+    def __init__(
+        self,
+        cluster: dict,
+        brief: dict,
+        name: str,
+        skip_files: list[str] | None = None,
+        prior_record: dict | None = None,
+    ) -> None:
         self.cluster = cluster
         self.brief = brief
         self.name = name
         self.cluster_id_str = str(brief["cluster_id"])
+        self.skip_files = skip_files
+        self.prior_record = prior_record
 
 
 def _write_subsystem_batch(
@@ -695,6 +773,7 @@ def _write_subsystem_batch(
             "name": t.name,
             "brief": t.brief,
             "related_files": _related_files(evidence, t.brief),
+            "skip_files": t.skip_files or [],
         }
         for t in targets
     ]
@@ -753,13 +832,19 @@ def _generate_subsystem_records_for_targets(
         candidate = resolved.get(cluster_id_str)
         if candidate is not None:
             parsed, description = candidate
+            merged_files = _splice_prior_files(
+                _sanitize_written_files(parsed.get("files"), target.brief["files"]), target.prior_record
+            )
             if cache_write is not None:
+                # Cache the merged files, not the model's raw (possibly
+                # skip_files-trimmed) response - see build_subsystem_record's
+                # identical comment on why an un-merged cache write is unsafe.
                 packet = build_evidence_packet(
                     evidence, target.cluster, target.brief, model_used,
                     cache_eligible=True, prompt_version=AIRVIEW_PROMPT_VERSION,
                 )
                 try:
-                    cache_write(packet, parsed, model_used)
+                    cache_write(packet, {**parsed, "files": merged_files}, model_used)
                 except Exception as exc:
                     logger.warning("AIRview cache write failed (%s); continuing without cache", type(exc).__name__)
         else:
@@ -768,13 +853,16 @@ def _generate_subsystem_records_for_targets(
                 "fully-verifiable prose",
                 target.name,
             )
-            parsed, description = {}, SUBSYSTEM_DESCRIPTION_UNAVAILABLE
+            description = SUBSYSTEM_DESCRIPTION_UNAVAILABLE
+            merged_files = _splice_prior_files(
+                _sanitize_written_files(None, target.brief["files"]), target.prior_record
+            )
 
         records[cluster_id_str] = {
             "subsystem_id": cluster_id_str,
             "name": target.name,
             "description": description,
-            "files": _sanitize_written_files(parsed.get("files"), target.brief["files"]),
+            "files": merged_files,
             "diagram_mermaid": build_subsystem_diagram(evidence, target.cluster),
         }
     return records
@@ -865,10 +953,21 @@ def generate_subsystems(
     cache_write: Callable[[dict, dict, str], None] | None = None,
     model_used: str = "",
     fetch_line_count: Callable[[str], int | None] | None = None,
+    changed_files: list[str] | None = None,
+    prior_records: dict[str, dict] | None = None,
 ) -> list[dict]:
     """Generates subsystem records. If cluster_ids is given, only those
     clusters are processed (incremental update); otherwise every cluster
     in the evidence is (full build).
+
+    changed_files/prior_records: incremental-update cost optimization. When
+    both are given, a target cluster whose brief has files outside
+    changed_files only gets a fresh write for the changed ones - the rest
+    are spliced in from prior_records (keyed by subsystem_id, i.e.
+    str(cluster_id)) instead of being re-written by the model. Leave both
+    None for full-build behavior (every file in every processed cluster is
+    written fresh) - this is the default and existing callers are
+    unaffected.
     """
     briefs = build_cluster_briefs(evidence)
     if cluster_ids is not None:
@@ -899,6 +998,19 @@ def generate_subsystems(
 
     lookup_results = _run_concurrently([lambda b=brief: _lookup_one(b) for brief in briefs])
 
+    changed_set = set(changed_files) if changed_files is not None else None
+
+    def _skip_files_and_prior(brief: dict) -> tuple[list[str] | None, dict | None]:
+        if changed_set is None or prior_records is None:
+            return None, None
+        prior_record = prior_records.get(str(brief["cluster_id"]))
+        if prior_record is None:
+            return None, None
+        skip = [f["path"] for f in brief.get("files", []) if f["path"] not in changed_set]
+        if not skip:
+            return None, None
+        return skip, prior_record
+
     records_by_id: dict[str, dict] = {}
     targets: list[_SubsystemWriteTarget] = []
     order: list[str] = []
@@ -911,7 +1023,8 @@ def generate_subsystems(
         if cached_record is not None:
             records_by_id[cluster_id_str] = cached_record
         else:
-            targets.append(_SubsystemWriteTarget(cluster, brief, name))
+            skip_files, prior_record = _skip_files_and_prior(brief)
+            targets.append(_SubsystemWriteTarget(cluster, brief, name, skip_files, prior_record))
 
     if len(targets) == 1:
         # No batching benefit for a single item - the plain single-item
@@ -922,7 +1035,7 @@ def generate_subsystems(
         record = build_subsystem_record(
             evidence, t.cluster, t.brief, t.name, writing_adapter,
             cache_lookup=None, cache_write=cache_write, model_used=model_used,
-            fetch_line_count=fetch_line_count,
+            fetch_line_count=fetch_line_count, skip_files=t.skip_files, prior_record=t.prior_record,
         )
         if record is not None:
             records_by_id[t.cluster_id_str] = record
