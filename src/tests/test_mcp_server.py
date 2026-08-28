@@ -268,6 +268,19 @@ async def test_build_server_registers_expected_tools(tmp_path):
     assert "aletheore_answer" not in names
 
 
+def test_build_server_surfaces_instructions_in_the_handshake(tmp_path):
+    # Unlike a resource the connecting agent would have to separately think
+    # to fetch, `instructions` is surfaced in the MCP `initialize` handshake
+    # itself - every client shows it to the agent before any tool is called.
+    repo = make_repo_with_evidence(tmp_path)
+
+    server = build_server(repo)
+
+    assert server.instructions
+    assert "aletheore_overview" in server.instructions
+    assert "vocabulary" in server.instructions.lower()
+
+
 @pytest.mark.asyncio
 async def test_dynamic_query_tools_have_distinct_non_generic_descriptions(tmp_path):
     # Before this fix, every one of these 16 tools shared the same templated

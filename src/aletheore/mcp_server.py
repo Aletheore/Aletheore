@@ -83,6 +83,51 @@ def read_evidence(repo_path: Path) -> dict:
     return evidence
 
 
+# Surfaced in the MCP `initialize` handshake itself - every client shows
+# this to the connecting agent before any tool is called, unlike a resource
+# the agent would have to separately think to fetch. Content sourced from
+# real, measured facts rather than generic advice: the vocabulary claim is
+# our own benchmark's finding (aletheore-benchmarks, "Where we lose" -
+# several corpora scored below 35% top-1 under vocabulary-avoiding phrasing,
+# recovering 20-47 points when the same questions used the project's own
+# terms), not a guess. Kept to what changes agent behavior, not a full tool
+# catalog - each tool's own docstring is already visible to the client.
+SERVER_INSTRUCTIONS = """Aletheore is a deterministic, evidence-grounded code intelligence tool for \
+this repository - every result cites a real file:line, nothing is invented.
+
+Getting started on an unfamiliar repo: call aletheore_overview first. If no \
+evidence exists yet, run aletheore_scan once - the deterministic parse and \
+dependency-graph pass every other tool reads from. aletheore_search_codebase \
+and aletheore_answer additionally require aletheore_index to have run first \
+(builds the semantic index on top of scan evidence); every other tool works \
+straight off scan evidence alone.
+
+Timing: aletheore_scan and aletheore_index both report live progress while \
+running, not a silent hang - a small repo finishes in seconds, a large \
+monorepo can take several minutes. Don't assume either has failed just \
+because it's still running; check the reported progress before retrying.
+
+Question phrasing matters more than for most tools. aletheore_search_codebase \
+and aletheore_answer are semantic, but our own published benchmark measured \
+real, large accuracy drops when a question avoids the codebase's own \
+vocabulary in favor of generic or paraphrased terms - several corpora scored \
+under 35% top-1 accuracy on vocabulary-avoiding phrasing, recovering 20-47 \
+points when the same question used the project's own terms instead. Prefer \
+this repo's actual identifiers, file names, and terminology over a \
+paraphrase. aletheore_overview, aletheore_symbols, and aletheore_list can \
+surface real names to query with when you're unsure of the vocabulary.
+
+Prefer exact tools when the target is already known: aletheore_imports, \
+aletheore_imported_by, aletheore_symbols, aletheore_symbol_source, \
+aletheore_neighborhood, and the aletheore_find_evidence_for_* tools are \
+exact (not approximate) and need no semantic index. So are the security/ \
+quality tools (aletheore_secrets, aletheore_vulnerabilities, \
+aletheore_licenses, aletheore_dead_code, aletheore_hotspots, \
+aletheore_layer_violations) and aletheore_search (literal/regex text \
+search, not semantic). Reach for the semantic tools only for open-ended \
+"how does this work" questions the exact tools can't answer directly."""
+
+
 def _toon_result(data: object) -> str:
     # Every tool result is TOON-encoded rather than returned as a plain dict
     # (which MCPServer would otherwise auto-serialize to JSON) - this is the
@@ -719,7 +764,7 @@ def build_server(
     """
     effects = allowed_effects(os.environ.get(_ALLOW_ENV_VAR)) if allow is None else allow
 
-    mcp_instance = MCPServer("aletheore")
+    mcp_instance = MCPServer("aletheore", instructions=SERVER_INSTRUCTIONS)
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)
