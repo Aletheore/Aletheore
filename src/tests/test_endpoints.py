@@ -199,6 +199,43 @@ def test_map_api_endpoints_composes_fastapi_prefix_from_another_file(tmp_path):
     assert route["path"] == "/api/v1/users/{user_id}"
 
 
+def test_map_api_endpoints_reparses_a_router_file_when_only_the_mounting_file_changed(tmp_path):
+    # docs/audits/Claude_Audit.md finding 20, confirmed live before the fix:
+    # cross_file_router_mounts is recomputed fresh every call (the pre-pass
+    # loop above has no unchanged_endpoints check), but the per-file
+    # cache-reuse skip below used to trust users.py's own hash/diff as the
+    # whole story - so bumping main.py's include_router prefix while
+    # users.py stayed byte-identical left the cached, now-stale /api/v1
+    # path in place. users.py must be excluded from cache-reuse because its
+    # composed path depends on a DIFFERENT file's include_router call, not
+    # because its own content changed.
+    (tmp_path / "users.py").write_text(
+        'router = APIRouter()\n'
+        '@router.get("/list")\n'
+        'def list_users():\n    pass\n'
+    )
+    (tmp_path / "main.py").write_text(
+        "from users import router\n"
+        'app.include_router(router, prefix="/api/v1")\n'
+    )
+
+    first = map_api_endpoints(tmp_path)
+    cached_users_endpoint = next(e for e in first["endpoints"] if e["file"] == "users.py")
+    assert cached_users_endpoint["path"] == "/api/v1/list"
+
+    # Only main.py changes (prefix bumped to /api/v2) - users.py is passed
+    # as unchanged, exactly as evidence.py/scan_worker.jobs would build it
+    # from a real hash/diff comparison.
+    (tmp_path / "main.py").write_text(
+        "from users import router\n"
+        'app.include_router(router, prefix="/api/v2")\n'
+    )
+
+    second = map_api_endpoints(tmp_path, unchanged_endpoints={"users.py": [cached_users_endpoint]})
+    users_endpoint = next(e for e in second["endpoints"] if e["file"] == "users.py")
+    assert users_endpoint["path"] == "/api/v2/list"
+
+
 def test_map_api_endpoints_does_not_double_count_a_same_file_include_router_prefix(tmp_path):
     (tmp_path / "api.py").write_text(
         'router = APIRouter(prefix="/api/v1/users")\n'
