@@ -148,29 +148,11 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
         )
         return
 
-    transitioned_to_paid = False
-    if plan != "free":
-        transitioned_to_paid = await claim_free_to_paid_plan(pool, installation_id, plan)
-        if not transitioned_to_paid:
-            await set_paid_installation_plan(pool, installation_id, plan)
-    else:
-        await set_installation_plan(pool, installation_id, plan)
-
-    # Deliberately independent of transitioned_to_paid: if a crash lands
-    # between that write committing and the one-time setup below actually
-    # running, a Paddle retry finds plan already non-free, so
-    # claim_free_to_paid_plan correctly returns False on the retry - but
-    # setup still never ran once. This claim is what actually decides
-    # whether to run it, so a crash-then-retry still runs it exactly once
-    # instead of silently skipping it forever.
-    should_run_paid_setup = plan != "free" and await claim_paid_setup(pool, installation_id)
-    if "id" in data and "customer_id" in data:
-        await add_paddle_ids_to_installation(pool, installation_id, data["id"], data["customer_id"])
-
     # The extra-seat line item's quantity is the source of truth for billed
     # seats - reconciled here, the same way the plan itself is, rather than
     # trusting the buy/remove-seat button's own optimism about what Paddle
-    # actually charged.
+    # actually charged. Computed before the transaction below since it only
+    # reads `items`/`plan`, already available.
     extra_seats = (
         sum(
             item.get("quantity", 0)
@@ -180,7 +162,42 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
         if plan != "free"
         else 0
     )
-    await set_extra_seats(pool, installation_id, extra_seats)
+
+    # One transaction, not three independent writes: a crash between any two
+    # of these previously left the installation on the new plan with stale
+    # extra_seats, or upgraded with no Paddle IDs recorded - a state that
+    # persisted until a Paddle retry happened to land outside
+    # claim_webhook_delivery's 15-minute reclaim window (see
+    # docs/audits/Claude_Audit.md finding 11; confirmed live by injecting a
+    # crash between add_paddle_ids_to_installation and set_extra_seats - the
+    # plan and Paddle IDs committed, extra_seats never did). Rolling back
+    # together means a crash here now looks identical to never having
+    # started, from any later retry's point of view - no partial state to
+    # reason about, whether the retry is immediate or 15 minutes later.
+    transitioned_to_paid = False
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if plan != "free":
+                transitioned_to_paid = await claim_free_to_paid_plan(conn, installation_id, plan)
+                if not transitioned_to_paid:
+                    await set_paid_installation_plan(conn, installation_id, plan)
+            else:
+                await set_installation_plan(conn, installation_id, plan)
+
+            if "id" in data and "customer_id" in data:
+                await add_paddle_ids_to_installation(conn, installation_id, data["id"], data["customer_id"])
+
+            await set_extra_seats(conn, installation_id, extra_seats)
+
+    # Deliberately independent of transitioned_to_paid, and deliberately
+    # outside the transaction above: if a crash lands between that
+    # transaction committing and the one-time setup below actually running,
+    # a Paddle retry finds plan already non-free, so claim_free_to_paid_plan
+    # correctly returns False on the retry - but setup still never ran once.
+    # This claim is what actually decides whether to run it, so a
+    # crash-then-retry still runs it exactly once instead of silently
+    # skipping it forever.
+    should_run_paid_setup = plan != "free" and await claim_paid_setup(pool, installation_id)
 
     # One-time Live Wiki build, mirroring the GitHub Marketplace path in
     # webhooks/marketplace.py - fires exactly once, on the free -> paid
