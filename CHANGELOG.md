@@ -3,6 +3,68 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.8 — 2026-08-28
+
+- **Bounded the Java/C# scanner pre-pass's peak memory** (audit finding
+  15). `java_pre_parsed`/`csharp_pre_parsed` used to hold every `.java`/
+  `.cs` file's parsed tree-sitter `Tree` simultaneously once the source-
+  root pre-pass finished, before the main loop had consumed any of them -
+  trees run roughly 37x their source size, and the hosted scan-worker
+  containers are capped at 1GB, so a large enough Java/C# repo could
+  OOM-crash the whole scan right there, before any partial result
+  exists to fall back to. Removed the cache entirely instead of shrinking
+  its retention window: each file's tree now falls out of scope at the
+  end of its own pre-pass iteration, and the main loop re-parses each
+  file from scratch. Trades doubled tree-sitter parse CPU for never
+  holding more than about one file's tree in memory at a time - measured
+  directly on a 600-file synthetic Java repo: peak boundary memory
+  dropped from ~406MB to ~3.3MB.
+- **Fixed 8 real scanner import/endpoint-resolution bugs**, each
+  independently reproduced against the real tree-sitter grammar before
+  fixing: Rust `pub use` re-exports extracted the literal word `"pub"`
+  instead of the real path; Rust nested `use` group items (`use
+  std::{fmt, io::{self, Write}}`) below the first brace level were
+  dropped; PHP grouped `use Foo\Bar\{ClassA, ClassB}` statements were
+  skipped entirely; PHP `use Foo\Bar as Baz` aliases produced a phantom
+  duplicate entry; Java `import static a.b.C.*` misparsed as a directory
+  import; TypeScript `import foo = require('./foo')` (import-equals)
+  silently produced zero imports; Django's `urlpatterns += [...]` routes
+  were never extracted (only plain `=` assignment was); and Python/JS/TS
+  files that imported themselves could defeat dead-code detection's
+  unreachable-file check, unlike the other 7 language branches which
+  already guarded against it.
+- **Fixed the endpoint cache reusing a stale composed path across an
+  incremental scan** when only a *different* file's `include_router(...,
+  prefix=...)` call changed, not the router-defining file itself - a
+  common FastAPI pattern (router defined in one file, mounted with a
+  prefix in another) that silently corrupted endpoint evidence on every
+  subsequent push/PR scan of the affected repo until the router file
+  changed for an unrelated reason.
+- **Fixed `OpenAICompatibleAdapter.invoke()`** (the tool-calling agent
+  loop `aletheore audit`'s reasoning phase uses) never passing
+  `extra_body` to the API, unlike `simple_completion()` - `gpt-5.6-luna`
+  rejects function tools unless `reasoning_effort` is explicitly
+  `"none"`, so any audit run routed to Luna crashed on its very first
+  LLM call.
+- **`aletheore_search`'s MCP result is now bounded by total character
+  size, not just match count.** `_SEARCH_MATCH_CAP` bounded how many
+  matches came back, but nothing bounded their combined size - 200
+  matches of long lines (a minified bundle, a generated file, a single
+  huge JSON line) could produce a result an MCP client rejects for
+  exceeding its own size limit. Two independent guards: a per-line
+  truncation and a total character budget that stops the search early
+  and flags `truncated: true`, reusing the existing truncation signal.
+- **Sharpened the MCP server's vocabulary guidance and documented two
+  tools' actual parameter shapes**, both verified with real A/B subagent
+  runs. `aletheore_search` (literal/regex) needed the same explicit
+  sequencing guidance the semantic tools already had - a paraphrased
+  query matches nothing at all there, not just "scores lower."
+  `aletheore_symbol_source` and `aletheore_find_evidence_for_endpoint`'s
+  docstrings never stated they take two separate arguments, not a single
+  combined string - agents were burning 3-4 calls guessing the shape.
+  Verified: a task that previously took 15-23 tool calls with 3
+  parameter errors dropped to 13 calls with zero.
+
 ## 0.9.7 — 2026-08-28
 
 - **The Anthropic adapter now retries transient errors** (auth hiccups,
