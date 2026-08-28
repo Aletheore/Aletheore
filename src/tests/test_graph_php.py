@@ -1,7 +1,16 @@
 from pathlib import Path
 
-from aletheore.scanner.graph import build_module_graph
+from tree_sitter import Parser
+
+from aletheore.scanner.graph import PHP_LANGUAGE, _extract_php, build_module_graph
 from conftest import symbol_names
+
+
+def parse_php(source: str):
+    parser = Parser()
+    parser.language = PHP_LANGUAGE
+    encoded = source.encode()
+    return parser.parse(encoded).root_node, encoded
 
 
 def make_php_repo(tmp_path: Path) -> Path:
@@ -116,6 +125,64 @@ def test_build_module_graph_php_psr4_ambiguous_prefix_is_flagged_inferred(tmp_pa
     main = by_path["main.php"]
     assert main["imports"] == ["extra/Foo.php"]
     assert main["import_confidence"] == {"extra/Foo.php": "inferred"}
+
+
+def test_build_module_graph_php_grouped_use_resolves_every_clause(tmp_path):
+    # audit finding 28: "use Foo\Bar\{ClassA, ClassB};" nests its clauses
+    # inside a namespace_use_group one level deeper than a plain
+    # unprefixed clause - neither is a namespace_use_declaration's direct
+    # child, so scanning only direct namespace_use_clause children
+    # silently dropped the entire grouped statement, real code that
+    # `use`s two sibling classes under one shared namespace got zero
+    # resolved dependencies for either.
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "composer.json").write_text(
+        '{"name": "example/webservice", "autoload": {"psr-4": {"App\\\\": "src/"}}}'
+    )
+    (repo / "src" / "ClassA.php").write_text("<?php\n\nnamespace App;\n\nclass ClassA\n{\n}\n")
+    (repo / "src" / "ClassB.php").write_text("<?php\n\nnamespace App;\n\nclass ClassB\n{\n}\n")
+    (repo / "main.php").write_text("<?php\n\nuse App\\{ClassA, ClassB};\n")
+
+    _, dependency_graph, _ = build_module_graph(repo)
+    edges = {tuple(edge) for edge in dependency_graph["edges"]}
+
+    assert ("main.php", "src/ClassA.php") in edges
+    assert ("main.php", "src/ClassB.php") in edges
+
+
+def test_extract_php_aliased_use_does_not_also_extract_the_bare_alias():
+    # audit finding 31: "use Foo\Bar as Baz;" - the alias target ("Baz")
+    # and the real path ("Foo\Bar") are both bare "name" nodes to
+    # tree-sitter-php, the same node type - matching on type alone
+    # appended a second, phantom entry for the alias string itself
+    # alongside the real path.
+    #
+    # This has to be checked at the raw extraction level, before PSR-4
+    # resolution: a bare, unprefixed alias string can never resolve
+    # through _resolve_php_use regardless of whether the extraction bug is
+    # fixed (its matching requires an exact or prefix+"\\" match against a
+    # registered namespace prefix, which a bare name never has), so a
+    # build_module_graph-level test would pass identically whether the
+    # phantom entry was extracted or not - it always silently disappears
+    # during resolution either way, exactly the "usually harmless noise"
+    # the finding itself describes.
+    root, source = parse_php("<?php\n\nuse Foo\\Bar as Baz;\n")
+
+    imports, _functions, _classes = _extract_php(root, source)
+
+    assert imports == [("use", "Foo\\Bar")]
+
+
+def test_extract_php_grouped_aliased_use_does_not_also_extract_the_bare_alias():
+    # Same check as above, for an aliased clause inside a grouped use
+    # statement - the alias exclusion has to apply there too, not just to
+    # a top-level unprefixed clause.
+    root, source = parse_php("<?php\n\nuse Foo\\Bar\\{ClassA, ClassB as B};\n")
+
+    imports, _functions, _classes = _extract_php(root, source)
+
+    assert imports == [("use", "Foo\\Bar\\ClassA"), ("use", "Foo\\Bar\\ClassB")]
 
 
 def test_build_module_graph_php_dir_concat_require_resolves(tmp_path):

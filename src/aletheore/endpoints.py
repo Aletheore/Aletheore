@@ -401,7 +401,16 @@ def _extract_django_routes(root: Node, source: bytes, rel_path: str) -> list[dic
     entries: list[dict] = []
 
     def walk(n: Node) -> None:
-        if n.type == "assignment":
+        # "urlpatterns += [...]" (splitting the list across an initial
+        # assignment plus one or more extensions - an ordinary, documented
+        # Django organizing pattern) parses to augmented_assignment, a
+        # distinct node type from plain assignment - the unconditional
+        # recursion below already walks into it, but nothing matched it
+        # for extraction, so every route declared this way was silently
+        # missing from the endpoint inventory with no indication anything
+        # was skipped (audit finding 27). Both node types use the same
+        # left/right field names in this grammar, confirmed directly.
+        if n.type in ("assignment", "augmented_assignment"):
             left = n.child_by_field_name("left")
             right = n.child_by_field_name("right")
             is_urlpatterns = (

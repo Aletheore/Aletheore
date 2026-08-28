@@ -215,6 +215,45 @@ def test_build_module_graph_java_static_import_resolves_to_the_class_not_the_mem
     ) in edges
 
 
+def test_build_module_graph_java_static_wildcard_import_resolves_to_the_class(tmp_path):
+    # audit finding 29: "import static com.example.util.Constants.*;" used
+    # to be checked against is_wildcard before is_static, treating every
+    # segment - including the trailing class name "Constants" - as a
+    # package-directory component and looking for a directory
+    # .../util/Constants/ that doesn't exist (the real file is
+    # Constants.java). A static wildcard's dotted text is already just the
+    # class path (no member/"*" segment appended, unlike a static
+    # non-wildcard import), so it needs the same class-file lookup the
+    # test right above this one already exercises for a named static
+    # member - never the plain-wildcard package-directory lookup.
+    repo = tmp_path / "repo"
+    base = repo / "src" / "main" / "java" / "com" / "example"
+    (base / "util").mkdir(parents=True)
+    (base / "util" / "Constants.java").write_text(
+        "package com.example.util;\n\n"
+        "public class Constants {\n"
+        "    public static final int MAX_SIZE = 100;\n"
+        "}\n"
+    )
+    (base / "Main.java").write_text(
+        "package com.example;\n\n"
+        "import static com.example.util.Constants.*;\n\n"
+        "public class Main {\n"
+        "    public static void main(String[] args) {\n"
+        "        int x = MAX_SIZE;\n"
+        "    }\n"
+        "}\n"
+    )
+
+    _, dependency_graph, _ = build_module_graph(repo)
+    edges = {tuple(edge) for edge in dependency_graph["edges"]}
+
+    assert (
+        "src/main/java/com/example/Main.java",
+        "src/main/java/com/example/util/Constants.java",
+    ) in edges
+
+
 def test_build_module_graph_java_no_package_declaration_still_scans_the_file(tmp_path):
     # A class in the unnamed/default package can't actually be imported by name at
     # all - javac rejects a bare "import Helper;" outright ("'.' expected", verified
