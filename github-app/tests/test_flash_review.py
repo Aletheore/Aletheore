@@ -467,6 +467,27 @@ def test_review_diff_drops_findings_missing_required_fields(mock_adapter_class):
 
 
 @patch("scan_worker.flash_review.writing_adapter_for")
+def test_review_diff_drops_a_finding_whose_line_is_a_bool_not_a_real_number(mock_adapter_class):
+    # Regression: bool is a subclass of int in Python, so isinstance(True,
+    # int) is True - a malformed "line": true in the model's JSON used to
+    # pass the shape check and would have rendered as a literal
+    # "app.py:True" in the posted PR comment. The diff below deliberately
+    # has a real hunk for app.py at line 1 - matching True == 1 - so
+    # grounding alone can't explain a dropped finding here; only the type
+    # check can. Confirmed directly before fixing: without it, this exact
+    # finding (line=True) passed straight through into the returned list.
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = (
+        '[{"file": "app.py", "line": true, "issue": "line is a bool, not a number"}]'
+    )
+    mock_adapter_class.return_value = mock_adapter
+
+    findings = review_diff("--- app.py ---\n@@ -1,1 +1,1 @@\n+print(1)")
+
+    assert findings == []
+
+
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_drops_a_hallucinated_finding_outside_the_diff(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = (
