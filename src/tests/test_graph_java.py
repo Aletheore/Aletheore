@@ -5,6 +5,85 @@ from aletheore.scanner.graph import build_module_graph
 from conftest import symbol_names
 
 
+def _write_synthetic_java_repo(repo: Path, file_count: int) -> None:
+    # Real class bodies, not one-liners - tree-sitter tree size scales with
+    # source complexity, so trivial fixtures under-report the memory this
+    # test is trying to measure (verified: one-line classes never surfaced
+    # a measurable gap between the cached and uncached pre-pass; classes
+    # this size reliably do).
+    for i in range(file_count):
+        fields = "\n".join(f"    private int field{j} = {j};" for j in range(40))
+        methods = "\n".join(
+            f"""
+    public int method{j}(int a, int b) {{
+        int total = 0;
+        for (int k = 0; k < 10; k++) {{
+            if (k % 2 == 0) {{
+                total += a * k + field{j % 40};
+            }} else {{
+                total -= b - k;
+            }}
+        }}
+        return total;
+    }}"""
+            for j in range(60)
+        )
+        (repo / f"C{i}.java").write_text(
+            f"package com.example.pkg{i};\n\nimport java.util.List;\nimport java.util.Map;\n\n"
+            f"public class C{i} {{\n{fields}\n{methods}\n}}\n"
+        )
+
+
+def _measure_boundary_rss_for_java_repo(file_count: int, out_queue) -> None:
+    # Runs inside its own subprocess so ru_maxrss - a whole-process
+    # high-water-mark that can't be reset mid-process - reflects only this
+    # one scan, not whatever the pytest process had already touched before
+    # this test ran.
+    import resource
+    import sys
+    import tempfile
+    from pathlib import Path as _Path
+
+    from aletheore.scanner import graph as _graph_module
+
+    baseline = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    boundary: dict[str, int] = {}
+    original_rel = _graph_module._rel
+
+    def tracking_rel(repo_path, path):
+        # _rel(repo_path, path) is the first thing the main loop does for
+        # each file, so its first-ever call lands right at the boundary
+        # between the pre-pass finishing (every .java file already parsed)
+        # and the main loop starting to consume anything - the instant a
+        # whole-repo cache would be at its fullest.
+        if "value" not in boundary:
+            boundary["value"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return original_rel(repo_path, path)
+
+    _graph_module._rel = tracking_rel
+
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _Path(tmp)
+        _write_synthetic_java_repo(repo, file_count)
+        _graph_module.build_module_graph(repo)
+
+    # ru_maxrss is bytes on macOS, KB on Linux.
+    scale = 1 if sys.platform == "darwin" else 1024
+    out_queue.put((boundary["value"] - baseline) * scale)
+
+
+def _boundary_rss_delta_for_java_repo(file_count: int) -> int:
+    import multiprocessing
+
+    ctx = multiprocessing.get_context("spawn")
+    out_queue: multiprocessing.Queue = ctx.Queue()
+    process = ctx.Process(target=_measure_boundary_rss_for_java_repo, args=(file_count, out_queue))
+    process.start()
+    result = out_queue.get()
+    process.join()
+    return result
+
+
 def make_java_repo(tmp_path: Path) -> Path:
     # Mirrors a real Maven-layout project verified with `javac` before this fixture
     # was written - Main.java at com.example, importing across com.example.handlers
@@ -293,16 +372,19 @@ def test_build_module_graph_java_import_escaping_repo_root_does_not_crash(tmp_pa
     assert dependency_graph["edges"] == []
 
 
-def test_build_module_graph_reuses_the_java_prepass_parse_in_the_main_loop(tmp_path):
-    # Real regression this guards: the source-root pre-pass already reads
-    # and parses every .java file to extract its package declaration - the
-    # main loop used to read and parse each one again from scratch instead
-    # of reusing that (source, tree) pair, doubling tree-sitter parse cost
-    # for every Java file in a scan for no benefit (the pre-parsed tree is
-    # consumed by the main loop moments later in the same function call,
-    # not retained for the scan's whole lifetime, so caching it costs
-    # nothing extra in memory - the "reparse for bounded memory" framing
-    # this test used to encode was never a real trade-off).
+def test_build_module_graph_reparses_each_java_file_in_the_main_loop(tmp_path):
+    # Documents the deliberate trade-off behind audit finding 15: the
+    # source-root pre-pass already has to read and parse every .java file
+    # to extract its package declaration, but nothing from that parse is
+    # cached for the main loop to reuse anymore - each file is read and
+    # parsed a second time there. That's real, avoidable CPU cost, traded
+    # away on purpose because the alternative (a dict caching every file's
+    # (source, Tree) between the two passes) pins every tree in the repo
+    # in memory at once - real risk on a hosted worker capped at 1GB
+    # (scan-worker/scan-worker-2's mem_limit in docker-compose.yml). If a
+    # future change reintroduces that cache, this test's count drops back
+    # to 1 and should be revisited alongside the memory trade-off, not
+    # just updated to match.
     repo = make_java_repo(tmp_path)
 
     real_read_bytes = Path.read_bytes
@@ -317,30 +399,34 @@ def test_build_module_graph_reuses_the_java_prepass_parse_in_the_main_loop(tmp_p
         build_module_graph(repo)
 
     assert read_counts
-    assert all(count == 1 for count in read_counts.values())
+    assert all(count == 2 for count in read_counts.values())
 
 
-def test_build_module_graph_releases_a_java_prepass_tree_once_the_main_loop_consumes_it(tmp_path, monkeypatch):
-    # Real regression this guards: java_pre_parsed holds every .java file's
-    # (source, Tree) simultaneously once the pre-pass finishes - tree-sitter
-    # trees run ~37x their source size, so on a large Java repo this is real
-    # memory (measured independently at 82MB RSS on a 512-file C# repo, the
-    # same shape). The main loop used to keep each entry alive via a plain
-    # dict lookup even after consuming it, so the whole cache stayed pinned
-    # until build_module_graph returned - i.e. until every other file in the
-    # repo (every language, not just Java) had also been processed. Popping
-    # instead of indexing releases each entry's memory as soon as the main
-    # loop passes it.
+def test_build_module_graph_never_holds_every_java_files_tree_at_once(tmp_path, monkeypatch):
+    # Real regression this guards: java_pre_parsed used to hold every
+    # .java file's (source, Tree) simultaneously once the pre-pass
+    # finished - tree-sitter trees run ~37x their source size, so on a
+    # large Java repo this is real memory (measured independently at
+    # 82MB RSS on a 512-file C# repo, the same shape), and it was pinned
+    # until the main loop got around to consuming each entry. The fix
+    # doesn't cache at all: each file's (source, Tree) falls out of scope
+    # at the end of its own pre-pass iteration, before the next file is
+    # even read.
     #
-    # Refcount, not RSS: RSS is real but flaky/slow to assert on directly in
-    # a unit test. sys.getrefcount() on the specific Tree object is a direct,
-    # reliable proxy for "is java_pre_parsed still holding a reference to
-    # this" - verified by hand that reverting the pop() fix changes the
-    # count this asserts (4 without the fix, 3 with it).
+    # Inspects build_module_graph's own frame locals directly rather than
+    # inferring retention from sys.getrefcount(): getrefcount on a single
+    # captured tree turned out to fluctuate for reasons unrelated to
+    # caching (other locals briefly holding it during unrelated
+    # processing), which made it unable to reliably tell the cached and
+    # uncached implementations apart. Scanning every local collection in
+    # the frame for how many Tree objects it holds at once has no such
+    # ambiguity - a name-agnostic version of "did anything just accumulate
+    # one entry per file".
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "AFirst.java").write_text("package com.example;\nclass AFirst {}\n")
-    (repo / "ZLater.js").write_text("const x = 1;\n")
+    file_count = 12
+    for i in range(file_count):
+        (repo / f"C{i}.java").write_text(f"package com.example;\nclass C{i} {{}}\n")
 
     import sys
 
@@ -348,38 +434,56 @@ def test_build_module_graph_releases_a_java_prepass_tree_once_the_main_loop_cons
 
     from aletheore.scanner import graph as graph_module
 
-    captured: dict[str, object] = {}
-    original_parse = tree_sitter.Parser.parse
-
-    def tracking_parse(self, source, *a, **k):
-        tree = original_parse(self, source, *a, **k)
-        if b"AFirst" in source:
-            captured["tree"] = tree
-        return tree
-
-    monkeypatch.setattr(tree_sitter.Parser, "parse", tracking_parse)
-
-    refcounts: dict[str, int] = {}
+    peak_trees_in_one_local: dict[str, int] = {"value": 0}
     original_rel = graph_module._rel
 
     def tracking_rel(repo_path, path):
-        # _rel(repo_path, path) is the first thing the main loop does for
-        # each file - by the time it's called for ZLater.js, AFirst.java's
-        # own main-loop iteration (including the java_pre_parsed.pop()) has
-        # already completed.
-        if path.name == "ZLater.js" and "tree" in captured:
-            refcounts["value"] = sys.getrefcount(captured["tree"])
+        frame = sys._getframe(1)
+        if frame.f_code.co_name == "build_module_graph":
+            for value in frame.f_locals.values():
+                if isinstance(value, dict):
+                    n = sum(
+                        1
+                        for v in value.values()
+                        if isinstance(v, tuple) and any(isinstance(x, tree_sitter.Tree) for x in v)
+                    )
+                elif isinstance(value, (list, set)):
+                    n = sum(1 for v in value if isinstance(v, tree_sitter.Tree))
+                else:
+                    n = 0
+                peak_trees_in_one_local["value"] = max(peak_trees_in_one_local["value"], n)
         return original_rel(repo_path, path)
 
     monkeypatch.setattr(graph_module, "_rel", tracking_rel)
 
     graph_module.build_module_graph(repo)
 
-    assert "value" in refcounts
-    # Baseline references at this point: captured["tree"] itself, the local
-    # `tree` parameter inside sys.getrefcount()'s own call frame. Anything
-    # higher means java_pre_parsed is still holding a third reference alive.
-    assert refcounts["value"] <= 3
+    # A reintroduced whole-pre-pass cache would show up here as a single
+    # local holding all file_count trees at once (verified: this exact
+    # test found java_pre_parsed holding 12/12 when run against the
+    # dict-caching implementation this fix replaces).
+    assert peak_trees_in_one_local["value"] < file_count
+
+
+def test_build_module_graph_java_prepass_boundary_rss_does_not_scale_with_repo_size(tmp_path):
+    # Secondary, corroborating check for the same invariant the frame-
+    # inspection test above proves directly: peak process memory at the
+    # boundary between the pre-pass finishing and the main loop starting
+    # should stay roughly flat as file count grows, not scale with it.
+    # Real production constraint this guards: scan-worker/scan-worker-2 are
+    # both capped at mem_limit: 1g in docker-compose.yml.
+    #
+    # Calibrated against real measurements on this exact fixture shape, in
+    # an isolated subprocess so ru_maxrss - a whole-process high-water-mark
+    # that can't be reset mid-process - reflects only this one scan:
+    # dict-caching (pre-fix) scaled the boundary delta close to linearly
+    # with file count (~7MB at 10 files, ~406MB at 600 files); this fix
+    # stays flat regardless of file count (~1-3MB at both). 60MB leaves
+    # roughly 20x headroom above the fix's real measured delta while
+    # sitting comfortably below the pre-fix number it needs to catch.
+    boundary_delta = _boundary_rss_delta_for_java_repo(600)
+
+    assert boundary_delta < 60 * 1024 * 1024
 
 
 def test_java_extracts_javadoc_and_return_type(tmp_path):

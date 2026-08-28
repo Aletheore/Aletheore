@@ -5,6 +5,85 @@ from aletheore.scanner.graph import build_module_graph
 from conftest import symbol_names
 
 
+def _write_synthetic_csharp_repo(repo: Path, file_count: int) -> None:
+    # Real class bodies, not one-liners - tree-sitter tree size scales with
+    # source complexity, so trivial fixtures under-report the memory this
+    # test is trying to measure (verified on the Java equivalent of this
+    # fixture: one-line classes never surfaced a measurable gap between the
+    # cached and uncached pre-pass; classes this size reliably do).
+    for i in range(file_count):
+        fields = "\n".join(f"    private int field{j} = {j};" for j in range(40))
+        methods = "\n".join(
+            f"""
+    public int Method{j}(int a, int b) {{
+        int total = 0;
+        for (int k = 0; k < 10; k++) {{
+            if (k % 2 == 0) {{
+                total += a * k + field{j % 40};
+            }} else {{
+                total -= b - k;
+            }}
+        }}
+        return total;
+    }}"""
+            for j in range(60)
+        )
+        (repo / f"C{i}.cs").write_text(
+            f"namespace Example.Pkg{i};\n\nusing System.Collections.Generic;\n\n"
+            f"public class C{i} {{\n{fields}\n{methods}\n}}\n"
+        )
+
+
+def _measure_boundary_rss_for_csharp_repo(file_count: int, out_queue) -> None:
+    # Runs inside its own subprocess so ru_maxrss - a whole-process
+    # high-water-mark that can't be reset mid-process - reflects only this
+    # one scan, not whatever the pytest process had already touched before
+    # this test ran.
+    import resource
+    import sys
+    import tempfile
+    from pathlib import Path as _Path
+
+    from aletheore.scanner import graph as _graph_module
+
+    baseline = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    boundary: dict[str, int] = {}
+    original_rel = _graph_module._rel
+
+    def tracking_rel(repo_path, path):
+        # _rel(repo_path, path) is the first thing the main loop does for
+        # each file, so its first-ever call lands right at the boundary
+        # between the pre-pass finishing (every .cs file already parsed)
+        # and the main loop starting to consume anything - the instant a
+        # whole-repo cache would be at its fullest.
+        if "value" not in boundary:
+            boundary["value"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return original_rel(repo_path, path)
+
+    _graph_module._rel = tracking_rel
+
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = _Path(tmp)
+        _write_synthetic_csharp_repo(repo, file_count)
+        _graph_module.build_module_graph(repo)
+
+    # ru_maxrss is bytes on macOS, KB on Linux.
+    scale = 1 if sys.platform == "darwin" else 1024
+    out_queue.put((boundary["value"] - baseline) * scale)
+
+
+def _boundary_rss_delta_for_csharp_repo(file_count: int) -> int:
+    import multiprocessing
+
+    ctx = multiprocessing.get_context("spawn")
+    out_queue: multiprocessing.Queue = ctx.Queue()
+    process = ctx.Process(target=_measure_boundary_rss_for_csharp_repo, args=(file_count, out_queue))
+    process.start()
+    result = out_queue.get()
+    process.join()
+    return result
+
+
 def make_csharp_repo(tmp_path: Path) -> Path:
     # Mirrors a real project verified by actually compiling AND running it with
     # `dotnet run` before this fixture was written - a <RootNamespace>App</RootNamespace>
@@ -205,17 +284,19 @@ def test_build_module_graph_csharp_using_escaping_repo_root_does_not_crash(tmp_p
     assert dependency_graph["edges"] == []
 
 
-def test_build_module_graph_reuses_the_csharp_prepass_parse_in_the_main_loop(tmp_path):
-    # Real regression this guards: the namespace/type pre-pass already reads
-    # and parses every .cs file to extract its namespace and declared type
-    # names - the main loop used to read and parse each one again from
-    # scratch instead of reusing that (source, tree) pair, doubling
-    # tree-sitter parse cost for every C# file in a scan for no benefit
-    # (the pre-parsed tree is consumed by the main loop moments later in
-    # the same function call, not retained for the scan's whole lifetime,
-    # so caching it costs nothing extra in memory - the "reparse for
-    # bounded memory" framing this test used to encode was never a real
-    # trade-off).
+def test_build_module_graph_reparses_each_csharp_file_in_the_main_loop(tmp_path):
+    # Documents the deliberate trade-off behind audit finding 15: the
+    # namespace/type pre-pass already has to read and parse every .cs file
+    # to extract its namespace and declared type names, but nothing from
+    # that parse is cached for the main loop to reuse anymore - each file
+    # is read and parsed a second time there. That's real, avoidable CPU
+    # cost, traded away on purpose because the alternative (a dict caching
+    # every file's (source, Tree) between the two passes) pins every tree
+    # in the repo in memory at once - real risk on a hosted worker capped
+    # at 1GB (scan-worker/scan-worker-2's mem_limit in docker-compose.yml).
+    # If a future change reintroduces that cache, this test's count drops
+    # back to 1 and should be revisited alongside the memory trade-off,
+    # not just updated to match.
     repo = make_csharp_repo(tmp_path)
 
     real_read_bytes = Path.read_bytes
@@ -230,18 +311,20 @@ def test_build_module_graph_reuses_the_csharp_prepass_parse_in_the_main_loop(tmp
         build_module_graph(repo)
 
     assert read_counts
-    assert all(count == 1 for count in read_counts.values())
+    assert all(count == 2 for count in read_counts.values())
 
 
-def test_build_module_graph_releases_a_csharp_prepass_tree_once_the_main_loop_consumes_it(tmp_path, monkeypatch):
+def test_build_module_graph_never_holds_every_csharp_files_tree_at_once(tmp_path, monkeypatch):
     # C# equivalent of the identically-named Java test in test_graph_java.py
-    # - see that test's comment for the full reasoning. csharp_pre_parsed
-    # has the same shape (dict[Path, tuple[bytes, Tree]]) and the same
-    # main-loop consumption site as java_pre_parsed.
+    # - see that test's comment for the full reasoning, including why this
+    # inspects build_module_graph's own frame locals directly rather than
+    # inferring retention from sys.getrefcount() (which turned out unable
+    # to reliably distinguish the cached and uncached implementations).
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "AFirst.cs").write_text("namespace Example { class AFirst {} }\n")
-    (repo / "ZLater.js").write_text("const x = 1;\n")
+    file_count = 12
+    for i in range(file_count):
+        (repo / f"C{i}.cs").write_text(f"namespace Example {{ class C{i} {{}} }}\n")
 
     import sys
 
@@ -249,31 +332,45 @@ def test_build_module_graph_releases_a_csharp_prepass_tree_once_the_main_loop_co
 
     from aletheore.scanner import graph as graph_module
 
-    captured: dict[str, object] = {}
-    original_parse = tree_sitter.Parser.parse
-
-    def tracking_parse(self, source, *a, **k):
-        tree = original_parse(self, source, *a, **k)
-        if b"AFirst" in source:
-            captured["tree"] = tree
-        return tree
-
-    monkeypatch.setattr(tree_sitter.Parser, "parse", tracking_parse)
-
-    refcounts: dict[str, int] = {}
+    peak_trees_in_one_local: dict[str, int] = {"value": 0}
     original_rel = graph_module._rel
 
     def tracking_rel(repo_path, path):
-        if path.name == "ZLater.js" and "tree" in captured:
-            refcounts["value"] = sys.getrefcount(captured["tree"])
+        frame = sys._getframe(1)
+        if frame.f_code.co_name == "build_module_graph":
+            for value in frame.f_locals.values():
+                if isinstance(value, dict):
+                    n = sum(
+                        1
+                        for v in value.values()
+                        if isinstance(v, tuple) and any(isinstance(x, tree_sitter.Tree) for x in v)
+                    )
+                elif isinstance(value, (list, set)):
+                    n = sum(1 for v in value if isinstance(v, tree_sitter.Tree))
+                else:
+                    n = 0
+                peak_trees_in_one_local["value"] = max(peak_trees_in_one_local["value"], n)
         return original_rel(repo_path, path)
 
     monkeypatch.setattr(graph_module, "_rel", tracking_rel)
 
     graph_module.build_module_graph(repo)
 
-    assert "value" in refcounts
-    assert refcounts["value"] <= 3
+    # A reintroduced whole-pre-pass cache would show up here as a single
+    # local holding all file_count trees at once (verified against the
+    # Java equivalent's dict-caching implementation: it showed 12/12).
+    assert peak_trees_in_one_local["value"] < file_count
+
+
+def test_build_module_graph_csharp_prepass_boundary_rss_does_not_scale_with_repo_size(tmp_path):
+    # Secondary, corroborating check for the same invariant the frame-
+    # inspection test above proves directly - see the Java equivalent in
+    # test_graph_java.py for the real before/after numbers this threshold
+    # is calibrated against (same fixture shape, same mechanism, same
+    # mem_limit: 1g production constraint).
+    boundary_delta = _boundary_rss_delta_for_csharp_repo(600)
+
+    assert boundary_delta < 60 * 1024 * 1024
 
 
 def test_csharp_extracts_summary_from_xmldoc(tmp_path):
