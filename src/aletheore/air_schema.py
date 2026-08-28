@@ -89,7 +89,23 @@ _SCHEMA_MAP = _obj(
         "sources": _ANY_LIST,
     }
 )
-_MODULE = _obj({"path": _STR, "language": _STR, "imports": _ANY_LIST, "imported_by": _ANY_LIST})
+# import_confidence is optional and, when present, a plain object mapping a
+# resolved import target (a value already present in this module's own
+# "imports") to "inferred" or "ambiguous" - see scanner/graph.py's
+# _extract_module. Omitted entirely for a module with no non-exact edges,
+# which is the common case and every module in six of Aletheore's eleven
+# supported languages (js/ts, go, rust, ruby, c/cpp), whose resolvers are
+# never ambiguous at all.
+_MODULE = _obj(
+    {
+        "path": _STR,
+        "language": _STR,
+        "imports": _ANY_LIST,
+        "imported_by": _ANY_LIST,
+        "import_confidence": _ANY_OBJECT,
+    },
+    required=["path", "language", "imports", "imported_by"],
+)
 _LANGUAGE = _obj({"name": _STR, "file_count": _INT, "loc": _INT})
 _OWNERSHIP = _obj({"email": _STR, "commit_count": _INT, "percent": _NUM})
 _BRANCH = _obj({"name": _STR, "type": _STR})

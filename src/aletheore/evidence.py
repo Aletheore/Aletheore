@@ -37,7 +37,7 @@ from aletheore.secrets import (
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 from aletheore.vulnerabilities import check_vulnerabilities as check_dependency_vulnerabilities
 
-EVIDENCE_VERSION = "0.4.0"
+EVIDENCE_VERSION = "0.5.0"
 
 
 def _version_compatibility_key(version: str) -> tuple[int, int] | None:
