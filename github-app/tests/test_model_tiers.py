@@ -6,6 +6,7 @@ import pytest
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from scan_worker.model_tiers import (
     LUNA_MODEL,
+    MANAGED_AUDIT_MODEL,
     OPENAI_FREE_TIER_DAILY_TOKEN_CAP,
     PRO_MODEL,
     VERIFICATION_MODEL,
@@ -17,6 +18,7 @@ from scan_worker.model_tiers import (
     writing_adapter_chain_for_free_tier,
     writing_adapter_for,
     writing_adapter_for_airview,
+    writing_adapter_for_managed_audit,
     writing_adapter_for_plan,
 )
 
@@ -126,6 +128,48 @@ def test_writing_adapter_for_airview_threads_on_usage_and_before_llm_call(monkey
     assert received == [(7, 3)]
     assert adapter._before_llm_call() is True
     assert calls_allowed == [True]
+
+
+def test_writing_adapter_for_managed_audit_never_uses_luna_even_when_openai_is_configured(monkeypatch):
+    # Measured directly against a real repo, three full audit runs: Luna
+    # cost $0.15 (6 rounds) and missed a real circular import;
+    # deepseek-v4-pro cost $1.15 (14 rounds) and caught it; deepseek-v4-flash
+    # cost $0.40 (16 rounds) and also caught it - same accuracy as Pro for a
+    # third of the cost. Unlike writing_adapter_for_plan, this must not
+    # switch to Luna just because OPENAI_API_KEY is configured.
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    adapter = writing_adapter_for_managed_audit()
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == MANAGED_AUDIT_MODEL == "deepseek-v4-flash"
+    assert adapter._base_url == "https://api.deepseek.com"
+    assert adapter._supports_tool_choice is False
+
+
+def test_writing_adapter_for_managed_audit_still_uses_deepseek_when_openai_is_not_configured(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
+    adapter = writing_adapter_for_managed_audit()
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == "deepseek-v4-flash"
+
+
+def test_writing_adapter_for_managed_audit_threads_on_usage_and_before_llm_call(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    received = []
+    calls_allowed = []
+    adapter = writing_adapter_for_managed_audit(
+        on_usage=lambda p, c: received.append((p, c)),
+        before_llm_call=lambda: calls_allowed.append(True) or True,
+    )
+    adapter._on_usage(7, 3)
+    assert received == [(7, 3)]
+    assert adapter._before_llm_call() is True
+    assert calls_allowed == [True]
+
+
+def test_writing_adapter_for_managed_audit_threads_allow_partial_report(monkeypatch):
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    adapter = writing_adapter_for_managed_audit(allow_partial_report=True)
+    assert adapter._allow_partial_report is True
 
 
 def test_verification_adapter_always_uses_deepseek_even_when_openai_is_configured(monkeypatch):

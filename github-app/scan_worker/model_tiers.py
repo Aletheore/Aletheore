@@ -215,11 +215,54 @@ def writing_adapter_for_airview(
     noise floor) while gpt-5.6-luna scored 1.53 against RepoWise's 2.08 (a
     real loss, outside it) - same corpus, same day, same rubric. Scoped
     narrowly to AIRview because that is exactly what was measured; PR
-    review and managed audits were not re-tested and stay on Luna via
-    writing_adapter_for/writing_adapter_for_plan.
+    review was not re-tested and stays on Luna via writing_adapter_for/
+    writing_adapter_for_plan. Managed audits moved off Luna separately -
+    see writing_adapter_for_managed_audit below.
     """
     return writing_adapter_for(
         fallback_model, on_usage=on_usage, before_llm_call=before_llm_call, _prefer_luna=False
+    )
+
+
+# Not resolve_model(PRO_MODEL) or any other dynamic choice - always exactly
+# this one model, unconditionally. See writing_adapter_for_managed_audit's
+# docstring for the real numbers behind why.
+MANAGED_AUDIT_MODEL = "deepseek-v4-flash"
+
+
+def writing_adapter_for_managed_audit(
+    on_usage: Callable[[int, int], None] | None = None,
+    before_llm_call: Callable[[], bool] | None = None,
+    allow_partial_report: bool = False,
+) -> OpenAICompatibleAdapter:
+    """Always DeepSeek Flash for managed_audit specifically - never Luna
+    (writing_adapter_for_plan's default) and never DeepSeek Pro either.
+
+    Measured directly, three real full audit runs against this repository,
+    same evidence, same manual: Luna cost $0.15 (6 rounds) and missed a
+    real circular import; deepseek-v4-pro cost $1.15 (14 rounds) and caught
+    it; deepseek-v4-flash cost $0.40 (16 rounds) and also caught it. Pro's
+    3x-higher per-token rate over flash bought nothing here - pro actually
+    used fewer total tokens than flash, so the extra cost was pure list-
+    price premium, not more work done, for a shorter report and the
+    identical finding. Flash is the only one of the three that is both
+    accurate (matches Pro's finding) and cheap (a fraction of Pro's cost)
+    for this specific task.
+
+    This doesn't generalize from AIRview's own Luna-vs-DeepSeek finding
+    above (or the other direction, Luna-preferred by default elsewhere):
+    managed_audit is multi-round agentic tool use, not a single completion,
+    and its cost is ~96% input-token-driven because every round re-sends
+    the entire accumulated conversation - round-trip efficiency dominates
+    over any model's per-token list price, which is exactly what made Pro
+    the expensive choice here despite its higher-tier positioning.
+    """
+    return writing_adapter_for(
+        MANAGED_AUDIT_MODEL,
+        on_usage=on_usage,
+        before_llm_call=before_llm_call,
+        allow_partial_report=allow_partial_report,
+        _prefer_luna=False,
     )
 
 

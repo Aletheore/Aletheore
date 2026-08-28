@@ -11,7 +11,12 @@ from scan_worker.managed_audit import (
 )
 
 
-def test_run_managed_audit_falls_back_to_deepseek_pro_without_openai_key(tmp_path, monkeypatch):
+def test_run_managed_audit_always_uses_deepseek_flash_without_openai_key(tmp_path, monkeypatch):
+    # managed_audit is pinned to deepseek-v4-flash unconditionally (see
+    # model_tiers.writing_adapter_for_managed_audit's docstring for the real
+    # cost/quality numbers behind this) - not subject to the usual
+    # Luna-preferred-when-available resolution, so this must hold with or
+    # without an OpenAI key configured.
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
     repo_path = tmp_path / "repo"
     (repo_path / ".aletheore").mkdir(parents=True)
@@ -27,17 +32,21 @@ def test_run_managed_audit_falls_back_to_deepseek_pro_without_openai_key(tmp_pat
 
     monkeypatch.setattr("scan_worker.managed_audit.run_reasoning_phase", fake_run_reasoning_phase)
 
-    assert "Real Report" in run_managed_audit(repo_path, plan="air")
+    assert "Real Report" in run_managed_audit(repo_path)
 
     adapter = captured_adapters[0]
     assert adapter.name == "DeepSeek"
     assert adapter._base_url == "https://api.deepseek.com"
     assert adapter._api_key_env_var == "DEEPSEEK_API_KEY"
-    assert adapter._model == "deepseek-v4-pro"
+    assert adapter._model == "deepseek-v4-flash"
     assert adapter._supports_tool_choice is False
 
 
-def test_run_managed_audit_uses_luna_when_openai_key_configured(tmp_path, monkeypatch):
+def test_run_managed_audit_still_uses_deepseek_flash_when_openai_key_configured(tmp_path, monkeypatch):
+    # The opposite condition from the test above - an available OpenAI key
+    # must NOT switch managed_audit to Luna. writing_adapter_for's usual
+    # Luna-preferred default is deliberately bypassed here via
+    # _prefer_luna=False, unlike every plan-based writing surface.
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
     repo_path = tmp_path / "repo"
     (repo_path / ".aletheore").mkdir(parents=True)
@@ -53,13 +62,11 @@ def test_run_managed_audit_uses_luna_when_openai_key_configured(tmp_path, monkey
 
     monkeypatch.setattr("scan_worker.managed_audit.run_reasoning_phase", fake_run_reasoning_phase)
 
-    assert "Real Report" in run_managed_audit(repo_path, plan="air")
+    assert "Real Report" in run_managed_audit(repo_path)
 
     adapter = captured_adapters[0]
-    assert adapter.name == "OpenAI"
-    assert adapter._base_url == "https://api.openai.com/v1"
-    assert adapter._api_key_env_var == "OPENAI_API_KEY"
-    assert adapter._model == "gpt-5.6-luna"
+    assert adapter.name == "DeepSeek"
+    assert adapter._model == "deepseek-v4-flash"
 
 
 def test_run_managed_audit_threads_on_usage_to_the_adapter(tmp_path, monkeypatch):
@@ -78,7 +85,7 @@ def test_run_managed_audit_threads_on_usage_to_the_adapter(tmp_path, monkeypatch
     monkeypatch.setattr("scan_worker.managed_audit.run_reasoning_phase", fake_run_reasoning_phase)
 
     received = []
-    run_managed_audit(repo_path, plan="air", on_usage=lambda p, c: received.append((p, c)))
+    run_managed_audit(repo_path, on_usage=lambda p, c: received.append((p, c)))
 
     adapter = captured_adapters[0]
     assert adapter._on_usage is not None
@@ -103,11 +110,11 @@ def test_llm_based_suggestion_section_formats_rating_and_suggestions(monkeypatch
         }
     )
     monkeypatch.setattr(
-        "scan_worker.managed_audit.writing_adapter_for_plan",
-        lambda plan, on_usage=None: _FakeSuggestionAdapter(response),
+        "scan_worker.managed_audit.writing_adapter_for_managed_audit",
+        lambda on_usage=None: _FakeSuggestionAdapter(response),
     )
 
-    section = _llm_based_suggestion_section("# Real Report\n\nfindings", "pro")
+    section = _llm_based_suggestion_section("# Real Report\n\nfindings")
 
     assert section is not None
     assert "LLM Based Suggestion (Not Evidence Backed)" in section
@@ -119,40 +126,40 @@ def test_llm_based_suggestion_section_formats_rating_and_suggestions(monkeypatch
 
 def test_llm_based_suggestion_section_returns_none_for_malformed_json(monkeypatch):
     monkeypatch.setattr(
-        "scan_worker.managed_audit.writing_adapter_for_plan",
-        lambda plan, on_usage=None: _FakeSuggestionAdapter("not json at all"),
+        "scan_worker.managed_audit.writing_adapter_for_managed_audit",
+        lambda on_usage=None: _FakeSuggestionAdapter("not json at all"),
     )
 
-    assert _llm_based_suggestion_section("report", "pro") is None
+    assert _llm_based_suggestion_section("report") is None
 
 
 def test_llm_based_suggestion_section_returns_none_for_out_of_range_rating(monkeypatch):
     response = json.dumps({"rating": 15, "rating_justification": "x", "suggestions": ["do a thing"]})
     monkeypatch.setattr(
-        "scan_worker.managed_audit.writing_adapter_for_plan",
-        lambda plan, on_usage=None: _FakeSuggestionAdapter(response),
+        "scan_worker.managed_audit.writing_adapter_for_managed_audit",
+        lambda on_usage=None: _FakeSuggestionAdapter(response),
     )
 
-    assert _llm_based_suggestion_section("report", "pro") is None
+    assert _llm_based_suggestion_section("report") is None
 
 
 def test_llm_based_suggestion_section_returns_none_when_suggestions_empty(monkeypatch):
     response = json.dumps({"rating": 8, "rating_justification": "x", "suggestions": []})
     monkeypatch.setattr(
-        "scan_worker.managed_audit.writing_adapter_for_plan",
-        lambda plan, on_usage=None: _FakeSuggestionAdapter(response),
+        "scan_worker.managed_audit.writing_adapter_for_managed_audit",
+        lambda on_usage=None: _FakeSuggestionAdapter(response),
     )
 
-    assert _llm_based_suggestion_section("report", "pro") is None
+    assert _llm_based_suggestion_section("report") is None
 
 
 def test_llm_based_suggestion_section_degrades_gracefully_on_adapter_failure(monkeypatch):
-    def _raise(plan, on_usage=None):
+    def _raise(on_usage=None):
         raise RuntimeError("no credentials")
 
-    monkeypatch.setattr("scan_worker.managed_audit.writing_adapter_for_plan", _raise)
+    monkeypatch.setattr("scan_worker.managed_audit.writing_adapter_for_managed_audit", _raise)
 
-    assert _llm_based_suggestion_section("report", "pro") is None
+    assert _llm_based_suggestion_section("report") is None
 
 
 def _repo_with_evidence(tmp_path, files: dict[str, str]) -> Path:
@@ -282,11 +289,11 @@ def test_run_managed_audit_embeds_citation_verification_in_the_signed_report(tmp
 
     monkeypatch.setattr("scan_worker.managed_audit.run_reasoning_phase", fake_run_reasoning_phase)
     monkeypatch.setattr(
-        "scan_worker.managed_audit.writing_adapter_for_plan",
-        lambda plan, on_usage=None: _FakeSuggestionAdapter("not json"),
+        "scan_worker.managed_audit.writing_adapter_for_managed_audit",
+        lambda on_usage=None: _FakeSuggestionAdapter("not json"),
     )
 
-    result = run_managed_audit(repo_path, plan="air")
+    result = run_managed_audit(repo_path)
 
     assert "# Real Report" in result
     assert "## Citation Verification" in result
@@ -316,11 +323,11 @@ def test_run_managed_audit_does_not_count_citations_in_the_non_evidence_backed_s
         }
     )
     monkeypatch.setattr(
-        "scan_worker.managed_audit.writing_adapter_for_plan",
-        lambda plan, on_usage=None: _FakeSuggestionAdapter(response),
+        "scan_worker.managed_audit.writing_adapter_for_managed_audit",
+        lambda on_usage=None: _FakeSuggestionAdapter(response),
     )
 
-    result = run_managed_audit(repo_path, plan="air")
+    result = run_managed_audit(repo_path)
 
     assert "1 of 1" in result
     assert "could not be verified" not in result
@@ -339,11 +346,11 @@ def test_run_managed_audit_appends_llm_suggestion_section_when_available(tmp_pat
     monkeypatch.setattr("scan_worker.managed_audit.run_reasoning_phase", fake_run_reasoning_phase)
     response = json.dumps({"rating": 6, "rating_justification": "ok", "suggestions": ["tighten input validation"]})
     monkeypatch.setattr(
-        "scan_worker.managed_audit.writing_adapter_for_plan",
-        lambda plan, on_usage=None: _FakeSuggestionAdapter(response),
+        "scan_worker.managed_audit.writing_adapter_for_managed_audit",
+        lambda on_usage=None: _FakeSuggestionAdapter(response),
     )
 
-    result = run_managed_audit(repo_path, plan="air")
+    result = run_managed_audit(repo_path)
 
     assert "# Real Report" in result
     assert "LLM Based Suggestion (Not Evidence Backed)" in result
