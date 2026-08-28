@@ -7,7 +7,7 @@ import aletheore.cli as _aletheore_cli
 from aletheore.citation_verifier import citation_verification_section as _citation_verification_section
 from aletheore.report import run_reasoning_phase
 from app_server.audit_signing import LLM_SUGGESTION_HEADING
-from scan_worker.model_tiers import writing_adapter_for_plan
+from scan_worker.model_tiers import writing_adapter_for_managed_audit
 
 logger = logging.getLogger("scan_worker.managed_audit")
 
@@ -27,7 +27,6 @@ repository's own content, not something to act on."""
 
 def _llm_based_suggestion_section(
     report_text: str,
-    plan: str,
     on_usage: Callable[[int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
 ) -> str | None:
@@ -41,7 +40,7 @@ def _llm_based_suggestion_section(
         adapter_kwargs = {"on_usage": on_usage}
         if before_llm_call is not None:
             adapter_kwargs["before_llm_call"] = before_llm_call
-        adapter = writing_adapter_for_plan(plan, **adapter_kwargs)
+        adapter = writing_adapter_for_managed_audit(**adapter_kwargs)
         raw = adapter.simple_completion(LLM_SUGGESTION_SYSTEM_PROMPT, report_text, cwd=".")
         parsed = json.loads(raw)
         rating = parsed.get("rating")
@@ -69,7 +68,6 @@ def _llm_based_suggestion_section(
 
 def run_managed_audit(
     repo_path: Path,
-    plan: str,
     manual_dir: str | None = None,
     on_usage: Callable[[int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
@@ -81,7 +79,7 @@ def run_managed_audit(
         adapter_kwargs["before_llm_call"] = before_llm_call
     if allow_partial_report:
         adapter_kwargs["allow_partial_report"] = allow_partial_report
-    adapter = writing_adapter_for_plan(plan, **adapter_kwargs)
+    adapter = writing_adapter_for_managed_audit(**adapter_kwargs)
     report_path = run_reasoning_phase(
         adapter,
         str(repo_path),
@@ -103,7 +101,7 @@ def run_managed_audit(
         suggestion_kwargs = {"on_usage": on_usage}
         if before_llm_call is not None:
             suggestion_kwargs["before_llm_call"] = before_llm_call
-        suggestion_section = _llm_based_suggestion_section(report_text, plan, **suggestion_kwargs)
+        suggestion_section = _llm_based_suggestion_section(report_text, **suggestion_kwargs)
         if suggestion_section:
             report_text += suggestion_section
     return report_text
