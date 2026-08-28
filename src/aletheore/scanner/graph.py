@@ -666,6 +666,26 @@ def _extract_javascript(node: Node, source: bytes) -> tuple[list[str], list[dict
                 if source_node is not None:
                     raw = source[source_node.start_byte:source_node.end_byte].decode(errors="ignore")
                     imports.append(raw.strip("'\""))
+                else:
+                    # Import-equals ("import foo = require('./foo');") is
+                    # still an import_statement node, but has no "source"
+                    # field - the path lives inside a nested
+                    # import_require_clause instead, a declaration form
+                    # distinct from (and not caught by) the
+                    # call_expression-based require() handling below.
+                    # Confirmed present in real code (3 occurrences in the
+                    # axios repo) - without this, the whole statement
+                    # silently produced zero imports (audit finding 32).
+                    require_clause = next(
+                        (c for c in n.children if c.type == "import_require_clause"), None
+                    )
+                    if require_clause is not None:
+                        string_node = next(
+                            (c for c in require_clause.children if c.type == "string"), None
+                        )
+                        specifier = string_literal(string_node)
+                        if specifier is not None:
+                            imports.append(specifier)
             elif n.type == "export_statement":
                 # Re-export barrels ("export { x } from './x'", "export * from
                 # './x'") get their own export_statement node type with a
@@ -935,10 +955,29 @@ def _rust_use_paths(node: Node, source: bytes) -> list[str]:
         # "crate::foo::{Bar, Baz}" - both names share the same prefix module; each
         # becomes prefix::name so the existing crate/self/super resolver can treat
         # them exactly like any other full path.
+        #
+        # A list item can itself be a nested group ("crate::foo::{Bar,
+        # baz::{Qux, self}}") or an aliased entry ("Bar as MyBar") rather
+        # than a bare identifier/self leaf - recursing for those instead of
+        # only accepting leaves is what makes nested use grouping
+        # (idiomatic, rustfmt's default output in many configs) resolve at
+        # all, instead of silently dropping everything below the first
+        # brace level. Confirmed directly: "use std::{fmt, io::{self,
+        # Write}};" only ever produced "std::fmt" - io and io::Write both
+        # vanished (audit finding 33). Each recursive result is already
+        # fully qualified relative to ITS OWN nested prefix (e.g.
+        # "io::Write"), so prepending this level's prefix once, the same
+        # as for a leaf name, is enough to cascade correctly through any
+        # depth of nesting.
         prefix_node = node.children[0]
         list_node = node.children[-1]
         prefix = text(prefix_node)
-        names = [text(c) for c in list_node.children if c.type in ("identifier", "self")]
+        names: list[str] = []
+        for c in list_node.children:
+            if c.type in ("identifier", "self"):
+                names.append(text(c))
+            elif c.type in ("scoped_use_list", "use_as_clause"):
+                names.extend(_rust_use_paths(c, source))
         return [f"{prefix}::{name}" for name in names]
 
     if node.type == "use_list":
@@ -994,9 +1033,16 @@ def _extract_rust(node: Node, source: bytes) -> tuple[list[str], list[dict], lis
             n = stack.pop()
             if n.type == "use_declaration":
                 # use_declaration's single meaningful child is whichever path-shaped
-                # node follows the "use" keyword and precedes the ";".
+                # node follows the "use" keyword and precedes the ";" - a "pub"/
+                # "pub(crate)" use_declaration also carries a leading
+                # visibility_modifier child, which must be skipped too or it's
+                # mistaken for the path itself: confirmed directly,
+                # "pub use crate::foo::Bar;" produced imports: ['pub'] instead
+                # of the real target, silently dropping the dependency (audit
+                # finding 21 - pub use is the standard idiom for a crate's
+                # public re-export surface, not a corner case).
                 for child in n.children:
-                    if child.type not in ("use", ";"):
+                    if child.type not in ("use", ";", "visibility_modifier"):
                         imports.extend(_rust_use_paths(child, source))
                         break
             elif n.type == "mod_item" and not any(
@@ -1325,21 +1371,38 @@ def _resolve_java_import(
     if not segments:
         return [], False
 
-    if is_wildcard:
-        # dotted is a package path with no class name - every .java file directly
-        # in that package's directory is what a wildcard import pulls in, the same
-        # "import the whole package" fan-out Go's package-level imports need.
+    if is_static:
+        # "import static a.b.C.MEMBER" - MEMBER is a field or method, not a
+        # class; the file that actually exists is a.b.C.java. A static
+        # WILDCARD import ("import static a.b.C.*;") is different: its
+        # dotted text is already just "a.b.C" - the "*" isn't part of
+        # dotted at all, tracked separately via is_wildcard - so there is
+        # no extra trailing segment to trim here; trimming it anyway would
+        # cut the real class name "C" itself. Confirmed directly against
+        # the real tree-sitter-java grammar: the scoped_identifier for
+        # "a.b.C.*" is "a.b.C" (3 segments), for "a.b.C.MEMBER" it's
+        # "a.b.C.MEMBER" (4 segments).
+        #
+        # Checked before is_wildcard, unlike before - a static wildcard
+        # used to fall into that branch first and get treated exactly like
+        # a plain (non-static) wildcard import, looking for a directory
+        # a/b/C/ that doesn't exist, since C is a class file, not a
+        # package. Confirmed: "import static a.b.C.*;" always returned []
+        # even when C was local to the repo (audit finding 29).
+        if not is_wildcard:
+            segments = segments[:-1]
+            if not segments:
+                return [], False
+    elif is_wildcard:
+        # dotted is a package path with no class name - only reached here
+        # for a plain, non-static wildcard now. Every .java file directly
+        # in that package's directory is what a wildcard import pulls in,
+        # the same "import the whole package" fan-out Go's package-level
+        # imports need.
         matching_roots = [root for root in source_roots if root.joinpath(*segments).is_dir()]
         if not matching_roots:
             return [], False
         return sorted(matching_roots[0].joinpath(*segments).glob("*.java")), len(matching_roots) > 1
-
-    if is_static:
-        # "import static a.b.C.MEMBER" - MEMBER is a field or method, not a class;
-        # the file that actually exists is a.b.C.java.
-        segments = segments[:-1]
-        if not segments:
-            return [], False
 
     matches = [target for root in source_roots if (target := _java_class_file(root, segments)) is not None]
     if matches:
@@ -1535,11 +1598,44 @@ def _extract_php(node: Node, source: bytes) -> tuple[list[tuple[str, str]], list
                             imports.append(("include", path))
                         break
             elif n.type == "namespace_use_declaration":
-                for clause in n.children:
-                    if clause.type == "namespace_use_clause":
-                        for grandchild in clause.children:
-                            if grandchild.type in ("qualified_name", "name"):
-                                imports.append(("use", text(grandchild)))
+                # A single unprefixed clause ("use Foo\Bar;" or "use Foo\Bar
+                # as Baz;") is a direct namespace_use_clause child. A
+                # grouped statement ("use Foo\Bar\{ClassA, ClassB as B};")
+                # nests its clauses one level deeper instead, inside a
+                # namespace_use_group sibling that carries the shared
+                # prefix from the declaration's own namespace_name - neither
+                # is a namespace_use_declaration's direct child, so scanning
+                # only direct namespace_use_clause children silently dropped
+                # the entire grouped statement (audit finding 28). Grouped
+                # use is valid PHP 7+ syntax and common enough that zeroing
+                # it out entirely is a real gap, not a corner case.
+                prefix = ""
+                clauses: list[Node] = []
+                for child in n.children:
+                    if child.type == "namespace_use_clause":
+                        clauses.append(child)
+                    elif child.type == "namespace_name":
+                        prefix = text(child)
+                    elif child.type == "namespace_use_group":
+                        clauses.extend(c for c in child.children if c.type == "namespace_use_clause")
+                for clause in clauses:
+                    # "use Foo\Bar as Baz;"'s alias target is also a bare
+                    # "name" node - the same node type as an unaliased
+                    # import's own path - so matching on type alone appended
+                    # a second, phantom "Baz" entry alongside the real path
+                    # every time an alias was used, grouped or not (audit
+                    # finding 31). child_by_field_name("alias") is how the
+                    # grammar itself distinguishes the two.
+                    alias_node = clause.child_by_field_name("alias")
+                    for grandchild in clause.children:
+                        if grandchild is alias_node:
+                            continue
+                        if grandchild.type in ("qualified_name", "name"):
+                            clause_path = text(grandchild)
+                            imports.append(
+                                ("use", f"{prefix}\\{clause_path}" if prefix else clause_path)
+                            )
+                            break
             elif n.type in ("function_definition", "method_declaration"):
                 name_node = n.child_by_field_name("name")
                 if name_node is not None:
@@ -2260,9 +2356,18 @@ def _extract_module(
     if language_name == "python":
         plain_imports, from_imports, functions, classes, constants = _extract_python(tree.root_node, source)
 
+        # target != rel_path is applied here and in the from-import loop
+        # below - every other language branch already guards against a
+        # file importing itself this way; Python's didn't (audit finding
+        # 35). dead_code.py's unreachable-file test is
+        # `if not module.get("imported_by", [])`, so a Python file that
+        # happens to statically self-import (an absolute `import pkg.mod`
+        # from inside pkg/mod.py itself) got a non-empty imported_by purely
+        # from itself and silently escaped dead-code detection even if
+        # genuinely unused by everything else.
         for dotted in plain_imports:
             target, ambiguous = _resolve_python_module(repo_path, dotted, path, python_source_roots)
-            if target is not None:
+            if target is not None and target != rel_path:
                 resolved_imports.append(target)
                 if ambiguous:
                     import_confidence[target] = "inferred"
@@ -2274,13 +2379,13 @@ def _extract_module(
                     target, ambiguous = _resolve_python_from_import(
                         repo_path, module_name, name, path, python_source_roots
                     )
-                    if target is not None:
+                    if target is not None and target != rel_path:
                         targets.add(target)
                         if ambiguous:
                             import_confidence[target] = "inferred"
             else:
                 target, ambiguous = _resolve_python_module(repo_path, module_name, path, python_source_roots)
-                if target is not None:
+                if target is not None and target != rel_path:
                     targets.add(target)
                     if ambiguous:
                         import_confidence[target] = "inferred"
@@ -2366,7 +2471,12 @@ def _extract_module(
         raw_imports, functions, classes = _extract_javascript(tree.root_node, source)
         for spec in raw_imports:
             target = _resolve_js_import(repo_path, path, spec)
-            if target is not None:
+            # Same target != rel_path guard every other language branch
+            # already has - see the Python branch's comment above (audit
+            # finding 35). A JS file require()-ing or importing its own
+            # path is the same false-negative risk for dead_code.py's
+            # `imported_by` check.
+            if target is not None and target != rel_path:
                 resolved_imports.append(target)
 
     module: dict = {
