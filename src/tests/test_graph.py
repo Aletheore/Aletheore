@@ -257,6 +257,66 @@ def test_build_module_graph_extracts_javascript_imports(tmp_path):
     assert unparseable == []
 
 
+def test_build_module_graph_typescript_import_equals_require_resolves(tmp_path):
+    # audit finding 32: "import foo = require('./foo');" (TypeScript's
+    # import-equals form) is still an import_statement node, but has no
+    # "source" field at all - the path lives inside a nested
+    # import_require_clause instead, a declaration form distinct from the
+    # separate call_expression-based require() handling. Without this, the
+    # whole statement silently produced zero imports.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "utils.ts").write_text("export function add(a: number, b: number) { return a + b; }\n")
+    (repo / "index.ts").write_text(
+        "import utils = require('./utils');\n\nfunction main() { return utils.add(1, 2); }\n"
+    )
+
+    modules, dependency_graph, unparseable = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+
+    assert "utils.ts" in by_path["index.ts"]["imports"]
+    assert ["index.ts", "utils.ts"] in dependency_graph["edges"]
+    assert unparseable == []
+
+
+def test_build_module_graph_python_file_that_imports_itself_is_not_its_own_dependent(tmp_path):
+    # audit finding 35: dead_code.py's unreachable-file test is
+    # `if not module.get("imported_by", [])` - a Python file that happens
+    # to statically self-import (an absolute "import pkg.mod" from inside
+    # pkg/mod.py itself) used to get a non-empty imported_by purely from
+    # itself, silently escaping dead-code detection even if genuinely
+    # unused by everything else. Every other language branch already
+    # guards against this; Python's didn't.
+    repo = tmp_path / "repo"
+    (repo / "pkg").mkdir(parents=True)
+    (repo / "pkg" / "__init__.py").write_text("")
+    (repo / "pkg" / "mod.py").write_text("import pkg.mod\n\ndef helper():\n    pass\n")
+
+    modules, dependency_graph, unparseable = build_module_graph(repo)
+    mod = next(m for m in modules if m["path"] == "pkg/mod.py")
+
+    assert mod["imports"] == []
+    assert mod["imported_by"] == []
+    assert dependency_graph["edges"] == []
+    assert unparseable == []
+
+
+def test_build_module_graph_javascript_file_that_requires_itself_is_not_its_own_dependent(tmp_path):
+    # Same guard as the Python case just above, for the JS/TS branch - see
+    # its comment for the dead_code.py consequence (audit finding 35).
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "self.js").write_text("const me = require('./self');\n\nfunction helper() {}\n")
+
+    modules, dependency_graph, unparseable = build_module_graph(repo)
+    mod = next(m for m in modules if m["path"] == "self.js")
+
+    assert mod["imports"] == []
+    assert mod["imported_by"] == []
+    assert dependency_graph["edges"] == []
+    assert unparseable == []
+
+
 def test_build_module_graph_extracts_commonjs_reexports_and_dynamic_imports(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

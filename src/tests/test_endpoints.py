@@ -429,6 +429,29 @@ def test_extract_django_path_call():
     ]
 
 
+def test_extract_django_augmented_assignment_urlpatterns_is_not_skipped():
+    # audit finding 27: "urlpatterns += [...]" - splitting the list across
+    # an initial assignment plus one or more extensions is an ordinary,
+    # documented Django organizing pattern. It parses to
+    # augmented_assignment, a distinct node type from plain assignment -
+    # only the initial "urlpatterns = [...]" used to be matched, so every
+    # route declared via "+=" was silently missing from the endpoint
+    # inventory with no indication anything was skipped.
+    root, source = parse_python(
+        "urlpatterns = [\n"
+        "    path('home/', views.home),\n"
+        "]\n"
+        "urlpatterns += [\n"
+        "    path('api/', views.api),\n"
+        "]\n"
+    )
+
+    entries = _extract_django_routes(root, source, "app/urls.py")
+
+    paths = {entry["path"] for entry in entries}
+    assert paths == {"home/", "api/"}
+
+
 def test_extract_django_re_path_call():
     root, source = parse_python("urlpatterns = [re_path(r'^items/$', views.list_items)]\n")
 

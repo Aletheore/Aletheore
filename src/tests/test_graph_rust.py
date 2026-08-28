@@ -148,6 +148,60 @@ def test_build_module_graph_rust_std_import_does_not_resolve(tmp_path):
     assert dependency_graph["edges"] == []
 
 
+def test_build_module_graph_rust_pub_use_resolves(tmp_path):
+    # audit finding 21: "pub use" is the standard idiom for constructing a
+    # crate's public re-export surface, not a corner case - a
+    # use_declaration with a leading visibility_modifier ("pub"/
+    # "pub(crate)") child used to have that modifier mistaken for the path
+    # itself (the first non-"use"/";" child), producing an import of the
+    # literal string "pub" - which then failed to resolve and silently
+    # dropped the real dependency.
+    #
+    # The target has to be reachable ONLY via the "pub use" itself, not
+    # also via a "mod" declaration - main.rs "mod foo;"-ing foo.rs directly
+    # would produce the same edge regardless of whether "pub use" resolved
+    # correctly, silently passing even against the pre-fix code. Nesting
+    # the real target one level deeper (foo::bar, reached only through
+    # "pub use crate::foo::bar::Something;", never through "mod foo;"
+    # alone) is what isolates the fix.
+    repo = tmp_path / "repo"
+    (repo / "src" / "foo").mkdir(parents=True)
+    (repo / "Cargo.toml").write_text('[package]\nname = "x"\nversion = "0.1.0"\n')
+    (repo / "src" / "foo.rs").write_text("mod bar;\n")
+    (repo / "src" / "foo" / "bar.rs").write_text("pub struct Something;\n")
+    (repo / "src" / "main.rs").write_text(
+        "mod foo;\n\npub use crate::foo::bar::Something;\n\nfn main() {}\n"
+    )
+
+    _, dependency_graph, _ = build_module_graph(repo)
+    edges = {tuple(edge) for edge in dependency_graph["edges"]}
+
+    assert ("src/main.rs", "src/foo/bar.rs") in edges
+
+
+def test_build_module_graph_rust_nested_grouped_use_resolves_every_level(tmp_path):
+    # audit finding 33: "use std::{fmt, io::{self, Write}};" - a group item
+    # can itself be a nested group, not just a bare identifier/self leaf.
+    # The old code only accepted identifier/self children, so a nested
+    # scoped_use_list matched neither type and was dropped along with
+    # everything inside it - here, foo::{Bar, baz::{Qux}} must resolve
+    # Bar (one level deep) AND Qux (two levels deep), not just Bar.
+    repo = tmp_path / "repo"
+    (repo / "src" / "foo").mkdir(parents=True)
+    (repo / "Cargo.toml").write_text('[package]\nname = "x"\nversion = "0.1.0"\n')
+    (repo / "src" / "foo.rs").write_text("mod baz;\npub struct Bar;\n")
+    (repo / "src" / "foo" / "baz.rs").write_text("pub struct Qux;\n")
+    (repo / "src" / "main.rs").write_text(
+        "mod foo;\n\nuse crate::foo::{Bar, baz::{Qux}};\n\nfn main() {}\n"
+    )
+
+    _, dependency_graph, _ = build_module_graph(repo)
+    edges = {tuple(edge) for edge in dependency_graph["edges"]}
+
+    assert ("src/main.rs", "src/foo.rs") in edges
+    assert ("src/main.rs", "src/foo/baz.rs") in edges
+
+
 def test_build_module_graph_rust_grouped_use_resolves_both_names(tmp_path):
     repo = tmp_path / "repo"
     (repo / "src").mkdir(parents=True)
