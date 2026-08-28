@@ -1,11 +1,19 @@
 from unittest.mock import MagicMock, patch
 
+import anthropic
+import httpx
 import pytest
 import toon
 
 from aletheore.adapters.anthropic_native import AnthropicAdapter
 from aletheore.adapters.base import AdapterInvocationError
 from aletheore.adapters.openai_compatible import REQUIRED_SECTIONS
+
+
+def _anthropic_error(cls, status_code=None):
+    request = httpx.Request("POST", "https://example.test/v1/messages")
+    response = httpx.Response(status_code, request=request)
+    return cls("boom", response=response, body=None)
 
 
 def _tool_use_block(name, input_dict, block_id="toolu_1"):
@@ -208,6 +216,101 @@ def test_invoke_normalizes_provider_errors_without_leaking_details(
     message = str(exc_info.value)
     assert "anthropic invocation failed: RuntimeError" in message
     assert "secret detail" not in message
+
+
+@patch("aletheore.adapters.openai_compatible.time.sleep")
+@patch("aletheore.adapters.anthropic_native.Anthropic")
+def test_invoke_retries_a_transient_authentication_error_and_succeeds(
+    mock_anthropic_class, mock_sleep, tmp_path
+):
+    # Same transient-auth-error scenario openai_compatible.py's own retry
+    # test documents (a real production run recovered on retry with no
+    # config change in between) - anthropic_native.py shares the same
+    # _call_with_retry helper now, so it must recover here too instead of
+    # failing the whole run on the first transient hiccup.
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    mock_client.messages.create.side_effect = [
+        _anthropic_error(anthropic.AuthenticationError, status_code=401),
+        _anthropic_error(anthropic.AuthenticationError, status_code=401),
+        *_write_all_sections_then_finish_responses(),
+    ]
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value="sk-ant-test"):
+        result = adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert "Summary" in result
+    assert mock_sleep.call_count == 2
+
+
+@patch("aletheore.adapters.openai_compatible.time.sleep")
+@patch("aletheore.adapters.anthropic_native.Anthropic")
+def test_invoke_gives_up_after_exhausting_retries_on_persistent_auth_error(
+    mock_anthropic_class, mock_sleep, tmp_path
+):
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    mock_client.messages.create.side_effect = _anthropic_error(
+        anthropic.AuthenticationError, status_code=401
+    )
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value="sk-ant-test"):
+        with pytest.raises(AdapterInvocationError) as exc_info:
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert "anthropic invocation failed: AuthenticationError" in str(exc_info.value)
+    assert mock_client.messages.create.call_count == 3
+
+
+@patch("aletheore.adapters.openai_compatible.time.sleep")
+@patch("aletheore.adapters.anthropic_native.Anthropic")
+def test_invoke_does_not_retry_a_non_transient_error(mock_anthropic_class, mock_sleep, tmp_path):
+    # Only the conventional transient set (auth/rate-limit/connection/
+    # timeout/5xx) is retried - a generic error (e.g. a genuine bad
+    # request) fails identically every time, so retrying it just delays
+    # surfacing it.
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    mock_client.messages.create.side_effect = RuntimeError("bad request")
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value="sk-ant-test"):
+        with pytest.raises(AdapterInvocationError):
+            adapter.invoke("audit this repo", cwd=str(repo))
+
+    assert mock_client.messages.create.call_count == 1
+    mock_sleep.assert_not_called()
+
+
+@patch("aletheore.adapters.openai_compatible.time.sleep")
+@patch("aletheore.adapters.anthropic_native.Anthropic")
+def test_simple_completion_retries_a_transient_rate_limit_error(
+    mock_anthropic_class, mock_sleep, tmp_path
+):
+    mock_client = MagicMock()
+    mock_anthropic_class.return_value = mock_client
+    text_block = MagicMock()
+    text_block.type = "text"
+    text_block.text = "ok"
+    success = MagicMock()
+    success.content = [text_block]
+    success.usage = None
+    mock_client.messages.create.side_effect = [
+        _anthropic_error(anthropic.RateLimitError, status_code=429),
+        success,
+    ]
+
+    adapter = _adapter(tmp_path)
+    with patch("aletheore.adapters.anthropic_native.get_api_key", return_value="sk-ant-test"):
+        result = adapter.simple_completion("system", "user", cwd=str(tmp_path))
+
+    assert result == "ok"
+    assert mock_sleep.call_count == 1
 
 
 @patch("aletheore.adapters.anthropic_native.Anthropic")
