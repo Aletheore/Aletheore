@@ -216,6 +216,19 @@ _SEARCH_MATCH_CAP = 200
 # what happened rather than returning results.
 _SEARCH_TIMEOUT_SECONDS = 5.0
 
+# _SEARCH_MATCH_CAP alone doesn't bound the result's total size - 200
+# matches of long lines (a minified bundle, a generated file, a single huge
+# JSON line) can still produce an oversized result even under the count
+# cap. Confirmed live: an unscoped literal search on a common word returned
+# a result the calling MCP client rejected outright for exceeding its own
+# ~390,000-char limit, with 200 matches well under the count cap. Both caps
+# below exist because either alone is insufficient - a handful of huge
+# lines defeats the count cap (this repro: 200 matches x 3000-char lines =
+# ~600,000 chars), and a huge number of merely-long lines would defeat a
+# per-line cap without an aggregate budget too.
+_SEARCH_LINE_MAX_CHARS = 500
+_SEARCH_TOTAL_CHAR_BUDGET = 100_000
+
 
 def _search_files(repo_path: Path, pattern: str, regex: bool, path_glob: str | None) -> dict:
     """The actual search. Literal (non-regex) mode has no backtracking risk
@@ -224,6 +237,7 @@ def _search_files(repo_path: Path, pattern: str, regex: bool, path_glob: str | N
     compiled = re.compile(pattern) if regex else None
     matches: list[dict] = []
     truncated = False
+    total_chars = 0
     ignored_paths = load_repo_config(repo_path)["ignored_paths"]
 
     for path in iter_all_files(repo_path, ignored_paths):
@@ -238,10 +252,16 @@ def _search_files(repo_path: Path, pattern: str, regex: bool, path_glob: str | N
         for line_no, line in enumerate(text.splitlines(), start=1):
             found = compiled.search(line) is not None if compiled else pattern in line
             if found:
-                if len(matches) >= _SEARCH_MATCH_CAP:
+                if len(matches) >= _SEARCH_MATCH_CAP or total_chars >= _SEARCH_TOTAL_CHAR_BUDGET:
                     truncated = True
                     break
-                matches.append({"path": rel_path, "line": line_no, "text": line})
+                line_text = (
+                    line[:_SEARCH_LINE_MAX_CHARS] + "... (line truncated)"
+                    if len(line) > _SEARCH_LINE_MAX_CHARS
+                    else line
+                )
+                matches.append({"path": rel_path, "line": line_no, "text": line_text})
+                total_chars += len(line_text)
         if truncated:
             break
 
