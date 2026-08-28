@@ -114,6 +114,35 @@ def test_build_module_graph_java_source_root_inferred_from_package(tmp_path):
     ) in edges
 
 
+def test_build_module_graph_java_ambiguous_import_is_flagged_inferred(tmp_path):
+    # Two independent source trees (no shared src/main/java prefix, so each
+    # contributes its own distinct root) each declare com.example.Shared -
+    # a real multi-root tiebreak, resolved deterministically (moduleA sorts
+    # before moduleB) but flagged, not silently presented as certain.
+    repo = tmp_path / "repo"
+    module_a = repo / "moduleA" / "com" / "example"
+    module_b = repo / "moduleB" / "com" / "example"
+    module_a.mkdir(parents=True)
+    module_b.mkdir(parents=True)
+    (module_a / "Shared.java").write_text(
+        "package com.example;\n\npublic class Shared {\n    public int x;\n}\n"
+    )
+    (module_b / "Shared.java").write_text(
+        "package com.example;\n\npublic class Shared {\n    public int x;\n}\n"
+    )
+    (module_a / "User.java").write_text(
+        "package com.example;\n\nimport com.example.Shared;\n\n"
+        "public class User {\n    private Shared s;\n}\n"
+    )
+
+    modules, _dependency_graph, _unparseable = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+
+    user = by_path["moduleA/com/example/User.java"]
+    assert user["imports"] == ["moduleA/com/example/Shared.java"]
+    assert user["import_confidence"] == {"moduleA/com/example/Shared.java": "inferred"}
+
+
 def test_build_module_graph_java_direct_import_resolves(tmp_path):
     repo = make_java_repo(tmp_path)
     _, dependency_graph, _ = build_module_graph(repo)

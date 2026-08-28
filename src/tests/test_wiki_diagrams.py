@@ -85,3 +85,36 @@ def test_build_subsystem_diagram_only_draws_edges_within_the_cluster():
 def test_build_subsystem_diagram_handles_empty_cluster():
     diagram = build_subsystem_diagram(make_evidence(), {"id": 5, "modules": []})
     assert diagram == "flowchart TD"
+
+
+def test_build_subsystem_diagram_excludes_ambiguous_edges():
+    # A diagram is a stronger claim than a citable-but-uncertain evidence
+    # edge ("this file depends on that one," not "probably, among a few
+    # candidates") - an edge flagged "ambiguous" in import_confidence
+    # (currently only C# type-reference edges - see scanner/graph.py's
+    # _csharp_type_reference_targets) stays in the underlying evidence but
+    # must not be drawn.
+    evidence = make_evidence()
+    evidence["repository"]["modules"][0]["import_confidence"] = {"auth/tokens.py": "ambiguous"}
+    cluster = evidence["architecture"]["clusters"][0]
+    diagram = build_subsystem_diagram(evidence, cluster)
+    assert "N0 --> N1" not in diagram
+    assert diagram.count("-->") == 0
+
+
+def test_build_subsystem_diagram_draws_inferred_edges_normally():
+    # "inferred" (a source-root/prefix tiebreak among multiple real
+    # candidates, generally still correct) is a materially different kind
+    # of uncertainty from "ambiguous" - only the latter is excluded.
+    evidence = make_evidence()
+    evidence["repository"]["modules"][0]["import_confidence"] = {"auth/tokens.py": "inferred"}
+    cluster = evidence["architecture"]["clusters"][0]
+    diagram = build_subsystem_diagram(evidence, cluster)
+    assert "N0 --> N1" in diagram
+
+
+def test_build_overview_diagram_excludes_ambiguous_cross_cluster_edges():
+    evidence = make_evidence()
+    evidence["repository"]["modules"][0]["import_confidence"] = {"db/session.py": "ambiguous"}
+    diagram = build_overview_diagram(evidence)
+    assert "C0 --> C1" not in diagram
