@@ -75,6 +75,8 @@
     "conftest",
     "cooldown",
     "cpus",
+    "misparsed",
+    "urlpatterns",
     "COOLDOWN",
     "licence",
     "codex",
