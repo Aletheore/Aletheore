@@ -5,7 +5,7 @@ import json
 import logging
 import time
 from decimal import Decimal
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -470,6 +470,49 @@ async def test_paid_to_paid_change_does_not_retrigger_live_wiki_full_build(pool)
     installation = await get_installation(pool, 201)
     assert installation["plan"] == "air"
     fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_crash_between_writes_rolls_back_the_plan_change_atomically(pool):
+    # docs/audits/Claude_Audit.md finding 11: the plan write, Paddle-id
+    # write, and extra-seats write used to be three independent awaits - a
+    # crash between any two of them left the installation on the new plan
+    # with stale extra_seats, or upgraded with no Paddle IDs recorded, a
+    # state no near-term retry could see coming since claim_webhook_delivery
+    # already thinks this event was claimed. Confirmed live before the fix:
+    # injecting a crash right before set_extra_seats left plan='air' and
+    # paddle_subscription_id='sub_repro' committed with extra_seats never
+    # applied. One transaction means the crash now rolls back everything,
+    # not just some of it.
+    import app_server.webhooks.paddle as paddle_mod
+
+    await upsert_installation(pool, 206, "acme")  # defaults to plan='free'
+    payload = {
+        "event_id": "evt_crash_mid_write",
+        "event_type": "subscription.created",
+        "data": {
+            "id": "sub_should_not_persist",
+            "customer_id": "ctm_should_not_persist",
+            "status": "active",
+            "custom_data": {"installation_token": _installation_token(206)},
+            "items": [
+                {"price": {"id": "pri_01kyhevc8bkcghfpwjymz16y2h"}, "quantity": 1},
+                {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": 2},
+            ],
+        },
+    }
+
+    async def _crash(*a, **k):
+        raise RuntimeError("simulated crash: pod killed here")
+
+    with patch.object(paddle_mod, "set_extra_seats", _crash):
+        with pytest.raises(RuntimeError):
+            await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=MagicMock())
+
+    installation = await get_installation(pool, 206)
+    assert installation["plan"] == "free"
+    assert installation["paddle_subscription_id"] is None
+    assert await get_extra_seats(pool, 206) == 0
 
 
 @pytest.mark.asyncio
