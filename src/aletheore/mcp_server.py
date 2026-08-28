@@ -107,15 +107,21 @@ running, not a silent hang - a small repo finishes in seconds, a large \
 monorepo can take several minutes. Don't assume either has failed just \
 because it's still running; check the reported progress before retrying.
 
-Question phrasing matters more than for most tools. aletheore_search_codebase \
-and aletheore_answer are semantic, but our own published benchmark measured \
-real, large accuracy drops when a question avoids the codebase's own \
-vocabulary in favor of generic or paraphrased terms - several corpora scored \
-under 35% top-1 accuracy on vocabulary-avoiding phrasing, recovering 20-47 \
-points when the same question used the project's own terms instead. Prefer \
-this repo's actual identifiers, file names, and terminology over a \
-paraphrase. aletheore_overview, aletheore_symbols, and aletheore_list can \
-surface real names to query with when you're unsure of the vocabulary.
+Before your first aletheore_search or aletheore_search_codebase/aletheore_answer \
+call: if you don't already know the exact identifier, file name, or term \
+you're looking for, do not guess a paraphrase and query with it first. \
+aletheore_search is literal/regex - a paraphrase there doesn't score lower, \
+it matches nothing at all, since the tool never sees your intent, only the \
+literal string. aletheore_search_codebase and aletheore_answer are semantic \
+and degrade more gracefully, but our own published benchmark still measured \
+real, large accuracy drops from paraphrasing - several corpora scored under \
+35% top-1 accuracy on vocabulary-avoiding phrasing, recovering 20-47 points \
+when the same question used the project's own terms instead. So: call \
+aletheore_overview, aletheore_symbols, or aletheore_list FIRST to find the \
+repo's actual identifiers, file names, and terminology, THEN query with \
+those - not a generic description of what you think the code might be \
+called. This ordering matters even when you're fairly confident in a guess; \
+confirming the real name first is cheap, a wasted or degraded query is not.
 
 Prefer exact tools when the target is already known: aletheore_imports, \
 aletheore_imported_by, aletheore_symbols, aletheore_symbol_source, \
@@ -123,9 +129,9 @@ aletheore_neighborhood, and the aletheore_find_evidence_for_* tools are \
 exact (not approximate) and need no semantic index. So are the security/ \
 quality tools (aletheore_secrets, aletheore_vulnerabilities, \
 aletheore_licenses, aletheore_dead_code, aletheore_hotspots, \
-aletheore_layer_violations) and aletheore_search (literal/regex text \
-search, not semantic). Reach for the semantic tools only for open-ended \
-"how does this work" questions the exact tools can't answer directly."""
+aletheore_layer_violations). Reach for aletheore_search_codebase/ \
+aletheore_answer only for open-ended "how does this work" questions the \
+exact tools can't answer directly."""
 
 
 def _toon_result(data: object) -> str:
@@ -490,7 +496,11 @@ def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
 def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_symbol_source", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_symbol_source(module: str, symbol: str) -> str:
-        """Exact source text for one named function/class, with resolved line bounds."""
+        """Exact source text for one named function/class, with resolved line bounds.
+
+        Two separate arguments, not a combined "path::name" - module: the
+        file path exactly as it appears in evidence (e.g. "src/app.py").
+        symbol: the function or class name alone (e.g. "my_function")."""
         evidence = read_evidence(repo_path)
         return _toon_result(find_symbol_source(evidence, repo_path, module, symbol))
 
@@ -515,7 +525,11 @@ def _register_verify_citations_tool(mcp_instance: MCPServer, repo_path: Path) ->
 def _register_code_evidence_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_find_evidence_for_endpoint", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_find_evidence_for_endpoint(method: str, path: str) -> str:
-        """Resolve an API endpoint to source evidence: file, line, symbol, owner, commit, dependency, and risk."""
+        """Resolve an API endpoint to source evidence: file, line, symbol, owner, commit, dependency, and risk.
+
+        Two separate arguments - method: the HTTP verb (e.g. "GET").
+        path: the route path exactly as it appears in evidence (e.g.
+        "/users/{id}"), not combined with the method into one string."""
         evidence = read_evidence(repo_path)
         return _toon_result(find_code_evidence_for_endpoint(evidence, f"{method} {path}", repo_path))
 
