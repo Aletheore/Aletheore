@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Callable
 
+import anthropic
 import toon
 from anthropic import Anthropic
 
@@ -13,6 +14,7 @@ from aletheore.adapters.openai_compatible import (
     REQUIRED_SECTIONS,
     SYSTEM_PROMPT_TEMPLATE,
     WEAK_MODEL_HINT,
+    _call_with_retry,
     _get_by_dot_path,
     _read_manual_text,
 )
@@ -20,6 +22,18 @@ from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api
 from aletheore.toon_encoding import ToonEncodingError, to_toon
 
 MAX_TOKENS = 8192
+
+# Same transient set as openai_compatible.py's _RETRYABLE_EXCEPTIONS, mirrored
+# for the Anthropic SDK's own exception hierarchy - see that module's comment
+# for why AuthenticationError is included (a real production run observed it
+# recover on retry with no config change in between).
+_RETRYABLE_EXCEPTIONS: tuple[type[Exception], ...] = (
+    anthropic.AuthenticationError,
+    anthropic.RateLimitError,
+    anthropic.APIConnectionError,
+    anthropic.APITimeoutError,
+    anthropic.InternalServerError,
+)
 
 ANTHROPIC_TOOLS = [
     {
@@ -86,11 +100,14 @@ class AnthropicAdapter(AgentAdapter):
 
         client = Anthropic(api_key=api_key)
         try:
-            response = client.messages.create(
-                model=self._model,
-                max_tokens=MAX_TOKENS,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_prompt}],
+            response = _call_with_retry(
+                lambda: client.messages.create(
+                    model=self._model,
+                    max_tokens=MAX_TOKENS,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                ),
+                _RETRYABLE_EXCEPTIONS,
             )
         except Exception as exc:
             raise AdapterInvocationError(
@@ -136,13 +153,16 @@ class AnthropicAdapter(AgentAdapter):
                     "the monthly LLM spend cap would be exceeded"
                 )
             try:
-                response = client.messages.create(
-                    model=self._model,
-                    max_tokens=MAX_TOKENS,
-                    system=system_prompt,
-                    messages=messages,
-                    tools=ANTHROPIC_TOOLS,
-                    tool_choice={"type": "any"},
+                response = _call_with_retry(
+                    lambda: client.messages.create(
+                        model=self._model,
+                        max_tokens=MAX_TOKENS,
+                        system=system_prompt,
+                        messages=messages,
+                        tools=ANTHROPIC_TOOLS,
+                        tool_choice={"type": "any"},
+                    ),
+                    _RETRYABLE_EXCEPTIONS,
                 )
             except Exception as exc:
                 raise AdapterInvocationError(
