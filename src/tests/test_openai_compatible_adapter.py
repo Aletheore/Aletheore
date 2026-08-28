@@ -713,3 +713,63 @@ def test_supports_tool_choice_true_by_default(mock_openai_class, tmp_path):
 
     first_call = mock_client.chat.completions.create.call_args_list[0]
     assert first_call.kwargs["tool_choice"] == "required"
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_forces_reasoning_effort_none_for_openai_provider(mock_openai_class, tmp_path):
+    # Regression: gpt-5.6-luna rejects function tools on /v1/chat/completions
+    # unless reasoning_effort is explicitly "none" - confirmed directly
+    # against the real API (tools+tool_choice="required" only succeeds with
+    # this present). extra_body defaults to {} (model_tiers._reasoning_body
+    # only returns a real value behind the opt-in AIRVIEW_REASONING=off
+    # toggle), so this can't rely on the caller having configured extra_body -
+    # invoke() must force it unconditionally for the OpenAI-named provider,
+    # since it's the only place that ever sends tools.
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _write_all_sections_then_finish_responses()
+
+    adapter = _adapter(tmp_path, name="OpenAI", needs_key=False)
+    adapter.invoke("audit this repo", cwd=str(repo))
+
+    first_call = mock_client.chat.completions.create.call_args_list[0]
+    assert first_call.kwargs["extra_body"] == {"reasoning_effort": "none"}
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_merges_reasoning_effort_with_existing_extra_body_for_openai(mock_openai_class, tmp_path):
+    # If a caller already configured extra_body (e.g. AIRVIEW_REASONING=off
+    # threading the same value through), the forced override must not
+    # clobber other keys that might be present alongside it.
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _write_all_sections_then_finish_responses()
+
+    adapter = _adapter(
+        tmp_path, name="OpenAI", needs_key=False, extra_body={"reasoning_effort": "none", "other_flag": True}
+    )
+    adapter.invoke("audit this repo", cwd=str(repo))
+
+    first_call = mock_client.chat.completions.create.call_args_list[0]
+    assert first_call.kwargs["extra_body"] == {"reasoning_effort": "none", "other_flag": True}
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_invoke_does_not_force_reasoning_effort_for_non_openai_provider(mock_openai_class, tmp_path):
+    # DeepSeek uses a different disabled-reasoning shape entirely
+    # ({"thinking": {"type": "disabled"}}, not reasoning_effort) and has no
+    # documented requirement that tools always need it disabled - forcing
+    # an OpenAI-specific field onto every provider would be wrong, not just
+    # unnecessary.
+    repo = _make_repo_with_evidence(tmp_path, {"repository": {"modules": []}})
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.chat.completions.create.side_effect = _write_all_sections_then_finish_responses()
+
+    adapter = _adapter(tmp_path, name="DeepSeek", needs_key=False)
+    adapter.invoke("audit this repo", cwd=str(repo))
+
+    first_call = mock_client.chat.completions.create.call_args_list[0]
+    assert "extra_body" not in first_call.kwargs
