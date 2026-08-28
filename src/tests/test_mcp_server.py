@@ -934,6 +934,46 @@ async def test_aletheore_search_caps_at_200_and_flags_truncated(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_aletheore_search_truncates_a_single_very_long_matched_line(tmp_path):
+    # A minified bundle or a huge generated JSON line can match once and
+    # still blow well past a reasonable result size on its own - the
+    # 200-match count cap does nothing to stop this since it's one match,
+    # not many.
+    long_line = "MATCH_ME " + ("x" * 3000)
+    repo = make_repo_with_files(tmp_path, {"bundle.min.js": long_line})
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_search", {"pattern": "MATCH_ME"})
+
+    matches = tool_result_body(result)["result"]["matches"]
+    assert len(matches) == 1
+    assert len(matches[0]["text"]) < len(long_line)
+    assert matches[0]["text"].startswith("MATCH_ME")
+    assert matches[0]["text"].endswith("(line truncated)")
+
+
+@pytest.mark.asyncio
+async def test_aletheore_search_stops_early_on_total_char_budget_even_under_the_match_cap(tmp_path):
+    # Confirmed live: an unscoped search on a common word returned a result
+    # an MCP client rejected for exceeding its own size limit, well under
+    # the 200-match count cap (200 matches x long lines = ~600,000 chars in
+    # this exact repro). The count cap alone can't catch this - only an
+    # aggregate character budget does.
+    long_line = "MATCH_ME " + ("x" * 3000)
+    content = "\n".join(long_line for _ in range(200))
+    repo = make_repo_with_files(tmp_path, {"big.js": content})
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_search", {"pattern": "MATCH_ME"})
+
+    result_body = tool_result_body(result)["result"]
+    total_chars = sum(len(m["text"]) for m in result_body["matches"])
+    assert len(result_body["matches"]) < 200
+    assert total_chars < 110_000
+    assert result_body["truncated"] is True
+
+
+@pytest.mark.asyncio
 async def test_aletheore_search_respects_repo_config_ignored_paths(tmp_path):
     repo = make_repo_with_evidence(tmp_path)
     (repo / "vendor").mkdir()
