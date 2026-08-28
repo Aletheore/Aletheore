@@ -1315,43 +1315,47 @@ def _java_class_file(root: Path, segments: list[str]) -> Path | None:
 
 def _resolve_java_import(
     source_roots: list[Path], dotted: str, is_static: bool, is_wildcard: bool
-) -> list[Path]:
+) -> tuple[list[Path], bool]:
+    """Returns (resolved files, was_ambiguous) - was_ambiguous is True when
+    more than one source root had a matching candidate and a fixed tiebreak
+    (source_roots' own order - see its sort in build_module_graph) had to
+    pick one, as opposed to there only ever having been one candidate.
+    """
     segments = dotted.split(".")
     if not segments:
-        return []
+        return [], False
 
     if is_wildcard:
         # dotted is a package path with no class name - every .java file directly
         # in that package's directory is what a wildcard import pulls in, the same
         # "import the whole package" fan-out Go's package-level imports need.
-        for root in source_roots:
-            package_dir = root.joinpath(*segments)
-            if package_dir.is_dir():
-                return sorted(package_dir.glob("*.java"))
-        return []
+        matching_roots = [root for root in source_roots if root.joinpath(*segments).is_dir()]
+        if not matching_roots:
+            return [], False
+        return sorted(matching_roots[0].joinpath(*segments).glob("*.java")), len(matching_roots) > 1
 
     if is_static:
         # "import static a.b.C.MEMBER" - MEMBER is a field or method, not a class;
         # the file that actually exists is a.b.C.java.
         segments = segments[:-1]
         if not segments:
-            return []
+            return [], False
 
-    for root in source_roots:
-        target = _java_class_file(root, segments)
-        if target is not None:
-            return [target]
+    matches = [target for root in source_roots if (target := _java_class_file(root, segments)) is not None]
+    if matches:
+        return [matches[0]], len(matches) > 1
 
     # One segment short: the same fallback Python/Rust already use - the last
     # segment might be a nested class rather than its own top-level file, in
     # which case the containing class's own file is the real target.
     if len(segments) > 1:
-        for root in source_roots:
-            target = _java_class_file(root, segments[:-1])
-            if target is not None:
-                return [target]
+        matches = [
+            target for root in source_roots if (target := _java_class_file(root, segments[:-1])) is not None
+        ]
+        if matches:
+            return [matches[0]], len(matches) > 1
 
-    return []
+    return [], False
 
 
 def _leading_ruby_doc_comment(source: bytes, enclosing_node: Node) -> str | None:
@@ -1588,29 +1592,35 @@ def _load_php_psr4_map(repo_path: Path) -> dict[str, Path]:
     return mapping
 
 
-def _resolve_php_use(psr4_map: dict[str, Path], qualified_name: str) -> Path | None:
+def _resolve_php_use(psr4_map: dict[str, Path], qualified_name: str) -> tuple[Path | None, bool]:
+    """Returns (resolved file, was_ambiguous) - was_ambiguous is True when
+    more than one registered PSR-4 prefix matched and the longest-prefix rule
+    had to pick one.
+    """
     qualified_name = qualified_name.lstrip("\\")
 
     # PSR-4 requires the longest matching prefix to win when more than one could
     # apply (e.g. "App\\" -> src/ and "App\\Tests\\" -> tests/ both matching
     # "App\Tests\Foo" - the more specific one is correct).
-    best_prefix: str | None = None
+    matching_prefixes: list[str] = []
     for prefix in psr4_map:
         normalized = prefix.rstrip("\\")
         if qualified_name == normalized or qualified_name.startswith(normalized + "\\"):
-            if best_prefix is None or len(normalized) > len(best_prefix.rstrip("\\")):
-                best_prefix = prefix
+            matching_prefixes.append(prefix)
 
-    if best_prefix is None:
-        return None
+    if not matching_prefixes:
+        return None, False
+    best_prefix = max(matching_prefixes, key=lambda p: len(p.rstrip("\\")))
 
     remainder = qualified_name[len(best_prefix.rstrip("\\")):].lstrip("\\")
     if not remainder:
-        return None
+        return None, False
 
     parts = remainder.split("\\")
     candidate = psr4_map[best_prefix].joinpath(*parts[:-1], f"{parts[-1]}.php")
-    return candidate if candidate.is_file() else None
+    if not candidate.is_file():
+        return None, False
+    return candidate, len(matching_prefixes) > 1
 
 
 def _resolve_php_include(from_file: Path, spec: str) -> Path | None:
@@ -1882,7 +1892,7 @@ def _csharp_type_reference_targets(
     source: bytes,
     own_types: set[str],
     type_owners: dict[str, set[Path]],
-) -> list[Path]:
+) -> list[tuple[Path, bool]]:
     """Files this one depends on by *naming their types*, not by importing them.
 
     C# needs no `using` to reference a type in the same namespace, so an
@@ -1893,11 +1903,13 @@ def _csharp_type_reference_targets(
     modules, one per file. That is not a parsing bug; there is genuinely nothing
     to parse. The dependency exists in the body, where a type is named.
 
-    Deliberately conservative, because a false edge invents a relationship the
-    wiki will then confidently explain: only names declared in exactly ONE file
-    in the repository count, so an ambiguous name contributes nothing.
+    Returns (target, was_ambiguous) pairs. A name declared in more than one
+    file in the repository still produces an edge - to a deterministically
+    chosen owner - flagged ambiguous, rather than silently contributing
+    nothing (the previous behavior: dropping it outright, which loses
+    strictly more information than keeping a flagged guess does).
     """
-    referenced: list[Path] = []
+    referenced: list[tuple[Path, bool]] = []
     seen: set[str] = set()
     for match in _IDENTIFIER_RE.finditer(source.decode("utf-8", "ignore")):
         name = match.group(0)
@@ -1908,11 +1920,14 @@ def _csharp_type_reference_targets(
         ):
             continue
         owners = type_owners.get(name)
-        # Exactly one declaring file, or we cannot say which one is meant.
-        if owners is None or len(owners) != 1:
+        if not owners:
             continue
         seen.add(name)
-        referenced.append(next(iter(owners)))
+        # More than one declaring file: still an edge (more informative than
+        # dropping it - the reader loses nothing that a dropped edge would
+        # have preserved), just to a deterministically-chosen one, flagged
+        # ambiguous rather than presented as certain.
+        referenced.append((sorted(owners)[0], len(owners) > 1))
         if len(referenced) >= _CSHARP_MAX_TYPE_EDGES:
             break
     return referenced
@@ -1967,7 +1982,11 @@ def _csharp_prefix_and_root_for(file_path: Path, namespace: str | None) -> tuple
     return namespace + ".", file_path.parent
 
 
-def _resolve_csharp_using(prefix_map: dict[str, Path], dotted: str) -> list[Path]:
+def _resolve_csharp_using(prefix_map: dict[str, Path], dotted: str) -> tuple[list[Path], bool]:
+    """Returns (resolved files, was_ambiguous) - was_ambiguous is True when
+    more than one registered namespace prefix matched and the longest-prefix
+    rule had to pick one.
+    """
     # "using Namespace;" imports the WHOLE namespace, not any specific type -
     # unlike Java's import (which explicitly names one class to bring in), C#
     # offers no way to tell which specific class is actually depended on from the
@@ -1980,22 +1999,18 @@ def _resolve_csharp_using(prefix_map: dict[str, Path], dotted: str) -> list[Path
     # instead the same way Go's package-level import already is: fan out to
     # every file in the corresponding directory, since a namespace is the actual
     # granularity "using" operates at.
-    best_prefix: str | None = None
-    for prefix in prefix_map:
-        if dotted.startswith(prefix):
-            if best_prefix is None or len(prefix) > len(best_prefix):
-                best_prefix = prefix
-
-    if best_prefix is None:
-        return []
+    matching_prefixes = [prefix for prefix in prefix_map if dotted.startswith(prefix)]
+    if not matching_prefixes:
+        return [], False
+    best_prefix = max(matching_prefixes, key=len)
 
     remainder = dotted[len(best_prefix):]
     root = prefix_map[best_prefix]
     namespace_dir = root if not remainder else root.joinpath(*remainder.split("."))
     if not namespace_dir.is_dir():
-        return []
+        return [], False
 
-    return sorted(namespace_dir.glob("*.cs"))
+    return sorted(namespace_dir.glob("*.cs")), len(matching_prefixes) > 1
 
 
 def _load_csharp_implicit_usings(repo_path: Path, source_paths: list[Path]) -> dict[Path, list[str]]:
@@ -2114,9 +2129,15 @@ def _resolve_python_module(
     dotted: str,
     from_file: Path | None = None,
     source_roots: list[Path] | None = None,
-) -> str | None:
+) -> tuple[str | None, bool]:
+    """Returns (resolved module path, was_ambiguous) - was_ambiguous is True
+    when more than one source root resolved this dotted path and a fixed
+    tiebreak (source_roots' own order - see its sort in _python_source_roots)
+    had to pick one, as opposed to there only ever having been one root that
+    could resolve it.
+    """
     if not dotted:
-        return None
+        return None, False
 
     if dotted.startswith("."):
         # Relative import ("from ..services.sessions import x"). tree-sitter hands us
@@ -2125,20 +2146,28 @@ def _resolve_python_module(
         # "the package containing from_file" (from_file.parent itself), each
         # additional dot goes up one more parent directory.
         if from_file is None:
-            return None
+            return None, False
         dot_count = len(dotted) - len(dotted.lstrip("."))
         remainder = dotted[dot_count:]
         base_dir = from_file.parent
         for _ in range(dot_count - 1):
             base_dir = base_dir.parent
         as_path = base_dir if not remainder else base_dir / Path(*remainder.split("."))
-        return _module_or_package_path(repo_path, as_path)
+        return _module_or_package_path(repo_path, as_path), False
 
-    for root in (source_roots if source_roots is not None else [repo_path]):
+    roots = source_roots if source_roots is not None else [repo_path]
+    matches: list[str] = []
+    for root in roots:
         target = _module_or_package_path(repo_path, root / Path(*dotted.split(".")))
         if target is not None:
-            return target
-    return None
+            matches.append(target)
+            if len(roots) == 1:
+                # Only one root exists at all - it can't be ambiguous, so
+                # there is nothing to gain from continuing to check others.
+                break
+    if not matches:
+        return None, False
+    return matches[0], len(matches) > 1
 
 
 def _resolve_python_from_import(
@@ -2147,7 +2176,7 @@ def _resolve_python_from_import(
     imported_name: str,
     from_file: Path,
     source_roots: list[Path] | None = None,
-) -> str | None:
+) -> tuple[str | None, bool]:
     # A relative module_name already ends in the dots that separate it from what
     # follows ("." or ".." or "..services.sessions"); appending imported_name with an
     # extra "." separator only when module_name does NOT already end in a dot avoids
@@ -2159,9 +2188,9 @@ def _resolve_python_from_import(
         submodule_dotted = f"{module_name}.{imported_name}"
     else:
         submodule_dotted = f"{module_name}{imported_name}"
-    target = _resolve_python_module(repo_path, submodule_dotted, from_file, source_roots)
+    target, ambiguous = _resolve_python_module(repo_path, submodule_dotted, from_file, source_roots)
     if target is not None:
-        return target
+        return target, ambiguous
     return _resolve_python_module(repo_path, module_name, from_file, source_roots)
 
 
@@ -2211,6 +2240,16 @@ def _extract_module(
     """
     rel_path = _rel(repo_path, path)
     resolved_imports: list[str] = []
+    # Populated only for a resolved edge whose resolution wasn't a single
+    # deterministic outcome - a source root/namespace-prefix/PSR-4-prefix
+    # tiebreak among genuine multiple candidates ("inferred"), or a C#
+    # type-reference kept despite more than one file declaring that type
+    # name ("ambiguous"). Deliberately omitted (both the key and, when
+    # empty, the whole field on the returned module dict below) for the
+    # common single-candidate case, so this costs nothing in evidence-packet
+    # size for the large majority of edges and the six languages whose
+    # resolvers are never ambiguous at all (js/ts, go, rust, ruby, c/cpp).
+    import_confidence: dict[str, str] = {}
 
     constants: list[dict] = []
     if language_name != "python":
@@ -2222,23 +2261,29 @@ def _extract_module(
         plain_imports, from_imports, functions, classes, constants = _extract_python(tree.root_node, source)
 
         for dotted in plain_imports:
-            target = _resolve_python_module(repo_path, dotted, path, python_source_roots)
+            target, ambiguous = _resolve_python_module(repo_path, dotted, path, python_source_roots)
             if target is not None:
                 resolved_imports.append(target)
+                if ambiguous:
+                    import_confidence[target] = "inferred"
 
         for module_name, names in from_imports:
             targets: set[str] = set()
             if names:
                 for name in names:
-                    target = _resolve_python_from_import(
+                    target, ambiguous = _resolve_python_from_import(
                         repo_path, module_name, name, path, python_source_roots
                     )
                     if target is not None:
                         targets.add(target)
+                        if ambiguous:
+                            import_confidence[target] = "inferred"
             else:
-                target = _resolve_python_module(repo_path, module_name, path, python_source_roots)
+                target, ambiguous = _resolve_python_module(repo_path, module_name, path, python_source_roots)
                 if target is not None:
                     targets.add(target)
+                    if ambiguous:
+                        import_confidence[target] = "inferred"
             resolved_imports.extend(sorted(targets))
     elif language_name == "go":
         raw_imports, functions, classes = _extract_go(tree.root_node, source)
@@ -2256,10 +2301,13 @@ def _extract_module(
     elif language_name == "java":
         raw_imports, functions, classes = _extract_java(tree.root_node, source)
         for dotted, is_static, is_wildcard in raw_imports:
-            for target_path in _resolve_java_import(java_source_roots, dotted, is_static, is_wildcard):
+            targets, ambiguous = _resolve_java_import(java_source_roots, dotted, is_static, is_wildcard)
+            for target_path in targets:
                 target = _rel(repo_path, target_path)
                 if target is not None and target != rel_path:
                     resolved_imports.append(target)
+                    if ambiguous:
+                        import_confidence[target] = "inferred"
     elif language_name == "ruby":
         raw_imports, functions, classes = _extract_ruby(tree.root_node, source)
         for kind, spec in raw_imports:
@@ -2271,13 +2319,17 @@ def _extract_module(
     elif language_name == "php":
         raw_imports, functions, classes = _extract_php(tree.root_node, source)
         for kind, spec in raw_imports:
-            target_path = (
-                _resolve_php_use(php_psr4_map, spec) if kind == "use" else _resolve_php_include(path, spec)
-            )
+            ambiguous = False
+            if kind == "use":
+                target_path, ambiguous = _resolve_php_use(php_psr4_map, spec)
+            else:
+                target_path = _resolve_php_include(path, spec)
             if target_path is not None:
                 target = _rel(repo_path, target_path)
                 if target is not None and target != rel_path:
                     resolved_imports.append(target)
+                    if ambiguous:
+                        import_confidence[target] = "inferred"
     elif language_name in ("c", "cpp"):
         raw_imports, functions, classes = _extract_c_family(tree.root_node, source)
         for spec in raw_imports:
@@ -2290,19 +2342,26 @@ def _extract_module(
         raw_imports, functions, classes = _extract_csharp(tree.root_node, source)
         raw_imports.extend((csharp_implicit_usings or {}).get(path, []))
         for dotted in raw_imports:
-            for target_path in _resolve_csharp_using(csharp_prefix_map or {}, dotted):
+            targets, ambiguous = _resolve_csharp_using(csharp_prefix_map or {}, dotted)
+            for target_path in targets:
                 target = _rel(repo_path, target_path)
                 if target is not None and target != rel_path:
                     resolved_imports.append(target)
+                    if ambiguous:
+                        import_confidence[target] = "inferred"
         # Same-namespace references need no `using`, so usings alone leave
         # the graph near-empty - see _csharp_type_reference_targets.
         own_type_names = {c["name"] for c in classes if c.get("name")}
         already = set(resolved_imports)
-        for target_path in _csharp_type_reference_targets(source, own_type_names, csharp_type_owners or {}):
+        for target_path, type_ref_ambiguous in _csharp_type_reference_targets(
+            source, own_type_names, csharp_type_owners or {}
+        ):
             target = _rel(repo_path, target_path)
             if target is not None and target != rel_path and target not in already:
                 already.add(target)
                 resolved_imports.append(target)
+                if type_ref_ambiguous:
+                    import_confidence[target] = "ambiguous"
     else:
         raw_imports, functions, classes = _extract_javascript(tree.root_node, source)
         for spec in raw_imports:
@@ -2310,13 +2369,16 @@ def _extract_module(
             if target is not None:
                 resolved_imports.append(target)
 
-    return {
+    module: dict = {
         "path": rel_path,
         "language": language_name,
         "imports": resolved_imports,
         "imported_by": [],
         "symbols": {"functions": functions, "classes": classes, "constants": constants},
     }
+    if import_confidence:
+        module["import_confidence"] = import_confidence
+    return module
 
 
 def _read_and_parse(path: Path, parser: Parser, ts_language: Language) -> tuple[bytes, Tree]:
@@ -2586,6 +2648,14 @@ def build_module_graph(
         root = _java_source_root_for(path, package)
         if root is not None and root not in java_source_roots:
             java_source_roots.append(root)
+    # Appended in _iter_source_files walk order, which is filesystem-dependent
+    # and not guaranteed stable across runs/platforms - an ambiguous import
+    # (resolvable via more than one root) could otherwise resolve differently
+    # between two scans of the identical repo. Same fix, same reasoning, as
+    # _python_source_roots' own sort below: shallower roots first, since a
+    # root closer to repo_path is more likely to be the actually-configured
+    # one than one nested deep inside a single module.
+    java_source_roots.sort(key=lambda p: (len(p.parts), str(p)))
 
     php_psr4_map = _load_php_psr4_map(repo_path)
 

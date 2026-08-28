@@ -397,6 +397,48 @@ def test_python_source_roots_returns_a_sorted_deterministic_list(tmp_path):
     assert roots == [repo, repo / "app", repo / "src"]
 
 
+def test_ambiguous_absolute_import_is_flagged_inferred(tmp_path):
+    # Same two-project monorepo shape as the sorted-roots test above, but this
+    # time the same dotted path ("shared.util") genuinely exists under both
+    # source roots - a real tiebreak, not just multiple roots existing. The
+    # edge still resolves (to whichever root sorts first, same determinism as
+    # above), but import_confidence must record that a choice was made among
+    # more than one real candidate, not presented as a certain resolution.
+    repo = tmp_path / "repo"
+    for project in ("app", "src"):
+        pkg_dir = repo / project / "shared"
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "__init__.py").write_text("")
+        (pkg_dir / "util.py").write_text("x = 1\n")
+    (repo / "main.py").write_text("import shared.util\n")
+
+    modules, _graph, _unparseable = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+
+    main = by_path["main.py"]
+    assert main["imports"] == ["app/shared/util.py"]
+    assert main["import_confidence"] == {"app/shared/util.py": "inferred"}
+
+
+def test_unambiguous_absolute_import_gets_no_confidence_entry(tmp_path):
+    # The overwhelmingly common case (single source root, or a dotted path
+    # only one root can resolve) must cost nothing - no import_confidence
+    # key for the edge, and no import_confidence field on the module at all.
+    repo = tmp_path / "repo"
+    pkg_dir = repo / "shared"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "__init__.py").write_text("")
+    (pkg_dir / "util.py").write_text("x = 1\n")
+    (repo / "main.py").write_text("import shared.util\n")
+
+    modules, _graph, _unparseable = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+
+    main = by_path["main.py"]
+    assert main["imports"] == ["shared/util.py"]
+    assert "import_confidence" not in main
+
+
 def test_build_module_graph_import_resolution_ignores_nested_git_worktree(tmp_path):
     # A different layer of the same real bug as
     # test_build_module_graph_ignores_nested_git_worktree above: that test

@@ -468,6 +468,9 @@
         "modules": {
           "items": {
             "properties": {
+              "import_confidence": {
+                "type": "object"
+              },
               "imported_by": {
                 "type": "array"
               },

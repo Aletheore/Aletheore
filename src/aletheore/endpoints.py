@@ -87,7 +87,9 @@ def _resolve_from_import_binding(
                 continue
             module_name = source[module_node.start_byte:module_node.end_byte].decode()
             imported_name = source[imported_node.start_byte:imported_node.end_byte].decode()
-            target = _resolve_python_from_import(repo_path, module_name, imported_name, path, source_roots)
+            target, _ambiguous = _resolve_python_from_import(
+                repo_path, module_name, imported_name, path, source_roots
+            )
             if target is not None:
                 return target
     return None

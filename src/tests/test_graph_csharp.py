@@ -375,9 +375,40 @@ def test_csharp_type_reference_does_not_invent_edges_for_unrelated_files(tmp_pat
     assert "src/Loner.cs" not in by_path["src/Mapper.cs"]["imports"]
 
 
-def test_csharp_ambiguous_type_name_declared_twice_creates_no_edge(tmp_path):
-    """A false edge invents a dependency the wiki then explains, so a name that
-    two files declare must contribute nothing rather than guess."""
+def test_csharp_ambiguous_using_prefix_is_flagged_inferred(tmp_path):
+    # Two distinct registered namespace prefixes both match "App.Extra.Foo" -
+    # "App." (from Handler.cs, whose directory doesn't mirror the "App"
+    # segment) and the more specific "App.Extra." (from Thing.cs, same
+    # reasoning one level deeper). The longest-prefix rule resolves it
+    # deterministically, but two real candidates existed, not one.
+    repo = tmp_path / "repo"
+    (repo / "Handlers").mkdir(parents=True)
+    (repo / "Extra" / "Sub").mkdir(parents=True)
+    (repo / "Extra" / "Foo").mkdir(parents=True)
+    (repo / "Handlers" / "Handler.cs").write_text(
+        "namespace App.Handlers\n{\n    public class Handler\n    {\n    }\n}\n"
+    )
+    (repo / "Extra" / "Sub" / "Thing.cs").write_text(
+        "namespace App.Extra.Sub\n{\n    public class Thing\n    {\n    }\n}\n"
+    )
+    (repo / "Extra" / "Foo" / "Bar.cs").write_text(
+        "namespace App.Extra.Foo\n{\n    public class Bar\n    {\n    }\n}\n"
+    )
+    (repo / "Main.cs").write_text("using App.Extra.Foo;\n\nclass Program\n{\n}\n")
+
+    modules, _dependency_graph, _unparseable = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+
+    main = by_path["Main.cs"]
+    assert main["imports"] == ["Extra/Foo/Bar.cs"]
+    assert main["import_confidence"] == {"Extra/Foo/Bar.cs": "inferred"}
+
+
+def test_csharp_ambiguous_type_name_declared_twice_creates_a_flagged_edge(tmp_path):
+    """A name two files declare still produces an edge - to a deterministically
+    chosen owner (sorted first) - rather than contributing nothing, since dropping
+    it loses strictly more information than keeping a flagged guess does. The
+    uncertainty is surfaced via import_confidence, not by silently guessing."""
     repo = tmp_path / "repo"
     (repo / "a").mkdir(parents=True)
     (repo / "b").mkdir(parents=True)
@@ -390,7 +421,8 @@ def test_csharp_ambiguous_type_name_declared_twice_creates_no_edge(tmp_path):
     )
     modules, _edges = build_module_graph(repo)[:2]
     by_path = {m["path"]: m for m in modules}
-    assert by_path["user.cs"]["imports"] == []
+    assert by_path["user.cs"]["imports"] == ["a/Duplicate.cs"]
+    assert by_path["user.cs"]["import_confidence"] == {"a/Duplicate.cs": "ambiguous"}
 
 
 def test_csharp_short_type_names_are_not_matched(tmp_path):

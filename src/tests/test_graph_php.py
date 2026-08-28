@@ -94,6 +94,30 @@ def test_build_module_graph_php_psr4_use_resolves(tmp_path):
     assert ("main.php", "src/Handlers/Handler.php") in edges
 
 
+def test_build_module_graph_php_psr4_ambiguous_prefix_is_flagged_inferred(tmp_path):
+    # Two registered PSR-4 prefixes both match "App\Extra\Foo" ("App\" -> src/
+    # and the more specific "App\Extra\" -> extra/) - PSR-4's own
+    # longest-prefix-wins rule resolves it deterministically, but that's still
+    # a real choice among multiple registered candidates, not a certainty.
+    repo = tmp_path / "repo"
+    (repo / "extra").mkdir(parents=True)
+    (repo / "composer.json").write_text(
+        '{"name": "example/webservice", '
+        '"autoload": {"psr-4": {"App\\\\": "src/", "App\\\\Extra\\\\": "extra/"}}}'
+    )
+    (repo / "extra" / "Foo.php").write_text(
+        "<?php\n\nnamespace App\\Extra;\n\nclass Foo\n{\n}\n"
+    )
+    (repo / "main.php").write_text("<?php\n\nuse App\\Extra\\Foo;\n")
+
+    modules, _dependency_graph, _unparseable = build_module_graph(repo)
+    by_path = {m["path"]: m for m in modules}
+
+    main = by_path["main.php"]
+    assert main["imports"] == ["extra/Foo.php"]
+    assert main["import_confidence"] == {"extra/Foo.php": "inferred"}
+
+
 def test_build_module_graph_php_dir_concat_require_resolves(tmp_path):
     repo = make_php_repo(tmp_path)
     _, dependency_graph, _ = build_module_graph(repo)

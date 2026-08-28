@@ -14,6 +14,7 @@ from aletheore.evidence import (
 )
 from aletheore.history import list_snapshots
 from aletheore.mcp_server import build_server, read_evidence
+from aletheore.wiki_diagrams import _ambiguous_edges
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -87,6 +88,17 @@ def build_history_summary(repo_path: Path) -> list[dict]:
 def build_graph_summary(evidence: dict) -> dict:
     dependency_graph = evidence["repository"]["dependency_graph"]
     clusters = evidence["architecture"]["clusters"]
+    # Unlike wiki_diagrams.py's static mermaid builders (which exclude these
+    # entirely - a rendered mermaid edge has no way to look "less certain"),
+    # this graph is interactive, so an edge whose resolution was genuinely
+    # uncertain (currently C# type-reference edges kept despite more than
+    # one file declaring that type name - see scanner/graph.py's
+    # _csharp_type_reference_targets) is still drawn, just marked so the
+    # frontend can dim/dash it rather than presenting it identically to a
+    # certain edge. A source-root/prefix tiebreak among real candidates
+    # ("inferred") is not marked - that resolution is generally still
+    # correct, unlike genuine which-of-several-files uncertainty.
+    ambiguous = _ambiguous_edges(evidence["repository"].get("modules", []))
 
     node_to_cluster: dict[str, int] = {}
     for cluster in clusters:
@@ -98,7 +110,12 @@ def build_graph_summary(evidence: dict) -> dict:
         for node in dependency_graph["nodes"]
     ]
     edges = [
-        {"source": edge[0], "target": edge[1]} for edge in dependency_graph["edges"]
+        {
+            "source": edge[0],
+            "target": edge[1],
+            **({"ambiguous": True} if (edge[0], edge[1]) in ambiguous else {}),
+        }
+        for edge in dependency_graph["edges"]
     ]
 
     return {"nodes": nodes, "edges": edges, "clusters": clusters}
@@ -578,8 +595,15 @@ function renderGraph(data) {
   let svgContent = '';
   edges.forEach(e => {
     const a = nodeById[e.source], b = nodeById[e.target];
+    // Ambiguous (see build_graph_summary) draws dashed and dimmed rather than
+    // being excluded entirely - still a real, citable edge, just one the
+    // resolver picked among more than one equally-plausible candidate for,
+    // so it should read as less certain rather than vanish outright.
+    const dash = e.ambiguous ? ' stroke-dasharray="4,3"' : '';
     svgContent += '<line data-source="' + escapeAttr(e.source) + '" data-target="' + escapeAttr(e.target) +
-      '" x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '" stroke="#333" stroke-width="1" />';
+      '" data-ambiguous="' + (e.ambiguous ? '1' : '0') + '"' +
+      ' x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y +
+      '" stroke="#333" stroke-width="1" opacity="' + (e.ambiguous ? '0.35' : '1') + '"' + dash + ' />';
   });
   nodes.forEach(n => {
     svgContent += '<circle data-id="' + escapeAttr(n.id) + '" data-base-r="6" cx="' + n.x + '" cy="' + n.y +
@@ -623,10 +647,13 @@ function highlightNodes(highlightSet, focusId) {
     const source = line.getAttribute('data-source');
     const target = line.getAttribute('data-target');
     const connectedToFocus = focusId ? (source === focusId || target === focusId) : (highlightSet.has(source) && highlightSet.has(target));
+    const ambiguous = line.getAttribute('data-ambiguous') === '1';
     // Unrelated edges go fully invisible (not just dim) while hovering - with ~1700 edges
     // rendered at once, even a low dim opacity reads as "many connections" purely from
-    // unrelated lines visually crossing near the hovered node's screen position.
-    line.setAttribute('opacity', connectedToFocus ? '0.9' : '0');
+    // unrelated lines visually crossing near the hovered node's screen position. An
+    // ambiguous edge stays visibly less certain even while focused, rather than
+    // reading as equally solid as every other highlighted connection.
+    line.setAttribute('opacity', connectedToFocus ? (ambiguous ? '0.5' : '0.9') : '0');
     line.setAttribute('stroke', connectedToFocus ? '#fff' : '#333');
   });
 }
@@ -652,7 +679,8 @@ function applyClusterFilter(clusterId) {
       const source = line.getAttribute('data-source');
       const target = line.getAttribute('data-target');
       const inCluster = memberSet.has(source) && memberSet.has(target);
-      line.setAttribute('opacity', inCluster ? '0.9' : '0');
+      const ambiguous = line.getAttribute('data-ambiguous') === '1';
+      line.setAttribute('opacity', inCluster ? (ambiguous ? '0.5' : '0.9') : '0');
       line.setAttribute('stroke', inCluster ? '#fff' : '#333');
     });
   });
@@ -682,7 +710,7 @@ function clearGraphFilter() {
       circle.setAttribute('r', circle.getAttribute('data-base-r') || '6');
     });
     svg.querySelectorAll('line').forEach(line => {
-      line.setAttribute('opacity', '1');
+      line.setAttribute('opacity', line.getAttribute('data-ambiguous') === '1' ? '0.35' : '1');
       line.setAttribute('stroke', '#333');
     });
   });
