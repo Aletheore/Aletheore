@@ -613,6 +613,23 @@ def test_splice_prior_files_no_prior_record_is_noop():
     assert _splice_prior_files(sanitized, None) == sanitized
 
 
+def test_splice_prior_files_splices_a_blank_role_even_with_a_stray_non_empty_key_symbols():
+    # Regression: a non-compliant model response could write a blank role
+    # but a hallucinated key_symbols entry for a file it was told to skip.
+    # Keying the splice on role=="" alone (not role=="" AND key_symbols==[])
+    # catches this - role is never legitimately blank for a file the model
+    # actually wrote, so blank role alone is sufficient to mean "unwritten."
+    sanitized = [
+        {"path": "auth/login.py", "role": "", "key_symbols": [{"name": "stray", "line": 1, "explanation": "x"}]}
+    ]
+    prior_record = {"files": [{"path": "auth/login.py", "role": "Old role.", "key_symbols": []}]}
+
+    result = _splice_prior_files(sanitized, prior_record)
+
+    assert result[0]["role"] == "Old role."
+    assert result[0]["key_symbols"] == []
+
+
 def test_build_subsystem_record_sends_skip_files_to_model():
     evidence = make_evidence()
     cluster = evidence["architecture"]["clusters"][0]

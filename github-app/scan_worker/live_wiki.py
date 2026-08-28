@@ -511,17 +511,23 @@ def _sanitize_written_files(written_files, brief_files: list[dict]) -> list[dict
 
 
 def _splice_prior_files(sanitized_files: list[dict], prior_record: dict | None) -> list[dict]:
-    """Fills a blank entry (role="" and no key_symbols - either because the
-    file was in that item's skip_files, or because the model omitted it
-    despite being asked) with the same path's entry from the last stored
-    record, including `detail` if that file already has its own reference
-    page. This is what makes skip_files free: the caller doesn't have to
-    tell the difference between "deliberately skipped" and "model dropped
-    it" - both degrade to the last known-good content instead of blank,
-    which is only ever an improvement over today's blank-on-omission
-    behavior. A path with no matching prior entry (new to this subsystem,
-    or predates the last stored record) is left exactly as sanitized_files
-    had it.
+    """Fills a blank entry (role=="" - either because the file was in that
+    item's skip_files, or because the model omitted it despite being asked)
+    with the same path's entry from the last stored record, including
+    `detail` if that file already has its own reference page. This is what
+    makes skip_files free: the caller doesn't have to tell the difference
+    between "deliberately skipped" and "model dropped it" - both degrade to
+    the last known-good content instead of blank, which is only ever an
+    improvement over today's blank-on-omission behavior. A path with no
+    matching prior entry (new to this subsystem, or predates the last
+    stored record) is left exactly as sanitized_files had it.
+
+    Keyed on role alone, not role AND an empty key_symbols: the prompt
+    requires 2-3 sentences for role, so an empty role is never a legitimate
+    "correctly written, intentionally blank" response - it always means
+    unwritten. Requiring key_symbols to also be empty would let a
+    non-compliant model response (blank role, but some hallucinated
+    key_symbols entry) slip past unsplied as a hollow, half-written entry.
     """
     if not prior_record:
         return sanitized_files
@@ -531,7 +537,7 @@ def _splice_prior_files(sanitized_files: list[dict], prior_record: dict | None) 
     result = []
     for entry in sanitized_files:
         prior_entry = prior_by_path.get(entry["path"])
-        if entry["role"] == "" and not entry["key_symbols"] and prior_entry is not None:
+        if entry["role"] == "" and prior_entry is not None:
             spliced = {
                 "path": entry["path"],
                 "role": prior_entry.get("role", ""),
