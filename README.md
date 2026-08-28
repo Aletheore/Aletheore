@@ -94,7 +94,7 @@ configuration options: **[`src/README.md`](src/README.md)**.
 
 Everything above is the free, local-first CLI (Aletheore Community). Installing the
 [Aletheore GitHub App](https://aletheore.com) adds a hosted layer on top of the same
-evidence — paid plans start at $29.99/mo for up to 5 team members:
+evidence — paid plans start at $29.99/mo for up to 3 team members (additional seats $6.99/mo each):
 
 - **Automated PR review** — Flash reviews and managed audits comment directly on pull
   requests, scoped to the changed hunks, citing file:line evidence. Blast-radius checks

@@ -83,6 +83,57 @@ def read_evidence(repo_path: Path) -> dict:
     return evidence
 
 
+# Surfaced in the MCP `initialize` handshake itself - every client shows
+# this to the connecting agent before any tool is called, unlike a resource
+# the agent would have to separately think to fetch. Content sourced from
+# real, measured facts rather than generic advice: the vocabulary claim is
+# our own benchmark's finding (aletheore-benchmarks, "Where we lose" -
+# several corpora scored below 35% top-1 under vocabulary-avoiding phrasing,
+# recovering 20-47 points when the same questions used the project's own
+# terms), not a guess. Kept to what changes agent behavior, not a full tool
+# catalog - each tool's own docstring is already visible to the client.
+SERVER_INSTRUCTIONS = """Aletheore is a deterministic, evidence-grounded code intelligence tool for \
+this repository - every result cites a real file:line, nothing is invented.
+
+Getting started on an unfamiliar repo: call aletheore_overview first. If no \
+evidence exists yet, run aletheore_scan once - the deterministic parse and \
+dependency-graph pass every other tool reads from. aletheore_search_codebase \
+and aletheore_answer additionally require aletheore_index to have run first \
+(builds the semantic index on top of scan evidence); every other tool works \
+straight off scan evidence alone.
+
+Timing: aletheore_scan and aletheore_index both report live progress while \
+running, not a silent hang - a small repo finishes in seconds, a large \
+monorepo can take several minutes. Don't assume either has failed just \
+because it's still running; check the reported progress before retrying.
+
+Before your first aletheore_search or aletheore_search_codebase/aletheore_answer \
+call: if you don't already know the exact identifier, file name, or term \
+you're looking for, do not guess a paraphrase and query with it first. \
+aletheore_search is literal/regex - a paraphrase there doesn't score lower, \
+it matches nothing at all, since the tool never sees your intent, only the \
+literal string. aletheore_search_codebase and aletheore_answer are semantic \
+and degrade more gracefully, but our own published benchmark still measured \
+real, large accuracy drops from paraphrasing - several corpora scored under \
+35% top-1 accuracy on vocabulary-avoiding phrasing, recovering 20-47 points \
+when the same question used the project's own terms instead. So: call \
+aletheore_overview, aletheore_symbols, or aletheore_list FIRST to find the \
+repo's actual identifiers, file names, and terminology, THEN query with \
+those - not a generic description of what you think the code might be \
+called. This ordering matters even when you're fairly confident in a guess; \
+confirming the real name first is cheap, a wasted or degraded query is not.
+
+Prefer exact tools when the target is already known: aletheore_imports, \
+aletheore_imported_by, aletheore_symbols, aletheore_symbol_source, \
+aletheore_neighborhood, and the aletheore_find_evidence_for_* tools are \
+exact (not approximate) and need no semantic index. So are the security/ \
+quality tools (aletheore_secrets, aletheore_vulnerabilities, \
+aletheore_licenses, aletheore_dead_code, aletheore_hotspots, \
+aletheore_layer_violations). Reach for aletheore_search_codebase/ \
+aletheore_answer only for open-ended "how does this work" questions the \
+exact tools can't answer directly."""
+
+
 def _toon_result(data: object) -> str:
     # Every tool result is TOON-encoded rather than returned as a plain dict
     # (which MCPServer would otherwise auto-serialize to JSON) - this is the
@@ -165,6 +216,19 @@ _SEARCH_MATCH_CAP = 200
 # what happened rather than returning results.
 _SEARCH_TIMEOUT_SECONDS = 5.0
 
+# _SEARCH_MATCH_CAP alone doesn't bound the result's total size - 200
+# matches of long lines (a minified bundle, a generated file, a single huge
+# JSON line) can still produce an oversized result even under the count
+# cap. Confirmed live: an unscoped literal search on a common word returned
+# a result the calling MCP client rejected outright for exceeding its own
+# ~390,000-char limit, with 200 matches well under the count cap. Both caps
+# below exist because either alone is insufficient - a handful of huge
+# lines defeats the count cap (this repro: 200 matches x 3000-char lines =
+# ~600,000 chars), and a huge number of merely-long lines would defeat a
+# per-line cap without an aggregate budget too.
+_SEARCH_LINE_MAX_CHARS = 500
+_SEARCH_TOTAL_CHAR_BUDGET = 100_000
+
 
 def _search_files(repo_path: Path, pattern: str, regex: bool, path_glob: str | None) -> dict:
     """The actual search. Literal (non-regex) mode has no backtracking risk
@@ -173,6 +237,7 @@ def _search_files(repo_path: Path, pattern: str, regex: bool, path_glob: str | N
     compiled = re.compile(pattern) if regex else None
     matches: list[dict] = []
     truncated = False
+    total_chars = 0
     ignored_paths = load_repo_config(repo_path)["ignored_paths"]
 
     for path in iter_all_files(repo_path, ignored_paths):
@@ -187,10 +252,16 @@ def _search_files(repo_path: Path, pattern: str, regex: bool, path_glob: str | N
         for line_no, line in enumerate(text.splitlines(), start=1):
             found = compiled.search(line) is not None if compiled else pattern in line
             if found:
-                if len(matches) >= _SEARCH_MATCH_CAP:
+                if len(matches) >= _SEARCH_MATCH_CAP or total_chars >= _SEARCH_TOTAL_CHAR_BUDGET:
                     truncated = True
                     break
-                matches.append({"path": rel_path, "line": line_no, "text": line})
+                line_text = (
+                    line[:_SEARCH_LINE_MAX_CHARS] + "... (line truncated)"
+                    if len(line) > _SEARCH_LINE_MAX_CHARS
+                    else line
+                )
+                matches.append({"path": rel_path, "line": line_no, "text": line_text})
+                total_chars += len(line_text)
         if truncated:
             break
 
@@ -445,7 +516,11 @@ def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
 def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_symbol_source", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_symbol_source(module: str, symbol: str) -> str:
-        """Exact source text for one named function/class, with resolved line bounds."""
+        """Exact source text for one named function/class, with resolved line bounds.
+
+        Two separate arguments, not a combined "path::name" - module: the
+        file path exactly as it appears in evidence (e.g. "src/app.py").
+        symbol: the function or class name alone (e.g. "my_function")."""
         evidence = read_evidence(repo_path)
         return _toon_result(find_symbol_source(evidence, repo_path, module, symbol))
 
@@ -470,7 +545,11 @@ def _register_verify_citations_tool(mcp_instance: MCPServer, repo_path: Path) ->
 def _register_code_evidence_tools(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_find_evidence_for_endpoint", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_find_evidence_for_endpoint(method: str, path: str) -> str:
-        """Resolve an API endpoint to source evidence: file, line, symbol, owner, commit, dependency, and risk."""
+        """Resolve an API endpoint to source evidence: file, line, symbol, owner, commit, dependency, and risk.
+
+        Two separate arguments - method: the HTTP verb (e.g. "GET").
+        path: the route path exactly as it appears in evidence (e.g.
+        "/users/{id}"), not combined with the method into one string."""
         evidence = read_evidence(repo_path)
         return _toon_result(find_code_evidence_for_endpoint(evidence, f"{method} {path}", repo_path))
 
@@ -719,7 +798,7 @@ def build_server(
     """
     effects = allowed_effects(os.environ.get(_ALLOW_ENV_VAR)) if allow is None else allow
 
-    mcp_instance = MCPServer("aletheore")
+    mcp_instance = MCPServer("aletheore", instructions=SERVER_INSTRUCTIONS)
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)

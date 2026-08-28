@@ -628,7 +628,11 @@ def list_health_check_targets_all(dsn: str) -> list[dict]:
                        i.pushover_user_key
                 FROM health_check_targets t
                 JOIN installations i ON i.installation_id = t.installation_id
+                LEFT JOIN hidden_repos hr
+                    ON hr.installation_id = t.installation_id
+                   AND hr.repo_full_name = t.repo_full_name
                 WHERE i.plan != 'free'
+                  AND hr.installation_id IS NULL
                 """
             )
             columns = [description[0] for description in cur.description]
@@ -1204,7 +1208,11 @@ def list_paid_repos_due_for_docs_catchup(dsn: str, interval_seconds: int) -> lis
                 LEFT JOIN docs_catchup_sweeps s
                     ON s.installation_id = rh.installation_id
                    AND s.repo_full_name = rh.repo_full_name
+                LEFT JOIN hidden_repos hr
+                    ON hr.installation_id = rh.installation_id
+                   AND hr.repo_full_name = rh.repo_full_name
                 WHERE i.plan != 'free'
+                  AND hr.installation_id IS NULL
                   AND (
                         s.last_swept_at IS NULL
                         OR (
@@ -1249,7 +1257,11 @@ def list_paid_repos_due_for_wiki_catchup(dsn: str, interval_seconds: int) -> lis
                 LEFT JOIN wiki_catchup_sweeps s
                     ON s.installation_id = rh.installation_id
                    AND s.repo_full_name = rh.repo_full_name
+                LEFT JOIN hidden_repos hr
+                    ON hr.installation_id = rh.installation_id
+                   AND hr.repo_full_name = rh.repo_full_name
                 WHERE i.plan != 'free'
+                  AND hr.installation_id IS NULL
                   AND (
                         s.last_swept_at IS NULL
                         OR (

@@ -44,12 +44,15 @@ _RETRY_BASE_DELAY_SECONDS = 1.0
 _T = TypeVar("_T")
 
 
-def _call_with_retry(fn: Callable[[], _T]) -> _T:
+def _call_with_retry(
+    fn: Callable[[], _T],
+    retryable_exceptions: tuple[type[Exception], ...] = _RETRYABLE_EXCEPTIONS,
+) -> _T:
     last_exc: Exception | None = None
     for attempt in range(_MAX_CALL_ATTEMPTS):
         try:
             return fn()
-        except _RETRYABLE_EXCEPTIONS as exc:
+        except retryable_exceptions as exc:
             last_exc = exc
             if attempt < _MAX_CALL_ATTEMPTS - 1:
                 time.sleep(_RETRY_BASE_DELAY_SECONDS * (2**attempt))

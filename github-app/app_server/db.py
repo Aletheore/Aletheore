@@ -706,7 +706,7 @@ async def set_extra_seats(pool: asyncpg.Pool, installation_id: int, extra_seats:
     )
 
 
-INCLUDED_SEATS = {"air": 5}
+INCLUDED_SEATS = {"air": 3}
 DEFAULT_SEAT_LIMIT = 5
 
 
@@ -1496,12 +1496,54 @@ async def list_repos_for_installations(pool: asyncpg.Pool, installation_ids: lis
         SELECT DISTINCT rh.installation_id, rh.repo_full_name, i.account_login, i.plan
         FROM repo_history rh
         JOIN installations i ON i.installation_id = rh.installation_id
+        LEFT JOIN hidden_repos hr
+            ON hr.installation_id = rh.installation_id AND hr.repo_full_name = rh.repo_full_name
         WHERE rh.installation_id = ANY($1::bigint[])
+          AND hr.installation_id IS NULL
         ORDER BY i.account_login ASC, rh.repo_full_name ASC
         """,
         installation_ids,
     )
     return [dict(row) for row in rows]
+
+
+async def hide_repo(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> None:
+    """Marks a repo as soft-removed: hidden from the dashboard, and a no-op
+    target for any new webhook/scheduled trigger (see is_repo_hidden). Fired
+    from installation_repositories/removed - the customer deselected this
+    one repo without uninstalling the app, so nothing here is deleted; see
+    unhide_repo for the reverse.
+    """
+    await pool.execute(
+        """
+        INSERT INTO hidden_repos (installation_id, repo_full_name)
+        VALUES ($1, $2)
+        ON CONFLICT (installation_id, repo_full_name) DO NOTHING
+        """,
+        installation_id,
+        repo_full_name,
+    )
+
+
+async def unhide_repo(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> None:
+    """Reverses hide_repo - fired from installation_repositories/added, in
+    case the repo being (re-)added was previously deselected under this
+    same installation.
+    """
+    await pool.execute(
+        "DELETE FROM hidden_repos WHERE installation_id = $1 AND repo_full_name = $2",
+        installation_id,
+        repo_full_name,
+    )
+
+
+async def is_repo_hidden(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> bool:
+    row = await pool.fetchrow(
+        "SELECT 1 FROM hidden_repos WHERE installation_id = $1 AND repo_full_name = $2",
+        installation_id,
+        repo_full_name,
+    )
+    return row is not None
 
 
 async def get_wiki_build_status(pool: asyncpg.Pool, installation_id: int, repo_full_name: str) -> dict | None:
