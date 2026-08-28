@@ -16,8 +16,19 @@ from app_server.llm_cost import WARN_FRACTION_OF_CAP, crossed_spend_warning_thre
 logger = logging.getLogger(__name__)
 
 # Advisory locks share one Postgres key space across app-server and
-# scan-worker. Keep namespace 1 identical to app_server.db; namespace 2 is
-# reserved for the session-scoped spend lock. The installation id is key 2.
+# scan-worker - pg_advisory_lock/pg_advisory_xact_lock key on the literal
+# (namespace, key) pair regardless of which file took the lock, so every
+# namespace value claimed here must stay disjoint from every namespace
+# app_server.db claims too, not just internally consistent within this
+# file. Keep namespace 1 identical to app_server.db (the same monthly-scan-
+# slot reservation, taken from either process); namespace 2 is reserved for
+# the session-scoped spend lock. app_server.db currently claims 1 (shared,
+# see above), 4 (HEALTH_CHECK_TARGET_LOCK_NAMESPACE), 5
+# (API_TOKEN_LOCK_NAMESPACE), and 6 (SEAT_LOCK_NAMESPACE) - 3 used to be an
+# independent, unintentional collision with SEAT_LOCK_NAMESPACE
+# (docs/audits/Claude_Audit.md finding 30, confirmed live: a held checkout
+# lock made a concurrent seat-admission call block for its full
+# lock_timeout and then fail), fixed by moving SEAT_LOCK_NAMESPACE to 6.
 SCAN_SLOT_LOCK_NAMESPACE = 1
 SPEND_LOCK_NAMESPACE = 2
 # Namespace 3 is reserved for the per-repo checkout lock (see

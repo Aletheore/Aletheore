@@ -493,17 +493,29 @@ async def insert_repo_history(
 # enforce the same cap against the same monthly_scanned_repos table.
 MAX_SCANNED_REPOS_PER_MONTH = 10
 # Advisory locks use the same Postgres global key space across app-server and
-# scan-worker connections. Keep this namespace value identical in both files;
-# the second key is the installation id.
+# scan-worker connections - pg_advisory_lock/pg_advisory_xact_lock key on the
+# literal (namespace, key) pair regardless of which function or file took
+# the lock, so every namespace value claimed in either file must stay
+# disjoint from every namespace claimed in the other, not just internally
+# consistent within one file. Live-verified: two unrelated locks sharing a
+# namespace genuinely block each other whenever their second key (an
+# installation id here, hashtext(f"{installation_id}:{repo}") in
+# scan_worker's REPO_CHECKOUT_LOCK_NAMESPACE) happens to collide.
+#
+# scan_worker/db.py claims 1 (SCAN_SLOT_LOCK_NAMESPACE, shared/intentional -
+# the same monthly-scan-slot reservation, taken from either process) and 2
+# (SPEND_LOCK_NAMESPACE). 3 used to be claimed by both SEAT_LOCK_NAMESPACE
+# here and scan_worker's REPO_CHECKOUT_LOCK_NAMESPACE - an independent,
+# unintentional collision (docs/audits/Claude_Audit.md finding 30,
+# confirmed live: a held checkout lock made a concurrent seat-admission
+# call block for its full lock_timeout and then fail). Moved to 6, the
+# first value neither file had claimed, rather than reusing 4 or 5 below
+# (chosen after the collision was found, specifically to avoid it for new
+# locks - but never applied to the original clash until now).
 SCAN_SLOT_LOCK_NAMESPACE = 1
-SEAT_LOCK_NAMESPACE = 3
-# scan_worker/db.py separately claims 1 (shared, intentional - see above), 2
-# (SPEND_LOCK_NAMESPACE), and 3 (REPO_CHECKOUT_LOCK_NAMESPACE, an
-# independent, unintentional collision with SEAT_LOCK_NAMESPACE above - see
-# docs/audits/Claude_Audit.md finding 30). 4 and 5 chosen here specifically
-# because neither file has claimed them yet.
 HEALTH_CHECK_TARGET_LOCK_NAMESPACE = 4
 API_TOKEN_LOCK_NAMESPACE = 5
+SEAT_LOCK_NAMESPACE = 6
 ADVISORY_LOCK_TIMEOUT = "5s"
 
 

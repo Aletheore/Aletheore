@@ -1167,6 +1167,40 @@ async def test_scan_slot_lock_does_not_collide_with_spend_lock(pool):
         ) is True
 
 
+def test_seat_lock_and_repo_checkout_lock_namespaces_are_disjoint():
+    # docs/audits/Claude_Audit.md finding 30, confirmed live before this
+    # fix: SEAT_LOCK_NAMESPACE (app_server.db) and REPO_CHECKOUT_LOCK_NAMESPACE
+    # (here) both used to be 3 - pg_advisory_lock/pg_advisory_xact_lock key on
+    # the literal (namespace, key) pair regardless of which file took the
+    # lock, so a held repo-checkout lock genuinely blocked (then failed) a
+    # concurrent seat-admission call whenever their second keys collided.
+    # A static equality check, not a live-blocking repro - the live behavior
+    # is exactly what test_scan_slot_lock_does_not_collide_with_spend_lock
+    # below already demonstrates for a different namespace pair.
+    from app_server.db import SEAT_LOCK_NAMESPACE
+
+    assert SEAT_LOCK_NAMESPACE != REPO_CHECKOUT_LOCK_NAMESPACE
+
+
+def test_every_advisory_lock_namespace_is_disjoint_across_both_files():
+    # Broader guard than the seat/checkout pair above: every namespace value
+    # either file claims must stay disjoint from every namespace the other
+    # claims, except SCAN_SLOT_LOCK_NAMESPACE (deliberately shared - the same
+    # monthly-scan-slot reservation, taken from either process). A future
+    # namespace added to either file without checking the other would
+    # otherwise reintroduce this exact bug class silently.
+    from app_server.db import (
+        API_TOKEN_LOCK_NAMESPACE,
+        HEALTH_CHECK_TARGET_LOCK_NAMESPACE,
+        SEAT_LOCK_NAMESPACE,
+    )
+
+    app_server_only = {API_TOKEN_LOCK_NAMESPACE, HEALTH_CHECK_TARGET_LOCK_NAMESPACE, SEAT_LOCK_NAMESPACE}
+    scan_worker_only = {SPEND_LOCK_NAMESPACE, REPO_CHECKOUT_LOCK_NAMESPACE}
+
+    assert app_server_only.isdisjoint(scan_worker_only)
+
+
 @pytest.mark.asyncio
 async def test_scan_slot_lock_still_serializes_same_purpose(pool):
     import psycopg
