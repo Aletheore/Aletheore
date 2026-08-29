@@ -18,13 +18,27 @@ def test_welcome_email_greets_by_login_and_includes_pricing_link():
 
 
 def test_payment_failed_email_names_account_and_does_not_promise_a_grace_period():
-    message = payment_failed_email("acme-corp")
+    message = payment_failed_email("acme-corp", "air")
     assert "acme-corp" in message["text"]
     assert "acme-corp" in message["html"]
     # Access is already fully revoked by the time this fires (no dunning
     # grace period) - the copy must say so, not imply access is still on.
     assert "resubscribe" in message["text"].lower()
     assert "pricing.html" in message["html"]
+    assert "Aletheore AIR" in message["text"]
+
+
+def test_payment_failed_email_names_flash_not_air_for_a_flash_downgrade():
+    """Real bug: this used to hardcode "AIR" regardless of which plan was
+    actually lost - a flash customer's failed payment produced an email
+    naming AIR-exclusive features (AIRview, endpoint monitoring) they
+    never had."""
+    message = payment_failed_email("acme-corp", "flash")
+    assert "Aletheore Flash" in message["text"]
+    assert "Aletheore AIR" not in message["text"]
+    assert "AIRview" not in message["text"]
+    assert "endpoint monitoring" not in message["text"]
+    assert "automated PR reviews" in message["text"]
 
 
 def test_deletion_otp_email_includes_the_code_and_a_10_minute_expiry():
@@ -82,16 +96,26 @@ def test_health_alert_email_escapes_html_in_repo_controlled_alert_text():
 
 
 def test_subscription_canceled_email_names_account_and_lists_what_is_lost():
-    message = subscription_canceled_email("acme-corp")
+    message = subscription_canceled_email("acme-corp", "air")
     assert "acme-corp" in message["text"]
     assert "acme-corp" in message["html"]
     assert "AIRview" in message["text"]
     assert "pricing.html" in message["html"]
 
 
+def test_subscription_canceled_email_names_flash_not_air_for_a_flash_cancellation():
+    message = subscription_canceled_email("acme-corp", "flash")
+    assert "Aletheore Flash" in message["text"]
+    assert "Aletheore AIR" not in message["text"]
+    assert "AIRview" not in message["text"]
+    assert "endpoint health monitoring" not in message["text"]
+    assert "automated PR reviews" in message["text"]
+
+
 def test_weekly_digest_email_reports_real_numbers_when_active():
     message = weekly_digest_email(
         account_login="acme-corp",
+        plan="air",
         scans_this_week=3,
         endpoints_reachable=4,
         endpoints_total=5,
@@ -108,6 +132,7 @@ def test_weekly_digest_email_reports_real_numbers_when_active():
 def test_weekly_digest_email_singular_scan_and_review_wording():
     message = weekly_digest_email(
         account_login="acme-corp",
+        plan="air",
         scans_this_week=1,
         endpoints_reachable=1,
         endpoints_total=1,
@@ -124,6 +149,7 @@ def test_weekly_digest_email_reads_naturally_with_zero_activity():
     # something that reads as an invitation, not a broken report.
     message = weekly_digest_email(
         account_login="quiet-co",
+        plan="air",
         scans_this_week=0,
         endpoints_reachable=0,
         endpoints_total=0,
@@ -133,4 +159,26 @@ def test_weekly_digest_email_reads_naturally_with_zero_activity():
     assert "No scans run this week" in message["text"]
     assert "No endpoints being monitored yet" in message["text"]
     assert "0/0 reachable" not in message["text"]
-    assert "$0.00" in message["text"]
+
+
+def test_weekly_digest_email_omits_endpoint_monitoring_and_dashboard_for_flash():
+    """Real bug: this used to unconditionally promote endpoint monitoring
+    and a managed dashboard - both AIR-exclusive - to every paid
+    installation including flash, which has neither."""
+    message = weekly_digest_email(
+        account_login="acme-corp",
+        plan="flash",
+        scans_this_week=3,
+        endpoints_reachable=0,
+        endpoints_total=0,
+        llm_spend_month_to_date=1.23,
+        flash_reviews_month_to_date=5,
+    )
+    assert "Aletheore Flash" in message["text"]
+    assert "Aletheore AIR" not in message["text"]
+    assert "Endpoint monitoring" not in message["text"]
+    assert "No endpoints being monitored yet" not in message["text"]
+    assert "app.aletheore.com/dashboard" not in message["text"]
+    assert "Manage your subscription" in message["text"]
+    assert "pricing.html" in message["text"]
+    assert "$1.23" in message["text"]

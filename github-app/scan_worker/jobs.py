@@ -3495,6 +3495,7 @@ def run_weekly_digest_sweep_job() -> None:
 
             context = {
                 "account_login": installation["account_login"],
+                "plan": installation["plan"],
                 "scans_this_week": count_repo_scans_since(dsn, installation_id, since),
                 "llm_spend_month_to_date": get_llm_spend_this_month(dsn, installation_id),
                 "flash_reviews_month_to_date": get_flash_review_count_this_month(dsn, installation_id),

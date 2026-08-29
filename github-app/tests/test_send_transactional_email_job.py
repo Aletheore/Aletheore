@@ -69,9 +69,11 @@ def test_sends_with_rendered_template_and_records_on_success(monkeypatch):
 
 def test_dict_template_arg_is_expanded_as_keyword_args(monkeypatch):
     # weekly_digest needs several values, unlike the single-string
-    # templates (welcome/payment_failed/subscription_canceled) - a dict
-    # template_arg is expanded as **kwargs into the render function
-    # rather than passed positionally.
+    # templates (welcome) - a dict template_arg is expanded as **kwargs
+    # into the render function rather than passed positionally. Since the
+    # flash-tier fix, payment_failed/subscription_canceled also use a
+    # dict (account_login + plan) - this test only needs to cover the
+    # expansion mechanism once, via weekly_digest.
     monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
     monkeypatch.setattr("scan_worker.jobs.email_already_sent", lambda dsn, key: False)
 
@@ -90,6 +92,7 @@ def test_dict_template_arg_is_expanded_as_keyword_args(monkeypatch):
         "weekly_digest",
         {
             "account_login": "acme",
+            "plan": "air",
             "scans_this_week": 2,
             "endpoints_reachable": 1,
             "endpoints_total": 1,
