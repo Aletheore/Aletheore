@@ -186,6 +186,14 @@ def test_main_with_no_command_shows_banner_and_exits_cleanly():
     assert "scan" in result.output and "audit" in result.output
 
 
+def test_main_with_no_command_shows_support_contact():
+    with patch("aletheore.cli._check_for_update", return_value="up to date"):
+        result = runner.invoke(app, [])
+
+    assert result.exit_code == 0
+    assert "support@aletheore.com" in result.output
+
+
 def test_main_with_no_command_prints_update_notice_when_available():
     with patch("aletheore.cli._check_for_update", return_value="update available: 9.9.9"):
         result = runner.invoke(app, [])
@@ -706,6 +714,18 @@ def test_scan_command_nudges_free_tier_users_toward_the_github_app(tmp_path):
 
     assert result.exit_code == 0
     assert "github.com/apps/aletheore/installations/new" in result.output
+
+
+def test_scan_command_nudge_stays_honest_about_the_rate_limit(tmp_path):
+    # The install CTA itself shouldn't lead with the hedge (that undercuts
+    # the ask), but the rate-limit disclosure must still be there somewhere -
+    # softer placement isn't license to drop it.
+    (tmp_path / "main.py").write_text("x = 1\n")
+
+    result = runner.invoke(app, ["scan", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "rate-limited" in result.output
 
 
 def test_scan_command_does_not_nudge_after_a_git_analysis_error(tmp_path):
