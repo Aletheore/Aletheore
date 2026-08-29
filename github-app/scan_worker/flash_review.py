@@ -304,7 +304,7 @@ def build_blast_radius_context(
 
             symbols_analyzed += 1
             candidates = (module.get("imported_by") or [])[:MAX_BLAST_RADIUS_CANDIDATES]
-            # No caching needed: at most MAX_BLAST_RADIUS_SYMBOLS (5) distinct
+            # No caching needed: at most MAX_BLAST_RADIUS_SYMBOLS (10) distinct
             # patterns are ever compiled in one call, and a module-level cache
             # here would grow unbounded over a long-running scan-worker
             # process's whole lifetime (one entry per distinct symbol name
@@ -519,6 +519,13 @@ def _source_contract_signals(source: str) -> list[str]:
         signals.append("contains retry/loop markers")
     if re.search(r"\*\s*100\b|\bpercent|\bratio\b", source, re.IGNORECASE):
         signals.append("contains scaling/ratio markers")
+    if re.search(
+        r"\brequests\.(get|post|put|delete|patch|head)\s*\(|\burllib\.request\.|"
+        r"\bsocket\.(socket|connect)\s*\(|\.execute\s*\(|\bcursor\.\w+\s*\(|"
+        r"\bhttpx\.(get|post|put|delete|patch|Client)\s*\(",
+        source,
+    ):
+        signals.append("performs network/database I/O")
     return signals
 
 

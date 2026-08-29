@@ -20,6 +20,7 @@ from scan_worker.github_api import (
     find_open_pull_request,
     upsert_pr_comment,
     upsert_repo_file,
+    _trim_patch_context,
 )
 
 
@@ -156,6 +157,161 @@ def test_fetch_pr_diff_returns_empty_string_when_no_files_changed():
     diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
 
     assert diff_text == ""
+
+
+def test_trim_patch_context_shrinks_wide_context_to_one_line():
+    """Real corpus measurement (25 real cases, real gpt-5.6-luna calls):
+    trimming GitHub's default 3-line context to 1 held recall at parity
+    and cut real cost ~5.7% - see DIFF_PROMPT_CONTEXT_LINES's own comment
+    for the full real numbers this constant is grounded in."""
+    patch = (
+        "@@ -10,7 +10,8 @@ def foo():\n"
+        " line8\n"
+        " line9\n"
+        " line10\n"
+        "-old_line\n"
+        "+new_line_a\n"
+        "+new_line_b\n"
+        " line13\n"
+        " line14\n"
+        " line15"
+    )
+
+    trimmed = _trim_patch_context(patch, context_lines=1)
+
+    assert trimmed == (
+        "@@ -12,3 +12,4 @@ def foo():\n"
+        " line10\n"
+        "-old_line\n"
+        "+new_line_a\n"
+        "+new_line_b\n"
+        " line13"
+    )
+
+
+def test_trim_patch_context_splits_hunk_when_changes_are_far_apart():
+    """Two change clusters with more untouched context between them than
+    the trimmed window (1 line each side, so >2 lines of gap) become two
+    real, separately-numbered hunks - matching real `git diff -U1`
+    semantics, not one hunk with a stale middle section."""
+    patch = (
+        "@@ -1,10 +1,10 @@\n"
+        " line1\n"
+        "-line2\n"
+        "+line2_new\n"
+        " line3\n"
+        " line4\n"
+        " line5\n"
+        " line6\n"
+        " line7\n"
+        "-line8\n"
+        "+line8_new\n"
+        " line9\n"
+        " line10"
+    )
+
+    trimmed = _trim_patch_context(patch, context_lines=1)
+
+    assert trimmed == (
+        "@@ -1,3 +1,3 @@\n"
+        " line1\n"
+        "-line2\n"
+        "+line2_new\n"
+        " line3\n"
+        "@@ -7,3 +7,3 @@\n"
+        " line7\n"
+        "-line8\n"
+        "+line8_new\n"
+        " line9"
+    )
+
+
+def test_trim_patch_context_preserves_every_change_line():
+    """Whatever the context window does, no +/- line's content is ever
+    lost - only surrounding unchanged lines are ever dropped."""
+    patch = (
+        "@@ -1,10 +1,10 @@\n"
+        " a\n"
+        " b\n"
+        " c\n"
+        "-removed_one\n"
+        "+added_one\n"
+        " d\n"
+        " e\n"
+        " f\n"
+        "-removed_two\n"
+        "+added_two\n"
+        " g"
+    )
+
+    trimmed = _trim_patch_context(patch, context_lines=1)
+
+    assert "-removed_one" in trimmed
+    assert "+added_one" in trimmed
+    assert "-removed_two" in trimmed
+    assert "+added_two" in trimmed
+
+
+def test_trim_patch_context_handles_pure_addition():
+    """A zero-count old-side range ('-5,0', a pure insertion after old
+    line 5) needs different header math than a real, non-empty range -
+    difflib itself reports an empty range's position as 0, not 1, so the
+    same -1 offset that converts a normal range would shift this one by
+    one and silently misreport where the insertion really happened."""
+    patch = "@@ -5,0 +6,2 @@ def foo():\n+new_line_1\n+new_line_2"
+
+    trimmed = _trim_patch_context(patch, context_lines=1)
+
+    assert trimmed == patch
+    assert not any(line.startswith("-") for line in trimmed.splitlines()[1:])
+
+
+def test_trim_patch_context_handles_pure_removal():
+    """Symmetric case to the pure-addition test above, on the new side's
+    zero-count range instead of the old side's."""
+    patch = "@@ -5,2 +6,0 @@ def foo():\n-old_line_1\n-old_line_2"
+
+    trimmed = _trim_patch_context(patch, context_lines=1)
+
+    assert trimmed == patch
+
+
+def test_fetch_pr_diff_trims_prompt_text_but_keeps_original_patches_for_grounding():
+    original_patch = (
+        "@@ -1,7 +1,8 @@ def foo():\n"
+        " line1\n"
+        " line2\n"
+        " line3\n"
+        "-old_line\n"
+        "+new_line\n"
+        " line5\n"
+        " line6\n"
+        " line7"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"files": [{"filename": "app.py", "patch": original_patch}]}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
+
+    # Grounding must still validate against GitHub's own real patch,
+    # untouched - only the prompt copy shrinks.
+    assert diff_text.patches == (("app.py", original_patch),)
+    # The prompt copy dropped the wide context (line1, line2, line6,
+    # line7) but kept every real change and its immediate neighbor.
+    assert "new_line" in diff_text
+    assert "old_line" in diff_text
+    assert "line3" in diff_text
+    assert "line5" in diff_text
+    # line1/line2 and line6/line7 sit outside the trimmed 1-line window -
+    # dropped from the prompt copy, unlike the untouched original patch.
+    assert "line1" not in diff_text
+    assert "line7" not in diff_text
+    assert "line1" in original_patch
+    assert diff_text.count("\n") < original_patch.count("\n")
 
 
 def test_fetch_pr_changed_files_returns_filenames():

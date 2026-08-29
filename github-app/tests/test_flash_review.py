@@ -1029,6 +1029,37 @@ def test_build_referenced_symbol_context_adds_observable_contract_signals():
     assert "uses mutation operations: sort" in context
 
 
+def test_build_referenced_symbol_context_flags_network_io_signal():
+    """A referenced function that does real network/DB I/O is a stronger
+    call-site risk (timeouts, connection errors) than one that doesn't -
+    worth surfacing the same way raises/mutation/concurrency already are."""
+    evidence = _evidence_with_two_modules()
+    diff_text = "--- dashboard.py ---\n@@ -1,1 +1,1 @@\n+_github_http_client()\n"
+
+    context = build_referenced_symbol_context(
+        evidence,
+        ["dashboard.py"],
+        diff_text,
+        lambda *args: "def _github_http_client():\n    return requests.get(url)\n",
+    )
+
+    assert "performs network/database I/O" in context
+
+
+def test_build_referenced_symbol_context_does_not_flag_io_when_absent():
+    evidence = _evidence_with_two_modules()
+    diff_text = "--- dashboard.py ---\n@@ -1,1 +1,1 @@\n+_github_http_client()\n"
+
+    context = build_referenced_symbol_context(
+        evidence,
+        ["dashboard.py"],
+        diff_text,
+        lambda *args: "def _github_http_client():\n    return 1 + 1\n",
+    )
+
+    assert "performs network/database I/O" not in context
+
+
 def test_semantic_checker_finds_removed_exception_handler():
     diff = (
         "--- caller.py ---\n@@ -1,3 +1,2 @@\n"
@@ -2173,6 +2204,35 @@ def test_semantic_checker_does_not_flag_an_except_that_logs():
     assert findings == []
 
 
+def test_semantic_checker_flags_a_swallow_even_with_a_comment_mentioning_raise():
+    """Real false-negative, found by an independent review pass: the body
+    is genuinely just `pass` - a comment merely mentioning "raise"/"log"
+    is commentary, not real handling, and must not suppress the finding.
+    The log/re-raise check must scope to non-comment lines only."""
+    source = (
+        "def close_quietly(self):\n"
+        "    try:\n"
+        "        self.conn.close()\n"
+        "    except Exception:\n"
+        "        # note: this used to raise, now silently ignored\n"
+        "        pass\n"
+    )
+    diff = (
+        "--- sessions.py ---\n"
+        "@@ -1,1 +1,5 @@\n"
+        " def close_quietly(self):\n"
+        "+    try:\n"
+        "+        self.conn.close()\n"
+        "+    except Exception:\n"
+        "+        # note: this used to raise, now silently ignored\n"
+        "+        pass\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"sessions.py": source}, "")
+
+    assert len(findings) == 1
+
+
 def test_semantic_checker_does_not_flag_a_narrow_except_with_pass():
     """A specific exception type, not a bare/broad catch-all, is a
     deliberate narrow suppression - a different risk profile from the
@@ -2223,6 +2283,72 @@ def test_semantic_checker_does_not_flag_an_except_body_with_more_than_pass():
     )
 
     findings = find_semantic_regressions(diff, {"sessions.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_finds_os_system_shell_injection():
+    """Real shape: os.system always runs through a shell - concatenating a
+    caller-influenced value directly into the command is a classic
+    command-injection risk (CWE-78), grounded in a real, verified
+    external example (CVE-2024-29189, ansys-geometry-core)."""
+    source = 'def cleanup(target):\n    os.system("rm -rf " + target)\n'
+    diff = (
+        "--- ops.py ---\n"
+        "@@ -1,1 +1,2 @@\n"
+        " def cleanup(target):\n"
+        '+    os.system("rm -rf " + target)\n'
+    )
+
+    findings = find_semantic_regressions(diff, {"ops.py": source}, "")
+
+    assert len(findings) == 1
+    assert "shell-injection" in findings[0]["issue"]
+
+
+def test_semantic_checker_finds_subprocess_shell_true_injection():
+    source = "def build(pkg):\n    subprocess.run(\"pip install \" + pkg, shell=True)\n"
+    diff = (
+        "--- ops.py ---\n"
+        "@@ -1,1 +1,2 @@\n"
+        " def build(pkg):\n"
+        '+    subprocess.run("pip install " + pkg, shell=True)\n'
+    )
+
+    findings = find_semantic_regressions(diff, {"ops.py": source}, "")
+
+    assert len(findings) == 1
+    assert "shell-injection" in findings[0]["issue"]
+
+
+def test_semantic_checker_does_not_flag_subprocess_without_shell_true():
+    """subprocess with an argument list and no shell=True never touches a
+    shell at all - not the vulnerability this check targets."""
+    source = 'def build(pkg):\n    subprocess.run(["pip", "install", pkg])\n'
+    diff = (
+        "--- ops.py ---\n"
+        "@@ -1,1 +1,2 @@\n"
+        " def build(pkg):\n"
+        '+    subprocess.run(["pip", "install", pkg])\n'
+    )
+
+    findings = find_semantic_regressions(diff, {"ops.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_a_hardcoded_shell_command():
+    """shell=True with no concatenated variable - nothing caller-influenced
+    is entering the command text."""
+    source = 'def restart():\n    os.system("systemctl restart myapp")\n'
+    diff = (
+        "--- ops.py ---\n"
+        "@@ -1,1 +1,2 @@\n"
+        " def restart():\n"
+        '+    os.system("systemctl restart myapp")\n'
+    )
+
+    findings = find_semantic_regressions(diff, {"ops.py": source}, "")
 
     assert findings == []
 
