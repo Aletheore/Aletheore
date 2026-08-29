@@ -312,15 +312,40 @@ def build_blast_radius_context(
             call_re = re.compile(rf"\b{re.escape(name)}\s*\(")
             callers: list[str] = []
             checked = 0
-            for candidate_path in candidates:
+            # fetch_file_content is a real GitHub API call in production
+            # (see jobs.py), so this is I/O-bound - fetched in bounded
+            # batches of MAX_FILE_FETCH_WORKERS (same pool-size convention
+            # as the initial changed-file fetch above and verification's
+            # pool below) rather than sequentially. Deliberately NOT a
+            # flat full-parallel fetch of every candidate: the early exit
+            # once MAX_BLAST_RADIUS_CALLERS_SHOWN callers are found is
+            # still checked between batches, so a symbol whose callers are
+            # found in the first batch never triggers the remaining
+            # batches' API calls - firing all up to MAX_BLAST_RADIUS_CANDIDATES
+            # (40) at once would trade this API-budget bound for latency,
+            # not just gain latency for free.
+            for batch_start in range(0, len(candidates), MAX_FILE_FETCH_WORKERS):
                 if len(callers) >= MAX_BLAST_RADIUS_CALLERS_SHOWN:
                     break
-                content = fetch_file_content(candidate_path)
-                if content is None:
-                    continue  # fetch failed - this candidate was never actually checked
-                checked += 1
-                if call_re.search(content):
-                    callers.append(candidate_path)
+                batch = candidates[batch_start : batch_start + MAX_FILE_FETCH_WORKERS]
+                with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+                    batch_contents = list(pool.map(fetch_file_content, batch))
+                for candidate_path, content in zip(batch, batch_contents):
+                    if content is None:
+                        continue  # fetch failed - this candidate was never actually checked
+                    checked += 1
+                    if call_re.search(content):
+                        callers.append(candidate_path)
+                # A whole batch can push callers past the cap (e.g. every
+                # candidate in an 8-wide batch matches) since the early-exit
+                # check above only runs between batches, not within one -
+                # confirmed as a real bug by a standalone before/after test,
+                # not theoretical: an all-matching 40-candidate scenario
+                # returned 16 callers instead of 10 before this line existed.
+                # Truncating here restores the exact MAX_BLAST_RADIUS_CALLERS_SHOWN
+                # contract the "+N more importers not shown" line below assumes.
+                if len(callers) > MAX_BLAST_RADIUS_CALLERS_SHOWN:
+                    callers = callers[:MAX_BLAST_RADIUS_CALLERS_SHOWN]
 
             if callers:
                 total = len(module.get("imported_by") or [])
