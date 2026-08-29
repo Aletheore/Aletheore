@@ -1761,7 +1761,12 @@ async def test_get_dismissed_identity_keys_sync_returns_empty_sets_when_none_dis
 
     dismissed = get_dismissed_identity_keys(TEST_DATABASE_URL, 810, "co/repo")
 
-    assert dismissed == {"secret": set(), "vulnerability": set()}
+    assert dismissed == {
+        "secret": set(),
+        "vulnerability": set(),
+        "flash_review_llm": set(),
+        "flash_review_semantic": set(),
+    }
 
 
 @pytest.mark.asyncio
