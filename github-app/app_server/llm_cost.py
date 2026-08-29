@@ -10,8 +10,17 @@ logger = logging.getLogger(__name__)
 # provider's own pricing page - not a promise the price hasn't moved
 # since, just an honest record of how stale it might be.
 MODEL_RATES_PER_MILLION_USD = {
-    "deepseek-v4-pro": {"input": 0.435, "output": 0.87, "verified_at": "2026-07-23"},
-    "deepseek-v4-flash": {"input": 0.14, "output": 0.28, "verified_at": "2026-07-23"},
+    # Peak-hour, cache-miss rate - DeepSeek repriced 2026-08-16 (confirmed
+    # against api-docs.deepseek.com/quick_start/pricing) and now publishes
+    # four real rates per model: peak/off-peak x cache-hit/cache-miss. Peak
+    # cache-miss is the worst case of the four, matching this table's own
+    # "overestimate is the safe direction" rule above - a real DeepSeek call
+    # is very often billed at the much cheaper cache-hit rate (managed_audit
+    # measured 96% cache hit on its shared, append-only conversation prefix
+    # in a real test), so this constant is deliberately a ceiling, not an
+    # estimate of typical real cost.
+    "deepseek-v4-pro": {"input": 1.32, "output": 3.96, "verified_at": "2026-08-29"},
+    "deepseek-v4-flash": {"input": 0.44, "output": 1.32, "verified_at": "2026-08-29"},
     "gpt-5.6-luna": {"input": 0.20, "output": 1.20, "verified_at": "2026-08-09"},
     # Embeddings bill on input only, so output is 0 rather than absent -
     # cost_for_usage multiplies both, and a missing key would KeyError
