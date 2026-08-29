@@ -15,13 +15,13 @@ from app_server.llm_cost import (
 
 def test_cost_for_usage_deepseek_v4_pro():
     assert cost_for_usage("deepseek-v4-pro", 1_000_000, 1_000_000) == pytest.approx(
-        0.435 + 0.87
+        1.32 + 3.96
     )
 
 
 def test_cost_for_usage_deepseek_v4_flash():
     assert cost_for_usage("deepseek-v4-flash", 1_000_000, 1_000_000) == pytest.approx(
-        0.14 + 0.28
+        0.44 + 1.32
     )
 
 
@@ -32,7 +32,7 @@ def test_cost_for_usage_gpt_5_6_luna():
 
 
 def test_cost_for_usage_small_real_call():
-    expected = (2_000 * 0.14 + 300 * 0.28) / 1_000_000
+    expected = (2_000 * 0.44 + 300 * 1.32) / 1_000_000
     assert cost_for_usage("deepseek-v4-flash", 2_000, 300) == pytest.approx(expected)
 
 
