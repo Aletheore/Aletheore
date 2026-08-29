@@ -211,3 +211,29 @@ def bare_repo_with_two_commits(tmp_path):
     bare = tmp_path / "bare.git"
     subprocess.run(["git", "clone", "-q", "--bare", str(work), str(bare)], check=True)
     return str(bare), base_sha, head_sha
+
+
+@pytest.fixture
+def bare_repo_with_dependency_bump(tmp_path):
+    # pyyaml 5.3.1 carries a real, currently-published OSV.dev advisory
+    # (GHSA-8q59-q68h-6hv4 / CVE-2020-14343); 6.0.1 does not - confirmed
+    # live against api.osv.dev before writing this fixture, not assumed
+    # from memory. This exercises check_vulnerabilities' real HTTP path,
+    # same as production, rather than a mocked/fake advisory a real OSV
+    # query would never actually return.
+    work = tmp_path / "work"
+    base_sha = _make_git_repo(work, {"requirements.txt": "pyyaml==6.0.1\n"})
+    (work / "requirements.txt").write_text("pyyaml==5.3.1\n")
+    subprocess.run(["git", "add", "."], cwd=work, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "bump pyyaml"], cwd=work, check=True)
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=work,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    bare = tmp_path / "bare.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(work), str(bare)], check=True)
+    return str(bare), base_sha, head_sha

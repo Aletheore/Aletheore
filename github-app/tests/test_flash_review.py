@@ -2118,6 +2118,115 @@ def test_semantic_checker_does_not_flag_ordinary_english_using_sql_keywords():
     assert findings == []
 
 
+def test_semantic_checker_finds_a_swallowed_exception():
+    """Real shape: this project's own PR-review benchmark case 021
+    (psf/requests) - a new Session.close_quietly() method wraps
+    v.close() in `except Exception: pass`, discarding a real close
+    failure with no logging and no re-raise."""
+    source = (
+        "class Session:\n"
+        "    def close_quietly(self) -> None:\n"
+        "        for v in self.adapters.values():\n"
+        "            try:\n"
+        "                v.close()\n"
+        "            except Exception:\n"
+        "                pass\n"
+    )
+    diff = (
+        "--- sessions.py ---\n"
+        "@@ -1,1 +1,7 @@\n"
+        " class Session:\n"
+        "+    def close_quietly(self) -> None:\n"
+        "+        for v in self.adapters.values():\n"
+        "+            try:\n"
+        "+                v.close()\n"
+        "+            except Exception:\n"
+        "+                pass\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"sessions.py": source}, "")
+
+    assert len(findings) == 1
+    assert "bare `pass`" in findings[0]["issue"]
+
+
+def test_semantic_checker_does_not_flag_an_except_that_logs():
+    source = (
+        "def close_quietly(self):\n"
+        "    try:\n"
+        "        self.conn.close()\n"
+        "    except Exception:\n"
+        "        logger.warning('close failed')\n"
+    )
+    diff = (
+        "--- sessions.py ---\n"
+        "@@ -1,1 +1,5 @@\n"
+        " def close_quietly(self):\n"
+        "+    try:\n"
+        "+        self.conn.close()\n"
+        "+    except Exception:\n"
+        "+        logger.warning('close failed')\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"sessions.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_a_narrow_except_with_pass():
+    """A specific exception type, not a bare/broad catch-all, is a
+    deliberate narrow suppression - a different risk profile from the
+    real case this check is built from, and not what it targets."""
+    source = (
+        "def close_quietly(self):\n"
+        "    try:\n"
+        "        self.conn.close()\n"
+        "    except KeyError:\n"
+        "        pass\n"
+    )
+    diff = (
+        "--- sessions.py ---\n"
+        "@@ -1,1 +1,4 @@\n"
+        " def close_quietly(self):\n"
+        "+    try:\n"
+        "+        self.conn.close()\n"
+        "+    except KeyError:\n"
+        "+        pass\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"sessions.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_an_except_body_with_more_than_pass():
+    """The body must be JUST pass to count as a pure swallow - a body
+    that does other real handling isn't the pattern this check targets,
+    even if it also happens to end in pass."""
+    source = (
+        "def close_quietly(self):\n"
+        "    try:\n"
+        "        self.conn.close()\n"
+        "    except Exception:\n"
+        "        self.failed = True\n"
+        "        pass\n"
+    )
+    diff = (
+        "--- sessions.py ---\n"
+        "@@ -1,1 +1,5 @@\n"
+        " def close_quietly(self):\n"
+        "+    try:\n"
+        "+        self.conn.close()\n"
+        "+    except Exception:\n"
+        "+        self.failed = True\n"
+        "+        pass\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"sessions.py": source}, "")
+
+    assert findings == []
+
+
 # ── blast-radius context tests ──────────────────────────────────────────
 
 

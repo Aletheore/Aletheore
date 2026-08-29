@@ -24,9 +24,10 @@ Two check families need a resolved referenced_symbol_context (a cross-file
 dependency the diff calls into) to have anything to reason about: the
 exception/iterator/mutation/scaling/concurrency/retry checks in
 _check_reference_at_call, and the moved-record-operation check in
-_moved_record_findings. The rest - _resource_leak_findings and
-_copy_to_alias_findings - read only the diff and the current file, and
-never require a referenced symbol at all. This split is deliberate and
+_moved_record_findings. The rest - _resource_leak_findings,
+_copy_to_alias_findings, and _swallowed_exception_findings - read only the
+diff and the current file, and never require a referenced symbol at all.
+This split is deliberate and
 measured, not incidental: a corpus evaluation against 18 real historical
 bugs (benchmarks/pr-review-benchmark/scripts/evaluate_semantic_checks.py)
 found a resolvable in-repo referenced symbol in only 6 of them - most real
@@ -477,6 +478,70 @@ def _removed_bounds_clamp_findings(file: str, source: str, hunks: list[_Hunk]) -
     return findings
 
 
+# A newly-added bare/broad Python except clause whose entire body is
+# `pass` - the classic swallowed-exception anti-pattern, where a failure is
+# discarded with no logging and no re-raise, leaving callers with no way to
+# know something went wrong. Python-only, not generalized to other
+# languages' broad-catch syntax (JS bare `catch {}`, Go's blanket `if err
+# != nil { return }` shape are structurally different and have no real
+# example in this corpus to verify a pattern against). Matches this
+# project's own PR-review benchmark case 021 (requests):
+# `except Exception: pass` added around Session.close_quietly()'s per-
+# adapter v.close() call, silently discarding any close failure.
+_BROAD_EXCEPT_RE = re.compile(
+    r"^(?P<indent>\s*)except(?:\s+\(?\s*(?:Exception|BaseException)\s*\)?(?:\s+as\s+\w+)?)?\s*:\s*(?:#.*)?$"
+)
+_LOG_OR_RERAISE_RE = re.compile(
+    r"\braise\b|\blog(?:ger|ging)?\.\w+\s*\(|\bwarnings\.warn\s*\(|\bprint\s*\("
+)
+
+
+def _swallowed_exception_findings(file: str, source: str, hunks: list[_Hunk]) -> list[dict]:
+    findings: list[dict] = []
+    for hunk in hunks:
+        added = hunk.added
+        for idx, line in enumerate(added):
+            match = _BROAD_EXCEPT_RE.match(line)
+            if not match:
+                continue
+            except_indent = len(match.group("indent"))
+
+            # Collect this except block's body: contiguous added lines
+            # indented deeper than the except itself, stopping at the first
+            # line back at or above that indentation (end of the block) or
+            # the end of this hunk's added lines.
+            body: list[str] = []
+            for later in added[idx + 1 :]:
+                stripped = later.strip()
+                if not stripped:
+                    continue
+                indent = len(later) - len(later.lstrip())
+                if indent <= except_indent:
+                    break
+                body.append(stripped)
+
+            if not body:
+                continue  # the except body isn't in this hunk at all - nothing to judge
+            non_comment = [b for b in body if not b.startswith("#")]
+            if non_comment != ["pass"]:
+                continue  # body has real handling (or more than just pass) - not a swallow
+            if any(_LOG_OR_RERAISE_RE.search(b) for b in body):
+                continue  # defensive, in case a future body shape sneaks a log/raise into a comment line
+
+            findings.append(
+                _finding(
+                    file,
+                    _line_number_near_hunk(source, line.strip(), hunk) or hunk.new_start,
+                    "This newly-added except block discards the error with a bare `pass` - no "
+                    "logging, no re-raise. If the wrapped call ever fails, the failure is silently "
+                    "swallowed and there's no way to diagnose what went wrong.",
+                    "Log the exception (e.g. `logger.warning(...)`) or re-raise it instead of "
+                    "silently passing.",
+                )
+            )
+    return findings
+
+
 # A C-style counted loop indexing a collection by its own length/size using
 # <= instead of < is an off-by-one that reads or writes one element past
 # the end. The comparison syntax (`i <= x.length`, `i <= x.size()`,
@@ -614,6 +679,7 @@ def find_semantic_regressions(
         findings.extend(_removed_bounds_clamp_findings(file, source, hunks))
         findings.extend(_off_by_one_loop_findings(file, source, hunks))
         findings.extend(_sql_injection_findings(file, source, hunks))
+        findings.extend(_swallowed_exception_findings(file, source, hunks))
 
     unique: list[dict] = []
     seen: set[tuple[str, int, str]] = set()

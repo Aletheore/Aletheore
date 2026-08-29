@@ -689,6 +689,47 @@ def _maybe_create_check_run(
         create_check_run(client, token, repo_full_name, head_sha, "success", "No new secrets found.")
 
 
+def _maybe_create_vulnerability_check_run(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    head_sha: str,
+    installation_id: int,
+    diff: dict,
+) -> None:
+    """Same shape as _maybe_create_check_run (secrets), for the other
+    category diff["vulnerabilities"]["new"] already carries. The data
+    itself is not new: compute_diff already produces it, and it already
+    reaches the PR via format_diff_comment's "Dependency vulnerabilities"
+    section and via `aletheore diff --fail-on-new-vulnerabilities` in the
+    CLI/SARIF path. What's missing on the hosted GitHub-App side
+    specifically is a dedicated Checks-tab pass/fail gate - the surface a
+    branch-protection rule can actually require, which a PR comment can't.
+    """
+    settings = get_settings()
+    installation = get_installation_row(settings.database_url, installation_id)
+    if installation is None or installation["plan"] == "free":
+        return
+
+    new_vulnerabilities = diff.get("vulnerabilities", {}).get("new", [])
+    if new_vulnerabilities:
+        summary = "\n".join(
+            f"- `{finding.get('package')}` ({finding.get('ecosystem')}) "
+            f"{finding.get('installed_version')}: {finding.get('advisory_id')} - "
+            f"{finding.get('summary') or 'no summary available'}"
+            for finding in new_vulnerabilities
+        )
+        create_check_run(
+            client, token, repo_full_name, head_sha, "failure", summary,
+            name="Aletheore dependency vulnerability check",
+        )
+    else:
+        create_check_run(
+            client, token, repo_full_name, head_sha, "success", "No new dependency vulnerabilities found.",
+            name="Aletheore dependency vulnerability check",
+        )
+
+
 def _maybe_create_regression_risk_check_run(
     client: httpx.Client,
     token: str,
@@ -953,6 +994,10 @@ def run_pr_scan_job(
             )
         try:
             _maybe_create_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            _maybe_create_vulnerability_check_run(client, token, repo_full_name, head_sha, installation_id, diff)
         except Exception:  # noqa: BLE001
             pass
         try:

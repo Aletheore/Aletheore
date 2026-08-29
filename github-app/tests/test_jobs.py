@@ -765,6 +765,84 @@ def test_check_run_failure_on_new_secret(bare_repo_with_two_commits, monkeypatch
     assert created["head_sha"] == head_sha
 
 
+def test_vulnerability_check_run_fails_on_real_known_cve_bump(
+    bare_repo_with_dependency_bump, monkeypatch
+):
+    """Real end-to-end: bumps requirements.txt to pyyaml==5.3.1 (a real,
+    live-queried OSV.dev advisory - see the fixture) and asserts the new
+    vulnerability check run fires failure. Makes a real network call to
+    OSV.dev, same as production; not mocked, so this only proves the
+    wiring if OSV.dev is reachable when the suite runs."""
+    bare_path, base_sha, head_sha = bare_repo_with_dependency_bump
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    created_runs = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo_full_name, head_sha, conclusion, summary, name="": created_runs.append(
+            {"name": name, "conclusion": conclusion, "summary": summary}
+        ),
+    )
+
+    run_pr_scan_job(1, "octocat/hello-world", 7, base_sha, head_sha)
+
+    vuln_runs = [r for r in created_runs if r["name"] == "Aletheore dependency vulnerability check"]
+    assert len(vuln_runs) == 1
+    assert vuln_runs[0]["conclusion"] == "failure"
+    assert "pyyaml" in vuln_runs[0]["summary"]
+    assert "GHSA-8q59-q68h-6hv4" in vuln_runs[0]["summary"] or "PYSEC-2021-142" in vuln_runs[0]["summary"]
+
+
+def test_vulnerability_check_run_succeeds_when_no_new_vulnerability(
+    bare_repo_with_two_commits, monkeypatch
+):
+    """Same real OSV.dev network path as the failure test above, but the
+    fixture's only change is a hardcoded secret in app.py - no dependency
+    manifest touched at all, so no vulnerability check should fire
+    failure. Confirms the new check run doesn't false-positive on an
+    unrelated PR."""
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_send_slack_alert", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"secret": set(), "vulnerability": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    created_runs = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo_full_name, head_sha, conclusion, summary, name="": created_runs.append(
+            {"name": name, "conclusion": conclusion, "summary": summary}
+        ),
+    )
+
+    run_pr_scan_job(1, "octocat/hello-world", 7, base_sha, head_sha)
+
+    vuln_runs = [r for r in created_runs if r["name"] == "Aletheore dependency vulnerability check"]
+    assert len(vuln_runs) == 1
+    assert vuln_runs[0]["conclusion"] == "success"
+
+
 def test_maybe_create_regression_risk_check_run_creates_neutral_check_run(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
