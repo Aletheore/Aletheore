@@ -198,9 +198,9 @@ async def test_list_my_repos_requires_login(pool):
 @pytest.mark.asyncio
 async def test_list_my_repos_returns_repos_across_administered_installations(pool, monkeypatch):
     await upsert_installation(pool, 701, "octocat")
-    await set_installation_plan(pool, 701, "indie")
+    await set_installation_plan(pool, 701, "air")
     await upsert_installation(pool, 702, "another-org")
-    await set_installation_plan(pool, 702, "indie")
+    await set_installation_plan(pool, 702, "air")
     await insert_repo_history(
         pool, 701, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -224,8 +224,8 @@ async def test_list_my_repos_returns_repos_across_administered_installations(poo
     by_name = {r["repo_full_name"]: r for r in repos}
     assert by_name["octocat/hello-world"]["org"] == "octocat"
     assert by_name["octocat/hello-world"]["repo"] == "hello-world"
-    assert by_name["octocat/hello-world"]["plan"] == "indie"
-    assert by_name["another-org/service-b"]["plan"] == "indie"
+    assert by_name["octocat/hello-world"]["plan"] == "air"
+    assert by_name["another-org/service-b"]["plan"] == "air"
 
 
 @pytest.mark.asyncio
@@ -254,7 +254,7 @@ async def test_list_my_repos_excludes_a_hidden_repo(pool, monkeypatch):
     # hide_repo) must disappear from the dashboard immediately, without
     # its scan history being deleted.
     await upsert_installation(pool, 705, "octocat")
-    await set_installation_plan(pool, 705, "indie")
+    await set_installation_plan(pool, 705, "air")
     await insert_repo_history(
         pool, 705, "octocat/kept", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -280,7 +280,7 @@ async def test_list_my_repos_includes_uninitialized_repos_with_no_scan_yet(pool,
     # paid for their personal-account installation and the dashboard kept
     # showing nothing for it.
     await upsert_installation(pool, 801, "some-user")
-    await set_installation_plan(pool, 801, "team")
+    await set_installation_plan(pool, 801, "air")
 
     monkeypatch.setattr("app_server.dashboard.generate_app_jwt", lambda *a, **k: "fake-jwt")
 
@@ -325,7 +325,7 @@ async def test_list_my_repos_includes_uninitialized_repos_with_no_scan_yet(pool,
         "org": "some-user",
         "repo": "proctor-browser",
         "repo_full_name": "some-user/proctor-browser",
-        "plan": "team",
+        "plan": "air",
         "initialized": False,
         "scan_limit_reached": False,
     }]
@@ -334,7 +334,7 @@ async def test_list_my_repos_includes_uninitialized_repos_with_no_scan_yet(pool,
 @pytest.mark.asyncio
 async def test_list_my_repos_flags_uninitialized_repos_when_monthly_scan_cap_reached(pool, monkeypatch):
     await upsert_installation(pool, 802, "some-user")
-    await set_installation_plan(pool, 802, "team")
+    await set_installation_plan(pool, 802, "air")
     for i in range(10):
         await pool.execute(
             """
@@ -387,7 +387,7 @@ async def test_list_my_repos_flags_uninitialized_repos_when_monthly_scan_cap_rea
         "org": "some-user",
         "repo": "proctor-browser",
         "repo_full_name": "some-user/proctor-browser",
-        "plan": "team",
+        "plan": "air",
         "initialized": False,
         "scan_limit_reached": True,
     }]
@@ -399,7 +399,7 @@ async def test_list_my_repos_does_not_duplicate_already_scanned_repos(pool, monk
     # "uninitialized" duplicate just because it's still covered by the
     # installation's real GitHub repo list.
     await upsert_installation(pool, 802, "some-user")
-    await set_installation_plan(pool, 802, "team")
+    await set_installation_plan(pool, 802, "air")
     await insert_repo_history(
         pool, 802, "some-user/already-scanned", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -447,7 +447,7 @@ async def test_list_my_repos_does_not_duplicate_already_scanned_repos(pool, monk
         "org": "some-user",
         "repo": "already-scanned",
         "repo_full_name": "some-user/already-scanned",
-        "plan": "team",
+        "plan": "air",
         "initialized": True,
     }]
 
@@ -620,7 +620,7 @@ async def test_dashboard_health_requires_paid_plan(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_returns_data_for_known_repo(pool, monkeypatch):
     await upsert_installation(pool, 1, "octocat")
-    await set_installation_plan(pool, 1, "indie")
+    await set_installation_plan(pool, 1, "air")
     await insert_repo_history(
         pool,
         1,
@@ -640,7 +640,7 @@ async def test_dashboard_returns_data_for_known_repo(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_returns_empty_dismissed_finding_keys_by_default(pool, monkeypatch):
     await upsert_installation(pool, 1, "octocat")
-    await set_installation_plan(pool, 1, "indie")
+    await set_installation_plan(pool, 1, "air")
     await insert_repo_history(
         pool, 1, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -666,7 +666,7 @@ async def test_dismiss_finding_route_requires_login(pool):
 @pytest.mark.asyncio
 async def test_dismiss_finding_route_rejects_unknown_finding_type(pool, monkeypatch):
     await upsert_installation(pool, 1, "octocat")
-    await set_installation_plan(pool, 1, "indie")
+    await set_installation_plan(pool, 1, "air")
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[1])
     async with client:
         response = await client.post(
@@ -679,7 +679,7 @@ async def test_dismiss_finding_route_rejects_unknown_finding_type(pool, monkeypa
 @pytest.mark.asyncio
 async def test_dismiss_finding_route_rejects_finding_missing_required_field(pool, monkeypatch):
     await upsert_installation(pool, 1, "octocat")
-    await set_installation_plan(pool, 1, "indie")
+    await set_installation_plan(pool, 1, "air")
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[1])
     async with client:
         response = await client.post(
@@ -692,7 +692,7 @@ async def test_dismiss_finding_route_rejects_finding_missing_required_field(pool
 @pytest.mark.asyncio
 async def test_dismiss_finding_route_then_get_dashboard_reflects_it(pool, monkeypatch):
     await upsert_installation(pool, 1, "octocat")
-    await set_installation_plan(pool, 1, "indie")
+    await set_installation_plan(pool, 1, "air")
     await insert_repo_history(
         pool, 1, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -717,7 +717,7 @@ async def test_dismiss_finding_route_then_get_dashboard_reflects_it(pool, monkey
 @pytest.mark.asyncio
 async def test_undismiss_finding_route_removes_it(pool, monkeypatch):
     await upsert_installation(pool, 1, "octocat")
-    await set_installation_plan(pool, 1, "indie")
+    await set_installation_plan(pool, 1, "air")
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[1])
     finding = {"ecosystem": "PyPI", "package": "requests", "advisory_id": "GHSA-1"}
     async with client:
@@ -1038,7 +1038,7 @@ async def test_dashboard_health_keeps_results_separate_per_target(pool, monkeypa
     # targets checking the exact same method+path collapse into one row
     # and one target's result silently vanishes.
     await upsert_installation(pool, 503, "octocat")
-    await set_installation_plan(pool, 503, "indie")
+    await set_installation_plan(pool, 503, "air")
     await insert_repo_history(
         pool, 503, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -1093,7 +1093,7 @@ async def test_dashboard_health_history_requires_login(pool):
 @pytest.mark.asyncio
 async def test_dashboard_health_history_returns_checks_newest_first(pool, monkeypatch):
     await upsert_installation(pool, 504, "octocat")
-    await set_installation_plan(pool, 504, "indie")
+    await set_installation_plan(pool, 504, "air")
     await insert_repo_history(
         pool, 504, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -1139,7 +1139,7 @@ async def test_dashboard_health_history_returns_checks_newest_first(pool, monkey
 @pytest.mark.asyncio
 async def test_dashboard_health_history_respects_limit(pool, monkeypatch):
     await upsert_installation(pool, 505, "octocat")
-    await set_installation_plan(pool, 505, "indie")
+    await set_installation_plan(pool, 505, "air")
     await insert_repo_history(
         pool, 505, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
     )
@@ -1210,7 +1210,7 @@ async def test_dashboard_health_rejects_unadministered_installation(pool, monkey
 @pytest.mark.asyncio
 async def test_dashboard_health_includes_evidence_resolution(pool, monkeypatch):
     await upsert_installation(pool, 502, "octocat")
-    await set_installation_plan(pool, 502, "indie")
+    await set_installation_plan(pool, 502, "air")
     await insert_repo_history(
         pool,
         502,
@@ -1257,7 +1257,7 @@ async def test_dashboard_health_includes_evidence_resolution(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_health_includes_stale_endpoints(pool, monkeypatch):
     await upsert_installation(pool, 504, "octocat")
-    await set_installation_plan(pool, 504, "indie")
+    await set_installation_plan(pool, 504, "air")
     await insert_repo_history(
         pool,
         504,
@@ -1308,7 +1308,7 @@ async def test_dashboard_health_includes_stale_endpoints(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_health_omits_stale_endpoints_with_recent_success(pool, monkeypatch):
     await upsert_installation(pool, 505, "octocat")
-    await set_installation_plan(pool, 505, "indie")
+    await set_installation_plan(pool, 505, "air")
     await insert_repo_history(
         pool,
         505,
@@ -1379,7 +1379,7 @@ async def test_dashboard_wiki_requires_paid_plan(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_wiki_returns_overview_and_subsystems(pool, monkeypatch):
     await upsert_installation(pool, 602, "octocat")
-    await set_installation_plan(pool, 602, "indie")
+    await set_installation_plan(pool, 602, "air")
     await insert_repo_history(
         pool,
         602,
@@ -1407,7 +1407,7 @@ async def test_dashboard_wiki_returns_overview_and_subsystems(pool, monkeypatch)
 @pytest.mark.asyncio
 async def test_dashboard_wiki_returns_null_overview_when_not_yet_generated(pool, monkeypatch):
     await upsert_installation(pool, 603, "octocat")
-    await set_installation_plan(pool, 603, "indie")
+    await set_installation_plan(pool, 603, "air")
     await insert_repo_history(
         pool,
         603,
@@ -1433,7 +1433,7 @@ async def test_dashboard_wiki_surfaces_failed_build_status(pool, monkeypatch):
     # from "hasn't been built yet" - the customer had no way to tell a
     # transient in-progress state apart from a build that's never coming.
     await upsert_installation(pool, 605, "octocat")
-    await set_installation_plan(pool, 605, "indie")
+    await set_installation_plan(pool, 605, "air")
     await insert_repo_history(
         pool,
         605,
@@ -1461,7 +1461,7 @@ async def test_dashboard_wiki_surfaces_failed_status_alongside_existing_overview
     # drop it just because an overview now exists), so the dashboard can
     # tell the customer their AIRview content may be stale.
     await upsert_installation(pool, 606, "octocat")
-    await set_installation_plan(pool, 606, "indie")
+    await set_installation_plan(pool, 606, "air")
     await insert_repo_history(
         pool,
         606,
@@ -1495,7 +1495,7 @@ async def test_dashboard_wiki_subsystem_requires_login(pool):
 @pytest.mark.asyncio
 async def test_dashboard_wiki_subsystem_returns_detail(pool, monkeypatch):
     await upsert_installation(pool, 604, "octocat")
-    await set_installation_plan(pool, 604, "indie")
+    await set_installation_plan(pool, 604, "air")
     await insert_repo_history(
         pool,
         604,
@@ -1521,7 +1521,7 @@ async def test_dashboard_wiki_subsystem_returns_detail(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_wiki_file_returns_structural_fallback_for_unpaged_module(pool, monkeypatch):
     await upsert_installation(pool, 607, "octocat")
-    await set_installation_plan(pool, 607, "indie")
+    await set_installation_plan(pool, 607, "air")
     await insert_repo_history(
         pool,
         607,
@@ -1568,7 +1568,7 @@ async def test_dashboard_wiki_file_returns_structural_fallback_for_unpaged_modul
 @pytest.mark.asyncio
 async def test_dashboard_wiki_file_fetches_unindexed_file_without_llm(pool, monkeypatch):
     await upsert_installation(pool, 608, "octocat")
-    await set_installation_plan(pool, 608, "indie")
+    await set_installation_plan(pool, 608, "air")
     await insert_repo_history(
         pool,
         608,
@@ -1594,7 +1594,7 @@ async def test_dashboard_wiki_file_fetches_unindexed_file_without_llm(pool, monk
 @pytest.mark.asyncio
 async def test_dashboard_wiki_subsystem_404s_for_unknown_id(pool, monkeypatch):
     await upsert_installation(pool, 605, "octocat")
-    await set_installation_plan(pool, 605, "indie")
+    await set_installation_plan(pool, 605, "air")
     await insert_repo_history(
         pool,
         605,
@@ -1633,7 +1633,7 @@ async def test_dashboard_docs_requires_paid_plan(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_docs_renders_verbatim_docstring_with_no_ai_marker(pool, monkeypatch):
     await upsert_installation(pool, 702, "octocat")
-    await set_installation_plan(pool, 702, "indie")
+    await set_installation_plan(pool, 702, "air")
     await insert_repo_history(
         pool, 702, "octocat/hello-world", datetime.now(timezone.utc),
         _evidence_with_module("a.py", "add", "Adds two numbers."),
@@ -1653,7 +1653,7 @@ async def test_dashboard_docs_renders_verbatim_docstring_with_no_ai_marker(pool,
 @pytest.mark.asyncio
 async def test_dashboard_docs_merges_ai_generated_description_for_undocumented_symbol(pool, monkeypatch):
     await upsert_installation(pool, 703, "octocat")
-    await set_installation_plan(pool, 703, "indie")
+    await set_installation_plan(pool, 703, "air")
     await insert_repo_history(
         pool, 703, "octocat/hello-world", datetime.now(timezone.utc),
         _evidence_with_module("a.py", "add", None),
@@ -1673,7 +1673,7 @@ async def test_dashboard_docs_merges_ai_generated_description_for_undocumented_s
 @pytest.mark.asyncio
 async def test_dashboard_docs_returns_empty_modules_when_nothing_scanned_yet(pool, monkeypatch):
     await upsert_installation(pool, 704, "octocat")
-    await set_installation_plan(pool, 704, "indie")
+    await set_installation_plan(pool, 704, "air")
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[704])
     async with client:
         response = await client.get("/app/octocat/hello-world/docs")
@@ -1687,7 +1687,7 @@ async def test_dashboard_docs_returns_empty_modules_when_nothing_scanned_yet(poo
 @pytest.mark.asyncio
 async def test_dashboard_docs_surfaces_failed_build_status(pool, monkeypatch):
     await upsert_installation(pool, 705, "octocat")
-    await set_installation_plan(pool, 705, "indie")
+    await set_installation_plan(pool, 705, "air")
     await insert_repo_history(
         pool, 705, "octocat/hello-world", datetime.now(timezone.utc),
         _evidence_with_module("a.py", "add", None),
@@ -1729,7 +1729,7 @@ async def test_dashboard_docs_export_requires_paid_plan(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_dashboard_docs_export_returns_combined_markdown_with_toc(pool, monkeypatch):
     await upsert_installation(pool, 707, "octocat")
-    await set_installation_plan(pool, 707, "indie")
+    await set_installation_plan(pool, 707, "air")
     await insert_repo_history(
         pool, 707, "octocat/hello-world", datetime.now(timezone.utc),
         _evidence_with_module("a.py", "add", "Adds two numbers."),
@@ -1751,7 +1751,7 @@ async def test_dashboard_docs_export_returns_combined_markdown_with_toc(pool, mo
 @pytest.mark.asyncio
 async def test_dashboard_docs_export_handles_no_modules_yet(pool, monkeypatch):
     await upsert_installation(pool, 708, "octocat")
-    await set_installation_plan(pool, 708, "indie")
+    await set_installation_plan(pool, 708, "air")
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[708])
     async with client:
         response = await client.get("/app/octocat/hello-world/docs/export")
@@ -1769,7 +1769,7 @@ async def test_dashboard_docs_export_sanitizes_unsafe_characters_in_filename(poo
     # can. A raw '"' here would otherwise break the Content-Disposition
     # header's quoting.
     await upsert_installation(pool, 709, "octocat")
-    await set_installation_plan(pool, 709, "indie")
+    await set_installation_plan(pool, 709, "air")
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[709])
     async with client:
         response = await client.get('/app/octocat/weird%22repo/docs/export')
