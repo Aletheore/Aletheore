@@ -5,7 +5,6 @@ import pytest
 
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter
 from scan_worker.model_tiers import (
-    DOCS_FULL_BUILD_MODEL,
     LUNA_MODEL,
     MANAGED_AUDIT_MODEL,
     OPENAI_FREE_TIER_DAILY_TOKEN_CAP,
@@ -19,7 +18,6 @@ from scan_worker.model_tiers import (
     writing_adapter_chain_for_free_tier,
     writing_adapter_for,
     writing_adapter_for_airview,
-    writing_adapter_for_docs_full_build,
     writing_adapter_for_managed_audit,
     writing_adapter_for_plan,
 )
@@ -171,47 +169,6 @@ def test_writing_adapter_for_managed_audit_threads_on_usage_and_before_llm_call(
 def test_writing_adapter_for_managed_audit_threads_allow_partial_report(monkeypatch):
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
     adapter = writing_adapter_for_managed_audit(allow_partial_report=True)
-    assert adapter._allow_partial_report is True
-
-
-def test_writing_adapter_for_docs_full_build_never_uses_luna_even_when_openai_is_configured(monkeypatch):
-    # A full build processes every module in the repo at once (2,814 real
-    # symbols measured on this repo alone) - previously ran on Luna by
-    # default (writing_adapter_for_plan's _prefer_luna=True, and
-    # OPENAI_API_KEY is configured in production), now always Flash, same
-    # "writing quality holds on Flash for a fraction of the cost" finding
-    # already established for managed_audit and AIRview.
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
-    adapter = writing_adapter_for_docs_full_build()
-    assert adapter.name == "DeepSeek"
-    assert adapter._model == DOCS_FULL_BUILD_MODEL == "deepseek-v4-flash"
-    assert adapter._base_url == "https://api.deepseek.com"
-
-
-def test_writing_adapter_for_docs_full_build_still_uses_deepseek_when_openai_is_not_configured(monkeypatch):
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: False)
-    adapter = writing_adapter_for_docs_full_build()
-    assert adapter.name == "DeepSeek"
-    assert adapter._model == "deepseek-v4-flash"
-
-
-def test_writing_adapter_for_docs_full_build_threads_on_usage_and_before_llm_call(monkeypatch):
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
-    received = []
-    calls_allowed = []
-    adapter = writing_adapter_for_docs_full_build(
-        on_usage=lambda p, c: received.append((p, c)),
-        before_llm_call=lambda: calls_allowed.append(True) or True,
-    )
-    adapter._on_usage(7, 3)
-    assert received == [(7, 3)]
-    assert adapter._before_llm_call() is True
-    assert calls_allowed == [True]
-
-
-def test_writing_adapter_for_docs_full_build_threads_allow_partial_report(monkeypatch):
-    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
-    adapter = writing_adapter_for_docs_full_build(allow_partial_report=True)
     assert adapter._allow_partial_report is True
 
 
