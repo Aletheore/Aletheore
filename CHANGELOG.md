@@ -3,6 +3,20 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.9 — 2026-08-29
+
+- **Strengthened the CLI's free-tier install nudge, and added a support
+  contact.** `scan`/`audit`'s prompt to install the GitHub App for free
+  PR reviews used to lead with a hedge ("globally rate-limited and
+  subject to availability") right at the call to action, and was styled
+  fully dim - easy to skim past at the exact moment a real run had just
+  demonstrated value. Reframed to lead with the value prop and a bold
+  install link; the honest rate-limit disclosure is kept, just moved to
+  a smaller trailing line rather than dropped. Also added a
+  `support@aletheore.com` line to the banner shown on every bare
+  `aletheore` invocation - previously the only in-CLI pointer for a bug
+  report or suggestion was the GitHub repo link.
+
 ## 0.9.8 — 2026-08-28
 
 - **Bounded the Java/C# scanner pre-pass's peak memory** (audit finding
