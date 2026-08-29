@@ -49,6 +49,96 @@ def test_filter_dismissed_does_not_mutate_input_list():
     assert findings == [SECRET_FINDING]
 
 
+def test_finding_identity_key_flash_review_llm_and_semantic_can_share_a_raw_key():
+    # The raw identity_key string is NOT required to differ between the two
+    # flash_review finding_types for the same file/line/issue - finding_type
+    # is tracked as its own column (dismissed_findings' UNIQUE constraint is
+    # on (installation_id, repo_full_name, finding_type, identity_key)) and
+    # its own dict bucket in get_dismissed_identity_keys, so a raw-key
+    # collision across the two types is harmless: dismissing the LLM
+    # finding never marks the semantic one (or vice versa) as dismissed.
+    # See test_get_dismissed_identity_keys_groups_rows_by_finding_type for
+    # the actual scoping guarantee this depends on.
+    finding = {"file": "a.py", "line": 10, "issue": "removed the null check"}
+    llm_key = finding_identity_key("flash_review_llm", finding)
+    semantic_key = finding_identity_key("flash_review_semantic", finding)
+    assert llm_key == semantic_key
+
+
+def test_finding_identity_key_flash_review_survives_word_reordering():
+    reworded = {"file": "a.py", "line": 10, "issue": "the null check was removed"}
+    original = {"file": "a.py", "line": 10, "issue": "removed the null check"}
+    assert finding_identity_key("flash_review_llm", reworded) == finding_identity_key(
+        "flash_review_llm", original
+    )
+
+
+def test_finding_identity_key_flash_review_survives_punctuation_and_case_changes():
+    a = {"file": "a.py", "line": 10, "issue": "Removed the null check!"}
+    b = {"file": "a.py", "line": 10, "issue": "removed the null check"}
+    assert finding_identity_key("flash_review_llm", a) == finding_identity_key("flash_review_llm", b)
+
+
+def test_finding_identity_key_flash_review_different_line_differs():
+    a = {"file": "a.py", "line": 10, "issue": "removed the null check"}
+    b = {"file": "a.py", "line": 11, "issue": "removed the null check"}
+    assert finding_identity_key("flash_review_llm", a) != finding_identity_key("flash_review_llm", b)
+
+
+def test_finding_identity_key_flash_review_different_file_differs():
+    a = {"file": "a.py", "line": 10, "issue": "removed the null check"}
+    b = {"file": "b.py", "line": 10, "issue": "removed the null check"}
+    assert finding_identity_key("flash_review_llm", a) != finding_identity_key("flash_review_llm", b)
+
+
+def test_finding_identity_key_flash_review_genuinely_different_issue_differs():
+    a = {"file": "a.py", "line": 10, "issue": "removed the null check"}
+    b = {"file": "a.py", "line": 10, "issue": "introduced a SQL injection risk"}
+    assert finding_identity_key("flash_review_llm", a) != finding_identity_key("flash_review_llm", b)
+
+
+class _FakePool:
+    """Minimal stand-in for asyncpg.Pool - get_dismissed_identity_keys only
+    ever calls .fetch() on it, so this only needs to satisfy that one call
+    with rows shaped the way asyncpg would return them (mapping-like, keyed
+    by column name)."""
+
+    def __init__(self, rows: list[dict]):
+        self._rows = rows
+
+    async def fetch(self, query, *args):
+        return self._rows
+
+
+@pytest.mark.asyncio
+async def test_get_dismissed_identity_keys_seeds_all_four_types_with_zero_rows():
+    # Always seeds all four known finding_type keys even with zero rows, so
+    # a caller building a dict comprehension over its result (e.g. jobs.py's
+    # dismissed["flash_review_llm"]) never KeyErrors on an installation
+    # with no dismissals of that type yet.
+    result = await get_dismissed_identity_keys(_FakePool([]), 1, "owner/repo")
+    assert result == {
+        "secret": set(),
+        "vulnerability": set(),
+        "flash_review_llm": set(),
+        "flash_review_semantic": set(),
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_dismissed_identity_keys_groups_rows_by_finding_type():
+    rows = [
+        {"finding_type": "flash_review_llm", "identity_key": "k1"},
+        {"finding_type": "flash_review_semantic", "identity_key": "k2"},
+        {"finding_type": "secret", "identity_key": "k3"},
+    ]
+    result = await get_dismissed_identity_keys(_FakePool(rows), 1, "owner/repo")
+    assert result["flash_review_llm"] == {"k1"}
+    assert result["flash_review_semantic"] == {"k2"}
+    assert result["secret"] == {"k3"}
+    assert result["vulnerability"] == set()
+
+
 @pytest.mark.asyncio
 async def test_dismiss_finding_then_get_dismissed_identity_keys(pool):
     await upsert_installation(pool, 1, "octocat")

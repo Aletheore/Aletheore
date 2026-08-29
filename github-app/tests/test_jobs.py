@@ -1796,6 +1796,20 @@ def test_flash_review_job_routes_free_tier_to_free_tier_path(monkeypatch):
     )
 
     from scan_worker.jobs import run_flash_review_job
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     # The free-tier chain's adapter was really called - proves the free-tier
@@ -1846,6 +1860,20 @@ def test_flash_review_job_reserves_the_free_tier_monthly_count_atomically(monkey
     monkeypatch.setattr("scan_worker.jobs._run_flash_review", lambda *a, **k: True)
 
     from scan_worker.jobs import run_flash_review_job
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert reserve_calls == [(1, MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH)]
@@ -1869,6 +1897,20 @@ def test_flash_review_job_skips_when_over_the_free_tier_monthly_cap(monkeypatch)
     )
 
     from scan_worker.jobs import run_flash_review_job
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert run_called == []
@@ -1938,6 +1980,20 @@ def test_flash_review_job_alerts_ops_when_all_free_tier_providers_fail(monkeypat
     )
 
     from scan_worker.jobs import run_flash_review_job
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert len(ops_alert_calls) == 1
@@ -2013,6 +2069,20 @@ def test_flash_review_does_not_post_or_advance_sha_when_free_tier_exhausted(monk
     )
 
     from scan_worker.jobs import run_flash_review_job
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert comment_calls == []
@@ -2032,6 +2102,20 @@ def test_flash_review_job_skips_when_debounced(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda *a, **k: llm_called.append(True))
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert llm_called == []
@@ -2062,6 +2146,20 @@ def test_flash_review_job_skips_when_spend_cap_reached(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda *a, **k: llm_called.append(True))
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert llm_called == []
@@ -2090,6 +2188,20 @@ def test_flash_review_job_skips_when_monthly_review_count_reached(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda *a, **k: llm_called.append(True))
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert llm_called == []
@@ -2131,6 +2243,20 @@ def test_flash_review_job_skips_model_call_for_lockfile_only_diff(monkeypatch):
     )
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert llm_called == []
@@ -2159,7 +2285,7 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs.review_diff",
         lambda diff_text, file_context="", **kwargs: [
-            {"file": "app.py", "line": 1, "issue": "real problem"}
+            {"file": "app.py", "line": 1, "issue": "real problem", "source": "llm"}
         ],
     )
     recorded_spend = []
@@ -2185,10 +2311,35 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     )
     from scan_worker.jobs import FLASH_REVIEW_MARKER, run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    inline_comments = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda client, token, repo, pr, commit_id, path, line, body: inline_comments.append(
+            (path, line, body)
+        )
+        or {"id": 999001},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
-    assert "app.py:1" in posted["body"]
-    assert "real problem" in posted["body"]
+    # The finding itself now posts as its own inline review comment
+    # (create_pr_review_comment) anchored to app.py:1, not listed inside
+    # the summary issue-comment (upsert_pr_comment) - see
+    # _post_flash_review_finding_comments.
+    assert len(inline_comments) == 1
+    assert inline_comments[0][0] == "app.py"
+    assert inline_comments[0][1] == 1
+    assert "real problem" in inline_comments[0][2]
+    assert "1 finding(s) posted as inline review comment(s) below" in posted["body"]
     assert posted["marker"] == FLASH_REVIEW_MARKER
     assert set_sha_calls == ["bbb"]
     # True-up delta, not the raw total: real cost (0.0 - review_diff is
@@ -2233,7 +2384,7 @@ def test_flash_review_job_reserves_the_cap_before_running_the_review(monkeypatch
 
     def _review_diff(diff_text, file_context="", **kwargs):
         call_order.append("review_diff")
-        return [{"file": "app.py", "line": 1, "issue": "x"}]
+        return [{"file": "app.py", "line": 1, "issue": "x", "source": "llm"}]
 
     monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", _reserve_flash_review_count)
     monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
@@ -2244,6 +2395,20 @@ def test_flash_review_job_reserves_the_cap_before_running_the_review(monkeypatch
 
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert call_order == ["reserve_count", "reserve_spend", "review_diff"]
@@ -2281,6 +2446,20 @@ def test_flash_review_job_releases_reservation_when_the_review_never_runs(monkey
 
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     # Free tier has no dollar reservation (reserved_spend stays 0.0), so
@@ -2314,7 +2493,7 @@ def test_flash_review_job_does_not_release_reservation_after_a_successful_review
     monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
     monkeypatch.setattr(
         "scan_worker.jobs.review_diff",
-        lambda diff_text, file_context="", **kwargs: [{"file": "app.py", "line": 1, "issue": "x"}],
+        lambda diff_text, file_context="", **kwargs: [{"file": "app.py", "line": 1, "issue": "x", "source": "llm"}],
     )
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
@@ -2322,6 +2501,20 @@ def test_flash_review_job_does_not_release_reservation_after_a_successful_review
 
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert released == {"count": False, "spend": False}
@@ -2345,7 +2538,7 @@ def test_flash_review_job_posts_grounding_note_when_some_findings_are_dropped(mo
 
     def fake_review_diff(diff_text, file_context="", **kwargs):
         kwargs["on_grounding_result"]({"proposed": 2, "kept": 1})
-        return [{"file": "app.py", "line": 1, "issue": "real problem"}]
+        return [{"file": "app.py", "line": 1, "issue": "real problem", "source": "llm"}]
 
     monkeypatch.setattr("scan_worker.jobs.review_diff", fake_review_diff)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
@@ -2361,6 +2554,20 @@ def test_flash_review_job_posts_grounding_note_when_some_findings_are_dropped(mo
     )
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert "Grounding: 1 of 2 proposed finding(s) held up" in posted["body"]
@@ -2400,6 +2607,20 @@ def test_flash_review_job_reports_zero_grounded_distinctly_from_no_issues_found(
     )
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert "No issues held up under grounding (3 proposed, 0 grounded" in posted["body"]
@@ -2450,6 +2671,20 @@ def test_flash_review_job_reports_zero_confirmed_distinctly_from_zero_grounded(m
     )
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert "No issues held up under independent verification (3 grounded, 0 confirmed" in posted["body"]
@@ -2498,6 +2733,20 @@ def test_flash_review_job_discloses_files_it_never_reviewed(monkeypatch):
     )
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert "No issues found in this diff." in posted["body"]
@@ -2539,6 +2788,20 @@ def test_flash_review_job_adds_no_coverage_note_when_every_file_was_read(monkeyp
     )
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert "not included in this review" not in posted["body"]
@@ -2580,6 +2843,20 @@ def test_flash_review_job_posts_failure_comment_instead_of_raising(monkeypatch):
     )
     from scan_worker.jobs import FLASH_REVIEW_MARKER, run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert posted["marker"] == FLASH_REVIEW_MARKER
@@ -2653,6 +2930,20 @@ def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkey
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert "admin.py:_github_http_client" in captured["referenced_symbol_context"]
@@ -2700,6 +2991,20 @@ def test_flash_review_job_passes_changed_file_contents_to_review_diff(monkeypatc
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert captured["file_contents"] == {"app.py": "real content of app.py"}
@@ -2737,6 +3042,20 @@ def test_flash_review_job_requests_second_model_verification_on_paid_plan(monkey
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert captured["verify_with_second_model"] is True
@@ -2848,6 +3167,20 @@ def test_flash_review_job_does_not_request_second_model_verification_on_free_tie
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert captured["verify_with_second_model"] is False
@@ -2900,6 +3233,20 @@ def test_flash_review_job_never_sends_the_raw_file_context_blob_to_review_diff(m
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert captured["file_context"] == ""
@@ -2928,7 +3275,7 @@ def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestio
     monkeypatch.setattr(
         "scan_worker.jobs.review_diff",
         lambda diff_text, file_context="", **kwargs: [
-            {"file": "app.py", "line": 1, "issue": "unclosed handle", "suggestion": "f.close()"}
+            {"file": "app.py", "line": 1, "issue": "unclosed handle", "suggestion": "f.close()", "source": "llm"}
         ],
     )
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
@@ -2944,10 +3291,30 @@ def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestio
     )
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    inline_comments = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda client, token, repo, pr, commit_id, path, line, body: inline_comments.append(body)
+        or {"id": 999001},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
-    assert "f.close()" in posted["body"]
-    assert "```suggestion" not in posted["body"]
+    # The suggestion now lives in the finding's own inline review comment
+    # (create_pr_review_comment), not the summary issue-comment
+    # (upsert_pr_comment) - see _post_flash_review_finding_comments.
+    assert len(inline_comments) == 1
+    assert "f.close()" in inline_comments[0]
+    assert "```suggestion" not in inline_comments[0]
 
 
 def test_flash_review_job_posts_no_issues_found_when_findings_empty(monkeypatch):
@@ -2983,6 +3350,20 @@ def test_flash_review_job_posts_no_issues_found_when_findings_empty(monkeypatch)
     )
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert "no issues found" in posted["body"].lower()
@@ -5148,6 +5529,20 @@ def test_flash_review_job_skips_paid_repo_past_monthly_scan_cap(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda *a, **k: llm_called.append(True))
     from scan_worker.jobs import run_flash_review_job
 
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda *a, **k: {"id": 999000 + len(a)},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert attempted == []
