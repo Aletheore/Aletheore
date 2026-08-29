@@ -245,10 +245,11 @@ def _free_pr_review_nudge() -> str:
     # place for this to live, on the general principle, not that specific
     # example.)
     return (
-        "\n[dim]You're on the free tier - Aletheore also does free, "
-        "evidence-grounded PR reviews on your pull requests, globally "
-        "rate-limited and subject to availability. Install the app: "
-        "https://github.com/apps/aletheore/installations/new[/dim]"
+        "\n[bold]Want this on every pull request automatically?[/bold] Aletheore's "
+        "free tier reviews PRs with the same evidence-grounded findings this run just "
+        "used. Install the GitHub App: "
+        "[bold cyan]https://github.com/apps/aletheore/installations/new[/bold cyan]\n"
+        "[dim](free tier is globally rate-limited)[/dim]"
     )
 
 
@@ -314,6 +315,8 @@ def _banner_panel() -> Panel:
     footer.append("aletheore <command> --help", style="bold cyan")
     footer.append(" for details on any command.\n")
     footer.append("https://github.com/Aletheore/Aletheore", style="dim underline")
+    footer.append("\nIssues or suggestions? ")
+    footer.append("support@aletheore.com", style="dim underline")
 
     return Panel(
         Group(intro, commands, Text(""), footer),
