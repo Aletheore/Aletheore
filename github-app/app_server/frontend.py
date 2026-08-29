@@ -479,7 +479,8 @@ function escapeHtml(s) {
   });
 }
 function planDisplayName(plan) {
-  return plan === 'free' ? 'Aletheore Community' : 'Aletheore AIR';
+  var names = { free: 'Aletheore Community', flash: 'Aletheore Flash', air: 'Aletheore AIR' };
+  return names[plan] || names.air;
 }
 // Minimal markdown for AIRview file pages. The text is model-written from
 // repository content, so it is escaped FIRST and only then are a handful of
@@ -2349,12 +2350,24 @@ def _no_store_html(content: str) -> HTMLResponse:
     return HTMLResponse(content, headers={"Cache-Control": "no-store"})
 
 
-_VALID_PLANS = ("air",)
+_VALID_PLANS = ("air", "flash")
 _VALID_INTERVALS = ("month", "year")
 
 
+_PLAN_DISPLAY_NAMES = {
+    "free": "Aletheore Community",
+    "flash": "Aletheore Flash",
+    "air": "Aletheore AIR",
+}
+
+
 def _plan_display_name(plan: str) -> str:
-    return "Aletheore Community" if plan == "free" else "Aletheore AIR"
+    # Falls back to AIR for an unrecognized value rather than raising -
+    # matches this function's pre-existing fail-open shape (a binary
+    # free/else check used to mean "anything that isn't literally 'free'
+    # is AIR"), now explicit about the values it knows rather than
+    # accidentally correct only by omission.
+    return _PLAN_DISPLAY_NAMES.get(plan, _PLAN_DISPLAY_NAMES["air"])
 
 
 def _subscribe_page(title: str, body: str) -> str:
@@ -2449,7 +2462,7 @@ document.getElementById("continue-checkout").addEventListener("click", (event) =
     settings: {{
       displayMode: "overlay",
       variant: "one-page",
-      successUrl: "https://app.aletheore.com/dashboard",
+      successUrl: "{"https://app.aletheore.com/dashboard" if plan == "air" else "https://www.aletheore.com/?subscribed=flash"}",
     }},
   }});
 }});
@@ -2459,7 +2472,16 @@ document.getElementById("continue-checkout").addEventListener("click", (event) =
 
 @frontend_router.get("/subscribe", response_class=HTMLResponse)
 async def subscribe_page(request: Request, plan: str = "", interval: str = ""):
+    # Validated against the real (plan, interval) -> price_id mapping
+    # directly, not plan and interval as two independent sets - flash
+    # only has a monthly price (no annual yet), so "flash" being in
+    # _VALID_PLANS and "year" being in _VALID_INTERVALS would otherwise
+    # both pass while resolve_price_id_for_plan("flash", "year") returns
+    # None, sending a customer to a checkout page with no real price
+    # attached instead of a clean 400.
     if plan not in _VALID_PLANS or interval not in _VALID_INTERVALS:
+        raise HTTPException(status_code=400, detail="invalid plan or interval")
+    if resolve_price_id_for_plan(plan, interval) is None:
         raise HTTPException(status_code=400, detail="invalid plan or interval")
 
     next_path = f"/subscribe?plan={plan}&interval={interval}"
