@@ -155,6 +155,77 @@ def upsert_pr_comment(
     response.raise_for_status()
 
 
+def create_pr_review_comment(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    pr_number: int,
+    commit_id: str,
+    path: str,
+    line: int,
+    body: str,
+) -> dict:
+    """Posts one inline PR review comment anchored to a real file:line -
+    the .../pulls/{pr}/comments endpoint, distinct from upsert_pr_comment's
+    .../issues/{pr}/comments (a plain, unanchored PR-level comment). side
+    is always RIGHT: line is always a new-file line number (see
+    flash_review.py's _diff_valid_lines), matching the new/head version of
+    the diff GitHub anchors RIGHT-side comments against.
+
+    Returns the created comment's JSON (id is what callers persist in
+    flash_review_finding_comments to track it across re-reviews).
+
+    A path/line GitHub's own review-comment validation rejects (not part
+    of the diff's added/context lines - can happen if the same finding's
+    citation drifted between grounding and posting, though grounding
+    should already prevent this) surfaces as a real 422 from raise_for_status
+    - deliberately not swallowed here, since a caller silently losing a
+    finding it meant to post is worse than a visible failure.
+    """
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    response = client.post(
+        f"/repos/{repo_full_name}/pulls/{pr_number}/comments",
+        headers=headers,
+        json={
+            "body": body,
+            "commit_id": commit_id,
+            "path": path,
+            "line": line,
+            "side": "RIGHT",
+        },
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def edit_pr_review_comment(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    comment_id: int,
+    body: str,
+) -> None:
+    """Edits an existing inline review comment in place - used both to
+    update a still-present finding's body across re-reviews (if its issue
+    text changed) and to mark one no longer detected without deleting it
+    (see run_flash_review_job's resolution handling: a reply thread a human
+    already engaged with must stay intact, so this edits rather than
+    deletes)."""
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    response = client.patch(
+        f"/repos/{repo_full_name}/pulls/comments/{comment_id}",
+        headers=headers,
+        json={"body": body},
+    )
+    response.raise_for_status()
+
+
 def create_check_run(
     client: httpx.Client,
     token: str,

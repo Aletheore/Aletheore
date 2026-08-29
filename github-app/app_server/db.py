@@ -14,6 +14,27 @@ async def create_pool(dsn: str) -> asyncpg.Pool:
     return await asyncpg.create_pool(dsn)
 
 
+async def get_flash_review_finding_comment_by_github_id(
+    pool: asyncpg.Pool, github_comment_id: int
+) -> dict | None:
+    """Reverse lookup for the reply-based dismissal webhook
+    (webhooks/pull_request_review_comment.py): a reply's payload only ever
+    carries in_reply_to_id, the real GitHub comment id of the finding
+    comment being replied to - this is the only path back to which
+    installation/repo/PR/finding that comment actually tracks. See
+    migration 059's flash_review_finding_comments_by_github_id index,
+    added specifically for this query."""
+    row = await pool.fetchrow(
+        """
+        SELECT installation_id, repo_full_name, pr_number, finding_type, identity_key
+        FROM flash_review_finding_comments
+        WHERE github_comment_id = $1
+        """,
+        github_comment_id,
+    )
+    return dict(row) if row else None
+
+
 async def upsert_installation(pool: asyncpg.Pool, installation_id: int, account_login: str) -> None:
     await pool.execute(
         """

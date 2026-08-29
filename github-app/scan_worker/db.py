@@ -618,7 +618,12 @@ def get_dismissed_identity_keys(dsn: str, installation_id: int, repo_full_name: 
                 """,
                 (installation_id, repo_full_name),
             )
-            result: dict[str, set[str]] = {"secret": set(), "vulnerability": set()}
+            result: dict[str, set[str]] = {
+                "secret": set(),
+                "vulnerability": set(),
+                "flash_review_llm": set(),
+                "flash_review_semantic": set(),
+            }
             for finding_type, identity_key in cur.fetchall():
                 result[finding_type].add(identity_key)
             return result
@@ -1439,6 +1444,125 @@ def record_flash_review_cache_hit(dsn: str, row_id: int) -> None:
                 (row_id,),
             )
         conn.commit()
+
+
+def get_flash_review_finding_comments(
+    dsn: str, installation_id: int, repo_full_name: str, pr_number: int
+) -> dict[tuple[str, str], dict]:
+    """Every tracked inline comment for this PR, keyed by (finding_type,
+    identity_key) so run_flash_review_job can tell, per finding in this
+    push's results, whether it already has a real GitHub comment (edit/
+    leave alone) or needs a new one (see migration 059's docstring for why
+    this replaced the old single-upserted-comment reconciliation)."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+            cur.execute(
+                """
+                SELECT id, finding_type, identity_key, github_comment_id, resolved_at
+                FROM flash_review_finding_comments
+                WHERE installation_id = %s AND repo_full_name = %s AND pr_number = %s
+                """,
+                (installation_id, repo_full_name, pr_number),
+            )
+            return {(row["finding_type"], row["identity_key"]): row for row in cur.fetchall()}
+
+
+def insert_flash_review_finding_comment(
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    finding_type: str,
+    identity_key: str,
+    github_comment_id: int,
+    head_sha: str,
+) -> None:
+    """Records a newly posted inline comment for a finding this PR has
+    never seen before. ON CONFLICT DO NOTHING rather than upsert: this is
+    only ever called after get_flash_review_finding_comments already
+    confirmed no row exists for this (finding_type, identity_key) - a
+    conflict here would mean a real race (two review runs for the same PR
+    overlapping), and silently keeping the first writer's github_comment_id
+    is correct, not a bug to paper over with a last-writer-wins update."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO flash_review_finding_comments
+                    (installation_id, repo_full_name, pr_number, finding_type,
+                     identity_key, github_comment_id, last_seen_sha)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (installation_id, repo_full_name, pr_number, finding_type, identity_key)
+                DO NOTHING
+                """,
+                (
+                    installation_id,
+                    repo_full_name,
+                    pr_number,
+                    finding_type,
+                    identity_key,
+                    github_comment_id,
+                    head_sha,
+                ),
+            )
+        conn.commit()
+
+
+def touch_flash_review_finding_comment(
+    dsn: str, row_id: int, head_sha: str, resolved: bool | None = None
+) -> None:
+    """A finding still present on this push - no new comment (usually no
+    edit either), just records that this sha re-confirmed it
+    (last_seen_sha), separate from resolved_at so a finding that
+    disappears and later comes back (a revert, or the same bug
+    reintroduced) has a real last-seen trail.
+
+    resolved=False clears resolved_at in the same UPDATE - used when a
+    finding reappears after having been marked resolved (see
+    _post_flash_review_finding_comments), so un-resolving is one state
+    transition, not a separate DB function on top of this one. resolved=True
+    is never passed here - mark_flash_review_finding_comment_resolved
+    exists specifically because that transition needs to know whether it
+    was the one that made it (its RETURNING id), which a plain UPDATE
+    ignoring rowcount can't distinguish from "was already resolved"."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            if resolved is False:
+                cur.execute(
+                    "UPDATE flash_review_finding_comments "
+                    "SET last_seen_sha = %s, resolved_at = NULL WHERE id = %s",
+                    (head_sha, row_id),
+                )
+            else:
+                cur.execute(
+                    "UPDATE flash_review_finding_comments SET last_seen_sha = %s WHERE id = %s",
+                    (head_sha, row_id),
+                )
+        conn.commit()
+
+
+def mark_flash_review_finding_comment_resolved(dsn: str, row_id: int) -> bool:
+    """Sets resolved_at the first time a re-review no longer detects this
+    finding. Returns whether this call actually made the transition (True)
+    vs the row was already resolved (False) - the caller uses this to
+    decide whether to PATCH the real GitHub comment: the edit is a one-time
+    transition, not resynced on every subsequent push that also doesn't
+    detect the finding (WHERE resolved_at IS NULL makes a second call on an
+    already-resolved row a no-op update, RETURNING id then coming back
+    empty)."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE flash_review_finding_comments SET resolved_at = now()
+                WHERE id = %s AND resolved_at IS NULL
+                RETURNING id
+                """,
+                (row_id,),
+            )
+            made_transition = cur.fetchone() is not None
+        conn.commit()
+        return made_transition
 
 
 def delete_expired_flash_review_cache(dsn: str, retention_days: int = 30) -> int:
