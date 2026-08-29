@@ -766,13 +766,32 @@ def test_check_run_failure_on_new_secret(bare_repo_with_two_commits, monkeypatch
 
 
 def test_vulnerability_check_run_fails_on_real_known_cve_bump(
-    bare_repo_with_dependency_bump, monkeypatch
+    bare_repo_with_dependency_bump, monkeypatch, tmp_path
 ):
     """Real end-to-end: bumps requirements.txt to pyyaml==5.3.1 (a real,
     live-queried OSV.dev advisory - see the fixture) and asserts the new
     vulnerability check run fires failure. Makes a real network call to
     OSV.dev, same as production; not mocked, so this only proves the
-    wiring if OSV.dev is reachable when the suite runs."""
+    wiring if OSV.dev is reachable when the suite runs.
+
+    Real flakiness this fixed: check_vulnerabilities' default cache_path
+    (aletheore.vulnerabilities.DEFAULT_VULNERABILITY_CACHE_PATH) is
+    ~/.cache/aletheore/vulnerability-cache.json - a real file, shared and
+    persistent across every test run and every branch/PR on the same
+    machine, with a 24-hour TTL. Without isolating it, a single spurious-
+    but-200 OSV.dev response (not even a real outage - just one
+    momentarily incomplete/empty result) gets cached as "no vulnerabilities
+    found" for pyyaml==5.3.1 and silently poisons every subsequent test run
+    for up to a day, on any branch. Confirmed as the real root cause of a
+    live CI failure on an unrelated PR (#463) whose only connection to this
+    test was running on the same CI runner. The module's own comment on
+    check_vulnerabilities ("resolved inside the function body so a test
+    monkeypatching DEFAULT_VULNERABILITY_CACHE_PATH actually takes effect")
+    already anticipated exactly this - this test just never did it."""
+    monkeypatch.setattr(
+        "aletheore.vulnerabilities.DEFAULT_VULNERABILITY_CACHE_PATH",
+        tmp_path / "vulnerability-cache.json",
+    )
     bare_path, base_sha, head_sha = bare_repo_with_dependency_bump
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
