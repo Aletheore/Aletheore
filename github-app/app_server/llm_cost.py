@@ -50,6 +50,18 @@ EXTRA_SEAT_LLM_CAP_USD = 3.00
 # spend cap is a monthly rolling figure either way.
 PLAN_MONTHLY_PRICE_USD = {
     "air": 29.99,
+    "flash": 6.00,
+}
+
+# flash's real spend cap is a deliberately looser fraction of its price
+# than the shared 50% default below (~67%, $4 of $6) - real worst-case
+# cost for 1000 reviews of solo Luna generation (no dual-agent
+# verification, compact + trimmed diff) measured at ~$4.34, small enough
+# in absolute dollars that the tighter formula wasn't worth applying
+# here. See jobs.py's MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH for the real
+# review-count cap (800) this was checked against.
+PLAN_CAP_OVERRIDE_USD = {
+    "flash": 4.00,
 }
 
 # Deliberately generous: this is a worst-case abuse/runaway-cost ceiling, not
@@ -89,6 +101,8 @@ def cost_for_usage(model: str, prompt_tokens: int, completion_tokens: int) -> fl
 
 
 def base_cap_for_plan(plan: str) -> float:
+    if plan in PLAN_CAP_OVERRIDE_USD:
+        return PLAN_CAP_OVERRIDE_USD[plan]
     price = PLAN_MONTHLY_PRICE_USD.get(plan)
     if price is None:
         return 0.0

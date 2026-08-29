@@ -57,7 +57,7 @@ async def test_report_runtime_event_rejects_free_plan(pool):
 @pytest.mark.asyncio
 async def test_report_runtime_event_rejects_unparseable_event(pool):
     await upsert_installation(pool, 201, "octocat")
-    await set_installation_plan(pool, 201, "indie")
+    await set_installation_plan(pool, 201, "air")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 201, token_hash, "laptop", "octocat")
     app.state.db_pool = pool
@@ -74,7 +74,7 @@ async def test_report_runtime_event_rejects_unparseable_event(pool):
 @pytest.mark.asyncio
 async def test_report_runtime_event_enqueues_job_with_parsed_fields(pool, monkeypatch):
     await upsert_installation(pool, 202, "octocat")
-    await set_installation_plan(pool, 202, "indie")
+    await set_installation_plan(pool, 202, "air")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 202, token_hash, "laptop", "octocat")
 

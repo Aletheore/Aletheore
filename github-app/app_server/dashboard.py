@@ -149,8 +149,10 @@ async def list_my_repos(request: Request):
         # ever touching a shared web view. Listing a free installation's
         # repos here would let every GitHub admin on that org click into a
         # full managed dashboard for free - exactly the team-collaboration
-        # capability AIR itself sells.
-        if row["plan"] == "free":
+        # capability AIR itself sells. The flash plan doesn't get a
+        # managed dashboard either - same self-service-only shape as
+        # free, just with paid PR-review limits.
+        if row["plan"] != "air":
             continue
         # repo_full_name is the source of truth for the org/repo split used
         # in every /app/{org}/{repo} route - account_login is a display
@@ -168,7 +170,8 @@ async def list_my_repos(request: Request):
 
     for installation_id in administered_ids:
         installation = await get_installation(pool, installation_id)
-        if installation is None or installation["plan"] == "free":
+        # AIR-exclusive - no managed dashboard for flash either.
+        if installation is None or installation["plan"] != "air":
             continue
         known = known_by_installation.get(installation_id, set())
         scanned_this_month = await count_monthly_scanned_repos(pool, installation_id)
@@ -205,8 +208,9 @@ async def _require_dashboard_installation(request: Request, org: str, repo: str)
 
     installation = await get_installation(pool, installation_id)
     if installation is not None:
-        if installation["plan"] == "free":
-            raise HTTPException(status_code=402, detail="the managed dashboard requires a paid plan")
+        # AIR-exclusive - no managed dashboard for flash either.
+        if installation["plan"] != "air":
+            raise HTTPException(status_code=402, detail="the managed dashboard requires the AIR plan")
         await _require_seat_if_paid(pool, installation, session["github_login"], f"{org}/{repo}")
 
     return session, installation_id

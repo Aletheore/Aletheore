@@ -981,7 +981,7 @@ async def test_my_installations_requires_bearer_token(pool):
 @pytest.mark.asyncio
 async def test_create_cli_token_mints_token_for_administered_paid_installation(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
-    await set_installation_plan(pool, 100, "indie")
+    await set_installation_plan(pool, 100, "air")
     await _mock_github_installations(monkeypatch, [100])
 
     app.state.db_pool = pool
@@ -1036,7 +1036,7 @@ async def test_create_cli_token_rejects_free_plan(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_create_cli_token_enforces_seat_cap(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
-    await set_installation_plan(pool, 100, "indie")
+    await set_installation_plan(pool, 100, "air")
     await _mock_github_installations(monkeypatch, [100])
 
     app.state.db_pool = pool
