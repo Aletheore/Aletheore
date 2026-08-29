@@ -182,7 +182,12 @@ async def test_managed_audit_requires_repo_full_name(pool):
 @pytest.mark.asyncio
 async def test_managed_audit_rejects_malformed_air_before_reserving_quota(monkeypatch):
     async def fake_authenticate(_request):
-        return {"installation_id": 100, "plan": "indie"}, "token-hash"
+        # Must be an installation actually entitled to managed audits
+        # (AIR, now that the flash plan also exists and is explicitly
+        # excluded) - this test is about malformed-evidence ordering, not
+        # entitlement, so the plan value here just needs to clear that
+        # gate, not be arbitrary.
+        return {"installation_id": 100, "plan": "air"}, "token-hash"
 
     reserve_repo_slot = AsyncMock()
     reserve_audit = AsyncMock()

@@ -146,11 +146,13 @@ async def create_embeddings(request: Request, body: EmbeddingsRequest):
     installation = await _authenticated_installation(request)
     installation_id = installation["installation_id"]
 
-    if installation["plan"] == "free":
+    # AIR-exclusive, not "any paid plan" - the flash plan doesn't include
+    # hosted embeddings/MCP.
+    if installation["plan"] != "air":
         raise HTTPException(
             status_code=402,
             detail=(
-                "hosted embeddings require a paid plan - run 'aletheore index' with a local "
+                "hosted embeddings require the AIR plan - run 'aletheore index' with a local "
                 "Ollama or your own OPENAI_API_KEY instead, which is free"
             ),
         )
