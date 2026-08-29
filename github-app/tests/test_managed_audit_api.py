@@ -165,7 +165,7 @@ async def test_managed_audit_returns_422_for_missing_evidence(pool):
 @pytest.mark.asyncio
 async def test_managed_audit_requires_repo_full_name(pool):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "indie")
+    await set_installation_plan(pool, 100, "air")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
     app.state.db_pool = pool
@@ -182,7 +182,12 @@ async def test_managed_audit_requires_repo_full_name(pool):
 @pytest.mark.asyncio
 async def test_managed_audit_rejects_malformed_air_before_reserving_quota(monkeypatch):
     async def fake_authenticate(_request):
-        return {"installation_id": 100, "plan": "indie"}, "token-hash"
+        # Must be an installation actually entitled to managed audits
+        # (AIR, now that the flash plan also exists and is explicitly
+        # excluded) - this test is about malformed-evidence ordering, not
+        # entitlement, so the plan value here just needs to clear that
+        # gate, not be arbitrary.
+        return {"installation_id": 100, "plan": "air"}, "token-hash"
 
     reserve_repo_slot = AsyncMock()
     reserve_audit = AsyncMock()
@@ -214,7 +219,7 @@ async def test_managed_audit_rejects_malformed_air_before_reserving_quota(monkey
 @pytest.mark.asyncio
 async def test_managed_audit_enqueues_job_for_paid_token(pool, monkeypatch):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "indie")
+    await set_installation_plan(pool, 100, "air")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
     fake_job = MagicMock(id="job-123")
@@ -244,7 +249,7 @@ async def test_managed_audit_enqueues_job_for_paid_token(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_managed_audit_blocks_second_request_within_cooldown(pool, monkeypatch):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "indie")
+    await set_installation_plan(pool, 100, "air")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
     fake_queue = MagicMock()
@@ -269,7 +274,7 @@ async def test_managed_audit_blocks_second_request_within_cooldown(pool, monkeyp
 @pytest.mark.asyncio
 async def test_managed_audit_rate_limit_is_independent_per_repo(pool, monkeypatch):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "indie")
+    await set_installation_plan(pool, 100, "air")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
     fake_queue = MagicMock()
@@ -297,7 +302,7 @@ async def test_managed_audit_rate_limit_is_independent_per_repo(pool, monkeypatc
 @pytest.mark.asyncio
 async def test_managed_audit_blocks_11th_new_repo_this_month(pool, monkeypatch):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "indie")
+    await set_installation_plan(pool, 100, "air")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
     for i in range(10):
@@ -331,7 +336,7 @@ async def test_managed_audit_new_repo_limit_does_not_block_repeat_audit(pool, mo
     # month must not count against the cap again on a repeat run - only
     # genuinely new repos do.
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "indie")
+    await set_installation_plan(pool, 100, "air")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
     # Already at the cap with 10 *other* repos - if the already-counted
@@ -377,7 +382,7 @@ async def test_managed_audit_new_repo_limit_does_not_block_repeat_audit(pool, mo
 @pytest.mark.asyncio
 async def test_start_managed_audit_passes_repo_full_name_to_the_job(pool, monkeypatch):
     await upsert_installation(pool, 100, "octocat")
-    await set_installation_plan(pool, 100, "indie")
+    await set_installation_plan(pool, 100, "air")
     token_hash = hashlib.sha256(b"real-token").hexdigest()
     await create_api_token(pool, 100, token_hash, "laptop", "octocat")
     fake_queue = MagicMock()

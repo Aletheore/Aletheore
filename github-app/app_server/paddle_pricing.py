@@ -14,9 +14,15 @@
 # bundle into the base $29.99/mo price.
 EXTRA_SEAT_PRICE_ID = "pri_01m123rwvvtgbm6bmmxcbav4hh"
 
+# The flash plan's real Paddle product (pro_01m1754jf8nkvhrn3sbaj9rmyq,
+# "Aletheore Flash") and its one price - monthly only, no annual yet,
+# matching what was actually validated ($6/mo, real cost/recall data
+# checked against an 800-review cap). Created live via the Paddle MCP,
+# not a placeholder - real, chargeable as of 2026-08-29.
 PADDLE_PRICE_TO_PLAN: dict[str, str] = {
     "pri_01kyhevc8bkcghfpwjymz16y2h": "air",
     "pri_01kyhevc9xn6z2nghmy8057jvp": "air",
+    "pri_01m1754jr5msg62grry49kjhw5": "flash",
 }
 
 
@@ -27,6 +33,7 @@ def resolve_plan_for_price_id(price_id: str) -> str | None:
 PLAN_INTERVAL_TO_PRICE_ID: dict[tuple[str, str], str] = {
     ("air", "month"): "pri_01kyhevc8bkcghfpwjymz16y2h",
     ("air", "year"): "pri_01kyhevc9xn6z2nghmy8057jvp",
+    ("flash", "month"): "pri_01m1754jr5msg62grry49kjhw5",
 }
 
 

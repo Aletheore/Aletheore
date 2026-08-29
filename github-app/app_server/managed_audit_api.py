@@ -97,8 +97,10 @@ async def _authenticate_token(request: Request) -> tuple[dict, str]:
 async def start_managed_audit(request: Request, body: StartManagedAuditRequest):
     installation, token_hash = await _authenticate_token(request)
     pool = request.app.state.db_pool
-    if installation["plan"] == "free":
-        raise HTTPException(status_code=402, detail="managed audits require a paid plan")
+    # AIR-exclusive, not "any paid plan" - the flash plan doesn't include
+    # managed audits.
+    if installation["plan"] != "air":
+        raise HTTPException(status_code=402, detail="managed audits require the AIR plan")
 
     if not body.repo_full_name:
         raise HTTPException(status_code=400, detail="repo_full_name is required")

@@ -2753,6 +2753,56 @@ def test_flash_review_job_requests_second_model_verification_on_paid_plan(monkey
     assert cost_calls == ["deepseek-v4-flash"]
 
 
+def test_flash_review_job_does_not_request_second_model_verification_on_flash_tier(monkeypatch):
+    # The real bug this guards: verify_with_second_model used to be
+    # `not is_free_tier`, which would have silently given the flash plan
+    # dual-agent verification for free the moment it existed as a plan
+    # value - flash's real cost/recall validation was run on solo
+    # generation only, and has no room in its cap for that. Also confirms
+    # flash gets its own, separately-validated review-count cap (800),
+    # not AIR's 500.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "flash"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n@@ -1,1 +1,1 @@\n+broken"
+    )
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    captured = {}
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: captured.update(kwargs) or [],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    reserve_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.reserve_flash_review_count",
+        lambda dsn, installation_id, cap: reserve_calls.append(cap) or True,
+    )
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    from scan_worker.jobs import MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH, run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert captured["verify_with_second_model"] is False
+    assert reserve_calls == [MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH]
+    assert MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH == 800
+
+
 def test_flash_review_job_does_not_request_second_model_verification_on_free_tier(monkeypatch):
     from unittest.mock import MagicMock
 

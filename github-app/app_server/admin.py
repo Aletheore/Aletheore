@@ -496,8 +496,11 @@ async def _require_authorized_installation(request: Request, org: str, repo: str
 
 async def _require_admin_installation(request: Request, org: str, repo: str) -> dict:
     session, installation = await _require_authorized_installation(request, org, repo)
-    if installation["plan"] == "free":
-        raise HTTPException(status_code=402, detail="this feature requires a paid plan")
+    # AIR-exclusive - the flash plan doesn't include a managed dashboard
+    # at all, same as free (self-service only: CLI, GitHub Action, free
+    # GitHub App usage).
+    if installation["plan"] != "air":
+        raise HTTPException(status_code=402, detail="this feature requires the AIR plan")
     pool = request.app.state.db_pool
     await _require_seat_if_paid(pool, installation, session["github_login"], f"{org}/{repo}")
     return installation
@@ -1326,8 +1329,10 @@ async def create_cli_token(request: Request, body: CreateCliTokenRequest):
     installation = await get_installation(pool, installation_id)
     if installation is None:
         raise HTTPException(status_code=404, detail="installation not found")
-    if installation["plan"] == "free":
-        raise HTTPException(status_code=402, detail="this feature requires a paid plan")
+    # AIR-exclusive - same "no dashboard/admin surface at all" rule as
+    # _require_admin_installation.
+    if installation["plan"] != "air":
+        raise HTTPException(status_code=402, detail="this feature requires the AIR plan")
 
     max_tokens = await get_max_tokens(pool, installation_id)
     raw_token = secrets.token_urlsafe(32)
