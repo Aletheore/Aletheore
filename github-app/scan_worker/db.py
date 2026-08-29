@@ -630,10 +630,19 @@ def get_dismissed_identity_keys(dsn: str, installation_id: int, repo_full_name: 
 
 
 def list_health_check_targets_all(dsn: str) -> list[dict]:
-    """Every configured health check target across every paid installation -
+    """Every configured health check target across every AIR installation -
     the health sweep job's worklist. One row per target, not per
     installation, since an installation's repos can each have their own
     monitored URL(s) now instead of a single shared one.
+
+    AIR-exclusive (plan = 'air'): endpoint monitoring's own creation route
+    (admin.py's add_health_check_target_route, gated by
+    _require_admin_installation) already only lets an AIR installation add
+    a target, but that alone doesn't stop this sweep from continuing to
+    poll a target that predates a later air -> flash downgrade - the
+    installation row's plan changes, the target row doesn't disappear.
+    Filtering here too means a downgrade actually stops the polling, not
+    just the ability to add new targets.
     """
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
@@ -647,7 +656,7 @@ def list_health_check_targets_all(dsn: str) -> list[dict]:
                 LEFT JOIN hidden_repos hr
                     ON hr.installation_id = t.installation_id
                    AND hr.repo_full_name = t.repo_full_name
-                WHERE i.plan != 'free'
+                WHERE i.plan = 'air'
                   AND hr.installation_id IS NULL
                 """
             )
@@ -1206,13 +1215,18 @@ def record_docs_repo_commit(
 
 
 def list_paid_repos_due_for_docs_catchup(dsn: str, interval_seconds: int) -> list[tuple[int, str]]:
-    """Paid-plan repos due for the recurring Docs catch-up sweep - never
+    """AIR-plan repos due for the recurring Docs catch-up sweep - never
     swept before, or swept more than interval_seconds ago AND scanned at
     least once since that last sweep. The activity requirement (a real
     scan since the last sweep, not just "installation is still paid") is
     what keeps a dormant repo with no new commits from repeatedly costing
     real LLM spend every 48h for zero new information - nothing changed,
     so there's nothing new to describe.
+
+    AIR-exclusive (plan = 'air'), not "any paid plan" - Docs is not part
+    of the flash tier. A leftover `!= 'free'` here would have swept a
+    flash installation's repos into a full Docs rebuild every 48h,
+    indefinitely, on a plan that never subscribed to Docs at all.
     """
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
@@ -1227,7 +1241,7 @@ def list_paid_repos_due_for_docs_catchup(dsn: str, interval_seconds: int) -> lis
                 LEFT JOIN hidden_repos hr
                     ON hr.installation_id = rh.installation_id
                    AND hr.repo_full_name = rh.repo_full_name
-                WHERE i.plan != 'free'
+                WHERE i.plan = 'air'
                   AND hr.installation_id IS NULL
                   AND (
                         s.last_swept_at IS NULL
@@ -1257,11 +1271,14 @@ def record_docs_catchup_swept(dsn: str, installation_id: int, repo_full_name: st
 
 
 def list_paid_repos_due_for_wiki_catchup(dsn: str, interval_seconds: int) -> list[tuple[int, str]]:
-    """Paid-plan repos due for the recurring AIRview catch-up sweep - mirrors
+    """AIR-plan repos due for the recurring AIRview catch-up sweep - mirrors
     list_paid_repos_due_for_docs_catchup exactly (never swept before, or
     swept more than interval_seconds ago AND scanned at least once since
     that last sweep), against wiki_catchup_sweeps instead of
     docs_catchup_sweeps.
+
+    AIR-exclusive (plan = 'air'), same reasoning as the Docs sweep above -
+    AIRview is not part of the flash tier.
     """
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
@@ -1276,7 +1293,7 @@ def list_paid_repos_due_for_wiki_catchup(dsn: str, interval_seconds: int) -> lis
                 LEFT JOIN hidden_repos hr
                     ON hr.installation_id = rh.installation_id
                    AND hr.repo_full_name = rh.repo_full_name
-                WHERE i.plan != 'free'
+                WHERE i.plan = 'air'
                   AND hr.installation_id IS NULL
                   AND (
                         s.last_swept_at IS NULL

@@ -458,6 +458,77 @@ async def test_free_to_paid_transition_triggers_live_wiki_full_build(pool):
 
 
 @pytest.mark.asyncio
+async def test_free_to_flash_transition_does_not_trigger_live_wiki_full_build(pool):
+    """Real bug this guards: should_run_paid_setup predates the flash tier
+    and used to mean "is air" by construction. AIRview/Docs are AIR-only -
+    a flash signup enqueueing a full build would have spent real money
+    against a $6/mo plan's own small monthly cap."""
+    fake_queue = MagicMock()
+    await upsert_installation(pool, 202, "acme")  # defaults to plan='free'
+
+    payload = _subscription_created_payload("pri_01m1754jr5msg62grry49kjhw5", 202)
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    installation = await get_installation(pool, 202)
+    assert installation["plan"] == "flash"
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_free_to_flash_transition_with_known_discount_id_still_records_referral(pool):
+    """Affiliate attribution is deliberately NOT gated on plan == "air" -
+    an affiliate should get credit for a flash referral too, even though
+    the AIRview/Docs build (tested above) correctly does not fire."""
+    fake_queue = MagicMock()
+    affiliate = await create_affiliate(pool, "SARAH10", "dsc_sarah_wh", "Sarah")
+    await upsert_installation(pool, 203, "acme")
+
+    payload = _subscription_created_payload(
+        "pri_01m1754jr5msg62grry49kjhw5", 203, discount_id="dsc_sarah_wh"
+    )
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    referral = await get_referral(pool, 203)
+    assert referral is not None
+    assert referral["affiliate_id"] == affiliate["id"]
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_flash_to_air_upgrade_does_not_retrigger_live_wiki_full_build(pool):
+    """The one-time paid-setup claim was already consumed on this
+    installation's original free -> flash transition, so an upgrade to air
+    does not get the instant build here - it self-heals via the AIR-only
+    catch-up sweep instead (scan_worker/db.py's
+    list_paid_repos_due_for_wiki_catchup/list_paid_repos_due_for_docs_catchup),
+    which finds a "never swept" row the moment the installation becomes
+    eligible. This test only pins down the webhook handler's own half:
+    no double-build, no crash."""
+    fake_queue = MagicMock()
+    await upsert_installation(pool, 204, "acme")
+    await handle_paddle_webhook_event(
+        _subscription_created_payload("pri_01m1754jr5msg62grry49kjhw5", 204, event_id="evt_flash_first"),
+        pool,
+        "redis://unused",
+        queue=fake_queue,
+    )
+    installation = await get_installation(pool, 204)
+    assert installation["plan"] == "flash"
+    fake_queue.reset_mock()
+
+    await handle_paddle_webhook_event(
+        _subscription_created_payload("pri_01kyhevc8bkcghfpwjymz16y2h", 204, event_id="evt_flash_to_air"),
+        pool,
+        "redis://unused",
+        queue=fake_queue,
+    )
+
+    installation = await get_installation(pool, 204)
+    assert installation["plan"] == "air"
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_paid_to_paid_change_does_not_retrigger_live_wiki_full_build(pool):
     fake_queue = MagicMock()
     await pool.execute(
@@ -746,10 +817,38 @@ async def test_past_due_from_paid_enqueues_payment_failed_email_to_members(pool,
     assert len(enqueue_calls) == 1
     call = enqueue_calls[0]
     assert call["template_name"] == "payment_failed"
-    assert call["template_arg"] == "acme"
+    assert call["template_arg"] == {"account_login": "acme", "plan": "air"}
     assert call["to_email"] == "alice@example.com"
     assert call["dedupe_key"] == "payment_failed:evt_past_due_1:alice@example.com"
     assert call["installation_id"] == 700
+
+
+@pytest.mark.asyncio
+async def test_past_due_from_flash_enqueues_payment_failed_email_naming_flash(pool, monkeypatch):
+    """Real bug this guards: template_arg used to be a bare account_login
+    string, so payment_failed_email always rendered "AIR" regardless of
+    the installation's actual plan - a flash customer's declined card
+    produced an email naming a plan and feature list they never had."""
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (703, 'acme', 'flash')"
+    )
+    await add_installation_member(pool, 703, "alice", "alice")
+    await upsert_github_user_email(pool, "alice", "alice@example.com")
+
+    enqueue_calls = []
+    monkeypatch.setattr(
+        "app_server.webhooks.paddle.enqueue_transactional_email",
+        lambda redis_url, **kwargs: enqueue_calls.append(kwargs),
+    )
+
+    payload = _subscription_event_payload("subscription.updated", "past_due", 703)
+    payload["event_id"] = "evt_past_due_flash"
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert len(enqueue_calls) == 1
+    assert enqueue_calls[0]["template_arg"] == {"account_login": "acme", "plan": "flash"}
 
 
 @pytest.mark.asyncio
@@ -775,6 +874,31 @@ async def test_canceled_from_paid_enqueues_win_back_email(pool, monkeypatch):
     assert len(enqueue_calls) == 1
     assert enqueue_calls[0]["template_name"] == "subscription_canceled"
     assert enqueue_calls[0]["dedupe_key"] == "subscription_canceled:evt_canceled_1:alice@example.com"
+    assert enqueue_calls[0]["template_arg"] == {"account_login": "acme", "plan": "air"}
+
+
+@pytest.mark.asyncio
+async def test_canceled_from_flash_enqueues_win_back_email_naming_flash(pool, monkeypatch):
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (704, 'acme', 'flash')"
+    )
+    await add_installation_member(pool, 704, "alice", "alice")
+    await upsert_github_user_email(pool, "alice", "alice@example.com")
+
+    enqueue_calls = []
+    monkeypatch.setattr(
+        "app_server.webhooks.paddle.enqueue_transactional_email",
+        lambda redis_url, **kwargs: enqueue_calls.append(kwargs),
+    )
+
+    payload = _subscription_event_payload("subscription.canceled", "canceled", 704)
+    payload["event_id"] = "evt_canceled_flash"
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert len(enqueue_calls) == 1
+    assert enqueue_calls[0]["template_arg"] == {"account_login": "acme", "plan": "flash"}
 
 
 @pytest.mark.asyncio

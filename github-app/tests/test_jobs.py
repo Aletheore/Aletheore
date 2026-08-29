@@ -4610,7 +4610,7 @@ async def test_sweep_end_to_end_against_real_postgres_redis_and_a_live_http_targ
         await pool.execute(
             "INSERT INTO installations (installation_id, account_login, plan, webhook_url) "
             "VALUES ($1, $2, $3, $4)",
-            9001, "integration-test-org", "indie", "https://hooks.slack.com/integration-test",
+            9001, "integration-test-org", "air", "https://hooks.slack.com/integration-test",
         )
         target_id = await pool.fetchval(
             "INSERT INTO health_check_targets (installation_id, repo_full_name, label, base_url) "

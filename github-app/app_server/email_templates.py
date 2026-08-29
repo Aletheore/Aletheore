@@ -40,6 +40,20 @@ _FOOTER_TEXT = (
     "Reply anytime - a person reads it."
 )
 
+# Mirrors frontend.py's _PLAN_DISPLAY_NAMES - kept as its own small copy
+# rather than imported, since this module is deliberately dependency-light
+# (see the module docstring) and frontend.py is a large FastAPI route
+# module with its own import surface.
+_PLAN_DISPLAY_NAMES = {
+    "free": "Aletheore Community",
+    "flash": "Aletheore Flash",
+    "air": "Aletheore AIR",
+}
+
+
+def _plan_display_name(plan: str) -> str:
+    return _PLAN_DISPLAY_NAMES.get(plan, _PLAN_DISPLAY_NAMES["air"])
+
 
 def _button(label: str, url: str) -> str:
     return (
@@ -130,22 +144,32 @@ def welcome_email(github_login: str) -> dict:
     return {"subject": subject, "html": html, "text": text}
 
 
-def payment_failed_email(account_login: str) -> dict:
+def payment_failed_email(account_login: str, plan: str) -> dict:
     # Access is already fully revoked by the time this fires (see
     # webhooks/paddle.py - there's no dunning-aware grace period, the
     # subscription downgrades to free the moment Paddle reports
     # past_due), so this can't honestly say "update your card before you
     # lose access" - it's already lost. Resubscribing via checkout is the
     # actual fix, not a customer-portal payment-method update.
-    subject = "Your Aletheore AIR payment failed"
+    #
+    # plan is the PLAN BEING LOST (paddle.py's previous_plan), not the
+    # installation's current plan - by the time this fires the DB already
+    # reads "free". Real bug this fixes: the copy used to hardcode "AIR"
+    # unconditionally, so a flash customer's failed payment produced an
+    # email naming a plan and feature list ("managed AI audits, AIRview,
+    # ... endpoint monitoring") they never had.
+    plan_name = _plan_display_name(plan)
+    features = "automated PR reviews" if plan == "flash" else (
+        "managed AI audits, AIRview, automated PR reviews, and endpoint monitoring"
+    )
+    subject = f"Your {plan_name} payment failed"
     preheader = f"{account_login} is back on the free Community plan until you resubscribe."
     text = (
         "Hi,\n\n"
-        f"A payment for {account_login}'s Aletheore AIR subscription didn't go "
+        f"A payment for {account_login}'s {plan_name} subscription didn't go "
         "through, and the account has moved back to the free Community plan.\n\n"
-        "Your scan history, settings, and endpoint targets are untouched - "
-        "resubscribing restores AIR immediately: managed AI audits, AIRview, "
-        "automated PR reviews, and endpoint monitoring.\n\n"
+        f"Your scan history and settings are untouched - resubscribing restores "
+        f"{plan_name} immediately: {features}.\n\n"
         "Resubscribe here: https://aletheore.com/pricing.html\n\n"
         "If this looks wrong, just reply to this email and we'll sort it out."
         f"{_FOOTER_TEXT}"
@@ -153,13 +177,12 @@ def payment_failed_email(account_login: str) -> dict:
     body_html = (
         '<p style="margin:0 0 16px;">Hi,</p>'
         f'<p style="margin:0 0 16px;">A payment for <strong>{account_login}</strong>'
-        '\'s Aletheore AIR subscription didn\'t go through, and the account has '
+        f'\'s {plan_name} subscription didn\'t go through, and the account has '
         'moved back to the free Community plan.</p>'
-        '<p style="margin:0 0 24px;">Your scan history, settings, and endpoint '
-        'targets are untouched &mdash; resubscribing restores AIR immediately: '
-        'managed AI audits, AIRview, automated PR reviews, and endpoint '
-        'monitoring.</p>'
-        f'<p style="margin:0 0 24px;">{_button("Resubscribe to Aletheore AIR", _PRICING_URL)}</p>'
+        f'<p style="margin:0 0 24px;">Your scan history and settings are '
+        f'untouched &mdash; resubscribing restores {plan_name} immediately: '
+        f'{features}.</p>'
+        f'<p style="margin:0 0 24px;">{_button(f"Resubscribe to {plan_name}", _PRICING_URL)}</p>'
         f'<p style="margin:0;color:{_TEXT_MUTED};font-size:14px;">If this looks '
         'wrong, just reply to this email and we\'ll sort it out.</p>'
     )
@@ -212,6 +235,7 @@ def _slack_markdown_to_html(text: str) -> str:
 
 def weekly_digest_email(
     account_login: str,
+    plan: str,
     scans_this_week: int,
     endpoints_reachable: int,
     endpoints_total: int,
@@ -222,6 +246,16 @@ def weekly_digest_email(
     # ones (see digest_sends' migration comment - this is meant to
     # re-engage installs that have gone quiet, not just report on active
     # ones), so every line needs copy that reads naturally at zero too.
+    #
+    # plan is the installation's CURRENT plan (unlike payment_failed_email/
+    # subscription_canceled_email's previous_plan - this digest only fires
+    # for a still-paying installation). Real bug this fixes: the copy used
+    # to hardcode "Aletheore AIR" and unconditionally promote endpoint
+    # monitoring + a managed dashboard - both AIR-exclusive - to every
+    # paid installation including flash, which has neither.
+    plan_name = _plan_display_name(plan)
+    is_air = plan == "air"
+
     if scans_this_week > 0:
         scan_line = f"{scans_this_week} scan{'s' if scans_this_week != 1 else ''} run this week."
     else:
@@ -230,13 +264,14 @@ def weekly_digest_email(
             "`aletheore audit . --managed`, and it'll show up here next week."
         )
 
-    if endpoints_total > 0:
-        health_line = f"Endpoint monitoring: {endpoints_reachable}/{endpoints_total} reachable right now."
-    else:
-        health_line = (
-            "No endpoints being monitored yet - add one in Settings to catch "
-            "outages before your users do."
-        )
+    if is_air:
+        if endpoints_total > 0:
+            health_line = f"Endpoint monitoring: {endpoints_reachable}/{endpoints_total} reachable right now."
+        else:
+            health_line = (
+                "No endpoints being monitored yet - add one in Settings to catch "
+                "outages before your users do."
+            )
 
     review_word = "review" if flash_reviews_month_to_date == 1 else "reviews"
     spend_line = (
@@ -244,28 +279,35 @@ def weekly_digest_email(
         f"{flash_reviews_month_to_date} automated PR {review_word}."
     )
 
-    subject = f"Your Aletheore weekly digest for {account_login}"
-    preheader = f"{scan_line} {health_line}"
+    lines = [scan_line]
+    if is_air:
+        lines.append(health_line)
+    lines.append(spend_line)
+
+    cta_label = "Open your dashboard" if is_air else "Manage your subscription"
+    cta_url = _DASHBOARD_URL if is_air else _PRICING_URL
+
+    subject = f"Your {plan_name} weekly digest for {account_login}"
+    preheader = f"{scan_line} {lines[1] if is_air else spend_line}"
     text = (
         "Hi,\n\n"
-        f"Here's what happened on {account_login}'s Aletheore AIR this week:\n\n"
-        f"- {scan_line}\n"
-        f"- {health_line}\n"
-        f"- {spend_line}\n\n"
-        "Open your dashboard: https://app.aletheore.com/dashboard\n\n"
+        f"Here's what happened on {account_login}'s {plan_name} this week:\n\n"
+        + "".join(f"- {line}\n" for line in lines)
+        + f"\n{cta_label}: {cta_url}\n\n"
         "Don't want these emails? Reply and let us know - we'll turn them off."
         f"{_FOOTER_TEXT}"
     )
     body_html = (
         '<p style="margin:0 0 16px;">Hi,</p>'
         f'<p style="margin:0 0 16px;">Here\'s what happened on '
-        f'<strong>{account_login}</strong>\'s Aletheore AIR this week:</p>'
+        f'<strong>{account_login}</strong>\'s {plan_name} this week:</p>'
         f'<ul style="margin:0 0 24px;padding-left:20px;">'
-        f'<li style="margin-bottom:8px;">{scan_line}</li>'
-        f'<li style="margin-bottom:8px;">{health_line}</li>'
-        f'<li>{spend_line}</li>'
-        '</ul>'
-        f'<p style="margin:0 0 24px;">{_button("Open your dashboard", _DASHBOARD_URL)}</p>'
+        + "".join(
+            f'<li style="margin-bottom:8px;">{line}</li>' if i < len(lines) - 1 else f'<li>{line}</li>'
+            for i, line in enumerate(lines)
+        )
+        + '</ul>'
+        f'<p style="margin:0 0 24px;">{_button(cta_label, cta_url)}</p>'
         f'<p style="margin:0;color:{_TEXT_MUTED};font-size:14px;">Don\'t want these '
         'emails? Reply and let us know &mdash; we\'ll turn them off.</p>'
     )
@@ -273,18 +315,24 @@ def weekly_digest_email(
     return {"subject": subject, "html": html, "text": text}
 
 
-def subscription_canceled_email(account_login: str) -> dict:
+def subscription_canceled_email(account_login: str, plan: str) -> dict:
+    # plan is the PLAN BEING LOST (paddle.py's previous_plan), same
+    # reasoning as payment_failed_email above - fixes the same hardcoded
+    # "AIR" bug for a canceling flash customer.
+    plan_name = _plan_display_name(plan)
+    features = "automated PR reviews" if plan == "flash" else (
+        "managed AI audits, AIRview architecture maps, AI-generated Docs, "
+        "automated PR reviews, Slack/Teams alerts, and endpoint health monitoring"
+    )
     subject = "Sorry to see you go"
     preheader = f"{account_login} is back on Community. Your history and settings are still here."
     text = (
         "Hi,\n\n"
-        f"{account_login}'s Aletheore AIR subscription has been canceled and the "
+        f"{account_login}'s {plan_name} subscription has been canceled and the "
         "account is back on the free Community plan. Your scan history and "
         "settings are still there if you come back.\n\n"
-        "Here's what's paused: managed AI audits, AIRview architecture maps, "
-        "AI-generated Docs, automated PR reviews, Slack/Teams alerts, and "
-        "endpoint health monitoring. The full deterministic CLI scanner stays "
-        "free, forever, on Community.\n\n"
+        f"Here's what's paused: {features}. The full deterministic CLI scanner "
+        "stays free, forever, on Community.\n\n"
         "Resubscribe here: https://aletheore.com/pricing.html\n\n"
         "Canceled by mistake, or something didn't work the way you expected? "
         "Just reply - we'd genuinely like to know why."
@@ -292,15 +340,13 @@ def subscription_canceled_email(account_login: str) -> dict:
     )
     body_html = (
         '<p style="margin:0 0 16px;">Hi,</p>'
-        f'<p style="margin:0 0 16px;"><strong>{account_login}</strong>\'s Aletheore '
-        'AIR subscription has been canceled and the account is back on the free '
+        f'<p style="margin:0 0 16px;"><strong>{account_login}</strong>\'s {plan_name} '
+        'subscription has been canceled and the account is back on the free '
         'Community plan. Your scan history and settings are still there if you '
         'come back.</p>'
-        '<p style="margin:0 0 24px;">Here\'s what\'s paused: managed AI audits, '
-        'AIRview architecture maps, AI-generated Docs, automated PR reviews, '
-        'Slack/Teams alerts, and endpoint health monitoring. The full '
+        f'<p style="margin:0 0 24px;">Here\'s what\'s paused: {features}. The full '
         'deterministic CLI scanner stays free, forever, on Community.</p>'
-        f'<p style="margin:0 0 24px;">{_button("Resubscribe to Aletheore AIR", _PRICING_URL)}</p>'
+        f'<p style="margin:0 0 24px;">{_button(f"Resubscribe to {plan_name}", _PRICING_URL)}</p>'
         f'<p style="margin:0;color:{_TEXT_MUTED};font-size:14px;">Canceled by '
         'mistake, or something didn\'t work the way you expected? Just reply '
         '&mdash; we\'d genuinely like to know why.</p>'

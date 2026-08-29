@@ -199,45 +199,65 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     # skipping it forever.
     should_run_paid_setup = plan != "free" and await claim_paid_setup(pool, installation_id)
 
-    # One-time Live Wiki build, mirroring the GitHub Marketplace path in
-    # webhooks/marketplace.py - fires exactly once, on the free -> paid
-    # transition. Without this, installations upgraded through Paddle (the
-    # actual live payment path) never get an initial AIRview build at all:
-    # only the Marketplace webhook used to trigger it, so a Paddle
-    # installation's wiki stayed limited to whatever clusters an
-    # incremental push happened to touch after the fact.
     if should_run_paid_setup:
-        # Attribution: first time this installation goes free -> paid, if it
-        # was checked out with a known affiliate's discount code, credit
-        # that affiliate. Gated the same paid-setup claim as the wiki/docs
-        # build below, so a later subscription.updated for the same
-        # installation (e.g. switching monthly <-> annual) can't
-        # re-attribute or steal credit - record_referral is also itself a
-        # database-enforced no-op past the first row (installation_id is
-        # that table's primary key).
+        # Attribution: first time this installation goes free -> paid, on
+        # ANY paid plan (flash included) - if it was checked out with a
+        # known affiliate's discount code, credit that affiliate. Gated on
+        # the same paid-setup claim as the AIRview/Docs build below, so a
+        # later subscription.updated for the same installation (e.g.
+        # switching monthly <-> annual) can't re-attribute or steal credit
+        # - record_referral is also itself a database-enforced no-op past
+        # the first row (installation_id is that table's primary key).
         discount_id = (data.get("discount") or {}).get("id")
         if discount_id:
             affiliate = await get_affiliate_by_discount_id(pool, discount_id)
             if affiliate is not None:
                 await record_referral(pool, installation_id, affiliate["id"])
 
-        if queue is None:
-            from redis import Redis
-            from rq import Queue
+        # One-time Live Wiki + Docs build, mirroring the GitHub Marketplace
+        # path in webhooks/marketplace.py - fires exactly once, on the
+        # free -> paid transition. Without this, installations upgraded
+        # through Paddle (the actual live payment path) never get an
+        # initial AIRview build at all: only the Marketplace webhook used
+        # to trigger it, so a Paddle installation's wiki stayed limited to
+        # whatever clusters an incremental push happened to touch after
+        # the fact.
+        #
+        # AIR-exclusive (plan == "air"), unlike the affiliate credit above
+        # - AIRview and Docs are not part of the flash tier. Real bug this
+        # closes: should_run_paid_setup predates the flash tier and used
+        # to mean "is air" by construction (air was the only paid plan),
+        # so a flash signup would have silently kicked off a full
+        # AIRview + Docs build - real LLM spend against a $6/mo plan whose
+        # own $4 cap override (llm_cost.py's PLAN_CAP_OVERRIDE_USD) a
+        # single full build could plausibly exhaust before the customer's
+        # first PR review ever ran.
+        #
+        # A flash -> air upgrade doesn't get this instant build (this
+        # claim was already consumed on that installation's original
+        # free -> flash transition), but self-heals within one scheduler
+        # tick: scan_worker/db.py's list_paid_repos_due_for_wiki_catchup/
+        # list_paid_repos_due_for_docs_catchup are also AIR-exclusive, so
+        # an installation that was never eligible while on flash has no
+        # wiki_catchup_sweeps/docs_catchup_sweeps row yet - the moment it
+        # becomes "air", the sweep's own "never swept" branch picks it up
+        # without needing any special-cased upgrade handling here.
+        if plan == "air":
+            if queue is None:
+                from redis import Redis
+                from rq import Queue
 
-            queue = Queue("scans", connection=Redis.from_url(redis_url))
-        queue.enqueue(
-            "scan_worker.jobs.run_live_wiki_full_build_for_installation_job",
-            job_timeout=60,
-            installation_id=installation_id,
-        )
-        # One-time Docs build, same trigger and tier-independence as the
-        # Live Wiki build immediately above.
-        queue.enqueue(
-            "scan_worker.jobs.run_live_docs_full_build_for_installation_job",
-            job_timeout=60,
-            installation_id=installation_id,
-        )
+                queue = Queue("scans", connection=Redis.from_url(redis_url))
+            queue.enqueue(
+                "scan_worker.jobs.run_live_wiki_full_build_for_installation_job",
+                job_timeout=60,
+                installation_id=installation_id,
+            )
+            queue.enqueue(
+                "scan_worker.jobs.run_live_docs_full_build_for_installation_job",
+                job_timeout=60,
+                installation_id=installation_id,
+            )
 
     # payment_failed and subscription_canceled emails, gated on an actual
     # paid -> free transition (not "was already free") so a webhook for an
@@ -258,12 +278,16 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
 
         if template_name and event_id:
             account_login = previous["account_login"] if previous is not None else str(installation_id)
+            # The plan being LOST, not the current (now "free") plan - both
+            # templates need it to name what's actually being paused (real
+            # bug this fixes: the copy used to hardcode "AIR" regardless of
+            # whether the installation was actually air or flash).
             for member_email in await list_installation_member_emails(pool, installation_id):
                 enqueue_transactional_email(
                     redis_url,
                     dedupe_key=f"{template_name}:{event_id}:{member_email}",
                     template_name=template_name,
-                    template_arg=account_login,
+                    template_arg={"account_login": account_login, "plan": previous_plan},
                     to_email=member_email,
                     installation_id=installation_id,
                 )

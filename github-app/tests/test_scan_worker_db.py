@@ -95,11 +95,11 @@ async def _insert_health_target(pool, installation_id: int, repo_full_name: str,
 
 @pytest.mark.asyncio
 async def test_list_health_check_targets_all_filters_by_plan(pool):
-    await _insert_installation(pool, 301, "a", plan="indie")
+    await _insert_installation(pool, 301, "a", plan="air")
     await _insert_health_target(pool, 301, "a/repo1", "https://a.example.com")
     await _insert_installation(pool, 302, "b", plan="free")
     await _insert_health_target(pool, 302, "b/repo1", "https://b.example.com")
-    await _insert_installation(pool, 303, "c", plan="indie")
+    await _insert_installation(pool, 303, "c", plan="air")
 
     targets = list_health_check_targets_all(TEST_DATABASE_URL)
     installation_ids = {t["installation_id"] for t in targets}
@@ -107,8 +107,22 @@ async def test_list_health_check_targets_all_filters_by_plan(pool):
 
 
 @pytest.mark.asyncio
+async def test_list_health_check_targets_all_excludes_flash_plan(pool):
+    """Endpoint monitoring is AIR-exclusive. A flash installation can't
+    create a target through the app (add_health_check_target_route is
+    AIR-only), but this is the defense-in-depth half: a target that
+    predates an air -> flash downgrade must also stop being polled, not
+    just stop accepting new ones."""
+    await _insert_installation(pool, 309, "i", plan="flash")
+    await _insert_health_target(pool, 309, "i/repo1", "https://i.example.com")
+
+    targets = list_health_check_targets_all(TEST_DATABASE_URL)
+    assert all(t["installation_id"] != 309 for t in targets)
+
+
+@pytest.mark.asyncio
 async def test_list_health_check_targets_all_includes_webhook_url_and_repo(pool):
-    await _insert_installation(pool, 304, "d", plan="indie", webhook_url="https://hooks.slack.com/d")
+    await _insert_installation(pool, 304, "d", plan="air", webhook_url="https://hooks.slack.com/d")
     await _insert_health_target(pool, 304, "d/repo1", "https://d.example.com", latency_threshold_ms=2000)
 
     targets = list_health_check_targets_all(TEST_DATABASE_URL)
@@ -121,7 +135,7 @@ async def test_list_health_check_targets_all_includes_webhook_url_and_repo(pool)
 
 @pytest.mark.asyncio
 async def test_list_health_check_targets_all_includes_alert_email(pool):
-    await _insert_installation(pool, 306, "f", plan="indie", alert_email="ops@f.example.com")
+    await _insert_installation(pool, 306, "f", plan="air", alert_email="ops@f.example.com")
     await _insert_health_target(pool, 306, "f/repo1", "https://f.example.com")
 
     targets = list_health_check_targets_all(TEST_DATABASE_URL)
@@ -131,7 +145,7 @@ async def test_list_health_check_targets_all_includes_alert_email(pool):
 
 @pytest.mark.asyncio
 async def test_list_health_check_targets_all_includes_pushover_user_key(pool):
-    await _insert_installation(pool, 307, "g", plan="indie", pushover_user_key="user-key-g")
+    await _insert_installation(pool, 307, "g", plan="air", pushover_user_key="user-key-g")
     await _insert_health_target(pool, 307, "g/repo1", "https://g.example.com")
 
     targets = list_health_check_targets_all(TEST_DATABASE_URL)
@@ -141,7 +155,7 @@ async def test_list_health_check_targets_all_includes_pushover_user_key(pool):
 
 @pytest.mark.asyncio
 async def test_list_health_check_targets_all_returns_one_row_per_target(pool):
-    await _insert_installation(pool, 305, "e", plan="indie")
+    await _insert_installation(pool, 305, "e", plan="air")
     await _insert_health_target(pool, 305, "e/repo1", "https://staging.example.com")
     await _insert_health_target(pool, 305, "e/repo1", "https://prod.example.com")
 
@@ -156,7 +170,7 @@ async def test_list_health_check_targets_all_excludes_hidden_repos(pool):
     # removed) must stop being actively monitored - no new checks against
     # it, matching the "stop processing" half of soft-hiding a repo, not
     # just its removal from the dashboard list.
-    await _insert_installation(pool, 308, "h", plan="indie")
+    await _insert_installation(pool, 308, "h", plan="air")
     await _insert_health_target(pool, 308, "h/repo1", "https://h.example.com")
     await hide_repo(pool, 308, "h/repo1")
 
@@ -1391,8 +1405,21 @@ async def test_docs_catchup_due_list_excludes_free_plan_repos(pool):
 
 
 @pytest.mark.asyncio
+async def test_docs_catchup_due_list_excludes_flash_plan_repos(pool):
+    """Docs is AIR-exclusive - a recurring 48h sweep re-including flash
+    here would silently rebuild Docs (real LLM spend) for a plan that
+    never subscribed to it, indefinitely."""
+    await _insert_installation(pool, 520, "flash-org", plan="flash")
+    insert_repo_history(TEST_DATABASE_URL, 520, "flash-org/repo", datetime.now(timezone.utc), {"v": 1})
+
+    due = list_paid_repos_due_for_docs_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (520, "flash-org/repo") not in due
+
+
+@pytest.mark.asyncio
 async def test_docs_catchup_due_list_includes_paid_repo_never_swept(pool):
-    await _insert_installation(pool, 502, "paid-org", plan="indie")
+    await _insert_installation(pool, 502, "paid-org", plan="air")
     insert_repo_history(TEST_DATABASE_URL, 502, "paid-org/repo", datetime.now(timezone.utc), {"v": 1})
 
     due = list_paid_repos_due_for_docs_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
@@ -1402,7 +1429,7 @@ async def test_docs_catchup_due_list_includes_paid_repo_never_swept(pool):
 
 @pytest.mark.asyncio
 async def test_docs_catchup_due_list_excludes_paid_repo_with_no_scan_history(pool):
-    await _insert_installation(pool, 503, "unscanned-org", plan="indie")
+    await _insert_installation(pool, 503, "unscanned-org", plan="air")
 
     due = list_paid_repos_due_for_docs_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
 
@@ -1411,7 +1438,7 @@ async def test_docs_catchup_due_list_excludes_paid_repo_with_no_scan_history(poo
 
 @pytest.mark.asyncio
 async def test_docs_catchup_due_list_excludes_repo_swept_within_cooldown(pool):
-    await _insert_installation(pool, 504, "recent-org", plan="indie")
+    await _insert_installation(pool, 504, "recent-org", plan="air")
     insert_repo_history(TEST_DATABASE_URL, 504, "recent-org/repo", datetime.now(timezone.utc), {"v": 1})
     record_docs_catchup_swept(TEST_DATABASE_URL, 504, "recent-org/repo")
 
@@ -1422,7 +1449,7 @@ async def test_docs_catchup_due_list_excludes_repo_swept_within_cooldown(pool):
 
 @pytest.mark.asyncio
 async def test_docs_catchup_due_list_excludes_repo_swept_long_ago_with_no_new_activity(pool):
-    await _insert_installation(pool, 505, "stale-org", plan="indie")
+    await _insert_installation(pool, 505, "stale-org", plan="air")
     old_scan = datetime.now(timezone.utc) - timedelta(days=10)
     insert_repo_history(TEST_DATABASE_URL, 505, "stale-org/repo", old_scan, {"v": 1})
     async with pool.acquire() as conn:
@@ -1442,7 +1469,7 @@ async def test_docs_catchup_due_list_excludes_repo_swept_long_ago_with_no_new_ac
 
 @pytest.mark.asyncio
 async def test_docs_catchup_due_list_includes_repo_swept_long_ago_with_new_activity_since(pool):
-    await _insert_installation(pool, 506, "active-org", plan="indie")
+    await _insert_installation(pool, 506, "active-org", plan="air")
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -1461,7 +1488,7 @@ async def test_docs_catchup_due_list_includes_repo_swept_long_ago_with_new_activ
 
 @pytest.mark.asyncio
 async def test_record_docs_catchup_swept_upserts_on_conflict(pool):
-    await _insert_installation(pool, 507, "upsert-org", plan="indie")
+    await _insert_installation(pool, 507, "upsert-org", plan="air")
     insert_repo_history(TEST_DATABASE_URL, 507, "upsert-org/repo", datetime.now(timezone.utc), {"v": 1})
 
     record_docs_catchup_swept(TEST_DATABASE_URL, 507, "upsert-org/repo")
@@ -1482,7 +1509,7 @@ async def test_record_docs_catchup_swept_upserts_on_conflict(pool):
 
 @pytest.mark.asyncio
 async def test_docs_catchup_due_list_excludes_hidden_repos(pool):
-    await _insert_installation(pool, 508, "hidden-docs-org", plan="indie")
+    await _insert_installation(pool, 508, "hidden-docs-org", plan="air")
     insert_repo_history(TEST_DATABASE_URL, 508, "hidden-docs-org/repo", datetime.now(timezone.utc), {"v": 1})
     await hide_repo(pool, 508, "hidden-docs-org/repo")
 
@@ -1502,8 +1529,20 @@ async def test_wiki_catchup_due_list_excludes_free_plan_repos(pool):
 
 
 @pytest.mark.asyncio
+async def test_wiki_catchup_due_list_excludes_flash_plan_repos(pool):
+    """AIRview is AIR-exclusive - same reasoning as the Docs sweep's own
+    flash-exclusion test above."""
+    await _insert_installation(pool, 521, "flash-wiki-org", plan="flash")
+    insert_repo_history(TEST_DATABASE_URL, 521, "flash-wiki-org/repo", datetime.now(timezone.utc), {"v": 1})
+
+    due = list_paid_repos_due_for_wiki_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
+
+    assert (521, "flash-wiki-org/repo") not in due
+
+
+@pytest.mark.asyncio
 async def test_wiki_catchup_due_list_includes_paid_repo_never_swept(pool):
-    await _insert_installation(pool, 512, "paid-wiki-org", plan="indie")
+    await _insert_installation(pool, 512, "paid-wiki-org", plan="air")
     insert_repo_history(TEST_DATABASE_URL, 512, "paid-wiki-org/repo", datetime.now(timezone.utc), {"v": 1})
 
     due = list_paid_repos_due_for_wiki_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
@@ -1513,7 +1552,7 @@ async def test_wiki_catchup_due_list_includes_paid_repo_never_swept(pool):
 
 @pytest.mark.asyncio
 async def test_wiki_catchup_due_list_excludes_paid_repo_with_no_scan_history(pool):
-    await _insert_installation(pool, 513, "unscanned-wiki-org", plan="indie")
+    await _insert_installation(pool, 513, "unscanned-wiki-org", plan="air")
 
     due = list_paid_repos_due_for_wiki_catchup(TEST_DATABASE_URL, 48 * 60 * 60)
 
@@ -1522,7 +1561,7 @@ async def test_wiki_catchup_due_list_excludes_paid_repo_with_no_scan_history(poo
 
 @pytest.mark.asyncio
 async def test_wiki_catchup_due_list_excludes_repo_swept_within_cooldown(pool):
-    await _insert_installation(pool, 514, "recent-wiki-org", plan="indie")
+    await _insert_installation(pool, 514, "recent-wiki-org", plan="air")
     insert_repo_history(TEST_DATABASE_URL, 514, "recent-wiki-org/repo", datetime.now(timezone.utc), {"v": 1})
     record_wiki_catchup_swept(TEST_DATABASE_URL, 514, "recent-wiki-org/repo")
 
@@ -1533,7 +1572,7 @@ async def test_wiki_catchup_due_list_excludes_repo_swept_within_cooldown(pool):
 
 @pytest.mark.asyncio
 async def test_wiki_catchup_due_list_excludes_repo_swept_long_ago_with_no_new_activity(pool):
-    await _insert_installation(pool, 515, "stale-wiki-org", plan="indie")
+    await _insert_installation(pool, 515, "stale-wiki-org", plan="air")
     old_scan = datetime.now(timezone.utc) - timedelta(days=10)
     insert_repo_history(TEST_DATABASE_URL, 515, "stale-wiki-org/repo", old_scan, {"v": 1})
     async with pool.acquire() as conn:
@@ -1553,7 +1592,7 @@ async def test_wiki_catchup_due_list_excludes_repo_swept_long_ago_with_no_new_ac
 
 @pytest.mark.asyncio
 async def test_wiki_catchup_due_list_includes_repo_swept_long_ago_with_new_activity_since(pool):
-    await _insert_installation(pool, 516, "active-wiki-org", plan="indie")
+    await _insert_installation(pool, 516, "active-wiki-org", plan="air")
     async with pool.acquire() as conn:
         await conn.execute(
             """
@@ -1572,7 +1611,7 @@ async def test_wiki_catchup_due_list_includes_repo_swept_long_ago_with_new_activ
 
 @pytest.mark.asyncio
 async def test_wiki_catchup_due_list_excludes_hidden_repos(pool):
-    await _insert_installation(pool, 519, "hidden-wiki-org", plan="indie")
+    await _insert_installation(pool, 519, "hidden-wiki-org", plan="air")
     insert_repo_history(TEST_DATABASE_URL, 519, "hidden-wiki-org/repo", datetime.now(timezone.utc), {"v": 1})
     await hide_repo(pool, 519, "hidden-wiki-org/repo")
 
@@ -1583,7 +1622,7 @@ async def test_wiki_catchup_due_list_excludes_hidden_repos(pool):
 
 @pytest.mark.asyncio
 async def test_record_wiki_catchup_swept_upserts_on_conflict(pool):
-    await _insert_installation(pool, 517, "upsert-wiki-org", plan="indie")
+    await _insert_installation(pool, 517, "upsert-wiki-org", plan="air")
     insert_repo_history(TEST_DATABASE_URL, 517, "upsert-wiki-org/repo", datetime.now(timezone.utc), {"v": 1})
 
     record_wiki_catchup_swept(TEST_DATABASE_URL, 517, "upsert-wiki-org/repo")

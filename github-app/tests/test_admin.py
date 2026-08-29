@@ -948,11 +948,11 @@ async def test_set_webhook_url_rejects_non_https(pool, monkeypatch):
 @pytest.mark.asyncio
 async def test_my_installations_returns_only_paid_and_administered(pool, monkeypatch):
     await upsert_installation(pool, 100, "acme")
-    await set_installation_plan(pool, 100, "indie")
+    await set_installation_plan(pool, 100, "air")
     await upsert_installation(pool, 200, "free-org")
     await set_installation_plan(pool, 200, "free")
     await upsert_installation(pool, 300, "not-mine")
-    await set_installation_plan(pool, 300, "indie")
+    await set_installation_plan(pool, 300, "air")
     await _mock_github_installations(monkeypatch, [100, 200])
 
     app.state.db_pool = pool
@@ -967,6 +967,26 @@ async def test_my_installations_returns_only_paid_and_administered(pool, monkeyp
     installations = response.json()["installations"]
     assert [installation["installation_id"] for installation in installations] == [100]
     assert installations[0]["account_login"] == "acme"
+
+
+@pytest.mark.asyncio
+async def test_my_installations_excludes_flash_plan(pool, monkeypatch):
+    """CLI tokens are AIR-only (create_cli_token) - a flash installation
+    must not appear in the picker for an action it can't complete."""
+    await upsert_installation(pool, 100, "acme")
+    await set_installation_plan(pool, 100, "flash")
+    await _mock_github_installations(monkeypatch, [100])
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/v1/my-installations",
+            headers={"Authorization": "Bearer gho_faketoken"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["installations"] == []
 
 
 @pytest.mark.asyncio

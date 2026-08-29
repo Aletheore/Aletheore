@@ -1302,13 +1302,21 @@ async def delete_all_data(
 
 @admin_router.get("/v1/my-installations")
 async def my_installations(request: Request):
+    # AIR-exclusive (plan = 'air'), not "any paid plan": this endpoint's
+    # only consumer is the CLI's `aletheore login` device flow, picking
+    # which installation to mint a CLI token for (see
+    # src/aletheore/device_auth.py's fetch_my_installations). CLI tokens
+    # are AIR-only (create_cli_token below), so listing a flash
+    # installation here would let a user pick it and then hit a 402 on
+    # the very next step - filtering it out here means they never see an
+    # option they can't use.
     github_token = _bearer_github_token(request)
     administered_ids = await _administered_installation_ids_or_401(github_token)
     rows = await request.app.state.db_pool.fetch(
         """
         SELECT installation_id, account_login
         FROM installations
-        WHERE installation_id = ANY($1::bigint[]) AND plan != 'free'
+        WHERE installation_id = ANY($1::bigint[]) AND plan = 'air'
         ORDER BY account_login ASC, installation_id ASC
         """,
         list(administered_ids),

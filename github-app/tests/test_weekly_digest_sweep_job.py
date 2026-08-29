@@ -1,8 +1,11 @@
 from scan_worker.jobs import run_weekly_digest_sweep_job
 
 
-def _patch_installation_data(monkeypatch, *, account_login="acme", emails=("alice@example.com",)):
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda dsn, iid: {"account_login": account_login})
+def _patch_installation_data(monkeypatch, *, account_login="acme", plan="air", emails=("alice@example.com",)):
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda dsn, iid: {"account_login": account_login, "plan": plan},
+    )
     monkeypatch.setattr("scan_worker.jobs.count_repo_scans_since", lambda dsn, iid, since: 3)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda dsn, iid: 5.5)
     monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda dsn, iid: 2)
@@ -32,6 +35,7 @@ def test_processes_each_due_installation_and_enqueues_per_member(monkeypatch):
         assert call["installation_id"] == 1
         assert call["template_arg"] == {
             "account_login": "acme",
+            "plan": "air",
             "scans_this_week": 3,
             "llm_spend_month_to_date": 5.5,
             "flash_reviews_month_to_date": 2,
@@ -67,7 +71,7 @@ def test_one_installation_failing_does_not_stop_the_others(monkeypatch):
     def _get_installation(dsn, iid):
         if iid == 1:
             raise RuntimeError("boom")
-        return {"account_login": "acme-2"}
+        return {"account_login": "acme-2", "plan": "air"}
 
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", _get_installation)
     monkeypatch.setattr("scan_worker.jobs.count_repo_scans_since", lambda dsn, iid, since: 0)
