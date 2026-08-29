@@ -525,8 +525,14 @@ def _swallowed_exception_findings(file: str, source: str, hunks: list[_Hunk]) ->
             non_comment = [b for b in body if not b.startswith("#")]
             if non_comment != ["pass"]:
                 continue  # body has real handling (or more than just pass) - not a swallow
-            if any(_LOG_OR_RERAISE_RE.search(b) for b in body):
-                continue  # defensive, in case a future body shape sneaks a log/raise into a comment line
+            # Scoped to non_comment, not body: a comment merely mentioning
+            # "raise"/"log"/"warn" ("# used to raise, now silently
+            # ignored") is commentary, not real handling, and must not
+            # suppress a genuine swallow - confirmed as a real false
+            # negative, not theoretical, by a standalone before/after
+            # check against this exact shape.
+            if any(_LOG_OR_RERAISE_RE.search(b) for b in non_comment):
+                continue  # defensive, in case a future body shape sneaks a log/raise into real code
 
             findings.append(
                 _finding(

@@ -2204,6 +2204,35 @@ def test_semantic_checker_does_not_flag_an_except_that_logs():
     assert findings == []
 
 
+def test_semantic_checker_flags_a_swallow_even_with_a_comment_mentioning_raise():
+    """Real false-negative, found by an independent review pass: the body
+    is genuinely just `pass` - a comment merely mentioning "raise"/"log"
+    is commentary, not real handling, and must not suppress the finding.
+    The log/re-raise check must scope to non-comment lines only."""
+    source = (
+        "def close_quietly(self):\n"
+        "    try:\n"
+        "        self.conn.close()\n"
+        "    except Exception:\n"
+        "        # note: this used to raise, now silently ignored\n"
+        "        pass\n"
+    )
+    diff = (
+        "--- sessions.py ---\n"
+        "@@ -1,1 +1,5 @@\n"
+        " def close_quietly(self):\n"
+        "+    try:\n"
+        "+        self.conn.close()\n"
+        "+    except Exception:\n"
+        "+        # note: this used to raise, now silently ignored\n"
+        "+        pass\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"sessions.py": source}, "")
+
+    assert len(findings) == 1
+
+
 def test_semantic_checker_does_not_flag_a_narrow_except_with_pass():
     """A specific exception type, not a bare/broad catch-all, is a
     deliberate narrow suppression - a different risk profile from the
