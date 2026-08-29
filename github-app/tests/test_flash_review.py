@@ -439,7 +439,7 @@ def test_review_diff_parses_valid_findings(mock_adapter_class):
     findings = review_diff("--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')")
 
     assert findings == [
-        {"file": "app.py", "line": 42, "issue": "unclosed file handle, never calls .close()"}
+        {"file": "app.py", "line": 42, "issue": "unclosed file handle, never calls .close()", "source": "llm"}
     ]
 
 
@@ -463,7 +463,7 @@ def test_review_diff_drops_findings_missing_required_fields(mock_adapter_class):
 
     findings = review_diff("--- b.py ---\n@@ -1,1 +3,1 @@\n+something")
 
-    assert findings == [{"file": "b.py", "line": 3, "issue": "this one is valid"}]
+    assert findings == [{"file": "b.py", "line": 3, "issue": "this one is valid", "source": "llm"}]
 
 
 @patch("scan_worker.flash_review.writing_adapter_for")
@@ -498,7 +498,7 @@ def test_review_diff_drops_a_hallucinated_finding_outside_the_diff(mock_adapter_
 
     findings = review_diff("--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')")
 
-    assert findings == [{"file": "app.py", "line": 42, "issue": "real, inside the diff"}]
+    assert findings == [{"file": "app.py", "line": 42, "issue": "real, inside the diff", "source": "llm"}]
 
 
 # ── adapter_chain (free-tier cascading fallback) integration ────────────
@@ -526,7 +526,7 @@ def test_review_diff_falls_back_to_the_next_adapter_in_the_chain_on_failure():
         adapter_chain=[first, second],
     )
 
-    assert findings == [{"file": "app.py", "line": 42, "issue": "found by the second provider"}]
+    assert findings == [{"file": "app.py", "line": 42, "issue": "found by the second provider", "source": "llm"}]
     first.simple_completion.assert_called_once()
     second.simple_completion.assert_called_once()
 
@@ -552,7 +552,9 @@ def test_review_diff_treats_non_json_output_as_a_failure_and_tries_the_next_adap
         adapter_chain=[weak_model, strong_model],
     )
 
-    assert findings == [{"file": "app.py", "line": 42, "issue": "real finding from the working adapter"}]
+    assert findings == [
+        {"file": "app.py", "line": 42, "issue": "real finding from the working adapter", "source": "llm"}
+    ]
 
 
 def test_review_diff_treats_non_json_list_as_a_failure_and_tries_the_next_adapter():
@@ -644,7 +646,7 @@ def test_review_diff_serves_validated_cache_hit_without_calling_the_model():
         findings = review_diff(diff_text, cache_lookup=lambda diff: cached_findings)
 
     mock_adapter_class.assert_not_called()
-    assert findings == cached_findings
+    assert findings == [{**cached_findings[0], "source": "llm"}]
 
 
 def test_review_diff_revalidates_cache_hit_against_current_diff():
@@ -658,7 +660,7 @@ def test_review_diff_revalidates_cache_hit_against_current_diff():
         findings = review_diff(diff_text, cache_lookup=lambda diff: cached_findings)
 
     mock_adapter_class.assert_not_called()
-    assert findings == [{"file": "app.py", "line": 42, "issue": "still valid"}]
+    assert findings == [{"file": "app.py", "line": 42, "issue": "still valid", "source": "llm"}]
 
 
 @patch("scan_worker.flash_review.writing_adapter_for")
@@ -672,7 +674,7 @@ def test_review_diff_falls_through_to_model_call_on_cache_miss(mock_adapter_clas
 
     findings = review_diff(diff_text, cache_lookup=lambda diff: None)
 
-    assert findings == [{"file": "app.py", "line": 42, "issue": "fresh finding"}]
+    assert findings == [{"file": "app.py", "line": 42, "issue": "fresh finding", "source": "llm"}]
 
 
 @patch("scan_worker.flash_review.writing_adapter_for")
@@ -693,7 +695,11 @@ def test_review_diff_writes_to_cache_after_a_fresh_call(mock_adapter_class):
     )
 
     assert written == [
-        (diff_text, [{"file": "app.py", "line": 42, "issue": "fresh finding"}], "deepseek-v4-flash")
+        (
+            diff_text,
+            [{"file": "app.py", "line": 42, "issue": "fresh finding", "source": "llm"}],
+            "deepseek-v4-flash",
+        )
     ]
 
 
@@ -831,7 +837,13 @@ def test_review_diff_parses_optional_suggestion_field(mock_adapter_class):
     findings = review_diff("--- a.py ---\n@@ -1,1 +3,1 @@\n+thing")
 
     assert findings == [
-        {"file": "a.py", "line": 3, "issue": "off-by-one", "suggestion": "for i in range(n):"}
+        {
+            "file": "a.py",
+            "line": 3,
+            "issue": "off-by-one",
+            "suggestion": "for i in range(n):",
+            "source": "llm",
+        }
     ]
 
 
@@ -845,7 +857,7 @@ def test_review_diff_suggestion_field_is_optional(mock_adapter_class):
 
     findings = review_diff("--- a.py ---\n@@ -1,1 +3,1 @@\n+thing")
 
-    assert findings == [{"file": "a.py", "line": 3, "issue": "off-by-one"}]
+    assert findings == [{"file": "a.py", "line": 3, "issue": "off-by-one", "source": "llm"}]
 
 
 def test_names_referenced_in_diff_extracts_identifiers_from_added_and_context_lines():
@@ -1660,7 +1672,7 @@ def test_review_diff_drops_only_the_suggestion_when_it_smuggles_a_fence(mock_ada
 
     findings = review_diff("--- a.py ---\n@@ -1,1 +3,1 @@\n+thing")
 
-    assert findings == [{"file": "a.py", "line": 3, "issue": "real, benign issue text"}]
+    assert findings == [{"file": "a.py", "line": 3, "issue": "real, benign issue text", "source": "llm"}]
 
 
 @patch("scan_worker.flash_review.writing_adapter_for")
@@ -1685,7 +1697,7 @@ def test_review_diff_ignores_unexpected_fields_on_a_finding(mock_adapter_class):
 
     findings = review_diff("--- a.py ---\n@@ -1,1 +3,1 @@\n+thing")
 
-    assert findings == [{"file": "a.py", "line": 3, "issue": "real issue"}]
+    assert findings == [{"file": "a.py", "line": 3, "issue": "real issue", "source": "llm"}]
 
 
 def test_fetch_review_file_context_stops_at_max_files(monkeypatch):
@@ -2448,7 +2460,9 @@ def test_review_diff_falls_through_to_next_provider_on_malformed_json():
 
     assert first.calls == 1
     assert second.calls == 1
-    assert findings == [{"file": "app.py", "line": 1, "issue": "real issue from the second provider"}]
+    assert findings == [
+        {"file": "app.py", "line": 1, "issue": "real issue from the second provider", "source": "llm"}
+    ]
 
 
 def test_review_diff_falls_through_to_next_provider_on_non_list_json():
@@ -2465,7 +2479,9 @@ def test_review_diff_falls_through_to_next_provider_on_non_list_json():
 
     assert first.calls == 1
     assert second.calls == 1
-    assert findings == [{"file": "app.py", "line": 1, "issue": "real issue from the second provider"}]
+    assert findings == [
+        {"file": "app.py", "line": 1, "issue": "real issue from the second provider", "source": "llm"}
+    ]
 
 
 def test_review_diff_uses_first_providers_valid_json_without_falling_through():
@@ -2482,7 +2498,7 @@ def test_review_diff_uses_first_providers_valid_json_without_falling_through():
 
     assert first.calls == 1
     assert second.calls == 0
-    assert findings == [{"file": "app.py", "line": 1, "issue": "found by the first provider"}]
+    assert findings == [{"file": "app.py", "line": 1, "issue": "found by the first provider", "source": "llm"}]
 
 
 def test_review_diff_returns_empty_findings_when_every_chain_provider_fails():
@@ -2661,7 +2677,7 @@ def test_review_diff_skips_verification_by_default(mock_verification_adapter, mo
 
     findings = review_diff("--- app.py ---\n@@ -1,1 +1,1 @@\n+x = 1")
 
-    assert findings == [{"file": "app.py", "line": 1, "issue": "a real problem"}]
+    assert findings == [{"file": "app.py", "line": 1, "issue": "a real problem", "source": "llm"}]
     mock_verification_adapter.assert_not_called()
 
 
@@ -2680,7 +2696,7 @@ def test_review_diff_never_reverifies_a_cache_hit(mock_verification_adapter):
         verify_with_second_model=True,
     )
 
-    assert findings == cached_findings
+    assert findings == [{**cached_findings[0], "source": "llm"}]
     mock_verification_adapter.assert_not_called()
 
 
@@ -2712,7 +2728,9 @@ def test_review_diff_never_sends_a_semantic_finding_to_the_llm_verifier(
     ):
         findings = review_diff(diff_text, verify_with_second_model=True)
 
-    assert findings == [{"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors"}]
+    assert findings == [
+        {"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors", "source": "semantic"}
+    ]
     mock_verifier.simple_completion.assert_not_called()
 
 
@@ -2742,5 +2760,7 @@ def test_review_diff_verifies_model_findings_but_not_semantic_findings_in_the_sa
     ):
         findings = review_diff(diff_text, verify_with_second_model=True)
 
-    assert findings == [{"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors"}]
+    assert findings == [
+        {"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors", "source": "semantic"}
+    ]
     mock_verifier.simple_completion.assert_called_once()

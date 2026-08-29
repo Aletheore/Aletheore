@@ -25,6 +25,10 @@ from scan_worker.db import (
     email_already_sent,
     get_dismissed_identity_keys,
     get_endpoint_health_summary,
+    get_flash_review_finding_comments,
+    insert_flash_review_finding_comment,
+    mark_flash_review_finding_comment_resolved,
+    touch_flash_review_finding_comment,
     get_extra_seats,
     get_last_endpoint_health,
     get_last_reviewed_sha,
@@ -1758,6 +1762,93 @@ async def test_get_dismissed_identity_keys_sync_returns_empty_sets_when_none_dis
     dismissed = get_dismissed_identity_keys(TEST_DATABASE_URL, 810, "co/repo")
 
     assert dismissed == {"secret": set(), "vulnerability": set()}
+
+
+@pytest.mark.asyncio
+async def test_insert_and_get_flash_review_finding_comment(pool):
+    await _insert_installation(pool, 812, "co")
+
+    insert_flash_review_finding_comment(
+        TEST_DATABASE_URL, 812, "co/repo", 42, "flash_review_llm", "a.py\x1f10\x1fabc123", 999001, "sha1"
+    )
+
+    comments = get_flash_review_finding_comments(TEST_DATABASE_URL, 812, "co/repo", 42)
+
+    key = ("flash_review_llm", "a.py\x1f10\x1fabc123")
+    assert key in comments
+    assert comments[key]["github_comment_id"] == 999001
+    assert comments[key]["resolved_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_flash_review_finding_comments_scoped_per_pr(pool):
+    await _insert_installation(pool, 813, "co")
+    insert_flash_review_finding_comment(
+        TEST_DATABASE_URL, 813, "co/repo", 1, "flash_review_llm", "a.py\x1f10\x1fabc", 1, "sha1"
+    )
+    insert_flash_review_finding_comment(
+        TEST_DATABASE_URL, 813, "co/repo", 2, "flash_review_llm", "a.py\x1f10\x1fabc", 2, "sha1"
+    )
+
+    pr1 = get_flash_review_finding_comments(TEST_DATABASE_URL, 813, "co/repo", 1)
+    pr2 = get_flash_review_finding_comments(TEST_DATABASE_URL, 813, "co/repo", 2)
+
+    assert pr1[("flash_review_llm", "a.py\x1f10\x1fabc")]["github_comment_id"] == 1
+    assert pr2[("flash_review_llm", "a.py\x1f10\x1fabc")]["github_comment_id"] == 2
+
+
+@pytest.mark.asyncio
+async def test_insert_flash_review_finding_comment_conflict_keeps_first_writer(pool):
+    # ON CONFLICT DO NOTHING - see the function's own docstring on why a
+    # second insert for the same identity must not clobber the first
+    # writer's github_comment_id.
+    await _insert_installation(pool, 814, "co")
+    insert_flash_review_finding_comment(
+        TEST_DATABASE_URL, 814, "co/repo", 1, "flash_review_llm", "a.py\x1f10\x1fabc", 111, "sha1"
+    )
+    insert_flash_review_finding_comment(
+        TEST_DATABASE_URL, 814, "co/repo", 1, "flash_review_llm", "a.py\x1f10\x1fabc", 222, "sha2"
+    )
+
+    comments = get_flash_review_finding_comments(TEST_DATABASE_URL, 814, "co/repo", 1)
+
+    assert comments[("flash_review_llm", "a.py\x1f10\x1fabc")]["github_comment_id"] == 111
+
+
+@pytest.mark.asyncio
+async def test_touch_flash_review_finding_comment_updates_last_seen_sha(pool):
+    await _insert_installation(pool, 815, "co")
+    insert_flash_review_finding_comment(
+        TEST_DATABASE_URL, 815, "co/repo", 1, "flash_review_llm", "a.py\x1f10\x1fabc", 1, "sha1"
+    )
+    row_id = get_flash_review_finding_comments(TEST_DATABASE_URL, 815, "co/repo", 1)[
+        ("flash_review_llm", "a.py\x1f10\x1fabc")
+    ]["id"]
+
+    touch_flash_review_finding_comment(TEST_DATABASE_URL, row_id, "sha2")
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT last_seen_sha FROM flash_review_finding_comments WHERE id = $1", row_id
+        )
+    assert row["last_seen_sha"] == "sha2"
+
+
+@pytest.mark.asyncio
+async def test_mark_flash_review_finding_comment_resolved_is_one_time_transition(pool):
+    await _insert_installation(pool, 816, "co")
+    insert_flash_review_finding_comment(
+        TEST_DATABASE_URL, 816, "co/repo", 1, "flash_review_llm", "a.py\x1f10\x1fabc", 1, "sha1"
+    )
+    row_id = get_flash_review_finding_comments(TEST_DATABASE_URL, 816, "co/repo", 1)[
+        ("flash_review_llm", "a.py\x1f10\x1fabc")
+    ]["id"]
+
+    first_call = mark_flash_review_finding_comment_resolved(TEST_DATABASE_URL, row_id)
+    second_call = mark_flash_review_finding_comment_resolved(TEST_DATABASE_URL, row_id)
+
+    assert first_call is True
+    assert second_call is False
 
 
 @pytest.mark.asyncio

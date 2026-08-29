@@ -973,13 +973,40 @@ def _verify_findings_with_second_model(
 
 
 def _merge_semantic_findings(model_findings: list[dict], semantic_findings: list[dict]) -> list[dict]:
-    """Prefer an evidence-only finding over a model finding at that location."""
+    """Prefer an evidence-only finding over a model finding at that location.
+
+    Also the one guaranteed choke point every finding passes through
+    regardless of code path (fresh generation, or a cache hit re-merging
+    stored model findings with a fresh semantic pass - see review_diff's
+    cache_lookup branch), so it's where "source" gets tagged
+    ("semantic"/"llm") rather than at each of the several individual
+    origin points (semantic_checks.py's _finding(), or the two raw
+    json.loads() sites for a fresh LLM response) - tagging here is the only
+    way to guarantee every finding that ever leaves review_diff carries it,
+    which app_server/dismissed_findings.py's finding_identity_key needs to
+    pick flash_review_llm vs flash_review_semantic. New dicts, not mutated
+    in place - callers elsewhere hold references to the same finding dicts
+    (e.g. the similarity cache writes model_findings verbatim) and must not
+    see a "source" key appear on them as a side effect of this call.
+
+    Tagging uses .get("source", default) - not an unconditional overwrite -
+    because model_findings is not always genuinely fresh, untagged LLM
+    output: on a cache hit, review_diff calls this again with the cache's
+    stored findings as model_findings, and those already carry whatever
+    "source" this function gave them the first time (a cache write stores
+    findings from a prior call to this same function). A finding that was
+    originally "semantic" must keep reading as "semantic" after surviving
+    into a cache hit, not get silently relabeled "llm" just because it's
+    sitting in the model_findings argument on this call.
+    """
+    tagged_semantic = [{**finding, "source": finding.get("source", "semantic")} for finding in semantic_findings]
     semantic_locations = {(finding["file"], finding["line"]) for finding in semantic_findings}
-    return semantic_findings + [
-        finding
+    tagged_model = [
+        {**finding, "source": finding.get("source", "llm")}
         for finding in model_findings
         if (finding["file"], finding["line"]) not in semantic_locations
     ]
+    return tagged_semantic + tagged_model
 
 
 def review_diff(

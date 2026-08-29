@@ -37,7 +37,7 @@ from aletheore.healthcheck import run_healthcheck
 from aletheore.signature_diff import find_regression_fence_violations
 from app_server.config import get_settings
 from app_server.db import MAX_SCANNED_REPOS_PER_MONTH
-from app_server.dismissed_findings import filter_dismissed
+from app_server.dismissed_findings import filter_dismissed, finding_identity_key
 from app_server.error_alerts import send_error_alert
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.http_client import get_github_api_client
@@ -66,6 +66,7 @@ from scan_worker.db import (
     delete_wiki_subsystems_not_in,
     email_already_sent,
     get_dismissed_identity_keys,
+    get_flash_review_finding_comments,
     managed_audit_definitely_still_cooling_down,
     get_docs_repo_commit_settings,
     get_endpoint_health_summary,
@@ -80,6 +81,7 @@ from scan_worker.db import (
     get_seconds_since_last_health_check,
     insert_audit_report,
     insert_endpoint_health,
+    insert_flash_review_finding_comment,
     insert_repo_history,
     installation_spend_lock,
     release_flash_review_count_reservation,
@@ -95,6 +97,7 @@ from scan_worker.db import (
     list_recent_endpoint_incidents,
     list_repos_for_installation,
     list_wiki_subsystems,
+    mark_flash_review_finding_comment_resolved,
     record_digest_sent,
     record_docs_catchup_swept,
     record_docs_repo_commit,
@@ -105,6 +108,7 @@ from scan_worker.db import (
     set_docs_build_status,
     set_last_reviewed_sha,
     set_wiki_build_status,
+    touch_flash_review_finding_comment,
     upsert_docs_symbol,
     upsert_wiki_overview,
     upsert_wiki_subsystem,
@@ -130,6 +134,8 @@ from scan_worker.github_api import (
     MAX_CONTEXT_FILE_BYTES,
     MAX_CONTEXT_FILES,
     create_check_run,
+    create_pr_review_comment,
+    edit_pr_review_comment,
     fetch_default_branch_head_sha,
     fetch_file_content,
     fetch_pr_changed_files,
@@ -1591,6 +1597,134 @@ def run_flash_review_job(
                 release_llm_spend_reservation(settings.database_url, installation_id, reserved_spend)
 
 
+def _flash_review_finding_type(finding: dict) -> str:
+    return "flash_review_llm" if finding.get("source") == "llm" else "flash_review_semantic"
+
+
+def _flash_review_comment_body(finding: dict) -> str:
+    lines = [finding["issue"]]
+    suggestion = finding.get("suggestion")
+    if suggestion:
+        lines.append(f"```\n{suggestion}\n```")
+    lines.append(
+        "\n_Reply `/dismiss` (optionally with a reason) if this isn't helpful - Aletheore won't "
+        "raise it again on this repo._"
+    )
+    return "\n\n".join(lines)
+
+
+_RESOLVED_PREFIX = "✅ _No longer detected as of `{sha}`._\n\n---\n\n"
+
+
+def _post_flash_review_finding_comments(
+    settings,
+    client,
+    token: str,
+    installation_id: int,
+    repo_full_name: str,
+    pr_number: int,
+    head_sha: str,
+    findings_to_post: list[dict],
+) -> None:
+    """Posts one inline PR review comment per finding (anchored to its real
+    file:line via create_pr_review_comment) instead of the old single
+    upserted issue-comment listing every finding as a bullet - each
+    finding needs its own comment for reply-based dismissal (a webhook
+    fires per-comment, not per-PR) and its own tracked identity across
+    re-reviews (see migration 059's docstring).
+
+    A finding already tracked for this PR is left untouched except for
+    last_seen_sha (no repost, no duplicate) - or, if it had previously been
+    marked resolved and has now reappeared (a revert, or the same bug
+    reintroduced), the comment is edited back to its normal body and
+    resolved_at is cleared. A tracked finding NOT present in
+    findings_to_post is presumed fixed: its comment is edited (not
+    deleted - see migration 059's docstring on why a human's existing
+    reply thread must survive) to note it's no longer detected, and only
+    on the first push that doesn't detect it (resolved_at is a one-time
+    transition, not resynced every subsequent silent push).
+    """
+    dsn = settings.database_url
+    existing = get_flash_review_finding_comments(dsn, installation_id, repo_full_name, pr_number)
+    seen_keys: set[tuple[str, str]] = set()
+
+    for finding in findings_to_post:
+        finding_type = _flash_review_finding_type(finding)
+        identity_key = finding_identity_key(finding_type, finding)
+        seen_keys.add((finding_type, identity_key))
+        row = existing.get((finding_type, identity_key))
+
+        if row is None:
+            try:
+                comment = create_pr_review_comment(
+                    client, token, repo_full_name, pr_number, head_sha,
+                    finding["file"], finding["line"], _flash_review_comment_body(finding),
+                )
+            except Exception:
+                # A finding whose citation GitHub's own diff-position
+                # validation rejects (see create_pr_review_comment's
+                # docstring) must not take down the rest of this PR's
+                # findings with it - one bad anchor posting nothing is
+                # better than the whole review silently posting none.
+                logging.getLogger("scan_worker.jobs").warning(
+                    "failed to post flash review inline comment for %s:%s on %s#%s",
+                    finding["file"], finding["line"], repo_full_name, pr_number, exc_info=True,
+                )
+                continue
+            insert_flash_review_finding_comment(
+                dsn, installation_id, repo_full_name, pr_number,
+                finding_type, identity_key, comment["id"], head_sha,
+            )
+        elif row["resolved_at"] is not None:
+            # Reappeared after being marked resolved - restore the normal
+            # comment body (dropping the "no longer detected" prefix) and
+            # clear resolved_at so a future disappearance can transition
+            # again. clear_flash_review_finding_comment_resolved isn't a
+            # separate DB call: touch_flash_review_finding_comment already
+            # updates last_seen_sha unconditionally, so resolved_at is
+            # cleared inline in the same UPDATE rather than adding a fifth
+            # DB function for what's really one state transition.
+            try:
+                edit_pr_review_comment(
+                    client, token, repo_full_name, row["github_comment_id"], _flash_review_comment_body(finding)
+                )
+            except Exception:
+                logging.getLogger("scan_worker.jobs").warning(
+                    "failed to un-resolve flash review comment %s on %s#%s",
+                    row["github_comment_id"], repo_full_name, pr_number, exc_info=True,
+                )
+            touch_flash_review_finding_comment(dsn, row["id"], head_sha, resolved=False)
+        else:
+            touch_flash_review_finding_comment(dsn, row["id"], head_sha)
+
+    for (finding_type, identity_key), row in existing.items():
+        if (finding_type, identity_key) in seen_keys or row["resolved_at"] is not None:
+            continue
+        if not mark_flash_review_finding_comment_resolved(dsn, row["id"]):
+            continue  # lost a race with another concurrent transition - do not double-edit
+        try:
+            # The tracking row has no copy of the finding's own text (only
+            # its identity_key, a one-way hash - see dismissed_findings.py)
+            # so the original comment body can't be reconstructed here.
+            # Prepending is enough: it doesn't need to restate the finding,
+            # just mark the thread resolved above whatever's already there.
+            current = client.get(
+                f"/repos/{repo_full_name}/pulls/comments/{row['github_comment_id']}",
+                headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"},
+            )
+            current.raise_for_status()
+            original_body = current.json()["body"]
+            edit_pr_review_comment(
+                client, token, repo_full_name, row["github_comment_id"],
+                _RESOLVED_PREFIX.format(sha=head_sha[:12]) + original_body,
+            )
+        except Exception:
+            logging.getLogger("scan_worker.jobs").warning(
+                "failed to mark flash review comment %s resolved on %s#%s",
+                row["github_comment_id"], repo_full_name, pr_number, exc_info=True,
+            )
+
+
 def _run_flash_review(
     settings,
     installation_id: int,
@@ -1845,14 +1979,46 @@ def _run_flash_review(
     proposed = grounding_result.get("proposed", 0)
     kept = grounding_result.get("kept", 0)
 
-    if findings:
-        lines = [f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n"]
-        for finding in findings:
-            lines.append(f"- `{finding['file']}:{finding['line']}` — {finding['issue']}")
-            suggestion = finding.get("suggestion")
-            if suggestion:
-                lines.append(f"  ```\n  {suggestion}\n  ```")
-        body = "\n".join(lines)
+    # Dismissal, applied here (not upstream in review_diff) for the same
+    # reason the diff-comment path already filters secrets/vulnerabilities
+    # this late: proposed/kept above describe what the grounding/
+    # verification pipeline technically validated, independent of whether
+    # a user already said "not helpful" on this exact bug. A dismissed
+    # finding still counts toward those stats - dismissal is a posting
+    # decision, not a re-judgment of the pipeline's own accuracy.
+    dismissed = get_dismissed_identity_keys(settings.database_url, installation_id, repo_full_name)
+    llm_findings = filter_dismissed(
+        [f for f in findings if f.get("source") == "llm"], "flash_review_llm", dismissed["flash_review_llm"]
+    )
+    semantic_findings_for_posting = filter_dismissed(
+        [f for f in findings if f.get("source") == "semantic"],
+        "flash_review_semantic",
+        dismissed["flash_review_semantic"],
+    )
+    findings_to_post = semantic_findings_for_posting + llm_findings
+
+    _post_flash_review_finding_comments(
+        settings, client, token, installation_id, repo_full_name, pr_number, head_sha, findings_to_post,
+    )
+
+    if findings_to_post:
+        body = (
+            f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
+            f"{len(findings_to_post)} finding(s) posted as inline review comment(s) below."
+        )
+    elif findings:
+        # findings (raw, pre-dismissal) is non-empty but findings_to_post
+        # is empty - every surviving finding was already dismissed by a
+        # user. Distinct from the two branches below (kept/proposed
+        # describe the grounding/verification pipeline, which ran before
+        # dismissal and doesn't know about it) - without this branch, an
+        # all-dismissed review would fall into "no issues held up under
+        # verification", which is simply false: they held up fine, a human
+        # already said not to show them.
+        body = (
+            f"{FLASH_REVIEW_MARKER}\n### Aletheore Flash review\n\n"
+            f"{len(findings)} finding(s) held up but were already dismissed on a previous review."
+        )
     elif kept:
         # Grounding accepted findings (kept > 0), but the independent
         # second-model verification step then rejected every one of them
