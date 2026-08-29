@@ -39,20 +39,26 @@ async def handle_issue_comment_event(payload: dict, pool, redis_url: str, queue=
     repo_full_name = payload["repository"]["full_name"]
     commenter = payload["comment"]["user"]["login"]
 
-    # Managed audits are a paid feature (see managed_audit_api.py's own
-    # 402 for the HTTP trigger) - this ChatOps trigger had no equivalent
-    # gate at all, letting any repo with write/admin access (trivially
-    # granted by installing the free app on your own repo) run unlimited
-    # clone+scan cycles on the shared scans queue. Silent, matching the
+    # Managed audits are AIR-exclusive (see managed_audit_api.py's own 402
+    # for the HTTP trigger, "!= air" not "== free") - the flash tier does
+    # not include managed audits at all, same as it doesn't include
+    # AIRview/Docs/the managed dashboard. This ChatOps trigger used to
+    # check "== free" (matching managed_audit_api.py's own pre-flash-tier
+    # check), which meant a flash installation - a real, live gap found
+    # during a full-session final audit - passed straight through: any
+    # commenter with write access on a $6/mo flash repo could type
+    # "/aletheore audit" and get a full, real managed-audit run, a
+    # meaningfully more expensive LLM workload than the PR reviews the
+    # tier is actually priced for. Silent on rejection, matching the
     # permission-denied case right below: this fires from any commenter
     # with write access, not just the installer, so it's not obviously a
     # billing question they're asking - same reasoning as staying quiet
     # on a permission check failure rather than narrating access details
     # to whoever happens to comment.
     installation = await get_installation(pool, installation_id)
-    if installation is None or installation["plan"] == "free":
+    if installation is None or installation["plan"] != "air":
         logger.info(
-            "ignoring '%s' on %s: managed audits require a paid plan",
+            "ignoring '%s' on %s: managed audits require the AIR plan",
             AUDIT_COMMAND,
             repo_full_name,
         )
