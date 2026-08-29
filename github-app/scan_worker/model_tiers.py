@@ -284,41 +284,6 @@ def writing_adapter_for_plan(
     )
 
 
-# Not resolve_model(PRO_MODEL) - always exactly this one model,
-# unconditionally, matching MANAGED_AUDIT_MODEL's own reasoning above.
-DOCS_FULL_BUILD_MODEL = "deepseek-v4-flash"
-
-
-def writing_adapter_for_docs_full_build(
-    on_usage: Callable[[int, int], None] | None = None,
-    before_llm_call: Callable[[], bool] | None = None,
-    allow_partial_report: bool = False,
-) -> OpenAICompatibleAdapter:
-    """Always DeepSeek Flash for a live-docs full build specifically - never
-    Luna (writing_adapter_for_plan's default, and what a full build actually
-    ran on before this, since OPENAI_API_KEY is configured in production)
-    and never DeepSeek Pro either.
-
-    A full build processes every module/symbol in the repo at once (2,814
-    real symbols on this repo alone as of 2026-08-29) - this is the same
-    "writing quality holds up on Flash, at a fraction of the cost" finding
-    already established for managed_audit and AIRview, applied to the one
-    remaining writing surface still defaulting to the expensive tier. Live
-    docs' own incremental update path (writing_adapter_for's caller in
-    _maybe_update_live_docs) already uses live_docs.FLASH_MODEL directly -
-    this brings the one-time full build in line with what incremental
-    updates already do, rather than leaving the more expensive model on
-    just the highest-volume of the two call sites.
-    """
-    return writing_adapter_for(
-        DOCS_FULL_BUILD_MODEL,
-        on_usage=on_usage,
-        before_llm_call=before_llm_call,
-        allow_partial_report=allow_partial_report,
-        _prefer_luna=False,
-    )
-
-
 def verification_adapter(
     on_usage: Callable[[int, int], None] | None = None,
 ) -> OpenAICompatibleAdapter:

@@ -148,7 +148,6 @@ from app_server.email_queue import enqueue_transactional_email
 from app_server.email_client import send_transactional_email
 from scan_worker.managed_audit import run_managed_audit
 from scan_worker.model_tiers import (
-    DOCS_FULL_BUILD_MODEL,
     MANAGED_AUDIT_MODEL,
     PRO_MODEL,
     VERIFICATION_MODEL,
@@ -156,7 +155,6 @@ from scan_worker.model_tiers import (
     resolve_model,
     writing_adapter_for,
     writing_adapter_for_airview,
-    writing_adapter_for_docs_full_build,
     writing_adapter_for_plan,
 )
 from scan_worker.packet_cache import lookup_cached_result, store_result
@@ -3777,9 +3775,9 @@ MAX_DOCS_FULL_BUILD_FILES = 50
 
 
 def _live_docs_full_build_writing_adapter(
-    on_usage: Callable[[int, int], None] | None = None
+    plan: str, on_usage: Callable[[int, int], None] | None = None
 ) -> OpenAICompatibleAdapter:
-    return writing_adapter_for_docs_full_build(on_usage=on_usage)
+    return writing_adapter_for_plan(plan, on_usage=on_usage)
 
 
 def _live_docs_update_writing_adapter(
@@ -4039,8 +4037,9 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         )
         return
 
+    full_build_model = model_for_plan(plan)
     spend_budget = _IncrementalSpendBudget(
-        dsn, installation_id, DOCS_FULL_BUILD_MODEL, monthly_cap,
+        dsn, installation_id, full_build_model, monthly_cap,
         feature="docs_full_build",
     )
 
@@ -4048,7 +4047,7 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
         spend_budget.record_usage(prompt_tokens, completion_tokens)
 
     try:
-        writing_adapter = _live_docs_full_build_writing_adapter(on_usage=_on_usage)
+        writing_adapter = _live_docs_full_build_writing_adapter(plan, on_usage=_on_usage)
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("scan_worker.jobs").warning(
             "live docs full build could not start for installation=%s repo=%s (%s)",
