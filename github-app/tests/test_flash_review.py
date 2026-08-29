@@ -2629,6 +2629,58 @@ def test_build_blast_radius_context_caps_candidates_checked():
     assert call_count[0] <= MAX_BLAST_RADIUS_CANDIDATES
 
 
+def test_build_blast_radius_context_never_exceeds_callers_shown_cap():
+    """Regression test for a real bug: fetch_file_content now runs in
+    bounded parallel batches (MAX_FILE_FETCH_WORKERS-wide) rather than one
+    candidate at a time, so the MAX_BLAST_RADIUS_CALLERS_SHOWN early-exit
+    is only rechecked between batches, not within one. A batch where every
+    candidate matches can push callers past the cap before the next
+    between-batch check catches it - confirmed as a real, not theoretical,
+    bug via a standalone before/after harness comparing this function
+    against the original sequential loop: an all-matching 40-candidate
+    scenario returned 16 callers instead of 10 before this was fixed.
+    15 real matching candidates (more than MAX_BLAST_RADIUS_CALLERS_SHOWN,
+    fewer than MAX_BLAST_RADIUS_CANDIDATES so none are dropped by that
+    other cap) exercises exactly the scenario that broke."""
+    from scan_worker.flash_review import (
+        MAX_BLAST_RADIUS_CALLERS_SHOWN,
+        build_blast_radius_context,
+    )
+
+    imported_by_list = [f"caller_{i}.py" for i in range(15)]
+    evidence = {
+        "repository": {
+            "modules": [
+                {
+                    "path": "a.py",
+                    "imported_by": imported_by_list,
+                    "symbols": {
+                        "functions": [
+                            {"name": "handler", "start_line": 1, "end_line": 10}
+                        ],
+                        "classes": [],
+                    },
+                }
+            ]
+        }
+    }
+
+    diff_text = "--- a.py ---\n@@ -1,10 +1,10 @@\n def handler():\n     pass\n"
+
+    def fake_fetch_file_content(candidate_path: str) -> str | None:
+        # Every single candidate is a real match - the exact shape that
+        # exposed the bug (a fetcher this uniform never occurred in the
+        # other blast-radius tests, which is why none of them caught it).
+        return "def call_it():\n    handler()\n"
+
+    context = build_blast_radius_context(evidence, ["a.py"], diff_text, fake_fetch_file_content)
+
+    shown_line = next(line for line in context.splitlines() if "is called from:" in line)
+    shown_names = [name for name in imported_by_list if name in shown_line]
+    assert len(shown_names) == MAX_BLAST_RADIUS_CALLERS_SHOWN
+    assert f"+{15 - MAX_BLAST_RADIUS_CALLERS_SHOWN} more importers not shown" in shown_line
+
+
 def test_build_blast_radius_context_caller_using_different_symbol_not_flagged():
     """A caller imports the file but uses a *different* symbol is not flagged.
     This justifies requiring real content match, not just imported_by membership."""
