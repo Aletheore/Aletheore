@@ -5794,7 +5794,7 @@ def test_run_live_docs_full_build_job_skips_llm_call_when_spend_cap_reached(monk
     adapter_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs._live_docs_full_build_writing_adapter",
-        lambda plan, on_usage=None: adapter_calls.append(True),
+        lambda on_usage=None: adapter_calls.append(True),
     )
     status_calls = []
     monkeypatch.setattr(
@@ -5825,7 +5825,7 @@ def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda on_usage=None: object()
     )
 
     def fake_fetch(client, token, repo, path, ref):
@@ -5884,7 +5884,7 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
 
     monkeypatch.setattr(
         "scan_worker.jobs._live_docs_full_build_writing_adapter",
-        lambda plan, on_usage=None: FakeAdapter(on_usage),
+        lambda on_usage=None: FakeAdapter(on_usage),
     )
     stored_for = []
 
@@ -5941,7 +5941,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(mon
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda on_usage=None: object()
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
@@ -5983,7 +5983,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_fetch_returns_no
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
     monkeypatch.setattr(
-        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda plan, on_usage=None: object()
+        "scan_worker.jobs._live_docs_full_build_writing_adapter", lambda on_usage=None: object()
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
     status_calls = []
