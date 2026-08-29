@@ -25,9 +25,9 @@ dependency the diff calls into) to have anything to reason about: the
 exception/iterator/mutation/scaling/concurrency/retry checks in
 _check_reference_at_call, and the moved-record-operation check in
 _moved_record_findings. The rest - _resource_leak_findings,
-_copy_to_alias_findings, and _swallowed_exception_findings - read only the
-diff and the current file, and never require a referenced symbol at all.
-This split is deliberate and
+_copy_to_alias_findings, _swallowed_exception_findings, and
+_shell_injection_findings - read only the diff and the current file, and
+never require a referenced symbol at all. This split is deliberate and
 measured, not incidental: a corpus evaluation against 18 real historical
 bugs (benchmarks/pr-review-benchmark/scripts/evaluate_semantic_checks.py)
 found a resolvable in-repo referenced symbol in only 6 of them - most real
@@ -542,6 +542,44 @@ def _swallowed_exception_findings(file: str, source: str, hunks: list[_Hunk]) ->
     return findings
 
 
+# os.system() always runs through a shell; subprocess.{call,run,Popen,
+# check_call,check_output}() only does when explicitly given shell=True -
+# hence the two-branch pattern rather than one. Same STRING_CONCAT_RE
+# reused from the SQL check above: the risk shape is identical (a bare
+# variable concatenated directly into the command text), just a different
+# sink. No case in this project's own PR-review benchmark corpus has this
+# exact shape - grounded instead in a real, verified external example:
+# CVE-2024-29189 (ansys-geometry-core), a subprocess call with shell=True
+# flagged as a real command-injection risk. Only the + concatenation shape
+# is covered, matching the SQL check's own scope limit - f-strings and
+# %-formatting building a shell command are a different syntactic shape
+# with no real example yet to verify a pattern against.
+_SHELL_CALL_RE = re.compile(
+    r"\bos\.system\s*\(|\bsubprocess\.(?:call|run|Popen|check_call|check_output)\s*\([^\n]*\bshell\s*=\s*True\b"
+)
+
+
+def _shell_injection_findings(file: str, source: str, hunks: list[_Hunk]) -> list[dict]:
+    findings: list[dict] = []
+    for hunk in hunks:
+        for added_line in hunk.added:
+            if not _SHELL_CALL_RE.search(added_line):
+                continue
+            if not _STRING_CONCAT_RE.search(added_line):
+                continue
+            findings.append(
+                _finding(
+                    file,
+                    _line_number_near_hunk(source, added_line.strip(), hunk) or hunk.new_start,
+                    "This runs a shell command built by concatenating a variable directly into the "
+                    "command text - a shell-injection risk if that value can be influenced by a caller.",
+                    "Avoid shell=True/os.system with concatenated input - pass arguments as a list "
+                    "(e.g. subprocess.run([...], shell=False)) instead.",
+                )
+            )
+    return findings
+
+
 # A C-style counted loop indexing a collection by its own length/size using
 # <= instead of < is an off-by-one that reads or writes one element past
 # the end. The comparison syntax (`i <= x.length`, `i <= x.size()`,
@@ -680,6 +718,7 @@ def find_semantic_regressions(
         findings.extend(_off_by_one_loop_findings(file, source, hunks))
         findings.extend(_sql_injection_findings(file, source, hunks))
         findings.extend(_swallowed_exception_findings(file, source, hunks))
+        findings.extend(_shell_injection_findings(file, source, hunks))
 
     unique: list[dict] = []
     seen: set[tuple[str, int, str]] = set()
