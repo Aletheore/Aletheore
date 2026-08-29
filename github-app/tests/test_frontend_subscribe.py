@@ -7,7 +7,24 @@ from httpx import ASGITransport, AsyncClient
 
 from app_server.auth import encrypt_access_token, sign_session_id, unsign_checkout_installation_id
 from app_server.db import add_paddle_ids_to_installation, create_session, upsert_installation
+from app_server.frontend import _plan_display_name
 from app_server.main import app
+
+
+def test_plan_display_name_covers_all_three_plans():
+    # Real bug found by an independent audit pass: this used to be a bare
+    # binary (free vs "else AIR"), which silently mislabeled a flash-plan
+    # installation as "Aletheore AIR" in the UI - a real, misleading
+    # billing-adjacent bug, not cosmetic.
+    assert _plan_display_name("free") == "Aletheore Community"
+    assert _plan_display_name("flash") == "Aletheore Flash"
+    assert _plan_display_name("air") == "Aletheore AIR"
+
+
+def test_plan_display_name_falls_back_to_air_for_unrecognized_value():
+    # Matches this function's original fail-open shape (anything not
+    # literally "free" used to read as AIR) - now explicit, not accidental.
+    assert _plan_display_name("some-future-plan") == "Aletheore AIR"
 
 
 async def _logged_in_client(pool, monkeypatch, administered_ids):

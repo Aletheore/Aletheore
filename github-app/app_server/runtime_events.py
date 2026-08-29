@@ -83,8 +83,10 @@ def _enforce_runtime_event_rate_limit(installation_id: int) -> None:
 @runtime_events_router.post("/v1/runtime-events")
 async def report_runtime_event(request: Request, body: RuntimeEventRequest):
     installation, token_hash = await _authenticate_token(request)
-    if installation["plan"] == "free":
-        raise HTTPException(status_code=402, detail="runtime event correlation requires a paid plan")
+    # AIR-exclusive, not "any paid plan" - the flash plan doesn't include
+    # runtime event correlation.
+    if installation["plan"] != "air":
+        raise HTTPException(status_code=402, detail="runtime event correlation requires the AIR plan")
 
     _enforce_runtime_event_rate_limit(installation["installation_id"])
 

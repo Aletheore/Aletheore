@@ -257,6 +257,13 @@ MAX_FLASH_REVIEWS_PER_MONTH = 500
 # above) - free tier is meant to stay generous and reach more people, not
 # track paid 1:1.
 MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH = 150
+# The "flash" plan's own cap - real, validated separately from AIR's 500,
+# not just a bigger/smaller multiple of it. 800/mo is the number this
+# tier's whole real cost/recall validation (compact + trimmed diff,
+# solo Luna generation, no dual-agent verification) was run against - see
+# model_tiers.py's plan-specific adapter choice and the real worst-case
+# cost figures that number was checked against before committing to it.
+MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH = 800
 DEFAULT_LLM_NEXT_CALL_RESERVE_USD = 0.001
 
 # Conservative flat reserve for one paid-tier Flash Review, used by
@@ -623,7 +630,11 @@ def _maybe_send_slack_alert(
 ) -> None:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    if installation is None or installation["plan"] == "free":
+    # AIR-exclusive, not "any paid plan" - a notification convenience
+    # bundled into AIR's price, not a PR-review feature the flash plan's
+    # pitch includes. "!= air" (not "== free") deliberately, so this stays
+    # correct if a future plan value shows up too.
+    if installation is None or installation["plan"] != "air":
         return
     webhook_url = installation.get("webhook_url")
     if not webhook_url:
@@ -1130,12 +1141,13 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
         _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
         _insert_history(installation_id, repo_full_name, evidence)
 
-        # A repo added to an already-paid installation should get its
+        # A repo added to an already-AIR installation should get its
         # AIRview build right away too, rather than waiting for enough
         # incremental pushes to slowly build clusters one at a time - the
         # same gap the Paddle subscription.created wiki-build trigger
-        # closed for brand-new upgrades.
-        if installation is not None and installation["plan"] != "free":
+        # closed for brand-new upgrades. AIR-exclusive, not "any paid
+        # plan" - the flash plan doesn't include AIRview/Docs at all.
+        if installation is not None and installation["plan"] == "air":
             try:
                 run_live_wiki_full_build_job(installation_id, repo_full_name)
             except Exception:  # noqa: BLE001
@@ -1201,7 +1213,9 @@ def run_push_scan_job(
         _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
         history_id = _insert_history(installation_id, repo_full_name, evidence)
 
-        if installation is not None and installation["plan"] != "free":
+        # AIR-exclusive - see the identical note on run_initial_scan_job's
+        # full-build trigger above.
+        if installation is not None and installation["plan"] == "air":
             # Enqueued as their own jobs, not called inline - see
             # run_live_wiki_incremental_update_job's docstring.
             try:
@@ -1607,8 +1621,18 @@ def run_flash_review_job(
         # that itself needs cross-process atomicity.
         extra_seats = get_extra_seats(settings.database_url, installation_id)
         monthly_cap = monthly_cap_for_installation(base_cap_for_plan(installation["plan"]), extra_seats)
+        # flash's own real, separately-validated cap (800), not AIR's 500 -
+        # see MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH. Any other non-free
+        # plan value falls back to the AIR cap, matching this codebase's
+        # existing "only free is special-cased, everything else defaults
+        # to the paid shape" convention elsewhere.
+        review_count_cap = (
+            MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH
+            if installation["plan"] == "flash"
+            else MAX_FLASH_REVIEWS_PER_MONTH
+        )
         if not reserve_flash_review_count(
-            settings.database_url, installation_id, MAX_FLASH_REVIEWS_PER_MONTH
+            settings.database_url, installation_id, review_count_cap
         ):
             return
         reserved_spend = FLASH_REVIEW_SPEND_RESERVE_USD
@@ -1621,6 +1645,7 @@ def run_flash_review_job(
         review_ran = _run_flash_review(
             settings, installation_id, repo_full_name, pr_number, base_sha, head_sha, monthly_cap,
             reserved_spend, is_free_tier=is_free_tier,
+            verify_with_second_model=(installation["plan"] == "air"),
         )
     except Exception as exc:  # noqa: BLE001
         try:
@@ -1781,6 +1806,7 @@ def _run_flash_review(
     reserved_spend: float,
     *,
     is_free_tier: bool = False,
+    verify_with_second_model: bool = False,
 ) -> bool:
     """Returns True if a real review actually ran and its spend/count
     reservation (see run_flash_review_job) was trued up to reflect it -
@@ -1990,10 +2016,17 @@ def _run_flash_review(
             diff_patches=diff_patches,
             adapter_chain=free_tier_chain,
             on_free_tier_exhausted=_on_free_tier_exhausted,
-            # Paid-tier only (see _on_verification_usage) - free tier's
-            # own generation quality/cost tradeoffs are a separate,
-            # already-pooled budget this doesn't touch.
-            verify_with_second_model=not is_free_tier,
+            # AIR-tier only (see _on_verification_usage) - explicit, not
+            # derived from is_free_tier, because "paid" no longer means
+            # "AIR" now that the flash plan exists: flash's whole real
+            # cost/recall validation (see MAX_FLASH_TIER_FLASH_REVIEWS_
+            # PER_MONTH) was run on solo generation, no second-model
+            # check - `not is_free_tier` would have silently given flash
+            # dual-agent verification for free, the exact cost this plan
+            # doesn't have room for. Free tier's own generation quality/
+            # cost tradeoffs are a separate, already-pooled budget this
+            # doesn't touch either way.
+            verify_with_second_model=verify_with_second_model,
             on_verification_usage=_on_verification_usage,
         )
     # Every free-tier provider failed mid-review (see
@@ -2567,7 +2600,9 @@ def run_runtime_event_job(
     """
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    if installation is None or installation["plan"] == "free":
+    # AIR-exclusive - endpoint/runtime monitoring is a premium convenience
+    # unrelated to PR-review value, not part of the flash plan's pitch.
+    if installation is None or installation["plan"] != "air":
         return
 
     if not (
@@ -3901,7 +3936,8 @@ def _maybe_update_live_wiki(
 ) -> None:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    if installation is None or installation["plan"] == "free":
+    # AIR-exclusive - AIRview isn't part of the flash plan's pitch.
+    if installation is None or installation["plan"] != "air":
         return
 
     cluster_ids = live_wiki.affected_cluster_ids(evidence, changed_files)
@@ -4359,7 +4395,8 @@ def _maybe_update_live_docs(
 ) -> None:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    if installation is None or installation["plan"] == "free":
+    # AIR-exclusive - Docs isn't part of the flash plan's pitch.
+    if installation is None or installation["plan"] != "air":
         return
 
     modules_by_path = {m["path"]: m for m in evidence["repository"]["modules"]}
