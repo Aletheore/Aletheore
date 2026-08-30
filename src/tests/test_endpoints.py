@@ -13,6 +13,7 @@ from aletheore.endpoints import (
     _extract_laravel_routes,
     _extract_rails_routes,
     _extract_spring_boot_routes,
+    _extract_vapor_routes,
     map_api_endpoints,
 )
 from aletheore.scanner.graph import (
@@ -25,6 +26,7 @@ from aletheore.scanner.graph import (
     PY_LANGUAGE,
     RUBY_LANGUAGE,
     RUST_LANGUAGE,
+    SWIFT_LANGUAGE,
 )
 
 
@@ -38,6 +40,13 @@ def parse_python(source: str):
 def parse_js(source: str):
     parser = Parser()
     parser.language = JS_LANGUAGE
+    tree = parser.parse(source.encode())
+    return tree.root_node, source.encode()
+
+
+def parse_swift(source: str):
+    parser = Parser()
+    parser.language = SWIFT_LANGUAGE
     tree = parser.parse(source.encode())
     return tree.root_node, source.encode()
 
@@ -824,6 +833,83 @@ def test_extract_axum_nest_is_unresolved():
             "note": None,
         }
     ]
+
+
+def test_extract_vapor_route_with_trailing_closure():
+    root, source = parse_swift(
+        'app.get("hello") { req async throws -> String in\n'
+        '    return "Hello, world!"\n'
+        "}\n"
+    )
+
+    entries = _extract_vapor_routes(root, source, "routes.swift")
+
+    assert entries == [
+        {
+            "method": "GET",
+            "path": "/hello",
+            "framework": "vapor",
+            "file": "routes.swift",
+            "line": 1,
+            "handler": "<inline handler>",
+            "unresolved": False,
+            "note": None,
+        }
+    ]
+
+
+def test_extract_vapor_route_with_use_labeled_handler_and_multi_segment_path():
+    root, source = parse_swift('app.get("users", ":id", use: getUserHandler)\n')
+
+    entries = _extract_vapor_routes(root, source, "routes.swift")
+
+    assert entries == [
+        {
+            "method": "GET",
+            "path": "/users/:id",
+            "framework": "vapor",
+            "file": "routes.swift",
+            "line": 1,
+            "handler": "getUserHandler",
+            "unresolved": False,
+            "note": None,
+        }
+    ]
+
+
+def test_extract_vapor_route_on_grouped_sub_router():
+    # A route group ("api.get(...)" where api = app.grouped("api")) is
+    # caught the same way Express's mounted sub-routers are: by matching
+    # the verb/shape, not by tracking what `api` was actually assigned from.
+    root, source = parse_swift(
+        'let api = app.grouped("api")\n'
+        'api.get("health") { req in "ok" }\n'
+    )
+
+    entries = _extract_vapor_routes(root, source, "routes.swift")
+
+    assert entries == [
+        {
+            "method": "GET",
+            "path": "/health",
+            "framework": "vapor",
+            "file": "routes.swift",
+            "line": 2,
+            "handler": "<inline handler>",
+            "unresolved": False,
+            "note": None,
+        }
+    ]
+
+
+def test_extract_vapor_ignores_unrelated_get_calls_without_closure_or_handler():
+    # someDict.get("key") - a real, extremely common shape with no trailing
+    # closure and no use: label, so it must not be misidentified as a route.
+    root, source = parse_swift('let value = someDict.get("key")\n')
+
+    entries = _extract_vapor_routes(root, source, "utils.swift")
+
+    assert entries == []
 
 
 def test_extract_spring_get_mapping():
