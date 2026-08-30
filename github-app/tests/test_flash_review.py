@@ -444,6 +444,44 @@ def test_review_diff_parses_valid_findings(mock_adapter_class):
 
 
 @patch("scan_worker.flash_review.writing_adapter_for")
+def test_review_diff_parses_findings_after_prose_analysis(mock_adapter_class):
+    # FLASH_REVIEW_SYSTEM_PROMPT now asks the model to reason in prose
+    # before its final answer - only the LAST top-level array in the
+    # response is the real answer.
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = (
+        "I checked app.py's open() call against the surrounding function and found no matching "
+        "close() or context manager anywhere in scope.\n\n"
+        '[{"file": "app.py", "line": 42, "issue": "unclosed file handle, never calls .close()"}]'
+    )
+    mock_adapter_class.return_value = mock_adapter
+
+    findings = review_diff("--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')")
+
+    assert findings == [
+        {"file": "app.py", "line": 42, "issue": "unclosed file handle, never calls .close()", "source": "llm"}
+    ]
+
+
+@patch("scan_worker.flash_review.writing_adapter_for")
+def test_review_diff_prose_mentioning_brackets_does_not_confuse_array_extraction(mock_adapter_class):
+    # The prose analysis can itself mention array/index syntax (e.g. "foo[0]")
+    # - only a bracket-balanced, string-aware scan finds the real trailing
+    # array rather than a naive first-'['-to-last-']' match.
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = (
+        'I checked the changed line `items[0]` against callers[1:] and found the index access is '
+        "guarded correctly, so no finding there.\n\n"
+        '[{"file": "app.py", "line": 3, "issue": "real issue found elsewhere"}]'
+    )
+    mock_adapter_class.return_value = mock_adapter
+
+    findings = review_diff("--- app.py ---\n@@ -1,1 +3,1 @@\n+something")
+
+    assert findings == [{"file": "app.py", "line": 3, "issue": "real issue found elsewhere", "source": "llm"}]
+
+
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_treats_malformed_json_as_no_findings(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = "not valid json at all"
@@ -1642,6 +1680,42 @@ def test_system_prompt_instructs_checking_local_logic_independent_of_cross_file_
     assert "null/undefined/none guard" in normalized
     assert "edge-case input" in normalized
     assert "accurately describe the condition it fires on" in normalized
+
+
+def test_system_prompt_instructs_reporting_narrow_or_subtle_real_issues_rather_than_staying_silent():
+    # Real gap found via a hand-scored pass of benchmarks/pr-review-benchmark's
+    # 25-case corpus against a real competitor (PR-Agent), 2026-08-30: Aletheore
+    # produced zero findings on cases whose bug was real but easy to talk
+    # yourself out of reporting - a one-character missing closing quote in a
+    # CLI error message (case 001), and a Java equals()/hashCode() contract
+    # violation (case 013) - while PR-Agent, whose own system prompt explicitly
+    # separates "be thorough on real bugs regardless of how narrow the trigger
+    # is" from "be certain before flagging low-severity concerns", caught both
+    # with correct reasoning. Aletheore's prompt only had the silence-biased
+    # half of that calibration ("a missed issue is preferable to an invented
+    # one"), with nothing telling the model not to let that caution suppress a
+    # real, verifiable, subtle issue. Proves the instruction exists, not that a
+    # live model obeys it - untestable without a real call.
+    normalized = " ".join(FLASH_REVIEW_SYSTEM_PROMPT.lower().split())
+    assert "worth reporting even when it only triggers under a narrow or unusual" in normalized
+    assert "cannot verify against the evidence you were actually given" in normalized
+
+
+def test_system_prompt_instructs_a_deliberate_security_pass_even_when_diff_purpose_is_unrelated():
+    # Same 2026-08-30 benchmark pass: Aletheore missed a real, security-shaped
+    # bug in case 003 (a Windows registry proxy-bypass rule converted to an
+    # unanchored regex, letting `example.com` also match
+    # `example.com.attacker.tld`) and instead reported an unrelated resource-
+    # leak finding nearby. PR-Agent caught it with the exact right mechanism,
+    # and its schema forces a dedicated security_concerns field on every
+    # review - Aletheore's review procedure had no equivalent explicit,
+    # separate pass for security-relevant categories, leaving it entirely to
+    # whatever the general-purpose steps happened to surface. Proves the
+    # instruction exists, not that a live model obeys it - untestable without
+    # a real call.
+    normalized = " ".join(FLASH_REVIEW_SYSTEM_PROMPT.lower().split())
+    assert "deliberately check for security-relevant issues" in normalized
+    assert "unanchored or overly permissive" in normalized
 
 
 def test_system_prompt_warns_about_host_language_escaping_in_generated_source():
