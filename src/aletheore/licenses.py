@@ -6,7 +6,7 @@ import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -32,6 +32,19 @@ DEFAULT_TIMEOUT_SECONDS = 10
 # to blow the hosted worker's per-job timeout on its own. Bounded, not
 # unbounded, so this stays polite to registries under a large repo.
 LICENSE_CHECK_CONCURRENCY = 20
+# `timeout` (DEFAULT_TIMEOUT_SECONDS) bounds a single blocking socket
+# operation (connect/read), not the total time to receive a response - a
+# registry serving its body slowly (a few bytes every few seconds, no
+# single read ever idle long enough to trip the socket timeout) can still
+# take far longer overall. Confirmed as a real production incident, not a
+# theoretical one: three real npm packages (es-errors, es6-error,
+# serialize-error) reproducibly stalled dependency-license checks for
+# 1+ hour before their RQ work-horse was eventually reaped, appearing as
+# "work-horse terminated unexpectedly" - not a timeout error at all, since
+# nothing ever actually raised one. This wall-clock cap is the real fix:
+# generous enough for a legitimately slow-but-real response, firm enough
+# that one bad registry endpoint can never hang the whole check.
+LICENSE_FETCH_WALL_CLOCK_TIMEOUT_SECONDS = 30
 
 # A registry lookup for one exact (ecosystem, name, version) triple returns
 # the same answer forever in the overwhelming majority of cases - a
@@ -341,18 +354,30 @@ def check_dependency_licenses(
     cache = _load_license_cache(cache_path)
     # Each registry lookup is an independent blocking HTTP call - a thread
     # pool overlaps their network wait time instead of paying it serially.
-    # executor.map (not as_completed) preserves pins' original order in the
-    # results regardless of which thread finishes first, so progress
-    # reporting and finding order both stay deterministic.
-    with ThreadPoolExecutor(max_workers=LICENSE_CHECK_CONCURRENCY) as executor:
-        license_texts = executor.map(
-            lambda pin: _fetch_one_license_cached(pin, timeout, cache), pins
-        )
-        for index, ((name, version, ecosystem), license_text) in enumerate(
-            zip(pins, license_texts), start=1
-        ):
+    # Submitted individually (not executor.map, whose iterator yields
+    # results in submission order - one stuck fetch at position N blocks
+    # every result after it from ever being reported, even though later
+    # threads already finished; see LICENSE_FETCH_WALL_CLOCK_TIMEOUT_SECONDS
+    # for why "stuck" is a real, not theoretical, failure mode here).
+    # future.result(timeout=...) bounds how long THIS function waits for
+    # each pin without needing to interrupt whatever the worker thread is
+    # actually blocked on - that thread is abandoned (Python has no way to
+    # forcibly kill a blocked thread) and left to die on its own eventual
+    # socket timeout; shutdown(wait=False) below means this function
+    # returns promptly rather than blocking on that stray thread to exit.
+    executor = ThreadPoolExecutor(max_workers=LICENSE_CHECK_CONCURRENCY)
+    try:
+        futures = [
+            executor.submit(_fetch_one_license_cached, pin, timeout, cache) for pin in pins
+        ]
+        for index, ((name, version, ecosystem), future) in enumerate(zip(pins, futures), start=1):
             if on_progress is not None:
                 on_progress(index, len(pins), name)
+
+            try:
+                license_text = future.result(timeout=LICENSE_FETCH_WALL_CLOCK_TIMEOUT_SECONDS)
+            except FutureTimeoutError:
+                license_text = None
 
             category = categorize_license(license_text)
             if category != "permissive":
@@ -365,6 +390,8 @@ def check_dependency_licenses(
                         "category": category,
                     }
                 )
+    finally:
+        executor.shutdown(wait=False)
     _save_license_cache(cache_path, cache)
 
     return {"checked": True, "reason": None, "repo_license": repo_license, "findings": findings}
