@@ -32,6 +32,28 @@ def test_test_files_are_never_unreachable(tmp_path):
     assert result["unreachable_modules"] == []
 
 
+def test_capitalized_test_directory_is_never_unreachable(tmp_path):
+    # SwiftPM/Xcode universally capitalize the test directory ("Tests/") -
+    # real repo confirmed: every test file in apple/swift-algorithms lives
+    # under "Tests/", which the previously case-sensitive pattern silently
+    # missed entirely (only matched lowercase "test"/"tests"/"__tests__").
+    modules = [_module("Tests/SwiftAlgorithmsTests/ChainTests.swift")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_package_swift_manifest_is_never_unreachable(tmp_path):
+    # Real repo confirmed (apple/swift-algorithms): Package.swift parses as
+    # a legitimate module now that Swift is a supported language - it's the
+    # build manifest itself, read by the SwiftPM toolchain, not imported by
+    # any of the repo's own application code, same category as manage.py/
+    # wsgi.py/conftest.py above.
+    modules = [_module("Package.swift")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "Package.swift" in result["entry_points_detected"]
+
+
 def test_config_can_add_custom_entry_points(tmp_path):
     modules = [_module("app/worker.py")]
     config = {"dead_code_entry_points": ["app/worker.py"]}
