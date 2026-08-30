@@ -373,11 +373,15 @@ def test_trim_patch_context_handles_pure_removal():
     assert trimmed == patch
 
 
-def test_fetch_pr_diff_packs_largest_patches_first_under_a_total_byte_budget():
+def test_fetch_pr_diff_packs_smallest_patches_first_under_a_total_byte_budget():
     # Real gap: fetch_pr_diff had no total size cap at all before this -
-    # every file's patch got concatenated unconditionally. Mirrors
-    # PR-Agent's own pr_generate_compressed_diff: pack largest patches
-    # first, demote whatever doesn't fit instead of leaving it uncapped.
+    # every file's patch got concatenated unconditionally. Packs smallest
+    # patches first (matching order_changed_files_by_diff_size's rationale
+    # in flash_review.py, see #473): a single huge low-value file
+    # shouldn't be able to consume the whole budget and starve several
+    # genuinely important small files around it - the same shape of miss
+    # #473 fixed for evidence context. Demotes whatever doesn't fit
+    # instead of leaving the budget uncapped.
     import scan_worker.github_api as github_api_module
 
     original_budget = github_api_module.MAX_DIFF_TOTAL_BYTES
@@ -388,8 +392,8 @@ def test_fetch_pr_diff_packs_largest_patches_first_under_a_total_byte_budget():
                 200,
                 json={
                     "files": [
-                        {"filename": "small.py", "patch": "@@ -1,1 +1,1 @@\n-a\n+b"},
                         {"filename": "big.py", "patch": "@@ -1,1 +1,1 @@\n-" + "x" * 90 + "\n+" + "y" * 90},
+                        {"filename": "small.py", "patch": "@@ -1,1 +1,1 @@\n-a\n+b"},
                         {"filename": "medium.py", "patch": "@@ -1,1 +1,1 @@\n-" + "z" * 40 + "\n+" + "w" * 40},
                     ]
                 },
@@ -398,12 +402,13 @@ def test_fetch_pr_diff_packs_largest_patches_first_under_a_total_byte_budget():
         client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
         diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
 
-        # big.py alone (~183 bytes) already exceeds the 100-byte budget, so
-        # only whichever single file fits under it should be included -
-        # the largest that fits, not just the first in GitHub's own order.
-        assert diff_text.budget_omitted_files != ()
+        # big.py (~183 bytes) alone exceeds the 100-byte budget, so it must
+        # lose out to the two smaller files even though it's listed first
+        # in GitHub's own order - proves the sort is smallest-first, not
+        # just "whatever fits" in arbitrary order.
         included_names = {name for name, _ in diff_text.patches}
-        assert included_names.isdisjoint(set(diff_text.budget_omitted_files))
+        assert "small.py" in included_names
+        assert "big.py" in diff_text.budget_omitted_files
     finally:
         github_api_module.MAX_DIFF_TOTAL_BYTES = original_budget
 

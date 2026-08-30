@@ -324,12 +324,22 @@ def _reconstruct_missing_patch(
 # jobs.py), which makes diff_text the one part of the prompt that's never
 # reduced - so this was the real, uncapped surface the whole time, just
 # never exercised by anything caught in review (a normal PR's total diff
-# rarely gets big enough to matter). PR-Agent's own equivalent
-# (pr_processing.py's pr_generate_compressed_diff) counts real tokens,
-# packs files largest-first, and demotes whatever doesn't fit to a
-# filename-only list instead of leaving the budget uncapped - same shape
-# adopted here, byte-counted rather than token-counted for consistency
-# with this file's other budgets.
+# rarely gets big enough to matter).
+#
+# Packs smallest patches first, matching order_changed_files_by_diff_size's
+# rationale in flash_review.py (see #473) rather than the largest-first
+# convention this originally shipped with (see #474; borrowed from
+# PR-Agent's own pr_generate_compressed_diff, which sorts descending). That
+# first choice was never validated against anything actually observed to
+# fail this way - reversed for two reasons: consistency (having the diff-
+# text budget and the evidence-context budget prioritize opposite things
+# for adjacent "what gets shown when it doesn't all fit" problems was an
+# unreconciled contradiction, caught in review, not by a failing case), and
+# because largest-first has a real, concrete failure mode #473's approach
+# doesn't: a single huge low-value file (a generated lockfile, a compiled
+# bundle) can consume the whole budget and starve several genuinely
+# important small files around it - the same shape of miss #473 fixed for
+# evidence context, case 007's small surgical fix losing out to size alone.
 MAX_DIFF_TOTAL_BYTES = 400_000
 
 
@@ -368,15 +378,14 @@ def fetch_pr_diff(
         else:
             omitted_files.append(file["filename"])
 
-    # Pack largest patches first (PR-Agent's own convention: a big,
-    # substantive change is more likely to matter than fitting many small
-    # ones around it) up to the total budget; anything that doesn't fit is
-    # tracked, not silently dropped.
-    by_size_desc = sorted(all_patches, key=lambda item: len(item[1]), reverse=True)
+    # Pack smallest patches first (see MAX_DIFF_TOTAL_BYTES above) up to the
+    # total budget; anything that doesn't fit is tracked, not silently
+    # dropped.
+    by_size_asc = sorted(all_patches, key=lambda item: len(item[1]))
     included_filenames: set[str] = set()
     total_bytes = 0
     budget_omitted_files = []
-    for filename, patch in by_size_desc:
+    for filename, patch in by_size_asc:
         patch_bytes = len(patch.encode("utf-8"))
         if total_bytes + patch_bytes > MAX_DIFF_TOTAL_BYTES:
             budget_omitted_files.append(filename)
@@ -385,7 +394,7 @@ def fetch_pr_diff(
         total_bytes += patch_bytes
 
     # Re-walk in GitHub's own original file order for the files that made
-    # the cut - the size-desc pass only decided which files fit, not what
+    # the cut - the size-asc pass only decided which files fit, not what
     # order they're shown in; a diff that jumps around out of order is
     # harder to review than one that doesn't.
     patches = [(f, p) for f, p in all_patches if f in included_filenames]
