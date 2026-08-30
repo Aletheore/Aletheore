@@ -4,11 +4,58 @@ This benchmark measures Aletheore's grounding claim ("every finding traces back 
 
 CodeRabbit was dropped from this comparison entirely: its ToS bans publishing benchmark results without consent, and its Free-plan rate limits made a fair, repeatable comparison impractical. Since there's no CodeRabbit output to anonymize for legal reasons, this comparison runs **named, not blind-labeled** — every tool's output is scored under its real name. (Blind manual scoring of the ground-truth *judgment* — recall/false-positives/actionability — is still a good practice on its own merits, but tool identity no longer needs to be hidden from the scorer.)
 
-Aletheore's real comparable feature is its hosted GitHub App's **Flash Review** (`deepseek-v4-flash`, hardcoded server-side), which posts findings as a PR comment from `aletheore[bot]` — not the CLI's whole-repo `aletheore audit` command, which is a different, non-comparable feature.
+Aletheore's real comparable feature is its hosted GitHub App's **Flash Review**, which posts findings as a PR comment from `aletheore[bot]` — not the CLI's whole-repo `aletheore audit` command, which is a different, non-comparable feature. Flash Review's model routing is `gpt-5.6-luna` primary (OpenAI), with `deepseek-v4-flash` as fallback and, on the AIR tier only, as a second-model verification pass over Luna's own output (see `github-app/scan_worker/model_tiers.py`) — not the single hardcoded DeepSeek model this doc originally described.
 
 See `METHODOLOGY.md` for runtime values (model versions, dates, provider versions) recorded at execution time.
 
 See the full design spec in `docs/superpowers/specs/2026-07-26-aletheore-pr-review-benchmark-design.md`.
+
+## Results (current as of 2026-08-30)
+
+**Headline: on identical models, Aletheore roughly doubles PR-Agent's real recall and holds zero false positives against PR-Agent's 8** — a genuinely fair, same-model, same-corpus, post-deploy comparison, not a model-tier or config mismatch. Full detail, per-case reasoning, and every documented limitation: [`REPORT.md`](REPORT.md) and [`METHODOLOGY.md`](METHODOLOGY.md). This section is a summary of those two files — if the numbers ever disagree, `REPORT.md`/`METHODOLOGY.md` are the source of truth and this section is stale and needs re-syncing.
+
+**Run conditions:** production deployed at commit `35e18f8` (tag `github-app-deploy-2026-08-30`, includes every fix through PR #476), scratch install on the real `air` plan, PR-Agent explicitly configured to `--config.model=gpt-5.6-luna` (not its own `gpt-5.5` default) for true model parity. Corpus: 24 of 25 cases (case `020` excluded — see Known Limitations in `REPORT.md`); DeepSource excluded this run (real analysis-quota exhaustion on the test account).
+
+### Recall and false positives
+
+24 cases (15 real-bug-fix, 5 injected-bug, 4 clean); 20 cases carry a real recall verdict, the 4 clean cases score false-positive rate only. Scored by reading real finding content against `cases/<id>/ground_truth.yaml` (Step 4 manual scoring — see Known Limitations for why the blind LLM-judge pass, Step 5, didn't run this cycle).
+
+| Tool | Hit | Partial | Miss | False Positives |
+|---|---|---|---|---|
+| Aletheore AIR (`gpt-5.6-luna` + `deepseek-v4-flash` verify) | 15 | 1 | 4 | 0 |
+| Aletheore Flash (`gpt-5.6-luna` only, no verification) | 15 | 0 | 5 | 0 |
+| PR-Agent / Qodo (`gpt-5.6-luna`) | 6 | 0 | 14 | 8 |
+
+AIR and Flash score identically on total recall (15/20 each) despite Flash never calling the verification model — consistent with verification being a precision mechanism (it can only drop a finding, never add one), not a recall lever.
+
+### Timing (real wall-clock, per case)
+
+| Tool | Per-case avg | Basis |
+|---|---|---|
+| Aletheore AIR | 33s | 24 cases, direct in-process invocation |
+| Aletheore Flash | 15.9s | 24 cases — ~2x faster than AIR, since it skips the verification round-trip entirely |
+| PR-Agent | 69.3s | 10 freshly re-measured cases this run (full subprocess + live GitHub round-trips each time) |
+
+### Tokens and real cost
+
+Luna pricing: $0.20/M input, $1.20/M output. DeepSeek-v4-flash (verification) pricing: $0.44/M input, $1.32/M output. All figures below are real, measured token counts (not estimated), captured via each tool's/model's own usage response.
+
+| Tool | Prompt tokens | Completion tokens | Real cost |
+|---|---|---|---|
+| Aletheore AIR — generation | 387,382 | 33,075 | $0.1172 |
+| Aletheore AIR — DeepSeek verification | 16,768 | 49,341 | $0.0725 |
+| **Aletheore AIR — total** | **404,150** | **82,416** | **$0.1897** |
+| Aletheore Flash | 387,382 | 32,651 | $0.1167 |
+| PR-Agent (10 fresh cases, measured) | 293,733 | 14,051 | $0.0756 |
+| PR-Agent (extrapolated to all 24, same rate) | ~704,959 | ~33,722 | ~$0.1815 |
+
+Aletheore's generation prompt uses roughly half the input tokens PR-Agent's does for the same 24 diffs — PR-Agent's schema (ticket-compliance check, effort-to-review score, a dedicated security field) costs real input tokens beyond the diff itself.
+
+### Known limitations (summary — full detail in `REPORT.md`)
+
+- **No blind LLM judge this cycle** — Step 5 requires a fresh Claude subagent dispatch per case; this run was executed by a forked subagent whose tool policy blocks spawning further subagents, and no direct API key was available as a substitute. An earlier, separate 2-arm run (Aletheore vs. PR-Agent only, same model, different exact scores) *did* get a full blind-judge pass and measured 83.3% agreement with manual scoring — real independent verification, but on a different run's numbers than the table above. Don't blend the two.
+- **AIR's numbers are via direct in-process invocation, not a live webhook trigger** — the plan to validate the deployed fixes end-to-end via real webhook events produced zero new comments (the AIR install's monthly review cap was already exhausted), though the webhooks themselves were confirmed received and processed by the deployed code via check-run evidence. AIR's generation/prompt code path is unaffected by this (the fixes it's missing live in the GitHub-fetch layer, which direct invocation doesn't call), but this run does not constitute live end-to-end proof of PRs #471/#473/#474/#476 specifically.
+- **PR-Agent: 10 of 24 cases are freshly re-measured this cycle**, the remaining 14 reuse real same-day, same-config data (nothing about PR-Agent changed in between).
 
 ## Prerequisites
 
