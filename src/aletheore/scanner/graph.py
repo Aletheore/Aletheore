@@ -240,6 +240,10 @@ _FUNCTION_LIKE_NODE_TYPES = frozenset({
     "anonymous_function",  # PHP: `function(){}` (PHP's `fn() =>` is the
     # same "arrow_function" type name already listed above for JS/TS -
     # no separate entry needed, one shared set, no cross-grammar collision)
+    "lambda_literal",  # Kotlin AND Swift's closure node - both grammars use
+    # this exact name (confirmed empirically, not assumed - checked no
+    # other already-supported grammar uses it first, the same way "block"
+    # below was checked and excluded for colliding with Python's).
     #
     # Deliberately NOT here: Ruby's plain `{...}` block, node type
     # "block" - confirmed empirically to be the exact same type name
