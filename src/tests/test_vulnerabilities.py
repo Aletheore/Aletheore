@@ -264,6 +264,57 @@ def test_parse_cargo_pins_reads_package_tables(tmp_path):
     assert ("libc", "0.2.169", "crates.io") in pins
 
 
+def test_parse_swift_package_resolved_pins_reads_real_v2_schema(tmp_path):
+    # Real content from vapor/penny-bot's committed Package.resolved (schema
+    # v3, current format at time of writing) - not a hand-invented shape.
+    from aletheore.vulnerabilities import _parse_swift_package_resolved_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Package.resolved").write_text(
+        """{
+          "originHash" : "abc123",
+          "pins" : [
+            {
+              "identity" : "async-http-client",
+              "kind" : "remoteSourceControl",
+              "location" : "https://github.com/swift-server/async-http-client.git",
+              "state" : {
+                "revision" : "9544287b9416c0bc71e58b9f3aead8dd14b16103",
+                "version" : "1.36.0"
+              }
+            },
+            {
+              "identity" : "discordbm",
+              "kind" : "remoteSourceControl",
+              "location" : "https://github.com/DiscordBM/DiscordBM.git",
+              "state" : {
+                "branch" : "main",
+                "revision" : "b01d40baf434cc968b113ff44c9eecd40bfb6e9e"
+              }
+            }
+          ],
+          "version" : 3
+        }"""
+    )
+
+    pins = _parse_swift_package_resolved_pins(repo)
+
+    assert ("github.com/swift-server/async-http-client", "1.36.0", "SwiftURL") in pins
+    # DiscordBM tracks a branch, not a released version - no SEMVER range
+    # could ever match it, so it's correctly excluded rather than guessed at.
+    assert len(pins) == 1
+
+
+def test_parse_swift_package_resolved_pins_empty_when_no_manifest(tmp_path):
+    from aletheore.vulnerabilities import _parse_swift_package_resolved_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    assert _parse_swift_package_resolved_pins(repo) == []
+
+
 def test_parse_cargo_pins_empty_when_no_cargo_lock(tmp_path):
     from aletheore.vulnerabilities import _parse_cargo_pins
 

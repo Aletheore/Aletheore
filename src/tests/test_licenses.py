@@ -451,6 +451,48 @@ def test_fetch_crates_license_reads_version_license_field():
     assert result == "MIT OR Apache-2.0"
 
 
+def test_fetch_swift_license_reads_spdx_id_from_real_response_shape():
+    from aletheore.licenses import _fetch_swift_license
+
+    # Real response shape from GitHub's Contents API license endpoint,
+    # confirmed live against api.github.com/repos/swift-server/async-http-client/license.
+    response = _mock_response({"license": {"spdx_id": "Apache-2.0"}})
+
+    with patch("aletheore.licenses.urllib.request.urlopen", return_value=response):
+        result = _fetch_swift_license("github.com/swift-server/async-http-client", "1.36.0", timeout=10)
+
+    assert result == "Apache-2.0"
+
+
+def test_fetch_swift_license_falls_back_past_a_404_tag_to_the_default_branch():
+    from aletheore.licenses import _fetch_swift_license
+
+    not_found = urllib.error.HTTPError(url="", code=404, msg="Not Found", hdrs=None, fp=None)
+    success = _mock_response({"license": {"spdx_id": "MIT"}})
+
+    with patch("aletheore.licenses.urllib.request.urlopen", side_effect=[not_found, not_found, success]):
+        result = _fetch_swift_license("github.com/example/pkg", "2.0.0", timeout=10)
+
+    assert result == "MIT"
+
+
+def test_fetch_swift_license_treats_noassertion_as_unknown():
+    from aletheore.licenses import _fetch_swift_license
+
+    response = _mock_response({"license": {"spdx_id": "NOASSERTION"}})
+
+    with patch("aletheore.licenses.urllib.request.urlopen", return_value=response):
+        result = _fetch_swift_license("github.com/example/pkg", "1.0.0", timeout=10)
+
+    assert result is None
+
+
+def test_fetch_swift_license_skips_non_github_hosts():
+    from aletheore.licenses import _fetch_swift_license
+
+    assert _fetch_swift_license("gitlab.com/example/pkg", "1.0.0", timeout=10) is None
+
+
 def test_check_dependency_licenses_reports_a_rust_dependency(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
