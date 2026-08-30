@@ -4,7 +4,7 @@ This benchmark measures Aletheore's grounding claim ("every finding traces back 
 
 CodeRabbit was dropped from this comparison entirely: its ToS bans publishing benchmark results without consent, and its Free-plan rate limits made a fair, repeatable comparison impractical. Since there's no CodeRabbit output to anonymize for legal reasons, this comparison runs **named, not blind-labeled** — every tool's output is scored under its real name. (Blind manual scoring of the ground-truth *judgment* — recall/false-positives/actionability — is still a good practice on its own merits, but tool identity no longer needs to be hidden from the scorer.)
 
-Aletheore's real comparable feature is its hosted GitHub App's **Flash Review** (`deepseek-v4-flash`, hardcoded server-side), which posts findings as a PR comment from `aletheore[bot]` — not the CLI's whole-repo `aletheore audit` command, which is a different, non-comparable feature.
+Aletheore's real comparable feature is its hosted GitHub App's **Flash Review**, which posts findings as a PR comment from `aletheore[bot]` — not the CLI's whole-repo `aletheore audit` command, which is a different, non-comparable feature. Flash Review's model routing is `gpt-5.6-luna` primary (OpenAI), with `deepseek-v4-flash` as fallback and, on the AIR tier only, as a second-model verification pass over Luna's own output (see `github-app/scan_worker/model_tiers.py`) — not the single hardcoded DeepSeek model this doc originally described.
 
 See `METHODOLOGY.md` for runtime values (model versions, dates, provider versions) recorded at execution time.
 
@@ -99,7 +99,7 @@ export DEEPSEEK_API_KEY="<your-deepseek-api-key>"
 
 ### Aletheore Configuration
 
-**Nothing to configure.** Aletheore's comparable feature in this benchmark is the hosted GitHub App's Flash Review, not the CLI's `audit` command — it runs automatically the moment a PR is opened on a repo with the app installed, and its model is hardcoded server-side to `deepseek-v4-flash` (see `github-app/scan_worker/model_tiers.py`). There is no BYOK model config for it as of 2026-07-26. Model parity with PR-Agent is achieved by pointing PR-Agent at the same model, below.
+**Nothing to configure.** Aletheore's comparable feature in this benchmark is the hosted GitHub App's Flash Review, not the CLI's `audit` command — it runs automatically the moment a PR is opened on a repo with the app installed. Its model routing is `gpt-5.6-luna` primary (OpenAI), with `deepseek-v4-flash` as fallback and, on the AIR tier, as a verification pass (see `github-app/scan_worker/model_tiers.py`) — it was hardcoded to `deepseek-v4-flash` as of 2026-07-26 when this doc was first written, but that changed weeks before this repo's later runs. There is no BYOK model config for it. Model parity with PR-Agent is achieved by pointing PR-Agent at Aletheore's actual current model, below.
 
 ### PR-Agent Configuration
 
