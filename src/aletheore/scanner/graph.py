@@ -17,6 +17,7 @@ import tree_sitter_php as tsphp
 import tree_sitter_python as tspython
 import tree_sitter_ruby as tsruby
 import tree_sitter_rust as tsrust
+import tree_sitter_swift as tsswift
 import tree_sitter_typescript as tstypescript
 from tree_sitter import Language, Node, Parser, Tree
 
@@ -36,6 +37,7 @@ PHP_LANGUAGE = Language(tsphp.language_php())
 C_LANGUAGE = Language(tsc.language())
 CPP_LANGUAGE = Language(tscpp.language())
 CSHARP_LANGUAGE = Language(tscsharp.language())
+SWIFT_LANGUAGE = Language(tsswift.language())
 
 LANGUAGE_BY_EXTENSION = {
     ".py": ("python", PY_LANGUAGE),
@@ -58,6 +60,7 @@ LANGUAGE_BY_EXTENSION = {
     ".cpp": ("cpp", CPP_LANGUAGE),
     ".cc": ("cpp", CPP_LANGUAGE),
     ".cs": ("csharp", CSHARP_LANGUAGE),
+    ".swift": ("swift", SWIFT_LANGUAGE),
 }
 
 # Extensions that are recognizable programming languages we don't yet have a grammar
@@ -68,7 +71,6 @@ LANGUAGE_BY_EXTENSION = {
 # from an untracked cache directory before IGNORED_DIRS was widened, none of which
 # were ever "unparseable source").
 KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR = {
-    ".swift",
     ".m", ".mm", ".scala",
 }
 
@@ -142,7 +144,22 @@ def _params_text(source: bytes, enclosing_node: Node) -> str | None:
     safe to try unconditionally after the field lookup fails: no other
     grammar checked here has a node literally typed
     "function_value_parameters", so this can never accidentally match on
-    the wrong grammar.
+    the wrong grammar. Swift is a third exception, of yet another shape:
+    its grammar has no wrapping parameter-list node at all - individual
+    `parameter` nodes sit as direct children of function_declaration,
+    separated by bare "(", ",", ")" tokens (confirmed empirically) - so
+    the span is reconstructed from the outermost "(" and ")" tokens
+    themselves rather than read off a single child node.
+
+    Kotlin and Swift's enclosing node TYPE is confirmed identical - both
+    grammars literally call it "function_declaration" - so the two
+    fallbacks below must not gate on that type name (an earlier merge of
+    these two independently-developed fallbacks did exactly that, which
+    would have silently broken Kotlin's params by always taking Swift's
+    branch first and returning early). Ordered by trying each fallback's
+    own node shape in turn instead: Kotlin's function_value_parameters
+    child is looked for first (absent on a Swift node, so harmless there),
+    and only if that comes up empty does the bare "(...)" token scan run.
     """
     params_node = enclosing_node.child_by_field_name("parameters")
     if params_node is None:
@@ -153,6 +170,13 @@ def _params_text(source: bytes, enclosing_node: Node) -> str | None:
         params_node = next(
             (c for c in enclosing_node.children if c.type == "function_value_parameters"), None
         )
+    if params_node is None and enclosing_node.type == "function_declaration":
+        open_paren = next((c for c in enclosing_node.children if c.type == "("), None)
+        close_paren = next((c for c in reversed(enclosing_node.children) if c.type == ")"), None)
+        if open_paren is not None and close_paren is not None:
+            raw = source[open_paren.start_byte:close_paren.end_byte].decode(errors="ignore")
+            return " ".join(raw.split())
+        return None
     if params_node is None:
         return None
     raw = source[params_node.start_byte:params_node.end_byte].decode(errors="ignore")
@@ -216,6 +240,10 @@ _FUNCTION_LIKE_NODE_TYPES = frozenset({
     "anonymous_function",  # PHP: `function(){}` (PHP's `fn() =>` is the
     # same "arrow_function" type name already listed above for JS/TS -
     # no separate entry needed, one shared set, no cross-grammar collision)
+    "lambda_literal",  # Kotlin AND Swift's closure node - both grammars use
+    # this exact name (confirmed empirically, not assumed - checked no
+    # other already-supported grammar uses it first, the same way "block"
+    # below was checked and excluded for colliding with Python's).
     #
     # Deliberately NOT here: Ruby's plain `{...}` block, node type
     # "block" - confirmed empirically to be the exact same type name
@@ -595,6 +623,34 @@ def _extract_module_constants(node: Node, source: bytes, language: str) -> list[
                     )
                     if in_type_body or is_top_level(n):
                         add(lhs, n)
+        elif language == "swift":
+            # Only immutable ("let") bindings, at module scope or as a type's
+            # `static let` - matching the same deliberate restraint as Java's
+            # `static final`-only branch above (a mutable `static var` is a
+            # class-level field, not really a "constant", and top-level `var`
+            # is script-local mutable state, not a lookup-by-name API
+            # surface). Confirmed empirically: tree-sitter-swift always wraps
+            # a name in "property_declaration -> pattern -> simple_identifier"
+            # for both shapes.
+            if t == "property_declaration":
+                binding = next((c for c in n.children if c.type == "value_binding_pattern"), None)
+                is_let = binding is not None and any(c.type == "let" for c in binding.children)
+                modifiers = next((c for c in n.children if c.type == "modifiers"), None)
+                is_static = modifiers is not None and any(
+                    mc.type == "property_modifier" and any(c.type == "static" for c in mc.children)
+                    for mc in modifiers.children
+                )
+                is_public = modifiers is not None and any(
+                    mc.type == "visibility_modifier" and any(c.type in ("public", "open") for c in mc.children)
+                    for mc in modifiers.children
+                )
+                if is_let and (is_static or is_top_level(n)):
+                    pattern = next((c for c in n.children if c.type == "pattern"), None)
+                    nm = next(
+                        (c for c in pattern.children if c.type == "simple_identifier"), None
+                    ) if pattern is not None else None
+                    if nm is not None:
+                        add(nm, n, public=is_public)
         elif language == "php":
             if t == "const_declaration":
                 for child in n.named_children:
@@ -1704,6 +1760,436 @@ def _resolve_java_import(
     return [], False
 
 
+def _leading_swift_doc_comment(source: bytes, enclosing_node: Node) -> str | None:
+    """Swift's dominant doc-comment convention (DocC): one or more contiguous
+    "///" line comments immediately above the declaration, no blank line in
+    between - same rule as Rust's "///", not Go's plainer "//". Confirmed
+    empirically that tree-sitter-swift's "comment" node span ends on its own
+    content row (matches Go's adjacency arithmetic, not Rust's off-by-one).
+    """
+    lines: list[str] = []
+    node = enclosing_node.prev_sibling
+    expected_end_row = enclosing_node.start_point[0] - 1
+    while node is not None and node.type == "comment" and node.end_point[0] == expected_end_row:
+        raw = source[node.start_byte:node.end_byte].decode(errors="ignore").strip()
+        if not raw.startswith("///"):
+            break
+        lines.append(raw[3:].strip())
+        expected_end_row = node.start_point[0] - 1
+        node = node.prev_sibling
+
+    if not lines:
+        return None
+    lines.reverse()
+    return "\n".join(lines) or None
+
+
+def _swift_return_type(source: bytes, enclosing_node: Node) -> str | None:
+    node = enclosing_node.child_by_field_name("return_type")
+    if node is None:
+        return None
+    return source[node.start_byte:node.end_byte].decode(errors="ignore").strip()
+
+
+def _swift_is_public(node: Node) -> bool:
+    """Real visibility, read from Swift's own access-level keywords.
+
+    Absent any modifier, Swift's actual default is `internal` - visible
+    within the same module/target but NOT across a module boundary the way
+    `public`/`open` are. Since this field feeds cross-target import
+    resolution (see _resolve_swift_import) as well as docs filtering, the
+    correct default here is False, not True - an `internal` symbol is real
+    but not part of what another target can actually see.
+    """
+    modifiers = next((c for c in node.children if c.type == "modifiers"), None)
+    if modifiers is None:
+        return False
+    return any(
+        c.type == "visibility_modifier" and any(gc.type in ("public", "open") for gc in c.children)
+        for c in modifiers.children
+    )
+
+
+def _extract_swift(node: Node, source: bytes) -> tuple[list[str], list[dict], list[dict]]:
+    """Return imported module names, function names, and type names.
+
+    Unlike every other extractor here, "imports" is flat module-name
+    strings, not paths or dotted specs - a Swift `import Foo` names a whole
+    compiled target, not a file, so there is nothing more specific to
+    extract at this stage; _resolve_swift_import does the whole-target
+    fan-out. A submodule-qualified import ("import UIKit.UIView") only
+    keeps the first (module) segment - the vast majority of real imports
+    are unqualified, and the qualifier never names anything this scanner
+    could resolve differently anyway.
+    """
+    imports: list[str] = []
+    functions: list[dict] = []
+    types: list[dict] = []
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
+
+    def walk(root: Node):
+        # Iterative, not recursive - see _extract_python's walk for why.
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n.type == "import_declaration":
+                ident = next((c for c in n.children if c.type == "identifier"), None)
+                first_segment = next(
+                    (c for c in ident.children if c.type == "simple_identifier"), None
+                ) if ident is not None else None
+                if first_segment is not None:
+                    imports.append(text(first_segment))
+            elif n.type == "function_declaration":
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_swift_doc_comment(source, n),
+                        return_type=_swift_return_type(source, n),
+                        is_public=_swift_is_public(n),
+                    ))
+            elif n.type == "protocol_declaration":
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_leading_swift_doc_comment(source, n),
+                        is_public=_swift_is_public(n),
+                        is_pure_declaration=True,
+                    ))
+            elif n.type == "class_declaration":
+                # tree-sitter-swift uses this one node type for class, struct,
+                # AND enum - and also, confusingly, for `extension` (adding
+                # members to an EXISTING type, not declaring a new one), all
+                # distinguished only by the keyword token itself, found among
+                # the node's direct children rather than assumed to be the
+                # first one - a visibility `modifiers` node (e.g. `public
+                # class Foo`) sits before it when present (confirmed
+                # empirically). An extension's body is still walked below for
+                # its own function_declarations - real, often public API - it
+                # just doesn't get its own "type" entry here, since it isn't one.
+                keyword = next(
+                    (c.type for c in n.children if c.type in ("class", "struct", "enum", "extension")), None
+                )
+                if keyword in ("class", "struct", "enum"):
+                    name_node = n.child_by_field_name("name")
+                    if name_node is not None:
+                        types.append(_symbol_entry(
+                            source, name_node, n,
+                            docstring=_leading_swift_doc_comment(source, n),
+                            is_public=_swift_is_public(n),
+                        ))
+            stack.extend(reversed(n.children))
+
+    walk(node)
+    return imports, functions, types
+
+
+_SWIFT_TARGET_CALL_NAMES = {
+    "target", "executableTarget", "testTarget", "binaryTarget", "systemLibraryTarget", "macro", "plugin",
+}
+
+
+def _swift_call_arg_strings(call_expr: Node, source: bytes) -> dict[str, str]:
+    """label -> string-literal text for a `.someCall(label: "value", ...)`
+    call_expression's own labeled arguments - used to read Package.swift's
+    `.target(name: "...", path: "...")`-shaped declarations. Only
+    string-literal argument values are extracted; every real manifest
+    passes name:/path: as plain string literals.
+    """
+    result: dict[str, str] = {}
+    suffix = next((c for c in call_expr.children if c.type == "call_suffix"), None)
+    args = next((c for c in suffix.children if c.type == "value_arguments"), None) if suffix is not None else None
+    if args is None:
+        return result
+    for arg in args.children:
+        if arg.type != "value_argument":
+            continue
+        label_node = next((c for c in arg.children if c.type == "value_argument_label"), None)
+        label_id = next(
+            (c for c in label_node.children if c.type == "simple_identifier"), None
+        ) if label_node is not None else None
+        if label_id is None:
+            continue
+        label = source[label_id.start_byte:label_id.end_byte].decode(errors="ignore")
+        str_lit = next((c for c in arg.children if c.type == "line_string_literal"), None)
+        text_node = next(
+            (c for c in str_lit.children if c.type == "line_str_text"), None
+        ) if str_lit is not None else None
+        if text_node is not None:
+            result[label] = source[text_node.start_byte:text_node.end_byte].decode(errors="ignore")
+    return result
+
+
+def _parse_swift_package_manifest(repo_path: Path) -> dict[str, str]:
+    """Best-effort read of Package.swift for explicit target `path:`
+    overrides only - SwiftPM's own default (Sources/<Name>/, or a
+    Tests/<Name>/ test target) needs no manifest at all and is handled
+    entirely by directory-convention scanning in _infer_swift_targets; this
+    only matters for the minority of targets that actually override it.
+    Not a full Package.swift interpreter - that file is executable Swift,
+    not data - just a walk for the one call shape every real manifest uses
+    for this (`.target(name: "...", path: "...")` and its
+    executableTarget/testTarget/etc. siblings), never executed.
+    """
+    manifest = repo_path / "Package.swift"
+    if not manifest.is_file():
+        return {}
+    try:
+        source = manifest.read_bytes()
+    except OSError:
+        return {}
+    parser = Parser()
+    parser.language = SWIFT_LANGUAGE
+    tree = parser.parse(source)
+
+    overrides: dict[str, str] = {}
+    stack = [tree.root_node]
+    while stack:
+        n = stack.pop()
+        if n.type == "call_expression":
+            prefix = next((c for c in n.children if c.type == "prefix_expression"), None)
+            ident = next(
+                (c for c in prefix.children if c.type == "simple_identifier"), None
+            ) if prefix is not None else None
+            callee_name = source[ident.start_byte:ident.end_byte].decode(errors="ignore") if ident else None
+            if callee_name in _SWIFT_TARGET_CALL_NAMES:
+                call_args = _swift_call_arg_strings(n, source)
+                name, path_str = call_args.get("name"), call_args.get("path")
+                if name and path_str:
+                    overrides[name] = path_str
+        stack.extend(n.children)
+    return overrides
+
+
+_PBXPROJ_TOKEN_RE = re.compile(
+    r"""
+      \s+
+    | /\*.*?\*/
+    | //[^\n]*
+    | "(?:\\.|[^"\\])*"
+    | [{}()=;,]
+    | [^\s{}()=;,"]+
+    """,
+    re.VERBOSE | re.DOTALL,
+)
+
+
+def _tokenize_pbxproj(text: str) -> list[str]:
+    """Tokenizer for the OpenStep-plist dialect .pbxproj files actually use -
+    NOT the same format Python's stdlib `plistlib` reads (that only handles
+    binary and XML plists; confirmed empirically - plistlib has no OpenStep
+    format constant at all). The grammar itself is simple and regular
+    (brace/paren-delimited dicts and arrays, semicolon-terminated pairs,
+    bare-or-quoted string values, C-style comments) - this single regex
+    alternation classifies each token; whitespace and comments are dropped,
+    quoted strings have their escapes unescaped, everything else (including
+    every UUID and bare identifier) passes through as-is.
+    """
+    tokens = []
+    pos, n = 0, len(text)
+    while pos < n:
+        match = _PBXPROJ_TOKEN_RE.match(text, pos)
+        if match is None:
+            raise ValueError(f"unparseable pbxproj content at byte {pos}")
+        pos = match.end()
+        piece = match.group()
+        if not piece.strip() or piece.startswith(("/*", "//")):
+            continue
+        if piece.startswith('"'):
+            piece = piece[1:-1].replace('\\"', '"')
+        tokens.append(piece)
+    return tokens
+
+
+def _parse_pbxproj_tokens(tokens: list[str], pos: int) -> tuple[object, int]:
+    """Recursive-descent parse of one value at tokens[pos] - a dict ("{...}"),
+    an array ("(...)"), or a bare/quoted string token. Returns (value,
+    next_pos). Object identity (which "isa" type each UUID names) is
+    resolved later by the caller, not here - this only reconstructs the
+    plain dict/list/str structure.
+    """
+    token = tokens[pos]
+    if token == "{":
+        d: dict[str, object] = {}
+        pos += 1
+        while tokens[pos] != "}":
+            key = tokens[pos]
+            pos += 1
+            assert tokens[pos] == "="
+            pos += 1
+            value, pos = _parse_pbxproj_tokens(tokens, pos)
+            d[key] = value
+            if tokens[pos] == ";":
+                pos += 1
+        return d, pos + 1
+    if token == "(":
+        items: list[object] = []
+        pos += 1
+        while tokens[pos] != ")":
+            value, pos = _parse_pbxproj_tokens(tokens, pos)
+            items.append(value)
+            if tokens[pos] == ",":
+                pos += 1
+        return items, pos + 1
+    return token, pos + 1
+
+
+def _parse_pbxproj(pbxproj_path: Path) -> dict | None:
+    try:
+        text = pbxproj_path.read_text(encoding="utf-8", errors="ignore")
+        tokens = _tokenize_pbxproj(text)
+        data, _ = _parse_pbxproj_tokens(tokens, 0)
+    except (OSError, IndexError, AssertionError, ValueError):
+        # A real project.pbxproj is machine-written by Xcode and never
+        # malformed in practice - these are defensive only, the same
+        # tolerance every other manifest parser here (tomllib.TOMLDecodeError
+        # etc.) already has for a file that doesn't match its expected shape.
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _infer_xcodeproj_swift_targets(
+    repo_path: Path, ignored_paths: list[str] | None
+) -> dict[str, list[Path]]:
+    """Target membership read directly from an Xcode project's own
+    project.pbxproj - the real ground-truth source Xcode itself uses,
+    verified against a real, large, modern multi-target app
+    (wordpress-mobile/WordPress-iOS, objectVersion 77, 685 objects, 15 real
+    PBXNativeTargets) before being trusted. Two real membership mechanisms
+    exist and both are handled, confirmed on that same real project:
+
+    - Classic: PBXNativeTarget.buildPhases -> a PBXSourcesBuildPhase's
+      "files" -> each PBXBuildFile's "fileRef" -> a PBXFileReference's
+      "path". Resolved by basename search under the project root rather
+      than reconstructing the full PBXGroup nesting path (which does not
+      have to mirror the filesystem) - a deliberate, bounded heuristic
+      matching this codebase's existing style elsewhere (e.g. Java/Rust's
+      own nested-class fallback resolution), not a claim of perfect
+      precision; a duplicate basename across the repo is skipped rather
+      than guessed at.
+    - Modern (Xcode 16+): PBXNativeTarget.fileSystemSynchronizedGroups ->
+      each PBXFileSystemSynchronizedRootGroup's "path" names a whole
+      directory Xcode syncs automatically, with no per-file PBXBuildFile
+      entries at all - confirmed as the primary mechanism WordPress-iOS's
+      own main "WordPress" target actually uses today (1 file via the
+      classic path, the real bulk via four synchronized groups).
+    """
+    matches = list(repo_path.glob("*.xcodeproj")) + list(repo_path.glob("*/*.xcodeproj"))
+    targets: dict[str, list[Path]] = {}
+    for xcodeproj in matches:
+        pbxproj_path = xcodeproj / "project.pbxproj"
+        data = _parse_pbxproj(pbxproj_path)
+        if data is None:
+            continue
+        objects = data.get("objects")
+        if not isinstance(objects, dict):
+            continue
+        project_root = xcodeproj.parent
+
+        def resolve_classic(phase_uuid: object) -> list[Path]:
+            phase = objects.get(phase_uuid)
+            if not isinstance(phase, dict) or phase.get("isa") != "PBXSourcesBuildPhase":
+                return []
+            found = []
+            for build_file_uuid in phase.get("files", []) or []:
+                build_file = objects.get(build_file_uuid)
+                file_ref = objects.get(build_file.get("fileRef")) if isinstance(build_file, dict) else None
+                path_str = file_ref.get("path") if isinstance(file_ref, dict) else None
+                if not path_str or not path_str.endswith(".swift"):
+                    continue
+                candidates = [
+                    p for p in project_root.rglob(Path(path_str).name)
+                    if not is_ignored(_rel(repo_path, p), ignored_paths or [])
+                ]
+                if len(candidates) == 1:
+                    found.append(candidates[0])
+            return found
+
+        def resolve_synced(group_uuid: object) -> list[Path]:
+            group = objects.get(group_uuid)
+            path_str = group.get("path") if isinstance(group, dict) else None
+            if not path_str:
+                return []
+            target_dir = project_root / path_str
+            if not target_dir.is_dir():
+                return []
+            return [
+                p for p in target_dir.rglob("*.swift")
+                if not is_ignored(_rel(repo_path, p), ignored_paths or [])
+            ]
+
+        for obj in objects.values():
+            if not isinstance(obj, dict) or obj.get("isa") != "PBXNativeTarget":
+                continue
+            name = obj.get("name")
+            if not isinstance(name, str):
+                continue
+            files: list[Path] = []
+            for phase_uuid in obj.get("buildPhases", []) or []:
+                files.extend(resolve_classic(phase_uuid))
+            for group_uuid in obj.get("fileSystemSynchronizedGroups", []) or []:
+                files.extend(resolve_synced(group_uuid))
+            if files:
+                targets.setdefault(name, []).extend(files)
+    return targets
+
+
+def _infer_swift_targets(repo_path: Path, ignored_paths: list[str] | None) -> dict[str, list[Path]]:
+    """Whole-target file membership for Swift's import graph.
+
+    Unlike every other supported language, a Swift `import Foo` names a
+    compiled module, not a file - there is no source-level statement that
+    resolves to one specific file the way there is for Python/JS/Go/Java,
+    so an import edge has to fan out to every file belonging to that
+    target instead (see _resolve_swift_import). Three sources, merged: an
+    explicit `path:` override read from Package.swift (the minority case)
+    takes priority per target name; every other SwiftPM target - the large
+    majority in a real SwiftPM repo, which almost never overrides the
+    default - falls back to the convention itself (every direct
+    subdirectory of Sources/ or Tests/ is its own target); and, separately,
+    any Xcode project's own project.pbxproj is read directly for its real
+    PBXNativeTarget membership (see _infer_xcodeproj_swift_targets) - a
+    multi-target .xcodeproj app with no SwiftPM structure at all still gets
+    real cross-target edges this way, not just a same-directory guess.
+    """
+    overrides = _parse_swift_package_manifest(repo_path)
+    targets: dict[str, list[Path]] = {}
+
+    def add_dir_as_target(name: str, target_dir: Path) -> None:
+        if not target_dir.is_dir():
+            return
+        files = [
+            p for p in target_dir.rglob("*.swift")
+            if not is_ignored(_rel(repo_path, p), ignored_paths or [])
+        ]
+        if files:
+            targets.setdefault(name, []).extend(files)
+
+    for name, rel_path in overrides.items():
+        add_dir_as_target(name, repo_path / rel_path)
+
+    for parent_name in ("Sources", "Tests"):
+        parent = repo_path / parent_name
+        if not parent.is_dir():
+            continue
+        for child in parent.iterdir():
+            if child.is_dir() and child.name not in overrides:
+                add_dir_as_target(child.name, child)
+
+    for name, files in _infer_xcodeproj_swift_targets(repo_path, ignored_paths).items():
+        existing = targets.setdefault(name, [])
+        existing.extend(f for f in files if f not in existing)
+
+    return targets
+
+
+def _resolve_swift_import(swift_target_files: dict[str, list[Path]], module_name: str) -> list[Path]:
+    return swift_target_files.get(module_name, [])
+
+
 def _leading_ruby_doc_comment(source: bytes, enclosing_node: Node) -> str | None:
     """Ruby has no compiler-enforced doc-comment syntax (RDoc/YARD are
     tooling conventions, not grammar) - the de facto convention this
@@ -2606,6 +3092,7 @@ def _extract_module(
     csharp_prefix_map: dict[str, Path] | None = None,
     csharp_type_owners: dict[str, set[Path]] | None = None,
     csharp_implicit_usings: dict[Path, list[str]] | None = None,
+    swift_target_files: dict[str, list[Path]] | None = None,
 ) -> dict:
     """Turns one already-parsed (tree, source) into a module dict - the
     per-language dispatch every file eventually goes through, whether it
@@ -2761,6 +3248,13 @@ def _extract_module(
                 resolved_imports.append(target)
                 if type_ref_ambiguous:
                     import_confidence[target] = "ambiguous"
+    elif language_name == "swift":
+        raw_imports, functions, classes = _extract_swift(tree.root_node, source)
+        for module_name in raw_imports:
+            for target_path in _resolve_swift_import(swift_target_files or {}, module_name):
+                target = _rel(repo_path, target_path)
+                if target is not None and target != rel_path:
+                    resolved_imports.append(target)
     else:
         raw_imports, functions, classes = _extract_javascript(tree.root_node, source)
         for spec in raw_imports:
@@ -3128,6 +3622,12 @@ def build_module_graph(
             csharp_type_owners.setdefault(declared, set()).add(path)
     csharp_implicit_usings = _load_csharp_implicit_usings(repo_path, csharp_source_paths)
 
+    # Swift needs no per-file pre-parse the way Java/C# do - target membership
+    # is directory/manifest-derived (see _infer_swift_targets), not read off
+    # each file's own declarations - so this is a single cheap call, not a
+    # per-file loop.
+    swift_target_files = _infer_swift_targets(repo_path, ignored_paths)
+
     parser = Parser()
     # Non-java/kotlin/csharp files still needing a fresh parse - collected
     # here instead of being parsed inline, so they can go through the
@@ -3164,7 +3664,7 @@ def build_module_graph(
             unparseable.append({"path": rel_path, "reason": "file exceeds size limit"})
             continue
 
-        if language_name in ("java", "kotlin", "csharp"):
+        if language_name in ("java", "kotlin", "csharp", "swift"):
             # Re-parsed here rather than reusing a tree the pre-pass above
             # held onto - see that pre-pass's own comment (audit finding
             # 15). The pre-pass already had to parse every .java/.kt/.cs
@@ -3172,6 +3672,12 @@ def build_module_graph(
             # could have a source root inferred at all; this is
             # deliberately a second parse per file, trading CPU for never
             # holding more than about one file's tree in memory at a time.
+            # Swift never needed a per-file pre-parse in the first place
+            # (see swift_target_files above) but is processed here too,
+            # serially in-process, for the same reason the others are: the
+            # worker pool below has no java_source_roots/kotlin_source_roots/
+            # csharp_prefix_map/swift_target_files to resolve any of these
+            # four languages' imports with.
             parser.language = ts_language
             source = path.read_bytes()
             tree = parser.parse(source)
@@ -3191,6 +3697,7 @@ def build_module_graph(
                 csharp_prefix_map=csharp_prefix_map,
                 csharp_type_owners=csharp_type_owners,
                 csharp_implicit_usings=csharp_implicit_usings,
+                swift_target_files=swift_target_files,
             )
         )
 

@@ -12,6 +12,7 @@ from aletheore.scanner.graph import (
     PY_LANGUAGE,
     RUBY_LANGUAGE,
     RUST_LANGUAGE,
+    SWIFT_LANGUAGE,
     TS_LANGUAGE,
     TSX_LANGUAGE,
     _iter_source_files,
@@ -34,6 +35,7 @@ _SPRING_VERB_ANNOTATIONS = {
     "DeleteMapping": "DELETE",
     "PatchMapping": "PATCH",
 }
+_VAPOR_VERB_METHODS = {"get", "post", "put", "delete", "patch"}
 _RAILS_ROUTE_METHODS = {"get", "post", "put", "patch", "delete"}
 _LARAVEL_ROUTE_METHODS = {"get", "post", "put", "delete", "patch", "any"}
 _ASPNET_ATTRIBUTE_METHODS = {
@@ -1073,6 +1075,96 @@ def _extract_ktor_routes(root: Node, source: bytes, rel_path: str) -> list[dict]
     return entries
 
 
+def _extract_vapor_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Vapor's real routing shape (confirmed empirically against
+    tree-sitter-swift, not assumed): `app.get("path") { req in ... }` or
+    `app.get("path", use: handler)` - a call_expression whose callee is
+    `<receiver>.<verb>` and whose call_suffix carries either a trailing
+    lambda_literal or a `use:`-labeled argument. Matches on the verb/shape
+    regardless of the receiver's own name (same as _extract_express_routes
+    does for Express) so a route group's own variable (`app.grouped("api")`
+    assigned to `api`, then `api.get(...)`) is still caught without needing
+    to track that assignment.
+    """
+    entries: list[dict] = []
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
+
+    def walk(n: Node) -> None:
+        if n.type == "call_expression":
+            nav = next((c for c in n.children if c.type == "navigation_expression"), None)
+            suffix_node = next((c for c in n.children if c.type == "call_suffix"), None)
+            if nav is not None and suffix_node is not None:
+                nav_suffix = next((c for c in nav.children if c.type == "navigation_suffix"), None)
+                method_id = next(
+                    (c for c in nav_suffix.children if c.type == "simple_identifier"), None
+                ) if nav_suffix is not None else None
+                method_name = text(method_id) if method_id is not None else None
+
+                if method_name in _VAPOR_VERB_METHODS:
+                    args = next((c for c in suffix_node.children if c.type == "value_arguments"), None)
+                    trailing_closure = next(
+                        (c for c in suffix_node.children if c.type == "lambda_literal"), None
+                    )
+                    path_segments: list[str] = []
+                    handler_label = None
+                    if args is not None:
+                        for arg in args.children:
+                            if arg.type != "value_argument":
+                                continue
+                            label_node = next(
+                                (c for c in arg.children if c.type == "value_argument_label"), None
+                            )
+                            if label_node is not None:
+                                label_id = next(
+                                    (c for c in label_node.children if c.type == "simple_identifier"), None
+                                )
+                                if label_id is not None and text(label_id) == "use" and arg.children:
+                                    handler_label = text(arg.children[-1])
+                                continue
+                            str_lit = next(
+                                (c for c in arg.children if c.type == "line_string_literal"), None
+                            )
+                            if str_lit is not None:
+                                content = next(
+                                    (c for c in str_lit.children if c.type == "line_str_text"), None
+                                )
+                                if content is not None:
+                                    path_segments.append(text(content))
+
+                    # A real Vapor route registration always either takes a
+                    # trailing closure or a `use:`-labeled handler reference -
+                    # required as a false-positive guard, since ".get"/".post"
+                    # are extremely common method names on unrelated types
+                    # (dictionaries, key-value stores) that also happen to take
+                    # a string-literal first argument. Express's own path-
+                    # must-start-with-"/" guard doesn't work here: unlike
+                    # Express, real Vapor path segments never carry a leading
+                    # "/" in source, so that signal isn't available.
+                    if path_segments and (trailing_closure is not None or handler_label is not None):
+                        entries.append(
+                            {
+                                "method": method_name.upper(),
+                                # Normalized to a leading "/" for consistency
+                                # with every other framework's stored paths -
+                                # Vapor's own source never writes one.
+                                "path": "/" + "/".join(path_segments),
+                                "framework": "vapor",
+                                "file": rel_path,
+                                "line": n.start_point[0] + 1,
+                                "handler": handler_label or "<inline handler>",
+                                "unresolved": False,
+                                "note": None,
+                            }
+                        )
+        for child in n.children:
+            walk(child)
+
+    walk(root)
+    return entries
+
+
 def _ruby_string_content(node: Node, source: bytes) -> str:
     content = next((c for c in node.children if c.type == "string_content"), None)
     if content is None:
@@ -1467,6 +1559,7 @@ def map_api_endpoints(
         ("php", PHP_LANGUAGE),
         ("cs", CSHARP_LANGUAGE),
         ("kt", KOTLIN_LANGUAGE),
+        ("swift", SWIFT_LANGUAGE),
     ):
         parser = Parser()
         parser.language = lang
@@ -1548,6 +1641,10 @@ def map_api_endpoints(
             source = path.read_bytes()
             tree = parsers["java"].parse(source)
             endpoints.extend(_extract_spring_boot_routes(tree.root_node, source, rel_path))
+        elif suffix == ".swift":
+            source = path.read_bytes()
+            tree = parsers["swift"].parse(source)
+            endpoints.extend(_extract_vapor_routes(tree.root_node, source, rel_path))
         elif suffix == ".rb" and path.name == "routes.rb":
             source = path.read_bytes()
             tree = parsers["rb"].parse(source)

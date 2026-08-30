@@ -20,6 +20,9 @@ ENTRY_POINT_FILENAMES = {
     "manage.py",
     "server.py",
     "wsgi.py",
+    # SwiftPM's build manifest - always this exact name, read by the swift
+    # toolchain itself, never imported by the repo's own application code.
+    "Package.swift",
 }
 
 TEST_PATH_PATTERNS = [
@@ -27,7 +30,11 @@ TEST_PATH_PATTERNS = [
     re.compile(r"(^|/)[^/]+_test\.py$"),
     re.compile(r"(^|/)[^/]+\.test\.[jt]sx?$"),
     re.compile(r"(^|/)[^/]+\.spec\.[jt]sx?$"),
-    re.compile(r"(^|/)(tests?|__tests__)/"),
+    # Case-insensitive: SwiftPM/Xcode universally capitalize this directory
+    # ("Tests/") - confirmed against a real repo (apple/swift-algorithms),
+    # where the previous case-sensitive version missed every single test
+    # file, flagging them all as dead code.
+    re.compile(r"(^|/)(tests?|__tests__)/", re.IGNORECASE),
 ]
 
 PACKAGE_IMPORT_ALIASES = {

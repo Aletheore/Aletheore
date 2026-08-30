@@ -246,6 +246,56 @@ def _maven_resolve_property(version: str | None, properties: dict[str, str]) -> 
     return version.strip()
 
 
+def _swift_package_url_to_osv_name(location: str) -> str | None:
+    """OSV.dev's Swift ecosystem ("SwiftURL", confirmed empirically against
+    the live API - "SwiftPM" is not a valid ecosystem name there, despite
+    being the more obvious guess) identifies a package by its normalized
+    source URL, not a short name - e.g. "github.com/apple/swift-nio", not
+    "swift-nio". Strips the scheme and a trailing ".git", the only two
+    things Package.resolved's "location" field carries that OSV's own
+    package.name values never do (confirmed by querying a real published
+    advisory for apple/swift-nio and matching its exact "name" field).
+    """
+    url = location.strip()
+    url = re.sub(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", "", url)
+    url = url.rstrip("/")
+    if url.endswith(".git"):
+        url = url[: -len(".git")]
+    return url or None
+
+
+def _parse_swift_package_resolved_pins(repo_path: Path) -> list[tuple[str, str, str]]:
+    resolved = repo_path / "Package.resolved"
+    if not resolved.exists():
+        return []
+    try:
+        data = json.loads(resolved.read_text(encoding="utf-8", errors="ignore"))
+    except json.JSONDecodeError:
+        return []
+    # Schema v1 (older toolchains) nests pins under "object"; v2+ (current)
+    # has them at the top level - confirmed against a real, current
+    # Package.resolved (vapor/penny-bot, schema v3).
+    raw_pins = data.get("pins")
+    if raw_pins is None:
+        raw_pins = data.get("object", {}).get("pins", [])
+    pins = []
+    for pin in raw_pins:
+        identity = pin.get("identity")
+        location = pin.get("location") or pin.get("repositoryURL")
+        state = pin.get("state") or {}
+        version = state.get("version")
+        # A branch/revision-pinned dependency (no released version, e.g.
+        # DiscordBM tracking "main" in penny-bot's own real Package.resolved)
+        # has nothing a CVE advisory's SEMVER range could ever match against
+        # - skipped rather than guessed at.
+        if not identity or not location or not version:
+            continue
+        osv_name = _swift_package_url_to_osv_name(location)
+        if osv_name:
+            pins.append((osv_name, version, "SwiftURL"))
+    return pins
+
+
 def _parse_maven_pom(pom: Path, seen: set[Path]) -> list[tuple[str, str, str]]:
     if not pom.exists():
         return []
@@ -732,6 +782,7 @@ def check_vulnerabilities(
         + _parse_composer_pins(repo_path)
         + _parse_nuget_pins(repo_path)
         + _parse_gradle_pins(repo_path)
+        + _parse_swift_package_resolved_pins(repo_path)
     )
     if not pins:
         return {"checked": True, "reason": None, "findings": []}

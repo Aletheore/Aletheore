@@ -235,10 +235,10 @@ def test_build_module_graph_dependency_edges(tmp_path):
 def test_build_module_graph_records_unparseable_files(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "helper.swift").write_text("func hi() {}\n")
+    (repo / "helper.scala").write_text("def hi(): Unit = {}\n")
     modules, _, unparseable = build_module_graph(repo)
     assert modules == []
-    assert unparseable == [{"path": "helper.swift", "reason": "no grammar registered for .swift"}]
+    assert unparseable == [{"path": "helper.scala", "reason": "no grammar registered for .scala"}]
 
 
 def test_build_module_graph_extracts_javascript_imports(tmp_path):

@@ -40,8 +40,8 @@ Scanning /path/to/your/repo...
 No LLM call, no account, no network access beyond the vulnerability/license registry lookups
 (turn those off too for a fully offline run). That one command gets you a real dependency
 graph, secrets scan, git-history secret sweep, dependency-vulnerability/license check, and
-static API endpoint map — for **Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Ruby,
-PHP, C, C++, and C#**.
+static API endpoint map — for **Python, JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Kotlin,
+Ruby, PHP, C, C++, C#, and Swift**.
 
 ## Why
 

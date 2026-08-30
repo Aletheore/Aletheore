@@ -32,14 +32,19 @@ top of that one `air.json` file.
 
 Secrets, git activity, and dependency-vulnerability checks are language-agnostic. The module
 dependency graph (imports, clusters, layer violations) currently understands **Python,
-JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Ruby, PHP, C, C++, and C#** — other languages
-are still scanned for secrets/git/vulnerabilities, but get no dependency-graph or architecture
-analysis until a grammar is added for them.
+JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Ruby, PHP, C, C++, C#, and Swift** — other
+languages are still scanned for secrets/git/vulnerabilities, but get no dependency-graph or
+architecture analysis until a grammar is added for them.
 
 Go resolution needs a `go.mod` at the repo root to know the module's own import-path prefix;
 without one, Go imports are left unresolved (same as any import Aletheore can't place) rather
 than guessed at. An import is resolved to every non-test `.go` file in its target directory,
 since Go imports whole packages, not individual files.
+
+Swift resolution works the same way, one level up: a Swift `import` names a whole compiled
+target, not a file, so it's resolved to every `.swift` file belonging to that target - inferred
+from `Package.swift`'s own `path:` overrides where present, falling back to the SwiftPM
+convention (`Sources/<TargetName>/`, `Tests/<TargetName>/`) everywhere else.
 
 Rust resolution needs `src/lib.rs` or `src/main.rs` at the repo root (workspace repos with
 multiple crates aren't supported yet); without one, nothing resolves. It assumes directory
