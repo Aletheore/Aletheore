@@ -255,6 +255,11 @@ def _fetch_nuget_license(name: str, version: str, timeout: int) -> str | None:
     return None
 
 
+_SWIFT_GITHUB_OWNER_REPO_RE = re.compile(
+    r"^github\.com/([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)/([A-Za-z0-9._-]+)$"
+)
+
+
 def _fetch_swift_license(name: str, version: str, timeout: int) -> str | None:
     """Swift has no centralized package-registry license API the way
     PyPI/npm/crates.io do - SwiftPM dependencies are consumed directly from
@@ -265,17 +270,24 @@ def _fetch_swift_license(name: str, version: str, timeout: int) -> str | None:
     Swift dependencies), matching `name`'s "github.com/owner/repo" shape
     from _parse_swift_package_resolved_pins.
 
-    SwiftPM release tags are commonly the bare version ("1.36.0") but a real
-    minority use a "v"-prefixed tag ("v1.36.0") - confirmed both forms exist
-    in the wild. Tried in that order, falling back to the default branch's
-    current license rather than reporting nothing just because the exact
-    tag wasn't found - license drift between a specific release and HEAD is
-    rare (same reasoning the module-level license-cache-TTL comment already
-    relies on).
+    `name` traces back to Package.resolved's own "location" field - real
+    content from the scanned repository, not a value this codebase
+    controls. A prefix check alone (`name.startswith("github.com/")`) is
+    exactly the "incomplete URL substring sanitization" class CodeQL
+    flagged here: it doesn't rule out a crafted value like
+    "github.com/@attacker.example/x" still passing (the classic
+    trusted-domain-as-userinfo trick, though the request host here is
+    always the hardcoded api.github.com regardless, not attacker-derived -
+    fixing the check anyway rather than arguing the specific blast radius,
+    since a security product's own dependency code is exactly where this
+    should be provably correct, not just currently-not-exploitable). A
+    single fullmatch against an anchored owner/repo shape closes it -
+    nothing this doesn't explicitly allow can reach the URL built below.
     """
-    if not name.startswith("github.com/"):
+    match = _SWIFT_GITHUB_OWNER_REPO_RE.fullmatch(name)
+    if match is None:
         return None
-    owner_repo = name[len("github.com/") :]
+    owner_repo = f"{match.group(1)}/{match.group(2)}"
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "aletheore (https://github.com/Aletheore/Aletheore)",

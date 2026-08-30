@@ -493,6 +493,29 @@ def test_fetch_swift_license_skips_non_github_hosts():
     assert _fetch_swift_license("gitlab.com/example/pkg", "1.0.0", timeout=10) is None
 
 
+def test_fetch_swift_license_rejects_userinfo_trick_past_a_prefix_check(tmp_path):
+    # Real CodeQL finding (Incomplete URL substring sanitization) on this
+    # exact function: a plain name.startswith("github.com/") check doesn't
+    # rule out "github.com/@attacker.example/x" - the classic trusted-
+    # domain-as-userinfo trick - still passing it. `name` traces back to a
+    # scanned repo's own Package.resolved content, real untrusted input,
+    # not a value this codebase controls. Must be rejected outright, not
+    # reach urlopen at all.
+    from aletheore.licenses import _fetch_swift_license
+
+    with patch("aletheore.licenses.urllib.request.urlopen") as mock_urlopen:
+        result = _fetch_swift_license("github.com/@attacker.example/x", "1.0.0", timeout=10)
+
+    assert result is None
+    mock_urlopen.assert_not_called()
+
+
+def test_fetch_swift_license_rejects_extra_path_segments():
+    from aletheore.licenses import _fetch_swift_license
+
+    assert _fetch_swift_license("github.com/owner/repo/extra", "1.0.0", timeout=10) is None
+
+
 def test_check_dependency_licenses_does_not_hang_on_one_slow_drip_registry_response(tmp_path):
     # Real production incident, reproduced: a registry response that drips
     # data slowly enough that no single blocking read ever idles past the
