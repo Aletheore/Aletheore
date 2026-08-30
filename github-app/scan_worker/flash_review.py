@@ -24,17 +24,33 @@ logger = logging.getLogger(__name__)
 FLASH_REVIEW_FALLBACK_MODEL = "deepseek-v4-flash"
 
 FLASH_REVIEW_SYSTEM_PROMPT = """You are reviewing a code diff for potential issues. You may also be
-given the full current content of the changed files for context. You must respond with ONLY a
-JSON array of findings, no other text, no markdown code fences, no explanation outside the
-array. Each finding must be an object with these fields: "file" (the exact file path shown in
-the diff), "line" (the exact line number from the diff, as an integer), "issue" (a concrete,
-specific, checkable description of an actual problem at that exact line - never a style
-opinion, never "consider refactoring", never a vague concern that isn't tied to something you
-can point at), and optionally "suggestion" (a short plain-text code fix for that exact issue,
-with no markdown formatting or code fences of your own - if you have no concrete fix, omit this
-field entirely rather than restating the issue). Only report a finding if you can name a
-specific, real issue at a specific line. If you find nothing worth flagging, respond with
-exactly: [].
+given the full current content of the changed files for context.
+
+Before your final answer, briefly work through the review procedure below in plain prose - for
+each file or method you seriously examined, name what you checked and what you concluded, in 2-4
+sentences per file/method. This is working analysis, not a report: be direct and skip anything
+you didn't seriously check. Do not skip straight to a verdict without this - a change can look
+correct in isolation and only turn out wrong once you actually compare it against something
+else (a sibling method, an old code path, a caller), and that comparison has to happen in this
+analysis to be reliable, not silently inside a final answer with no room to show it.
+
+After that analysis, end your response with the JSON array of findings on its own line, and
+nothing after it - only the LAST JSON array in your response is parsed, so do not put another
+array-shaped example earlier in your analysis. Each finding must be an object with these fields:
+"file" (the exact file path shown in the diff), "line" (the exact line number from the diff, as
+an integer), "issue" (a concrete, specific, checkable description of an actual problem at that
+exact line - never a style opinion, never "consider refactoring", never a vague concern that
+isn't tied to something you can point at), and optionally "suggestion" (a short plain-text code
+fix for that exact issue, with no markdown formatting or code fences of your own - if you have no
+concrete fix, omit this field entirely rather than restating the issue). Only report a finding if
+you can name a specific, real issue at a specific line. If you find nothing worth flagging, end
+your response with exactly: [].
+
+A real, concrete issue is worth reporting even when it only triggers under a narrow or unusual
+scenario, or when it takes careful reading to see - that is a reason to look closely, not a
+reason to stay silent. The caution below is about claims you cannot verify against the evidence
+you were actually given, not about problems that are real but easy to overlook; do not let the
+former talk you out of reporting the latter.
 
 Deterministic change-impact signals are hints extracted from the diff, not conclusions. Verify
 each signal against the changed code before reporting an issue. A "no confirmed caller found among
@@ -61,6 +77,23 @@ Review procedure:
 5. Report only a concrete regression supported by that comparison. Do not report unused code,
    missing definitions, or style concerns when the supplied current file or referenced source
    disproves the claim.
+6. Separately, deliberately check for security-relevant issues even when the diff's stated
+   purpose is unrelated to security: injection (SQL, command, template, path traversal),
+   hardcoded credentials or secrets, missing authentication/authorization checks on a new or
+   changed code path, unsafe deserialization, SSRF, and unanchored or overly permissive
+   pattern/regex matching used for a security-relevant decision (an allowlist, a proxy-bypass
+   rule, an auth check). Do not skip this pass just because nothing security-related stood out
+   from the earlier steps.
+7. Separately, check whether the changed method or branch is one half of a pair or group that
+   must stay semantically consistent with a sibling you can see in the referenced or file
+   context, even though that sibling was not itself touched by the diff: equals() vs hashCode()
+   (equal objects must hash equal), a clone or copy path vs the constructor or path it is meant
+   to mirror, a serialize method vs its matching deserialize, a mutating method vs a non-mutating
+   variant of the same operation, or two overloads of the same operation. Read the sibling and
+   compare its handling of the same case (a type, a branch, a field) against the changed method's
+   new handling of that case. A change can be correct in isolation and still break a contract that
+   only becomes visible by comparing it against the method it must agree with - do not skip this
+   comparison just because the changed method reads correctly on its own.
 
 A file can itself be a generator or template for another language - for example a Python file
 building HTML or JavaScript through an f-string, .format(), or string concatenation. In that
@@ -730,6 +763,44 @@ _FILE_MARKER_RE = re.compile(r"^--- (.+) ---$")
 _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
+def _extract_trailing_json_array(text: str) -> str | None:
+    """The last complete top-level JSON array substring in text, or None.
+
+    FLASH_REVIEW_SYSTEM_PROMPT now asks for prose analysis before the final
+    answer, so the response is no longer guaranteed to be bare JSON - only
+    the LAST top-level array is the real answer. Bracket-depth tracked with
+    string-awareness (so a '[' or ']' inside a quoted "issue" string, or
+    mentioned in the prose analysis, like "the array foo[0]", can't be
+    mistaken for the answer's own delimiters).
+    """
+    depth = 0
+    in_string = False
+    escape = False
+    start: int | None = None
+    last_span: str | None = None
+    for i, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "[":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "]":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    last_span = text[start : i + 1]
+    return last_span
+
+
 def _patch_valid_lines(patch: str) -> set[int]:
     valid: set[int] = set()
     current_line: int | None = None
@@ -1159,7 +1230,23 @@ def review_diff(
     try:
         findings = json.loads(raw_output)
     except json.JSONDecodeError:
-        findings = []
+        findings = None
+
+    if not isinstance(findings, list):
+        # The prompt now asks for prose analysis before the final answer
+        # (see FLASH_REVIEW_SYSTEM_PROMPT), so a well-behaved response is no
+        # longer bare JSON - it's prose followed by a trailing array. Only
+        # the last complete top-level array is the real answer; a weaker
+        # model's response that never resolves to an array at all (e.g. an
+        # object instead of ending in one) still correctly yields no
+        # findings here, same as before this change.
+        array_text = _extract_trailing_json_array(raw_output)
+        findings = None
+        if array_text is not None:
+            try:
+                findings = json.loads(array_text)
+            except json.JSONDecodeError:
+                findings = None
 
     if not isinstance(findings, list):
         findings = []
