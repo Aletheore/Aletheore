@@ -10,6 +10,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 import certifi
+from tree_sitter import Node
 
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 OSV_VULN_URL_TEMPLATE = "https://api.osv.dev/v1/vulns/{vuln_id}"
@@ -439,6 +440,235 @@ def _parse_nuget_pins(repo_path: Path) -> list[tuple[str, str, str]]:
     return pins
 
 
+_GRADLE_DEPENDENCY_CONFIGURATIONS = {
+    "implementation", "api", "compileOnly", "runtimeOnly",
+    "testImplementation", "testApi", "testCompileOnly", "testRuntimeOnly",
+    "androidTestImplementation", "kapt", "ksp",
+}
+
+# Coordinates resolve through the same Maven Central repository Java's
+# pom.xml already targets - Gradle just has two different Kotlin/Groovy
+# syntaxes for declaring the same "group:artifact:version" triple. "Maven"
+# here is deliberate, not a typo for a Gradle-specific ecosystem string:
+# confirmed against OSV.dev's own ecosystem list, which has no separate
+# "Gradle" entry - Gradle dependencies ARE Maven coordinates.
+_GRADLE_ECOSYSTEM = "Maven"
+
+
+def _kotlin_navigation_segments(node: Node, source: bytes) -> list[str] | None:
+    """Flattens a (possibly nested) navigation_expression like
+    `libs.androidx.annotation` into ["libs", "androidx", "annotation"].
+    Returns None for anything that isn't a plain dotted-identifier chain
+    (a method call in the middle, an indexing expression, etc.) rather
+    than guessing - an unresolvable catalog reference should be skipped,
+    not silently mis-resolved.
+    """
+    if node.type == "identifier":
+        return [source[node.start_byte:node.end_byte].decode(errors="ignore")]
+    if node.type != "navigation_expression":
+        return None
+    children = [c for c in node.children if c.type != "."]
+    if len(children) != 2:
+        return None
+    left, right = children
+    left_segments = _kotlin_navigation_segments(left, source)
+    if left_segments is None or right.type != "identifier":
+        return None
+    return left_segments + [source[right.start_byte:right.end_byte].decode(errors="ignore")]
+
+
+def _parse_gradle_version_catalog(repo_path: Path) -> dict[str, tuple[str, str, str | None]]:
+    """Parses gradle/libs.versions.toml's [libraries] table into
+    {dotted-accessor-key: (group, artifact, version-or-None)}, matching
+    the real accessor Kotlin/Groovy code actually calls (e.g. TOML key
+    "androidx-annotation" -> code accessor libs.androidx.annotation) -
+    confirmed empirically against a real catalog (android/architecture-
+    samples), not assumed from the Gradle docs. Every [libraries] entry
+    key is hyphen-separated; the generated accessor dot-separates the
+    same segments, so the accessor's segments after "libs" rejoin with
+    "-" to become the lookup key back into this dict.
+    version is None when the entry gives a plain "version" field pointing
+    at something other than version.ref, or omits it (a BOM-managed
+    dependency) - such an entry is real but not usable as an OSV.dev pin
+    without a resolvable version, so callers must skip it rather than
+    invent one.
+    """
+    catalog_path = repo_path / "gradle" / "libs.versions.toml"
+    if not catalog_path.exists():
+        return {}
+    try:
+        data = tomllib.loads(catalog_path.read_text(encoding="utf-8", errors="ignore"))
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError):
+        return {}
+    versions = data.get("versions", {}) or {}
+    libraries = data.get("libraries", {}) or {}
+    catalog: dict[str, tuple[str, str, str | None]] = {}
+    for key, entry in libraries.items():
+        if not isinstance(entry, dict):
+            continue
+        group = entry.get("group")
+        artifact = entry.get("name")
+        if not group or not artifact:
+            # The other real libs.versions.toml shape: a bare "module"
+            # string ("androidx.core:core-ktx") instead of split
+            # group/name fields - both are real, seen in the wild.
+            module = entry.get("module")
+            if isinstance(module, str) and ":" in module:
+                group, artifact = module.split(":", 1)
+            else:
+                continue
+        version_ref = entry.get("version")
+        if isinstance(version_ref, dict):
+            version = versions.get(version_ref.get("ref"))
+        elif isinstance(version_ref, str):
+            version = version_ref
+        else:
+            version = None
+        catalog[key.replace(".", "-")] = (group, artifact, version)
+    return catalog
+
+
+def _parse_gradle_kts_pins(
+    build_file: Path, catalog: dict[str, tuple[str, str, str | None]]
+) -> list[tuple[str, str, str]]:
+    """build.gradle.kts, parsed as real Kotlin source via tree_sitter_kotlin
+    (the same grammar graph.py uses) - AST-based, matching this codebase's
+    standard, not a regex over Kotlin source. Two real dependency-
+    declaration shapes exist and both are handled: a direct string literal
+    ("group:artifact:version"), and a version-catalog accessor
+    (libs.androidx.annotation) resolved against catalog. Confirmed via a
+    real repo (android/architecture-samples) that the catalog form is the
+    dominant one in modern Gradle projects, not a rare corner case - a
+    parser that only handled string literals would resolve close to zero
+    real dependencies there.
+    """
+    try:
+        from aletheore.scanner.graph import KOTLIN_LANGUAGE
+        from tree_sitter import Parser as _TSParser
+    except ImportError:
+        return []
+    try:
+        source = build_file.read_bytes()
+    except OSError:
+        return []
+    parser = _TSParser(KOTLIN_LANGUAGE)
+    tree = parser.parse(source)
+
+    pins: list[tuple[str, str, str]] = []
+
+    def walk(node: Node) -> None:
+        if node.type == "call_expression":
+            # No field names on this grammar's call_expression at all
+            # (confirmed empirically: child_by_field_name("function") and
+            # ("arguments") both return None) - children are purely
+            # positional: identifier, then value_arguments (when the call
+            # has parenthesized args at all - a trailing-lambda-only call
+            # like `get { ... }` has no value_arguments child, correctly
+            # excluded here since dependency declarations always use
+            # parens).
+            func = node.children[0] if node.children and node.children[0].type == "identifier" else None
+            if func is not None:
+                name = source[func.start_byte:func.end_byte].decode(errors="ignore")
+                if name in _GRADLE_DEPENDENCY_CONFIGURATIONS:
+                    args = next((c for c in node.children if c.type == "value_arguments"), None)
+                    if args is not None:
+                        for arg in args.named_children:
+                            value = arg.named_children[0] if arg.type == "value_argument" and arg.named_children else arg
+                            if value.type == "string_literal":
+                                content = next((c for c in value.children if c.type == "string_content"), None)
+                                if content is not None:
+                                    text = source[content.start_byte:content.end_byte].decode(errors="ignore")
+                                    parts = text.split(":")
+                                    if len(parts) == 3:
+                                        pins.append((f"{parts[0]}:{parts[1]}", parts[2], _GRADLE_ECOSYSTEM))
+                            else:
+                                segments = _kotlin_navigation_segments(value, source)
+                                if segments and segments[0] == "libs" and len(segments) > 1:
+                                    key = "-".join(segments[1:])
+                                    resolved = catalog.get(key)
+                                    if resolved and resolved[2]:
+                                        group, artifact, version = resolved
+                                        pins.append((f"{group}:{artifact}", version, _GRADLE_ECOSYSTEM))
+        for child in node.children:
+            walk(child)
+
+    walk(tree.root_node)
+    return pins
+
+
+_GRADLE_GROOVY_STRING_DEP_RE = re.compile(
+    r"""\b(?:implementation|api|compileOnly|runtimeOnly|testImplementation|testApi|
+    androidTestImplementation|kapt|ksp)\s*[( ]\s*['"]([^:'"]+):([^:'"]+):([^'"]+)['"]""",
+    re.VERBOSE,
+)
+
+
+def _parse_gradle_groovy_pins(build_file: Path) -> list[tuple[str, str, str]]:
+    """build.gradle (Groovy DSL) - deliberately regex-based, not a real
+    parse. There is no tree-sitter-groovy grammar among this project's
+    dependencies, and adding one would mean building full Groovy language
+    support (a much bigger task than parsing Gradle manifests) just to
+    read dependency declarations. This only catches the direct string-
+    literal coordinate shape, not version-catalog accessors (Groovy's
+    `libs.androidx.annotation` needs real parsing to distinguish from
+    surrounding code the way the .kts AST walk above does safely) - a
+    narrower, explicitly acknowledged heuristic, not full coverage.
+    """
+    try:
+        text = build_file.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    pins = []
+    for match in _GRADLE_GROOVY_STRING_DEP_RE.finditer(text):
+        group, artifact, version = match.groups()
+        pins.append((f"{group}:{artifact}", version, _GRADLE_ECOSYSTEM))
+    return pins
+
+
+def _gradle_included_subprojects(repo_path: Path) -> list[str]:
+    """Real subproject paths from settings.gradle(.kts)'s include(...)
+    calls, e.g. include(":app") -> "app", include(":core:data") ->
+    "core/data" - a plain regex over the settings file text is enough
+    here (unlike dependency declarations, an include(...) argument is
+    always a simple string literal in practice, never a catalog
+    reference), confirmed against a real multi-module repo (android/
+    architecture-samples, which includes :app and :shared-test).
+    """
+    subprojects = []
+    for name in ("settings.gradle.kts", "settings.gradle"):
+        settings_file = repo_path / name
+        if not settings_file.exists():
+            continue
+        text = settings_file.read_text(encoding="utf-8", errors="ignore")
+        for match in re.finditer(r"""include\s*\(\s*['"]([^'"]+)['"]""", text):
+            path = match.group(1).lstrip(":").replace(":", "/")
+            if path:
+                subprojects.append(path)
+    return subprojects
+
+
+def _parse_gradle_pins(repo_path: Path) -> list[tuple[str, str, str]]:
+    catalog = _parse_gradle_version_catalog(repo_path)
+    build_dirs = [repo_path] + [repo_path / sub for sub in _gradle_included_subprojects(repo_path)]
+    pins: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for build_dir in build_dirs:
+        for filename, is_kts in (("build.gradle.kts", True), ("build.gradle", False)):
+            build_file = build_dir / filename
+            if not build_file.exists():
+                continue
+            found = (
+                _parse_gradle_kts_pins(build_file, catalog)
+                if is_kts
+                else _parse_gradle_groovy_pins(build_file)
+            )
+            for pin in found:
+                if pin not in seen:
+                    seen.add(pin)
+                    pins.append(pin)
+    return pins
+
+
 def _query_batch(pins: list[tuple[str, str, str]], timeout: int) -> list[dict]:
     queries = [
         {
@@ -501,6 +731,7 @@ def check_vulnerabilities(
         + _parse_gemfile_lock_pins(repo_path)
         + _parse_composer_pins(repo_path)
         + _parse_nuget_pins(repo_path)
+        + _parse_gradle_pins(repo_path)
     )
     if not pins:
         return {"checked": True, "reason": None, "findings": []}

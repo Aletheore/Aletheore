@@ -831,3 +831,159 @@ def test_filter_by_severity_always_keeps_findings_with_no_derivable_severity():
     unknown = {"advisory_id": "no-cvss-data", "severity": []}
     result = filter_by_severity([unknown], "critical")
     assert result == [unknown]
+
+
+def test_parse_gradle_kts_pins_reads_direct_string_coordinate(tmp_path):
+    from aletheore.vulnerabilities import _parse_gradle_kts_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    build_file = repo / "build.gradle.kts"
+    build_file.write_text(
+        'dependencies {\n    implementation("com.squareup.retrofit2:retrofit:2.9.0")\n}\n'
+    )
+
+    pins = _parse_gradle_kts_pins(build_file, {})
+
+    assert pins == [("com.squareup.retrofit2:retrofit", "2.9.0", "Maven")]
+
+
+def test_parse_gradle_kts_pins_resolves_version_catalog_accessor(tmp_path):
+    from aletheore.vulnerabilities import _parse_gradle_kts_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    build_file = repo / "build.gradle.kts"
+    build_file.write_text(
+        "dependencies {\n    implementation(libs.androidx.annotation)\n}\n"
+    )
+    catalog = {"androidx-annotation": ("androidx.annotation", "annotation", "1.9.1")}
+
+    pins = _parse_gradle_kts_pins(build_file, catalog)
+
+    assert pins == [("androidx.annotation:annotation", "1.9.1", "Maven")]
+
+
+def test_parse_gradle_kts_pins_skips_catalog_entry_with_no_resolvable_version(tmp_path):
+    # A real libs.versions.toml shape: a BOM-managed entry with no version
+    # field of its own - not a bug to invent a version for, a real
+    # "cannot resolve without more context" case that must be skipped
+    # rather than silently producing a wrong pin.
+    from aletheore.vulnerabilities import _parse_gradle_kts_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    build_file = repo / "build.gradle.kts"
+    build_file.write_text("dependencies {\n    implementation(libs.compose.bom)\n}\n")
+    catalog = {"compose-bom": ("androidx.compose", "compose-bom", None)}
+
+    pins = _parse_gradle_kts_pins(build_file, catalog)
+
+    assert pins == []
+
+
+def test_parse_gradle_version_catalog_reads_libraries_and_resolves_version_ref(tmp_path):
+    from aletheore.vulnerabilities import _parse_gradle_version_catalog
+
+    repo = tmp_path / "repo"
+    (repo / "gradle").mkdir(parents=True)
+    (repo / "gradle" / "libs.versions.toml").write_text(
+        '[versions]\nannotation = "1.9.1"\n\n'
+        "[libraries]\n"
+        'androidx-annotation = { group = "androidx.annotation", name = "annotation", version.ref = "annotation" }\n'
+    )
+
+    catalog = _parse_gradle_version_catalog(repo)
+
+    assert catalog["androidx-annotation"] == ("androidx.annotation", "annotation", "1.9.1")
+
+
+def test_parse_gradle_version_catalog_handles_bare_module_shape(tmp_path):
+    # The other real libs.versions.toml entry shape: a single "module"
+    # string ("group:artifact") instead of split group/name fields - both
+    # are real and seen in the wild, not a hypothetical.
+    from aletheore.vulnerabilities import _parse_gradle_version_catalog
+
+    repo = tmp_path / "repo"
+    (repo / "gradle").mkdir(parents=True)
+    (repo / "gradle" / "libs.versions.toml").write_text(
+        '[versions]\ncoreKtx = "1.15.0"\n\n'
+        "[libraries]\n"
+        'androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }\n'
+    )
+
+    catalog = _parse_gradle_version_catalog(repo)
+
+    assert catalog["androidx-core-ktx"] == ("androidx.core", "core-ktx", "1.15.0")
+
+
+def test_parse_gradle_groovy_pins_reads_direct_string_coordinate(tmp_path):
+    from aletheore.vulnerabilities import _parse_gradle_groovy_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    build_file = repo / "build.gradle"
+    build_file.write_text(
+        "dependencies {\n    implementation 'com.squareup.okhttp3:okhttp:4.12.0'\n}\n"
+    )
+
+    pins = _parse_gradle_groovy_pins(build_file)
+
+    assert pins == [("com.squareup.okhttp3:okhttp", "4.12.0", "Maven")]
+
+
+def test_parse_gradle_pins_covers_root_and_included_subprojects(tmp_path):
+    from aletheore.vulnerabilities import _parse_gradle_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "settings.gradle.kts").write_text('include(":app")\ninclude(":core:data")\n')
+    (repo / "build.gradle.kts").write_text(
+        'dependencies {\n    implementation("com.example:root-dep:1.0.0")\n}\n'
+    )
+    app_dir = repo / "app"
+    app_dir.mkdir()
+    (app_dir / "build.gradle.kts").write_text(
+        'dependencies {\n    implementation("com.example:app-dep:2.0.0")\n}\n'
+    )
+    nested_dir = repo / "core" / "data"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "build.gradle.kts").write_text(
+        'dependencies {\n    implementation("com.example:data-dep:3.0.0")\n}\n'
+    )
+
+    pins = _parse_gradle_pins(repo)
+
+    names = {p[0] for p in pins}
+    assert names == {"com.example:root-dep", "com.example:app-dep", "com.example:data-dep"}
+
+
+def test_parse_gradle_pins_empty_when_no_gradle_files(tmp_path):
+    from aletheore.vulnerabilities import _parse_gradle_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    assert _parse_gradle_pins(repo) == []
+
+
+def test_check_vulnerabilities_includes_gradle_pins(tmp_path, monkeypatch):
+    from aletheore import vulnerabilities
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "build.gradle.kts").write_text(
+        'dependencies {\n    implementation("com.example:foo:1.0.0")\n}\n'
+    )
+
+    captured = {}
+
+    def fake_query_batch(pins, timeout):
+        captured["pins"] = pins
+        return [{"vulns": []} for _ in pins]
+
+    monkeypatch.setattr(vulnerabilities, "_query_batch", fake_query_batch)
+
+    vulnerabilities.check_vulnerabilities(repo, cache_path=tmp_path / "cache.json")
+
+    assert ("com.example:foo", "1.0.0", "Maven") in captured["pins"]
