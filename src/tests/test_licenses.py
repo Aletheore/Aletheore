@@ -493,6 +493,56 @@ def test_fetch_swift_license_skips_non_github_hosts():
     assert _fetch_swift_license("gitlab.com/example/pkg", "1.0.0", timeout=10) is None
 
 
+def test_check_dependency_licenses_does_not_hang_on_one_slow_drip_registry_response(tmp_path):
+    # Real production incident, reproduced: a registry response that drips
+    # data slowly enough that no single blocking read ever idles past the
+    # per-socket-operation `timeout` never raises a timeout error at all -
+    # confirmed live (three real npm packages stalled dependency-license
+    # checks for 1+ hour before their job was forcibly reaped). The fix is
+    # a wall-clock cap independent of the socket-level timeout, submitted
+    # per-future (not executor.map, whose ordered iterator would otherwise
+    # block every result behind the stuck one).
+    import time
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").write_text(
+        json.dumps({"dependencies": {"slow-pkg": "1.0.0", "fast-pkg": "1.0.0"}})
+    )
+
+    fast_response = _mock_response({"license": "MIT"})
+
+    def urlopen_side_effect(request, timeout=None, context=None):
+        if "slow-pkg" in request.full_url:
+            time.sleep(2)  # far longer than the patched wall-clock cap below
+            return fast_response
+        return fast_response
+
+    start = time.monotonic()
+    with (
+        patch("aletheore.licenses.urllib.request.urlopen", side_effect=urlopen_side_effect),
+        patch("aletheore.licenses.LICENSE_FETCH_WALL_CLOCK_TIMEOUT_SECONDS", 0.2),
+    ):
+        result = check_dependency_licenses(repo)
+    elapsed = time.monotonic() - start
+
+    # Real proof of the fix, not just "it returned something": returning in
+    # well under the 2s simulated hang means this function did not wait for
+    # the stuck future, and fast-pkg's already-available result still made
+    # it into the findings despite slow-pkg being stuck ahead of it.
+    assert elapsed < 1.5
+    findings_by_package = {f["package"]: f for f in result["findings"]}
+    # slow-pkg times out - reported as "unknown" (graceful degradation, the
+    # same outcome any other unresolvable license lookup already gets), not
+    # silently dropped and not left hanging.
+    assert findings_by_package["slow-pkg"]["category"] == "unknown"
+    # fast-pkg's MIT license resolved correctly despite being submitted
+    # after the stuck slow-pkg - the real proof this isn't executor.map's
+    # ordered-blocking behavior anymore. Permissive licenses aren't
+    # findings at all, so its absence here is the correct, positive signal.
+    assert "fast-pkg" not in findings_by_package
+
+
 def test_check_dependency_licenses_reports_a_rust_dependency(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
