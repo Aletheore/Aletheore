@@ -7,6 +7,7 @@ from aletheore.scanner.graph import (
     GO_LANGUAGE,
     JAVA_LANGUAGE,
     JS_LANGUAGE,
+    KOTLIN_LANGUAGE,
     PHP_LANGUAGE,
     PY_LANGUAGE,
     RUBY_LANGUAGE,
@@ -959,6 +960,119 @@ def _extract_spring_boot_routes(root: Node, source: bytes, rel_path: str) -> lis
     return entries
 
 
+_KTOR_VERB_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
+
+# Ktor route-definition calls (route(...), routing { }, verb calls) are the
+# one Kotlin call_expression shape tests directly against real parsed
+# output (see _ktor_call_shape) - Gradle dependency calls in
+# vulnerabilities.py's _parse_gradle_kts_pins independently discovered the
+# same real fact about this grammar: call_expression has no "function"/
+# "arguments" field names at all, purely positional children. Confirmed
+# again here rather than assumed carried over.
+def _ktor_call_shape(node: Node, source: bytes) -> tuple[str, str | None, Node] | None:
+    """Recognizes `name { ... }` and `name("path") { ... }` - the two real
+    shapes every Ktor DSL call takes (routing { }, route("/x") { },
+    get { }, get("/x") { }, authenticate { }, and any other receiver-
+    lambda call, since Ktor's own routing DSL is just ordinary Kotlin
+    trailing-lambda syntax, not special grammar). Returns
+    (identifier_name, path_or_None, annotated_lambda_node), or None if
+    node isn't a call_expression shaped this way at all (e.g. a plain
+    function call with no trailing lambda, or an assignment).
+    """
+    if node.type != "call_expression":
+        return None
+    children = node.children
+    if len(children) != 2 or children[1].type != "annotated_lambda":
+        return None
+    head, lambda_node = children
+    if head.type == "identifier":
+        return source[head.start_byte:head.end_byte].decode(errors="ignore"), None, lambda_node
+    if head.type == "call_expression":
+        inner = head.children
+        if len(inner) == 2 and inner[0].type == "identifier" and inner[1].type == "value_arguments":
+            name = source[inner[0].start_byte:inner[0].end_byte].decode(errors="ignore")
+            path = None
+            named = inner[1].named_children
+            if named and named[0].type == "value_argument" and named[0].named_children:
+                value = named[0].named_children[0]
+                if value.type == "string_literal":
+                    content = next((c for c in value.children if c.type == "string_content"), None)
+                    if content is not None:
+                        path = source[content.start_byte:content.end_byte].decode(errors="ignore")
+            return name, path, lambda_node
+    return None
+
+
+def _ktor_join_path(prefix_stack: list[str], leaf: str | None) -> str:
+    segments = [seg.strip("/") for seg in (*prefix_stack, leaf) if seg]
+    return "/" + "/".join(segments) if segments else "/"
+
+
+def _extract_ktor_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
+    """Ktor's routing DSL has no special grammar of its own - `routing { }`,
+    `route("/x") { }`, and `get("/x") { }` are ordinary Kotlin calls with a
+    trailing lambda (see _ktor_call_shape), which is what makes this
+    different from every other framework already handled here: Spring's
+    shape is annotations (a fixed, closed vocabulary), Axum's is chained
+    combinators (a flat call chain) - Ktor's is arbitrary nesting depth of
+    the *same* call-with-lambda shape, where only real domain knowledge
+    (which identifiers are HTTP verbs vs. the path-prefixing `route` vs.
+    an unrelated pass-through wrapper like `authenticate { }`) distinguishes
+    a route definition from routing-adjacent scaffolding. Confirmed
+    against real, hand-verified Ktor code (parsed directly with
+    tree_sitter_kotlin, not assumed from documentation) - no real Ktor
+    server code was found in this project's own verification repo
+    (android/architecture-samples, a client app), so this specific
+    extractor's correctness rests on that direct grammar inspection plus
+    its own test fixtures, not a real third-party server repo.
+    """
+    entries: list[dict] = []
+
+    def walk(node: Node, prefix_stack: list[str]) -> None:
+        shape = _ktor_call_shape(node, source)
+        if shape is not None:
+            name, path, lambda_node = shape
+            lambda_literal = next((c for c in lambda_node.children if c.type == "lambda_literal"), None)
+            body = next((c for c in lambda_literal.children if c.type != "{" and c.type != "}"), lambda_literal) if lambda_literal else None
+            if name in _KTOR_VERB_METHODS:
+                entries.append(
+                    {
+                        "method": name.upper(),
+                        "path": _ktor_join_path(prefix_stack, path),
+                        "framework": "ktor",
+                        "file": rel_path,
+                        "line": node.start_point[0] + 1,
+                        "handler": "<lambda>",
+                        "unresolved": False,
+                        "note": None,
+                    }
+                )
+                if lambda_literal is not None:
+                    walk(lambda_literal, prefix_stack)
+                return
+            if name == "route":
+                new_stack = [*prefix_stack, path] if path else prefix_stack
+                if lambda_literal is not None:
+                    walk(lambda_literal, new_stack)
+                return
+            # Any other call-with-trailing-lambda (routing, authenticate,
+            # install, intercept, static, ...) is real routing-adjacent
+            # scaffolding, not a route itself and not a path prefix -
+            # recurse into its body with the prefix stack unchanged rather
+            # than either skipping it (would miss every route nested
+            # inside authenticate { }, a real, common pattern) or treating
+            # its own name as a path segment (wrong - authenticate isn't
+            # part of the URL).
+            if lambda_literal is not None:
+                walk(lambda_literal, prefix_stack)
+            return
+        for child in node.children:
+            walk(child, prefix_stack)
+
+    walk(root, [])
+    return entries
+
+
 def _ruby_string_content(node: Node, source: bytes) -> str:
     content = next((c for c in node.children if c.type == "string_content"), None)
     if content is None:
@@ -1352,6 +1466,7 @@ def map_api_endpoints(
         ("rb", RUBY_LANGUAGE),
         ("php", PHP_LANGUAGE),
         ("cs", CSHARP_LANGUAGE),
+        ("kt", KOTLIN_LANGUAGE),
     ):
         parser = Parser()
         parser.language = lang
@@ -1446,5 +1561,9 @@ def map_api_endpoints(
             tree = parsers["cs"].parse(source)
             endpoints.extend(_extract_aspnet_attribute_routes(tree.root_node, source, rel_path))
             endpoints.extend(_extract_aspnet_minimal_routes(tree.root_node, source, rel_path))
+        elif suffix == ".kt":
+            source = path.read_bytes()
+            tree = parsers["kt"].parse(source)
+            endpoints.extend(_extract_ktor_routes(tree.root_node, source, rel_path))
 
     return {"checked": True, "endpoints": endpoints}

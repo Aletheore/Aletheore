@@ -9,6 +9,7 @@ from aletheore.endpoints import (
     _extract_flask_fastapi_routes,
     _extract_gin_routes,
     _extract_go_net_http_routes,
+    _extract_ktor_routes,
     _extract_laravel_routes,
     _extract_rails_routes,
     _extract_spring_boot_routes,
@@ -19,6 +20,7 @@ from aletheore.scanner.graph import (
     GO_LANGUAGE,
     JAVA_LANGUAGE,
     JS_LANGUAGE,
+    KOTLIN_LANGUAGE,
     PHP_LANGUAGE,
     PY_LANGUAGE,
     RUBY_LANGUAGE,
@@ -57,6 +59,13 @@ def parse_rust(source: str):
 def parse_java(source: str):
     parser = Parser()
     parser.language = JAVA_LANGUAGE
+    tree = parser.parse(source.encode())
+    return tree.root_node, source.encode()
+
+
+def parse_kotlin(source: str):
+    parser = Parser()
+    parser.language = KOTLIN_LANGUAGE
     tree = parser.parse(source.encode())
     return tree.root_node, source.encode()
 
@@ -1159,3 +1168,91 @@ def test_map_api_endpoints_covers_all_new_languages(tmp_path):
 
     paths = {e["path"] for e in result["endpoints"]}
     assert paths == {"/health", "/ping", "/x", "y", "/z", "/w"}
+
+
+def test_extract_ktor_top_level_route_with_path():
+    root, source = parse_kotlin(
+        'fun main() { routing { get("/health") { call.respondText("ok") } } }\n'
+    )
+
+    entries = _extract_ktor_routes(root, source, "Routes.kt")
+
+    assert entries == [
+        {
+            "method": "GET",
+            "path": "/health",
+            "framework": "ktor",
+            "file": "Routes.kt",
+            "line": 1,
+            "handler": "<lambda>",
+            "unresolved": False,
+            "note": None,
+        }
+    ]
+
+
+def test_extract_ktor_bare_verb_inherits_route_prefix():
+    # get { } with no path argument at all - real, idiomatic Ktor for "the
+    # base path of the enclosing route(...) block" - a shape that has no
+    # equivalent in Spring's annotation vocabulary or Axum's combinator
+    # chain, so nothing existing already covers this.
+    root, source = parse_kotlin(
+        'fun r() { routing { route("/users/{id}") { get { respond() } } } }\n'
+    )
+
+    entries = _extract_ktor_routes(root, source, "Routes.kt")
+
+    assert len(entries) == 1
+    assert entries[0]["method"] == "GET"
+    assert entries[0]["path"] == "/users/{id}"
+
+
+def test_extract_ktor_route_prefix_composes_with_sub_path():
+    root, source = parse_kotlin(
+        'fun r() { routing { route("/users") { post("/create") { respond() } } } }\n'
+    )
+
+    entries = _extract_ktor_routes(root, source, "Routes.kt")
+
+    assert entries[0]["method"] == "POST"
+    assert entries[0]["path"] == "/users/create"
+
+
+def test_extract_ktor_pass_through_wrapper_does_not_become_a_path_segment():
+    # authenticate { } (and install/intercept/etc.) are real, common Ktor
+    # wrappers with a trailing lambda but no path meaning at all -
+    # confirmed by direct AST inspection this shape is indistinguishable
+    # from route(...) at the grammar level (both are call-with-lambda);
+    # only the identifier name tells them apart. Getting this wrong either
+    # way is a real bug: skipping authenticate{} entirely would silently
+    # lose every route nested inside auth, and treating "authenticate" as
+    # a literal path segment would corrupt every path under it.
+    root, source = parse_kotlin(
+        'fun r() { routing { authenticate { route("/admin") { delete("/purge") { respond() } } } } }\n'
+    )
+
+    entries = _extract_ktor_routes(root, source, "Routes.kt")
+
+    assert len(entries) == 1
+    assert entries[0]["method"] == "DELETE"
+    assert entries[0]["path"] == "/admin/purge"
+    assert "authenticate" not in entries[0]["path"]
+
+
+def test_extract_ktor_ignores_calls_with_no_trailing_lambda():
+    root, source = parse_kotlin('fun r() { val x = someHelper("/not/a/route") }\n')
+
+    entries = _extract_ktor_routes(root, source, "Routes.kt")
+
+    assert entries == []
+
+
+def test_map_api_endpoints_extracts_kotlin_ktor_routes(tmp_path):
+    (tmp_path / "Routes.kt").write_text(
+        'fun r() { routing { get("/kt") { respond() } } }\n'
+    )
+
+    result = map_api_endpoints(tmp_path)
+
+    paths = {e["path"] for e in result["endpoints"]}
+    assert "/kt" in paths

@@ -17,6 +17,7 @@ from aletheore.vulnerabilities import (
     _parse_composer_pins,
     _parse_gemfile_lock_pins,
     _parse_go_pins,
+    _parse_gradle_pins,
     _parse_maven_pins,
     _parse_npm_pins,
     _parse_nuget_pins,
@@ -331,6 +332,7 @@ def check_dependency_licenses(
         + _parse_gemfile_lock_pins(repo_path)
         + _parse_composer_pins(repo_path)
         + _parse_nuget_pins(repo_path)
+        + _parse_gradle_pins(repo_path)
     )
     if not pins:
         return {"checked": True, "reason": None, "repo_license": repo_license, "findings": []}

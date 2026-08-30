@@ -624,3 +624,36 @@ def test_check_dependency_licenses_reports_a_nuget_dependency(tmp_path):
     assert len(result["findings"]) == 1
     assert result["findings"][0]["ecosystem"] == "NuGet"
     assert result["findings"][0]["category"] == "copyleft-strong"
+
+
+def test_check_dependency_licenses_reports_a_gradle_dependency(tmp_path):
+    # Gradle coordinates resolve through the same Maven Central repository
+    # (and the same _fetch_maven_license fetcher) Java's pom.xml pins
+    # already use - this only proves _parse_gradle_pins is correctly wired
+    # into check_dependency_licenses's pin list, not new fetch logic.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "build.gradle.kts").write_text(
+        'dependencies {\n    implementation("com.example:some-gpl-thing:1.0.0")\n}\n'
+    )
+
+    pom_xml = (
+        b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        b'<project xmlns="http://maven.apache.org/POM/4.0.0">\n'
+        b"  <licenses>\n"
+        b"    <license>\n"
+        b"      <name>GPL-3.0</name>\n"
+        b"    </license>\n"
+        b"  </licenses>\n"
+        b"</project>\n"
+    )
+
+    with patch(
+        "aletheore.licenses.urllib.request.urlopen", return_value=_mock_bytes_response(pom_xml)
+    ):
+        result = check_dependency_licenses(repo)
+
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["ecosystem"] == "Maven"
+    assert result["findings"][0]["package"] == "com.example:some-gpl-thing"
+    assert result["findings"][0]["category"] == "copyleft-strong"
