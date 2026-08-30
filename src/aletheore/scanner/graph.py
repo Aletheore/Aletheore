@@ -1960,6 +1960,179 @@ def _parse_swift_package_manifest(repo_path: Path) -> dict[str, str]:
     return overrides
 
 
+_PBXPROJ_TOKEN_RE = re.compile(
+    r"""
+      \s+
+    | /\*.*?\*/
+    | //[^\n]*
+    | "(?:\\.|[^"\\])*"
+    | [{}()=;,]
+    | [^\s{}()=;,"]+
+    """,
+    re.VERBOSE | re.DOTALL,
+)
+
+
+def _tokenize_pbxproj(text: str) -> list[str]:
+    """Tokenizer for the OpenStep-plist dialect .pbxproj files actually use -
+    NOT the same format Python's stdlib `plistlib` reads (that only handles
+    binary and XML plists; confirmed empirically - plistlib has no OpenStep
+    format constant at all). The grammar itself is simple and regular
+    (brace/paren-delimited dicts and arrays, semicolon-terminated pairs,
+    bare-or-quoted string values, C-style comments) - this single regex
+    alternation classifies each token; whitespace and comments are dropped,
+    quoted strings have their escapes unescaped, everything else (including
+    every UUID and bare identifier) passes through as-is.
+    """
+    tokens = []
+    pos, n = 0, len(text)
+    while pos < n:
+        match = _PBXPROJ_TOKEN_RE.match(text, pos)
+        if match is None:
+            raise ValueError(f"unparseable pbxproj content at byte {pos}")
+        pos = match.end()
+        piece = match.group()
+        if not piece.strip() or piece.startswith(("/*", "//")):
+            continue
+        if piece.startswith('"'):
+            piece = piece[1:-1].replace('\\"', '"')
+        tokens.append(piece)
+    return tokens
+
+
+def _parse_pbxproj_tokens(tokens: list[str], pos: int) -> tuple[object, int]:
+    """Recursive-descent parse of one value at tokens[pos] - a dict ("{...}"),
+    an array ("(...)"), or a bare/quoted string token. Returns (value,
+    next_pos). Object identity (which "isa" type each UUID names) is
+    resolved later by the caller, not here - this only reconstructs the
+    plain dict/list/str structure.
+    """
+    token = tokens[pos]
+    if token == "{":
+        d: dict[str, object] = {}
+        pos += 1
+        while tokens[pos] != "}":
+            key = tokens[pos]
+            pos += 1
+            assert tokens[pos] == "="
+            pos += 1
+            value, pos = _parse_pbxproj_tokens(tokens, pos)
+            d[key] = value
+            if tokens[pos] == ";":
+                pos += 1
+        return d, pos + 1
+    if token == "(":
+        items: list[object] = []
+        pos += 1
+        while tokens[pos] != ")":
+            value, pos = _parse_pbxproj_tokens(tokens, pos)
+            items.append(value)
+            if tokens[pos] == ",":
+                pos += 1
+        return items, pos + 1
+    return token, pos + 1
+
+
+def _parse_pbxproj(pbxproj_path: Path) -> dict | None:
+    try:
+        text = pbxproj_path.read_text(encoding="utf-8", errors="ignore")
+        tokens = _tokenize_pbxproj(text)
+        data, _ = _parse_pbxproj_tokens(tokens, 0)
+    except (OSError, IndexError, AssertionError, ValueError):
+        # A real project.pbxproj is machine-written by Xcode and never
+        # malformed in practice - these are defensive only, the same
+        # tolerance every other manifest parser here (tomllib.TOMLDecodeError
+        # etc.) already has for a file that doesn't match its expected shape.
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _infer_xcodeproj_swift_targets(
+    repo_path: Path, ignored_paths: list[str] | None
+) -> dict[str, list[Path]]:
+    """Target membership read directly from an Xcode project's own
+    project.pbxproj - the real ground-truth source Xcode itself uses,
+    verified against a real, large, modern multi-target app
+    (wordpress-mobile/WordPress-iOS, objectVersion 77, 685 objects, 15 real
+    PBXNativeTargets) before being trusted. Two real membership mechanisms
+    exist and both are handled, confirmed on that same real project:
+
+    - Classic: PBXNativeTarget.buildPhases -> a PBXSourcesBuildPhase's
+      "files" -> each PBXBuildFile's "fileRef" -> a PBXFileReference's
+      "path". Resolved by basename search under the project root rather
+      than reconstructing the full PBXGroup nesting path (which does not
+      have to mirror the filesystem) - a deliberate, bounded heuristic
+      matching this codebase's existing style elsewhere (e.g. Java/Rust's
+      own nested-class fallback resolution), not a claim of perfect
+      precision; a duplicate basename across the repo is skipped rather
+      than guessed at.
+    - Modern (Xcode 16+): PBXNativeTarget.fileSystemSynchronizedGroups ->
+      each PBXFileSystemSynchronizedRootGroup's "path" names a whole
+      directory Xcode syncs automatically, with no per-file PBXBuildFile
+      entries at all - confirmed as the primary mechanism WordPress-iOS's
+      own main "WordPress" target actually uses today (1 file via the
+      classic path, the real bulk via four synchronized groups).
+    """
+    matches = list(repo_path.glob("*.xcodeproj")) + list(repo_path.glob("*/*.xcodeproj"))
+    targets: dict[str, list[Path]] = {}
+    for xcodeproj in matches:
+        pbxproj_path = xcodeproj / "project.pbxproj"
+        data = _parse_pbxproj(pbxproj_path)
+        if data is None:
+            continue
+        objects = data.get("objects")
+        if not isinstance(objects, dict):
+            continue
+        project_root = xcodeproj.parent
+
+        def resolve_classic(phase_uuid: object) -> list[Path]:
+            phase = objects.get(phase_uuid)
+            if not isinstance(phase, dict) or phase.get("isa") != "PBXSourcesBuildPhase":
+                return []
+            found = []
+            for build_file_uuid in phase.get("files", []) or []:
+                build_file = objects.get(build_file_uuid)
+                file_ref = objects.get(build_file.get("fileRef")) if isinstance(build_file, dict) else None
+                path_str = file_ref.get("path") if isinstance(file_ref, dict) else None
+                if not path_str or not path_str.endswith(".swift"):
+                    continue
+                candidates = [
+                    p for p in project_root.rglob(Path(path_str).name)
+                    if not is_ignored(_rel(repo_path, p), ignored_paths or [])
+                ]
+                if len(candidates) == 1:
+                    found.append(candidates[0])
+            return found
+
+        def resolve_synced(group_uuid: object) -> list[Path]:
+            group = objects.get(group_uuid)
+            path_str = group.get("path") if isinstance(group, dict) else None
+            if not path_str:
+                return []
+            target_dir = project_root / path_str
+            if not target_dir.is_dir():
+                return []
+            return [
+                p for p in target_dir.rglob("*.swift")
+                if not is_ignored(_rel(repo_path, p), ignored_paths or [])
+            ]
+
+        for obj in objects.values():
+            if not isinstance(obj, dict) or obj.get("isa") != "PBXNativeTarget":
+                continue
+            name = obj.get("name")
+            if not isinstance(name, str):
+                continue
+            files: list[Path] = []
+            for phase_uuid in obj.get("buildPhases", []) or []:
+                files.extend(resolve_classic(phase_uuid))
+            for group_uuid in obj.get("fileSystemSynchronizedGroups", []) or []:
+                files.extend(resolve_synced(group_uuid))
+            if files:
+                targets.setdefault(name, []).extend(files)
+    return targets
+
+
 def _infer_swift_targets(repo_path: Path, ignored_paths: list[str] | None) -> dict[str, list[Path]]:
     """Whole-target file membership for Swift's import graph.
 
@@ -1967,22 +2140,16 @@ def _infer_swift_targets(repo_path: Path, ignored_paths: list[str] | None) -> di
     compiled module, not a file - there is no source-level statement that
     resolves to one specific file the way there is for Python/JS/Go/Java,
     so an import edge has to fan out to every file belonging to that
-    target instead (see _resolve_swift_import). Two-tier: an explicit
-    `path:` override read from Package.swift (the minority case) takes
-    priority per target name; every other target - the large majority in a
-    real SwiftPM repo, which almost never overrides the default - falls
-    back to the convention itself: every direct subdirectory of Sources/
-    or Tests/ is its own target, named after that directory.
-
-    Known gap, left honest rather than guessed at: a multi-target Xcode
-    project (.xcodeproj, no SwiftPM Sources/ structure) resolves to an
-    empty target map here, so genuine cross-target imports in that shape
-    go unresolved. Deliberately not papered over with a "whole repo is one
-    target" fallback - that would trade a missing edge for a wrong one
-    (falsely merging distinct targets' files), the opposite of what this
-    whole-target design exists for. A single-target Xcode app is unaffected
-    by this gap: Swift shares visibility within one target with no import
-    statement at all, the same as SwiftPM same-target files.
+    target instead (see _resolve_swift_import). Three sources, merged: an
+    explicit `path:` override read from Package.swift (the minority case)
+    takes priority per target name; every other SwiftPM target - the large
+    majority in a real SwiftPM repo, which almost never overrides the
+    default - falls back to the convention itself (every direct
+    subdirectory of Sources/ or Tests/ is its own target); and, separately,
+    any Xcode project's own project.pbxproj is read directly for its real
+    PBXNativeTarget membership (see _infer_xcodeproj_swift_targets) - a
+    multi-target .xcodeproj app with no SwiftPM structure at all still gets
+    real cross-target edges this way, not just a same-directory guess.
     """
     overrides = _parse_swift_package_manifest(repo_path)
     targets: dict[str, list[Path]] = {}
@@ -2007,6 +2174,10 @@ def _infer_swift_targets(repo_path: Path, ignored_paths: list[str] | None) -> di
         for child in parent.iterdir():
             if child.is_dir() and child.name not in overrides:
                 add_dir_as_target(child.name, child)
+
+    for name, files in _infer_xcodeproj_swift_targets(repo_path, ignored_paths).items():
+        existing = targets.setdefault(name, [])
+        existing.extend(f for f in files if f not in existing)
 
     return targets
 

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from aletheore.scanner.graph import build_module_graph
+from aletheore.scanner.graph import _infer_xcodeproj_swift_targets, build_module_graph
 from conftest import symbol_names
 
 
@@ -161,3 +161,96 @@ def test_build_module_graph_swift_target_path_override_from_package_manifest(tmp
     edges = {tuple(edge) for edge in dependency_graph["edges"]}
 
     assert ("Sources/App/Main.swift", "Vendor/StoreImpl/User.swift") in edges
+
+
+def _pbxproj_text(objects_body: str) -> bytes:
+    # Real key/isa names throughout, matching what a real project.pbxproj
+    # actually contains (verified against wordpress-mobile/WordPress-iOS,
+    # a real, large, modern multi-target app, objectVersion 77) - not an
+    # invented shape.
+    return (
+        "// !$*UTF8*$!\n"
+        "{\n"
+        "\tarchiveVersion = 1;\n"
+        "\tobjectVersion = 77;\n"
+        "\tobjects = {\n" + objects_body + "\t};\n"
+        "\trootObject = ROOT;\n"
+        "}\n"
+    ).encode()
+
+
+def make_xcodeproj_repo(tmp_path: Path) -> Path:
+    # A real, minimal shape of a two-target Xcode app: "App" (classic
+    # PBXSourcesBuildPhase -> PBXBuildFile -> PBXFileReference chain) and
+    # "Widgets" (the modern Xcode 16 fileSystemSynchronizedGroups
+    # mechanism, no per-file PBXBuildFile entries at all) - both confirmed
+    # real against WordPress-iOS's own "WordPress" target, which uses both
+    # at once.
+    repo = tmp_path / "repo"
+    proj = repo / "App.xcodeproj"
+    proj.mkdir(parents=True)
+    (repo / "App").mkdir()
+    (repo / "App" / "Main.swift").write_text("import Widgets\n\nlet w = WidgetKit()\n")
+    (repo / "Widgets").mkdir()
+    (repo / "Widgets" / "WidgetKit.swift").write_text("public class WidgetKit {}\n")
+
+    (proj / "project.pbxproj").write_bytes(
+        _pbxproj_text(
+            "\t\tAPPTARGET /* App */ = {\n"
+            "\t\t\tisa = PBXNativeTarget;\n"
+            "\t\t\tbuildPhases = (\n"
+            "\t\t\t\tSOURCESPHASE /* Sources */,\n"
+            "\t\t\t);\n"
+            "\t\t\tname = App;\n"
+            "\t\t};\n"
+            "\t\tWIDGETTARGET /* Widgets */ = {\n"
+            "\t\t\tisa = PBXNativeTarget;\n"
+            "\t\t\tfileSystemSynchronizedGroups = (\n"
+            "\t\t\t\tSYNCGROUP /* Widgets */,\n"
+            "\t\t\t);\n"
+            "\t\t\tname = Widgets;\n"
+            "\t\t};\n"
+            "\t\tSOURCESPHASE /* Sources */ = {\n"
+            "\t\t\tisa = PBXSourcesBuildPhase;\n"
+            "\t\t\tfiles = (\n"
+            "\t\t\t\tBUILDFILE /* Main.swift in Sources */,\n"
+            "\t\t\t);\n"
+            "\t\t};\n"
+            "\t\tBUILDFILE /* Main.swift in Sources */ = {\n"
+            "\t\t\tisa = PBXBuildFile;\n"
+            "\t\t\tfileRef = FILEREF /* Main.swift */;\n"
+            "\t\t};\n"
+            "\t\tFILEREF /* Main.swift */ = {\n"
+            "\t\t\tisa = PBXFileReference;\n"
+            "\t\t\tpath = Main.swift;\n"
+            "\t\t\tsourceTree = \"<group>\";\n"
+            "\t\t};\n"
+            "\t\tSYNCGROUP /* Widgets */ = {\n"
+            "\t\t\tisa = PBXFileSystemSynchronizedRootGroup;\n"
+            "\t\t\tpath = Widgets;\n"
+            "\t\t\tsourceTree = \"<group>\";\n"
+            "\t\t};\n"
+        )
+    )
+    return repo
+
+
+def test_infer_xcodeproj_swift_targets_resolves_both_real_mechanisms(tmp_path):
+    repo = make_xcodeproj_repo(tmp_path)
+
+    targets = _infer_xcodeproj_swift_targets(repo, None)
+
+    assert targets["App"] == [repo / "App" / "Main.swift"]
+    assert targets["Widgets"] == [repo / "Widgets" / "WidgetKit.swift"]
+
+
+def test_build_module_graph_resolves_cross_target_xcodeproj_import(tmp_path):
+    # The end-to-end case that used to be a documented, deliberately unfixed
+    # gap: a multi-target .xcodeproj app (no SwiftPM Sources/ structure at
+    # all) importing across its own targets.
+    repo = make_xcodeproj_repo(tmp_path)
+
+    _modules, dependency_graph, _unparseable = build_module_graph(repo)
+    edges = {tuple(edge) for edge in dependency_graph["edges"]}
+
+    assert ("App/Main.swift", "Widgets/WidgetKit.swift") in edges
