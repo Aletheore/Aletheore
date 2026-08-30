@@ -1,10 +1,12 @@
 # Methodology
 
-- **Run date:** TBD at execution time
-- **Aletheore version/model:** TBD (hosted Flash Review, GitHub App; hardcoded to `deepseek-v4-flash` server-side as of 2026-07-26 — see `github-app/scan_worker/model_tiers.py`)
-- **Qodo/PR-Agent version/model:** TBD (CLI, BYOK; configured to `deepseek/deepseek-v4-flash` for model parity with Aletheore)
-- **DeepSource plan/version:** TBD
-- **LLM judge model:** TBD (must be a different provider/family than the models above)
-- **Corpus:** 25 cases — 15 real bug-fix reconstructions, 6 injected bugs, 4 clean PRs, across Python/TypeScript/Go/Java
-- **Known limitations:** see `docs/superpowers/specs/2026-07-26-aletheore-pr-review-benchmark-design.md`'s
-  "Known Limitations" section — reproduced in full in the published report, not just linked.
+- **Run date:** 2026-08-30
+- **Aletheore version/model:** hosted Flash Review, real AIR-tier config — `gpt-5.6-luna` (generation) via OpenAI, `deepseek-v4-flash` (dual-agent verification, ACCEPT/REJECT/UNCERTAIN) via DeepSeek. See `github-app/scan_worker/model_tiers.py` and `github-app/scan_worker/flash_review.py`'s `_verify_findings_with_second_model`. This benchmark's Aletheore side was invoked directly via `review_diff()` (not the live GitHub webhook path) specifically to capture clean per-provider token accounting — see REPORT.md's Known Limitations for what this trades off.
+- **Qodo/PR-Agent version/model:** CLI (`pip install pr-agent`), explicitly reconfigured to `gpt-5.6-luna` via `--config.model=gpt-5.6-luna --config.fallback_models=[] --config.custom_model_max_tokens=128000`, not its own real default (`gpt-5.5-2026-04-23`) — reconfigured for true model parity with Aletheore's real production model, correcting an earlier same-day run's mismatched-model-cost comparison. `reasoning_effort='medium'` (litellm's default for GPT-5-family models on this config).
+- **DeepSource:** excluded this run. Its GitHub App had exhausted its analysis quota on the test account (`ArihantK15/proctor-browser`) partway through an earlier same-day run and never reconnected for this one — an infrastructure gap, not a methodology choice.
+- **LLM judge model:** Claude (subagent dispatch, no separate API key) — 24 independent, blind, fresh-context dispatches, one per case, each given only that case's ground truth and normalized findings (no awareness of this benchmark, the run's purpose, or which tool is which beyond its real name).
+- **Corpus:** 24 of 25 cases run — 15 real bug-fix reconstructions, 5 injected bugs, 4 clean PRs, across Python/TypeScript/Go/Java. Case `020` (hardcoded-secret injected bug) excluded: its corpus fixture (a generic high-entropy placeholder secret, fixed same-day from an earlier Stripe-key-shaped value that tripped GitHub push protection) has not yet been re-verified against a live push to the scratch repo.
+- **Scratch repo:** `ArihantK15/proctor-browser`, installation on Aletheore's real `air` plan as of this run (bumped from `free` earlier the same day — the free-tier install was the root cause of an earlier, unintentionally unfair same-day comparison; see REPORT.md).
+- **Real cost, this run:** Aletheore $0.1897 (OpenAI $0.1172 + DeepSeek $0.0725) · PR-Agent $0.1784 (OpenAI only) — 24 cases, both tools, real measured tokens, not estimated.
+- **Real timing, this run:** Aletheore 24 cases in 13m04s wall-clock (~33s/case avg, direct invocation, no live GitHub round-trip) · PR-Agent 23 real cases (excluding one earlier smoke-test run) in 29m32s (~77s/case avg, full CLI subprocess + live GitHub fetch/post round-trip each time). Not a clean apples-to-apples architecture comparison — see REPORT.md's Known Limitations.
+- **Known limitations:** see `docs/superpowers/specs/2026-07-26-aletheore-pr-review-benchmark-design.md`'s "Known Limitations" section for the design's original list; this run's own specific limitations (single-run noise floor, the direct-invocation scope gap, the clean-case rubric ambiguity, judge-vs-manual disagreement on case 009) are reproduced in full in `REPORT.md`, not just linked.
