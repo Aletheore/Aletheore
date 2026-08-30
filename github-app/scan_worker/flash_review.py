@@ -200,12 +200,49 @@ def fetch_review_file_context(
     return file_context, file_contents
 
 
+def order_changed_files_by_diff_size(
+    changed_files: list[str], diff_patches: tuple[tuple[str, str], ...] | None
+) -> list[str]:
+    """changed_files, most-surgical-change-first.
+
+    GitHub's changed-files listing carries no relevance ordering of its
+    own, so every downstream context builder that caps how many files it
+    covers (a flat MAX_CONTEXT_FILES slice, or a byte budget) was
+    effectively covering an arbitrary N files in GitHub's own order, not
+    the ones most likely to matter. A small, targeted diff is a better
+    signal of "this is probably where the bug is" than list position -
+    a real miss traced to exactly this: a one-function fix inside a huge
+    bundled file never reached context because larger, less relevant
+    files happened to sort earlier in GitHub's listing.
+
+    Files with no patch data (renamed with no content change, or
+    genuinely omitted by GitHub - see fetch_pr_diff) sort last, after
+    every file real size evidence exists for, rather than being treated
+    as high-priority by default. Stable sort, so files within each group
+    keep their original relative order.
+    """
+    patch_sizes = {filename: len(patch) for filename, patch in (diff_patches or ())}
+    return sorted(changed_files, key=lambda path: (path not in patch_sizes, patch_sizes.get(path, 0)))
+
+
+# Budget for build_code_evidence_context/build_dependency_impact_context -
+# each entry is a compact one-line summary (symbol/dependency/risk facts),
+# not raw source, so this is far smaller than MAX_REFERENCED_SYMBOL_BYTES
+# below (which holds real source text). A real byte budget accumulated
+# over the diff-size-sorted file list, same pattern as
+# build_referenced_symbol_context, replaces the flat changed_files[:30]
+# slice both functions used to apply regardless of how small each line is
+# or how many files would otherwise fit.
+MAX_CODE_EVIDENCE_BYTES = 20_000
+
+
 def build_code_evidence_context(evidence: dict | None, changed_files: list[str]) -> str:
     if not evidence:
         return ""
     modules = evidence.get("repository", {}).get("modules", [])
     lines = []
-    for file_path in changed_files[:MAX_CONTEXT_FILES]:
+    total_bytes = 0
+    for file_path in changed_files:
         module = next((entry for entry in modules if entry.get("path") == file_path), None)
         if not module:
             continue
@@ -242,7 +279,12 @@ def build_code_evidence_context(evidence: dict | None, changed_files: list[str])
         ]
         if risk_summaries:
             parts.append(f"risk={'; '.join(risk_summaries[:3])}")
-        lines.append(" ".join(parts))
+        line = " ".join(parts)
+        encoded_len = len(line.encode("utf-8"))
+        if total_bytes + encoded_len > MAX_CODE_EVIDENCE_BYTES:
+            break
+        lines.append(line)
+        total_bytes += encoded_len
     if not lines:
         return ""
     return "--- deterministic code evidence for changed files ---\n" + "\n".join(lines)
@@ -263,7 +305,8 @@ def build_dependency_impact_context(evidence: dict | None, changed_files: list[s
         if module.get("path")
     }
     lines: list[str] = []
-    for path in changed_files[:MAX_CONTEXT_FILES]:
+    total_bytes = 0
+    for path in changed_files:
         module = modules.get(path)
         if not module:
             continue
@@ -275,7 +318,12 @@ def build_dependency_impact_context(evidence: dict | None, changed_files: list[s
         if imported_by:
             facts.append("imported_by=" + ",".join(imported_by[:8]))
         if len(facts) > 1:
-            lines.append(" ".join(facts))
+            line = " ".join(facts)
+            encoded_len = len(line.encode("utf-8"))
+            if total_bytes + encoded_len > MAX_CODE_EVIDENCE_BYTES:
+                break
+            lines.append(line)
+            total_bytes += encoded_len
     if not lines:
         return ""
     return "--- deterministic dependency impact context (raw graph facts, not conclusions) ---\n" + "\n".join(lines)

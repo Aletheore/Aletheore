@@ -20,8 +20,10 @@ from scan_worker.flash_review import (
     build_referenced_symbol_context,
     find_semantic_regressions,
     is_non_substantive_diff,
+    order_changed_files_by_diff_size,
     review_diff,
 )
+from scan_worker.flash_review import MAX_CODE_EVIDENCE_BYTES
 
 
 def test_diff_valid_lines_maps_added_and_context_lines_by_file():
@@ -861,6 +863,93 @@ def test_build_dependency_impact_context_includes_raw_graph_facts():
 
     assert "imports=b.py" in context
     assert "imported_by=app.py,worker.py" in context
+
+
+def test_order_changed_files_by_diff_size_puts_smallest_patch_first():
+    # A small, targeted diff is a better signal of "the bug is probably
+    # here" than GitHub's arbitrary listing order.
+    diff_patches = (
+        ("huge.py", "x" * 5000),
+        ("tiny.py", "x" * 10),
+        ("medium.py", "x" * 500),
+    )
+
+    ordered = order_changed_files_by_diff_size(["huge.py", "tiny.py", "medium.py"], diff_patches)
+
+    assert ordered == ["tiny.py", "medium.py", "huge.py"]
+
+
+def test_order_changed_files_by_diff_size_puts_files_with_no_patch_data_last():
+    # A file GitHub omitted a patch for (or that has none, e.g. a pure
+    # rename) has no real size signal - it should not jump ahead of files
+    # we actually know are small, just because an unknown defaults to 0.
+    diff_patches = (("small.py", "x" * 10),)
+
+    ordered = order_changed_files_by_diff_size(
+        ["no_patch_a.py", "small.py", "no_patch_b.py"], diff_patches
+    )
+
+    assert ordered == ["small.py", "no_patch_a.py", "no_patch_b.py"]
+
+
+def test_order_changed_files_by_diff_size_is_a_noop_without_patch_data():
+    ordered = order_changed_files_by_diff_size(["b.py", "a.py"], None)
+
+    assert ordered == ["b.py", "a.py"]
+
+
+def test_build_code_evidence_context_demotes_files_past_the_byte_budget():
+    modules = [
+        {
+            "path": f"file_{i}.py",
+            "imports": ["dep.py"],
+            "symbols": {
+                "functions": [{"name": f"a_fairly_long_function_name_{i}", "start_line": 1, "end_line": 2}],
+                "classes": [],
+            },
+        }
+        for i in range(50)
+    ]
+    evidence = {
+        "repository": {"modules": modules, "api_endpoints": {"endpoints": []}},
+        "security": {
+            "secrets": {"findings": []},
+            "dependency_vulnerabilities": {"findings": []},
+            "dependency_licenses": {"findings": []},
+        },
+        "architecture": {"layer_violations": {"violations": []}},
+    }
+    changed_files = [f"file_{i}.py" for i in range(50)]
+
+    # A tight budget makes the cutoff reachable within a handful of files,
+    # proving the byte budget - not just MAX_CONTEXT_FILES's old count - is
+    # what stops it.
+    with patch("scan_worker.flash_review.MAX_CODE_EVIDENCE_BYTES", 500):
+        context = build_code_evidence_context(evidence, changed_files)
+
+    assert len(context.encode("utf-8")) <= 700  # header + one line's slack
+    assert "file_0.py" in context
+    assert "file_49.py" not in context  # past the budget, correctly demoted
+
+
+def test_build_dependency_impact_context_demotes_files_past_the_byte_budget():
+    modules = [
+        {
+            "path": f"file_{i}.py",
+            "imports": [f"dep_{j}.py" for j in range(8)],
+            "imported_by": [f"caller_{j}.py" for j in range(8)],
+        }
+        for i in range(80)
+    ]
+    evidence = {"repository": {"modules": modules}}
+    changed_files = [f"file_{i}.py" for i in range(80)]
+
+    with patch("scan_worker.flash_review.MAX_CODE_EVIDENCE_BYTES", 500):
+        context = build_dependency_impact_context(evidence, changed_files)
+
+    assert len(context.encode("utf-8")) <= 700
+    assert "file_0.py" in context
+    assert "file_79.py" not in context
 
 
 @patch("scan_worker.flash_review.writing_adapter_for")

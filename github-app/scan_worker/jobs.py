@@ -124,6 +124,7 @@ from scan_worker.flash_review import (
     fetch_review_file_context,
     files_missing_from_review_context,
     is_non_substantive_diff,
+    order_changed_files_by_diff_size,
     review_diff,
 )
 from scan_worker.flash_review_cache import (
@@ -1836,6 +1837,12 @@ def _run_flash_review(
             ", ".join(diff_omitted_files[:10]),
         )
     changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
+    # GitHub's changed-files listing carries no relevance ordering - sorted
+    # once here so every downstream context builder (evidence, dependency
+    # impact, referenced symbols, file content) sees the most surgical
+    # changes first instead of covering an arbitrary prefix of GitHub's own
+    # order. See order_changed_files_by_diff_size's docstring.
+    changed_files = order_changed_files_by_diff_size(changed_files, diff_patches)
     try:
         pr_context = fetch_pr_context(client, token, repo_full_name, pr_number)
     except Exception:  # noqa: BLE001
