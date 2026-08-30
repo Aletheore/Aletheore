@@ -1973,6 +1973,16 @@ def _infer_swift_targets(repo_path: Path, ignored_paths: list[str] | None) -> di
     real SwiftPM repo, which almost never overrides the default - falls
     back to the convention itself: every direct subdirectory of Sources/
     or Tests/ is its own target, named after that directory.
+
+    Known gap, left honest rather than guessed at: a multi-target Xcode
+    project (.xcodeproj, no SwiftPM Sources/ structure) resolves to an
+    empty target map here, so genuine cross-target imports in that shape
+    go unresolved. Deliberately not papered over with a "whole repo is one
+    target" fallback - that would trade a missing edge for a wrong one
+    (falsely merging distinct targets' files), the opposite of what this
+    whole-target design exists for. A single-target Xcode app is unaffected
+    by this gap: Swift shares visibility within one target with no import
+    statement at all, the same as SwiftPM same-target files.
     """
     overrides = _parse_swift_package_manifest(repo_path)
     targets: dict[str, list[Path]] = {}
