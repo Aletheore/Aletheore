@@ -116,6 +116,7 @@ class PRDiff(str):
         text: str,
         patches: tuple[tuple[str, str], ...],
         omitted_files: tuple[str, ...] = (),
+        budget_omitted_files: tuple[str, ...] = (),
     ):
         value = str.__new__(cls, text)
         value.patches = patches
@@ -124,6 +125,11 @@ class PRDiff(str):
         # fetch failure) - see fetch_pr_diff. These are genuinely invisible
         # to review, not merely trimmed.
         value.omitted_files = omitted_files
+        # Changed files whose real patch WAS available but didn't fit
+        # MAX_DIFF_TOTAL_BYTES - unlike omitted_files, the content exists,
+        # it just lost out to bigger patches in the same PR. See
+        # fetch_pr_diff for the packing order.
+        value.budget_omitted_files = budget_omitted_files
         return value
 
 
@@ -310,6 +316,23 @@ def _reconstruct_missing_patch(
     return "\n".join(line.rstrip("\n") for line in diff_lines)
 
 
+# fetch_review_file_context has had a total-byte budget (MAX_CONTEXT_TOTAL_
+# BYTES) on file_context since this file's earliest version - but diff_text
+# itself, built here, never had an equivalent cap: every file's trimmed
+# patch got concatenated unconditionally, however many files or however
+# large. Compact mode blanks file_context before it reaches the model (see
+# jobs.py), which makes diff_text the one part of the prompt that's never
+# reduced - so this was the real, uncapped surface the whole time, just
+# never exercised by anything caught in review (a normal PR's total diff
+# rarely gets big enough to matter). PR-Agent's own equivalent
+# (pr_processing.py's pr_generate_compressed_diff) counts real tokens,
+# packs files largest-first, and demotes whatever doesn't fit to a
+# filename-only list instead of leaving the budget uncapped - same shape
+# adopted here, byte-counted rather than token-counted for consistency
+# with this file's other budgets.
+MAX_DIFF_TOTAL_BYTES = 400_000
+
+
 def fetch_pr_diff(
     client: httpx.Client,
     token: str,
@@ -326,8 +349,7 @@ def fetch_pr_diff(
         headers=headers,
     )
     response.raise_for_status()
-    parts = []
-    patches = []
+    all_patches: list[tuple[str, str]] = []
     omitted_files = []
     for file in response.json().get("files", []):
         patch = file.get("patch")
@@ -342,13 +364,41 @@ def fetch_pr_diff(
                 client, token, repo_full_name, file["filename"], base_ref, head_ref
             )
         if patch:
-            # Grounding always validates against the real, untrimmed patch
-            # (patches, below) - only the text handed to the model shrinks.
-            patches.append((file["filename"], patch))
-            parts.append(f"--- {file['filename']} ---\n{_trim_patch_context(patch)}")
+            all_patches.append((file["filename"], patch))
         else:
             omitted_files.append(file["filename"])
-    return PRDiff("\n\n".join(parts), tuple(patches), tuple(omitted_files))
+
+    # Pack largest patches first (PR-Agent's own convention: a big,
+    # substantive change is more likely to matter than fitting many small
+    # ones around it) up to the total budget; anything that doesn't fit is
+    # tracked, not silently dropped.
+    by_size_desc = sorted(all_patches, key=lambda item: len(item[1]), reverse=True)
+    included_filenames: set[str] = set()
+    total_bytes = 0
+    budget_omitted_files = []
+    for filename, patch in by_size_desc:
+        patch_bytes = len(patch.encode("utf-8"))
+        if total_bytes + patch_bytes > MAX_DIFF_TOTAL_BYTES:
+            budget_omitted_files.append(filename)
+            continue
+        included_filenames.add(filename)
+        total_bytes += patch_bytes
+
+    # Re-walk in GitHub's own original file order for the files that made
+    # the cut - the size-desc pass only decided which files fit, not what
+    # order they're shown in; a diff that jumps around out of order is
+    # harder to review than one that doesn't.
+    patches = [(f, p) for f, p in all_patches if f in included_filenames]
+    parts = [f"--- {f} ---\n{_trim_patch_context(p)}" for f, p in patches]
+    # Grounding always validates against the real, untrimmed patch (patches,
+    # above) - only the text handed to the model shrinks (_trim_patch_
+    # context). A file dropped by the size budget above is excluded from
+    # both: the model never saw any part of its diff, so a finding citing
+    # it could never legitimately exist, and grounding must not accidentally
+    # validate one anyway.
+    return PRDiff(
+        "\n\n".join(parts), tuple(patches), tuple(omitted_files), tuple(budget_omitted_files)
+    )
 
 
 def fetch_pr_changed_files(

@@ -1836,6 +1836,16 @@ def _run_flash_review(
             len(diff_omitted_files),
             ", ".join(diff_omitted_files[:10]),
         )
+    diff_budget_omitted_files = getattr(diff_result, "budget_omitted_files", ())
+    if diff_budget_omitted_files:
+        logging.getLogger("scan_worker.jobs").info(
+            "flash review diff truncated for %s#%s: %d changed file(s) had a real diff but "
+            "lost out to larger files under the total diff size budget (%s)",
+            repo_full_name,
+            pr_number,
+            len(diff_budget_omitted_files),
+            ", ".join(diff_budget_omitted_files[:10]),
+        )
     changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
     # GitHub's changed-files listing carries no relevance ordering - sorted
     # once here so every downstream context builder (evidence, dependency
