@@ -126,7 +126,13 @@ def test_create_check_run_uses_custom_name_when_given():
 
 def test_fetch_pr_diff_concatenates_real_patches():
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/repos/octocat/hello-world/compare/aaa...bbb"
+        if request.url.path != "/repos/octocat/hello-world/compare/aaa...bbb":
+            # image.png's omitted patch: the reconstruction fallback fetches
+            # its content to try rebuilding a diff, and a real binary file's
+            # response correctly has no usable content - see
+            # test_fetch_pr_diff_records_omitted_files_when_reconstruction_also_fails
+            # for this behavior tested directly.
+            return httpx.Response(200, json={"content": "", "encoding": "none", "size": 1})
         return httpx.Response(
             200,
             json={
@@ -157,6 +163,97 @@ def test_fetch_pr_diff_returns_empty_string_when_no_files_changed():
     diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
 
     assert diff_text == ""
+
+
+def test_fetch_pr_diff_reconstructs_a_patch_github_omitted_for_a_large_text_file():
+    # Real gap, confirmed live against benchmarks/pr-review-benchmark's own
+    # case 007: GitHub's compare API returns patch=None for a large changed
+    # text file (a minified/vendored bundle is exactly this shape), and
+    # without this fallback the file - and whatever real bug it contains -
+    # was silently invisible to Flash Review with no signal anything was
+    # lost.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/octocat/hello-world/compare/aaa...bbb":
+            return httpx.Response(
+                200, json={"files": [{"filename": "lib/bundle.js", "patch": None}]}
+            )
+        assert request.url.path == "/repos/octocat/hello-world/contents/lib/bundle.js"
+        ref = request.url.params["ref"]
+        content = b"function f() {\n  return isPlainObject(v) || isArray(v);\n}\n"
+        if ref == "bbb":
+            content = b"function f() {\n  return isPlainObject(v);\n}\n"
+        return httpx.Response(
+            200,
+            json={"content": base64.b64encode(content).decode(), "encoding": "base64", "size": len(content)},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
+
+    assert "lib/bundle.js" in diff_text
+    assert "isPlainObject(v);" in diff_text
+    assert diff_text.omitted_files == ()
+    assert len(diff_text.patches) == 1
+    assert diff_text.patches[0][0] == "lib/bundle.js"
+
+
+def test_fetch_pr_diff_records_omitted_files_when_reconstruction_also_fails():
+    # A genuinely binary file: GitHub omits the patch, and the contents
+    # fetch's own base64/encoding check correctly refuses to treat it as
+    # text - reconstruction must fail closed here, not fabricate a diff.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/octocat/hello-world/compare/aaa...bbb":
+            return httpx.Response(200, json={"files": [{"filename": "image.png", "patch": None}]})
+        return httpx.Response(200, json={"content": "", "encoding": "none", "size": 12345})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
+
+    assert diff_text == ""
+    assert diff_text.patches == ()
+    assert diff_text.omitted_files == ("image.png",)
+
+
+def test_fetch_pr_diff_does_not_reconstruct_when_base_and_head_content_are_identical():
+    # GitHub's own patch omission isn't always hiding a real change (e.g. a
+    # pure mode/permission change with no content diff) - reconstructing an
+    # empty diff would be pure noise in the prompt, so this must still land
+    # in omitted_files rather than fabricate a no-op patch.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/octocat/hello-world/compare/aaa...bbb":
+            return httpx.Response(200, json={"files": [{"filename": "script.sh", "patch": None}]})
+        content = base64.b64encode(b"#!/bin/sh\necho hi\n").decode()
+        return httpx.Response(200, json={"content": content, "encoding": "base64", "size": 18})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
+
+    assert diff_text == ""
+    assert diff_text.omitted_files == ("script.sh",)
+
+
+def test_fetch_pr_diff_reconstructs_a_newly_added_file_github_omitted_a_patch_for():
+    # base_ref genuinely has no such file (a brand-new large file) -
+    # fetch_file_content correctly returns None for the base fetch (404),
+    # and the whole head content is the real diff, not a reason to give up.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/octocat/hello-world/compare/aaa...bbb":
+            return httpx.Response(200, json={"files": [{"filename": "new_big.py", "patch": None}]})
+        ref = request.url.params["ref"]
+        if ref == "aaa":
+            return httpx.Response(404, json={"message": "Not Found"})
+        content = b"def f():\n    return 1\n"
+        return httpx.Response(
+            200,
+            json={"content": base64.b64encode(content).decode(), "encoding": "base64", "size": len(content)},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
+
+    assert "new_big.py" in diff_text
+    assert "def f():" in diff_text
+    assert diff_text.omitted_files == ()
 
 
 def test_trim_patch_context_shrinks_wide_context_to_one_line():

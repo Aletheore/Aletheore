@@ -111,9 +111,19 @@ def _trim_patch_context(patch: str, context_lines: int = DIFF_PROMPT_CONTEXT_LIN
 class PRDiff(str):
     """Flattened diff text plus structured patches from GitHub."""
 
-    def __new__(cls, text: str, patches: tuple[tuple[str, str], ...]):
+    def __new__(
+        cls,
+        text: str,
+        patches: tuple[tuple[str, str], ...],
+        omitted_files: tuple[str, ...] = (),
+    ):
         value = str.__new__(cls, text)
         value.patches = patches
+        # Changed files GitHub's own compare API gave no patch for, and whose
+        # content couldn't be reconstructed either (binary, too large, or a
+        # fetch failure) - see fetch_pr_diff. These are genuinely invisible
+        # to review, not merely trimmed.
+        value.omitted_files = omitted_files
         return value
 
 
@@ -253,6 +263,53 @@ def create_check_run(
     response.raise_for_status()
 
 
+# A file this large wasn't going to fit the review budget even if it could
+# be diffed - not worth two extra fetches (base + head content) to find
+# that out. Real gap this guards against staying invisible, not a
+# performance concern: without this fallback, GitHub omitting `patch` for
+# a large changed file (a vendored/minified bundle is exactly this shape -
+# confirmed live against benchmarks/pr-review-benchmark's own case 007,
+# where GitHub's compare API returned has_patch=false for lodash.js)
+# silently dropped that file from the diff the model ever sees, with no
+# signal anywhere that anything was lost.
+MAX_RECONSTRUCTED_DIFF_FILE_BYTES = 2_000_000
+
+
+def _reconstruct_missing_patch(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    path: str,
+    base_ref: str,
+    head_ref: str,
+) -> str | None:
+    """Best-effort local diff for a file GitHub's compare API gave no patch
+    for. Returns None (never raises) for anything that isn't a clean win -
+    a deleted/unreadable/binary/too-large file, or a file whose base and
+    head content are byte-identical (GitHub's own omission wasn't hiding a
+    real change) - so the caller can fall back to just recording the file
+    as genuinely omitted rather than surfacing a wrong or noisy diff.
+    """
+    head_content = fetch_file_content(client, token, repo_full_name, path, head_ref)
+    if head_content is None or len(head_content.encode("utf-8")) > MAX_RECONSTRUCTED_DIFF_FILE_BYTES:
+        return None
+    base_content = fetch_file_content(client, token, repo_full_name, path, base_ref)
+    if base_content is not None and len(base_content.encode("utf-8")) > MAX_RECONSTRUCTED_DIFF_FILE_BYTES:
+        return None
+    if base_content == head_content:
+        return None
+    base_lines = (base_content or "").splitlines(keepends=True)
+    head_lines = head_content.splitlines(keepends=True)
+    diff_lines = [
+        line
+        for line in difflib.unified_diff(base_lines, head_lines, lineterm="")
+        if not (line.startswith("--- ") or line.startswith("+++ "))
+    ]
+    if not diff_lines:
+        return None
+    return "\n".join(line.rstrip("\n") for line in diff_lines)
+
+
 def fetch_pr_diff(
     client: httpx.Client,
     token: str,
@@ -271,14 +328,27 @@ def fetch_pr_diff(
     response.raise_for_status()
     parts = []
     patches = []
+    omitted_files = []
     for file in response.json().get("files", []):
         patch = file.get("patch")
+        if not patch:
+            # GitHub omits `patch` both for binary files and for text files
+            # it considers too large/complex to diff - reconstructing from
+            # the two full file versions recovers the second case (and
+            # naturally still fails, cleanly, for the first: a binary
+            # file's content fails fetch_file_content's utf-8 decode and
+            # comes back None).
+            patch = _reconstruct_missing_patch(
+                client, token, repo_full_name, file["filename"], base_ref, head_ref
+            )
         if patch:
             # Grounding always validates against the real, untrimmed patch
             # (patches, below) - only the text handed to the model shrinks.
             patches.append((file["filename"], patch))
             parts.append(f"--- {file['filename']} ---\n{_trim_patch_context(patch)}")
-    return PRDiff("\n\n".join(parts), tuple(patches))
+        else:
+            omitted_files.append(file["filename"])
+    return PRDiff("\n\n".join(parts), tuple(patches), tuple(omitted_files))
 
 
 def fetch_pr_changed_files(

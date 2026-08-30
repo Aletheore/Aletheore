@@ -1824,6 +1824,17 @@ def _run_flash_review(
     diff_result = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha)
     diff_text = str(diff_result)
     diff_patches = getattr(diff_result, "patches", None)
+    diff_omitted_files = getattr(diff_result, "omitted_files", ())
+    if diff_omitted_files:
+        logging.getLogger("scan_worker.jobs").info(
+            "flash review diff incomplete for %s#%s: %d changed file(s) had no reviewable "
+            "diff at all - GitHub gave no patch and local reconstruction also failed "
+            "(binary, too large, or fetch error) (%s)",
+            repo_full_name,
+            pr_number,
+            len(diff_omitted_files),
+            ", ".join(diff_omitted_files[:10]),
+        )
     changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
     try:
         pr_context = fetch_pr_context(client, token, repo_full_name, pr_number)
