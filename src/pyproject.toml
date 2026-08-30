@@ -26,6 +26,7 @@ dependencies = [
     "tree-sitter-go>=0.25,<0.26",
     "tree-sitter-rust>=0.24,<0.25",
     "tree-sitter-java>=0.23,<0.24",
+    "tree-sitter-kotlin>=1.1,<1.2",
     "tree-sitter-ruby>=0.23,<0.24",
     "tree-sitter-php>=0.24,<0.25",
     "tree-sitter-c>=0.24,<0.25",

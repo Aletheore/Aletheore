@@ -12,6 +12,7 @@ import tree_sitter_cpp as tscpp
 import tree_sitter_go as tsgo
 import tree_sitter_java as tsjava
 import tree_sitter_javascript as tsjavascript
+import tree_sitter_kotlin as tskotlin
 import tree_sitter_php as tsphp
 import tree_sitter_python as tspython
 import tree_sitter_ruby as tsruby
@@ -29,6 +30,7 @@ TSX_LANGUAGE = Language(tstypescript.language_tsx())
 GO_LANGUAGE = Language(tsgo.language())
 RUST_LANGUAGE = Language(tsrust.language())
 JAVA_LANGUAGE = Language(tsjava.language())
+KOTLIN_LANGUAGE = Language(tskotlin.language())
 RUBY_LANGUAGE = Language(tsruby.language())
 PHP_LANGUAGE = Language(tsphp.language_php())
 C_LANGUAGE = Language(tsc.language())
@@ -44,6 +46,8 @@ LANGUAGE_BY_EXTENSION = {
     ".go": ("go", GO_LANGUAGE),
     ".rs": ("rust", RUST_LANGUAGE),
     ".java": ("java", JAVA_LANGUAGE),
+    ".kt": ("kotlin", KOTLIN_LANGUAGE),
+    ".kts": ("kotlin", KOTLIN_LANGUAGE),
     ".rb": ("ruby", RUBY_LANGUAGE),
     ".php": ("php", PHP_LANGUAGE),
     ".c": ("c", C_LANGUAGE),
@@ -65,7 +69,7 @@ LANGUAGE_BY_EXTENSION = {
 # were ever "unparseable source").
 KNOWN_SOURCE_EXTENSIONS_WITHOUT_GRAMMAR = {
     ".swift",
-    ".kt", ".kts", ".m", ".mm", ".scala",
+    ".m", ".mm", ".scala",
 }
 
 MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024
@@ -129,13 +133,26 @@ def _params_text(source: bytes, enclosing_node: Node) -> str | None:
     parameter_list, method_parameters) - confirmed empirically per
     language, not assumed. C/C++ is the one exception: the parameter list
     hangs off a nested function_declarator ("declarator" field) rather
-    than the function_definition node directly.
+    than the function_definition node directly. Kotlin is a second
+    exception, of a different shape: tree-sitter-kotlin names no field on
+    function_declaration at all except "name" (confirmed via
+    field_name_for_child on every child) - parameters, return type, and
+    body are purely positional. The type-name fallback below finds the
+    parameter list by its node TYPE instead of a field lookup, which is
+    safe to try unconditionally after the field lookup fails: no other
+    grammar checked here has a node literally typed
+    "function_value_parameters", so this can never accidentally match on
+    the wrong grammar.
     """
     params_node = enclosing_node.child_by_field_name("parameters")
     if params_node is None:
         declarator = enclosing_node.child_by_field_name("declarator")
         if declarator is not None:
             params_node = declarator.child_by_field_name("parameters")
+    if params_node is None:
+        params_node = next(
+            (c for c in enclosing_node.children if c.type == "function_value_parameters"), None
+        )
     if params_node is None:
         return None
     raw = source[params_node.start_byte:params_node.end_byte].decode(errors="ignore")
@@ -500,6 +517,32 @@ def _extract_module_constants(node: Node, source: bytes, language: str) -> list[
                 nm = n.child_by_field_name("name")
                 if nm is not None:
                     add(nm, n, public=any(c.type == "visibility_modifier" for c in n.children))
+        elif language == "kotlin":
+            # tree-sitter-kotlin uses one node type, property_declaration, for
+            # every top-level val/var/const val binding - no separate
+            # "const_declaration" the way Go/Rust have. Confirmed empirically:
+            # `const val MAX_TASKS = 100` and a plain `val x = 1` at file scope
+            # both parse as property_declaration, distinguished only by
+            # whether `modifiers` contains a property_modifier "const" - not
+            # filtered on here, matching Go's broad const-or-var precedent
+            # rather than Rust's narrower const/static-only one, since a
+            # Kotlin file-scope `val` is itself the idiomatic constant shape,
+            # with or without the explicit `const` keyword.
+            if t == "property_declaration" and is_top_level(n):
+                var_decl = next((c for c in n.children if c.type == "variable_declaration"), None)
+                if var_decl is not None:
+                    # No named "name" field here either (see _kotlin_return_
+                    # type's docstring on this grammar's sparse field names) -
+                    # variable_declaration's only child in the common case is
+                    # the identifier itself.
+                    nm = next((c for c in var_decl.children if c.type == "identifier"), None)
+                    if nm is not None:
+                        modifiers = next((c for c in n.children if c.type == "modifiers"), None)
+                        public = (
+                            not ({"private", "protected", "internal"} & _kotlin_modifier_keywords(modifiers))
+                            if modifiers is not None else True
+                        )
+                        add(nm, n, public=public)
         elif language in ("java", "csharp"):
             # Class members: `static final` / `const` are the module-constant
             # equivalent in languages with no file-level scope.
@@ -1330,6 +1373,246 @@ def _extract_java(
 
     walk(node)
     return imports, functions, types
+
+
+def _kotlin_modifier_keywords(modifiers_node: Node) -> set[str]:
+    """tree-sitter-kotlin nests each modifier in a category node
+    (visibility_modifier, class_modifier, property_modifier, ...) whose
+    own child is the actual keyword token - unlike Java, where a
+    modifiers node's children ARE the keyword tokens directly. Collecting
+    one level deeper here, not modifiers.children itself, is what makes
+    text like "enum"/"data"/"private" visible at all. Confirmed
+    empirically by parsing real Kotlin source and printing the AST.
+    """
+    keywords: set[str] = set()
+    for category in modifiers_node.children:
+        for leaf in category.children:
+            keywords.add(leaf.type)
+    return keywords
+
+
+def _kotlin_is_public(node: Node) -> bool:
+    """Kotlin's default visibility is public - the OPPOSITE of Java's
+    package-private default - unless a declaration is explicitly marked
+    private/internal/protected. Confirmed empirically: a function/class/
+    property with no `modifiers` node at all parses as fully public,
+    same as an interface member in Java, but here it's the ordinary case
+    for every top-level and class-member declaration, not a special case.
+    """
+    modifiers = next((c for c in node.children if c.type == "modifiers"), None)
+    if modifiers is None:
+        return True
+    return not ({"private", "protected", "internal"} & _kotlin_modifier_keywords(modifiers))
+
+
+def _kotlin_class_kind(node: Node) -> str:
+    """'interface' | 'enum' | 'data' | 'class' - tree-sitter-kotlin uses
+    ONE node type, class_declaration, for all four; there is no separate
+    interface_declaration the way Java has. The actual keyword token
+    (`interface` vs `class` as a direct child) and, for class specifically,
+    a class_modifier's keyword ("enum"/"data") inside `modifiers` are what
+    distinguish them - confirmed empirically, not assumed from Java's shape.
+    """
+    if any(c.type == "interface" for c in node.children):
+        return "interface"
+    modifiers = next((c for c in node.children if c.type == "modifiers"), None)
+    if modifiers is not None:
+        keywords = _kotlin_modifier_keywords(modifiers)
+        if "enum" in keywords:
+            return "enum"
+        if "data" in keywords:
+            return "data"
+    return "class"
+
+
+def _kotlin_return_type(source: bytes, enclosing_node: Node) -> str | None:
+    """function_declaration's return type, positional (no named field -
+    see _params_text's docstring). Concatenates every child between the
+    ':' token and 'function_body' (or end of node, for a body-less
+    interface method) rather than taking just the first one, since a
+    nullable marker on the return type is not guaranteed to be part of
+    the same node as the base type - joining with no separator matches
+    how tree-sitter's byte ranges already exclude the whitespace between
+    sibling nodes, so genuinely adjacent tokens (a type and a trailing
+    '?') read back correctly without a spurious gap.
+    """
+    found_colon = False
+    parts: list[str] = []
+    for child in enclosing_node.children:
+        if child.type == ":":
+            found_colon = True
+            continue
+        if not found_colon:
+            continue
+        if child.type == "function_body":
+            break
+        parts.append(source[child.start_byte:child.end_byte].decode(errors="ignore"))
+    text = "".join(parts).strip()
+    return text or None
+
+
+def _extract_kotlin(
+    node: Node, source: bytes
+) -> tuple[list[tuple[str, bool, bool]], list[dict], list[dict]]:
+    """Return (import path, is_static, is_wildcard) tuples, function
+    names, and type names (classes, data classes, interfaces, enum
+    classes, and objects all land in `types` - is_pure_declaration
+    distinguishes an interface).
+
+    is_static is always False here - Kotlin has no "import static"
+    equivalent (the closest analogue, importing a companion object's
+    member, is a normal qualified import with no distinct grammar shape)
+    - kept in the tuple only for structural parity with _extract_java's
+    return shape, which the generic import-resolution caller also
+    consumes.
+    """
+    imports: list[tuple[str, bool, bool]] = []
+    functions: list[dict] = []
+    types: list[dict] = []
+
+    def text(n: Node) -> str:
+        return source[n.start_byte:n.end_byte].decode(errors="ignore")
+
+    def walk(root: Node):
+        # Iterative, not recursive - see _extract_python's walk for why.
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n.type == "import":
+                # Confirmed empirically: a wildcard import's last child is
+                # a literal '*' token (no distinct "asterisk" node type
+                # the way Java's grammar has one) - "import a.b.*" parses
+                # as qualified_identifier("a.b") + '.' + '*'.
+                is_wildcard = bool(n.children) and n.children[-1].type == "*"
+                for child in n.children:
+                    if child.type == "qualified_identifier":
+                        imports.append((text(child), False, is_wildcard))
+                        break
+            elif n.type == "function_declaration":
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    raw_doc = _leading_block_comment(n, source, comment_type="block_comment")
+                    functions.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        return_type=_kotlin_return_type(source, n),
+                        is_public=_kotlin_is_public(n),
+                    ))
+            elif n.type in ("class_declaration", "object_declaration"):
+                name_node = n.child_by_field_name("name")
+                if name_node is not None:
+                    raw_doc = _leading_block_comment(n, source, comment_type="block_comment")
+                    kind = _kotlin_class_kind(n) if n.type == "class_declaration" else "object"
+                    types.append(_symbol_entry(
+                        source, name_node, n,
+                        docstring=_strip_jsdoc_stars(raw_doc) if raw_doc else None,
+                        is_public=_kotlin_is_public(n),
+                        is_pure_declaration=kind == "interface",
+                    ))
+            stack.extend(reversed(n.children))
+
+    walk(node)
+    return imports, functions, types
+
+
+def _kotlin_package(node: Node, source: bytes) -> str | None:
+    for child in node.children:
+        if child.type == "package_header":
+            for grandchild in child.children:
+                if grandchild.type == "qualified_identifier":
+                    return source[grandchild.start_byte:grandchild.end_byte].decode(errors="ignore")
+            return None
+    return None
+
+
+def _kotlin_source_root_for(file_path: Path, package: str | None) -> Path | None:
+    """Same inference _java_source_root_for uses - the directory such that
+    source_root / package-as-a-path is this file's own containing
+    directory. Kotlin's package system is directory-based the same way
+    Java's is (Gradle's conventional src/main/kotlin, or a bare src/, or
+    a flat repo root all work the same way this derives it per-file).
+    Unlike Java, Kotlin does not require a file's name to match any
+    top-level declaration - multiple top-level classes/functions per file
+    are idiomatic and common (confirmed against android/architecture-
+    samples) - which only affects _kotlin_class_file below, not this.
+    """
+    if not package:
+        return file_path.parent
+    segments = package.split(".")
+    parts = file_path.parent.parts
+    if len(parts) < len(segments) or list(parts[-len(segments):]) != segments:
+        return None
+    root = file_path.parent
+    for _ in range(len(segments)):
+        root = root.parent
+    return root
+
+
+def _kotlin_class_file(root: Path, segments: list[str]) -> Path | None:
+    """Unlike Java, a Kotlin file's name need not match the class being
+    imported - multiple top-level declarations commonly share one file
+    (confirmed against android/architecture-samples: e.g. a single
+    TaskRepository.kt exporting both TasksRepository and
+    DefaultTasksRepository). So a same-named .kt file is tried first as
+    the common case, but the containing directory is also searched for
+    any .kt/.kts file that actually declares the imported name - the
+    only way to resolve the common "class doesn't match filename" shape
+    at all, at the real cost of a real file read per candidate rather
+    than a filename check.
+    """
+    if not segments:
+        return None
+    same_name = root.joinpath(*segments[:-1], f"{segments[-1]}.kt")
+    if same_name.is_file():
+        return same_name
+    directory = root.joinpath(*segments[:-1])
+    if not directory.is_dir():
+        return None
+    target = segments[-1]
+    needle = re.compile(rf"\b(?:class|interface|object)\s+{re.escape(target)}\b")
+    for candidate in sorted(directory.glob("*.kt")) + sorted(directory.glob("*.kts")):
+        try:
+            if needle.search(candidate.read_text(errors="ignore")):
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def _resolve_kotlin_import(
+    source_roots: list[Path], dotted: str, is_wildcard: bool
+) -> tuple[list[Path], bool]:
+    """Returns (resolved files, was_ambiguous) - was_ambiguous is True
+    when more than one source root had a matching candidate and a fixed
+    tiebreak (source_roots' own order) had to pick one.
+    """
+    segments = dotted.split(".")
+    if not segments:
+        return [], False
+
+    if is_wildcard:
+        matching_roots = [root for root in source_roots if root.joinpath(*segments).is_dir()]
+        if not matching_roots:
+            return [], False
+        directory = matching_roots[0].joinpath(*segments)
+        files = sorted(directory.glob("*.kt")) + sorted(directory.glob("*.kts"))
+        return files, len(matching_roots) > 1
+
+    matches = [target for root in source_roots if (target := _kotlin_class_file(root, segments)) is not None]
+    if matches:
+        return [matches[0]], len(matches) > 1
+
+    # One segment short: the imported name might be a nested class/object
+    # rather than its own top-level file - same fallback Java/Python/Rust
+    # already use.
+    if len(segments) > 1:
+        matches = [
+            target for root in source_roots if (target := _kotlin_class_file(root, segments[:-1])) is not None
+        ]
+        if matches:
+            return [matches[0]], len(matches) > 1
+
+    return [], False
 
 
 def _java_source_root_for(file_path: Path, package: str | None) -> Path | None:
@@ -2318,6 +2601,7 @@ def _extract_module(
     go_module_prefix: str | None = None,
     has_rust_crate_root: bool = False,
     java_source_roots: list[Path] | None = None,
+    kotlin_source_roots: list[Path] | None = None,
     php_psr4_map: dict[str, Path] | None = None,
     csharp_prefix_map: dict[str, Path] | None = None,
     csharp_type_owners: dict[str, set[Path]] | None = None,
@@ -2407,6 +2691,16 @@ def _extract_module(
         raw_imports, functions, classes = _extract_java(tree.root_node, source)
         for dotted, is_static, is_wildcard in raw_imports:
             targets, ambiguous = _resolve_java_import(java_source_roots, dotted, is_static, is_wildcard)
+            for target_path in targets:
+                target = _rel(repo_path, target_path)
+                if target is not None and target != rel_path:
+                    resolved_imports.append(target)
+                    if ambiguous:
+                        import_confidence[target] = "inferred"
+    elif language_name == "kotlin":
+        raw_imports, functions, classes = _extract_kotlin(tree.root_node, source)
+        for dotted, _is_static, is_wildcard in raw_imports:
+            targets, ambiguous = _resolve_kotlin_import(kotlin_source_roots, dotted, is_wildcard)
             for target_path in targets:
                 target = _rel(repo_path, target_path)
                 if target is not None and target != rel_path:
@@ -2775,6 +3069,30 @@ def build_module_graph(
     # one than one nested deep inside a single module.
     java_source_roots.sort(key=lambda p: (len(p.parts), str(p)))
 
+    # Same reasoning and mechanism as Java's pre-pass above - Kotlin's package
+    # declaration is the only signal for its own source root (Gradle's
+    # conventional src/main/kotlin, a bare src/, or the repo root), and .kts
+    # script files (build.gradle.kts, etc.) carry no package_header at all, so
+    # they fall back to their own containing directory via the same `not
+    # package` branch _kotlin_source_root_for shares with _java_source_root_for.
+    kotlin_source_roots: list[Path] = []
+    kotlin_pre_parser = Parser()
+    kotlin_pre_parser.language = KOTLIN_LANGUAGE
+    for path in _iter_source_files(repo_path, ignored_paths):
+        if path.suffix not in (".kt", ".kts"):
+            continue
+        if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
+            oversized_paths.add(path)
+            unparseable.append({"path": _rel(repo_path, path), "reason": "file exceeds size limit"})
+            continue
+        pre_source = path.read_bytes()
+        tree = kotlin_pre_parser.parse(pre_source)
+        package = _kotlin_package(tree.root_node, pre_source)
+        root = _kotlin_source_root_for(path, package)
+        if root is not None and root not in kotlin_source_roots:
+            kotlin_source_roots.append(root)
+    kotlin_source_roots.sort(key=lambda p: (len(p.parts), str(p)))
+
     php_psr4_map = _load_php_psr4_map(repo_path)
 
     # Same reasoning and mechanism as Java's pre-pass above - C# has no repo-root
@@ -2811,15 +3129,16 @@ def build_module_graph(
     csharp_implicit_usings = _load_csharp_implicit_usings(repo_path, csharp_source_paths)
 
     parser = Parser()
-    # Non-java/csharp files still needing a fresh parse - collected here
-    # instead of being parsed inline, so they can go through the process
-    # pool below (in one batch) when there's enough of them, or the
-    # sequential fallback otherwise. Java/C# are never added here: they're
-    # either resolved from their pre-parsed tree below, or (the rare
-    # pre-pass/main-walk-saw-different-filesystem-state case) parsed
-    # inline immediately, in both cases without ever leaving this process -
-    # the worker pool has no java_source_roots/csharp_prefix_map to resolve
-    # those two languages' imports with, by design (see the design doc).
+    # Non-java/kotlin/csharp files still needing a fresh parse - collected
+    # here instead of being parsed inline, so they can go through the
+    # process pool below (in one batch) when there's enough of them, or
+    # the sequential fallback otherwise. Java/Kotlin/C# are never added
+    # here: they're either resolved from their pre-parsed tree below, or
+    # (the rare pre-pass/main-walk-saw-different-filesystem-state case)
+    # parsed inline immediately, in both cases without ever leaving this
+    # process - the worker pool has no java_source_roots/
+    # kotlin_source_roots/csharp_prefix_map to resolve those languages'
+    # imports with, by design (see the design doc).
     paths_needing_parse: list[Path] = []
 
     for path in _iter_source_files(repo_path, ignored_paths):
@@ -2845,14 +3164,14 @@ def build_module_graph(
             unparseable.append({"path": rel_path, "reason": "file exceeds size limit"})
             continue
 
-        if language_name in ("java", "csharp"):
+        if language_name in ("java", "kotlin", "csharp"):
             # Re-parsed here rather than reusing a tree the pre-pass above
             # held onto - see that pre-pass's own comment (audit finding
-            # 15). The pre-pass already had to parse every .java/.cs file
-            # once to read its package/namespace before any of them could
-            # have a source root inferred at all; this is deliberately a
-            # second parse per file, trading CPU for never holding more
-            # than about one file's tree in memory at a time.
+            # 15). The pre-pass already had to parse every .java/.kt/.cs
+            # file once to read its package/namespace before any of them
+            # could have a source root inferred at all; this is
+            # deliberately a second parse per file, trading CPU for never
+            # holding more than about one file's tree in memory at a time.
             parser.language = ts_language
             source = path.read_bytes()
             tree = parser.parse(source)
@@ -2868,6 +3187,7 @@ def build_module_graph(
                 source,
                 language_name,
                 java_source_roots=java_source_roots,
+                kotlin_source_roots=kotlin_source_roots,
                 csharp_prefix_map=csharp_prefix_map,
                 csharp_type_owners=csharp_type_owners,
                 csharp_implicit_usings=csharp_implicit_usings,
