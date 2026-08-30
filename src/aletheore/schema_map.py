@@ -5,7 +5,7 @@ foreign-key relations, and indexes a repository's migrations define, each
 resolving to the file:line that introduced it.
 
 Why a hand-written tokenizer rather than a grammar: the scanner ships no SQL
-grammar (LANGUAGE_BY_EXTENSION covers 11 languages, none of them SQL), and
+grammar (LANGUAGE_BY_EXTENSION covers 13 languages, none of them SQL), and
 adding one would put a dialect-fragile dependency in the free CLI's install
 path while still leaving the ALTER-replay logic to be written by hand. This
 mirrors endpoints.py, which is purpose-built per-framework extraction for the
