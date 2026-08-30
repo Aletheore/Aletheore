@@ -163,6 +163,23 @@ async def test_audit_command_on_a_free_plan_installation_does_not_enqueue(pool, 
 
 
 @pytest.mark.asyncio
+async def test_audit_command_on_a_flash_plan_installation_does_not_enqueue(pool, monkeypatch):
+    # Real, live gap found during a full-session final audit: this gate
+    # used to check "== free", which the $6/mo flash plan (a real value
+    # once #468 shipped) passed straight through - flash does not include
+    # managed audits, same exclusion as AIRview/Docs/the managed
+    # dashboard, but any write-access commenter on a flash repo could
+    # still trigger a full, real, meaningfully-more-expensive-than-a-PR-
+    # review managed-audit run via this ChatOps command.
+    await upsert_installation(pool, 111, "octocat")
+    await set_installation_plan(pool, 111, "flash")
+    _mock_permission_check(monkeypatch, "write")
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(_payload("/aletheore audit"), pool, "redis://unused", queue=fake_queue)
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_audit_command_with_no_installation_row_does_not_enqueue(pool, monkeypatch):
     _mock_permission_check(monkeypatch, "write")
     fake_queue = MagicMock()
