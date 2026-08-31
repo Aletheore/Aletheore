@@ -19,7 +19,6 @@ from scan_worker.flash_review import (
     build_dependency_impact_context,
     build_referenced_symbol_context,
     find_semantic_regressions,
-    find_symbol_at_location,
     is_non_substantive_diff,
     order_changed_files_by_diff_size,
     review_diff,
@@ -3215,70 +3214,3 @@ def test_review_diff_verifies_model_findings_but_not_semantic_findings_in_the_sa
         {"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors", "source": "semantic"}
     ]
     mock_verifier.simple_completion.assert_called_once()
-
-
-def _evidence_with_symbols(path: str, functions=(), classes=()) -> dict:
-    return {
-        "repository": {
-            "modules": [
-                {
-                    "path": path,
-                    "symbols": {"functions": list(functions), "classes": list(classes)},
-                }
-            ]
-        }
-    }
-
-
-def test_find_symbol_at_location_returns_the_containing_function():
-    evidence = _evidence_with_symbols(
-        "app.py",
-        functions=[{"name": "handle_request", "start_line": 10, "end_line": 30}],
-    )
-    assert find_symbol_at_location(evidence, "app.py", 15) == "handle_request"
-
-
-def test_find_symbol_at_location_picks_the_innermost_of_nested_candidates():
-    # A method's range is a strict subset of its containing class's - the
-    # narrower match should win, since it's the more useful attribution
-    # for a line-level finding.
-    evidence = _evidence_with_symbols(
-        "app.py",
-        functions=[{"name": "handle_request", "start_line": 12, "end_line": 20}],
-        classes=[{"name": "RequestHandler", "start_line": 1, "end_line": 40}],
-    )
-    assert find_symbol_at_location(evidence, "app.py", 15) == "handle_request"
-
-
-def test_find_symbol_at_location_returns_none_outside_any_symbol():
-    evidence = _evidence_with_symbols(
-        "app.py",
-        functions=[{"name": "handle_request", "start_line": 10, "end_line": 30}],
-    )
-    assert find_symbol_at_location(evidence, "app.py", 5) is None
-
-
-def test_find_symbol_at_location_returns_none_for_a_file_not_in_evidence():
-    evidence = _evidence_with_symbols(
-        "app.py", functions=[{"name": "handle_request", "start_line": 10, "end_line": 30}]
-    )
-    assert find_symbol_at_location(evidence, "other.py", 15) is None
-
-
-def test_find_symbol_at_location_returns_none_when_evidence_is_none():
-    assert find_symbol_at_location(None, "app.py", 15) is None
-
-
-def test_find_symbol_at_location_returns_none_when_evidence_has_no_modules():
-    assert find_symbol_at_location({"repository": {}}, "app.py", 15) is None
-
-
-def test_find_symbol_at_location_skips_a_symbol_entry_missing_line_bounds():
-    evidence = _evidence_with_symbols(
-        "app.py",
-        functions=[
-            {"name": "malformed_entry", "start_line": None, "end_line": None},
-            {"name": "handle_request", "start_line": 10, "end_line": 30},
-        ],
-    )
-    assert find_symbol_at_location(evidence, "app.py", 15) == "handle_request"
