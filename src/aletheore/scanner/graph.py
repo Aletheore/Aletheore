@@ -615,11 +615,35 @@ def _extract_module_constants(node: Node, source: bytes, language: str) -> list[
             if t == "assignment":
                 lhs = n.child_by_field_name("left")
                 if lhs is not None and lhs.type == "constant":
+                    # Walk up through Ruby's conditional/exception-handling
+                    # wrapper nodes (if/then/elsif/else/unless/case/when/
+                    # begin/rescue/ensure) to find whether this assignment
+                    # ultimately sits in a class/module's own body_statement,
+                    # not just checking one level up. Real bug this fixes: a
+                    # constant gated on a RUBY_VERSION/platform check, or
+                    # wrapped in begin/rescue for a defensive fallback, is
+                    # exactly as idiomatic a class-body constant as the flat
+                    # case above - confirmed live against tree-sitter-ruby's
+                    # actual parse tree - but its immediate parent is "then"
+                    # or "begin"/"rescue", never "body_statement" directly,
+                    # so it was silently invisible. A constant nested the
+                    # same way inside a def's body still correctly stays
+                    # excluded: the walk stops at the first body_statement
+                    # it reaches (a method's own, not a skippable wrapper),
+                    # and that one's parent is "method", not class/module.
+                    parent = n.parent
+                    hops = 0
+                    while parent is not None and hops < 6 and parent.type in (
+                        "then", "else", "elsif", "unless", "if", "case", "when",
+                        "begin", "rescue", "ensure", "rescue_modifier",
+                    ):
+                        parent = parent.parent
+                        hops += 1
                     in_type_body = (
-                        n.parent is not None
-                        and n.parent.type == "body_statement"
-                        and n.parent.parent is not None
-                        and n.parent.parent.type in ("class", "module")
+                        parent is not None
+                        and parent.type == "body_statement"
+                        and parent.parent is not None
+                        and parent.parent.type in ("class", "module")
                     )
                     if in_type_body or is_top_level(n):
                         add(lhs, n)

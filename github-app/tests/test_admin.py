@@ -2,6 +2,7 @@ import asyncio
 import socket
 import threading
 import time
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -709,7 +710,7 @@ async def test_send_test_notification_posts_to_saved_webhook(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch)
     sent = []
 
-    def fake_send_health_alert(webhook_url, message, http_client=None):
+    def fake_send_health_alert(webhook_url, message):
         sent.append((webhook_url, message))
 
     monkeypatch.setattr("scan_worker.slack.send_health_alert", fake_send_health_alert)
@@ -731,12 +732,8 @@ async def test_send_test_notification_posts_to_saved_webhook(pool, monkeypatch):
 async def test_send_test_notification_reports_delivery_failure(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch)
 
-    def fake_send_health_alert(webhook_url, message, http_client=None):
-        raise httpx.HTTPStatusError(
-            "internal secret detail that must never reach the caller",
-            request=None,
-            response=httpx.Response(502),
-        )
+    def fake_send_health_alert(webhook_url, message):
+        raise urllib.error.URLError("internal secret detail that must never reach the caller")
 
     monkeypatch.setattr("scan_worker.slack.send_health_alert", fake_send_health_alert)
     async with client:
@@ -756,23 +753,26 @@ async def test_send_test_notification_reports_delivery_failure(pool, monkeypatch
 @pytest.mark.asyncio
 async def test_send_test_notification_revalidates_the_url_right_before_fetching(pool, monkeypatch):
     # Same DNS-rebinding defense as the health-check sweep: a URL that
-    # validated fine when saved could resolve somewhere unsafe by the
-    # time "test" is clicked. This must be caught here too, not just at
-    # save time.
+    # validated fine when saved could resolve somewhere unsafe by the time
+    # "test" is clicked. This route no longer runs its own separate
+    # validate_external_https_url pre-check (a real, confirmed gap: that
+    # pattern validated the URL, then made a SECOND, independent,
+    # unvalidated connection for the real request - a DNS-rebinding window
+    # scan_worker.slack.send_health_alert itself now closes to zero by
+    # validating, pinning, and connecting to that exact pinned address in
+    # one step, see its own docstring) - this test simulates that
+    # revalidation failing inside send_health_alert and asserts this route
+    # still translates it into a clean 400.
     client = await _logged_in_client(pool, monkeypatch)
 
-    def fake_send_health_alert(webhook_url, message, http_client=None):
-        raise AssertionError("must not fetch a webhook URL that just failed revalidation")
+    def fake_send_health_alert(webhook_url, message):
+        raise UnsafeURLError("now resolves internally")
 
     monkeypatch.setattr("scan_worker.slack.send_health_alert", fake_send_health_alert)
     async with client:
         await client.put(
             "/admin/octocat/hello-world/webhook-url",
             json={"webhook_url": "https://hooks.slack.com/services/x"},
-        )
-        monkeypatch.setattr(
-            "app_server.admin.validate_external_https_url",
-            MagicMock(side_effect=UnsafeURLError("now resolves internally")),
         )
         response = await client.post("/admin/octocat/hello-world/webhook-url/test")
 
