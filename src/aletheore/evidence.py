@@ -11,6 +11,7 @@ from aletheore.air_schema import validate_evidence
 from aletheore.architecture import build_clusters, detect_layer_violations, load_architecture_config
 from aletheore.dead_code import find_dead_code
 from aletheore.endpoints import map_api_endpoints
+from aletheore.evidence_resolution import find_symbol_at_location
 from aletheore.git_intel.analyzer import analyze_git, compute_hotspots
 from aletheore.licenses import check_dependency_licenses
 from aletheore.repo_config import load_repo_config
@@ -447,6 +448,15 @@ def scan_repository(
     report("Scanning working tree for secrets")
     secrets_baseline = load_secrets_baseline(repo_path)
     secrets_data = find_secrets(repo_path, baseline=secrets_baseline)
+    # Symbol attribution only applies to the working-tree findings above, not
+    # the history_findings merged in below: those have no line number (a
+    # historical diff hunk, not a location in the current tree) and, even if
+    # they did, this scan's module graph reflects the CURRENT working tree -
+    # attaching today's symbol name to a bygone commit's line would describe
+    # code that may have since moved, been renamed, or been deleted.
+    _symbol_evidence = {"repository": {"modules": modules}}
+    for finding in secrets_data["findings"]:
+        finding["symbol"] = find_symbol_at_location(_symbol_evidence, finding["path"], finding["line"])
     if scan_git_history:
         report("Scanning git history for secrets (can be slow on large histories)")
         history_data = find_secrets_in_history(

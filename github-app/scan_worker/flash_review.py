@@ -8,6 +8,7 @@ from aletheore.dead_code import is_test_file
 from aletheore.evidence_resolution import (
     attach_dependency_evidence,
     attach_risk_evidence,
+    find_symbol_at_location,
     normalize_resolution,
 )
 from scan_worker.github_api import (

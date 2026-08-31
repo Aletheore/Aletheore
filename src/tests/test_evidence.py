@@ -184,6 +184,65 @@ def test_scan_repository_honors_ignored_paths_from_config(tmp_path):
     assert "vendor/lib.py" not in secret_paths
 
 
+def test_scan_repository_attributes_a_secret_finding_to_its_containing_function(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "config.py").write_text(
+        "def get_config():\n"
+        '    AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n'
+        "    return AWS_KEY\n"
+    )
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo, check_licenses=False, scan_git_history=False)
+
+    findings = [f for f in evidence["security"]["secrets"]["findings"] if f["path"] == "config.py"]
+    assert len(findings) == 1
+    assert findings[0]["symbol"] == "get_config"
+
+
+def test_scan_repository_leaves_a_module_level_secret_finding_with_no_symbol(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "config.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo, check_licenses=False, scan_git_history=False)
+
+    findings = [f for f in evidence["security"]["secrets"]["findings"] if f["path"] == "config.py"]
+    assert len(findings) == 1
+    assert findings[0]["symbol"] is None
+
+
+def test_scan_repository_does_not_attach_symbol_to_history_findings(tmp_path):
+    # History findings reflect a past commit's diff, not the current
+    # working tree the module graph describes - attaching today's symbol
+    # name to a bygone line would misdescribe code that may have since
+    # moved, been renamed, or been deleted. They also carry no "line" at
+    # all (see find_secrets_in_history), so there's nothing to look up.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "config.py").write_text("def get_config():\n    return 1\n")
+    run(repo, "init", "-b", "main")
+    run(repo, "config", "user.email", "a@example.com")
+    run(repo, "config", "user.name", "Alice")
+    run(repo, "add", ".")
+    run(repo, "commit", "-m", "init")
+    (repo / "leaked.py").write_text('AWS_KEY = "AKIAABCDEFGHIJKLMNOP"\n')
+    run(repo, "add", ".")
+    run(repo, "commit", "-m", "oops")
+    run(repo, "rm", "leaked.py")
+    run(repo, "commit", "-m", "remove leaked key")
+
+    with patch("aletheore.evidence.check_dependency_vulnerabilities") as mock_check:
+        mock_check.return_value = {"checked": True, "reason": None, "findings": []}
+        evidence = scan_repository(repo, check_licenses=False)
+
+    history_findings = evidence["security"]["secrets"]["history_findings"]
+    assert len(history_findings) == 1
+    assert "symbol" not in history_findings[0]
+
+
 def test_scan_repository_handles_no_git_history(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

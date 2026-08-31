@@ -180,6 +180,34 @@ def test_build_module_graph_kotlin_extension_function_import_resolves(tmp_path):
     ) in edges
 
 
+def test_build_module_graph_kotlin_top_level_val_import_resolves(tmp_path):
+    # Real repo confirmed (android/architecture-samples): CoroutinesUtils.kt's
+    # `val WhileUiSubscribed: SharingStarted = ...` - a module-level
+    # constant/computed property, imported by name from another file, had
+    # zero incoming edges before this (needle only matched class/interface/
+    # object/fun, never val/var).
+    repo = tmp_path / "repo"
+    src = repo / "src" / "main" / "kotlin" / "com" / "example"
+    (src / "util").mkdir(parents=True)
+    (src / "util" / "CoroutinesUtils.kt").write_text(
+        "package com.example.util\n\n"
+        "val WhileUiSubscribed: Long = 5000L\n"
+    )
+    (src / "Main.kt").write_text(
+        "package com.example\n\n"
+        "import com.example.util.WhileUiSubscribed\n\n"
+        "fun main() { println(WhileUiSubscribed) }\n"
+    )
+
+    _, dependency_graph, _ = build_module_graph(repo)
+    edges = {tuple(edge) for edge in dependency_graph["edges"]}
+
+    assert (
+        "src/main/kotlin/com/example/Main.kt",
+        "src/main/kotlin/com/example/util/CoroutinesUtils.kt",
+    ) in edges
+
+
 def test_build_module_graph_kotlin_wildcard_import_resolves_every_file_in_package(tmp_path):
     repo = tmp_path / "repo"
     src = repo / "src" / "main" / "kotlin" / "com" / "example"
