@@ -1183,7 +1183,14 @@ async def request_deletion_otp(org: str, repo: str, request: Request):
 
     settings = get_settings()
     try:
-        rate_limited = is_rate_limited(
+        # is_rate_limited uses the synchronous redis-py client and blocks on
+        # pipe.execute() - run off the event loop (asyncio.to_thread, same
+        # pattern as embeddings_api.py's #328 fix and this file's own
+        # asyncio.to_thread(send_transactional_email...) call below) so one
+        # request's Redis round-trip doesn't stall every other concurrent
+        # request on this worker.
+        rate_limited = await asyncio.to_thread(
+            is_rate_limited,
             get_redis_client(),
             f"ratelimit:deletion-otp:{installation_id}",
             DELETION_OTP_RATE_LIMIT,
@@ -1254,7 +1261,10 @@ async def delete_all_data(
         )
 
     try:
-        attempt_limited = is_rate_limited(
+        # See request_deletion_otp's identical asyncio.to_thread comment
+        # above - same call, same reason.
+        attempt_limited = await asyncio.to_thread(
+            is_rate_limited,
             get_redis_client(),
             f"ratelimit:deletion-otp-attempt:{installation_id}",
             DELETION_OTP_ATTEMPT_LIMIT,
