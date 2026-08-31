@@ -1634,8 +1634,17 @@ def _kotlin_class_file(root: Path, segments: list[str]) -> Path | None:
     # optional `\S+\.` handles an extension function's receiver type
     # (`fun LocalTask.toExternal()`), which sits between `fun` and the
     # name this import actually names.
+    #
+    # A top-level `val`/`var` is the same shape one level simpler - a
+    # module-level constant or computed property with no parameter list
+    # at all (confirmed against the same real repo:
+    # CoroutinesUtils.kt's `val WhileUiSubscribed: SharingStarted = ...`,
+    # imported by name, same failure as the function case above before
+    # this).
     needle = re.compile(
-        rf"\b(?:class|interface|object)\s+{escaped}\b|\bfun\s+(?:\S+\.)?{escaped}\s*\("
+        rf"\b(?:class|interface|object)\s+{escaped}\b"
+        rf"|\bfun\s+(?:\S+\.)?{escaped}\s*\("
+        rf"|\b(?:val|var)\s+{escaped}\b"
     )
     for candidate in sorted(directory.glob("*.kt")) + sorted(directory.glob("*.kts")):
         try:
