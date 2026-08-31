@@ -34,6 +34,7 @@ from aletheore.evidence_resolution import (
 from aletheore.history import compute_diff
 from aletheore.pr_comment import COMMENT_MARKER, format_diff_comment
 from aletheore.healthcheck import run_healthcheck
+from aletheore.repo_config import parse_repo_config
 from aletheore.signature_diff import find_regression_fence_violations
 from app_server.config import get_settings
 from app_server.db import MAX_SCANNED_REPOS_PER_MONTH
@@ -1851,7 +1852,24 @@ def _run_flash_review(
         settings.database_url, installation_id, repo_full_name, pr_number
     )
     diff_base = last_reviewed_sha or base_sha
-    diff_result = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha)
+    # Flash Review has no local checkout to read .aletheore.json from the
+    # way the deterministic `aletheore scan` path does (see evidence.py's
+    # identical use of ignored_paths, applied before any file is even
+    # parsed) - fetched here instead, straight from the PR head, so a
+    # customer's configured ignored_paths excludes a file from Flash
+    # Review's diff the same way it already excludes it from a real scan.
+    # Real gap this closes: without this, Flash Review posted PR comments
+    # about paths a customer had explicitly configured to be ignored.
+    # Best-effort: a fetch failure degrades to "no config" (review
+    # everything), matching every other config-read in this codebase's
+    # fail-open-on-infra-error discipline - a missing config must never
+    # block the review that's this job's actual deliverable.
+    try:
+        repo_config_text = fetch_file_content(client, token, repo_full_name, ".aletheore.json", ref=head_sha)
+    except Exception:  # noqa: BLE001
+        repo_config_text = None
+    ignored_paths = parse_repo_config(repo_config_text)["ignored_paths"]
+    diff_result = fetch_pr_diff(client, token, repo_full_name, diff_base, head_sha, ignored_paths=ignored_paths)
     diff_text = str(diff_result)
     diff_patches = getattr(diff_result, "patches", None)
     diff_omitted_files = getattr(diff_result, "omitted_files", ())

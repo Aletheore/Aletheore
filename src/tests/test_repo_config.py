@@ -1,11 +1,27 @@
 import json
 from pathlib import Path
 
-from aletheore.repo_config import DEFAULT_CONFIG, is_ignored, load_repo_config
+from aletheore.repo_config import DEFAULT_CONFIG, is_ignored, load_repo_config, parse_repo_config
 
 
 def test_load_repo_config_returns_defaults_when_no_file(tmp_path: Path):
     assert load_repo_config(tmp_path) == DEFAULT_CONFIG
+
+
+def test_parse_repo_config_returns_defaults_for_none():
+    # None is parse_repo_config's "no .aletheore.json at this ref" case -
+    # a caller with no local checkout to read a Path from (see
+    # scan_worker.jobs._run_flash_review) fetches the file via GitHub's
+    # Contents API instead, which reports a missing file as a 404 rather
+    # than an OSError load_repo_config's Path-based check catches.
+    assert parse_repo_config(None) == DEFAULT_CONFIG
+
+
+def test_parse_repo_config_matches_load_repo_config_for_the_same_content(tmp_path: Path):
+    raw_text = json.dumps({"ignored_paths": ["vendor/**"], "severity_threshold": "high"})
+    (tmp_path / ".aletheore.json").write_text(raw_text)
+
+    assert parse_repo_config(raw_text) == load_repo_config(tmp_path)
 
 
 def test_load_repo_config_returns_defaults_on_malformed_json(tmp_path: Path):
