@@ -802,7 +802,16 @@ pre {
   border-radius: 999px;
   background: var(--accent-soft);
   padding: 6px 9px;
-  color: #f5d9b8;
+  /* #f5d9b8 (pale) was only ever legible against .evidence-preview's local
+     dark override of --accent-soft (#3a2a18) - these two components live
+     in the page's normal light theme instead, where --accent-soft is
+     #fdf0e2 (pale cream), so that same pale text was reading as
+     near-invisible pale-on-pale. #8a4715 keeps the warm on-brand orange
+     but at 6.26:1 contrast against #fdf0e2 - --accent-hover (#b85f1c)
+     alone only reached 3.99:1, short of WCAG AA's 4.5:1 for this text
+     size (12px, below the "large text" 3:1 exception). Confirmed via a
+     real luminance-contrast computation, not eyeballed. */
+  color: #8a4715;
   font-family: "SF Mono", Menlo, Consolas, monospace;
   font-size: 12px;
 }
@@ -1511,7 +1520,11 @@ pre {
   border-radius: 999px;
   background: var(--accent-soft);
   padding: 5px 9px;
-  color: #f5d9b8;
+  /* Same fix as .query-board code/.mcp-tool-list span above: #f5d9b8 only
+     reads against .evidence-preview's local dark --accent-soft override,
+     not the page's normal light one (#fdf0e2) this pill actually renders
+     against. */
+  color: #8a4715;
   font-size: 11px;
   font-weight: 760;
 }
@@ -1788,7 +1801,10 @@ pre {
   cursor: pointer;
   padding: 14px 0;
   font-weight: 640;
-  color: #efe7d8;
+  /* #efe7d8 (pale, meant for a dark background) was rendering against
+     .bench-details's actual background (var(--card-bg), near-white) -
+     near-invisible. Same root cause as the pill-color fixes above. */
+  color: var(--text-primary);
   list-style: none;
 }
 
@@ -1833,7 +1849,10 @@ pre {
 
 .bench-chart-title {
   margin: 0 0 4px;
-  color: #efe7d8;
+  /* Same fix as .bench-details summary above: pale text meant for a dark
+     background, actually rendering against .bench-chart's near-white
+     var(--card-bg). */
+  color: var(--text-primary);
   font-size: 15px;
   font-weight: 640;
 }

@@ -44,11 +44,15 @@
         directly rather than leave it unstated.</p>
 
       <h2>Your source code</h2>
-      <p>When the GitHub App runs a scan, your repository is cloned into an ephemeral scan worker,
-        analyzed, and discarded. We do not keep a copy of your source code at rest. Only derived
-        evidence, findings like secrets matches, dependency graphs, and endpoint health rows, is
-        written to our database. If a scan uses managed AI review (Aletheore AIR), the evidence we
-        send to our LLM provider is the same derived evidence, not your raw source files. See our
+      <p>When the GitHub App runs a scan, your repository is cloned into a scan worker and analyzed.
+        For a repository we scan only once, that clone is discarded afterward. For one we scan
+        repeatedly, a working copy is kept on the scan worker between scans so a later scan can
+        process only what changed - it is deleted on uninstall or a data-deletion request, and never
+        otherwise retained. Only derived evidence, findings like secrets matches, dependency graphs,
+        and endpoint health rows, is written to our database. What reaches our LLM provider depends
+        on the feature: Flash review (automated PR review, Flash tier and up) sends the pull
+        request's diff itself - your actual source code, for the changed lines - while managed
+        audits and AIRview (AIR) send only derived evidence, never raw source files. See our
         <a href="privacy.html">Privacy Policy</a> for the full data-handling breakdown.</p>
 
       <h2>GitHub App permissions</h2>

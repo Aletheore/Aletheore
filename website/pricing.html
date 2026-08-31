@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pricing — Aletheore</title>
-  <meta name="description" content="Aletheore Community: free deterministic CLI scanning forever. Aletheore AIR ($29.99/mo): managed AI audits, AIRview, AI-generated Docs, live endpoint monitoring, automated PR reviews, and team seats.">
+  <meta name="description" content="Aletheore Community: free deterministic CLI scanning forever. Aletheore Flash ($6/mo): automatic PR reviews, up to 800/month. Aletheore AIR ($29.99/mo): everything in Flash plus a second-model verification pass, managed AI audits, AIRview, AI-generated Docs, live endpoint monitoring, and team seats.">
   <link rel="canonical" href="https://www.aletheore.com/pricing">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Aletheore">
   <meta property="og:url" content="https://www.aletheore.com/pricing">
   <meta property="og:title" content="Pricing — Aletheore">
-  <meta property="og:description" content="Aletheore Community: free deterministic CLI scanning forever. Aletheore AIR ($29.99/mo): managed AI audits, AIRview, AI-generated Docs, live endpoint monitoring, automated PR reviews, and team seats.">
+  <meta property="og:description" content="Aletheore Community: free deterministic CLI scanning forever. Aletheore Flash ($6/mo): automatic PR reviews, up to 800/month. Aletheore AIR ($29.99/mo): everything in Flash plus a second-model verification pass, managed AI audits, AIRview, AI-generated Docs, live endpoint monitoring, and team seats.">
   <meta property="og:image" content="https://www.aletheore.com/assets/logo-mark.png">
   <link rel="icon" type="image/png" href="assets/logo-mark.png">
   <link rel="stylesheet" href="styles.css">
@@ -38,7 +38,7 @@
     <section class="pricing-hero">
       <p class="eyebrow">Pricing</p>
       <h1>Simple, honest pricing.</h1>
-      <p class="section-intro">Aletheore Community is the deterministic scanner, free forever. Aletheore AIR adds managed AI audits, AIRview, AI-generated Docs, automated PR reviews, endpoint monitoring, and team seats.</p>
+      <p class="section-intro">Aletheore Community is the deterministic scanner, free forever. Aletheore Flash adds automatic PR reviews. Aletheore AIR adds a second-model verification pass on those reviews, managed AI audits, AIRview, AI-generated Docs, endpoint monitoring, and team seats.</p>
 
       <div class="billing-toggle" role="group" aria-label="Billing interval">
         <button type="button" data-interval="month" class="active">Monthly</button>
@@ -62,6 +62,21 @@
           </ul>
         </article>
 
+        <article class="price-card" data-tier="flash">
+          <div class="price-card-head">
+            <span class="price-kicker">Hosted GitHub App</span>
+            <h3>Aletheore Flash</h3>
+            <div class="price-now">$6</div>
+            <div class="price-sub"><span class="price-sub-interval">/month</span>, monthly billing only</div>
+          </div>
+          <ul>
+            <li>Everything in Community.</li>
+            <li>Automatic Flash reviews on every push to an open pull request, up to 800/month - one model, evidence-grounded, source-of-record for what changed in the diff. Real head-to-head numbers (0 false positives, real recall) on the <a href="benchmarks.html">Benchmarks page</a>.</li>
+            <li>No independent second-model verification pass - that's AIR's addition, see below.</li>
+          </ul>
+          <button type="button" class="btn btn-primary" data-subscribe="flash">Subscribe</button>
+        </article>
+
         <article class="price-card pro" data-tier="air">
           <div class="price-card-head">
             <span class="price-kicker">Hosted GitHub App</span>
@@ -70,10 +85,10 @@
             <div class="price-sub"><span class="price-sub-interval">/month</span>, up to 3 team members</div>
           </div>
           <ul>
-            <li>Everything in Community.</li>
+            <li>Everything in Flash.</li>
             <li>Managed audits and AIRview, written by an OpenAI frontier model.</li>
             <li>AI-generated Docs for every public symbol - grounded in source, kept current automatically, nobody has to write one. Exportable as a single Markdown file.</li>
-            <li>Automatic Flash reviews on every push to an open pull request - one model writes the review, a second, independent model re-checks every individual finding against the diff before it's ever shown to you, dropping anything that doesn't hold up. Methodology and real per-review cost on the <a href="benchmarks.html">Benchmarks page</a>.</li>
+            <li>Flash reviews get a second, independent model that re-checks every individual finding against the diff before it's ever shown to you, dropping anything that doesn't hold up. Methodology and real per-review cost on the <a href="benchmarks.html">Benchmarks page</a>.</li>
             <li>Slack / Teams alerts on new findings.</li>
             <li>Branch-protection Check Runs for new secrets.</li>
             <li>Endpoint health monitoring across multiple targets, with a public status API.</li>
@@ -86,7 +101,7 @@
         <a class="btn btn-secondary" href="https://github.com/apps/aletheore/installations/new" rel="noopener">Install the GitHub App</a>
       </div>
       <p class="cta-note">
-        Install it on your GitHub account or organization, then hit Subscribe above to activate AIR on that installation. The public <a href="https://github.com/marketplace" rel="noopener">Marketplace listing</a> is still under GitHub's review, so this direct link is the way to find and install it today.
+        Install it on your GitHub account or organization, then hit Subscribe above to activate Flash or AIR on that installation. The public <a href="https://github.com/marketplace" rel="noopener">Marketplace listing</a> is still under GitHub's review, so this direct link is the way to find and install it today.
       </p>
       <p class="cta-note">
         <sup>*</sup><strong>Free AI Reviews:</strong> AI-powered PR reviews are free, built on the same evidence-only (compact) prompt as AIR - see the <a href="benchmarks.html">Benchmarks page</a> for the methodology. They don't include AIR's independent second-model verification pass. Routed across multiple providers' free tiers so it isn't tied to any single company's quota - usage is globally rate-limited and subject to availability, and access may be adjusted if that changes.
