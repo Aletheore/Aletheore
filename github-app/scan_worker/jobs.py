@@ -2252,7 +2252,20 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
     """
     webhook_url = installation.get("webhook_url")
     if webhook_url:
-        send_health_alert(webhook_url, message)
+        # This docstring's own "fires on every channel independently"
+        # promise wasn't actually true for any of the three channels below
+        # - an unguarded exception here (send_health_alert now also raises
+        # UnsafeURLError when a saved webhook URL no longer resolves to a
+        # safe address, see its own docstring, on top of the delivery
+        # failures it could already raise) would skip email/Pushover
+        # entirely instead of just skipping this one channel.
+        try:
+            send_health_alert(webhook_url, message)
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("scan_worker.jobs").warning(
+                "Slack/Teams alert failed for installation=%s (%s)",
+                installation.get("installation_id"), exc,
+            )
 
     alert_email = installation.get("alert_email")
     if alert_email:
@@ -2271,7 +2284,13 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
     if pushover_user_key:
         settings = get_settings()
         if settings.pushover_api_token:
-            send_pushover_alert(settings.pushover_api_token, pushover_user_key, message)
+            try:
+                send_pushover_alert(settings.pushover_api_token, pushover_user_key, message)
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("scan_worker.jobs").warning(
+                    "Pushover alert failed for installation=%s (%s)",
+                    installation.get("installation_id"), exc,
+                )
         else:
             # A saved user key with no server-side app token configured -
             # not an error in the installation's own config, so it
