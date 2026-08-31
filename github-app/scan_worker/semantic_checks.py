@@ -121,9 +121,22 @@ def _diff_hunks_by_file(diff_text: str) -> dict[str, list[_Hunk]]:
         prev_blank = False
         if current_hunk is None or not current_file:
             continue
-        if line.startswith("-") and not line.startswith("---"):
+        # Real bug this fixes: once inside a hunk body, past both marker
+        # checks above, a line's first character is unambiguously the diff
+        # +/- prefix - the file-marker collision this "---"/"+++" exclusion
+        # was trying to guard against is already correctly handled by
+        # prev_blank gating _FILE_MARKER_RE.match above, the fix for #283/
+        # #305. This second, redundant guard didn't just fail to add
+        # protection - it actively dropped real content: a genuinely
+        # removed source line starting with "--" (diffed as "---...", e.g.
+        # a deleted Markdown/YAML divider or SQL/shell comment banner) was
+        # silently excluded from hunk.removed entirely, invisible to every
+        # check in this file that inspects it. Confirmed directly, not
+        # theoretical: a hunk removing "--- old section ---" produced an
+        # empty hunk.removed.
+        if line.startswith("-"):
             current_hunk.removed.append(line[1:])
-        elif line.startswith("+") and not line.startswith("+++"):
+        elif line.startswith("+"):
             current_hunk.added.append(line[1:])
     return hunks
 

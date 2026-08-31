@@ -2125,6 +2125,32 @@ def test_semantic_checker_finds_a_removed_bounds_clamp():
     assert "clamped to a bound" in findings[0]["issue"]
 
 
+def test_semantic_checker_finds_a_removed_bounds_clamp_whose_removed_line_starts_with_dashes():
+    # Real bug this guards: a removed source line whose own content starts
+    # with "--" (e.g. a SQL/Lua-style "--" comment, or a Markdown/YAML
+    # divider) diffs to a line starting with "---" - _diff_hunks_by_file
+    # used to have a second, redundant "not startswith('---')" guard here
+    # that silently dropped the whole line from hunk.removed, on top of
+    # (and separate from) the real #283/#305 file-marker-collision guard
+    # earlier in the same function. That made this exact check - and every
+    # other one that inspects hunk.removed - blind to a real regression
+    # whenever the removed line happened to start with two dashes.
+    source = "function reducer(e) {\n  const loaded = total;\n  return loaded;\n}\n"
+    diff = (
+        "--- progressEventReducer.js ---\n"
+        "@@ -1,3 +1,3 @@\n"
+        " function reducer(e) {\n"
+        "---   const loaded = Math.max(0, total);\n"
+        "+  const loaded = total;\n"
+        "   return loaded;\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"progressEventReducer.js": source}, "")
+
+    assert len(findings) == 1
+    assert "clamped to a bound" in findings[0]["issue"]
+
+
 def test_semantic_checker_cites_the_hunk_not_an_earlier_unrelated_assignment_for_a_removed_bounds_clamp():
     # Regression test for a wrong-line citation bug: _line_number's
     # whole-file scan for "{var} =" returned whichever occurrence came
