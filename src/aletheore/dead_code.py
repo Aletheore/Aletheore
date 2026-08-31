@@ -97,6 +97,12 @@ _HILT_VIEWMODEL_PATTERN = re.compile(r"^\s*@HiltViewModel\b", re.MULTILINE)
 _DAGGER_MODULE_PATTERN = re.compile(r"^\s*@Module\b", re.MULTILINE)
 _DAGGER_INSTALL_IN_PATTERN = re.compile(r"^\s*@(?:InstallIn|TestInstallIn)\b", re.MULTILINE)
 
+# A plain regex read, not a tree-sitter parse - consistent with every other
+# content check in this file (main guard, @main, Hilt/Dagger above), and
+# graph.py's own _kotlin_package already needs a full parsed tree it has no
+# reason to hand this module just for one line of source.
+_KOTLIN_PACKAGE_PATTERN = re.compile(r"^\s*package\s+([\w.]+)", re.MULTILINE)
+
 _HTML_SCRIPT_SRC_PATTERN = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
 
 # A module dispatched by dotted-string name (RQ's queue.enqueue("pkg.mod.func", ...),
@@ -284,6 +290,75 @@ def _android_manifest_entry_points(repo_path: Path, ignored_paths: list[str] | N
     return entry_points
 
 
+def _kotlin_package_of(repo_path: Path, path: str) -> str | None:
+    if not path.endswith((".kt", ".kts")):
+        return None
+    try:
+        content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    match = _KOTLIN_PACKAGE_PATTERN.search(content)
+    return match.group(1) if match else None
+
+
+def _kotlin_package_reachable_files(
+    repo_path: Path,
+    modules: list[dict],
+    android_manifest_entry_points: set[str],
+) -> set[str]:
+    """Every Kotlin file sharing a package with a file that's reachable
+    some other way - the same blind spot _swift_target_reachable_files
+    above already handles for Swift's whole-target visibility, just at
+    package instead of target granularity.
+
+    Kotlin files in the same package see each other's top-level
+    declarations (classes, objects, and - real repo confirmed - top-level
+    functions) with no import statement at all, unlike every other
+    supported language here. Confirmed on a real repo
+    (android/architecture-samples): DefaultTaskRepository.kt calls
+    ModelMappingExt.kt's toExternal() with zero import statement - both
+    declared in the same package, and DefaultTaskRepository.kt is
+    independently reachable (bound into Hilt's DI graph via
+    DataModules.kt). StatisticsUtils.kt is the same shape one package
+    over: unreachable itself, but sharing a package with the
+    @HiltViewModel-annotated StatisticsViewModel.kt.
+
+    A package's own reachability is judged by the same signals
+    find_dead_code already treats as reachable on their own (imported_by,
+    a manifest entry point, or a Hilt/Dagger annotation) - propagating
+    from an already-independently-reachable sibling is the whole point,
+    so requiring anything more here would just miss the real cases above.
+    Test files are excluded from the grouping entirely (not just left to
+    fall through) so a test file's own package-mate status can never leak
+    reachability into a production sibling that happens to share its
+    package name, which Android's own androidTest/test convention often
+    does.
+    """
+    packages: dict[str, list[str]] = {}
+    for module in modules:
+        path = module["path"]
+        if is_test_file(path):
+            continue
+        package = _kotlin_package_of(repo_path, path)
+        if package is not None:
+            packages.setdefault(package, []).append(path)
+
+    modules_by_path = {module["path"]: module for module in modules}
+    reachable_files: set[str] = set()
+    for paths in packages.values():
+        if len(paths) < 2:
+            continue
+        package_is_reachable = any(
+            modules_by_path.get(path, {}).get("imported_by")
+            or path in android_manifest_entry_points
+            or _has_hilt_dagger_annotation(repo_path, path)
+            for path in paths
+        )
+        if package_is_reachable:
+            reachable_files.update(paths)
+    return reachable_files
+
+
 def _swift_target_reachable_files(
     repo_path: Path,
     modules: list[dict],
@@ -385,6 +460,9 @@ def find_dead_code(
 
     html_script_entry_points = _html_script_entry_points(repo_path, ignored_paths)
     android_manifest_entry_points = _android_manifest_entry_points(repo_path, ignored_paths)
+    kotlin_package_reachable_files = _kotlin_package_reachable_files(
+        repo_path, modules, android_manifest_entry_points
+    )
     swift_reachable_files = _swift_target_reachable_files(repo_path, modules, ignored_paths)
 
     unreachable_modules = []
@@ -396,7 +474,7 @@ def find_dead_code(
             continue
         if is_test_file(path):
             continue
-        if path in swift_reachable_files:
+        if path in swift_reachable_files or path in kotlin_package_reachable_files:
             continue
         if not module.get("imported_by", []):
             if (
