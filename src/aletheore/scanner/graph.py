@@ -1484,7 +1484,21 @@ def _kotlin_is_public(node: Node) -> bool:
     property with no `modifiers` node at all parses as fully public,
     same as an interface member in Java, but here it's the ordinary case
     for every top-level and class-member declaration, not a special case.
+
+    Also excludes a local (nested) function: tree-sitter-kotlin uses the
+    exact same node type, function_declaration, for a top-level function
+    and one declared inside another function's body - and Kotlin's local
+    functions can't even carry an explicit visibility modifier (it's a
+    compile error), so every one of them would otherwise fall straight
+    into the "no modifiers node -> public" default above. Real bug this
+    fixes: the same "closure extracted as a top-level public symbol" gap
+    the shared _is_nested_in_function check exists for (see its own
+    docstring), just never wired into this language's own is_public -
+    confirmed directly, not assumed: a `fun outer() { fun inner() {} }`
+    reported inner as is_public=True.
     """
+    if _is_nested_in_function(node):
+        return False
     modifiers = next((c for c in node.children if c.type == "modifiers"), None)
     if modifiers is None:
         return True
