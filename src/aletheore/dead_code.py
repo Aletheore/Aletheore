@@ -3,6 +3,7 @@ from pathlib import Path
 
 from aletheore.repo_config import is_ignored
 from aletheore.scanner.detect import IGNORED_DIRS
+from aletheore.scanner.graph import _infer_swift_targets
 from aletheore.vulnerabilities import _parse_npm_direct_pins, _parse_pip_pins
 
 ENTRY_POINT_FILENAMES = {
@@ -23,6 +24,12 @@ ENTRY_POINT_FILENAMES = {
     # SwiftPM's build manifest - always this exact name, read by the swift
     # toolchain itself, never imported by the repo's own application code.
     "Package.swift",
+    # Swift's classic top-level-code entry point (predates the @main
+    # attribute, still standard in Vapor's own project template): the one
+    # file in a target the compiler allows top-level executable statements
+    # in, by both language rule and universal convention its entry point.
+    # Confirmed on a real repo (vapor/api-template): Sources/Run/main.swift.
+    "main.swift",
 }
 
 TEST_PATH_PATTERNS = [
@@ -51,6 +58,12 @@ PACKAGE_IMPORT_ALIASES = {
 # Confirmed on this repo: RQ worker processes and standalone scripts/*.py
 # CLI tools all follow this convention regardless of filename.
 _MAIN_GUARD_PATTERN = re.compile(r"if\s+__name__\s*==\s*[\'\"]__main__[\'\"]\s*:")
+
+# A Swift @main type (an AWS Lambda handler, a CLI's entry struct, ...) is
+# invoked by the runtime, never imported by another file - same category as
+# Python's __main__ guard above. Always at file scope, so a start-of-line
+# anchor (allowing leading whitespace) is enough without a full parse.
+_SWIFT_MAIN_ATTRIBUTE_PATTERN = re.compile(r"^\s*@main\b", re.MULTILINE)
 
 _HTML_SCRIPT_SRC_PATTERN = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
 
@@ -154,6 +167,53 @@ def _has_main_guard(repo_path: Path, path: str) -> bool:
     return bool(_MAIN_GUARD_PATTERN.search(content))
 
 
+def _has_swift_main_attribute(repo_path: Path, path: str) -> bool:
+    if not path.endswith(".swift"):
+        return False
+    try:
+        content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return bool(_SWIFT_MAIN_ATTRIBUTE_PATTERN.search(content))
+
+
+def _swift_target_reachable_files(
+    repo_path: Path,
+    modules: list[dict],
+    ignored_paths: list[str] | None,
+) -> set[str]:
+    """Every Swift file belonging to a target that's reachable some other
+    way (imported from another target, or containing a @main entry point).
+
+    Swift files within one target see each other with no import statement
+    at all - that's how Swift's compilation model works, unlike every other
+    language here - so the per-file import graph can never show intra-
+    target edges no matter how well cross-target import resolution works.
+    Confirmed on a real repo (vapor/penny-bot): a target's @main handler
+    file imported by nothing outside it, alongside sibling files (a
+    repository/service layer) the handler itself references with no
+    import, both looked equally unreachable before this.
+    """
+    swift_targets = _infer_swift_targets(repo_path, ignored_paths)
+    if not swift_targets:
+        return set()
+
+    modules_by_path = {module["path"]: module for module in modules}
+    reachable_files: set[str] = set()
+    for name, files in swift_targets.items():
+        rel_paths = [
+            file_path.relative_to(repo_path).as_posix() if file_path.is_absolute() else file_path.as_posix()
+            for file_path in files
+        ]
+        target_is_reachable = any(
+            modules_by_path.get(rel, {}).get("imported_by") or _has_swift_main_attribute(repo_path, rel)
+            for rel in rel_paths
+        )
+        if target_is_reachable:
+            reachable_files.update(rel_paths)
+    return reachable_files
+
+
 def _html_script_entry_points(repo_path: Path, ignored_paths: list[str] | None = None) -> set[str]:
     # Plain <script src="..."> tags (no bundler, no ES module imports) are
     # invisible to the JS import graph - confirmed on this repo's website/:
@@ -217,6 +277,7 @@ def find_dead_code(
             custom_entry_points = {path for path in raw_entry_points if isinstance(path, str)}
 
     html_script_entry_points = _html_script_entry_points(repo_path, ignored_paths)
+    swift_reachable_files = _swift_target_reachable_files(repo_path, modules, ignored_paths)
 
     unreachable_modules = []
     entry_points_detected = []
@@ -226,6 +287,8 @@ def find_dead_code(
             entry_points_detected.append(path)
             continue
         if is_test_file(path):
+            continue
+        if path in swift_reachable_files:
             continue
         if not module.get("imported_by", []):
             if path in html_script_entry_points or _has_main_guard(repo_path, path):

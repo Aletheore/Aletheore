@@ -1915,9 +1915,24 @@ def _swift_call_arg_strings(call_expr: Node, source: bytes) -> dict[str, str]:
             continue
         label = source[label_id.start_byte:label_id.end_byte].decode(errors="ignore")
         str_lit = next((c for c in arg.children if c.type == "line_string_literal"), None)
-        text_node = next(
-            (c for c in str_lit.children if c.type == "line_str_text"), None
-        ) if str_lit is not None else None
+        if str_lit is None:
+            continue
+        # A string with interpolation (e.g. "./Lambdas/\(name)", the shape a
+        # programmatic manifest's factory function uses to build several
+        # targets from one call site) isn't a pure literal - `name` is a
+        # runtime value, never resolvable from source alone. Skipping it
+        # here is deliberate: picking the first line_str_text child instead
+        # (the old behavior) silently returned a truncated fragment of the
+        # real value ("./Lambdas/", missing the interpolated suffix) as if
+        # it were the whole thing - confirmed on a real repo (vapor/
+        # penny-bot), where this merged eight distinct Lambda targets into
+        # one fictitious "Lambda" target spanning the entire Lambdas/
+        # directory. An unresolvable value should fall through to
+        # _infer_swift_targets's own directory-convention scan instead of
+        # being reported as this.
+        if any(c.type == "interpolated_expression" for c in str_lit.children):
+            continue
+        text_node = next((c for c in str_lit.children if c.type == "line_str_text"), None)
         if text_node is not None:
             result[label] = source[text_node.start_byte:text_node.end_byte].decode(errors="ignore")
     return result

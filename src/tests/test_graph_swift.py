@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from aletheore.scanner.graph import _infer_xcodeproj_swift_targets, build_module_graph
+from aletheore.scanner.graph import _infer_swift_targets, _infer_xcodeproj_swift_targets, build_module_graph
 from conftest import symbol_names
 
 
@@ -161,6 +161,53 @@ def test_build_module_graph_swift_target_path_override_from_package_manifest(tmp
     edges = {tuple(edge) for edge in dependency_graph["edges"]}
 
     assert ("Sources/App/Main.swift", "Vendor/StoreImpl/User.swift") in edges
+
+
+def test_interpolated_manifest_target_path_is_never_mistaken_for_a_literal(tmp_path):
+    # Real repo confirmed (vapor/penny-bot): a factory function shape - a
+    # static func building several similar targets from one call site, each
+    # passing a literal name but building name:/path: with string
+    # interpolation ("\(name)Lambda", "./Lambdas/\(name)") - isn't a
+    # resolvable literal at all; `name` is a runtime parameter. The old
+    # behavior extracted the interpolated string's first literal text
+    # fragment instead of recognizing it wasn't a plain literal, silently
+    # producing a wrong, truncated path ("./Lambdas/", the parent of every
+    # such target) under a wrong, truncated name ("Lambda") - merging eight
+    # distinct real targets into one fictitious one spanning their entire
+    # shared parent directory. Skipping the value entirely (falling through
+    # to _infer_swift_targets's own directory-convention scan, which
+    # correctly can't resolve a directory this manifest never names
+    # literally either) is the honest outcome - not a wrong merge.
+    repo = tmp_path / "repo"
+    (repo / "Lambdas" / "AutoFaqs").mkdir(parents=True)
+    (repo / "Lambdas" / "AutoPings").mkdir(parents=True)
+    (repo / "Lambdas" / "AutoFaqs" / "Handler.swift").write_text("@main\nstruct Handler {}\n")
+    (repo / "Lambdas" / "AutoPings" / "Handler.swift").write_text("@main\nstruct Handler {}\n")
+
+    (repo / "Package.swift").write_text(
+        "// swift-tools-version:5.9\n"
+        "import PackageDescription\n\n"
+        "extension PackageDescription.Target {\n"
+        "    static func lambdaTarget(name: String) -> PackageDescription.Target {\n"
+        '        .executableTarget(name: "\\(name)Lambda", path: "./Lambdas/\\(name)")\n'
+        "    }\n"
+        "}\n\n"
+        "let package = Package(\n"
+        '    name: "Ex",\n'
+        "    targets: [\n"
+        '        .lambdaTarget(name: "AutoFaqs"),\n'
+        '        .lambdaTarget(name: "AutoPings"),\n'
+        "    ]\n"
+        ")\n"
+    )
+
+    targets = _infer_swift_targets(repo, None)
+    assert "Lambda" not in targets
+    all_files = {path.name for files in targets.values() for path in files}
+    # Neither Handler.swift shows up under any wrong merged grouping -
+    # both are genuinely unresolvable here, same as any target this
+    # manifest never names literally.
+    assert not all_files
 
 
 def _pbxproj_text(objects_body: str) -> bytes:
