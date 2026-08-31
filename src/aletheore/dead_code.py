@@ -35,6 +35,17 @@ TEST_PATH_PATTERNS = [
     # where the previous case-sensitive version missed every single test
     # file, flagging them all as dead code.
     re.compile(r"(^|/)(tests?|__tests__)/", re.IGNORECASE),
+    # JVM (Java/Kotlin) PascalCase suffix convention - e.g. TaskDaoTest.kt,
+    # StatisticsScreenTest.kt. Confirmed against a real repo
+    # (android/architecture-samples): without this, every androidTest file
+    # flagged as dead code purely because JUnit/instrumentation invokes them
+    # by reflection, never a plain import.
+    re.compile(r"(^|/)[^/]+Test\.(kt|kts|java)$"),
+    # Gradle's androidTest/test source-set convention - doesn't require the
+    # PascalCase suffix above (e.g. a test helper/fixture file), and
+    # "androidTest" isn't matched by the tests?/__tests__ pattern above
+    # since it's one fused word, not "test" as its own path segment.
+    re.compile(r"(^|/)(androidTest|test)/.+\.(kt|kts|java)$"),
 ]
 
 PACKAGE_IMPORT_ALIASES = {

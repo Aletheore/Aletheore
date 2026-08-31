@@ -54,6 +54,27 @@ def test_package_swift_manifest_is_never_unreachable(tmp_path):
     assert "Package.swift" in result["entry_points_detected"]
 
 
+def test_jvm_test_files_are_never_unreachable(tmp_path):
+    # Real repo confirmed (android/architecture-samples): androidTest files
+    # are invoked by instrumentation/JUnit reflection, never a plain import,
+    # so they always look unreachable to the import graph. The PascalCase
+    # "*Test.kt" suffix is the JVM convention (unlike Python's "test_*.py"),
+    # and "androidTest" is one fused word - not matched by the tests?/
+    # __tests__ directory pattern, which requires "test" as its own segment.
+    modules = [
+        _module(
+            "app/src/androidTest/java/com/example/todoapp/tasks/TasksScreenTest.kt"
+        ),
+        _module("app/src/androidTest/java/com/example/todoapp/data/TaskDaoTest.kt"),
+        _module("app/src/test/java/com/example/todoapp/data/TaskRepositoryTest.java"),
+        # A test-directory file with no "*Test" suffix (a fixture/helper) -
+        # only the directory-convention pattern catches this one.
+        _module("app/src/androidTest/java/com/example/todoapp/util/TestUtils.kt"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
 def test_config_can_add_custom_entry_points(tmp_path):
     modules = [_module("app/worker.py")]
     config = {"dead_code_entry_points": ["app/worker.py"]}
