@@ -467,7 +467,7 @@ def _build_unchanged_scan_cache(
         return None
     diff_result = subprocess.run(
         ["git", "diff", "--name-only", previous_sha, current_sha],
-        cwd=checkout_dir, capture_output=True, text=True,
+        cwd=checkout_dir, capture_output=True, text=True, errors="ignore",
     )
     if diff_result.returncode != 0:
         return None
@@ -1150,12 +1150,25 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
             return
         clone_url = _clone_url(repo_full_name, token)
         repo_dir = job_dir / "repo"
-        _clone_ref(clone_url, head_sha, repo_dir)
 
-        evidence_path = _run_scan(repo_dir)
-        evidence = json.loads(evidence_path.read_text())
-        evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
-        _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
+        # Locked for the whole checkout-through-graph-sync span - see
+        # run_pr_scan_job's identical lock for why. Previously unlocked
+        # entirely: connecting a repo and then pushing to it in quick
+        # succession (this job and run_push_scan_job racing on different
+        # scan-worker replicas) could interleave their _sync_code_graph
+        # writes and leave code_graph_sync_state.last_synced_sha pointing at
+        # the OLDER of the two scans while the file/symbol/edge rows ended
+        # up a clobbered mix of both - corrupting the very state
+        # _build_unchanged_scan_cache trusts as ground truth for skipping
+        # re-parsing of "unchanged" files on the next PR scan, silently
+        # feeding stale parsed data into a real PR review.
+        with repo_checkout_lock(settings.database_url, installation_id, repo_full_name):
+            _clone_ref(clone_url, head_sha, repo_dir)
+
+            evidence_path = _run_scan(repo_dir)
+            evidence = json.loads(evidence_path.read_text())
+            evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
+            _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
         _insert_history(installation_id, repo_full_name, evidence)
 
         # A repo added to an already-AIR installation should get its
@@ -1219,6 +1232,11 @@ def run_push_scan_job(
 
         # See run_pr_scan_job's identical lock for why this spans checkout
         # through git-graph-sync rather than just the checkout call.
+        # _sync_code_graph was previously dedented out here, running
+        # unlocked - the exact same cross-replica race run_initial_scan_job's
+        # lock docstring above describes, just reached from this job's side
+        # of it (a push landing while run_initial_scan_job is still mid-sync
+        # for the same repo, or two pushes racing each other).
         with repo_checkout_lock(settings.database_url, installation_id, repo_full_name):
             repo_dir = _prepare_head_checkout(
                 clone_url, head_sha, installation_id, repo_full_name, job_dir / "repo"
@@ -1227,7 +1245,7 @@ def run_push_scan_job(
             evidence_path = _run_scan(repo_dir)
             evidence = json.loads(evidence_path.read_text())
             evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
-        _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
+            _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
         history_id = _insert_history(installation_id, repo_full_name, evidence)
 
         # AIR-exclusive - see the identical note on run_initial_scan_job's

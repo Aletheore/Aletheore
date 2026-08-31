@@ -240,7 +240,20 @@ def _extract_flask_fastapi_routes(
         if defining_file == rel_path
     }
 
-    def collect_static_prefixes(n: Node) -> None:
+    def collect_static_prefixes(root: Node) -> None:
+        # Iterative, not recursive - see graph.py's walk() for why. Prunes
+        # rather than descending unconditionally (skips function/class
+        # bodies below, per the module-scope note further down), so it
+        # can't reuse the plain _walk_tree() generator the unconditional
+        # walks in this file were converted to.
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            collect_static_prefixes_body(n)
+            if n.type not in ("function_definition", "class_definition"):
+                stack.extend(reversed(n.children))
+
+    def collect_static_prefixes_body(n: Node) -> None:
         # include_router(...) prefixes are deliberately NOT collected here even
         # when the call happens to live in this same file - map_api_endpoints's
         # cross-file pre-pass (_collect_fastapi_include_prefixes) already scans
@@ -263,8 +276,8 @@ def _extract_flask_fastapi_routes(
         # actually binds to is always resolved from module scope (a
         # decorator can only reference a name already in scope at that
         # point), so nothing below module level is ever a real match here.
-        if n.type in ("function_definition", "class_definition"):
-            return
+        # (function_definition/class_definition bodies are pruned by the
+        # caller below, before it ever reaches this function.)
         if n.type == "call":
             function = n.child_by_field_name("function")
             args = n.child_by_field_name("arguments")
@@ -283,12 +296,10 @@ def _extract_flask_fastapi_routes(
                             prefix = literal(prefix_arg.child_by_field_name("value")) if prefix_arg else None
                             if prefix is not None:
                                 router_prefixes[source[left.start_byte:left.end_byte].decode()] = prefix
-        for child in n.children:
-            collect_static_prefixes(child)
 
     collect_static_prefixes(root)
 
-    def walk(n: Node) -> None:
+    for n in _walk_tree(root):
         if n.type == "decorated_definition":
             definition = n.child_by_field_name("definition")
             handler = "unknown"
@@ -393,17 +404,13 @@ def _extract_flask_fastapi_routes(
                                 "note": None,
                             }
                         )
-        for child in n.children:
-            walk(child)
-
-    walk(root)
     return entries
 
 
 def _extract_django_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
-    def walk(n: Node) -> None:
+    for n in _walk_tree(root):
         # "urlpatterns += [...]" (splitting the list across an initial
         # assignment plus one or more extensions - an ordinary, documented
         # Django organizing pattern) parses to augmented_assignment, a
@@ -426,10 +433,6 @@ def _extract_django_routes(root: Node, source: bytes, rel_path: str) -> list[dic
                     entry = _django_call_to_entry(item, source, rel_path)
                     if entry is not None:
                         entries.append(entry)
-        for child in n.children:
-            walk(child)
-
-    walk(root)
     return entries
 
 
@@ -509,7 +512,7 @@ def _looks_like_express_path(path: str) -> bool:
 def _extract_express_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
-    def walk(n: Node) -> None:
+    for n in _walk_tree(root):
         if n.type == "call_expression":
             func = n.child_by_field_name("function")
             if func is not None and func.type == "member_expression":
@@ -554,10 +557,6 @@ def _extract_express_routes(root: Node, source: bytes, rel_path: str) -> list[di
                                         "note": None,
                                     }
                                 )
-        for child in n.children:
-            walk(child)
-
-    walk(root)
     return entries
 
 
@@ -600,7 +599,7 @@ def _go_handler_name(args_named: list[Node], source: bytes) -> str:
 def _extract_go_net_http_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
-    def walk(n: Node) -> None:
+    for n in _walk_tree(root):
         if n.type == "call_expression":
             func = n.child_by_field_name("function")
             if func is not None and func.type == "selector_expression":
@@ -710,17 +709,13 @@ def _extract_go_net_http_routes(root: Node, source: bytes, rel_path: str) -> lis
                                             "note": None,
                                         }
                                     )
-        for child in n.children:
-            walk(child)
-
-    walk(root)
     return entries
 
 
 def _extract_gin_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
-    def walk(n: Node) -> None:
+    for n in _walk_tree(root):
         if n.type == "call_expression":
             func = n.child_by_field_name("function")
             if func is not None and func.type == "selector_expression":
@@ -747,10 +742,6 @@ def _extract_gin_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
                                         "note": None,
                                     }
                                 )
-        for child in n.children:
-            walk(child)
-
-    walk(root)
     return entries
 
 
@@ -805,7 +796,7 @@ def _collect_axum_combinators(node: Node, source: bytes) -> list[tuple[str, str]
 def _extract_axum_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
-    def walk(n: Node) -> None:
+    for n in _walk_tree(root):
         if n.type == "call_expression":
             func = n.child_by_field_name("function")
             if func is not None and func.type == "field_expression":
@@ -852,10 +843,6 @@ def _extract_axum_routes(root: Node, source: bytes, rel_path: str) -> list[dict]
                                         "note": None,
                                     }
                                 )
-        for child in n.children:
-            walk(child)
-
-    walk(root)
     return entries
 
 
@@ -918,7 +905,7 @@ def _spring_class_prefix_note(method_node: Node, source: bytes) -> str | None:
 def _extract_spring_boot_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
-    def walk(n: Node) -> None:
+    for n in _walk_tree(root):
         if n.type == "method_declaration":
             name_node = n.child_by_field_name("name")
             handler = "unknown"
@@ -955,10 +942,6 @@ def _extract_spring_boot_routes(root: Node, source: bytes, rel_path: str) -> lis
                                     "note": _spring_class_prefix_note(n, source),
                                 }
                             )
-        for child in n.children:
-            walk(child)
-
-    walk(root)
     return entries
 
 
@@ -1030,12 +1013,22 @@ def _extract_ktor_routes(root: Node, source: bytes, rel_path: str) -> list[dict]
     """
     entries: list[dict] = []
 
-    def walk(node: Node, prefix_stack: list[str]) -> None:
+    # Iterative, not recursive - see graph.py's walk() for why (deeply-nested
+    # real-world ASTs can exceed Python's recursion limit and crash the whole
+    # scan). This walk prunes rather than descending unconditionally (a
+    # matched call recurses only into its own lambda body, carrying a
+    # threaded prefix_stack), so it can't reuse the plain _walk_tree()
+    # generator the other extractors below were converted to - the stack
+    # here carries (node, prefix_stack) pairs instead of bare nodes, and
+    # reversed(node.children) before pushing preserves the same left-to-right
+    # visiting order the original recursive calls produced.
+    stack: list[tuple[Node, list[str]]] = [(root, [])]
+    while stack:
+        node, prefix_stack = stack.pop()
         shape = _ktor_call_shape(node, source)
         if shape is not None:
             name, path, lambda_node = shape
             lambda_literal = next((c for c in lambda_node.children if c.type == "lambda_literal"), None)
-            body = next((c for c in lambda_literal.children if c.type != "{" and c.type != "}"), lambda_literal) if lambda_literal else None
             if name in _KTOR_VERB_METHODS:
                 entries.append(
                     {
@@ -1050,13 +1043,13 @@ def _extract_ktor_routes(root: Node, source: bytes, rel_path: str) -> list[dict]
                     }
                 )
                 if lambda_literal is not None:
-                    walk(lambda_literal, prefix_stack)
-                return
+                    stack.append((lambda_literal, prefix_stack))
+                continue
             if name == "route":
                 new_stack = [*prefix_stack, path] if path else prefix_stack
                 if lambda_literal is not None:
-                    walk(lambda_literal, new_stack)
-                return
+                    stack.append((lambda_literal, new_stack))
+                continue
             # Any other call-with-trailing-lambda (routing, authenticate,
             # install, intercept, static, ...) is real routing-adjacent
             # scaffolding, not a route itself and not a path prefix -
@@ -1066,12 +1059,10 @@ def _extract_ktor_routes(root: Node, source: bytes, rel_path: str) -> list[dict]
             # its own name as a path segment (wrong - authenticate isn't
             # part of the URL).
             if lambda_literal is not None:
-                walk(lambda_literal, prefix_stack)
-            return
-        for child in node.children:
-            walk(child, prefix_stack)
+                stack.append((lambda_literal, prefix_stack))
+            continue
+        stack.extend((child, prefix_stack) for child in reversed(node.children))
 
-    walk(root, [])
     return entries
 
 
@@ -1091,7 +1082,7 @@ def _extract_vapor_routes(root: Node, source: bytes, rel_path: str) -> list[dict
     def text(n: Node) -> str:
         return source[n.start_byte:n.end_byte].decode(errors="ignore")
 
-    def walk(n: Node) -> None:
+    for n in _walk_tree(root):
         if n.type == "call_expression":
             nav = next((c for c in n.children if c.type == "navigation_expression"), None)
             suffix_node = next((c for c in n.children if c.type == "call_suffix"), None)
@@ -1158,10 +1149,6 @@ def _extract_vapor_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                                 "note": None,
                             }
                         )
-        for child in n.children:
-            walk(child)
-
-    walk(root)
     return entries
 
 
@@ -1194,7 +1181,7 @@ def _rails_path_and_to(
 def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
-    def walk(n: Node) -> None:
+    for n in _walk_tree(root):
         if n.type == "call":
             method_node = n.child_by_field_name("method")
             args = n.child_by_field_name("arguments")
@@ -1235,10 +1222,6 @@ def _extract_rails_routes(root: Node, source: bytes, rel_path: str) -> list[dict
                                 "note": None,
                             }
                         )
-        for child in n.children:
-            walk(child)
-
-    walk(root)
     return entries
 
 
@@ -1287,7 +1270,7 @@ def _laravel_group_note(call_node: Node, source: bytes) -> str | None:
 def _extract_laravel_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
-    def walk(n: Node) -> None:
+    for n in _walk_tree(root):
         if n.type == "scoped_call_expression":
             scope = n.child_by_field_name("scope")
             name = n.child_by_field_name("name")
@@ -1359,10 +1342,6 @@ def _extract_laravel_routes(root: Node, source: bytes, rel_path: str) -> list[di
                                     "note": note,
                                 }
                             )
-        for child in n.children:
-            walk(child)
-
-    walk(root)
     return entries
 
 
@@ -1425,7 +1404,7 @@ def _aspnet_class_prefix_note(method_node: Node, source: bytes) -> str | None:
 def _extract_aspnet_attribute_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
-    def walk(n: Node) -> None:
+    for n in _walk_tree(root):
         if n.type == "method_declaration":
             name_node = n.child_by_field_name("name")
             handler = "unknown"
@@ -1452,10 +1431,6 @@ def _extract_aspnet_attribute_routes(root: Node, source: bytes, rel_path: str) -
                                 "note": _aspnet_class_prefix_note(n, source),
                             }
                         )
-        for child in n.children:
-            walk(child)
-
-    walk(root)
     return entries
 
 
@@ -1473,7 +1448,7 @@ def _aspnet_minimal_handler_label(arg_wrapper: Node | None, source: bytes) -> st
 def _extract_aspnet_minimal_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
 
-    def walk(n: Node) -> None:
+    for n in _walk_tree(root):
         if n.type == "invocation_expression":
             func = n.child_by_field_name("function")
             if func is not None and func.type == "member_access_expression":
@@ -1526,10 +1501,6 @@ def _extract_aspnet_minimal_routes(root: Node, source: bytes, rel_path: str) -> 
                                 "note": None,
                             }
                         )
-        for child in n.children:
-            walk(child)
-
-    walk(root)
     return entries
 
 
