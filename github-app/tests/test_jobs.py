@@ -2392,6 +2392,64 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     assert recorded_spend == [-FLASH_REVIEW_SPEND_RESERVE_USD]
 
 
+def test_flash_review_job_excludes_aletheore_json_ignored_paths_from_the_diff(monkeypatch):
+    # Real gap this closes: Flash Review's PR-comment pipeline has no
+    # local checkout to read .aletheore.json from the way the
+    # deterministic `aletheore scan` path does - a customer who
+    # configured ignored_paths still got Flash Review PR comments about
+    # exactly that path. .aletheore.json is now fetched straight from the
+    # PR head and threaded into fetch_pr_diff as ignored_paths.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_file_content",
+        lambda client, token, repo, path, ref=None: (
+            json.dumps({"ignored_paths": ["vendor/**"]}) if path == ".aletheore.json" else None
+        ),
+    )
+    diff_calls = []
+
+    def fake_fetch_pr_diff(client, token, repo, base, head, ignored_paths=()):
+        diff_calls.append(list(ignored_paths))
+        return "--- app.py ---\n+bug"
+
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", fake_fetch_pr_diff)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.review_diff", lambda diff_text, file_context="", **kwargs: [])
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr("scan_worker.jobs.create_pr_review_comment", lambda *a, **k: {"id": 1})
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False)
+
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert diff_calls == [["vendor/**"]]
+
+
 def test_flash_review_comment_body_prefixes_the_symbol_when_present():
     from scan_worker.jobs import _flash_review_comment_body
 

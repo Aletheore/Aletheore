@@ -166,6 +166,49 @@ def test_fetch_pr_diff_returns_empty_string_when_no_files_changed():
     assert diff_text == ""
 
 
+def test_fetch_pr_diff_excludes_files_matching_ignored_paths():
+    # Real gap this closes: Flash Review's PR-comment pipeline has no
+    # local checkout to pick up .aletheore.json's ignored_paths the way
+    # the deterministic `aletheore scan` path does (see evidence.py) - a
+    # customer who configured an ignored path still got Flash Review PR
+    # comments about exactly that path. An ignored file must be excluded
+    # entirely (not appear in patches, and not appear in omitted_files
+    # either - it's a deliberate exclusion per config, not a genuinely
+    # missing/unreviewable file).
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "files": [
+                    {"filename": "vendor/lib.js", "patch": "@@ -1 +1 @@\n-old\n+new"},
+                    {"filename": "src/app.py", "patch": "@@ -1 +1 @@\n-old\n+new"},
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    diff_text = fetch_pr_diff(
+        client, "fake-token", "octocat/hello-world", "aaa", "bbb", ignored_paths=["vendor/**"]
+    )
+
+    assert "vendor/lib.js" not in diff_text
+    assert "src/app.py" in diff_text
+    assert diff_text.omitted_files == ()
+    assert [f for f, _ in diff_text.patches] == ["src/app.py"]
+
+
+def test_fetch_pr_diff_with_no_ignored_paths_includes_every_file():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"files": [{"filename": "vendor/lib.js", "patch": "@@ -1 +1 @@\n-old\n+new"}]}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
+
+    assert "vendor/lib.js" in diff_text
+
+
 def test_fetch_pr_diff_reconstructs_a_patch_github_omitted_for_a_large_text_file():
     # Real gap, confirmed live against benchmarks/pr-review-benchmark's own
     # case 007: GitHub's compare API returns patch=None for a large changed
