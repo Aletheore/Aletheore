@@ -3,6 +3,15 @@ const PADDLE_ENVIRONMENT = "production";
 const PADDLE_CLIENT_TOKEN = "live_e7aef6edd9b215cd9059dab0c3d";
 
 const TIERS = {
+  flash: {
+    // Monthly only - no annual price exists yet in Paddle for this plan
+    // (see app_server/paddle_pricing.py). refreshPrices() below skips a
+    // tier entirely for an interval it has no priceId for, leaving its
+    // card's static HTML price as the fallback rather than fetching an
+    // undefined priceId.
+    name: "Aletheore Flash",
+    priceId: { month: "pri_01m1754jr5msg62grry49kjhw5" },
+  },
   air: {
     name: "Aletheore AIR",
     priceId: { month: "pri_01kyhevc8bkcghfpwjymz16y2h", year: "pri_01kyhevc9xn6z2nghmy8057jvp" },
@@ -28,7 +37,14 @@ function initPaddle() {
 
 async function refreshPrices() {
   const paddle = await initPaddle();
-  const items = Object.values(TIERS).map((tier) => ({ priceId: tier.priceId[billingInterval], quantity: 1 }));
+  // Only tiers that actually have a price for this interval - Flash has no
+  // "year" priceId, so toggling to Yearly must skip it entirely rather than
+  // send Paddle an undefined priceId (which fails the whole preview call
+  // for every tier, not just the one missing it). Its card keeps the
+  // static "$6/month" from the HTML in that case.
+  const activeTiers = Object.entries(TIERS).filter(([, tier]) => tier.priceId[billingInterval]);
+  if (activeTiers.length === 0) return;
+  const items = activeTiers.map(([, tier]) => ({ priceId: tier.priceId[billingInterval], quantity: 1 }));
 
   let preview;
   try {
@@ -39,7 +55,7 @@ async function refreshPrices() {
   }
 
   const lineItems = preview.data.details.lineItems;
-  Object.keys(TIERS).forEach((key, index) => {
+  activeTiers.forEach(([key], index) => {
     const card = document.querySelector(`[data-tier="${key}"]`);
     if (!card) return;
     const lineItem = lineItems[index];

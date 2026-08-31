@@ -11,12 +11,12 @@
   <meta property="og:site_name" content="Aletheore">
   <meta property="og:url" content="https://www.aletheore.com/">
   <meta property="og:title" content="Aletheore — Evidence-Grounded Code Audits &amp; GitHub Automation">
-  <meta property="og:description" content="Aletheore is more than a scanner. Free deterministic CLI audits (secrets, vulnerabilities, licenses, dead code, git hotspots) plus a hosted GitHub App: automated PR reviews, live endpoint health monitoring, AIRview (an AI-generated, always-current map of your repo's architecture), AI-generated per-symbol Docs, Slack/Teams alerts, and team seat management on Aletheore AIR.">
+  <meta property="og:description" content="Aletheore is more than a scanner. Free deterministic CLI audits (secrets, vulnerabilities, licenses, dead code, git hotspots) plus a hosted GitHub App: automated PR reviews on Aletheore Flash ($6/mo), or everything in Flash plus a second-model verification pass, AIRview, AI-generated Docs, live endpoint monitoring, Slack/Teams alerts, and team seats on Aletheore AIR ($29.99/mo).">
   <meta property="og:image" content="https://www.aletheore.com/assets/logo-mark.png">
 
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Aletheore — Evidence-Grounded Code Audits &amp; GitHub Automation">
-  <meta name="twitter:description" content="Free deterministic CLI scanning (Aletheore Community) plus a hosted GitHub App on Aletheore AIR: dead code detection, live endpoint monitoring, AIRview architecture maps, AI-generated Docs, automated PR reviews, and Slack/Teams alerts.">
+  <meta name="twitter:description" content="Free deterministic CLI scanning (Aletheore Community) plus a hosted GitHub App: automated PR reviews on Aletheore Flash, or Flash plus verification, AIRview, AI-generated Docs, and Slack/Teams alerts on Aletheore AIR.">
   <meta name="twitter:image" content="https://www.aletheore.com/assets/logo-mark.png">
 
   <link rel="icon" type="image/png" href="assets/logo-mark.png">
@@ -39,10 +39,17 @@
       },
       {
         "@type": "Offer",
+        "name": "Aletheore Flash",
+        "price": "6",
+        "priceCurrency": "USD",
+        "description": "Automatic PR reviews on every push, up to 800/month, one model."
+      },
+      {
+        "@type": "Offer",
         "name": "Aletheore AIR",
         "price": "29.99",
         "priceCurrency": "USD",
-        "description": "Up to 3 team members. Managed audits and AIRview builds run on an OpenAI frontier model."
+        "description": "Up to 3 team members. Everything in Flash plus a second-model verification pass, managed audits, and AIRview builds run on an OpenAI frontier model."
       }
     ],
     "featureList": [
@@ -55,7 +62,7 @@
       "Multi-provider AI audit reports (Claude, OpenAI, Gemini, Mistral, Grok, DeepSeek, Ollama)",
       "GitHub App: automatic PR comments and branch-protection check runs",
       "AI-powered managed audit reports on pull requests, written by an OpenAI frontier model",
-      "Automatic Flash reviews on every pull request push: one model writes the review, a second independent model re-checks every finding against the diff before it's shown (AIR)",
+      "Automatic Flash reviews on every pull request push (Flash tier and up); AIR adds a second, independent model that re-checks every finding against the diff before it's shown",
       "Slack/Teams alerts on new findings",
       "Live API endpoint health monitoring across multiple targets, with a public status API",
       "AIRview: an AI-generated, always-current map of your repo's architecture with dependency diagrams",
@@ -173,7 +180,7 @@
         <article class="pillar-card">
           <span class="pillar-index">01</span>
           <h3>Code Review</h3>
-          <p>Automatic PR comments, Flash reviews independently re-checked by a second model before you see them, managed audits, and branch-protection checks that cite the changed file and line.</p>
+          <p>Automatic PR comments and Flash reviews on every push, independently re-checked by a second model on AIR before you see them, plus managed audits and branch-protection checks that cite the changed file and line.</p>
           <ul>
             <li>Review only what changed</li>
             <li>Catch secrets before merge</li>

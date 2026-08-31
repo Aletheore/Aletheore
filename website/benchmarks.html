@@ -4,19 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Aletheore Benchmarks — Measured Against RepoWise, In the Open</title>
-  <meta name="description" content="Aletheore vs. RepoWise on locating code, cost, and PR review — every number reproducible from the public aletheore-benchmarks repo, no API key required. We publish the rows we lose too.">
+  <meta name="description" content="Aletheore vs. RepoWise and a real named competitor (PR-Agent) on locating code, dead-code detection, cost, and PR review - every number reproducible from the public aletheore-benchmarks repo, no API key required. We publish the rows we lose too.">
   <link rel="canonical" href="https://www.aletheore.com/benchmarks">
 
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="Aletheore">
   <meta property="og:url" content="https://www.aletheore.com/benchmarks">
   <meta property="og:title" content="Aletheore Benchmarks — Measured Against RepoWise, In the Open">
-  <meta property="og:description" content="Head-to-head retrieval results, PR review cost/quality, and deterministic-vs-bare-LLM precision — reproducible from the public aletheore-benchmarks repo. We publish the rows we lose too.">
+  <meta property="og:description" content="Head-to-head retrieval results, dead-code detection, a real named-competitor PR review comparison, and deterministic-vs-bare-LLM precision - reproducible from the public aletheore-benchmarks repo. We publish the rows we lose too.">
   <meta property="og:image" content="https://www.aletheore.com/assets/logo-mark.png">
 
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Aletheore Benchmarks — Measured Against RepoWise, In the Open">
-  <meta name="twitter:description" content="Head-to-head retrieval results, PR review cost/quality, and deterministic-vs-bare-LLM precision — reproducible, no API key required.">
+  <meta name="twitter:description" content="Head-to-head retrieval, dead-code detection, PR review vs. a real named competitor, and deterministic-vs-bare-LLM precision - reproducible, no API key required.">
   <meta name="twitter:image" content="https://www.aletheore.com/assets/logo-mark.png">
 
   <link rel="icon" type="image/png" href="assets/logo-mark.png">
@@ -372,6 +372,58 @@ python scripts/score_fallback_judge.py</code></pre>
 
       <section class="developer-section dogfood-repo dogfood-repo-alt">
         <div class="section-heading dogfood-heading">
+          <p class="eyebrow">Head-to-head against PR-Agent · a real, named competitor</p>
+          <h2>Same model, same corpus, production code.</h2>
+          <p>A different question from the compact-vs-context experiments above: how does
+            Aletheore's actual hosted product compare against a real, named, external competitor
+            (Qodo's <a href="https://github.com/qodo-ai/pr-agent" rel="noopener">PR-Agent</a>), held
+            to the same model, so the result isolates review methodology rather than which vendor
+            has the bigger model budget? Both tools on <code>gpt-5.6-luna</code>, 24-case corpus,
+            production Aletheore deployed at commit <code>35e18f8</code>.</p>
+        </div>
+
+        <div class="toon-counters">
+          <div class="toon-counter">
+            <div class="toon-counter-value">0</div>
+            <div class="toon-counter-label">false positives, both Aletheore tiers<br>vs. PR-Agent's 8</div>
+          </div>
+          <div class="toon-counter">
+            <div class="toon-counter-value">2.5x</div>
+            <div class="toon-counter-label">Aletheore's real recall vs. PR-Agent's,<br>on identical footing</div>
+          </div>
+          <div class="toon-counter">
+            <div class="toon-counter-value">4.4x</div>
+            <div class="toon-counter-label">faster per case, Aletheore Flash<br>vs. PR-Agent (15.9s vs. 69.3s)</div>
+          </div>
+        </div>
+
+        <div class="dogfood-table-wrap">
+          <table class="dogfood-table">
+            <thead>
+              <tr><th>Tool</th><th>Hit</th><th>Partial</th><th>Miss</th><th>False Positives</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Aletheore AIR (Luna + DeepSeek verify)</td><td><strong>15</strong></td><td>1</td><td>4</td><td><strong>0</strong></td></tr>
+              <tr><td>Aletheore Flash (Luna only, no verify)</td><td><strong>15</strong></td><td>0</td><td>5</td><td><strong>0</strong></td></tr>
+              <tr><td>PR-Agent / Qodo (Luna)</td><td>6</td><td>0</td><td>14</td><td>8</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="dogfood-p">AIR and Flash tie on total recall (15/20 each) despite Flash never
+          calling the verification model, consistent with verification being a precision
+          mechanism, not a recall lever. Both Aletheore tiers hold a clean false-positive record on
+          the 4 clean diffs, not explained by proposing fewer findings overall (it doesn't cost
+          recall, see the hit numbers above). This reverses an earlier, unintentionally unfair run
+          (free-tier Aletheore vs. PR-Agent's own pricier default model) that had shown the opposite,
+          documented as superseded, not discarded. Disclosed limitations (no blind-judge pass this
+          cycle, AIR measured via direct invocation rather than a live webhook) and the full setup
+          in
+          <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/pr_review/README.md" rel="noopener">pr_review/README.md</a>,
+          Experiment 5.</p>
+      </section>
+
+      <section class="developer-section dogfood-repo dogfood-repo-alt">
+        <div class="section-heading dogfood-heading">
           <p class="eyebrow">Deterministic analysis vs. bare LLM</p>
           <h2>Can a bare LLM reproduce the scanner's answer, given the same data?</h2>
           <p>Not "Aletheore vs. RepoWise" — for the parts of Aletheore that aren't an LLM call
@@ -395,6 +447,40 @@ python scripts/score_fallback_judge.py</code></pre>
         </div>
         <p class="dogfood-p">Full methodology, including a real bug this testing surfaced, in
           <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/DETERMINISTIC_VS_LLM.md" rel="noopener">DETERMINISTIC_VS_LLM.md</a>.</p>
+      </section>
+
+      <section class="developer-section dogfood-repo dogfood-repo-alt">
+        <div class="section-heading dogfood-heading">
+          <p class="eyebrow">Dead-code detection · Kotlin and Swift, vs. RepoWise</p>
+          <h2>Swift: a clean win. Kotlin: an exact match.</h2>
+          <p>A different axis from "how does X work?" above: which files does each tool correctly
+            leave alone as real, reachable code? Measured file-level (RepoWise also flags
+            unused-export symbols; Aletheore's dead-code module doesn't attempt that granularity,
+            so symbol-level findings are excluded from both sides).</p>
+        </div>
+
+        <div class="dogfood-table-wrap">
+          <table class="dogfood-table">
+            <thead>
+              <tr><th>Repo</th><th>Files</th><th>RepoWise false positives</th><th>Aletheore false positives</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>vapor/penny-bot (Swift)</td><td>168</td><td>60 (36%)</td><td><strong>0</strong></td></tr>
+              <tr><td>vapor/api-template (Swift)</td><td>10</td><td>6 (60%)</td><td><strong>0</strong></td></tr>
+              <tr><td>android/architecture-samples (Kotlin)</td><td>268</td><td>7</td><td><strong>7</strong>, same 7 files</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="dogfood-p">RepoWise's Swift support doesn't understand whole-module imports: a
+          Swift <code>import Foo</code> names a compiled target, not a file, so files referenced
+          only from outside Swift's import syntax (a Lambda handler invoked by the AWS runtime)
+          look completely unreachable to it. Getting Aletheore to 0 on Swift, and Kotlin from an
+          initial 31 down to an exact 7-vs-7 match with RepoWise, took five real fixes to
+          Aletheore's own scanner, found by re-running this comparison rather than trusting an
+          earlier pass: same-target and same-package implicit visibility, a manifest
+          string-interpolation parsing bug, and two missing import-resolution cases (top-level
+          Kotlin functions and constants). Full writeup and the fix history in
+          <a href="https://github.com/Aletheore/aletheore-benchmarks/blob/master/LANGUAGE_COVERAGE.md" rel="noopener">LANGUAGE_COVERAGE.md</a>.</p>
       </section>
 
       <section class="developer-section dogfood-repo dogfood-repo-alt">

@@ -84,19 +84,21 @@ This is a local process you start and stop. It is not a hosted service, and noth
 
 `aletheore dashboard` serves a local web UI over the same evidence: dependency graph, trend charts across scan history, and the live MCP tool list. No account, no data leaves the machine.
 
-## Hosted service — Aletheore AIR
+## Hosted service - three tiers
 
-**$29.99/month** (or $299.90/year), including **5 team members**. Additional members $4.99/month each.
+A free **Community** tier covers the CLI, the GitHub Action, the MCP server, and the local dashboard, permanently and without an account.
 
-A free Community tier covers the CLI, the GitHub Action, the MCP server, and the local dashboard, permanently and without an account.
+**Aletheore Flash: $6/month** (monthly billing only, no annual price yet). Adds a hosted GitHub App:
 
-AIR adds a hosted GitHub App:
+- **Flash review**: automated PR review on every push to an open pull request, grounded in evidence for the changed files, up to 800/month
 
+**Aletheore AIR: $29.99/month** (or $299.90/year), including **3 team members**. Additional members $6.99/month each. Everything in Flash, plus:
+
+- **Verification pass**: Flash review's findings are re-checked by a second, independent model against the diff before being shown; anything that doesn't hold up is dropped
 - **Managed audits** — LLM-written, evidence-grounded reports, Ed25519-signed with a public verification endpoint
 - **Citation verification** — every finding is checked against real evidence; unverifiable claims are dropped or flagged, and the report's certificate reports whether it is fully evidence-backed
 - **AIRview** — a generated architecture wiki, grounded in scan evidence
 - **Docs** — generated API reference with `file:line` citations, exportable as a single Markdown file
-- **Flash review** — automated PR review, grounded in evidence for the changed files
 - **Endpoint health monitoring** — GET-only probes of endpoints already mapped from source, with Slack/Teams alerting
 - **Runtime event correlation** — connects a runtime error to the commit that last touched the file
 - **Hosted semantic search embeddings** — removes the local-model setup step in front of `aletheore index`; a paid plan calls Aletheore's own embedding endpoint instead of running a local Ollama or supplying a personal OpenAI key. The resulting index is identical either way, and nothing is stored server-side
