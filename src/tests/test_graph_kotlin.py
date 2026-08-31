@@ -121,6 +121,65 @@ def test_build_module_graph_kotlin_import_resolves_despite_filename_mismatch(tmp
     ) in edges
 
 
+def test_build_module_graph_kotlin_top_level_function_import_resolves(tmp_path):
+    # Real repo confirmed (android/architecture-samples): ComposeUtils.kt's
+    # `fun LoadingContent(...)` (the dominant declaration shape in real
+    # Jetpack Compose code) imported by name from three other files,
+    # resolved to nothing before this - _kotlin_class_file's needle only
+    # matched class/interface/object, never a top-level function.
+    repo = tmp_path / "repo"
+    src = repo / "src" / "main" / "kotlin" / "com" / "example"
+    (src / "util").mkdir(parents=True)
+    (src / "util" / "ComposeUtils.kt").write_text(
+        "package com.example.util\n\n"
+        "@Composable\n"
+        "fun LoadingContent(loading: Boolean) {}\n"
+    )
+    (src / "Main.kt").write_text(
+        "package com.example\n\n"
+        "import com.example.util.LoadingContent\n\n"
+        "fun main() { LoadingContent(true) }\n"
+    )
+
+    _, dependency_graph, _ = build_module_graph(repo)
+    edges = {tuple(edge) for edge in dependency_graph["edges"]}
+
+    assert (
+        "src/main/kotlin/com/example/Main.kt",
+        "src/main/kotlin/com/example/util/ComposeUtils.kt",
+    ) in edges
+
+
+def test_build_module_graph_kotlin_extension_function_import_resolves(tmp_path):
+    # Real repo confirmed (android/architecture-samples): ModelMappingExt.kt's
+    # `fun LocalTask.toExternal()` - an extension function, where the
+    # imported name ("toExternal") comes after the receiver type
+    # ("LocalTask."), not right after `fun`.
+    repo = tmp_path / "repo"
+    src = repo / "src" / "main" / "kotlin" / "com" / "example"
+    (src / "data").mkdir(parents=True)
+    (src / "data" / "ModelMappingExt.kt").write_text(
+        "package com.example.data\n\n"
+        "class LocalTask(val id: String)\n"
+        "class Task(val id: String)\n\n"
+        "fun LocalTask.toExternal() = Task(id)\n"
+    )
+    (src / "Main.kt").write_text(
+        "package com.example\n\n"
+        "import com.example.data.LocalTask\n"
+        "import com.example.data.toExternal\n\n"
+        "fun main() { LocalTask(\"1\").toExternal() }\n"
+    )
+
+    _, dependency_graph, _ = build_module_graph(repo)
+    edges = {tuple(edge) for edge in dependency_graph["edges"]}
+
+    assert (
+        "src/main/kotlin/com/example/Main.kt",
+        "src/main/kotlin/com/example/data/ModelMappingExt.kt",
+    ) in edges
+
+
 def test_build_module_graph_kotlin_wildcard_import_resolves_every_file_in_package(tmp_path):
     repo = tmp_path / "repo"
     src = repo / "src" / "main" / "kotlin" / "com" / "example"
