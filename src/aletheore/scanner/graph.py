@@ -1625,7 +1625,27 @@ def _kotlin_class_file(root: Path, segments: list[str]) -> Path | None:
     if not directory.is_dir():
         return None
     target = segments[-1]
-    needle = re.compile(rf"\b(?:class|interface|object)\s+{re.escape(target)}\b")
+    escaped = re.escape(target)
+    # A top-level Kotlin function is as common an import target as a
+    # class - Jetpack Compose's @Composable functions are the dominant
+    # shape in real UI code (confirmed against android/architecture-
+    # samples: ComposeUtils.kt's `fun LoadingContent(...)`, imported by
+    # name from three other files, resolved to nothing before this). The
+    # optional `\S+\.` handles an extension function's receiver type
+    # (`fun LocalTask.toExternal()`), which sits between `fun` and the
+    # name this import actually names.
+    #
+    # A top-level `val`/`var` is the same shape one level simpler - a
+    # module-level constant or computed property with no parameter list
+    # at all (confirmed against the same real repo:
+    # CoroutinesUtils.kt's `val WhileUiSubscribed: SharingStarted = ...`,
+    # imported by name, same failure as the function case above before
+    # this).
+    needle = re.compile(
+        rf"\b(?:class|interface|object)\s+{escaped}\b"
+        rf"|\bfun\s+(?:\S+\.)?{escaped}\s*\("
+        rf"|\b(?:val|var)\s+{escaped}\b"
+    )
     for candidate in sorted(directory.glob("*.kt")) + sorted(directory.glob("*.kts")):
         try:
             if needle.search(candidate.read_text(errors="ignore")):
@@ -1915,9 +1935,24 @@ def _swift_call_arg_strings(call_expr: Node, source: bytes) -> dict[str, str]:
             continue
         label = source[label_id.start_byte:label_id.end_byte].decode(errors="ignore")
         str_lit = next((c for c in arg.children if c.type == "line_string_literal"), None)
-        text_node = next(
-            (c for c in str_lit.children if c.type == "line_str_text"), None
-        ) if str_lit is not None else None
+        if str_lit is None:
+            continue
+        # A string with interpolation (e.g. "./Lambdas/\(name)", the shape a
+        # programmatic manifest's factory function uses to build several
+        # targets from one call site) isn't a pure literal - `name` is a
+        # runtime value, never resolvable from source alone. Skipping it
+        # here is deliberate: picking the first line_str_text child instead
+        # (the old behavior) silently returned a truncated fragment of the
+        # real value ("./Lambdas/", missing the interpolated suffix) as if
+        # it were the whole thing - confirmed on a real repo (vapor/
+        # penny-bot), where this merged eight distinct Lambda targets into
+        # one fictitious "Lambda" target spanning the entire Lambdas/
+        # directory. An unresolvable value should fall through to
+        # _infer_swift_targets's own directory-convention scan instead of
+        # being reported as this.
+        if any(c.type == "interpolated_expression" for c in str_lit.children):
+            continue
+        text_node = next((c for c in str_lit.children if c.type == "line_str_text"), None)
         if text_node is not None:
             result[label] = source[text_node.start_byte:text_node.end_byte].decode(errors="ignore")
     return result

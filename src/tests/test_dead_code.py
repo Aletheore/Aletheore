@@ -54,6 +54,260 @@ def test_package_swift_manifest_is_never_unreachable(tmp_path):
     assert "Package.swift" in result["entry_points_detected"]
 
 
+def test_jvm_test_files_are_never_unreachable(tmp_path):
+    # Real repo confirmed (android/architecture-samples): androidTest files
+    # are invoked by instrumentation/JUnit reflection, never a plain import,
+    # so they always look unreachable to the import graph. The PascalCase
+    # "*Test.kt" suffix is the JVM convention (unlike Python's "test_*.py"),
+    # and "androidTest" is one fused word - not matched by the tests?/
+    # __tests__ directory pattern, which requires "test" as its own segment.
+    modules = [
+        _module(
+            "app/src/androidTest/java/com/example/todoapp/tasks/TasksScreenTest.kt"
+        ),
+        _module("app/src/androidTest/java/com/example/todoapp/data/TaskDaoTest.kt"),
+        _module("app/src/test/java/com/example/todoapp/data/TaskRepositoryTest.java"),
+        # A test-directory file with no "*Test" suffix (a fixture/helper) -
+        # only the directory-convention pattern catches this one.
+        _module("app/src/androidTest/java/com/example/todoapp/util/TestUtils.kt"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_android_manifest_application_shorthand_name_is_never_unreachable(tmp_path):
+    # Real repo confirmed (android/architecture-samples): TodoApplication.kt
+    # carries @HiltAndroidApp and is referenced only by AndroidManifest.xml's
+    # <application android:name=".TodoApplication"> - the Android OS
+    # instantiates it via reflection from that XML, never a plain Kotlin
+    # import. ".TodoApplication" is the manifest shorthand form (relative to
+    # the app's package), not a file path or a full class name.
+    manifest_dir = tmp_path / "app" / "src" / "main"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n'
+        '    <application android:name=".TodoApplication" />\n'
+        "</manifest>\n"
+    )
+    app_dir = tmp_path / "app" / "src" / "main" / "java" / "com" / "example" / "todoapp"
+    app_dir.mkdir(parents=True)
+    (app_dir / "TodoApplication.kt").write_text(
+        "@HiltAndroidApp\nclass TodoApplication : Application()\n"
+    )
+    modules = [_module("app/src/main/java/com/example/todoapp/TodoApplication.kt")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "app/src/main/java/com/example/todoapp/TodoApplication.kt" in result["entry_points_detected"]
+
+
+def test_android_manifest_activity_fully_qualified_name_is_never_unreachable(tmp_path):
+    # Real repo confirmed (android/architecture-samples): TodoActivity.kt,
+    # the app's launcher activity, is referenced only by AndroidManifest.xml's
+    # <activity android:name="com.example...TodoActivity"> with a
+    # MAIN/LAUNCHER intent-filter - the fully-qualified form, unlike
+    # TodoApplication's shorthand above.
+    manifest_dir = tmp_path / "app" / "src" / "main"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n'
+        "    <application>\n"
+        '        <activity android:name="com.example.todoapp.TodoActivity" />\n'
+        "    </application>\n"
+        "</manifest>\n"
+    )
+    app_dir = tmp_path / "app" / "src" / "main" / "java" / "com" / "example" / "todoapp"
+    app_dir.mkdir(parents=True)
+    (app_dir / "TodoActivity.kt").write_text("class TodoActivity : AppCompatActivity()\n")
+    modules = [_module("app/src/main/java/com/example/todoapp/TodoActivity.kt")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "app/src/main/java/com/example/todoapp/TodoActivity.kt" in result["entry_points_detected"]
+
+
+def test_android_manifest_ignores_action_and_category_name_attributes(tmp_path):
+    # <action>/<category> tags also carry android:name (e.g.
+    # "android.intent.action.MAIN"), but those name Intent actions, never a
+    # class - only <application>/<activity>/<service>/<receiver>/<provider>
+    # are treated as entry-point-bearing tags.
+    manifest_dir = tmp_path / "app" / "src" / "main"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n'
+        "    <application>\n"
+        '        <activity android:name="com.example.todoapp.TodoActivity">\n'
+        "            <intent-filter>\n"
+        '                <action android:name="android.intent.action.MAIN" />\n'
+        '                <category android:name="android.intent.category.LAUNCHER" />\n'
+        "            </intent-filter>\n"
+        "        </activity>\n"
+        "    </application>\n"
+        "</manifest>\n"
+    )
+    app_dir = tmp_path / "app" / "src" / "main" / "java" / "com" / "example" / "todoapp"
+    app_dir.mkdir(parents=True)
+    (app_dir / "MAIN.kt").write_text("class MAIN\n")
+    (app_dir / "TodoActivity.kt").write_text("class TodoActivity : AppCompatActivity()\n")
+    modules = [
+        _module("app/src/main/java/com/example/todoapp/MAIN.kt"),
+        _module("app/src/main/java/com/example/todoapp/TodoActivity.kt"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    paths = [m["path"] for m in result["unreachable_modules"]]
+    assert "app/src/main/java/com/example/todoapp/MAIN.kt" in paths
+    assert "app/src/main/java/com/example/todoapp/TodoActivity.kt" not in paths
+
+
+def test_android_manifest_entry_point_skips_an_ambiguous_basename_match(tmp_path):
+    # A manifest entry names a class, not a file path - resolved the same
+    # way _infer_xcodeproj_swift_targets resolves Xcode target membership:
+    # basename search under the repo root, kept only when unambiguous. Two
+    # files sharing "Foo.kt" as their basename means the manifest's "Foo"
+    # can't be resolved to either one specifically, so neither is treated
+    # as an entry point (matches the Xcode resolver's own tie-breaking).
+    manifest_dir = tmp_path / "app" / "src" / "main"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "AndroidManifest.xml").write_text(
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n'
+        '    <application android:name=".Foo" />\n'
+        "</manifest>\n"
+    )
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "Foo.kt").write_text("class Foo\n")
+    (tmp_path / "b").mkdir()
+    (tmp_path / "b" / "Foo.kt").write_text("class Foo\n")
+    modules = [_module("a/Foo.kt"), _module("b/Foo.kt")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    paths = [m["path"] for m in result["unreachable_modules"]]
+    assert "a/Foo.kt" in paths
+    assert "b/Foo.kt" in paths
+
+
+def test_hilt_android_app_annotation_is_never_unreachable(tmp_path):
+    (tmp_path / "TodoApplication.kt").write_text(
+        "@HiltAndroidApp\nclass TodoApplication : Application()\n"
+    )
+    modules = [_module("TodoApplication.kt")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "TodoApplication.kt" in result["entry_points_detected"]
+
+
+def test_hilt_viewmodel_annotation_is_never_unreachable(tmp_path):
+    # Real repo confirmed (android/architecture-samples): TasksViewModel.kt
+    # and its sibling ViewModels carry @HiltViewModel + @Inject constructor -
+    # instantiated via Hilt's generated factory, never a plain import.
+    (tmp_path / "TasksViewModel.kt").write_text(
+        "@HiltViewModel\nclass TasksViewModel @Inject constructor() : ViewModel()\n"
+    )
+    modules = [_module("TasksViewModel.kt")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "TasksViewModel.kt" in result["entry_points_detected"]
+
+
+def test_dagger_module_with_install_in_is_never_unreachable(tmp_path):
+    # Real repo confirmed (android/architecture-samples): DataModules.kt's
+    # @Module classes are wired into Hilt's DI graph via @InstallIn, never
+    # imported by name anywhere in the app's own source.
+    (tmp_path / "DataModules.kt").write_text(
+        "@Module\n@InstallIn(SingletonComponent::class)\nobject RepositoryModule\n"
+    )
+    modules = [_module("DataModules.kt")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "DataModules.kt" in result["entry_points_detected"]
+
+
+def test_dagger_module_with_test_install_in_is_never_unreachable(tmp_path):
+    # Real repo confirmed (android/architecture-samples): DatabaseTestModule.kt
+    # and RepositoryTestModule.kt (shared-test source set) use @TestInstallIn
+    # rather than @InstallIn - Hilt's variant for a test module that replaces
+    # a production one - same DI-wiring mechanism, just for test builds.
+    (tmp_path / "DatabaseTestModule.kt").write_text(
+        "@Module\n"
+        "@TestInstallIn(components = [SingletonComponent::class], replaces = [DatabaseModule::class])\n"
+        "object DatabaseTestModule\n"
+    )
+    modules = [_module("DatabaseTestModule.kt")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "DatabaseTestModule.kt" in result["entry_points_detected"]
+
+
+def test_dagger_module_without_install_in_stays_unreachable(tmp_path):
+    # A bare @Module with no @InstallIn/@TestInstallIn isn't enough on its
+    # own - real Hilt/Dagger modules always pair @Module with one of those,
+    # and requiring the pair avoids matching an unrelated project's own
+    # "Module" concept that happens to reuse the annotation name.
+    (tmp_path / "NotActuallyDagger.kt").write_text("@Module\nclass NotActuallyDagger\n")
+    modules = [_module("NotActuallyDagger.kt")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    paths = [m["path"] for m in result["unreachable_modules"]]
+    assert "NotActuallyDagger.kt" in paths
+
+
+def test_hilt_dagger_annotation_ignored_outside_jvm_files(tmp_path):
+    # The annotation text alone isn't the signal - only a real .kt/.kts/
+    # .java file gets this heuristic, the same file-extension gate every
+    # other language-specific check here (main guard, @main) already uses.
+    (tmp_path / "not_kotlin.py").write_text("# @HiltViewModel\nclass NotKotlin: pass\n")
+    modules = [_module("not_kotlin.py")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    paths = [m["path"] for m in result["unreachable_modules"]]
+    assert "not_kotlin.py" in paths
+
+
+def test_main_swift_is_never_unreachable(tmp_path):
+    # Real repo confirmed (vapor/api-template): Sources/Run/main.swift is
+    # Swift's classic top-level-code entry point (predates @main, still
+    # what Vapor's own project template uses) - same category as
+    # Package.swift above, not this repo's own application code importing
+    # it.
+    modules = [_module("Sources/Run/main.swift")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "Sources/Run/main.swift" in result["entry_points_detected"]
+
+
+def test_swift_target_siblings_of_a_main_entry_point_are_never_unreachable(tmp_path):
+    # Real repo confirmed (vapor/penny-bot): a target's @main handler file
+    # is imported by nothing outside the target (nothing in Swift *can*
+    # import a leaf executable target), and its sibling files within the
+    # same target (a repository/service layer) are referenced by the
+    # handler with no import statement at all - Swift files within one
+    # target see each other implicitly. Both looked equally unreachable
+    # before this: the per-file import graph can never show intra-target
+    # edges, no matter how well cross-target import resolution works.
+    target_dir = tmp_path / "Sources" / "AutoFaqsLambda"
+    target_dir.mkdir(parents=True)
+    (target_dir / "AutoFaqsHandler.swift").write_text(
+        "import AWSLambdaRuntime\n\n@main\nstruct AutoFaqsHandler: LambdaHandler {}\n"
+    )
+    (target_dir / "S3AutoFaqsRepository.swift").write_text(
+        "struct S3AutoFaqsRepository {}\n"
+    )
+    modules = [
+        _module("Sources/AutoFaqsLambda/AutoFaqsHandler.swift"),
+        _module("Sources/AutoFaqsLambda/S3AutoFaqsRepository.swift"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, ignored_paths=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_swift_target_with_no_reachable_member_stays_unreachable(tmp_path):
+    # An entirely orphaned target (no @main, nothing imports it) should
+    # still be flagged - the fix only propagates reachability from a
+    # target that's actually reachable some other way, it doesn't make
+    # every Swift file immune to dead-code detection.
+    target_dir = tmp_path / "Sources" / "Orphan"
+    target_dir.mkdir(parents=True)
+    (target_dir / "OrphanThing.swift").write_text("struct OrphanThing {}\n")
+    modules = [_module("Sources/Orphan/OrphanThing.swift")]
+    result = find_dead_code(tmp_path, modules, config=None, ignored_paths=None)
+    paths = [m["path"] for m in result["unreachable_modules"]]
+    assert "Sources/Orphan/OrphanThing.swift" in paths
+
+
 def test_config_can_add_custom_entry_points(tmp_path):
     modules = [_module("app/worker.py")]
     config = {"dead_code_entry_points": ["app/worker.py"]}
