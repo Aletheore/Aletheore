@@ -143,6 +143,7 @@ from scan_worker.github_api import (
     fetch_pr_changed_files,
     fetch_pr_context,
     fetch_pr_diff,
+    fetch_pr_is_open,
     upsert_pr_comment,
 )
 from app_server.email_templates import (
@@ -936,6 +937,18 @@ def run_pr_scan_job(
     try:
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
         token = _token_sync(installation_id, app_jwt)
+
+        # A fast merge-and-delete-branch (a completely normal workflow)
+        # between this job being queued and actually running leaves
+        # head_sha unfetchable - not a scan failure, there's simply
+        # nothing left to check out, and the PR is already done. Checked
+        # here rather than only catching the eventual git error so this
+        # doesn't post a failure comment or count against the ops
+        # failed-jobs alert for what is, from the user's perspective, a
+        # PR that already finished successfully.
+        client = get_github_api_client()
+        if not fetch_pr_is_open(client, token, repo_full_name, pr_number):
+            return
 
         clone_url = _clone_url(repo_full_name, token)
         base_dir = job_dir / "base"

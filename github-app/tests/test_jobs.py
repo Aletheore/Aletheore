@@ -37,6 +37,17 @@ def _noop_repo_checkout_lock(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.repo_checkout_lock", _noop_spend_lock)
 
 
+@pytest.fixture(autouse=True)
+def _pr_is_open_by_default(monkeypatch):
+    # run_pr_scan_job now checks the PR is still open before attempting a
+    # checkout that's doomed once its branch is gone (see
+    # fetch_pr_is_open's docstring for the real production failure this
+    # closes) - a real network call none of the 30+ existing tests here
+    # expect. Default to "still open" so none of them need touching; the
+    # skip-when-closed path gets its own dedicated test overriding this.
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_is_open", lambda *a, **k: True)
+
+
 def _patch_no_spend_cap(monkeypatch) -> None:
     """AIRview/Docs build jobs now gate on the same installation monthly
     LLM spend cap managed audits and flash review already used - real
@@ -5564,6 +5575,38 @@ def test_run_pr_scan_job_skips_paid_repo_past_monthly_scan_cap(bare_repo_with_tw
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: cloned.append(True))
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    posted = []
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: posted.append(True))
+
+    run_pr_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        pr_number=7,
+        base_sha=base_sha,
+        head_sha=head_sha,
+    )
+
+    assert cloned == []
+    assert posted == []
+
+
+def test_run_pr_scan_job_skips_cleanly_when_pr_already_closed(bare_repo_with_two_commits, monkeypatch):
+    # Real production failure this closes: a PR merged (squash-merge-and-
+    # delete-branch, a completely normal fast workflow) between this job
+    # being queued and actually running left head_sha unfetchable by any
+    # git checkout - "unable to read tree", not a real scan failure, and
+    # not something a retry could ever fix. Checking PR state up front
+    # means this is a clean no-op instead of a failed job (a bot comment
+    # on an already-merged PR, and an ops "failed_jobs" alert for a PR
+    # that already finished successfully).
+    bare_path, base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_is_open", lambda *a, **k: False)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    cloned = []
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: cloned.append(True))
     posted = []
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: posted.append(True))
 
