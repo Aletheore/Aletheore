@@ -2349,6 +2349,105 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     assert recorded_spend == [-FLASH_REVIEW_SPEND_RESERVE_USD]
 
 
+def test_flash_review_comment_body_prefixes_the_symbol_when_present():
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body(
+        {"file": "app.py", "line": 12, "issue": "real problem", "symbol": "handle_request"}
+    )
+    assert body.startswith("**`handle_request`**")
+    assert "real problem" in body
+
+
+def test_flash_review_comment_body_omits_the_symbol_line_when_none():
+    from scan_worker.jobs import _flash_review_comment_body
+
+    body = _flash_review_comment_body({"file": "app.py", "line": 12, "issue": "real problem"})
+    assert "**`" not in body
+    assert body.startswith("real problem")
+
+
+def test_flash_review_job_attaches_symbol_attribution_from_deterministic_evidence(monkeypatch):
+    # Build B: the symbol shown in the posted comment must come from the
+    # same deterministic module-graph evidence every other blast-radius/
+    # dependency-impact context already reads (find_symbol_at_location),
+    # never a field the LLM itself generated - see find_symbol_at_location's
+    # docstring in flash_review.py.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr(
+        "scan_worker.jobs._latest_evidence_or_none",
+        lambda *a, **k: {
+            "repository": {
+                "modules": [
+                    {
+                        "path": "app.py",
+                        "symbols": {
+                            "functions": [
+                                {"name": "handle_request", "start_line": 1, "end_line": 5}
+                            ],
+                            "classes": [],
+                        },
+                    }
+                ]
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.review_diff",
+        lambda diff_text, file_context="", **kwargs: [
+            {"file": "app.py", "line": 2, "issue": "real problem", "source": "llm"}
+        ],
+    )
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    inline_comments = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_pr_review_comment",
+        lambda client, token, repo, pr, commit_id, path, line, body: inline_comments.append(
+            (path, line, body)
+        )
+        or {"id": 999002},
+    )
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert len(inline_comments) == 1
+    assert "**`handle_request`**" in inline_comments[0][2]
+
+
 def test_flash_review_job_reserves_the_cap_before_running_the_review(monkeypatch):
     # F25/atomic-reservation redesign: run_flash_review_job used to check the
     # cap inside a lock, release it, run the (multi-minute) review unlocked,

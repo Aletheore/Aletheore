@@ -329,6 +329,45 @@ def build_dependency_impact_context(evidence: dict | None, changed_files: list[s
     return "--- deterministic dependency impact context (raw graph facts, not conclusions) ---\n" + "\n".join(lines)
 
 
+def find_symbol_at_location(evidence: dict | None, file_path: str, line: int) -> str | None:
+    """The name of the function/class whose real body contains this
+    file:line, read from the same deterministic module graph
+    build_blast_radius_context already reads - never the LLM's own guess,
+    so a finding can never be mislabeled with a symbol name that doesn't
+    actually contain the cited line.
+
+    A citation can fall inside more than one candidate range at once (a
+    method's own range is a strict subset of its containing class's) -
+    when that happens, the narrowest (innermost) match wins, since the
+    method name is the more useful attribution for a line-level finding
+    than its enclosing class.
+
+    Returns None - never a guess - when the location isn't inside any
+    known symbol: module-level code, a file the evidence pass never
+    covered, or missing evidence entirely. Callers must treat that as
+    "no symbol to report", not an error.
+    """
+    if not evidence:
+        return None
+    modules = evidence.get("repository", {}).get("modules", [])
+    module = next((m for m in modules if m.get("path") == file_path), None)
+    if module is None:
+        return None
+    symbols = module.get("symbols", {})
+    candidates: list[tuple[int, str]] = []
+    for entry in symbols.get("functions", []) + symbols.get("classes", []):
+        name = entry.get("name")
+        start, end = entry.get("start_line"), entry.get("end_line")
+        if not name or start is None or end is None:
+            continue
+        if start <= line <= end:
+            candidates.append((end - start, name))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
+
+
 MAX_BLAST_RADIUS_SYMBOLS = 10
 MAX_BLAST_RADIUS_CANDIDATES = 40
 MAX_BLAST_RADIUS_CALLERS_SHOWN = 10
