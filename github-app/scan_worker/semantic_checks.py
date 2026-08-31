@@ -489,7 +489,7 @@ def _removed_bounds_clamp_findings(file: str, source: str, hunks: list[_Hunk]) -
 # `except Exception: pass` added around Session.close_quietly()'s per-
 # adapter v.close() call, silently discarding any close failure.
 _BROAD_EXCEPT_RE = re.compile(
-    r"^(?P<indent>\s*)except(?:\s+\(?\s*(?:Exception|BaseException)\s*\)?(?:\s+as\s+\w+)?)?\s*:\s*(?:#.*)?$"
+    r"^(?P<indent>\s*)except(?:\s+\(?\s*(?:Exception|BaseException)\s*\)?(?:\s+as\s+\w+)?)?\s*:(?P<rest>.*)$"
 )
 _LOG_OR_RERAISE_RE = re.compile(
     r"\braise\b|\blog(?:ger|ging)?\.\w+\s*\(|\bwarnings\.warn\s*\(|\bprint\s*\("
@@ -506,22 +506,38 @@ def _swallowed_exception_findings(file: str, source: str, hunks: list[_Hunk]) ->
                 continue
             except_indent = len(match.group("indent"))
 
-            # Collect this except block's body: contiguous added lines
-            # indented deeper than the except itself, stopping at the first
-            # line back at or above that indentation (end of the block) or
-            # the end of this hunk's added lines.
-            body: list[str] = []
-            for later in added[idx + 1 :]:
-                stripped = later.strip()
-                if not stripped:
+            # A common idiom the old regex's "colon, then only whitespace or
+            # a comment" anchor missed entirely: `except Exception: pass` on
+            # one line never matches it at all (real, verified false
+            # negative - the pattern this check exists to catch, invisible
+            # to it whenever the body isn't given its own line). Anything
+            # after the colon is now captured instead of gating the match,
+            # so an inline body is judged directly - only a bare `pass`
+            # (optionally trailing a comment) counts as a swallow; any other
+            # inline statement (e.g. `except Exception: raise`) is real
+            # handling and correctly falls through as not a swallow.
+            inline_rest = re.sub(r"#.*$", "", match.group("rest")).strip()
+            if inline_rest:
+                if inline_rest != "pass":
                     continue
-                indent = len(later) - len(later.lstrip())
-                if indent <= except_indent:
-                    break
-                body.append(stripped)
+                body = ["pass"]
+            else:
+                # Collect this except block's body: contiguous added lines
+                # indented deeper than the except itself, stopping at the
+                # first line back at or above that indentation (end of the
+                # block) or the end of this hunk's added lines.
+                body = []
+                for later in added[idx + 1 :]:
+                    stripped = later.strip()
+                    if not stripped:
+                        continue
+                    indent = len(later) - len(later.lstrip())
+                    if indent <= except_indent:
+                        break
+                    body.append(stripped)
 
-            if not body:
-                continue  # the except body isn't in this hunk at all - nothing to judge
+                if not body:
+                    continue  # the except body isn't in this hunk at all - nothing to judge
             non_comment = [b for b in body if not b.startswith("#")]
             if non_comment != ["pass"]:
                 continue  # body has real handling (or more than just pass) - not a swallow

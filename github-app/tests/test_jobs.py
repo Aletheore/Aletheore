@@ -1346,6 +1346,38 @@ def test_managed_audit_pr_job_clones_pr_head_runs_audit_and_replies(monkeypatch,
     assert posted["marker"] == AUDIT_COMMENT_MARKER
 
 
+def test_managed_audit_pr_job_skips_cleanly_when_pr_already_closed(monkeypatch):
+    # Sibling gap to run_pr_scan_job's own fetch_pr_is_open check (see
+    # test_run_pr_scan_job_skips_cleanly_when_pr_already_closed): the
+    # ChatOps /aletheore audit trigger races the same way - the PR can
+    # close between being queued and a worker picking it up.
+    # _clone_pr_head's refs/pull/N/head ref outlives branch deletion, so
+    # unlike run_pr_scan_job this wouldn't crash, but without this check it
+    # would still burn a real clone, a full scan, and one or more paid LLM
+    # calls against the monthly spend cap, then post a comment on a PR
+    # nobody's watching anymore.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.managed_audit_definitely_still_cooling_down", lambda *a, **k: False)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_is_open", lambda *a, **k: False)
+    cloned = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._clone_pr_head",
+        lambda *a, **k: cloned.append(True) or (_ for _ in ()).throw(AssertionError("must not clone")),
+    )
+    posted = []
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: posted.append(True))
+
+    from scan_worker.jobs import run_managed_audit_pr_job
+
+    run_managed_audit_pr_job(1, "octocat/hello-world", 42)
+
+    assert cloned == []
+    assert posted == []
+
+
 def test_managed_audit_pr_job_records_each_call_and_stops_mid_run_when_cap_reached(monkeypatch, tmp_path):
     # Mirrors test_managed_audit_api_job_records_each_call_and_exposes_budget_stop:
     # run_managed_audit_pr_job must gate on the same atomic per-call

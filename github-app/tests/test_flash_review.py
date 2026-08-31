@@ -484,6 +484,30 @@ def test_review_diff_prose_mentioning_brackets_does_not_confuse_array_extraction
 
 
 @patch("scan_worker.flash_review.writing_adapter_for")
+def test_review_diff_trailing_remark_with_a_bracket_does_not_eclipse_the_real_answer(
+    mock_adapter_class,
+):
+    # Real bug: the prompt asks the model to end with the array and put
+    # nothing after it, but a model that adds a short trailing remark of
+    # its own containing a bracket pair (e.g. referencing "item[0]") used
+    # to silently outrank and replace the real findings array - the old
+    # extractor took the literal LAST top-level bracket span, and "[0]" is
+    # valid JSON too. The real answer must still win because it's the last
+    # span that actually looks like a findings array (empty, or a list of
+    # objects), not just the last span, period.
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = (
+        '[{"file": "app.py", "line": 3, "issue": "real issue found"}]\n\n'
+        "(see item[0] above for the finding)"
+    )
+    mock_adapter_class.return_value = mock_adapter
+
+    findings = review_diff("--- app.py ---\n@@ -1,1 +3,1 @@\n+something")
+
+    assert findings == [{"file": "app.py", "line": 3, "issue": "real issue found", "source": "llm"}]
+
+
+@patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_treats_malformed_json_as_no_findings(mock_adapter_class):
     mock_adapter = MagicMock()
     mock_adapter.simple_completion.return_value = "not valid json at all"
@@ -2406,6 +2430,57 @@ def test_semantic_checker_flags_a_swallow_even_with_a_comment_mentioning_raise()
     findings = find_semantic_regressions(diff, {"sessions.py": source}, "")
 
     assert len(findings) == 1
+
+
+def test_semantic_checker_flags_a_single_line_swallow():
+    """Real false negative: `except Exception: pass` on one line - a common
+    Python idiom - never matched the old regex at all, which anchored the
+    match on the colon being followed by only whitespace/a comment. The
+    check must judge an inline body directly, not only one given its own
+    line."""
+    source = (
+        "def close_quietly(self):\n"
+        "    try:\n"
+        "        self.conn.close()\n"
+        "    except Exception: pass\n"
+    )
+    diff = (
+        "--- sessions.py ---\n"
+        "@@ -1,1 +1,4 @@\n"
+        " def close_quietly(self):\n"
+        "+    try:\n"
+        "+        self.conn.close()\n"
+        "+    except Exception: pass\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"sessions.py": source}, "")
+
+    assert len(findings) == 1
+    assert "bare `pass`" in findings[0]["issue"]
+
+
+def test_semantic_checker_does_not_flag_a_single_line_except_that_reraises():
+    """The inline-body path must judge the same as the multi-line one: a
+    bare `pass` is the only shape that counts as a swallow, so an inline
+    `except Exception: raise` (real handling) must not be flagged."""
+    source = (
+        "def close_quietly(self):\n"
+        "    try:\n"
+        "        self.conn.close()\n"
+        "    except Exception: raise\n"
+    )
+    diff = (
+        "--- sessions.py ---\n"
+        "@@ -1,1 +1,4 @@\n"
+        " def close_quietly(self):\n"
+        "+    try:\n"
+        "+        self.conn.close()\n"
+        "+    except Exception: raise\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"sessions.py": source}, "")
+
+    assert findings == []
 
 
 def test_semantic_checker_does_not_flag_a_narrow_except_with_pass():

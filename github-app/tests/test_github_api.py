@@ -257,6 +257,89 @@ def test_fetch_pr_diff_reconstructs_a_newly_added_file_github_omitted_a_patch_fo
     assert diff_text.omitted_files == ()
 
 
+def test_fetch_pr_diff_reconstructs_a_pure_rename_correctly_from_the_old_path():
+    # Real bug: GitHub omits `patch` for a pure rename (no content change)
+    # too, and reports the file only under its NEW path in `filename` -
+    # the old content lives at the OLD path (`previous_filename`) in the
+    # base tree. Without threading previous_filename through, the base
+    # fetch looked up the new path against base_ref, 404'd (the file
+    # didn't exist there yet), and the "None != head_content" comparison
+    # fabricated a full-file "added" diff for a file whose content never
+    # actually changed - burning the diff budget on a no-op and actively
+    # misleading Flash Review into reviewing untouched code as new.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/octocat/hello-world/compare/aaa...bbb":
+            return httpx.Response(
+                200,
+                json={
+                    "files": [
+                        {
+                            "filename": "new_name.py",
+                            "previous_filename": "old_name.py",
+                            "status": "renamed",
+                            "patch": None,
+                        }
+                    ]
+                },
+            )
+        content = b"def f():\n    return 1\n"
+        assert request.url.path in (
+            "/repos/octocat/hello-world/contents/new_name.py",
+            "/repos/octocat/hello-world/contents/old_name.py",
+        )
+        return httpx.Response(
+            200,
+            json={"content": base64.b64encode(content).decode(), "encoding": "base64", "size": len(content)},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
+
+    # Same content at old and new paths - a pure rename has no reviewable
+    # content diff, so it must be omitted, not fabricated.
+    assert diff_text == ""
+    assert diff_text.patches == ()
+    assert diff_text.omitted_files == ("new_name.py",)
+
+
+def test_fetch_pr_diff_reconstructs_a_rename_with_a_real_content_change():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/octocat/hello-world/compare/aaa...bbb":
+            return httpx.Response(
+                200,
+                json={
+                    "files": [
+                        {
+                            "filename": "new_name.py",
+                            "previous_filename": "old_name.py",
+                            "status": "renamed",
+                            "patch": None,
+                        }
+                    ]
+                },
+            )
+        ref = request.url.params["ref"]
+        assert request.url.path == (
+            "/repos/octocat/hello-world/contents/old_name.py"
+            if ref == "aaa"
+            else "/repos/octocat/hello-world/contents/new_name.py"
+        )
+        content = b"def f():\n    return 1\n" if ref == "aaa" else b"def f():\n    return 2\n"
+        return httpx.Response(
+            200,
+            json={"content": base64.b64encode(content).decode(), "encoding": "base64", "size": len(content)},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    diff_text = fetch_pr_diff(client, "fake-token", "octocat/hello-world", "aaa", "bbb")
+
+    assert "new_name.py" in diff_text
+    assert "return 2" in diff_text
+    assert diff_text.omitted_files == ()
+    assert len(diff_text.patches) == 1
+    assert diff_text.patches[0][0] == "new_name.py"
+
+
 def test_trim_patch_context_shrinks_wide_context_to_one_line():
     """Real corpus measurement (25 real cases, real gpt-5.6-luna calls):
     trimming GitHub's default 3-line context to 1 held recall at parity
