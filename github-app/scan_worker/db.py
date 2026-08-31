@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 # (docs/audits/Claude_Audit.md finding 30, confirmed live: a held checkout
 # lock made a concurrent seat-admission call block for its full
 # lock_timeout and then fail), fixed by moving SEAT_LOCK_NAMESPACE to 6.
+# 7 is claimed below for the wiki-write lock - keep this registry comment
+# in sync with any new namespace either file adds.
 SCAN_SLOT_LOCK_NAMESPACE = 1
 SPEND_LOCK_NAMESPACE = 2
 # Namespace 3 is reserved for the per-repo checkout lock (see
@@ -36,6 +38,13 @@ SPEND_LOCK_NAMESPACE = 2
 # rather than a bare int, since the resource being protected is a
 # composite (installation, repo) pair, not a single id.
 REPO_CHECKOUT_LOCK_NAMESPACE = 3
+# Namespace 7 is reserved for the per-repo Live Wiki write lock (see
+# wiki_write_lock) - same composite-key shape as REPO_CHECKOUT_LOCK_NAMESPACE
+# above, deliberately a distinct namespace rather than reusing 3: a slow
+# AI-writing job blocking on an unrelated in-progress checkout (or vice
+# versa) would be needless coupling between two genuinely independent
+# resources for the same repo.
+WIKI_WRITE_LOCK_NAMESPACE = 7
 ADVISORY_LOCK_TIMEOUT = "5s"
 INSTALLATION_SPEND_LOCK_MAX_ATTEMPTS = 4
 INSTALLATION_SPEND_LOCK_RETRY_DELAY_SECONDS = 3
@@ -522,6 +531,51 @@ def repo_checkout_lock(dsn: str, installation_id: int, repo_full_name: str):
             cur.execute(
                 "SELECT pg_advisory_unlock(%s, hashtext(%s))",
                 (REPO_CHECKOUT_LOCK_NAMESPACE, key),
+            )
+        conn.close()
+
+
+@contextmanager
+def wiki_write_lock(dsn: str, installation_id: int, repo_full_name: str):
+    """Serializes one repo's Live Wiki writes (scan_worker.jobs.
+    _store_wiki_generation - the upsert/prune/overview-regenerate sequence,
+    not the slower LLM generation that runs before it) across whichever
+    job reaches it: a full build, an incremental push-triggered update, and
+    an incremental PR-triggered update can all be enqueued for the same
+    repo close together, on different scan-worker replicas, and none of
+    that concurrency is bounded by repo_checkout_lock - that lock's scope
+    ends (checkout releases) before the wiki job is even enqueued.
+
+    Real bug this closes: _store_wiki_generation prunes wiki_subsystems
+    rows using ITS OWN evidence snapshot's current cluster list
+    (delete_wiki_subsystems_not_in) - if an older-evidence job's write
+    lands after a newer-evidence job's (e.g. two pushes close together,
+    finishing out of order), the older job's prune step has no way to
+    know about a cluster the newer evidence already added, and deletes
+    that just-written, still-current subsystem row out from under it.
+
+    Deliberately blocking, same reasoning as repo_checkout_lock: a second
+    wiki write for the same repo should wait its turn and still run, not
+    fail fast and silently drop a real update. A distinct namespace from
+    repo_checkout_lock (see WIKI_WRITE_LOCK_NAMESPACE) - these are two
+    independent resources for the same repo, and coupling them would make
+    a slow AI-writing job needlessly block an unrelated checkout, or vice
+    versa.
+    """
+    key = f"{installation_id}:{repo_full_name}"
+    conn = psycopg.connect(dsn, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_lock(%s, hashtext(%s))",
+                (WIKI_WRITE_LOCK_NAMESPACE, key),
+            )
+        yield
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_advisory_unlock(%s, hashtext(%s))",
+                (WIKI_WRITE_LOCK_NAMESPACE, key),
             )
         conn.close()
 

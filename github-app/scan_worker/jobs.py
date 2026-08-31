@@ -113,6 +113,7 @@ from scan_worker.db import (
     upsert_docs_symbol,
     upsert_wiki_overview,
     upsert_wiki_subsystem,
+    wiki_write_lock,
 )
 from scan_worker.docs_repo_commit import sync_docs_to_repo
 from scan_worker.flash_review import (
@@ -3790,35 +3791,48 @@ def _store_wiki_generation(
     regenerates the overview from the full current set (fresh records
     merged with whatever was already stored for subsystems untouched by
     this run).
+
+    Wrapped in wiki_write_lock (see its own docstring for the real race
+    this closes): a full build and a push/PR-triggered incremental update
+    for the same repo can land here from two different scan-worker
+    replicas close together, and the prune step below trusts ITS OWN
+    evidence snapshot's cluster list - an older-evidence job finishing
+    after a newer one otherwise deletes a subsystem the newer job just
+    correctly wrote. Scoped around the whole write sequence, including
+    the overview regeneration below (itself an LLM call, not just a DB
+    write): the overview read (list_wiki_subsystems) happens after the
+    prune, so a concurrent writer landing in that gap would make the
+    overview reflect an inconsistent, half-pruned subsystem set too.
     """
-    for record in fresh_records:
-        upsert_wiki_subsystem(
-            dsn,
-            installation_id,
-            repo_full_name,
-            record["subsystem_id"],
-            record["name"],
-            record["description"],
-            record["files"],
-            record["diagram_mermaid"],
-            source_commit,
+    with wiki_write_lock(dsn, installation_id, repo_full_name):
+        for record in fresh_records:
+            upsert_wiki_subsystem(
+                dsn,
+                installation_id,
+                repo_full_name,
+                record["subsystem_id"],
+                record["name"],
+                record["description"],
+                record["files"],
+                record["diagram_mermaid"],
+                source_commit,
+            )
+
+        current_cluster_ids = [str(c["id"]) for c in evidence.get("architecture", {}).get("clusters", [])]
+        delete_wiki_subsystems_not_in(dsn, installation_id, repo_full_name, current_cluster_ids)
+
+        all_records = {r["subsystem_id"]: r for r in list_wiki_subsystems(dsn, installation_id, repo_full_name)}
+        for record in fresh_records:
+            all_records[record["subsystem_id"]] = record
+        if not all_records:
+            return
+
+        overview = live_wiki.generate_overview(
+            evidence, list(all_records.values()), writing_adapter, fetch_line_count=fetch_line_count
         )
-
-    current_cluster_ids = [str(c["id"]) for c in evidence.get("architecture", {}).get("clusters", [])]
-    delete_wiki_subsystems_not_in(dsn, installation_id, repo_full_name, current_cluster_ids)
-
-    all_records = {r["subsystem_id"]: r for r in list_wiki_subsystems(dsn, installation_id, repo_full_name)}
-    for record in fresh_records:
-        all_records[record["subsystem_id"]] = record
-    if not all_records:
-        return
-
-    overview = live_wiki.generate_overview(
-        evidence, list(all_records.values()), writing_adapter, fetch_line_count=fetch_line_count
-    )
-    upsert_wiki_overview(
-        dsn, installation_id, repo_full_name, overview["description"], overview["diagram_mermaid"], source_commit
-    )
+        upsert_wiki_overview(
+            dsn, installation_id, repo_full_name, overview["description"], overview["diagram_mermaid"], source_commit
+        )
 
 
 # Every cluster gets an LLM call in a full build (naming + subsystem
