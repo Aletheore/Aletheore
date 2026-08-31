@@ -81,13 +81,31 @@ def _parse_pip_pins(repo_path: Path) -> list[tuple[str, str, str]]:
     if requirements.exists():
         for line in requirements.read_text(encoding="utf-8", errors="ignore").splitlines():
             line = line.strip()
-            if not line or line.startswith("#") or "==" not in line:
+            # Real bug this closes: the old hand-rolled parser here required a
+            # literal "==" to even consider a line, silently dropping every
+            # unpinned dependency (a bare "requests") AND every non-exact
+            # specifier ("requests>=2.0") - not just the marker-qualified-
+            # unpinned shape #335 fixed in _parse_pep508_dependency for
+            # pyproject.toml. Confirmed directly: "requests>=2.0" was
+            # invisible to both CVE scanning and license checking (this
+            # function's only two callers) despite being a completely normal
+            # requirements.txt line. Reusing _parse_pep508_dependency instead
+            # of a separate hand-rolled parser means this file gets the exact
+            # same "keep it, query the package as a whole" handling #335
+            # already established, rather than a second, independently
+            # drifting implementation of the same PEP 508 grammar.
+            #
+            # A pip option line (-e ..., -r other.txt, --index-url ...) needs
+            # its own explicit skip: "-" is itself inside the name regex's
+            # character class (it has to be, for a real name like
+            # "typing-extensions"), so a leading "-e"/"-r" would otherwise
+            # still match as a bogus package name instead of being rejected -
+            # confirmed directly, not assumed.
+            if not line or line.startswith("#") or line.startswith("-"):
                 continue
-            name, _, version = line.partition("==")
-            name = name.strip().lower()
-            version = version.split(";")[0].split(",")[0].strip()
-            if name and version:
-                pins.append((name, version, "PyPI"))
+            pin = _parse_pep508_dependency(line)
+            if pin:
+                pins.append(pin)
 
     pyproject = repo_path / "pyproject.toml"
     if not pyproject.exists():

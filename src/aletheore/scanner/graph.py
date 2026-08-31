@@ -1056,18 +1056,24 @@ def _rust_use_paths(node: Node, source: bytes) -> list[str]:
         # them exactly like any other full path.
         #
         # A list item can itself be a nested group ("crate::foo::{Bar,
-        # baz::{Qux, self}}") or an aliased entry ("Bar as MyBar") rather
-        # than a bare identifier/self leaf - recursing for those instead of
-        # only accepting leaves is what makes nested use grouping
-        # (idiomatic, rustfmt's default output in many configs) resolve at
-        # all, instead of silently dropping everything below the first
-        # brace level. Confirmed directly: "use std::{fmt, io::{self,
-        # Write}};" only ever produced "std::fmt" - io and io::Write both
-        # vanished (audit finding 33). Each recursive result is already
-        # fully qualified relative to ITS OWN nested prefix (e.g.
-        # "io::Write"), so prepending this level's prefix once, the same
-        # as for a leaf name, is enough to cascade correctly through any
-        # depth of nesting.
+        # baz::{Qux, self}}"), an aliased entry ("Bar as MyBar"), or a
+        # nested wildcard ("bar::*") rather than a bare identifier/self
+        # leaf - recursing for those instead of only accepting leaves is
+        # what makes nested use grouping (idiomatic, rustfmt's default
+        # output in many configs) resolve at all, instead of silently
+        # dropping everything below the first brace level. Confirmed
+        # directly: "use std::{fmt, io::{self, Write}};" only ever
+        # produced "std::fmt" - io and io::Write both vanished (audit
+        # finding 33). The nested-wildcard case ("use foo::{bar::*, Baz};")
+        # has the identical failure shape - confirmed live against the
+        # real tree-sitter-rust grammar: bar::* parses to a use_wildcard
+        # node as a direct use_list child, matching neither the leaf check
+        # nor the original recursion check, so it silently vanished too.
+        # Each recursive result is already fully qualified relative to ITS
+        # OWN nested prefix (e.g. "io::Write", or "bar" for a nested
+        # wildcard per the use_wildcard branch above), so prepending this
+        # level's prefix once, the same as for a leaf name, is enough to
+        # cascade correctly through any depth of nesting.
         prefix_node = node.children[0]
         list_node = node.children[-1]
         prefix = text(prefix_node)
@@ -1075,7 +1081,7 @@ def _rust_use_paths(node: Node, source: bytes) -> list[str]:
         for c in list_node.children:
             if c.type in ("identifier", "self"):
                 names.append(text(c))
-            elif c.type in ("scoped_use_list", "use_as_clause"):
+            elif c.type in ("scoped_use_list", "use_as_clause", "use_wildcard"):
                 names.extend(_rust_use_paths(c, source))
         return [f"{prefix}::{name}" for name in names]
 

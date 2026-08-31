@@ -874,6 +874,49 @@ async def test_public_health_rate_limits_after_threshold(pool, monkeypatch, redi
 
 
 @pytest.mark.asyncio
+async def test_public_health_rate_limit_check_is_offloaded_to_thread(pool):
+    # Real regression this guards: is_rate_limited uses the synchronous
+    # redis-py client and blocks on pipe.execute() - called directly inside
+    # an async def handler, each check stalls the whole event loop (every
+    # other concurrent request on this worker) for its full duration. This
+    # route is public and unauthenticated - the most exposed instance of
+    # this gap. See embeddings_api.py's identical test for the pattern this
+    # was copied from (#328's own original fix).
+    from unittest.mock import AsyncMock, patch
+
+    from app_server import dashboard
+    from app_server.rate_limit import is_rate_limited
+
+    await upsert_installation(pool, 5091, "octocat")
+    await set_public_status_enabled(pool, 5091, "octocat/hello-world", True)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+            VALUES (5091, 'octocat/hello-world', 'GET', '/api/users', true)
+            """
+        )
+
+    offloaded_funcs = []
+
+    async def _dispatch(func, *args, **kwargs):
+        offloaded_funcs.append(func)
+        return func(*args, **kwargs)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    with patch.object(dashboard.asyncio, "to_thread", AsyncMock(side_effect=_dispatch)):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(
+                "/v1/health/octocat/hello-world", headers={"x-forwarded-for": "203.0.113.52"}
+            )
+
+    assert response.status_code == 200
+    assert is_rate_limited in offloaded_funcs
+
+
+@pytest.mark.asyncio
 async def test_public_health_rate_limit_is_keyed_per_ip(pool, monkeypatch, redis_conn):
     from app_server import dashboard
 

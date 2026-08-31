@@ -602,7 +602,14 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
         request.client.host if request.client else "",
     )
     try:
-        rate_limited = is_rate_limited(
+        # is_rate_limited uses the synchronous redis-py client and blocks on
+        # pipe.execute() - run off the event loop (asyncio.to_thread, same
+        # pattern as embeddings_api.py's #328 fix). This route is public and
+        # unauthenticated, so it's the most exposed instance of this gap:
+        # without this, a burst of requests here stalls the event loop for
+        # every other concurrent request on this worker, not just this one.
+        rate_limited = await asyncio.to_thread(
+            is_rate_limited,
             get_redis_client(),
             f"ratelimit:public_health:{client_ip}",
             PUBLIC_HEALTH_RATE_LIMIT,

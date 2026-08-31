@@ -202,6 +202,30 @@ def test_build_module_graph_rust_nested_grouped_use_resolves_every_level(tmp_pat
     assert ("src/main.rs", "src/foo/baz.rs") in edges
 
 
+def test_build_module_graph_rust_nested_wildcard_in_group_resolves(tmp_path):
+    # Same failure shape as finding 33's nested-group gap, but for a nested
+    # use_wildcard child ("use foo::{bar::*, Baz};") instead of a nested
+    # scoped_use_list. The group-list recursion only checked for
+    # scoped_use_list/use_as_clause children, so bar::* matched neither the
+    # leaf check nor the recursion check and was silently dropped - verified
+    # live against tree-sitter-rust's actual parse tree, which types "bar::*"
+    # as a use_wildcard node directly under the use_list.
+    repo = tmp_path / "repo"
+    (repo / "src" / "foo").mkdir(parents=True)
+    (repo / "Cargo.toml").write_text('[package]\nname = "x"\nversion = "0.1.0"\n')
+    (repo / "src" / "foo.rs").write_text("mod bar;\npub struct Baz;\n")
+    (repo / "src" / "foo" / "bar.rs").write_text("pub struct Qux;\n")
+    (repo / "src" / "main.rs").write_text(
+        "mod foo;\n\nuse crate::foo::{bar::*, Baz};\n\nfn main() {}\n"
+    )
+
+    _, dependency_graph, _ = build_module_graph(repo)
+    edges = {tuple(edge) for edge in dependency_graph["edges"]}
+
+    assert ("src/main.rs", "src/foo/bar.rs") in edges
+    assert ("src/main.rs", "src/foo.rs") in edges
+
+
 def test_build_module_graph_rust_grouped_use_resolves_both_names(tmp_path):
     repo = tmp_path / "repo"
     (repo / "src").mkdir(parents=True)

@@ -1401,6 +1401,20 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
     try:
         app_jwt = generate_app_jwt(settings.github_app_id, settings.github_app_private_key)
         token = _token_sync(installation_id, app_jwt)
+
+        # Same race as run_pr_scan_job's own fetch_pr_is_open check (see
+        # there): the ChatOps /aletheore audit trigger enqueues this job,
+        # and by the time a worker picks it up the PR can already be
+        # closed/merged. _clone_pr_head's refs/pull/N/head ref outlives
+        # branch deletion, so unlike run_pr_scan_job this wouldn't crash -
+        # but without this check it still burns a real clone, a full scan,
+        # and one or more paid LLM calls against the monthly spend cap, then
+        # posts a managed-audit comment on a PR nobody triggering `/aletheore
+        # audit` is watching anymore.
+        client = get_github_api_client()
+        if not fetch_pr_is_open(client, token, repo_full_name, pr_number):
+            return
+
         repo_dir = job_dir / "head"
         _clone_pr_head(_clone_url(repo_full_name, token), pr_number, repo_dir)
         evidence_path = _run_scan(repo_dir)
