@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from aletheore.evidence import EVIDENCE_VERSION
 from app_server.evidence_limits import EvidenceTooLargeError, MAX_EVIDENCE_BYTES
 from app_server.db import (
     add_installation_member_within_seat_limit,
@@ -21,6 +22,7 @@ from app_server.db import (
     get_extra_seats,
     get_installation_by_token_hash,
     get_installation,
+    get_latest_evidence,
     get_llm_spend_this_month,
     get_recent_history,
     get_max_tokens,
@@ -96,12 +98,61 @@ async def test_repo_history_rotation_keeps_only_20(pool):
     await upsert_installation(pool, 123, "octocat")
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     for i in range(21):
-        await insert_repo_history(pool, 123, "octocat/repo", start + timedelta(minutes=i), {"n": i})
+        await insert_repo_history(
+            pool, 123, "octocat/repo", start + timedelta(minutes=i),
+            {"aletheore_version": EVIDENCE_VERSION, "n": i},
+        )
 
     history = await get_recent_history(pool, 123, "octocat/repo", limit=100)
     assert len(history) == 20
     assert history[0]["evidence"]["n"] == 20
     assert history[-1]["evidence"]["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_latest_evidence_returns_none_for_an_incompatible_version(pool):
+    # Real bug this guards: the hosted dashboard's own evidence-read path
+    # (this async get_latest_evidence, distinct from scan_worker.db's
+    # already-guarded sync version) never checked aletheore_version at
+    # all - a repo_history row written by an older, schema-incompatible
+    # build would surface as a raw, unhandled exception deep in dashboard
+    # rendering instead of a clean "awaiting re-scan".
+    await upsert_installation(pool, 123, "octocat")
+    await insert_repo_history(
+        pool, 123, "octocat/repo", datetime.now(timezone.utc), {"aletheore_version": "0.1.0", "n": 1}
+    )
+    assert await get_latest_evidence(pool, 123, "octocat/repo") is None
+
+
+@pytest.mark.asyncio
+async def test_get_latest_evidence_returns_the_evidence_for_a_compatible_version(pool):
+    await upsert_installation(pool, 123, "octocat")
+    await insert_repo_history(
+        pool, 123, "octocat/repo", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "n": 1},
+    )
+    evidence = await get_latest_evidence(pool, 123, "octocat/repo")
+    assert evidence["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_recent_history_drops_rows_with_an_incompatible_version(pool):
+    # A version-incompatible row is dropped from the list entirely, not
+    # included with evidence=None - a history entry whose evidence dict
+    # is missing keys the frontend expects to render would fail there
+    # instead of here, on a row the next scan will overwrite anyway.
+    await upsert_installation(pool, 123, "octocat")
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    await insert_repo_history(
+        pool, 123, "octocat/repo", start, {"aletheore_version": "0.1.0", "n": "old-shape"}
+    )
+    await insert_repo_history(
+        pool, 123, "octocat/repo", start + timedelta(minutes=1),
+        {"aletheore_version": EVIDENCE_VERSION, "n": "current-shape"},
+    )
+    history = await get_recent_history(pool, 123, "octocat/repo", limit=100)
+    assert len(history) == 1
+    assert history[0]["evidence"]["n"] == "current-shape"
 
 
 @pytest.mark.asyncio

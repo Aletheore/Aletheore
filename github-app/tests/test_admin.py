@@ -11,6 +11,8 @@ import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
+from aletheore.evidence import EVIDENCE_VERSION
+
 from app_server.admin import (
     _fetch_administered_installation_ids,
     _administered_installation_ids_for_session_or_401,
@@ -47,7 +49,7 @@ async def _logged_in_client(pool, monkeypatch, installation_id=100, plan="air"):
         installation_id,
         "octocat/hello-world",
         datetime.now(timezone.utc),
-        {"scanned_at": "x"},
+        {"aletheore_version": EVIDENCE_VERSION, "scanned_at": "x"},
     )
     await create_session(
         pool,
