@@ -3691,6 +3691,51 @@ def test_send_alerts_if_configured_sends_both_channels_when_both_set(monkeypatch
     assert len(email_sent) == 1
 
 
+def test_send_alerts_if_configured_isolates_a_slack_failure_from_other_channels(monkeypatch):
+    # Real bug this closes: this function's own docstring promises every
+    # channel "fires independently," but the Slack/Teams call was
+    # unguarded - any exception from it (send_health_alert now also
+    # raises UnsafeURLError when a saved webhook URL no longer resolves to
+    # a safe address, on top of the delivery failures it could already
+    # raise) skipped email/Pushover entirely instead of just skipping
+    # this one channel.
+    from app_server.config import get_settings
+    from app_server.url_validation import UnsafeURLError
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("PUSHOVER_API_TOKEN", "server-app-token")
+    get_settings.cache_clear()
+
+    def failing_send_health_alert(url, msg, **k):
+        raise UnsafeURLError("'internal.example.com' resolves to a disallowed address")
+
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", failing_send_health_alert)
+    email_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **k: email_sent.append(k),
+    )
+    pushover_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_pushover_alert", lambda *a, **k: pushover_sent.append(a)
+    )
+
+    _send_alerts_if_configured(
+        {
+            "installation_id": 1,
+            "target_id": 900,
+            "webhook_url": "https://internal.example.com/webhook",
+            "alert_email": "ops@example.com",
+            "pushover_user_key": "u" * 30,
+        },
+        {"text": "down"},
+    )
+
+    assert len(email_sent) == 1
+    assert len(pushover_sent) == 1
+
+
 def test_send_alerts_if_configured_email_dedupe_key_collapses_within_the_same_second(monkeypatch):
     # Regression: the docstring says the dedupe_key includes wall-clock
     # time "down to the second" specifically so a genuine retry of the

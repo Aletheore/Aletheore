@@ -1,8 +1,42 @@
+import json
 import re
+import urllib.request
 
-import httpx
+from aletheore.healthcheck import opener_for
+from app_server.url_validation import validate_and_pin_https_url
 
-from app_server.http_client import get_generic_http_client
+WEBHOOK_POST_TIMEOUT_SECONDS = 10
+
+
+def _post_to_webhook(webhook_url: str, payload: dict) -> None:
+    """POST payload as JSON to a customer-configured Slack/Teams webhook
+    URL, pinned to the exact address validate_and_pin_https_url resolved
+    and approved.
+
+    Real gap this closes: both callers of this used to hand a plain URL
+    string straight to an httpx client, which re-resolves DNS itself at
+    request time - independently of, and later than, any validation a
+    caller happened to do first. A webhook URL that resolves to a public
+    IP when saved (passing validation) can have its DNS repointed at an
+    internal address before the next alert fires; the old code would then
+    happily connect there. Resolving once here and pinning the real
+    request to that exact IP (see aletheore.healthcheck.opener_for, the
+    same mechanism already proven for the health-check sweep) closes the
+    window to zero instead of merely narrowing it. Raises UnsafeURLError
+    if the URL no longer resolves to a safe address, or
+    urllib.error.URLError/HTTPError/OSError on a real delivery failure -
+    both already expected and handled by every caller.
+    """
+    url, pinned_ip = validate_and_pin_https_url(webhook_url)
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url, data=body, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    # HTTPError (raised for any non-2xx status) is itself a URLError
+    # subclass - the same "raises on any non-2xx" contract
+    # response.raise_for_status() gave callers before this.
+    with opener_for(pinned_ip).open(request, timeout=WEBHOOK_POST_TIMEOUT_SECONDS):
+        pass
 
 
 def _detect_platform(webhook_url: str) -> str:
@@ -132,14 +166,11 @@ def send_slack_alert(
     diff: dict,
     repo_full_name: str,
     pr_number: int,
-    http_client: httpx.Client | None = None,
 ) -> None:
     if not _has_new_findings(diff):
         return
-    client = http_client or get_generic_http_client()
     payload = _render_payload(webhook_url, format_slack_message(diff, repo_full_name, pr_number))
-    response = client.post(webhook_url, json=payload)
-    response.raise_for_status()
+    _post_to_webhook(webhook_url, payload)
 
 
 def format_reachability_alert(
@@ -258,12 +289,6 @@ def format_runtime_error_alert(
     return {"text": text}
 
 
-def send_health_alert(
-    webhook_url: str,
-    message: dict,
-    http_client: httpx.Client | None = None,
-) -> None:
-    client = http_client or get_generic_http_client()
+def send_health_alert(webhook_url: str, message: dict) -> None:
     payload = _render_payload(webhook_url, message)
-    response = client.post(webhook_url, json=payload)
-    response.raise_for_status()
+    _post_to_webhook(webhook_url, payload)
