@@ -16,6 +16,7 @@ from scan_worker.github_api import (
     fetch_file_content,
     fetch_pr_changed_files,
     fetch_pr_diff,
+    fetch_pr_is_open,
     fetch_recent_commits_for_path,
     find_open_pull_request,
     upsert_pr_comment,
@@ -639,6 +640,34 @@ def test_fetch_default_branch_head_sha_returns_none_for_empty_repo_409():
 
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
     assert fetch_default_branch_head_sha(client, "token", "octocat/hello-world") is None
+
+
+def test_fetch_pr_is_open_true_for_open_pr():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"state": "open"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    assert fetch_pr_is_open(client, "token", "octocat/hello-world", 42) is True
+
+
+def test_fetch_pr_is_open_false_for_merged_pr():
+    # Real production failure this exists to prevent: a PR merged (and its
+    # branch deleted) between a scan job being queued and actually running
+    # left head_sha permanently unfetchable - "unable to read tree", not a
+    # real scan failure.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"state": "closed", "merged": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    assert fetch_pr_is_open(client, "token", "octocat/hello-world", 42) is False
+
+
+def test_fetch_pr_is_open_false_for_closed_unmerged_pr():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"state": "closed", "merged": False})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    assert fetch_pr_is_open(client, "token", "octocat/hello-world", 42) is False
 
 
 def test_ensure_branch_at_creates_ref_when_missing():

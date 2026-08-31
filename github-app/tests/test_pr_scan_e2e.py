@@ -44,6 +44,12 @@ def test_pull_request_webhook_to_pr_comment_end_to_end(
         lambda *a, **k: {"secret": set(), "vulnerability": set()},
     )
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", fake_upsert)
+    # This test deliberately makes no other GitHub API mock - real
+    # enqueue-through-perform, per its own docstring. fetch_pr_is_open is
+    # the one real network call run_pr_scan_job now makes before cloning
+    # anything; "fake-token" below isn't a real GitHub token, so an
+    # unmocked call here would 401, same as any other real call would.
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_is_open", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")

@@ -453,6 +453,31 @@ def fetch_pr_context(
     return "\n".join(parts) if len(parts) > 1 else ""
 
 
+def fetch_pr_is_open(
+    client: httpx.Client,
+    token: str,
+    repo_full_name: str,
+    pr_number: int,
+) -> bool:
+    """Whether a PR is still open right now, per GitHub's own record.
+
+    A PR's head_sha can stop being fetchable at all once its source branch
+    is deleted (a squash-merge-and-delete-branch is a completely normal,
+    fast workflow) - `git checkout` on that sha then fails with "unable to
+    read tree", not because anything is broken, but because there is
+    nothing left to check out. Confirmed as a real production failure:
+    a scan job queued against a PR's head_sha lost the race against that
+    same PR being merged and its branch deleted before the job ran.
+    """
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    response = client.get(f"/repos/{repo_full_name}/pulls/{pr_number}", headers=headers)
+    response.raise_for_status()
+    return response.json().get("state") == "open"
+
+
 def fetch_default_branch_head_sha(
     client: httpx.Client,
     token: str,
