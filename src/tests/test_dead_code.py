@@ -257,6 +257,91 @@ def test_hilt_dagger_annotation_ignored_outside_jvm_files(tmp_path):
     assert "not_kotlin.py" in paths
 
 
+def test_kotlin_package_sibling_of_an_imported_file_is_never_unreachable(tmp_path):
+    # Real repo confirmed (android/architecture-samples): ModelMappingExt.kt
+    # is called (toExternal()) by DefaultTaskRepository.kt with zero import
+    # statement - both declared in the same package, and Kotlin files in one
+    # package see each other's top-level declarations with no import at all.
+    # DefaultTaskRepository.kt is independently reachable via a real import
+    # elsewhere; that reachability should propagate to its package-mate.
+    pkg_dir = tmp_path / "data"
+    pkg_dir.mkdir()
+    (pkg_dir / "ModelMappingExt.kt").write_text(
+        "package com.example.todoapp.data\n\nfun LocalTask.toExternal() = Task()\n"
+    )
+    (pkg_dir / "DefaultTaskRepository.kt").write_text(
+        "package com.example.todoapp.data\n\nclass DefaultTaskRepository\n"
+    )
+    modules = [
+        _module("data/ModelMappingExt.kt"),
+        _module("data/DefaultTaskRepository.kt", imported_by=["di/DataModules.kt"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_kotlin_package_sibling_of_a_hilt_reachable_file_is_never_unreachable(tmp_path):
+    # Real repo confirmed (android/architecture-samples): StatisticsUtils.kt
+    # is unreferenced by any import, but shares its package with the
+    # @HiltViewModel-annotated StatisticsViewModel.kt - reachability
+    # propagation has to consider the SAME signals find_dead_code already
+    # treats as reachable on their own (a Hilt/Dagger annotation, not just
+    # imported_by), or this exact real case would still be missed.
+    pkg_dir = tmp_path / "statistics"
+    pkg_dir.mkdir()
+    (pkg_dir / "StatisticsUtils.kt").write_text(
+        "package com.example.todoapp.statistics\n\nfun getActiveAndCompletedStats() = 1\n"
+    )
+    (pkg_dir / "StatisticsViewModel.kt").write_text(
+        "package com.example.todoapp.statistics\n\n"
+        "@HiltViewModel\nclass StatisticsViewModel @Inject constructor() : ViewModel()\n"
+    )
+    modules = [
+        _module("statistics/StatisticsUtils.kt"),
+        _module("statistics/StatisticsViewModel.kt"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_kotlin_package_with_no_reachable_member_stays_unreachable(tmp_path):
+    # An entirely orphaned package (nothing in it independently reachable)
+    # should still be flagged - the fix only propagates reachability from a
+    # package that's actually reachable some other way, the same boundary
+    # test_swift_target_with_no_reachable_member_stays_unreachable already
+    # covers for Swift's target-level version of this.
+    pkg_dir = tmp_path / "orphan"
+    pkg_dir.mkdir()
+    (pkg_dir / "A.kt").write_text("package com.example.orphan\n\nclass A\n")
+    (pkg_dir / "B.kt").write_text("package com.example.orphan\n\nclass B\n")
+    modules = [_module("orphan/A.kt"), _module("orphan/B.kt")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    paths = [m["path"] for m in result["unreachable_modules"]]
+    assert "orphan/A.kt" in paths
+    assert "orphan/B.kt" in paths
+
+
+def test_kotlin_package_reachability_does_not_leak_from_a_test_file(tmp_path):
+    # Deliberate: is_test_file(path) files are excluded from package
+    # grouping entirely, not just left to independently fall through -
+    # Android's own androidTest/test convention constantly gives a test
+    # file the SAME package name as the production code it tests, so
+    # without this exclusion a test file's own reachability (nothing
+    # imports a test file itself, but this simulates the shape) could leak
+    # into an unrelated, genuinely-unused production sibling.
+    pkg_dir = tmp_path / "prod"
+    pkg_dir.mkdir()
+    (pkg_dir / "Orphan.kt").write_text("package com.example.pkg\n\nclass Orphan\n")
+    (pkg_dir / "FooTest.kt").write_text("package com.example.pkg\n\nclass FooTest\n")
+    modules = [
+        _module("prod/Orphan.kt"),
+        _module("prod/FooTest.kt", imported_by=["somewhere/Caller.kt"]),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    paths = [m["path"] for m in result["unreachable_modules"]]
+    assert "prod/Orphan.kt" in paths
+
+
 def test_main_swift_is_never_unreachable(tmp_path):
     # Real repo confirmed (vapor/api-template): Sources/Run/main.swift is
     # Swift's classic top-level-code entry point (predates @main, still
