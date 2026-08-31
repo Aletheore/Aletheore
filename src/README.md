@@ -32,7 +32,7 @@ top of that one `air.json` file.
 
 Secrets, git activity, and dependency-vulnerability checks are language-agnostic. The module
 dependency graph (imports, clusters, layer violations) currently understands **Python,
-JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Ruby, PHP, C, C++, C#, and Swift** — other
+JavaScript/JSX, TypeScript/TSX, Go, Rust, Java, Kotlin, Ruby, PHP, C, C++, C#, and Swift** — other
 languages are still scanned for secrets/git/vulnerabilities, but get no dependency-graph or
 architecture analysis until a grammar is added for them.
 
@@ -59,6 +59,14 @@ inferred per-file from each file's own `package` declaration matching its actual
 so it works across layouts without assuming one. Handles direct imports, wildcard imports
 (fanning out to every `.java` file in that package, same idea as Go's package-level imports),
 and `import static` (resolving to the class, not the imported member).
+
+Kotlin resolution infers its source root the same way Java's does - per-file, from each
+file's own `package` declaration matching its actual directory (Gradle's conventional
+`src/main/kotlin`, a bare `src/`, or the repo root all work). Unlike Java, a Kotlin file's
+name doesn't need to match any top-level declaration - multiple top-level classes/functions
+per file are idiomatic and common (confirmed against android/architecture-samples) - so
+import resolution tries the same-named `.kt` file first, then falls back to searching the
+containing directory for the actual matching declaration.
 
 Ruby's `require_relative` always resolves relative to the current file, unambiguous. Plain
 `require` is genuinely ambiguous (the overwhelming majority are gems, external), so it only
