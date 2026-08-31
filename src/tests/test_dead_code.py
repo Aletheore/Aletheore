@@ -75,6 +75,57 @@ def test_jvm_test_files_are_never_unreachable(tmp_path):
     assert result["unreachable_modules"] == []
 
 
+def test_main_swift_is_never_unreachable(tmp_path):
+    # Real repo confirmed (vapor/api-template): Sources/Run/main.swift is
+    # Swift's classic top-level-code entry point (predates @main, still
+    # what Vapor's own project template uses) - same category as
+    # Package.swift above, not this repo's own application code importing
+    # it.
+    modules = [_module("Sources/Run/main.swift")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "Sources/Run/main.swift" in result["entry_points_detected"]
+
+
+def test_swift_target_siblings_of_a_main_entry_point_are_never_unreachable(tmp_path):
+    # Real repo confirmed (vapor/penny-bot): a target's @main handler file
+    # is imported by nothing outside the target (nothing in Swift *can*
+    # import a leaf executable target), and its sibling files within the
+    # same target (a repository/service layer) are referenced by the
+    # handler with no import statement at all - Swift files within one
+    # target see each other implicitly. Both looked equally unreachable
+    # before this: the per-file import graph can never show intra-target
+    # edges, no matter how well cross-target import resolution works.
+    target_dir = tmp_path / "Sources" / "AutoFaqsLambda"
+    target_dir.mkdir(parents=True)
+    (target_dir / "AutoFaqsHandler.swift").write_text(
+        "import AWSLambdaRuntime\n\n@main\nstruct AutoFaqsHandler: LambdaHandler {}\n"
+    )
+    (target_dir / "S3AutoFaqsRepository.swift").write_text(
+        "struct S3AutoFaqsRepository {}\n"
+    )
+    modules = [
+        _module("Sources/AutoFaqsLambda/AutoFaqsHandler.swift"),
+        _module("Sources/AutoFaqsLambda/S3AutoFaqsRepository.swift"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None, ignored_paths=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_swift_target_with_no_reachable_member_stays_unreachable(tmp_path):
+    # An entirely orphaned target (no @main, nothing imports it) should
+    # still be flagged - the fix only propagates reachability from a
+    # target that's actually reachable some other way, it doesn't make
+    # every Swift file immune to dead-code detection.
+    target_dir = tmp_path / "Sources" / "Orphan"
+    target_dir.mkdir(parents=True)
+    (target_dir / "OrphanThing.swift").write_text("struct OrphanThing {}\n")
+    modules = [_module("Sources/Orphan/OrphanThing.swift")]
+    result = find_dead_code(tmp_path, modules, config=None, ignored_paths=None)
+    paths = [m["path"] for m in result["unreachable_modules"]]
+    assert "Sources/Orphan/OrphanThing.swift" in paths
+
+
 def test_config_can_add_custom_entry_points(tmp_path):
     modules = [_module("app/worker.py")]
     config = {"dead_code_entry_points": ["app/worker.py"]}
