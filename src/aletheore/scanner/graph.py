@@ -1625,7 +1625,18 @@ def _kotlin_class_file(root: Path, segments: list[str]) -> Path | None:
     if not directory.is_dir():
         return None
     target = segments[-1]
-    needle = re.compile(rf"\b(?:class|interface|object)\s+{re.escape(target)}\b")
+    escaped = re.escape(target)
+    # A top-level Kotlin function is as common an import target as a
+    # class - Jetpack Compose's @Composable functions are the dominant
+    # shape in real UI code (confirmed against android/architecture-
+    # samples: ComposeUtils.kt's `fun LoadingContent(...)`, imported by
+    # name from three other files, resolved to nothing before this). The
+    # optional `\S+\.` handles an extension function's receiver type
+    # (`fun LocalTask.toExternal()`), which sits between `fun` and the
+    # name this import actually names.
+    needle = re.compile(
+        rf"\b(?:class|interface|object)\s+{escaped}\b|\bfun\s+(?:\S+\.)?{escaped}\s*\("
+    )
     for candidate in sorted(directory.glob("*.kt")) + sorted(directory.glob("*.kts")):
         try:
             if needle.search(candidate.read_text(errors="ignore")):
