@@ -4,6 +4,7 @@ import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from aletheore.evidence import EVIDENCE_VERSION
 from app_server.auth import encrypt_access_token, sign_session_id
 from app_server.db import (
     create_session,
@@ -125,6 +126,7 @@ async def _seed_docs_build_status(pool, installation_id, repo_full_name, status,
 
 def _evidence_with_module(module_path: str, function_name: str, docstring: str | None) -> dict:
     return {
+        "aletheore_version": EVIDENCE_VERSION,
         "repository": {
             "modules": [
                 {
@@ -202,15 +204,15 @@ async def test_list_my_repos_returns_repos_across_administered_installations(poo
     await upsert_installation(pool, 702, "another-org")
     await set_installation_plan(pool, 702, "air")
     await insert_repo_history(
-        pool, 701, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 701, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     await insert_repo_history(
-        pool, 702, "another-org/service-b", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 702, "another-org/service-b", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     # A third installation the caller does NOT administer - must not leak in.
     await upsert_installation(pool, 703, "someone-else")
     await insert_repo_history(
-        pool, 703, "someone-else/private-repo", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 703, "someone-else/private-repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
 
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[701, 702])
@@ -236,7 +238,7 @@ async def test_list_my_repos_excludes_free_plan_installations(pool, monkeypatch)
     # managed dashboard for free, without anyone paying for it.
     await upsert_installation(pool, 704, "octocat")  # defaults to plan='free'
     await insert_repo_history(
-        pool, 704, "octocat/free-repo", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 704, "octocat/free-repo", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
 
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[704])
@@ -256,10 +258,10 @@ async def test_list_my_repos_excludes_a_hidden_repo(pool, monkeypatch):
     await upsert_installation(pool, 705, "octocat")
     await set_installation_plan(pool, 705, "air")
     await insert_repo_history(
-        pool, 705, "octocat/kept", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 705, "octocat/kept", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     await insert_repo_history(
-        pool, 705, "octocat/hidden", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 705, "octocat/hidden", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     await hide_repo(pool, 705, "octocat/hidden")
 
@@ -401,7 +403,7 @@ async def test_list_my_repos_does_not_duplicate_already_scanned_repos(pool, monk
     await upsert_installation(pool, 802, "some-user")
     await set_installation_plan(pool, 802, "air")
     await insert_repo_history(
-        pool, 802, "some-user/already-scanned", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 802, "some-user/already-scanned", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
 
     monkeypatch.setattr("app_server.dashboard.generate_app_jwt", lambda *a, **k: "fake-jwt")
@@ -573,7 +575,7 @@ async def test_dashboard_rejects_unadministered_installation_with_the_same_404_a
         1,
         "octocat/hello-world",
         datetime.now(timezone.utc),
-        {"repository": {"modules": []}},
+        {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}},
     )
     # The caller is logged in, but their GitHub account administers a
     # different installation (999), not the one that owns this repo (1) -
@@ -597,7 +599,7 @@ async def test_dashboard_requires_paid_plan(pool, monkeypatch):
     # into a full managed dashboard for free.
     await upsert_installation(pool, 511, "octocat")  # defaults to plan='free'
     await insert_repo_history(
-        pool, 511, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 511, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[511])
     async with client:
@@ -609,7 +611,7 @@ async def test_dashboard_requires_paid_plan(pool, monkeypatch):
 async def test_dashboard_health_requires_paid_plan(pool, monkeypatch):
     await upsert_installation(pool, 512, "octocat")  # defaults to plan='free'
     await insert_repo_history(
-        pool, 512, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 512, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[512])
     async with client:
@@ -626,7 +628,7 @@ async def test_dashboard_returns_data_for_known_repo(pool, monkeypatch):
         1,
         "octocat/hello-world",
         datetime.now(timezone.utc),
-        {"repository": {"modules": []}},
+        {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}},
     )
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[1])
     async with client:
@@ -642,7 +644,7 @@ async def test_dashboard_returns_empty_dismissed_finding_keys_by_default(pool, m
     await upsert_installation(pool, 1, "octocat")
     await set_installation_plan(pool, 1, "air")
     await insert_repo_history(
-        pool, 1, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 1, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[1])
     async with client:
@@ -694,7 +696,7 @@ async def test_dismiss_finding_route_then_get_dashboard_reflects_it(pool, monkey
     await upsert_installation(pool, 1, "octocat")
     await set_installation_plan(pool, 1, "air")
     await insert_repo_history(
-        pool, 1, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 1, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[1])
     finding = {"path": "config.py", "pattern": "aws_access_key_id", "match_preview": "AKIA****...MNOP"}
@@ -874,6 +876,49 @@ async def test_public_health_rate_limits_after_threshold(pool, monkeypatch, redi
 
 
 @pytest.mark.asyncio
+async def test_public_health_rate_limit_check_is_offloaded_to_thread(pool):
+    # Real regression this guards: is_rate_limited uses the synchronous
+    # redis-py client and blocks on pipe.execute() - called directly inside
+    # an async def handler, each check stalls the whole event loop (every
+    # other concurrent request on this worker) for its full duration. This
+    # route is public and unauthenticated - the most exposed instance of
+    # this gap. See embeddings_api.py's identical test for the pattern this
+    # was copied from (#328's own original fix).
+    from unittest.mock import AsyncMock, patch
+
+    from app_server import dashboard
+    from app_server.rate_limit import is_rate_limited
+
+    await upsert_installation(pool, 5091, "octocat")
+    await set_public_status_enabled(pool, 5091, "octocat/hello-world", True)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable)
+            VALUES (5091, 'octocat/hello-world', 'GET', '/api/users', true)
+            """
+        )
+
+    offloaded_funcs = []
+
+    async def _dispatch(func, *args, **kwargs):
+        offloaded_funcs.append(func)
+        return func(*args, **kwargs)
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    with patch.object(dashboard.asyncio, "to_thread", AsyncMock(side_effect=_dispatch)):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(
+                "/v1/health/octocat/hello-world", headers={"x-forwarded-for": "203.0.113.52"}
+            )
+
+    assert response.status_code == 200
+    assert is_rate_limited in offloaded_funcs
+
+
+@pytest.mark.asyncio
 async def test_public_health_rate_limit_is_keyed_per_ip(pool, monkeypatch, redis_conn):
     from app_server import dashboard
 
@@ -1040,7 +1085,7 @@ async def test_dashboard_health_keeps_results_separate_per_target(pool, monkeypa
     await upsert_installation(pool, 503, "octocat")
     await set_installation_plan(pool, 503, "air")
     await insert_repo_history(
-        pool, 503, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 503, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     async with pool.acquire() as conn:
         staging_id = await conn.fetchval(
@@ -1095,7 +1140,7 @@ async def test_dashboard_health_history_returns_checks_newest_first(pool, monkey
     await upsert_installation(pool, 504, "octocat")
     await set_installation_plan(pool, 504, "air")
     await insert_repo_history(
-        pool, 504, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 504, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     async with pool.acquire() as conn:
         target_id = await conn.fetchval(
@@ -1141,7 +1186,7 @@ async def test_dashboard_health_history_respects_limit(pool, monkeypatch):
     await upsert_installation(pool, 505, "octocat")
     await set_installation_plan(pool, 505, "air")
     await insert_repo_history(
-        pool, 505, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 505, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     async with pool.acquire() as conn:
         for i in range(5):
@@ -1171,7 +1216,7 @@ async def test_dashboard_health_history_rejects_unadministered_installation(pool
     # with_the_same_404_as_a_nonexistent_repo for why (finding 34).
     await upsert_installation(pool, 506, "octocat")
     await insert_repo_history(
-        pool, 506, "octocat/hello-world", datetime.now(timezone.utc), {"repository": {"modules": []}}
+        pool, 506, "octocat/hello-world", datetime.now(timezone.utc), {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}}
     )
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[])
     async with client:
@@ -1191,7 +1236,7 @@ async def test_dashboard_health_rejects_unadministered_installation(pool, monkey
         501,
         "octocat/hello-world",
         datetime.now(timezone.utc),
-        {"repository": {"modules": []}},
+        {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}},
     )
     async with pool.acquire() as conn:
         await conn.execute(
@@ -1217,6 +1262,7 @@ async def test_dashboard_health_includes_evidence_resolution(pool, monkeypatch):
         "octocat/hello-world",
         datetime.now(timezone.utc),
         {
+            "aletheore_version": EVIDENCE_VERSION,
             "repository": {
                 "api_endpoints": {
                     "endpoints": [
@@ -1264,6 +1310,7 @@ async def test_dashboard_health_includes_stale_endpoints(pool, monkeypatch):
         "octocat/hello-world",
         datetime.now(timezone.utc),
         {
+            "aletheore_version": EVIDENCE_VERSION,
             "repository": {
                 "api_endpoints": {
                     "endpoints": [
@@ -1368,7 +1415,7 @@ async def test_dashboard_wiki_requires_paid_plan(pool, monkeypatch):
         601,
         "octocat/hello-world",
         datetime.now(timezone.utc),
-        {"repository": {"modules": []}},
+        {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}},
     )
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[601])
     async with client:
@@ -1385,7 +1432,7 @@ async def test_dashboard_wiki_returns_overview_and_subsystems(pool, monkeypatch)
         602,
         "octocat/hello-world",
         datetime.now(timezone.utc),
-        {"repository": {"modules": []}},
+        {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}},
     )
     await _seed_wiki_overview(pool, 602, "octocat/hello-world")
     await _seed_wiki_subsystem(pool, 602, "octocat/hello-world", "auth")
@@ -1413,7 +1460,7 @@ async def test_dashboard_wiki_returns_null_overview_when_not_yet_generated(pool,
         603,
         "octocat/hello-world",
         datetime.now(timezone.utc),
-        {"repository": {"modules": []}},
+        {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}},
     )
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[603])
     async with client:
@@ -1439,7 +1486,7 @@ async def test_dashboard_wiki_surfaces_failed_build_status(pool, monkeypatch):
         605,
         "octocat/hello-world",
         datetime.now(timezone.utc),
-        {"repository": {"modules": []}},
+        {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}},
     )
     await _seed_wiki_build_status(pool, 605, "octocat/hello-world", "failed", "model provider unavailable")
 
@@ -1467,7 +1514,7 @@ async def test_dashboard_wiki_surfaces_failed_status_alongside_existing_overview
         606,
         "octocat/hello-world",
         datetime.now(timezone.utc),
-        {"repository": {"modules": []}},
+        {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}},
     )
     await _seed_wiki_overview(pool, 606, "octocat/hello-world")
     await _seed_wiki_build_status(pool, 606, "octocat/hello-world", "failed", "LLM API unavailable")
@@ -1501,7 +1548,7 @@ async def test_dashboard_wiki_subsystem_returns_detail(pool, monkeypatch):
         604,
         "octocat/hello-world",
         datetime.now(timezone.utc),
-        {"repository": {"modules": []}},
+        {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}},
     )
     await _seed_wiki_subsystem(pool, 604, "octocat/hello-world", "auth")
 
@@ -1528,6 +1575,7 @@ async def test_dashboard_wiki_file_returns_structural_fallback_for_unpaged_modul
         "octocat/hello-world",
         datetime.now(timezone.utc),
         {
+            "aletheore_version": EVIDENCE_VERSION,
             "repository": {
                 "modules": [
                     {
@@ -1574,7 +1622,7 @@ async def test_dashboard_wiki_file_fetches_unindexed_file_without_llm(pool, monk
         608,
         "octocat/hello-world",
         datetime.now(timezone.utc),
-        {"repository": {"modules": []}},
+        {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}},
     )
     monkeypatch.setattr(
         "app_server.dashboard._fetch_wiki_file_content_sync",
@@ -1600,7 +1648,7 @@ async def test_dashboard_wiki_subsystem_404s_for_unknown_id(pool, monkeypatch):
         605,
         "octocat/hello-world",
         datetime.now(timezone.utc),
-        {"repository": {"modules": []}},
+        {"aletheore_version": EVIDENCE_VERSION, "repository": {"modules": []}},
     )
     client = await _logged_in_client(pool, monkeypatch, administered_ids=[605])
     async with client:

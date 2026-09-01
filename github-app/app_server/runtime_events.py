@@ -11,6 +11,7 @@ this ingests the one well-known event shape (exception.values[].
 stacktrace.frames[], request.url/method - see aletheore.runtime_events)
 and does one thing with it well.
 """
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
@@ -54,11 +55,17 @@ class RuntimeEventRequest(BaseModel):
     event: dict
 
 
-def _enforce_runtime_event_rate_limit(installation_id: int) -> None:
+async def _enforce_runtime_event_rate_limit(installation_id: int) -> None:
     from app_server.redis_client import get_redis_client
 
     try:
-        rate_limited = is_rate_limited(
+        # is_rate_limited uses the synchronous redis-py client and blocks on
+        # pipe.execute() - run off the event loop (asyncio.to_thread, same
+        # pattern as embeddings_api.py's #328 fix) so one installation's
+        # Redis round-trip doesn't stall every other concurrent request on
+        # this worker.
+        rate_limited = await asyncio.to_thread(
+            is_rate_limited,
             get_redis_client(),
             f"ratelimit:runtime-events:{installation_id}",
             RUNTIME_EVENT_RATE_LIMIT,
@@ -88,7 +95,7 @@ async def report_runtime_event(request: Request, body: RuntimeEventRequest):
     if installation["plan"] != "air":
         raise HTTPException(status_code=402, detail="runtime event correlation requires the AIR plan")
 
-    _enforce_runtime_event_rate_limit(installation["installation_id"])
+    await _enforce_runtime_event_rate_limit(installation["installation_id"])
 
     parsed = parse_sentry_event(body.event)
     if parsed is None:
