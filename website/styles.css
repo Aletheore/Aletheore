@@ -1480,9 +1480,9 @@ pre {
 
 .pricing-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 24px;
-  max-width: 900px;
+  max-width: 1120px;
   margin: 0 auto;
   text-align: left;
 }
