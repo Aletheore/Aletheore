@@ -1,3 +1,4 @@
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -140,6 +141,97 @@ def find_cluster(evidence: dict, target: str | None) -> dict:
 
 def find_layer_violations(evidence: dict, target: str | None) -> dict:
     return evidence["architecture"]["layer_violations"]
+
+
+# Matches scan_worker/flash_review.py's build_blast_radius_context
+# constants (MAX_BLAST_RADIUS_CANDIDATES, MAX_BLAST_RADIUS_CALLERS_SHOWN) -
+# same design, adapted to read local files directly instead of fetching
+# over the GitHub API, so no batching/threading is needed here.
+_BLAST_RADIUS_CONFIRM_CANDIDATES = 40
+_BLAST_RADIUS_CONFIRMED_CALLERS_SHOWN = 10
+_BLAST_RADIUS_MAX_TRANSITIVE = 50
+
+
+def find_blast_radius(
+    evidence: dict, repo_path: Path, target: str, symbol: str | None = None
+) -> dict:
+    """Everything that would be affected by changing `target` - direct and
+    transitive dependents, and any existing layer violations already
+    touching one of them.
+
+    Direct dependents are evidence's own imported_by, unchanged. Transitive
+    dependents are a real BFS over that same imported_by edge set (not
+    just one hop), capped at _BLAST_RADIUS_MAX_TRANSITIVE with a truncated
+    flag rather than silently cut off - a highly-central module (a shared
+    utils file) can have far more transitive dependents than are useful to
+    return in one call, and the flag says so rather than pretending the
+    list is exhaustive.
+
+    With `symbol` given, also confirms which of the direct dependents
+    actually CALL it, not just import the file - mirrors
+    scan_worker/flash_review.py's build_blast_radius_context exactly: a
+    candidate only counts if its real file content contains the symbol
+    name in a call-shaped position (`name(`), the same deliberately
+    high-confidence-only design (a bare "imports the file" says nothing
+    about which of possibly many exported names is actually used).
+    Confirmed against real local content via repo_path, not evidence -
+    evidence has no per-call-site data to check against.
+
+    layer_violations reports EXISTING violations (evidence's own
+    architecture.layer_violations) that already touch a module in this
+    blast radius - not a prospective simulation of what a signature change
+    would newly break, which would need real symbol-level call resolution
+    this scanner doesn't have.
+    """
+    module = _find_module(evidence, target)
+    direct_dependents = list(module.get("imported_by") or [])
+    by_path = {m["path"]: m for m in evidence["repository"]["modules"] if m.get("path")}
+
+    visited = {target, *direct_dependents}
+    transitive_dependents: list[str] = []
+    truncated = False
+    queue = list(direct_dependents)
+    while queue:
+        current = queue.pop(0)
+        for dependent in by_path.get(current, {}).get("imported_by") or []:
+            if dependent in visited:
+                continue
+            visited.add(dependent)
+            if len(transitive_dependents) >= _BLAST_RADIUS_MAX_TRANSITIVE:
+                truncated = True
+                continue
+            transitive_dependents.append(dependent)
+            queue.append(dependent)
+
+    result: dict[str, Any] = {
+        "target": target,
+        "direct_dependents": direct_dependents,
+        "transitive_dependents": transitive_dependents,
+        "transitive_dependents_truncated": truncated,
+    }
+
+    if symbol:
+        call_pattern = re.compile(r"\b" + re.escape(symbol) + r"\s*\(")
+        confirmed_callers: list[str] = []
+        for candidate in direct_dependents[:_BLAST_RADIUS_CONFIRM_CANDIDATES]:
+            if len(confirmed_callers) >= _BLAST_RADIUS_CONFIRMED_CALLERS_SHOWN:
+                break
+            try:
+                content = (repo_path / candidate).read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if call_pattern.search(content):
+                confirmed_callers.append(candidate)
+        result["symbol"] = symbol
+        result["confirmed_callers"] = confirmed_callers
+
+    blast_radius_modules = {target, *direct_dependents, *transitive_dependents}
+    violations = evidence.get("architecture", {}).get("layer_violations", {}).get("violations") or []
+    result["layer_violations"] = [
+        v for v in violations
+        if v.get("from") in blast_radius_modules or v.get("to") in blast_radius_modules
+    ]
+    return result
 
 
 def find_dead_code_evidence(evidence: dict, target: str | None) -> dict:

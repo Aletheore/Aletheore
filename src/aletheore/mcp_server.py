@@ -25,6 +25,7 @@ from aletheore.managed_audit_client import run_managed_audit_request
 from aletheore.query import (
     ModuleNotFoundInEvidenceError,
     QUERY_FUNCTIONS,
+    find_blast_radius,
     find_code_evidence_for_dependency,
     find_code_evidence_for_endpoint,
     find_code_evidence_for_symbol,
@@ -439,6 +440,31 @@ def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
         )
 
 
+def _register_blast_radius_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_get_blast_radius", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_get_blast_radius(target: str, symbol: str | None = None) -> str:
+        """Everything that would be affected by changing `target` (a file
+        path) - one call instead of manually chasing aletheore_imported_by
+        recursively. Direct AND transitive dependents (a real multi-hop
+        walk, not just one level like aletheore_neighborhood), plus any
+        existing layer-boundary violations already touching a module in
+        that blast radius.
+
+        Pass `symbol` (a function/class name defined in target) to also get
+        confirmed_callers: which of the direct dependents actually CALL
+        that symbol, verified against their real file content - not just
+        "imports the file", which says nothing about which of possibly
+        many exported names is actually used.
+
+        layer_violations are EXISTING violations already on record, not a
+        prediction of what a signature change to `symbol` would newly
+        break - this repo has no per-call-site type/signature data to
+        simulate that against.
+        """
+        evidence = read_evidence(repo_path)
+        return _toon_result(find_blast_radius(evidence, repo_path, target, symbol))
+
+
 _LIST_KIND_TO_FUNCTION = {
     "modules": list_modules,
     "clusters": list_clusters,
@@ -802,6 +828,7 @@ def build_server(
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)
+    _register_blast_radius_tool(mcp_instance, repo_path)
     _register_list_tool(mcp_instance, repo_path)
     _register_overview_tool(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
