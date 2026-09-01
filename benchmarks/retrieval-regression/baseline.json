@@ -1,0 +1,10 @@
+{
+  "_comment": "Real measured baseline, not a guess - 30 questions (zod.json + zod_vocab.json) against a fresh index built by build_fixture.py from this repo's own code at the commit noted below. score.py fails the check if a PR's MRR drops more than --max-mrr-drop below this. Update via 'python3 score.py --update-baseline' after a deliberate, reviewed ranking change - never to silence a real regression.",
+  "measured_at_commit": "1202e9e4e6eac4220a8565526d56af236ad0ea21",
+  "measured_date": "2026-09-01",
+  "n": 30,
+  "top1": 12,
+  "top3": 17,
+  "top5": 17,
+  "mrr": 0.4777777777777778
+}

@@ -1,0 +1,8 @@
+{
+  "_comment": "One real corpus, not aletheore-benchmarks' full four (flask/gin/serde/zod) - this gate needs to clone and embed the fixture on GitHub-hosted runners with no pre-existing workspace, so it stays to a single corpus for CI time and reliability. Zod chosen because it's the corpus the barrel-file rank penalty (search_index.py's _is_barrel_file) targets. The pinned commit and questions are vendored from https://github.com/Aletheore/aletheore-benchmarks (MIT, same org) - see that repo for the full published multi-corpus numbers this gate does not attempt to reproduce.",
+  "name": "zod",
+  "url": "https://github.com/colinhacks/zod",
+  "commit": "2715c12e76cf022d7dbdeb5852c09fddfe91a481",
+  "language": "typescript",
+  "questions": ["questions/zod.json", "questions/zod_vocab.json"]
+}

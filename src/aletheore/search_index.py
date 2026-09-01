@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -403,6 +404,33 @@ def _is_declaration_only_file(module_path: str, language: str, source: str) -> b
     return False
 
 
+# A barrel/re-export file (packages/*/src/index.ts, a locales/*.ts
+# catalogue) imports a large slice of the repo while adding little of its
+# own - both conditions matter, not just a high import count: a large,
+# genuinely-implemented module can legitimately import 20+ collaborators
+# across hundreds of lines (a low ratio), while a thin index.ts of nothing
+# but `export * from './x'` statements hits both a high absolute count and
+# a high fraction of its (short) file. Line count, not stripped
+# "executable" lines - the file's `lines` list is already read for
+# everything else in this loop, and a barrel file's own line count is
+# almost entirely import/export statements anyway, so the simpler measure
+# lands in the same place here.
+#
+# Thresholds are a reasoned starting point (colinhacks/zod's
+# packages/*/src/index.ts files are the motivating case), not measured
+# against a labelled barrel-file corpus - retune once Bench-CI or a real
+# polyglot fixture makes that measurement possible.
+_BARREL_MIN_IMPORTS = 15
+_BARREL_MIN_FANOUT_RATIO = 0.3
+
+
+def _is_barrel_file(imports: list, line_count: int) -> bool:
+    """Whether a file is mostly a thin re-export surface over other files."""
+    if len(imports) < _BARREL_MIN_IMPORTS:
+        return False
+    return len(imports) / max(line_count, 1) >= _BARREL_MIN_FANOUT_RATIO
+
+
 _BOILERPLATE_MIN_REPEAT_COUNT = 2
 
 
@@ -487,6 +515,14 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
         # _is_declaration_only_file and the rank penalty in _rrf_fuse.
         is_declaration_only = _is_declaration_only_file(module_path, language, "\n".join(lines))
 
+        # Same pattern, for the opposite problem: a barrel/re-export file
+        # (packages/*/src/index.ts, a locales/*.ts catalogue) that imports
+        # or re-exports a large slice of the repo has an embedding close to
+        # nearly everything, so it competes against - and sometimes beats -
+        # the real implementation it merely points at. See
+        # _is_barrel_file and the rank penalty in _rrf_fuse.
+        is_barrel_file = _is_barrel_file(imports, len(lines))
+
         code_symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
         # Constants are indexed only for files that define nothing else.
         #
@@ -520,6 +556,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "language": language,
                     "imports": imports,
                     "is_declaration_only": is_declaration_only,
+                    "is_barrel_file": is_barrel_file,
                     "text": _truncate_for_embedding(f"{module_path} (no extracted symbols)\n{snippet}"),
                 }
             )
@@ -564,6 +601,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                         "language": language,
                         "imports": imports,
                         "is_declaration_only": is_declaration_only,
+                        "is_barrel_file": is_barrel_file,
                         # Path and symbol list join the docstring so the chunk
                         # is reachable by what the module *contains*, not only
                         # by how its author happened to describe it.
@@ -606,6 +644,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "language": language,
                     "imports": imports,
                     "is_declaration_only": is_declaration_only or symbol.get("is_pure_declaration", False),
+                    "is_barrel_file": is_barrel_file,
                     "text": _truncate_for_embedding(f"{header}\n{source}"),
                 }
             )
@@ -633,6 +672,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "language": language,
                     "imports": imports,
                     "is_declaration_only": is_declaration_only,
+                    "is_barrel_file": is_barrel_file,
                     "text": _truncate_for_embedding(
                         f"{module_path} (module-level declarations)\n"
                         f"declares: {names}\n{declared}"
@@ -1298,14 +1338,52 @@ def build_index(
     return len(rows)
 
 
+# In-process cache of opened table handles, keyed by index path - open_index
+# used to reconnect() and open_table() from disk on every single call,
+# including from a long-lived process (the MCP server especially) that
+# calls it once per query. checkout_latest() is LanceDB's own supported way
+# to refresh an already-open handle to the newest version in place, and is
+# cheap where a full reconnect isn't. Verified empirically that it sees a
+# full mode="overwrite" rebuild done through an entirely separate
+# connection (exactly what build_index does): open a handle, overwrite the
+# table via a second connection, call checkout_latest() on the first
+# handle, and the new rows are there - not just an update through the same
+# handle. Locked because the MCP server can serve concurrent tool calls.
+_TABLE_CACHE: dict[str, object] = {}
+_table_cache_lock = threading.Lock()
+
+
 def open_index(repo_path: Path):
     index_path = _index_path(repo_path)
     if not index_path.exists():
         raise IndexNotFoundError(
             f"no index found at {index_path} - run 'aletheore index {repo_path}' first"
         )
-    db = lancedb.connect(str(index_path))
-    return db.open_table(TABLE_NAME)
+    key = str(index_path)
+    # The whole check-then-act sequence has to be one critical section, not
+    # a lock around the dict read and a separate one around the dict write:
+    # split that way, concurrent callers can all see a cache miss before
+    # any of them stores a handle, each does its own full reconnect, and
+    # whichever finishes last "wins" the cache slot while the others still
+    # return their own distinct (and now orphaned) table object - the exact
+    # race this lock exists to prevent, caught by a real concurrent-callers
+    # test, not assumed away.
+    with _table_cache_lock:
+        table = _TABLE_CACHE.get(key)
+        if table is not None:
+            try:
+                table.checkout_latest()
+                return table
+            except Exception:  # noqa: BLE001
+                # The cached handle itself is broken (not just stale data)
+                # - drop it and fall through to a full reconnect rather
+                # than raise from what a caller has every reason to expect
+                # is a cheap, side-effect-free cache hit.
+                _TABLE_CACHE.pop(key, None)
+        db = lancedb.connect(str(index_path))
+        table = db.open_table(TABLE_NAME)
+        _TABLE_CACHE[key] = table
+        return table
 
 
 # How many chunks one file may contribute to a single result set, and how
@@ -1363,6 +1441,12 @@ _AUX_DIR_MARKERS = frozenset({
 # matches.
 _AUXILIARY_RANK_PENALTY = 8
 
+# Analogous to _AUXILIARY_RANK_PENALTY, and deliberately a little higher: an
+# examples/ file occasionally IS the only place a feature is shown (worth
+# demoting, not excluding), but a pure re-export has essentially never been
+# the chunk a real question was looking for.
+_BARREL_OR_REEXPORT_RANK_PENALTY = 10
+
 
 
 def _is_auxiliary_path(module_path: str) -> bool:
@@ -1392,6 +1476,8 @@ def _rrf_fuse(vector_hits: list[dict], text_hits: list[dict]) -> list[dict]:
             effective_rank = rank
             if hit.get("is_declaration_only"):
                 effective_rank += _DECLARATION_ONLY_RANK_PENALTY
+            if hit.get("is_barrel_file"):
+                effective_rank += _BARREL_OR_REEXPORT_RANK_PENALTY
             if _is_auxiliary_path(hit.get("module_path") or ""):
                 effective_rank += _AUXILIARY_RANK_PENALTY
             scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_K + effective_rank + 1)
