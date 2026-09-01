@@ -10,7 +10,7 @@ const TIERS = {
     // card's static HTML price as the fallback rather than fetching an
     // undefined priceId.
     name: "Aletheore Flash",
-    priceId: { month: "pri_01m1754jr5msg62grry49kjhw5" },
+    priceId: { month: "pri_01m1dj0m1netz6ze1mmckz73nm" },
   },
   air: {
     name: "Aletheore AIR",
