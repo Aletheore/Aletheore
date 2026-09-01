@@ -46,10 +46,10 @@ def test_base_cap_for_plan_free_or_unknown_plan_has_no_budget():
 
 
 def test_base_cap_for_plan_flash_uses_its_own_explicit_override_not_the_shared_fraction():
-    # Real, deliberate: $4, not $6 * CAP_FRACTION_OF_PRICE (0.5) = $3 -
+    # Real, deliberate: $5, not $8 * CAP_FRACTION_OF_PRICE (0.5) = $4 -
     # flash's real worst-case cost data justified a looser fraction than
     # the shared default, so it's a real override, not derived from price.
-    assert base_cap_for_plan("flash") == 4.00
+    assert base_cap_for_plan("flash") == 5.00
 
 
 def test_monthly_cap_for_installation_base_only():

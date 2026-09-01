@@ -10,7 +10,7 @@ const TIERS = {
     // card's static HTML price as the fallback rather than fetching an
     // undefined priceId.
     name: "Aletheore Flash",
-    priceId: { month: "pri_01m1754jr5msg62grry49kjhw5" },
+    priceId: { month: "pri_01m1dj0m1netz6ze1mmckz73nm" },
   },
   air: {
     name: "Aletheore AIR",
@@ -41,7 +41,7 @@ async function refreshPrices() {
   // "year" priceId, so toggling to Yearly must skip it entirely rather than
   // send Paddle an undefined priceId (which fails the whole preview call
   // for every tier, not just the one missing it). Its card keeps the
-  // static "$6/month" from the HTML in that case.
+  // static "$8/month" from the HTML in that case.
   const activeTiers = Object.entries(TIERS).filter(([, tier]) => tier.priceId[billingInterval]);
   if (activeTiers.length === 0) return;
   const items = activeTiers.map(([, tier]) => ({ priceId: tier.priceId[billingInterval], quantity: 1 }));
