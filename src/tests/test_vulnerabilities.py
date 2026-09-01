@@ -26,7 +26,7 @@ def _mock_response(payload: dict):
 
 def test_check_vulnerabilities_parses_pinned_pip_and_npm_versions(tmp_path):
     repo = make_repo(tmp_path)
-    batch_response = _mock_response({"results": [{}, {}]})
+    batch_response = _mock_response({"results": [{}, {}, {}]})
 
     with patch("aletheore.vulnerabilities.urllib.request.urlopen", return_value=batch_response) as mock_urlopen:
         result = check_vulnerabilities(repo)
@@ -37,7 +37,11 @@ def test_check_vulnerabilities_parses_pinned_pip_and_npm_versions(tmp_path):
     queries = sent_body["queries"]
     assert {"package": {"name": "fastapi", "ecosystem": "PyPI"}, "version": "0.100.0"} in queries
     assert {"package": {"name": "left-pad", "ecosystem": "npm"}, "version": "1.3.0"} in queries
-    assert not any(q["package"]["name"] == "requests" for q in queries)
+    # Real bug this guards against regressing: requests>=2.0 (an unpinned,
+    # non-"==" specifier) used to be completely invisible to CVE scanning -
+    # the old requirements.txt parser required a literal "==" to consider a
+    # line at all. See _parse_pip_pins's own comment.
+    assert {"package": {"name": "requests", "ecosystem": "PyPI"}, "version": "2.0"} in queries
 
 
 def test_check_vulnerabilities_reports_a_real_finding(tmp_path):
@@ -514,6 +518,44 @@ def test_parse_pip_pins_keeps_compound_compatible_and_unpinned_pep508_dependenci
     assert ("tree-sitter", "0.24.0", "PyPI") in pins
     assert ("openai", "1.0.0", "PyPI") in pins
     assert ("rich", "*", "PyPI") in pins
+
+
+def test_parse_pip_pins_keeps_unpinned_and_non_exact_requirements_txt_dependencies(tmp_path):
+    # Regression: the requirements.txt branch used a separate, hand-rolled
+    # parser that required a literal "==" to even consider a line at all -
+    # silently dropping a bare "requests" AND a non-exact specifier like
+    # "requests>=2.0", not just the marker-qualified-unpinned shape #335
+    # fixed for pyproject.toml's PEP 508 parser. Confirmed as a real, silent
+    # false negative: a completely normal requirements.txt line was
+    # invisible to both CVE scanning and license checking (this function's
+    # only two callers). Now reuses _parse_pep508_dependency directly,
+    # rather than a second, independently drifting implementation of the
+    # same grammar - pip option lines (-e, -r, --index-url) are explicitly
+    # skipped rather than relying on the name regex to reject them, since
+    # "-" is itself a valid name character (needed for "typing-extensions"),
+    # so a leading "-e"/"-r" would otherwise still match as a bogus package.
+    from aletheore.vulnerabilities import _parse_pip_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text(
+        "fastapi==0.100.0\n"
+        "requests>=2.0\n"
+        "rich\n"
+        "# a full-line comment\n"
+        "typing_extensions; python_version < \"3.10\"\n"
+        "-e git+https://example.com/foo.git\n"
+        "-r other-requirements.txt\n"
+        "--index-url https://pypi.example.com\n"
+    )
+
+    pins = _parse_pip_pins(repo)
+
+    assert ("fastapi", "0.100.0", "PyPI") in pins
+    assert ("requests", "2.0", "PyPI") in pins
+    assert ("rich", "*", "PyPI") in pins
+    assert ("typing-extensions", "*", "PyPI") in pins
+    assert not any(name.startswith("-") for name, _, _ in pins)
 
 
 def test_parse_pep508_dependency_keeps_unpinned_marker_qualified_dependency():

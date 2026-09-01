@@ -813,7 +813,8 @@ _HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
 def _extract_trailing_json_array(text: str) -> str | None:
-    """The last complete top-level JSON array substring in text, or None.
+    """The last top-level JSON array substring in text that actually looks
+    like a findings answer (empty, or a list of objects), or None.
 
     FLASH_REVIEW_SYSTEM_PROMPT now asks for prose analysis before the final
     answer, so the response is no longer guaranteed to be bare JSON - only
@@ -821,12 +822,23 @@ def _extract_trailing_json_array(text: str) -> str | None:
     string-awareness (so a '[' or ']' inside a quoted "issue" string, or
     mentioned in the prose analysis, like "the array foo[0]", can't be
     mistaken for the answer's own delimiters).
+
+    Picking the literal last top-level span isn't enough on its own: a
+    model that doesn't perfectly follow "nothing after the array" can add a
+    short trailing remark of its own containing a bracket pair (e.g. "(see
+    item[0] above)") after the real answer - that parses as valid JSON too
+    ([0] is a one-element int list), so it would silently outrank and
+    replace the real findings array. Every real answer is empty or a list
+    of finding objects, never a list of bare scalars, so spans are tried
+    last-to-first and the first one that actually parses to that shape
+    wins; a trailing "[0]"-style span is skipped over instead of winning by
+    virtue of position alone.
     """
     depth = 0
     in_string = False
     escape = False
     start: int | None = None
-    last_span: str | None = None
+    spans: list[str] = []
     for i, ch in enumerate(text):
         if in_string:
             if escape:
@@ -846,8 +858,15 @@ def _extract_trailing_json_array(text: str) -> str | None:
             if depth > 0:
                 depth -= 1
                 if depth == 0 and start is not None:
-                    last_span = text[start : i + 1]
-    return last_span
+                    spans.append(text[start : i + 1])
+    for span in reversed(spans):
+        try:
+            parsed = json.loads(span)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list) and all(isinstance(item, dict) for item in parsed):
+            return span
+    return None
 
 
 def _patch_valid_lines(patch: str) -> set[int]:

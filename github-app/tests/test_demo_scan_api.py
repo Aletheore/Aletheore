@@ -137,6 +137,50 @@ async def test_demo_scan_abuse_limiter_runs_before_github_api_call(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_demo_scan_abuse_limiter_is_offloaded_to_thread(monkeypatch):
+    # Real regression this guards: is_rate_limited uses the synchronous
+    # redis-py client and blocks on pipe.execute() - called directly inside
+    # an async def handler, each check stalls the whole event loop (every
+    # other concurrent request on this worker) for its full duration. This
+    # route is public and unauthenticated - the most exposed instance of
+    # this gap. See embeddings_api.py's identical test for the pattern this
+    # was copied from (#328's own original fix).
+    from unittest.mock import AsyncMock, patch
+
+    import app_server.demo_scan_api as demo_scan_api_module
+
+    async def fake_check_repo_size(owner, repo, token):
+        return None
+
+    async def fake_reserve(pool, client_ip, cooldown_seconds):
+        return True
+
+    monkeypatch.setattr("app_server.demo_scan_api._check_repo_size", fake_check_repo_size)
+    monkeypatch.setattr("app_server.demo_scan_api.check_and_reserve_demo_scan", fake_reserve)
+    _mock_queue(monkeypatch)
+    app.state.db_pool = object()
+
+    offloaded_funcs = []
+
+    async def _dispatch(func, *args, **kwargs):
+        offloaded_funcs.append(func)
+        return func(*args, **kwargs)
+
+    with patch.object(demo_scan_api_module.asyncio, "to_thread", AsyncMock(side_effect=_dispatch)):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"x-forwarded-for": "203.0.113.78"},
+        ) as client:
+            response = await client.post(
+                "/v1/demo-scan", json={"repo_url": "https://github.com/octocat/Hello-World"}
+            )
+
+    assert response.status_code == 202
+    assert demo_scan_api_module.is_rate_limited in offloaded_funcs
+
+
+@pytest.mark.asyncio
 async def test_repo_size_check_uses_pooled_http_client(monkeypatch):
     fake_client = _mock_github_response(monkeypatch, 200, size_kb=100)
 

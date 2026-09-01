@@ -417,17 +417,54 @@ def test_simple_completion_does_not_call_on_call_failed_on_success(mock_openai_c
     mock_openai_class.return_value = mock_client
     mock_message = MagicMock()
     mock_message.content = "ok"
+    mock_usage = MagicMock(prompt_tokens=10, completion_tokens=5)
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock(message=mock_message)]
+    mock_response.usage = mock_usage
+    mock_client.chat.completions.create.return_value = mock_response
+
+    failed_calls = []
+    usage_calls = []
+    adapter = _adapter(
+        tmp_path, on_call_failed=lambda: failed_calls.append(1), on_usage=lambda p, c: usage_calls.append((p, c))
+    )
+    with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
+        adapter.simple_completion("system", "user", cwd=str(tmp_path))
+
+    assert failed_calls == []
+    assert usage_calls == [(10, 5)]
+
+
+@patch("aletheore.adapters.openai_compatible.OpenAI")
+def test_simple_completion_calls_on_call_failed_when_response_has_no_usage(mock_openai_class, tmp_path):
+    # Real regression: a 200 response with no usage field is an observed
+    # shape from some OpenAI-compatible gateways/proxies, not something the
+    # SDK itself raises on - the except block never sees it. Without this,
+    # on_usage never fires (nothing to true up against) AND on_call_failed
+    # never fires either (no exception was raised), leaving the reservation
+    # before_llm_call made permanently stuck against a call that used zero
+    # real tokens - the identical symptom the exception-path fix above
+    # closes, just reached by a response shape that test never simulated.
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_message = MagicMock()
+    mock_message.content = "ok"
     mock_response = MagicMock()
     mock_response.choices = [MagicMock(message=mock_message)]
     mock_response.usage = None
     mock_client.chat.completions.create.return_value = mock_response
 
     failed_calls = []
-    adapter = _adapter(tmp_path, on_call_failed=lambda: failed_calls.append(1))
+    usage_calls = []
+    adapter = _adapter(
+        tmp_path, on_call_failed=lambda: failed_calls.append(1), on_usage=lambda p, c: usage_calls.append((p, c))
+    )
     with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
-        adapter.simple_completion("system", "user", cwd=str(tmp_path))
+        result = adapter.simple_completion("system", "user", cwd=str(tmp_path))
 
-    assert failed_calls == []
+    assert result == "ok"
+    assert usage_calls == []
+    assert failed_calls == [1]
 
 
 def test_simple_completion_does_not_call_on_call_failed_when_budget_is_declined_up_front():

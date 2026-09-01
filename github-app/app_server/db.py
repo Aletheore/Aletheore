@@ -4,6 +4,7 @@ from datetime import datetime
 
 import asyncpg
 
+from aletheore.evidence import is_evidence_version_compatible
 from app_server.evidence_limits import check_evidence_size
 from app_server.llm_cost import WARN_FRACTION_OF_CAP, crossed_spend_warning_threshold
 
@@ -1063,6 +1064,40 @@ async def count_health_check_targets(pool: asyncpg.Pool, installation_id: int, r
     return row["n"]
 
 
+def _version_gated_evidence(
+    installation_id: int, repo_full_name: str, raw: object
+) -> dict | None:
+    """Shared by get_recent_history and get_latest_evidence - the async,
+    hosted-dashboard counterpart of scan_worker.db's identically-named
+    sync helper (same reasoning, duplicated here rather than shared
+    because the two live in separate packages with no existing import
+    boundary between them).
+
+    repo_history rows outlive the schema that wrote them. The CLI, MCP
+    server, and scan_worker.db's own get_latest_evidence all version-
+    check evidence before reading it - real bug this closes: this async
+    path (the one the hosted dashboard actually calls, see dashboard.py)
+    did not, so after an EVIDENCE_VERSION bump the dashboard would keep
+    reading an old-shaped row as if current and crash rendering it (a raw
+    unhandled exception, not the clean "awaiting re-scan" this repo's
+    other read paths already give), or silently show stale/wrong data
+    for whatever keys happened to still be present in the old shape.
+    """
+    evidence = json.loads(raw) if isinstance(raw, str) else raw
+    if not is_evidence_version_compatible(
+        evidence.get("aletheore_version") if isinstance(evidence, dict) else None
+    ):
+        logging.getLogger("app_server.db").info(
+            "ignoring stored evidence for installation=%s repo=%s - written by "
+            "aletheore_version=%r, incompatible with this build; awaiting re-scan",
+            installation_id,
+            repo_full_name,
+            evidence.get("aletheore_version") if isinstance(evidence, dict) else None,
+        )
+        return None
+    return evidence
+
+
 async def get_recent_history(
     pool: asyncpg.Pool,
     installation_id: int,
@@ -1083,13 +1118,15 @@ async def get_recent_history(
     )
     history = []
     for row in rows:
-        evidence = row["evidence"]
-        history.append(
-            {
-                "scanned_at": row["scanned_at"],
-                "evidence": json.loads(evidence) if isinstance(evidence, str) else evidence,
-            }
-        )
+        # A version-incompatible row is dropped from the list entirely,
+        # not included with evidence=None - a history timeline entry
+        # whose evidence dict is missing keys the frontend expects to
+        # render would fail there instead of here, on a row the very
+        # next scan will overwrite anyway.
+        evidence = _version_gated_evidence(installation_id, repo_full_name, row["evidence"])
+        if evidence is None:
+            continue
+        history.append({"scanned_at": row["scanned_at"], "evidence": evidence})
     return history
 
 
@@ -1109,8 +1146,7 @@ async def get_latest_evidence(
     )
     if row is None:
         return None
-    evidence = row["evidence"]
-    return json.loads(evidence) if isinstance(evidence, str) else evidence
+    return _version_gated_evidence(installation_id, repo_full_name, row["evidence"])
 
 
 async def get_recent_endpoint_health(

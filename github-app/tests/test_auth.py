@@ -148,6 +148,37 @@ async def test_login_redirects_to_github_authorize(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_login_rate_limit_check_is_offloaded_to_thread(pool, monkeypatch):
+    # Real regression this guards: is_rate_limited uses the synchronous
+    # redis-py client and blocks on pipe.execute() - called directly inside
+    # an async def handler, each check stalls the whole event loop (every
+    # other concurrent request on this worker) for its full duration. See
+    # embeddings_api.py's identical test for the pattern this was copied
+    # from (#328's own original fix).
+    from unittest.mock import AsyncMock, patch
+
+    import app_server.auth as auth_module
+
+    monkeypatch.setenv("GITHUB_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "http://test")
+    app.state.db_pool = pool
+
+    offloaded_funcs = []
+
+    async def _dispatch(func, *args, **kwargs):
+        offloaded_funcs.append(func)
+        return func(*args, **kwargs)
+
+    transport = ASGITransport(app=app)
+    with patch.object(auth_module.asyncio, "to_thread", AsyncMock(side_effect=_dispatch)):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/auth/login", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert auth_module.is_rate_limited in offloaded_funcs
+
+
+@pytest.mark.asyncio
 async def test_login_sets_next_cookie(pool, monkeypatch):
     monkeypatch.setenv("GITHUB_CLIENT_ID", "test-client-id")
     monkeypatch.setenv("PUBLIC_BASE_URL", "http://test")

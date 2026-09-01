@@ -105,6 +105,29 @@ def test_kotlin_default_visibility_is_public_unlike_java(tmp_path):
     assert classes_by_name["TasksRepository"]["is_public"] is True  # class, no modifier
 
 
+def test_kotlin_local_function_nested_inside_another_function_is_not_public(tmp_path):
+    # Real bug: tree-sitter-kotlin uses the exact same node type,
+    # function_declaration, for a top-level function and one declared
+    # inside another function's body - and a Kotlin local function can't
+    # even carry an explicit visibility modifier (compile error), so every
+    # one of them fell into the "no modifiers node -> public" default,
+    # the same "closure extracted as a top-level public symbol" gap
+    # _is_nested_in_function exists to close for every other language,
+    # never wired into Kotlin's own _kotlin_is_public.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Foo.kt").write_text(
+        "fun outer() {\n"
+        "    fun innerHelper() { println(\"hi\") }\n"
+        "    innerHelper()\n"
+        "}\n"
+    )
+    modules, _, _ = build_module_graph(repo)
+    functions_by_name = {f["name"]: f for f in modules[0]["symbols"]["functions"]}
+    assert functions_by_name["outer"]["is_public"] is True
+    assert functions_by_name["innerHelper"]["is_public"] is False
+
+
 def test_build_module_graph_kotlin_import_resolves_despite_filename_mismatch(tmp_path):
     # The real, Kotlin-specific import-resolution gap Java-style same-
     # name-as-file lookup can't handle: TaskRepository.kt exports

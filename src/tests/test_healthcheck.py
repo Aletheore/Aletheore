@@ -44,13 +44,30 @@ def test_run_healthcheck_reports_reachable_get_endpoint():
 
 
 def test_run_healthcheck_checks_endpoints_concurrently():
+    # Asserts on the recorded call windows actually overlapping, not a
+    # tight total-wall-clock threshold - a fixed cutoff like "elapsed <
+    # 0.25" is a condition-based check in disguise (did the checks run
+    # concurrently?) expressed as an arbitrary timing number instead, and
+    # CI-runner scheduling noise can push even genuinely-overlapped calls
+    # past a tight bound. Real, observed failure this fixes: elapsed=0.268
+    # against this exact 0.25s cutoff on a loaded CI runner, nowhere near
+    # the ~400ms fully-serial floor (8 endpoints x 50ms). Same fix already
+    # applied once to test_live_wiki.py's identical anti-pattern (#318) -
+    # this sibling test wasn't part of that sweep.
     endpoints = [
         {"method": "GET", "path": f"/health/{index}", "unresolved": False}
         for index in range(8)
     ]
 
+    call_windows: list[tuple[float, float]] = []
+    windows_lock = threading.Lock()
+
     def slow_open(*args, **kwargs):
+        call_start = time.monotonic()
         time.sleep(0.05)
+        call_end = time.monotonic()
+        with windows_lock:
+            call_windows.append((call_start, call_end))
         return _mock_response(200)
 
     start = time.monotonic()
@@ -60,7 +77,21 @@ def test_run_healthcheck_checks_endpoints_concurrently():
 
     assert len(result["results"]) == len(endpoints)
     assert all(entry["reachable"] is True for entry in result["results"])
-    assert elapsed < 0.25
+    # Real proof of concurrency: at least two calls' [start, end) windows
+    # genuinely intersect - a fully serial implementation could never
+    # produce this, regardless of how loaded the machine running the test
+    # is.
+    assert len(call_windows) == len(endpoints)
+    overlapping_pairs = [
+        (a, b)
+        for i, a in enumerate(call_windows)
+        for b in call_windows[i + 1:]
+        if a[0] < b[1] and b[0] < a[1]
+    ]
+    assert overlapping_pairs, f"no overlapping call windows found: {call_windows}"
+    # Loose backstop against genuine full serialization (~400ms) - not the
+    # primary assertion, just a sanity net with real margin over CI noise.
+    assert elapsed < 0.4
 
 
 def test_run_healthcheck_substitutes_path_params_and_notes_it():
