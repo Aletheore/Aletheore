@@ -1,3 +1,4 @@
+import threading
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -8,6 +9,7 @@ import aletheore.search_index as search_index_module
 
 from aletheore.search_index import (
     _file_header_comment,
+    _is_barrel_file,
     _is_declaration_only_file,
     _detect_query_language,
     _is_auxiliary_path,
@@ -386,6 +388,80 @@ def test_build_index_creates_lancedb_table(mock_embed_texts, tmp_path):
 def test_open_index_raises_when_missing(tmp_path):
     with pytest.raises(IndexNotFoundError):
         open_index(tmp_path)
+
+
+def test_open_index_returns_a_cached_handle_across_calls(tmp_path):
+    """The whole point of the in-process cache: a long-lived process (the
+    MCP server especially) that calls open_index once per query must not
+    reconnect() and open_table() from disk every time."""
+    (tmp_path / "app.py").write_text("def f():\n    return 1\n")
+    evidence = _evidence_with_module("app.py", [{"name": "f", "start_line": 1, "end_line": 2}])
+    with patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.1] * 768] * len(t)):
+        build_index(tmp_path, evidence)
+
+    first = open_index(tmp_path)
+    second = open_index(tmp_path)
+
+    assert first is second
+
+
+def test_open_index_sees_a_full_rebuild_through_a_separate_connection(tmp_path):
+    """The correctness half of the same cache: build_index opens its own
+    fresh lancedb.connect(), entirely independent of whatever open_index
+    cached - a cached handle must still see a later mode="overwrite"
+    rebuild, not keep serving the version it was opened at. Verified
+    directly against a real LanceDB table (not mocked) that
+    Table.checkout_latest() picks up a full overwrite done through a
+    separate connection before trusting it in open_index itself.
+
+    The file's content (not just the mocked embed_texts return value) has
+    to change between the two builds - build_index has its own,
+    independent chunk-hash-based vector-reuse optimization, and reusing
+    the same content would legitimately skip re-embedding regardless of
+    what the mock returns, proving nothing about open_index's cache."""
+    (tmp_path / "app.py").write_text("def f():\n    return 1\n")
+    evidence = _evidence_with_module("app.py", [{"name": "f", "start_line": 1, "end_line": 2}])
+    with patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.1] * 768] * len(t)):
+        build_index(tmp_path, evidence)
+
+    cached = open_index(tmp_path)
+    assert cached.to_arrow().to_pylist()[0]["vector"] == pytest.approx([0.1] * 768)
+
+    (tmp_path / "app.py").write_text("def f():\n    return 2\n")
+    with patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.9] * 768] * len(t)):
+        build_index(tmp_path, evidence)
+
+    refreshed = open_index(tmp_path)
+    assert refreshed.to_arrow().to_pylist()[0]["vector"] == pytest.approx([0.9] * 768)
+
+
+def test_open_index_is_safe_under_concurrent_calls(tmp_path):
+    """The lock exists because the MCP server can serve concurrent tool
+    calls - many threads racing open_index() on the same repo must not
+    raise and must all converge on the one cached handle."""
+    (tmp_path / "app.py").write_text("def f():\n    return 1\n")
+    evidence = _evidence_with_module("app.py", [{"name": "f", "start_line": 1, "end_line": 2}])
+    with patch("aletheore.search_index.embed_texts", side_effect=lambda t: [[0.1] * 768] * len(t)):
+        build_index(tmp_path, evidence)
+
+    results = []
+    errors = []
+
+    def _open():
+        try:
+            results.append(open_index(tmp_path))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_open) for _ in range(16)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors
+    assert len(results) == 16
+    assert len({id(r) for r in results}) == 1
 
 
 def test_search_index_raises_a_clear_error_on_dimension_mismatch(tmp_path):
@@ -842,6 +918,36 @@ def test_build_chunks_tags_a_php_interface_files_chunks_as_declaration_only(tmp_
 
     assert chunks
     assert all(c["is_declaration_only"] for c in chunks)
+
+
+def test_build_chunks_tags_a_barrel_files_chunks_as_barrel_file(tmp_path):
+    (tmp_path / "index.ts").write_text(
+        "export { a } from './a';\nexport { b } from './b';\n"
+    )
+    modules = [{
+        "path": "index.ts",
+        "language": "typescript",
+        "imports": [f"mod{i}" for i in range(20)],
+        "symbols": {"functions": [], "classes": []},
+    }]
+    evidence = {"repository": {"modules": modules}}
+
+    chunks = build_chunks(evidence, tmp_path)
+
+    assert chunks
+    assert all(c["is_barrel_file"] for c in chunks)
+
+
+def test_build_chunks_does_not_tag_an_ordinary_files_chunks_as_barrel_file(tmp_path):
+    (tmp_path / "app.py").write_text("x = 1\ndef greet():\n    return 'hi'\n")
+    evidence = _evidence_with_module(
+        "app.py", [{"name": "greet", "start_line": 2, "end_line": 3}]
+    )
+
+    chunks = build_chunks(evidence, tmp_path)
+
+    assert chunks
+    assert not any(c["is_barrel_file"] for c in chunks)
 
 
 def test_build_chunks_drops_a_banner_repeated_across_many_files_even_if_no_regex_catches_it(
@@ -1892,6 +1998,56 @@ def test_is_auxiliary_path_does_not_flag_ordinary_library_code():
     assert not _is_auxiliary_path("src/flask/sessions.py")
     # The marker has to be a directory, not part of a file's name.
     assert not _is_auxiliary_path("src/aletheore/benchmarks.py")
+
+
+def test_is_barrel_file_flags_a_high_fanout_thin_file():
+    """colinhacks/zod's packages/*/src/index.ts shape: a short file that is
+    almost entirely re-export statements."""
+    assert _is_barrel_file(imports=[f"mod{i}" for i in range(20)], line_count=40)
+
+
+def test_is_barrel_file_does_not_flag_a_large_implementation_with_many_imports():
+    """High absolute import count alone isn't enough - a real, large module
+    can legitimately import 20+ collaborators across hundreds of lines."""
+    assert not _is_barrel_file(imports=[f"mod{i}" for i in range(20)], line_count=800)
+
+
+def test_is_barrel_file_does_not_flag_a_small_file_with_few_imports():
+    """High ratio alone isn't enough either - a small real file with a
+    couple of imports shouldn't trip the absolute-count floor."""
+    assert not _is_barrel_file(imports=["a", "b"], line_count=5)
+
+
+def test_rrf_fuse_demotes_a_barrel_hit_below_an_implementation():
+    def chunk(path, is_barrel):
+        return {
+            "module_path": path,
+            "symbol_name": "parse",
+            "start_line": 1,
+            "is_barrel_file": is_barrel,
+        }
+
+    barrel_hit = chunk("packages/resolution/src/index.ts", True)
+    library_hit = chunk("packages/zod/src/v4/core/parse.ts", False)
+
+    fused = _rrf_fuse([barrel_hit, library_hit], [barrel_hit, library_hit])
+
+    assert fused[0]["module_path"] == "packages/zod/src/v4/core/parse.ts"
+
+
+def test_rrf_fuse_still_surfaces_a_barrel_hit_when_nothing_else_matches():
+    """A demotion, not an exclusion - matches _is_auxiliary_path's own
+    reasoning below."""
+    only_hit = {
+        "module_path": "packages/resolution/src/index.ts",
+        "symbol_name": None,
+        "start_line": 1,
+        "is_barrel_file": True,
+    }
+
+    fused = _rrf_fuse([only_hit], [only_hit])
+
+    assert len(fused) == 1
 
 
 def test_rrf_fuse_demotes_an_auxiliary_hit_below_library_code():

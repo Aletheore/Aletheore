@@ -1,0 +1,62 @@
+name: Retrieval Regression (Bench-CI)
+
+# Only src/aletheore/search_index.py and scanner/graph.py can move retrieval
+# ranking - everything else in the repo is irrelevant to this check, so it
+# stays out of the path filter to avoid slowing down unrelated PRs with a
+# job that clones a fixture repo and runs a local embedding model.
+on:
+  pull_request:
+    paths:
+      - "src/aletheore/search_index.py"
+      - "src/aletheore/scanner/graph.py"
+
+permissions:
+  contents: read
+
+jobs:
+  retrieval-mrr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+
+      - name: Install Aletheore
+        working-directory: src
+        run: pip install -e "."
+
+      # Local, not hosted - build_fixture.py's `aletheore index` and
+      # score.py's search_index() both call with allow_hosted=False, so
+      # this gate never depends on an API key and never costs money.
+      - name: Install Ollama and pull the local embedding model
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          ollama serve &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:11434/api/tags >/dev/null && break
+            sleep 1
+          done
+          ollama pull nomic-embed-text
+
+      # Keyed on the fixture's pinned commit (fixture.json) - the slow part
+      # is cloning Zod and embedding ~2,400 chunks, not scoring, so this
+      # cache is what keeps every PR touching these two files from paying
+      # that cost on every run. Only invalidates when the pin itself
+      # changes, which is a deliberate, reviewed edit.
+      - name: Cache the fixture checkout and built index
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: benchmarks/retrieval-regression/.fixture-cache
+          key: retrieval-fixture-${{ hashFiles('benchmarks/retrieval-regression/fixture.json') }}
+
+      - name: Build the fixture (no-op on a cache hit)
+        working-directory: benchmarks/retrieval-regression
+        run: python3 build_fixture.py
+
+      - name: Score retrieval and gate on a real MRR regression
+        working-directory: benchmarks/retrieval-regression
+        run: python3 score.py

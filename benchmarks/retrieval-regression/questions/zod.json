@@ -1,0 +1,122 @@
+[
+ {
+  "id": "ts01",
+  "question": "Where does a value actually get run against a schema and its problems collected?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/parse.ts"
+  ],
+  "verification_anchor": "export const _parse"
+ },
+ {
+  "id": "ts02",
+  "question": "Where is the base shape every schema type builds on defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/schemas.ts"
+  ],
+  "verification_anchor": "export interface $ZodType"
+ },
+ {
+  "id": "ts03",
+  "question": "How are extra constraints like a minimum length attached to a type?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/checks.ts"
+  ],
+  "verification_anchor": "export interface $ZodCheck"
+ },
+ {
+  "id": "ts04",
+  "question": "Where are the individual failure descriptions a validation can produce declared?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/errors.ts"
+  ],
+  "verification_anchor": "export interface $ZodIssueBase"
+ },
+ {
+  "id": "ts05",
+  "question": "Where can descriptions be associated with a schema and looked up later?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/registries.ts"
+  ],
+  "verification_anchor": "export const globalRegistry"
+ },
+ {
+  "id": "ts06",
+  "question": "Where are the patterns for well-known string formats kept?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/regexes.ts"
+  ],
+  "verification_anchor": "export const uuid"
+ },
+ {
+  "id": "ts07",
+  "question": "How is a schema turned into a portable specification document?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/json-schema-generator.ts"
+  ],
+  "verification_anchor": "export class JSONSchemaGenerator"
+ },
+ {
+  "id": "ts08",
+  "question": "Where is the vendor-neutral interface other libraries can consume implemented?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/standard-schema.ts"
+  ],
+  "verification_anchor": "export interface StandardSchemaV1"
+ },
+ {
+  "id": "ts09",
+  "question": "Where are inputs converted to the expected type before checking rather than rejected?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/classic/coerce.ts"
+  ],
+  "verification_anchor": "export function string"
+ },
+ {
+  "id": "ts10",
+  "question": "Where are date and time string formats defined as their own types?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/classic/iso.ts"
+  ],
+  "verification_anchor": "export function datetime"
+ },
+ {
+  "id": "ts11",
+  "question": "Where is the user-facing type that gets chained with methods defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/classic/schemas.ts"
+  ],
+  "verification_anchor": "export interface ZodString"
+ },
+ {
+  "id": "ts12",
+  "question": "How does a specification document get turned back into a schema?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/classic/from-json-schema.ts"
+  ],
+  "verification_anchor": "export function fromJSONSchema"
+ },
+ {
+  "id": "ts13",
+  "question": "Where are library-wide settings such as the active language held?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/config.ts"
+  ],
+  "verification_anchor": "export const globalConfig"
+ },
+ {
+  "id": "ts14",
+  "question": "Where are the shared helpers the rest of the internals rely on?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/util.ts"
+  ],
+  "verification_anchor": "export function assertEqual"
+ },
+ {
+  "id": "ts15",
+  "question": "Where is everything the package exposes to importers gathered together?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/classic/external.ts"
+  ],
+  "verification_anchor": "export * as core from \"../core/index.js\""
+ }
+]
