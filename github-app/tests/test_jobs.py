@@ -5631,6 +5631,104 @@ def test_run_push_scan_job_skips_paid_repo_past_monthly_scan_cap(bare_repo_with_
     assert cloned == []
 
 
+def test_run_initial_scan_job_syncs_code_graph_while_still_holding_repo_checkout_lock(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # run_initial_scan_job previously called _sync_persistent_git_graph and
+    # _sync_code_graph with no locking at all - a repo connected and then
+    # pushed to in quick succession (this job racing run_push_scan_job on a
+    # different scan-worker replica) could interleave their writes and leave
+    # code_graph_sync_state.last_synced_sha pointing at the older of the two
+    # scans while the file/symbol/edge rows ended up a clobbered mix of
+    # both - corrupting the state _build_unchanged_scan_cache trusts as
+    # ground truth for skipping re-parsing of "unchanged" files on the next
+    # PR scan. Verifies the fix by overriding the autoused no-op lock with
+    # one that records enter/exit, and asserting both sync calls run
+    # strictly between them.
+    from scan_worker.jobs import run_initial_scan_job
+
+    bare_path, _base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda *a, **k: object())
+    monkeypatch.setattr("scan_worker.jobs.fetch_default_branch_head_sha", lambda *a, **k: head_sha)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+
+    call_order: list[str] = []
+
+    @contextmanager
+    def _recording_lock(*args, **kwargs):
+        call_order.append("lock_enter")
+        yield
+        call_order.append("lock_exit")
+
+    monkeypatch.setattr("scan_worker.jobs.repo_checkout_lock", _recording_lock)
+    monkeypatch.setattr(
+        "scan_worker.jobs._sync_persistent_git_graph",
+        lambda *a, **k: call_order.append("sync_git") or (a[3] if len(a) > 3 else k.get("evidence")),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._sync_code_graph",
+        lambda *a, **k: call_order.append("sync_code"),
+    )
+
+    run_initial_scan_job(1, "octocat/hello-world")
+
+    assert call_order == ["lock_enter", "sync_git", "sync_code", "lock_exit"]
+
+
+def test_run_push_scan_job_syncs_code_graph_while_still_holding_repo_checkout_lock(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # Direct sibling of the run_initial_scan_job fix above: _sync_code_graph
+    # here used to be dedented out of the `with repo_checkout_lock` block
+    # entirely, running unlocked after the lock had already released - the
+    # same class of race, just reached from this job's side of it (a push
+    # landing while run_initial_scan_job is still mid-sync for the same
+    # repo, or two pushes racing each other). Verifies the fix the same way:
+    # overrides the autoused no-op lock to record enter/exit and asserts
+    # _sync_code_graph runs strictly between them, not after lock_exit.
+    from scan_worker.jobs import run_push_scan_job
+
+    bare_path, _base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+
+    call_order: list[str] = []
+
+    @contextmanager
+    def _recording_lock(*args, **kwargs):
+        call_order.append("lock_enter")
+        yield
+        call_order.append("lock_exit")
+
+    monkeypatch.setattr("scan_worker.jobs.repo_checkout_lock", _recording_lock)
+    monkeypatch.setattr(
+        "scan_worker.jobs._sync_persistent_git_graph",
+        lambda *a, **k: call_order.append("sync_git") or (a[3] if len(a) > 3 else k.get("evidence")),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._sync_code_graph",
+        lambda *a, **k: call_order.append("sync_code"),
+    )
+
+    run_push_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        head_sha=head_sha,
+        changed_files=["app.py"],
+    )
+
+    assert call_order == ["lock_enter", "sync_git", "sync_code", "lock_exit"]
+
+
 def test_run_initial_scan_job_logs_and_reraises_on_inner_failure(monkeypatch, caplog):
     from scan_worker.jobs import run_initial_scan_job
 

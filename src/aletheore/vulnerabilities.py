@@ -624,7 +624,13 @@ def _parse_gradle_kts_pins(
 
     pins: list[tuple[str, str, str]] = []
 
-    def walk(node: Node) -> None:
+    # Iterative, not recursive - same class of fix as graph.py's walk() and
+    # endpoints.py's extractors: a deeply nested build.gradle.kts (long
+    # chained/parenthesized expressions are valid Kotlin) can otherwise blow
+    # past Python's recursion limit and crash the whole scan.
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
         if node.type == "call_expression":
             # No field names on this grammar's call_expression at all
             # (confirmed empirically: child_by_field_name("function") and
@@ -657,10 +663,8 @@ def _parse_gradle_kts_pins(
                                     if resolved and resolved[2]:
                                         group, artifact, version = resolved
                                         pins.append((f"{group}:{artifact}", version, _GRADLE_ECOSYSTEM))
-        for child in node.children:
-            walk(child)
+        stack.extend(reversed(node.children))
 
-    walk(tree.root_node)
     return pins
 
 
