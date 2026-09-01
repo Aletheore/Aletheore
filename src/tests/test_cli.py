@@ -1270,6 +1270,78 @@ def test_query_search_codebase_prints_friendly_error_on_dimension_mismatch(tmp_p
     assert "1536-dimension" in result.output
 
 
+def test_query_ast_pattern_prints_a_real_match(tmp_path):
+    (tmp_path / "app.py").write_text("def f():\n    pass\n")
+
+    result = runner.invoke(
+        app,
+        [
+            "query",
+            "ast-pattern",
+            "(function_definition name: (identifier) @name) @whole",
+            "--language",
+            "python",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "app.py" in result.output
+
+
+def test_query_ast_pattern_requires_target(tmp_path):
+    result = runner.invoke(
+        app, ["query", "ast-pattern", "--language", "python", "--path", str(tmp_path)]
+    )
+    assert result.exit_code == 1
+    assert "requires a tree-sitter query" in result.output
+
+
+def test_query_ast_pattern_requires_language(tmp_path):
+    result = runner.invoke(
+        app, ["query", "ast-pattern", "(function_definition) @f", "--path", str(tmp_path)]
+    )
+    assert result.exit_code == 1
+    assert "--language" in result.output
+
+
+def test_query_ast_pattern_prints_friendly_error_on_unknown_language(tmp_path):
+    result = runner.invoke(
+        app,
+        [
+            "query",
+            "ast-pattern",
+            "(anything)",
+            "--language",
+            "cobol",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "unknown language" in result.output.lower()
+
+
+def test_query_ast_pattern_prints_friendly_error_on_invalid_query(tmp_path):
+    (tmp_path / "app.py").write_text("def f():\n    pass\n")
+
+    result = runner.invoke(
+        app,
+        [
+            "query",
+            "ast-pattern",
+            "(this_node_type_does_not_exist)",
+            "--language",
+            "python",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "invalid tree-sitter query" in result.output.lower()
+
+
 def test_query_answer_reuses_selected_adapter(tmp_path):
     fake_adapter = MagicMock()
     fake_adapter.name = "ollama"

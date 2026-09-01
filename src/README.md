@@ -454,8 +454,8 @@ Starts a stdio MCP server scoped to one repository, so a coding agent can query 
 directly instead of shelling out via Bash or re-reading files on every lookup. Every tool
 result is [TOON](https://toonformat.dev)-encoded rather than plain JSON — the calling agent's
 own token budget is what actually pays for reading these results, and evidence's shape (almost
-entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 26 tools in
-a read-only posture, 30 by default, and 31 with every effect permitted — see
+entirely uniform arrays of same-shaped objects) is exactly TOON's best case. Exposes 27 tools in
+a read-only posture, 31 by default, and 32 with every effect permitted — see
 [Tool permissions](#tool-permissions) for what gates the rest — plus one optional answer tool
 when started with `--agent`:
 
@@ -478,6 +478,9 @@ when started with `--agent`:
   instead of three round-trips.
 - `aletheore_search(pattern, regex=False, path_glob=None)` — literal or regex full-text search
   over tracked source files, capped at 200 matches.
+- `aletheore_ast_pattern(language, query)` — structural search by shape, not words: a raw
+  tree-sitter S-expression query against every file of one language, re-parsed from disk (not
+  air.json) since a structural match needs the real parse tree.
 - `aletheore_symbol_source(module, symbol)` — exact source text for one named function/class,
   with resolved line bounds.
 - `aletheore_verify_citations(report_text)` — checks every `file:line` citation in a report

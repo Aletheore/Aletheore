@@ -140,6 +140,7 @@ QUERY_KIND_GROUPS: dict[str, list[str]] = {
         "layer-violations",
         "dead-code",
         "schema",
+        "ast-pattern",
     ],
     "Security": ["secrets", "vulnerabilities", "licenses"],
     "Runtime": ["endpoints", "database", "infrastructure", "environment-variables"],
@@ -813,6 +814,30 @@ def _query(
             return 1
         except IndexDimensionMismatchError as exc:
             console.print(f"[bold red]error:[/bold red] {exc}")
+            return 1
+        _print_query_result(result)
+        return 0
+
+    if kind == "ast-pattern":
+        if target is None:
+            print("error: query type 'ast-pattern' requires a tree-sitter query as TARGET")
+            return 1
+        if language is None:
+            print("error: query type 'ast-pattern' requires --language (which grammar to compile the query against)")
+            return 1
+        from aletheore.ast_pattern import (
+            InvalidPatternError,
+            UnknownLanguageError,
+            search_ast_pattern,
+        )
+
+        try:
+            result = search_ast_pattern(Path(repo_path).resolve(), language, target)
+        except UnknownLanguageError as exc:
+            console.print(f"[bold red]error:[/bold red] {exc}")
+            return 1
+        except InvalidPatternError as exc:
+            console.print(f"[bold red]error:[/bold red] invalid tree-sitter query: {exc}")
             return 1
         _print_query_result(result)
         return 0
@@ -1560,7 +1585,9 @@ def query(
     agent: Optional[str] = typer.Option(None, "--agent", help="provider for 'answer'"),
     k: int = typer.Option(10, "--k", help="number of semantic search results"),
     language: Optional[str] = typer.Option(
-        None, "--language", help="restrict 'search-codebase' to one language, e.g. python"
+        None,
+        "--language",
+        help="restrict 'search-codebase' to one language, e.g. python; required for 'ast-pattern'",
     ),
 ) -> None:
     if kind is None:
