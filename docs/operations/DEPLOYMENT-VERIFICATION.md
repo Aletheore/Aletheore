@@ -4,8 +4,8 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-08-31
-**Snapshot Freshness:** CURRENT as of 2026-08-31 - production was redeployed to `master` (commit `f90d820`) and re-verified live via SSH the same day. (This doc's snapshot history has gaps at the 2026-08-28 and 2026-08-30 deploys, tagged `github-app-deploy-2026-08-28`/`-08-30` but not separately logged here - see `github-app/CHANGELOG.md` for those.)
+**Last Updated:** 2026-09-02
+**Snapshot Freshness:** CURRENT as of 2026-09-02 - production was redeployed to `master` (commit `1795104`, tagged `github-app-deploy-2026-09-02`) and re-verified live via SSH the same day. Most critical of the 19 commits deployed: PR #506's Flash price bump ($6->$8) - prod had been running 19 commits behind, so `resolve_plan_for_price_id` still only recognized the old, archived $6 price while the live site was already selling the new $8 one. A real Flash signup in that window would have been charged but never activated (unresolvable price id -> webhook silently drops the plan flip). Verified fixed post-deploy: `docker exec app-server python3 -c "from app_server.paddle_pricing import resolve_plan_for_price_id; ..."` returns `'flash'` for the new price id. Also deployed the same day: PR #512's fix to the live Paddle webhook destination itself (added the missing `adjustment.created` subscription via the Paddle API, independently re-verified) - a separate, pre-existing gap where refund/chargeback affiliate-commission reversal could never fire since Paddle never delivered that event. (This doc's snapshot history has gaps at the 2026-08-28 and 2026-08-30 deploys, tagged `github-app-deploy-2026-08-28`/`-08-30` but not separately logged here - see `github-app/CHANGELOG.md` for those.)
 
 ## Purpose
 
