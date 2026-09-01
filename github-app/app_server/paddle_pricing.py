@@ -16,13 +16,23 @@ EXTRA_SEAT_PRICE_ID = "pri_01m123rwvvtgbm6bmmxcbav4hh"
 
 # The flash plan's real Paddle product (pro_01m1754jf8nkvhrn3sbaj9rmyq,
 # "Aletheore Flash") and its one price - monthly only, no annual yet,
-# matching what was actually validated ($6/mo, real cost/recall data
-# checked against an 800-review cap). Created live via the Paddle MCP,
-# not a placeholder - real, chargeable as of 2026-08-29.
+# matching what was actually validated (real cost/recall data checked
+# against an 800-review cap - see llm_cost.py's PLAN_CAP_OVERRIDE_USD).
+# Created live via the Paddle MCP, not a placeholder - real, chargeable
+# as of 2026-08-29.
+#
+# $6/mo (pri_01m1754jr5msg62grry49kjhw5) replaced by $8/mo
+# (pri_01m1dj0m1netz6ze1mmckz73nm) on 2026-09-01: the $6 price left thin
+# worst-case margin once Paddle's cut was factored in against the
+# measured ~$3.47 worst-case LLM cost for 800 reviews/month. Swapped
+# rather than mutated in place (same pattern as EXTRA_SEAT_PRICE_ID's
+# history above), only after confirming zero live subscribers on the old
+# price via the Paddle MCP - it had only been live a few hours (PR #492)
+# and never had a real subscriber, so there was nothing to migrate.
 PADDLE_PRICE_TO_PLAN: dict[str, str] = {
     "pri_01kyhevc8bkcghfpwjymz16y2h": "air",
     "pri_01kyhevc9xn6z2nghmy8057jvp": "air",
-    "pri_01m1754jr5msg62grry49kjhw5": "flash",
+    "pri_01m1dj0m1netz6ze1mmckz73nm": "flash",
 }
 
 
@@ -33,7 +43,7 @@ def resolve_plan_for_price_id(price_id: str) -> str | None:
 PLAN_INTERVAL_TO_PRICE_ID: dict[tuple[str, str], str] = {
     ("air", "month"): "pri_01kyhevc8bkcghfpwjymz16y2h",
     ("air", "year"): "pri_01kyhevc9xn6z2nghmy8057jvp",
-    ("flash", "month"): "pri_01m1754jr5msg62grry49kjhw5",
+    ("flash", "month"): "pri_01m1dj0m1netz6ze1mmckz73nm",
 }
 
 
