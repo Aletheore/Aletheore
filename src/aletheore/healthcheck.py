@@ -90,7 +90,16 @@ def _pinned_connection_class(base_class: type, pinned_ip: str) -> type:
     return _Pinned
 
 
-def _opener_for(pinned_ip: str | None) -> urllib.request.OpenerDirector:
+def opener_for(pinned_ip: str | None) -> urllib.request.OpenerDirector:
+    """A urllib opener that, when pinned_ip is given, connects every
+    request to that literal IP instead of letting the connection re-
+    resolve the URL's hostname itself - see _pinned_connection_class's
+    docstring for why that closes a real DNS-rebinding window rather than
+    just narrowing it. Public (not health-check-specific): any caller that
+    already validated-and-pinned a URL via app_server.url_validation.
+    validate_and_pin_https_url needs the exact same guarantee for its own
+    request, not just run_healthcheck's (see scan_worker.slack.
+    send_health_alert, which reuses this directly)."""
     if pinned_ip is None:
         return _NO_REDIRECT_OPENER
     pinned_https = _pinned_connection_class(http.client.HTTPSConnection, pinned_ip)
@@ -219,7 +228,7 @@ def run_healthcheck(
     address that was validated, not a fresh, unvalidated resolution. Plain
     CLI/MCP callers pass nothing and keep today's normal DNS behavior."""
     _require_http_scheme(base_url)
-    opener = _opener_for(pinned_ip)
+    opener = opener_for(pinned_ip)
     results: list[dict]
     if not endpoints:
         results = []

@@ -126,7 +126,17 @@ SECRET_PATTERNS = [
             # closes a JSON object or array (the overwhelmingly common case - the key is
             # rarely the last thing on the line followed by nothing) was invisible too,
             # since neither character was in the original lookahead's boundary set.
-            r"(?i)(?:^|[\s_.'\"-])(PASSWORD|SECRET|API_KEY)['\"]?\s*[:=]\s*"
+            #
+            # An optional "]" is now also consumed right after the keyword's closing
+            # quote - bracket-subscript key assignment (os.environ["API_KEY"] = "...",
+            # config["SECRET"] = "...", JS process.env['API_KEY'] = '...') is an equally
+            # common real shape as the quoted dict-key case just above, and was just as
+            # invisible: the keyword's quote is followed by "]" before the "=", which
+            # \s*[:=]\s* alone can't skip over either. Confirmed as a real, silent false
+            # negative by direct testing: 'os.environ["API_KEY"] = "sk-..."' never
+            # matched, the same failure shape the quoted-key fix above already covers
+            # for a plain dict literal.
+            r"(?i)(?:^|[\s_.'\"-])(PASSWORD|SECRET|API_KEY)['\"]?\]?\s*[:=]\s*"
             r"['\"]?([A-Za-z0-9+/=_.-]{16,})['\"]?(?=\s|$|[,#;)}\]])"
         ),
         2,

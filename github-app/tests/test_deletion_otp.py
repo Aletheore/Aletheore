@@ -1,5 +1,5 @@
 import hashlib
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -135,3 +135,42 @@ async def test_full_otp_flow_end_to_end(pool, monkeypatch):
         )
 
     assert delete_response.status_code == 200, delete_response.text
+
+
+@pytest.mark.asyncio
+async def test_otp_rate_limit_checks_are_offloaded_to_thread(pool, monkeypatch):
+    # Real regression this guards: is_rate_limited uses the synchronous
+    # redis-py client and blocks on pipe.execute() - called directly inside
+    # an async def handler, each check stalls the whole event loop (every
+    # other concurrent request on this worker) for its full duration. See
+    # embeddings_api.py's identical test for the pattern this was copied
+    # from (#328's own original fix). Covers both call sites in admin.py:
+    # the OTP request itself and the delete-all-data attempt limiter.
+    import app_server.admin as admin_module
+
+    monkeypatch.setattr("app_server.admin.secrets.randbelow", lambda _n: 424242)
+    client = await _logged_in_client(pool, monkeypatch)
+    await pool.execute(
+        "INSERT INTO github_user_emails (github_login, email) VALUES ('octocat', 'octocat@example.com') "
+        "ON CONFLICT (github_login) DO UPDATE SET email = EXCLUDED.email"
+    )
+    monkeypatch.setattr("rq.Queue.enqueue", MagicMock())
+
+    offloaded_funcs = []
+
+    async def _dispatch(func, *args, **kwargs):
+        offloaded_funcs.append(func)
+        return func(*args, **kwargs)
+
+    async with client:
+        with patch.object(admin_module.asyncio, "to_thread", AsyncMock(side_effect=_dispatch)):
+            request_response = await client.post("/admin/octocat/hello-world/delete-all-data/request-otp")
+            assert request_response.status_code == 200, request_response.text
+
+            delete_response = await client.post(
+                "/admin/octocat/hello-world/delete-all-data",
+                json={"confirm": "octocat", "otp_code": "424242"},
+            )
+            assert delete_response.status_code == 200, delete_response.text
+
+    assert offloaded_funcs.count(admin_module.is_rate_limited) == 2

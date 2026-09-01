@@ -64,6 +64,8 @@ from scan_worker.db import (
     upsert_docs_symbol,
     upsert_wiki_overview,
     upsert_wiki_subsystem,
+    wiki_write_lock,
+    WIKI_WRITE_LOCK_NAMESPACE,
 )
 
 TEST_DATABASE_URL = os.environ.get(
@@ -1177,6 +1179,78 @@ async def test_repo_checkout_lock_does_not_collide_with_spend_lock(pool):
 
 
 @pytest.mark.asyncio
+async def test_wiki_write_lock_blocks_concurrent_acquisition_for_same_repo(pool):
+    # Real bug this guards: _store_wiki_generation's prune step trusts its
+    # own evidence snapshot's cluster list - two wiki-write jobs for the
+    # same repo (a full build and a push-triggered incremental update, say)
+    # landing close together on different scan-worker replicas, finishing
+    # out of order, let the older-evidence one delete a subsystem the
+    # newer one just correctly wrote. This lock serializes them.
+    import psycopg
+
+    with wiki_write_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+        with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_lock(%s, hashtext(%s))",
+                    (WIKI_WRITE_LOCK_NAMESPACE, "301:a/repo1"),
+                )
+                acquired = cur.fetchone()[0]
+        assert acquired is False
+
+
+@pytest.mark.asyncio
+async def test_wiki_write_lock_releases_after_context_exits(pool):
+    import psycopg
+
+    with wiki_write_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+        pass
+
+    with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pg_try_advisory_lock(%s, hashtext(%s))",
+                (WIKI_WRITE_LOCK_NAMESPACE, "301:a/repo1"),
+            )
+            acquired = cur.fetchone()[0]
+            cur.execute(
+                "SELECT pg_advisory_unlock(%s, hashtext(%s))",
+                (WIKI_WRITE_LOCK_NAMESPACE, "301:a/repo1"),
+            )
+    assert acquired is True
+
+
+@pytest.mark.asyncio
+async def test_wiki_write_lock_does_not_block_a_different_repo(pool):
+    import psycopg
+
+    with wiki_write_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+        with psycopg.connect(TEST_DATABASE_URL, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_lock(%s, hashtext(%s))",
+                    (WIKI_WRITE_LOCK_NAMESPACE, "301:a/repo2"),
+                )
+                acquired = cur.fetchone()[0]
+                cur.execute(
+                    "SELECT pg_advisory_unlock(%s, hashtext(%s))",
+                    (WIKI_WRITE_LOCK_NAMESPACE, "301:a/repo2"),
+                )
+    assert acquired is True
+
+
+@pytest.mark.asyncio
+async def test_wiki_write_lock_does_not_collide_with_repo_checkout_lock(pool):
+    # Deliberately a distinct namespace from repo_checkout_lock (see
+    # wiki_write_lock's own docstring) - a slow AI-writing job must not
+    # block an unrelated in-progress checkout for the same repo, or vice
+    # versa.
+    with repo_checkout_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+        with wiki_write_lock(TEST_DATABASE_URL, 301, "a/repo1"):
+            pass
+
+
+@pytest.mark.asyncio
 async def test_scan_slot_lock_does_not_collide_with_spend_lock(pool):
     await _insert_installation(pool, 307, "a")
     with installation_spend_lock(TEST_DATABASE_URL, 307):
@@ -1214,9 +1288,13 @@ def test_every_advisory_lock_namespace_is_disjoint_across_both_files():
     )
 
     app_server_only = {API_TOKEN_LOCK_NAMESPACE, HEALTH_CHECK_TARGET_LOCK_NAMESPACE, SEAT_LOCK_NAMESPACE}
-    scan_worker_only = {SPEND_LOCK_NAMESPACE, REPO_CHECKOUT_LOCK_NAMESPACE}
+    scan_worker_only = {SPEND_LOCK_NAMESPACE, REPO_CHECKOUT_LOCK_NAMESPACE, WIKI_WRITE_LOCK_NAMESPACE}
 
     assert app_server_only.isdisjoint(scan_worker_only)
+    # Internally disjoint too - isdisjoint above only checks across files;
+    # a namespace value repeated within this one file would collide just
+    # as badly and slip past that check entirely.
+    assert len(scan_worker_only) == 3
 
 
 @pytest.mark.asyncio

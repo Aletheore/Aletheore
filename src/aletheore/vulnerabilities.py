@@ -81,13 +81,31 @@ def _parse_pip_pins(repo_path: Path) -> list[tuple[str, str, str]]:
     if requirements.exists():
         for line in requirements.read_text(encoding="utf-8", errors="ignore").splitlines():
             line = line.strip()
-            if not line or line.startswith("#") or "==" not in line:
+            # Real bug this closes: the old hand-rolled parser here required a
+            # literal "==" to even consider a line, silently dropping every
+            # unpinned dependency (a bare "requests") AND every non-exact
+            # specifier ("requests>=2.0") - not just the marker-qualified-
+            # unpinned shape #335 fixed in _parse_pep508_dependency for
+            # pyproject.toml. Confirmed directly: "requests>=2.0" was
+            # invisible to both CVE scanning and license checking (this
+            # function's only two callers) despite being a completely normal
+            # requirements.txt line. Reusing _parse_pep508_dependency instead
+            # of a separate hand-rolled parser means this file gets the exact
+            # same "keep it, query the package as a whole" handling #335
+            # already established, rather than a second, independently
+            # drifting implementation of the same PEP 508 grammar.
+            #
+            # A pip option line (-e ..., -r other.txt, --index-url ...) needs
+            # its own explicit skip: "-" is itself inside the name regex's
+            # character class (it has to be, for a real name like
+            # "typing-extensions"), so a leading "-e"/"-r" would otherwise
+            # still match as a bogus package name instead of being rejected -
+            # confirmed directly, not assumed.
+            if not line or line.startswith("#") or line.startswith("-"):
                 continue
-            name, _, version = line.partition("==")
-            name = name.strip().lower()
-            version = version.split(";")[0].split(",")[0].strip()
-            if name and version:
-                pins.append((name, version, "PyPI"))
+            pin = _parse_pep508_dependency(line)
+            if pin:
+                pins.append(pin)
 
     pyproject = repo_path / "pyproject.toml"
     if not pyproject.exists():
@@ -606,7 +624,13 @@ def _parse_gradle_kts_pins(
 
     pins: list[tuple[str, str, str]] = []
 
-    def walk(node: Node) -> None:
+    # Iterative, not recursive - same class of fix as graph.py's walk() and
+    # endpoints.py's extractors: a deeply nested build.gradle.kts (long
+    # chained/parenthesized expressions are valid Kotlin) can otherwise blow
+    # past Python's recursion limit and crash the whole scan.
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
         if node.type == "call_expression":
             # No field names on this grammar's call_expression at all
             # (confirmed empirically: child_by_field_name("function") and
@@ -639,10 +663,8 @@ def _parse_gradle_kts_pins(
                                     if resolved and resolved[2]:
                                         group, artifact, version = resolved
                                         pins.append((f"{group}:{artifact}", version, _GRADLE_ECOSYSTEM))
-        for child in node.children:
-            walk(child)
+        stack.extend(reversed(node.children))
 
-    walk(tree.root_node)
     return pins
 
 

@@ -615,11 +615,35 @@ def _extract_module_constants(node: Node, source: bytes, language: str) -> list[
             if t == "assignment":
                 lhs = n.child_by_field_name("left")
                 if lhs is not None and lhs.type == "constant":
+                    # Walk up through Ruby's conditional/exception-handling
+                    # wrapper nodes (if/then/elsif/else/unless/case/when/
+                    # begin/rescue/ensure) to find whether this assignment
+                    # ultimately sits in a class/module's own body_statement,
+                    # not just checking one level up. Real bug this fixes: a
+                    # constant gated on a RUBY_VERSION/platform check, or
+                    # wrapped in begin/rescue for a defensive fallback, is
+                    # exactly as idiomatic a class-body constant as the flat
+                    # case above - confirmed live against tree-sitter-ruby's
+                    # actual parse tree - but its immediate parent is "then"
+                    # or "begin"/"rescue", never "body_statement" directly,
+                    # so it was silently invisible. A constant nested the
+                    # same way inside a def's body still correctly stays
+                    # excluded: the walk stops at the first body_statement
+                    # it reaches (a method's own, not a skippable wrapper),
+                    # and that one's parent is "method", not class/module.
+                    parent = n.parent
+                    hops = 0
+                    while parent is not None and hops < 6 and parent.type in (
+                        "then", "else", "elsif", "unless", "if", "case", "when",
+                        "begin", "rescue", "ensure", "rescue_modifier",
+                    ):
+                        parent = parent.parent
+                        hops += 1
                     in_type_body = (
-                        n.parent is not None
-                        and n.parent.type == "body_statement"
-                        and n.parent.parent is not None
-                        and n.parent.parent.type in ("class", "module")
+                        parent is not None
+                        and parent.type == "body_statement"
+                        and parent.parent is not None
+                        and parent.parent.type in ("class", "module")
                     )
                     if in_type_body or is_top_level(n):
                         add(lhs, n)
@@ -1056,18 +1080,24 @@ def _rust_use_paths(node: Node, source: bytes) -> list[str]:
         # them exactly like any other full path.
         #
         # A list item can itself be a nested group ("crate::foo::{Bar,
-        # baz::{Qux, self}}") or an aliased entry ("Bar as MyBar") rather
-        # than a bare identifier/self leaf - recursing for those instead of
-        # only accepting leaves is what makes nested use grouping
-        # (idiomatic, rustfmt's default output in many configs) resolve at
-        # all, instead of silently dropping everything below the first
-        # brace level. Confirmed directly: "use std::{fmt, io::{self,
-        # Write}};" only ever produced "std::fmt" - io and io::Write both
-        # vanished (audit finding 33). Each recursive result is already
-        # fully qualified relative to ITS OWN nested prefix (e.g.
-        # "io::Write"), so prepending this level's prefix once, the same
-        # as for a leaf name, is enough to cascade correctly through any
-        # depth of nesting.
+        # baz::{Qux, self}}"), an aliased entry ("Bar as MyBar"), or a
+        # nested wildcard ("bar::*") rather than a bare identifier/self
+        # leaf - recursing for those instead of only accepting leaves is
+        # what makes nested use grouping (idiomatic, rustfmt's default
+        # output in many configs) resolve at all, instead of silently
+        # dropping everything below the first brace level. Confirmed
+        # directly: "use std::{fmt, io::{self, Write}};" only ever
+        # produced "std::fmt" - io and io::Write both vanished (audit
+        # finding 33). The nested-wildcard case ("use foo::{bar::*, Baz};")
+        # has the identical failure shape - confirmed live against the
+        # real tree-sitter-rust grammar: bar::* parses to a use_wildcard
+        # node as a direct use_list child, matching neither the leaf check
+        # nor the original recursion check, so it silently vanished too.
+        # Each recursive result is already fully qualified relative to ITS
+        # OWN nested prefix (e.g. "io::Write", or "bar" for a nested
+        # wildcard per the use_wildcard branch above), so prepending this
+        # level's prefix once, the same as for a leaf name, is enough to
+        # cascade correctly through any depth of nesting.
         prefix_node = node.children[0]
         list_node = node.children[-1]
         prefix = text(prefix_node)
@@ -1075,7 +1105,7 @@ def _rust_use_paths(node: Node, source: bytes) -> list[str]:
         for c in list_node.children:
             if c.type in ("identifier", "self"):
                 names.append(text(c))
-            elif c.type in ("scoped_use_list", "use_as_clause"):
+            elif c.type in ("scoped_use_list", "use_as_clause", "use_wildcard"):
                 names.extend(_rust_use_paths(c, source))
         return [f"{prefix}::{name}" for name in names]
 
@@ -1454,7 +1484,21 @@ def _kotlin_is_public(node: Node) -> bool:
     property with no `modifiers` node at all parses as fully public,
     same as an interface member in Java, but here it's the ordinary case
     for every top-level and class-member declaration, not a special case.
+
+    Also excludes a local (nested) function: tree-sitter-kotlin uses the
+    exact same node type, function_declaration, for a top-level function
+    and one declared inside another function's body - and Kotlin's local
+    functions can't even carry an explicit visibility modifier (it's a
+    compile error), so every one of them would otherwise fall straight
+    into the "no modifiers node -> public" default above. Real bug this
+    fixes: the same "closure extracted as a top-level public symbol" gap
+    the shared _is_nested_in_function check exists for (see its own
+    docstring), just never wired into this language's own is_public -
+    confirmed directly, not assumed: a `fun outer() { fun inner() {} }`
+    reported inner as is_public=True.
     """
+    if _is_nested_in_function(node):
+        return False
     modifiers = next((c for c in node.children if c.type == "modifiers"), None)
     if modifiers is None:
         return True

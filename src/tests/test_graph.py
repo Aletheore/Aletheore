@@ -951,6 +951,39 @@ def test_build_module_graph_ruby_extracts_constants_declared_inside_class_or_mod
     assert symbol_names(modules[0]["symbols"]["constants"]) == ["DROP_BODY"]
 
 
+def test_build_module_graph_ruby_extracts_constants_nested_inside_conditional_and_exception_blocks(tmp_path):
+    """Real bug: a constant gated on a RUBY_VERSION/platform check, or
+    wrapped in begin/rescue for a defensive fallback, is exactly as
+    idiomatic a class-body constant as the flat case above - but its
+    immediate parent is "then"/"begin"/"rescue", never "body_statement"
+    directly, so the flat in-body check alone left it silently invisible.
+    A constant nested the same way inside a def's body must still stay
+    excluded."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "base.rb").write_text(
+        "module Sinatra\n"
+        "  class Base\n"
+        "    if RUBY_VERSION >= \"3.0\"\n"
+        "      BAR = 1\n"
+        "    end\n"
+        "    begin\n"
+        "      BAZ = 2\n"
+        "    rescue\n"
+        "      QUX = 3\n"
+        "    end\n"
+        "    def method_local\n"
+        "      if true\n"
+        "        LOCAL = 4\n"
+        "      end\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+    )
+    modules, _graph, _unparseable = build_module_graph(repo)
+    assert sorted(symbol_names(modules[0]["symbols"]["constants"])) == ["BAR", "BAZ", "QUX"]
+
+
 def test_build_module_graph_ruby_does_not_extract_a_constant_assigned_inside_a_method(tmp_path):
     """A capitalised assignment inside a def body is a method-local, not
     part of the type's public API - must stay excluded even though it sits

@@ -347,8 +347,21 @@ class OpenAICompatibleAdapter(AgentAdapter):
             raise AdapterInvocationError(
                 f"{self.name} invocation failed: {type(exc).__name__}"
             ) from exc
-        if self._on_usage is not None and response.usage is not None:
-            self._on_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
+        if response.usage is not None:
+            if self._on_usage is not None:
+                self._on_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
+        elif self._on_call_failed is not None:
+            # A 200 response with no usage field is a real, observed shape
+            # from some OpenAI-compatible gateways/proxies - not something
+            # the SDK itself raises on, so the except block above never
+            # sees it. Without this, the reservation _ensure_budget_for_
+            # next_call made above is never trued up (on_usage never fires)
+            # and never released either (no exception was raised) - the
+            # exact same "stuck against zero real usage" symptom #314's own
+            # on_call_failed fix closed for the exception path, just
+            # reached by a different failure shape its regression tests
+            # never simulated.
+            self._on_call_failed()
         return response.choices[0].message.content or ""
 
     def _local_server_reachable(self) -> bool:

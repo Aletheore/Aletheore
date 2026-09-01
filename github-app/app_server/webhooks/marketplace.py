@@ -16,21 +16,31 @@ logger = logging.getLogger(__name__)
 def _normalize_marketplace_plan_name(raw_name: str) -> str:
     """Marketplace plan display names are configured on GitHub's own
     listing page, not by our code - `purchase["plan"]["name"]` could be
-    anything an admin typed there, and the only two slugs the rest of the
-    codebase understands are "free" and "air" (see paddle_pricing.py).
-    Writing the raw name straight into installations.plan meant any name
-    that wasn't exactly the lowercase string "free" granted full paid
-    access, including a plan literally named "Free" with a capital F.
+    anything an admin typed there, and the only slugs the rest of the
+    codebase understands are "free", "flash", and "air" (see
+    paddle_pricing.py). Writing the raw name straight into
+    installations.plan meant any name that wasn't exactly the lowercase
+    string "free" granted full paid access, including a plan literally
+    named "Free" with a capital F.
 
-    Recognizes anything naming the paid tier ("air", case-insensitive,
-    matching the product's own AIR branding) and defaults everything
-    else to "free" - fail-closed, not fail-open, for a name this doesn't
-    recognize. Whatever the listing's plans are actually named should be
-    confirmed against this function before the Marketplace listing goes
-    live (website copy still says it's pending GitHub's review as of this
-    writing).
+    Recognizes anything naming a paid tier ("flash" or "air", case-
+    insensitive, matching the product's own tier branding) and defaults
+    everything else to "free" - fail-closed, not fail-open, for a name
+    this doesn't recognize. Checked before "air": a listing plan named
+    "Aletheore Flash" would otherwise never match "air" and fall through
+    to "free" anyway, but this ordering also protects against a future
+    plan name that happens to contain both substrings. Real bug this
+    fixes: the flash tier didn't exist yet when this function was first
+    written (#169) and nobody swept it when the tier launched - a
+    Marketplace purchase of a Flash-named plan would have silently
+    granted "free" instead of what the customer paid for. Whatever the
+    listing's plans are actually named should be confirmed against this
+    function before the Marketplace listing goes live.
     """
-    if "air" in raw_name.strip().lower():
+    normalized = raw_name.strip().lower()
+    if "flash" in normalized:
+        return "flash"
+    if "air" in normalized:
         return "air"
     return "free"
 
