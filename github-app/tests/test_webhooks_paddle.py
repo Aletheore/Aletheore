@@ -462,11 +462,11 @@ async def test_free_to_flash_transition_does_not_trigger_live_wiki_full_build(po
     """Real bug this guards: should_run_paid_setup predates the flash tier
     and used to mean "is air" by construction. AIRview/Docs are AIR-only -
     a flash signup enqueueing a full build would have spent real money
-    against a $6/mo plan's own small monthly cap."""
+    against an $8/mo plan's own small monthly cap."""
     fake_queue = MagicMock()
     await upsert_installation(pool, 202, "acme")  # defaults to plan='free'
 
-    payload = _subscription_created_payload("pri_01m1754jr5msg62grry49kjhw5", 202)
+    payload = _subscription_created_payload("pri_01m1dj0m1netz6ze1mmckz73nm", 202)
     await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
 
     installation = await get_installation(pool, 202)
@@ -484,7 +484,7 @@ async def test_free_to_flash_transition_with_known_discount_id_still_records_ref
     await upsert_installation(pool, 203, "acme")
 
     payload = _subscription_created_payload(
-        "pri_01m1754jr5msg62grry49kjhw5", 203, discount_id="dsc_sarah_wh"
+        "pri_01m1dj0m1netz6ze1mmckz73nm", 203, discount_id="dsc_sarah_wh"
     )
     await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
 
@@ -507,7 +507,7 @@ async def test_flash_to_air_upgrade_does_not_retrigger_live_wiki_full_build(pool
     fake_queue = MagicMock()
     await upsert_installation(pool, 204, "acme")
     await handle_paddle_webhook_event(
-        _subscription_created_payload("pri_01m1754jr5msg62grry49kjhw5", 204, event_id="evt_flash_first"),
+        _subscription_created_payload("pri_01m1dj0m1netz6ze1mmckz73nm", 204, event_id="evt_flash_first"),
         pool,
         "redis://unused",
         queue=fake_queue,

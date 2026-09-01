@@ -50,18 +50,23 @@ EXTRA_SEAT_LLM_CAP_USD = 3.00
 # spend cap is a monthly rolling figure either way.
 PLAN_MONTHLY_PRICE_USD = {
     "air": 29.99,
-    "flash": 6.00,
+    "flash": 8.00,
 }
 
 # flash's real spend cap is a deliberately looser fraction of its price
-# than the shared 50% default below (~67%, $4 of $6) - real worst-case
-# cost for 1000 reviews of solo Luna generation (no dual-agent
-# verification, compact + trimmed diff) measured at ~$4.34, small enough
-# in absolute dollars that the tighter formula wasn't worth applying
-# here. See jobs.py's MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH for the real
-# review-count cap (800) this was checked against.
+# than the shared 50% default below (62.5%, $5 of $8 - raised from $6 on
+# 2026-09-01, see paddle_pricing.py's price-swap comment) - real
+# worst-case cost for 1000 reviews of solo Luna generation (no
+# dual-agent verification, compact + trimmed diff) measured at ~$4.34,
+# i.e. ~$3.47 for the 800-review/month cap this tier actually enforces.
+# $5 leaves ~44% headroom over that measured figure (vs. the old $4
+# cap's ~15% over the same $3.47), enough margin for provider price
+# drift or a DeepSeek-fallback call (pricier per input token than Luna)
+# without needing to revisit this constant. See jobs.py's
+# MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH for the real review-count cap
+# (800) this was checked against.
 PLAN_CAP_OVERRIDE_USD = {
-    "flash": 4.00,
+    "flash": 5.00,
 }
 
 # Deliberately generous: this is a worst-case abuse/runaway-cost ceiling, not
