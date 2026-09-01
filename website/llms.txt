@@ -48,11 +48,11 @@ This matters if you build on Aletheore: a key rename is a breaking change and is
 
 `aletheore diff` compares two evidence snapshots. `aletheore verify` checks a report's `file:line` citations against a repository's actual evidence — including reports Aletheore did not write.
 
-## MCP server — free, local, 30 tools
+## MCP server — free, local, 31 tools
 
 `aletheore mcp` runs a stdio MCP server. `aletheore mcp-install` writes client config for Claude Code, Cursor, VS Code, Kiro, Opencode, and Codex CLI.
 
-**30 tools by default; 26 in read-only mode; 31 with evidence upload enabled.** No account required.
+**31 tools by default; 27 in read-only mode; 32 with evidence upload enabled.** No account required.
 
 Tools are grouped by effect class — `write`, `network`, `external` — and a tool whose effects are not permitted is **never registered**, so it cannot be called at all. Evidence upload to the hosted service is off by default. Set `ALETHEORE_MCP_ALLOW` to change it.
 

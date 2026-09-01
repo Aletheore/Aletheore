@@ -253,6 +253,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_list",
         "aletheore_overview",
         "aletheore_search",
+        "aletheore_ast_pattern",
         "aletheore_symbol_source",
         "aletheore_verify_citations",
         "aletheore_scan",
@@ -265,7 +266,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_dependency",
     }
     assert expected.issubset(names)
-    assert len(names) == 32
+    assert len(names) == 33
     assert "aletheore_answer" not in names
 
 
@@ -879,6 +880,49 @@ async def test_aletheore_search_finds_a_literal_match(tmp_path):
     matches = tool_result_body(result)["result"]["matches"]
     assert len(matches) == 1
     assert matches[0] == {"path": "app/main.py", "line": 1, "text": "def hello():"}
+
+
+@pytest.mark.asyncio
+async def test_aletheore_ast_pattern_finds_a_structural_match(tmp_path):
+    repo = make_repo_with_files(
+        tmp_path,
+        {"app.py": "def plain():\n    pass\n\ndef guarded():\n    try:\n        pass\n    except ValueError:\n        pass\n"},
+    )
+    server = build_server(repo)
+
+    result = await server.call_tool(
+        "aletheore_ast_pattern",
+        {
+            "language": "python",
+            "query": "(function_definition name: (identifier) @name body: (block (try_statement))) @whole",
+        },
+    )
+
+    matches = tool_result_body(result)["result"]
+    assert len(matches) == 1
+    assert matches[0]["captures"]["name"][0]["text"] == "guarded"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_ast_pattern_reports_an_unknown_language_as_an_error_not_a_crash(tmp_path):
+    repo = make_repo_with_files(tmp_path, {"app.py": "pass\n"})
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_ast_pattern", {"language": "cobol", "query": "(anything)"})
+
+    assert "unknown language" in tool_result_body(result)["result"]["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_aletheore_ast_pattern_reports_an_invalid_query_as_an_error_not_a_crash(tmp_path):
+    repo = make_repo_with_files(tmp_path, {"app.py": "pass\n"})
+    server = build_server(repo)
+
+    result = await server.call_tool(
+        "aletheore_ast_pattern", {"language": "python", "query": "(this_node_type_does_not_exist)"}
+    )
+
+    assert "invalid tree-sitter query" in tool_result_body(result)["result"]["error"].lower()
 
 
 @pytest.mark.asyncio
