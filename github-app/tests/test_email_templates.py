@@ -17,6 +17,17 @@ def test_welcome_email_greets_by_login_and_includes_pricing_link():
         assert message[key]
 
 
+def test_welcome_email_mentions_both_paid_tiers_not_just_air():
+    """Real bug: this was the one template #470's AIR-only-branding sweep
+    missed - every new free signup was funneled exclusively toward AIR and
+    never told the cheaper Flash tier exists at all."""
+    message = welcome_email("octocat")
+    assert "Aletheore Flash" in message["text"]
+    assert "Aletheore AIR" in message["text"]
+    assert "Aletheore Flash" in message["html"]
+    assert "Aletheore AIR" in message["html"]
+
+
 def test_payment_failed_email_names_account_and_does_not_promise_a_grace_period():
     message = payment_failed_email("acme-corp", "air")
     assert "acme-corp" in message["text"]
