@@ -252,6 +252,29 @@ def test_find_secrets_detects_quoted_key_credential_assignment(tmp_path):
     assert sum(f["pattern"] == "generic_credential_assignment" for f in findings) == 4
 
 
+def test_find_secrets_detects_bracket_subscript_key_credential_assignment(tmp_path):
+    # Regression: the quoted-key fix above covers a plain dict literal
+    # ("API_KEY": "...") but left an equally common real shape uncovered -
+    # bracket-subscript key assignment (os.environ["API_KEY"] = "...",
+    # config["SECRET"] = "...", JS process.env['API_KEY'] = '...'). The
+    # keyword's closing quote is followed by "]" before "=", which the
+    # post-keyword gap couldn't skip over either. Confirmed as a real,
+    # silent false negative by direct testing before this fix.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "settings.py").write_text(
+        'os.environ["API_KEY"] = "sk-abcdefghijklmnopqrstuv"\n'
+        "config['SECRET'] = 'abcdefghijklmnopqrstuv'\n"
+    )
+    (repo / "config.js").write_text(
+        "process.env['API_KEY'] = 'sk-abcdefghijklmnopqrstuv';\n"
+    )
+
+    findings = find_secrets(repo)["findings"]
+
+    assert sum(f["pattern"] == "generic_credential_assignment" for f in findings) == 3
+
+
 def test_find_secrets_detects_fine_grained_github_and_sts_aws_tokens(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

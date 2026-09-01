@@ -262,6 +262,18 @@ services:
       context: ..
       dockerfile: github-app/Dockerfile.demo-scan-worker
     restart: unless-stopped
+    # Same reasoning as scan-worker's identical comment above, scaled to
+    # this worker's own queue: it only ever consumes "demo_scan", whose
+    # longest job is DEMO_SCAN_JOB_TIMEOUT_SECONDS = 120s
+    # (app_server/demo_scan_api.py), not the 1800s "scans" jobs scan-worker
+    # handles. Sibling gap #409 (this file's other three stop_grace_period
+    # entries) left uncovered here - a redeploy landing mid-demo-scan still
+    # got SIGKILL'd at the old 10s default instead of finishing or hitting
+    # a clean JobTimeoutException. Lower severity than #409's original
+    # symptom (OPS_MONITORED_QUEUES doesn't include "demo_scan", so this
+    # was never a false ops alert), but a real reliability gap for whoever
+    # was mid-demo when a redeploy landed.
+    stop_grace_period: 3m
     env_file:
       - path: .env
         required: false

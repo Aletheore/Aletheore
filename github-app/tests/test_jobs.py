@@ -1346,6 +1346,38 @@ def test_managed_audit_pr_job_clones_pr_head_runs_audit_and_replies(monkeypatch,
     assert posted["marker"] == AUDIT_COMMENT_MARKER
 
 
+def test_managed_audit_pr_job_skips_cleanly_when_pr_already_closed(monkeypatch):
+    # Sibling gap to run_pr_scan_job's own fetch_pr_is_open check (see
+    # test_run_pr_scan_job_skips_cleanly_when_pr_already_closed): the
+    # ChatOps /aletheore audit trigger races the same way - the PR can
+    # close between being queued and a worker picking it up.
+    # _clone_pr_head's refs/pull/N/head ref outlives branch deletion, so
+    # unlike run_pr_scan_job this wouldn't crash, but without this check it
+    # would still burn a real clone, a full scan, and one or more paid LLM
+    # calls against the monthly spend cap, then post a comment on a PR
+    # nobody's watching anymore.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.managed_audit_definitely_still_cooling_down", lambda *a, **k: False)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_is_open", lambda *a, **k: False)
+    cloned = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._clone_pr_head",
+        lambda *a, **k: cloned.append(True) or (_ for _ in ()).throw(AssertionError("must not clone")),
+    )
+    posted = []
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: posted.append(True))
+
+    from scan_worker.jobs import run_managed_audit_pr_job
+
+    run_managed_audit_pr_job(1, "octocat/hello-world", 42)
+
+    assert cloned == []
+    assert posted == []
+
+
 def test_managed_audit_pr_job_records_each_call_and_stops_mid_run_when_cap_reached(monkeypatch, tmp_path):
     # Mirrors test_managed_audit_api_job_records_each_call_and_exposes_budget_stop:
     # run_managed_audit_pr_job must gate on the same atomic per-call
@@ -2358,6 +2390,64 @@ def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     # (0.5) reserved up front - record_llm_spend's additive upsert applies
     # this negative delta to give back the unused portion of the reservation.
     assert recorded_spend == [-FLASH_REVIEW_SPEND_RESERVE_USD]
+
+
+def test_flash_review_job_excludes_aletheore_json_ignored_paths_from_the_diff(monkeypatch):
+    # Real gap this closes: Flash Review's PR-comment pipeline has no
+    # local checkout to read .aletheore.json from the way the
+    # deterministic `aletheore scan` path does - a customer who
+    # configured ignored_paths still got Flash Review PR comments about
+    # exactly that path. .aletheore.json is now fetched straight from the
+    # PR head and threaded into fetch_pr_diff as ignored_paths.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.fetch_file_content",
+        lambda client, token, repo, path, ref=None: (
+            json.dumps({"ignored_paths": ["vendor/**"]}) if path == ".aletheore.json" else None
+        ),
+    )
+    diff_calls = []
+
+    def fake_fetch_pr_diff(client, token, repo, base, head, ignored_paths=()):
+        diff_calls.append(list(ignored_paths))
+        return "--- app.py ---\n+bug"
+
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", fake_fetch_pr_diff)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.review_diff", lambda diff_text, file_context="", **kwargs: [])
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr("scan_worker.jobs.create_pr_review_comment", lambda *a, **k: {"id": 1})
+    monkeypatch.setattr("scan_worker.jobs.insert_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.touch_flash_review_finding_comment", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False)
+
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert diff_calls == [["vendor/**"]]
 
 
 def test_flash_review_comment_body_prefixes_the_symbol_when_present():
@@ -3657,6 +3747,51 @@ def test_send_alerts_if_configured_sends_both_channels_when_both_set(monkeypatch
 
     assert len(slack_sent) == 1
     assert len(email_sent) == 1
+
+
+def test_send_alerts_if_configured_isolates_a_slack_failure_from_other_channels(monkeypatch):
+    # Real bug this closes: this function's own docstring promises every
+    # channel "fires independently," but the Slack/Teams call was
+    # unguarded - any exception from it (send_health_alert now also
+    # raises UnsafeURLError when a saved webhook URL no longer resolves to
+    # a safe address, on top of the delivery failures it could already
+    # raise) skipped email/Pushover entirely instead of just skipping
+    # this one channel.
+    from app_server.config import get_settings
+    from app_server.url_validation import UnsafeURLError
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("PUSHOVER_API_TOKEN", "server-app-token")
+    get_settings.cache_clear()
+
+    def failing_send_health_alert(url, msg, **k):
+        raise UnsafeURLError("'internal.example.com' resolves to a disallowed address")
+
+    monkeypatch.setattr("scan_worker.jobs.send_health_alert", failing_send_health_alert)
+    email_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **k: email_sent.append(k),
+    )
+    pushover_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_pushover_alert", lambda *a, **k: pushover_sent.append(a)
+    )
+
+    _send_alerts_if_configured(
+        {
+            "installation_id": 1,
+            "target_id": 900,
+            "webhook_url": "https://internal.example.com/webhook",
+            "alert_email": "ops@example.com",
+            "pushover_user_key": "u" * 30,
+        },
+        {"text": "down"},
+    )
+
+    assert len(email_sent) == 1
+    assert len(pushover_sent) == 1
 
 
 def test_send_alerts_if_configured_email_dedupe_key_collapses_within_the_same_second(monkeypatch):
@@ -5494,6 +5629,104 @@ def test_run_push_scan_job_skips_paid_repo_past_monthly_scan_cap(bare_repo_with_
     )
 
     assert cloned == []
+
+
+def test_run_initial_scan_job_syncs_code_graph_while_still_holding_repo_checkout_lock(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # run_initial_scan_job previously called _sync_persistent_git_graph and
+    # _sync_code_graph with no locking at all - a repo connected and then
+    # pushed to in quick succession (this job racing run_push_scan_job on a
+    # different scan-worker replica) could interleave their writes and leave
+    # code_graph_sync_state.last_synced_sha pointing at the older of the two
+    # scans while the file/symbol/edge rows ended up a clobbered mix of
+    # both - corrupting the state _build_unchanged_scan_cache trusts as
+    # ground truth for skipping re-parsing of "unchanged" files on the next
+    # PR scan. Verifies the fix by overriding the autoused no-op lock with
+    # one that records enter/exit, and asserting both sync calls run
+    # strictly between them.
+    from scan_worker.jobs import run_initial_scan_job
+
+    bare_path, _base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda *a, **k: object())
+    monkeypatch.setattr("scan_worker.jobs.fetch_default_branch_head_sha", lambda *a, **k: head_sha)
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+
+    call_order: list[str] = []
+
+    @contextmanager
+    def _recording_lock(*args, **kwargs):
+        call_order.append("lock_enter")
+        yield
+        call_order.append("lock_exit")
+
+    monkeypatch.setattr("scan_worker.jobs.repo_checkout_lock", _recording_lock)
+    monkeypatch.setattr(
+        "scan_worker.jobs._sync_persistent_git_graph",
+        lambda *a, **k: call_order.append("sync_git") or (a[3] if len(a) > 3 else k.get("evidence")),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._sync_code_graph",
+        lambda *a, **k: call_order.append("sync_code"),
+    )
+
+    run_initial_scan_job(1, "octocat/hello-world")
+
+    assert call_order == ["lock_enter", "sync_git", "sync_code", "lock_exit"]
+
+
+def test_run_push_scan_job_syncs_code_graph_while_still_holding_repo_checkout_lock(
+    bare_repo_with_two_commits, monkeypatch
+):
+    # Direct sibling of the run_initial_scan_job fix above: _sync_code_graph
+    # here used to be dedented out of the `with repo_checkout_lock` block
+    # entirely, running unlocked after the lock had already released - the
+    # same class of race, just reached from this job's side of it (a push
+    # landing while run_initial_scan_job is still mid-sync for the same
+    # repo, or two pushes racing each other). Verifies the fix the same way:
+    # overrides the autoused no-op lock to record enter/exit and asserts
+    # _sync_code_graph runs strictly between them, not after lock_exit.
+    from scan_worker.jobs import run_push_scan_job
+
+    bare_path, _base_sha, head_sha = bare_repo_with_two_commits
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: bare_path)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs._insert_history", lambda *a, **k: None)
+
+    call_order: list[str] = []
+
+    @contextmanager
+    def _recording_lock(*args, **kwargs):
+        call_order.append("lock_enter")
+        yield
+        call_order.append("lock_exit")
+
+    monkeypatch.setattr("scan_worker.jobs.repo_checkout_lock", _recording_lock)
+    monkeypatch.setattr(
+        "scan_worker.jobs._sync_persistent_git_graph",
+        lambda *a, **k: call_order.append("sync_git") or (a[3] if len(a) > 3 else k.get("evidence")),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs._sync_code_graph",
+        lambda *a, **k: call_order.append("sync_code"),
+    )
+
+    run_push_scan_job(
+        installation_id=1,
+        repo_full_name="octocat/hello-world",
+        head_sha=head_sha,
+        changed_files=["app.py"],
+    )
+
+    assert call_order == ["lock_enter", "sync_git", "sync_code", "lock_exit"]
 
 
 def test_run_initial_scan_job_logs_and_reraises_on_inner_failure(monkeypatch, caplog):

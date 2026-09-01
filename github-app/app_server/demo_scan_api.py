@@ -122,9 +122,16 @@ async def _check_repo_size(owner: str, repo: str, token: str | None) -> None:
         )
 
 
-def _enforce_demo_scan_abuse_rate_limit(client_ip: str) -> None:
+async def _enforce_demo_scan_abuse_rate_limit(client_ip: str) -> None:
     try:
-        rate_limited = is_rate_limited(
+        # is_rate_limited uses the synchronous redis-py client and blocks on
+        # pipe.execute() - run off the event loop (asyncio.to_thread, same
+        # pattern as embeddings_api.py's #328 fix) so one visitor's Redis
+        # round-trip doesn't stall every other concurrent request on this
+        # worker. This is a public, unauthenticated endpoint - exactly the
+        # traffic shape most exposed to this gap.
+        rate_limited = await asyncio.to_thread(
+            is_rate_limited,
             get_redis_client(),
             f"ratelimit:demo-scan:{client_ip}",
             DEMO_SCAN_ABUSE_RATE_LIMIT,
@@ -156,7 +163,7 @@ async def start_demo_scan(request: Request, body: StartDemoScanRequest):
     pool = request.app.state.db_pool
     client_ip = _client_ip(request)
 
-    _enforce_demo_scan_abuse_rate_limit(client_ip)
+    await _enforce_demo_scan_abuse_rate_limit(client_ip)
 
     # Size (and existence) is checked before the rate-limit slot is
     # reserved - a repo that gets rejected here never reaches a worker, so

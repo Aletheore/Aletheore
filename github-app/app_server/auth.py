@@ -55,13 +55,24 @@ auth_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _enforce_auth_rate_limit(request: Request) -> None:
+async def _enforce_auth_rate_limit(request: Request) -> None:
     client_ip = client_ip_from_forwarded_for(
         request.headers.get("x-forwarded-for"),
         request.client.host if request.client else "",
     )
     try:
-        rate_limited = is_rate_limited(
+        # is_rate_limited uses the synchronous redis-py client and blocks on
+        # pipe.execute() - run off the event loop (asyncio.to_thread, same
+        # pattern as embeddings_api.py's identical fix) so one request's
+        # Redis round-trip doesn't stall every other concurrent request on
+        # this worker. Real gap this closes: /auth/login and /auth/callback
+        # are likely the highest-traffic async handlers in the whole
+        # service, and this call sat directly in their request path,
+        # synchronous, uncaught by #328's own fix (which only touched
+        # embeddings_api.py, never grepped for the same call shape
+        # elsewhere).
+        rate_limited = await asyncio.to_thread(
+            is_rate_limited,
             get_redis_client(),
             f"ratelimit:auth:{client_ip}",
             AUTH_RATE_LIMIT,
@@ -324,7 +335,7 @@ def _is_safe_next_path(next_path: str | None) -> str:
 
 @auth_router.get("/auth/login")
 async def login(request: Request, next: str | None = None):
-    _enforce_auth_rate_limit(request)
+    await _enforce_auth_rate_limit(request)
     settings = get_settings()
     state = secrets.token_urlsafe(32)
     safe_next = _is_safe_next_path(next)
@@ -356,7 +367,7 @@ async def login(request: Request, next: str | None = None):
 
 @auth_router.get("/auth/callback")
 async def callback(code: str, request: Request, state: str | None = None, installation_id: int | None = None):
-    _enforce_auth_rate_limit(request)
+    await _enforce_auth_rate_limit(request)
     settings = get_settings()
 
     # GitHub redirects here from two different entry points: our own
