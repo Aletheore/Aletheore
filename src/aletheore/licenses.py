@@ -1,6 +1,7 @@
 import json
 import re
 import ssl
+import threading
 import time
 import tomllib
 import urllib.error
@@ -364,7 +365,7 @@ def _save_license_cache(cache_path: Path, cache: dict[str, dict]) -> None:
 
 
 def _fetch_one_license_cached(
-    pin: tuple[str, str, str], timeout: int, cache: dict[str, dict]
+    pin: tuple[str, str, str], timeout: int, cache: dict[str, dict], cache_lock: threading.Lock
 ) -> str | None:
     name, version, ecosystem = pin
     key = _license_cache_key(ecosystem, name, version)
@@ -373,10 +374,20 @@ def _fetch_one_license_cached(
         return cached.get("license")
 
     license_text = _fetch_one_license(pin, timeout)
-    # Safe to mutate from multiple worker threads: dict item assignment on
-    # distinct keys is atomic under the GIL, and every pin has its own
-    # distinct key here.
-    cache[key] = {"license": license_text, "cached_at": time.time()}
+    # A plain `cache[key] = ...` here (distinct key per pin, atomic under
+    # the GIL) used to be enough on its own - but check_dependency_licenses
+    # abandons any worker still stuck past LICENSE_FETCH_WALL_CLOCK_TIMEOUT_
+    # SECONDS (shutdown(wait=False), see there for why) rather than waiting
+    # for it to exit. That abandoned thread is still running and can land
+    # this same write at any point after the main thread moves on -
+    # including while it's iterating `cache` whole to serialize it in
+    # _save_license_cache. A dict mutating size mid-iteration raises
+    # RuntimeError there, turning "degrades to license: None" into a real
+    # crash of the whole check. The lock only needs to guard the two places
+    # that actually touch dict *shape* (this insert, and the snapshot taken
+    # before saving) - not the network fetch itself, so it costs nothing.
+    with cache_lock:
+        cache[key] = {"license": license_text, "cached_at": time.time()}
     return license_text
 
 
@@ -423,10 +434,12 @@ def check_dependency_licenses(
     # forcibly kill a blocked thread) and left to die on its own eventual
     # socket timeout; shutdown(wait=False) below means this function
     # returns promptly rather than blocking on that stray thread to exit.
+    cache_lock = threading.Lock()
     executor = ThreadPoolExecutor(max_workers=LICENSE_CHECK_CONCURRENCY)
     try:
         futures = [
-            executor.submit(_fetch_one_license_cached, pin, timeout, cache) for pin in pins
+            executor.submit(_fetch_one_license_cached, pin, timeout, cache, cache_lock)
+            for pin in pins
         ]
         for index, ((name, version, ecosystem), future) in enumerate(zip(pins, futures), start=1):
             if on_progress is not None:
@@ -450,6 +463,14 @@ def check_dependency_licenses(
                 )
     finally:
         executor.shutdown(wait=False)
-    _save_license_cache(cache_path, cache)
+    # Snapshot under the same lock rather than handing `cache` itself to
+    # _save_license_cache - an abandoned worker thread can still be alive
+    # past shutdown(wait=False) and land a write while this iterates it to
+    # serialize (see _fetch_one_license_cached). dict(cache) here is a
+    # single, fast, lock-held copy; the slower json.dumps + disk write below
+    # runs outside the lock so it never blocks a worker's own brief insert.
+    with cache_lock:
+        cache_snapshot = dict(cache)
+    _save_license_cache(cache_path, cache_snapshot)
 
     return {"checked": True, "reason": None, "repo_license": repo_license, "findings": findings}

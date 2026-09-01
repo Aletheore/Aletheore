@@ -4,8 +4,8 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-08-27
-**Snapshot Freshness:** CURRENT as of 2026-08-27 - production was redeployed to `master` (commit `17ffd99`) and re-verified live via SSH the same day.
+**Last Updated:** 2026-08-31
+**Snapshot Freshness:** CURRENT as of 2026-08-31 - production was redeployed to `master` (commit `f90d820`) and re-verified live via SSH the same day. (This doc's snapshot history has gaps at the 2026-08-28 and 2026-08-30 deploys, tagged `github-app-deploy-2026-08-28`/`-08-30` but not separately logged here - see `github-app/CHANGELOG.md` for those.)
 
 ## Purpose
 

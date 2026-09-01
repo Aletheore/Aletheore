@@ -424,6 +424,57 @@ def test_extract_flask_fastapi_handles_multiple_decorators_on_one_function():
     assert entries[0]["path"] == "/a"
 
 
+def test_extract_flask_fastapi_deeply_nested_handler_body_does_not_crash():
+    # graph.py's own AST walk used to be recursive and blew past Python's
+    # default recursion limit on real, deeply-nested source (confirmed on the
+    # Linux kernel) - fixed in that file, but endpoints.py's extractors kept
+    # their own, separate recursive walk() closures over the same trees and
+    # were never converted, so the identical crash was still reachable via
+    # endpoint mapping. 3000 nesting levels comfortably exceeds the default
+    # limit (1000) while staying trivially parseable.
+    depth = 3000
+    nested_expr = "1" + "".join(f"+({i}" for i in range(depth)) + ")" * depth
+    root, source = parse_python(
+        f'@app.get("/deep")\ndef handler():\n    x = {nested_expr}\n    return x\n'
+    )
+
+    entries = _extract_flask_fastapi_routes(root, source, "app.py")
+
+    assert len(entries) == 1
+    assert entries[0]["path"] == "/deep"
+
+
+def test_extract_flask_fastapi_deeply_nested_module_level_statement_does_not_crash():
+    # Same bug class as the test above, but targeting collect_static_prefixes
+    # specifically: it prunes function/class bodies rather than descending
+    # unconditionally, so it can't reuse the shared _walk_tree() generator and
+    # needed its own, separately-converted iterative stack. Nesting has to
+    # stay at module level (outside any function) for that pruning to matter -
+    # depth kept lower than the 3000 used elsewhere since real module-level
+    # nesting (if/try chains) is inherently shallower than expression nesting,
+    # and this still comfortably exceeds the recursion limit.
+    depth = 1500
+    # Build real nested if-blocks (each level indented one more) rather than
+    # a single flat block, so the AST is actually depth-many levels deep.
+    lines = []
+    for i in range(depth):
+        lines.append("    " * i + f"if True:  # {i}")
+    lines.append("    " * depth + "pass")
+    nested_module_body = "\n".join(lines)
+    source_text = (
+        f'router = APIRouter(prefix="/api")\n'
+        f"{nested_module_body}\n"
+        '@router.get("/deep")\n'
+        "def handler():\n    pass\n"
+    )
+    root, source = parse_python(source_text)
+
+    entries = _extract_flask_fastapi_routes(root, source, "app.py")
+
+    assert len(entries) == 1
+    assert entries[0]["path"] == "/api/deep"
+
+
 def test_extract_django_path_call():
     root, source = parse_python(
         "urlpatterns = [\n"
@@ -1331,6 +1382,25 @@ def test_extract_ktor_ignores_calls_with_no_trailing_lambda():
     entries = _extract_ktor_routes(root, source, "Routes.kt")
 
     assert entries == []
+
+
+def test_extract_ktor_deeply_nested_pass_through_wrappers_does_not_crash():
+    # Same recursion-depth bug class as the other extractors in this file,
+    # but this walk prunes rather than descending unconditionally (it only
+    # recurses into a matched call's own lambda body, threading a prefix
+    # stack), so its iterative conversion needed its own explicit
+    # (node, prefix_stack) stack rather than reusing the plain _walk_tree()
+    # generator the other extractors share - the one place a subtle ordering
+    # or state-threading bug in that conversion would show up.
+    depth = 2000
+    nested = "authenticate { " * depth + 'get("/deep") { respond() } ' + "} " * depth
+    root, source = parse_kotlin(f"fun r() {{ routing {{ {nested} }} }}\n")
+
+    entries = _extract_ktor_routes(root, source, "Routes.kt")
+
+    assert len(entries) == 1
+    assert entries[0]["path"] == "/deep"
+    assert entries[0]["method"] == "GET"
 
 
 def test_map_api_endpoints_extracts_kotlin_ktor_routes(tmp_path):

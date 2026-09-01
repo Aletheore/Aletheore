@@ -2,6 +2,7 @@ import hashlib
 
 import pytest
 
+from aletheore.evidence import EVIDENCE_VERSION
 from app_server.db import list_admin_actions
 from test_admin import _logged_in_client
 
@@ -53,7 +54,10 @@ async def test_export_contains_expected_shape_and_findings(pool, monkeypatch):
     assert body["account_login"] == "octocat"
     assert body["plan"] == "air"
     assert "octocat/hello-world" in body["connected_repos"]
-    assert body["latest_findings_by_repo"]["octocat/hello-world"] == {"scanned_at": "x"}
+    assert body["latest_findings_by_repo"]["octocat/hello-world"] == {
+        "aletheore_version": EVIDENCE_VERSION,
+        "scanned_at": "x",
+    }
     assert "exported_at" in body
     for key in ("members", "api_tokens", "health_check_targets"):
         assert key in body

@@ -3,6 +3,31 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.10 — 2026-08-31
+
+- **Added Kotlin and Swift as fully supported scanner languages** (13
+  languages total, up from 11). `.kt`/`.kts` and Swift source now parse
+  into the same dependency graph, endpoint map, license scan, and
+  vulnerability scan as every other language.
+- **Fixed six real dead-code false-positive classes**, found by
+  re-validating the new languages against real repositories rather than
+  trusting the initial PRs' own tests: JVM test files and Android
+  manifest/Hilt-Dagger DI wiring weren't recognized as reachable entry
+  points; Swift files in the same build target implicitly see each
+  other with no import, and a `Package.swift` string-interpolation
+  pattern was silently truncating manifest parsing and merging distinct
+  targets into one; Kotlin top-level functions and top-level `val`/`var`
+  declarations were never resolved as import targets, only
+  classes/interfaces/objects; Kotlin files in the same package
+  implicitly see each other's declarations with no import, same as
+  Java.
+- **Capped dependency-license fetches to a real wall-clock timeout**, so
+  one slow registry lookup can no longer stall an entire scan.
+- **Deterministic symbol attribution for secrets findings** — CLI
+  secrets findings now cite the exact enclosing symbol via the same
+  evidence-resolution path used elsewhere, instead of leaving
+  attribution to best-effort heuristics.
+
 ## 0.9.9 — 2026-08-29
 
 - **Strengthened the CLI's free-tier install nudge, and added a support

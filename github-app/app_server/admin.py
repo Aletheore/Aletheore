@@ -6,6 +6,7 @@ import logging
 import re
 import secrets
 import time
+import urllib.error
 from datetime import datetime, timedelta, timezone
 
 import asyncpg
@@ -858,29 +859,25 @@ async def test_webhook_url_route(org: str, repo: str, request: Request):
     if not webhook_url:
         raise HTTPException(status_code=400, detail="no alert webhook is configured yet")
 
-    # validate_external_https_url only ran once, when the URL was saved
-    # (set_webhook_url_route) - re-checking here, immediately before the
-    # fetch, closes the DNS-rebinding window down to the gap between this
-    # call and the actual request instead of "until someone edits the URL
-    # again." Same reasoning and pattern as the health-check sweep (see
-    # scan_worker/jobs.py's re-validation right before _endpoint_results).
-    # An attacker who fully controls this webhook URL's domain could
-    # otherwise register one that resolves to a public IP at save time,
-    # pass validation, then repoint DNS at an internal service before
-    # clicking "test."
-    try:
-        validate_external_https_url(webhook_url)
-    except UnsafeURLError:
-        raise HTTPException(status_code=400, detail="this webhook URL no longer resolves to a safe address") from None
-
     from scan_worker.slack import send_health_alert
 
+    # send_health_alert itself now re-validates and pins the URL right
+    # before connecting (see its own docstring) - closing the DNS-
+    # rebinding window to zero rather than the narrower "re-check, then
+    # make a second, independent, unvalidated connection" this route used
+    # to do with a standalone validate_external_https_url pre-check. An
+    # attacker who fully controls this webhook URL's domain could
+    # otherwise register one that resolves to a public IP at save time
+    # (set_webhook_url_route), pass validation, then repoint DNS at an
+    # internal service before clicking "test."
     try:
         send_health_alert(
             webhook_url,
             {"text": f"*Aletheore*: test notification for `{org}/{repo}` - your alert webhook is configured correctly."},
         )
-    except httpx.HTTPError:
+    except UnsafeURLError:
+        raise HTTPException(status_code=400, detail="this webhook URL no longer resolves to a safe address") from None
+    except (urllib.error.URLError, TimeoutError, OSError):
         # Not the raw exception message - it's an SSRF oracle otherwise,
         # distinguishing "connection refused" from "timed out" from an
         # actual response body/status from whatever the URL resolved to.
@@ -1183,7 +1180,14 @@ async def request_deletion_otp(org: str, repo: str, request: Request):
 
     settings = get_settings()
     try:
-        rate_limited = is_rate_limited(
+        # is_rate_limited uses the synchronous redis-py client and blocks on
+        # pipe.execute() - run off the event loop (asyncio.to_thread, same
+        # pattern as embeddings_api.py's #328 fix and this file's own
+        # asyncio.to_thread(send_transactional_email...) call below) so one
+        # request's Redis round-trip doesn't stall every other concurrent
+        # request on this worker.
+        rate_limited = await asyncio.to_thread(
+            is_rate_limited,
             get_redis_client(),
             f"ratelimit:deletion-otp:{installation_id}",
             DELETION_OTP_RATE_LIMIT,
@@ -1254,7 +1258,10 @@ async def delete_all_data(
         )
 
     try:
-        attempt_limited = is_rate_limited(
+        # See request_deletion_otp's identical asyncio.to_thread comment
+        # above - same call, same reason.
+        attempt_limited = await asyncio.to_thread(
+            is_rate_limited,
             get_redis_client(),
             f"ratelimit:deletion-otp-attempt:{installation_id}",
             DELETION_OTP_ATTEMPT_LIMIT,

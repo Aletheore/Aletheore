@@ -44,6 +44,16 @@ def test_normalize_marketplace_plan_name_recognizes_air_case_insensitively():
     assert _normalize_marketplace_plan_name("  AIR  ") == "air"
 
 
+def test_normalize_marketplace_plan_name_recognizes_flash_case_insensitively():
+    # Real bug this guards: the flash tier didn't exist yet when this
+    # function was first written, and nobody swept it when the tier
+    # launched - a Marketplace purchase of a Flash-named plan silently
+    # granted "free" instead of what the customer paid for.
+    assert _normalize_marketplace_plan_name("Aletheore Flash") == "flash"
+    assert _normalize_marketplace_plan_name("flash") == "flash"
+    assert _normalize_marketplace_plan_name("  FLASH  ") == "flash"
+
+
 def test_normalize_marketplace_plan_name_defaults_unrecognized_names_to_free():
     # Fail-closed: an unrecognized name must not grant paid access, unlike
     # the original bug where anything other than the exact lowercase

@@ -7,6 +7,7 @@ bge-m3 actually underperformed nomic. See jina_embed/server.py, which
 serves this model behind a plain /embed endpoint.
 """
 
+import functools
 import logging
 import os
 
@@ -34,7 +35,18 @@ CURRENT_EMBEDDER = "jina-embed:jina-embeddings-v2-base-code"
 logger = logging.getLogger(__name__)
 
 
+@functools.lru_cache(maxsize=None)
 def _client(base_url: str | None = None) -> httpx.Client:
+    # Process-wide pooled client, one per distinct base_url, reused across
+    # every embed_text call - matches app_server/http_client.py's identical
+    # @lru_cache pooling convention (see get_github_api_client's docstring
+    # there for the reasoning). Real gap this closes: this was a fresh
+    # httpx.Client() - and a fresh TCP handshake to the jina-embed sidecar
+    # - constructed and torn down on EVERY embed_text call, the exact
+    # anti-pattern #183 fixed for the GitHub API and Redis clients but
+    # never got swept into this file. embed_text is called once per cache-
+    # eligible packet from packet_cache.py/flash_review_cache.py -
+    # potentially dozens of times in a single AIRview build.
     return httpx.Client(base_url=base_url or os.environ.get("JINA_EMBED_BASE_URL", "http://jina-embed:80"))
 
 
@@ -47,14 +59,17 @@ def embed_text(text: str, base_url: str | None = None, timeout_seconds: float = 
     if len(text) > MAX_EMBEDDING_CHARS:
         text = text[:MAX_EMBEDDING_CHARS]
     try:
-        with _client(base_url) as client:
-            response = client.post(
-                "/embed",
-                json={"text": text},
-                timeout=timeout_seconds,
-            )
-            response.raise_for_status()
-            data = response.json()
+        # Not a `with` block: _client is now a pooled, cached-for-the-
+        # process-lifetime client (see its own docstring) - closing it
+        # after one call would break every subsequent call.
+        client = _client(base_url)
+        response = client.post(
+            "/embed",
+            json={"text": text},
+            timeout=timeout_seconds,
+        )
+        response.raise_for_status()
+        data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
         logger.warning("embedding call failed (%s); treating cache as unavailable", type(exc).__name__)
         return None

@@ -5,6 +5,7 @@ import re
 import httpx
 
 from aletheore.pr_comment import COMMENT_MARKER
+from aletheore.repo_config import is_ignored
 
 MAX_CONTEXT_FILES = 30
 MAX_CONTEXT_FILE_BYTES = 80_000
@@ -288,6 +289,7 @@ def _reconstruct_missing_patch(
     path: str,
     base_ref: str,
     head_ref: str,
+    base_path: str | None = None,
 ) -> str | None:
     """Best-effort local diff for a file GitHub's compare API gave no patch
     for. Returns None (never raises) for anything that isn't a clean win -
@@ -295,11 +297,18 @@ def _reconstruct_missing_patch(
     head content are byte-identical (GitHub's own omission wasn't hiding a
     real change) - so the caller can fall back to just recording the file
     as genuinely omitted rather than surfacing a wrong or noisy diff.
+
+    base_path defaults to path, but a renamed file must pass the file's
+    `previous_filename` here: GitHub omits `patch` for a pure rename too,
+    and the old content lives at the *old* path in the base tree - looking
+    it up at the new path 404s there, which without this parameter used to
+    read as "no base content" and fabricate a full-file "added" diff for a
+    file whose content never actually changed.
     """
     head_content = fetch_file_content(client, token, repo_full_name, path, head_ref)
     if head_content is None or len(head_content.encode("utf-8")) > MAX_RECONSTRUCTED_DIFF_FILE_BYTES:
         return None
-    base_content = fetch_file_content(client, token, repo_full_name, path, base_ref)
+    base_content = fetch_file_content(client, token, repo_full_name, base_path or path, base_ref)
     if base_content is not None and len(base_content.encode("utf-8")) > MAX_RECONSTRUCTED_DIFF_FILE_BYTES:
         return None
     if base_content == head_content:
@@ -349,6 +358,7 @@ def fetch_pr_diff(
     repo_full_name: str,
     base_ref: str,
     head_ref: str,
+    ignored_paths: list[str] = (),
 ) -> PRDiff:
     headers = {
         "Authorization": f"token {token}",
@@ -362,6 +372,21 @@ def fetch_pr_diff(
     all_patches: list[tuple[str, str]] = []
     omitted_files = []
     for file in response.json().get("files", []):
+        # A file matching .aletheore.json's own ignored_paths must never
+        # reach Flash Review at all - the deterministic `aletheore scan`
+        # path already excludes ignored paths at the source (see
+        # evidence.py's identical use of ignored_paths before any file is
+        # even parsed), but Flash Review's PR-comment pipeline is a
+        # separate, GitHub-API-only code path (no local checkout to read
+        # .aletheore.json from - see _run_flash_review) that never
+        # consulted this config at all: a customer who configured an
+        # ignored path still got Flash Review PR comments about exactly
+        # that path. Skipped before the patch/reconstruction logic below,
+        # not just omitted afterward - this is a deliberate exclusion per
+        # the repo's own config, not a genuinely missing/unreviewable
+        # file, so it belongs in neither patches nor omitted_files.
+        if ignored_paths and is_ignored(file["filename"], ignored_paths):
+            continue
         patch = file.get("patch")
         if not patch:
             # GitHub omits `patch` both for binary files and for text files
@@ -371,7 +396,13 @@ def fetch_pr_diff(
             # file's content fails fetch_file_content's utf-8 decode and
             # comes back None).
             patch = _reconstruct_missing_patch(
-                client, token, repo_full_name, file["filename"], base_ref, head_ref
+                client,
+                token,
+                repo_full_name,
+                file["filename"],
+                base_ref,
+                head_ref,
+                base_path=file.get("previous_filename"),
             )
         if patch:
             all_patches.append((file["filename"], patch))

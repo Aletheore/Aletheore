@@ -109,6 +109,15 @@ def _shell(preheader: str, body_html: str) -> str:
 
 
 def welcome_email(github_login: str) -> dict:
+    # This is the first email every free signup receives, sent before the
+    # account has picked (or even seen) a paid plan - so unlike the other
+    # templates in this file, there's no installation `plan` to branch on
+    # here. Real bug this fixes: this was the one template #470 missed when
+    # it swept payment_failed/subscription_canceled/weekly_digest for the
+    # same hardcoded-AIR-only gap - every new free user was funneled
+    # exclusively toward AIR and never told the cheaper Flash tier (Aletheore
+    # Flash: automated PR reviews only, no managed audits/AIRview/endpoint
+    # monitoring) exists at all.
     subject = "Welcome to Aletheore"
     preheader = "Free deterministic scans today. AI-powered audits and PR reviews when you're ready."
     text = (
@@ -116,10 +125,11 @@ def welcome_email(github_login: str) -> dict:
         "Welcome to Aletheore. Community is free forever - run `aletheore scan .` "
         "on any repo to get evidence-grounded findings on secrets, vulnerabilities, "
         "dead code, licenses, and live endpoints. No LLM in the loop, no black box.\n\n"
-        "When you're ready for more, Aletheore AIR adds managed AI audits, AIRview "
+        "When you're ready for more: Aletheore Flash adds automated AI PR reviews "
+        "for a lower monthly cost, and Aletheore AIR adds managed AI audits, AIRview "
         "architecture maps, automated PR reviews, and endpoint health monitoring - "
         "installed once on your GitHub org and running in the background.\n\n"
-        "See Aletheore AIR pricing: https://aletheore.com/pricing.html\n\n"
+        "See pricing and compare plans: https://aletheore.com/pricing.html\n\n"
         "Questions, bug reports, or anything looks off - just reply. A person reads "
         "every message."
         f"{_FOOTER_TEXT}"
@@ -131,11 +141,12 @@ def welcome_email(github_login: str) -> dict:
         'border-radius:4px;">aletheore scan .</code> on any repo to get '
         'evidence-grounded findings on secrets, vulnerabilities, dead code, '
         'licenses, and live endpoints. No LLM in the loop, no black box.</p>'
-        '<p style="margin:0 0 24px;">When you\'re ready for more, Aletheore AIR '
+        '<p style="margin:0 0 24px;">When you\'re ready for more: Aletheore Flash '
+        'adds automated AI PR reviews for a lower monthly cost, and Aletheore AIR '
         'adds managed AI audits, AIRview architecture maps, automated PR reviews, '
         'and endpoint health monitoring &mdash; installed once on your GitHub org '
         'and running in the background.</p>'
-        f'<p style="margin:0 0 24px;">{_button("See Aletheore AIR pricing", _PRICING_URL)}</p>'
+        f'<p style="margin:0 0 24px;">{_button("Compare plans and pricing", _PRICING_URL)}</p>'
         f'<p style="margin:0;color:{_TEXT_MUTED};font-size:14px;">Questions, bug '
         'reports, or anything looks off &mdash; just reply. A person reads every '
         'message.</p>'

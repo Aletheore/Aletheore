@@ -28,7 +28,28 @@ def load_repo_config(repo_path: Path) -> dict:
         return result
 
     try:
-        data = json.loads(config_file.read_text(encoding="utf-8", errors="ignore"))
+        text = config_file.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return result
+    return parse_repo_config(text)
+
+
+def parse_repo_config(raw_text: str | None) -> dict:
+    """Same parsing/validation as load_repo_config, for a caller that
+    already has the config file's text some other way than a local
+    filesystem path - e.g. fetched from GitHub's Contents API for a repo
+    that was never cloned (see scan_worker.jobs._run_flash_review, which
+    reviews a PR diff purely via the GitHub API with no local checkout to
+    read a Path from). raw_text is None for "no .aletheore.json at this
+    ref" (GitHub's Contents API 404), same as load_repo_config's missing-
+    file case.
+    """
+    result = dict(DEFAULT_CONFIG)
+    if raw_text is None:
+        return result
+
+    try:
+        data = json.loads(raw_text)
     except json.JSONDecodeError:
         return result
     if not isinstance(data, dict):
