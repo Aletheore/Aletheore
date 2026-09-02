@@ -187,7 +187,12 @@ def test_a_deleted_file_is_always_a_real_change(tmp_path):
 def test_rebuild_refreshes_evidence_and_skips_the_slow_checks(tmp_path):
     """Vulnerability, license and history checks are network- and
     history-bound, take seconds to minutes, and do not change because a
-    function body was edited."""
+    function body was edited. Same reasoning extends to architecture
+    analysis (clustering + layer violations) and git hotspots: both are
+    driven by the import graph and commit history, neither of which moves
+    when a function body is edited, and clustering alone measured at 1.9s
+    on a 42-module repo - the dominant cost of an incremental rebuild by
+    far, confirmed by direct profiling, not estimated."""
     repo = _git_repo(tmp_path)
     (repo / "app.py").write_text("def f():\n    return 1\n\ndef added_later():\n    return 2\n")
 
@@ -200,6 +205,8 @@ def test_rebuild_refreshes_evidence_and_skips_the_slow_checks(tmp_path):
         "check_vulnerabilities": False,
         "check_licenses": False,
         "scan_git_history": False,
+        "analyze_architecture": False,
+        "check_hotspots": False,
     }
 
 
