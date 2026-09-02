@@ -553,7 +553,10 @@ def _register_ast_pattern_tool(mcp_instance: MCPServer, repo_path: Path) -> None
         which air.json never stores. Only whatever the query itself names
         with @capture is returned - a query with no captures matches
         structure but reports no text or location, so name at least one
-        node you care about."""
+        node you care about. Returns {matches, truncated} - a broad
+        structural query is capped by match count and total captured
+        characters; truncated=true means real results exist beyond what's
+        returned, so narrow the query rather than assume it's exhaustive."""
         from aletheore.ast_pattern import InvalidPatternError, UnknownLanguageError, search_ast_pattern
 
         try:

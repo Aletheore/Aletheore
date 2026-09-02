@@ -40,6 +40,20 @@ class InvalidPatternError(Exception):
     """`query_source` doesn't compile against the language's grammar."""
 
 
+# Same caps, same reasoning, as mcp_server.py's _search_files/
+# _SEARCH_MATCH_CAP/_SEARCH_TOTAL_CHAR_BUDGET: a broad structural query
+# (e.g. every function definition) has no reason to be bounded by
+# anything in this module on its own, and a real unscoped query against
+# this repo alone was measured to return ~5.6M characters - ~14x past
+# the ~390,000-char limit that sank an earlier unbounded MCP result (see
+# _search_files' own history). No timeout/subprocess isolation needed
+# here unlike the regex-search sibling: QueryCursor.matches() is a
+# deterministic tree walk, not backtracking regex, so there's no
+# pathological-slowness risk to guard against, only pathological size.
+_AST_PATTERN_MATCH_CAP = 200
+_AST_PATTERN_TOTAL_CHAR_BUDGET = 100_000
+
+
 def _extensions_and_languages_for(language: str) -> list[tuple[str, object]]:
     matches = [
         (ext, ts_language)
@@ -52,14 +66,18 @@ def _extensions_and_languages_for(language: str) -> list[tuple[str, object]]:
     return matches
 
 
-def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> list[dict]:
+def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> dict:
     """Runs a tree-sitter S-expression query against every file of
-    `language` under repo_path. One dict per match:
+    `language` under repo_path. Returns `{"matches": [...], "truncated": bool}` -
+    one dict per match in "matches":
     `{"file": ..., "captures": {name: [{"text", "start_line", "end_line"}, ...]}}`
     - captures are exactly what the query itself names with `@capture`,
     nothing synthesized. A query with no captures at all matches structure
     but returns no text/location - the caller's query must name at least
-    one node it cares about.
+    one node it cares about. "truncated" is honest, not assumed: a broad
+    structural query is capped at _AST_PATTERN_MATCH_CAP matches and
+    _AST_PATTERN_TOTAL_CHAR_BUDGET total captured characters, same
+    reasoning as mcp_server.py's file-search tool.
 
     Raises UnknownLanguageError for a language name LANGUAGE_BY_EXTENSION
     doesn't recognize, InvalidPatternError for a query_source that fails
@@ -82,32 +100,62 @@ def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> lis
     ext_to_ts_language = dict(ext_languages)
     parser = Parser()
     results: list[dict] = []
+    total_chars = 0
+    truncated = False
     for path in _iter_source_files(repo_path):
         ts_language = ext_to_ts_language.get(path.suffix)
         if ts_language is None:
             continue
-        if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
+        try:
+            if path.stat().st_size > MAX_SOURCE_FILE_BYTES:
+                continue
+            _, tree = _read_and_parse(path, parser, ts_language)
+        except OSError:
+            # A file can vanish or become unreadable between
+            # _iter_source_files listing its full path set upfront and this
+            # read - deleted mid-query, permissions changed, a concurrent
+            # `aletheore watch` touching it. Skipping it must not cost
+            # every other file's results, which an unhandled crash here
+            # previously did (verified: a chmod-000 file in a two-file repo
+            # lost the OTHER, readable file's real match too, not just its
+            # own - the whole call raised before returning anything).
             continue
-        _, tree = _read_and_parse(path, parser, ts_language)
         cursor = QueryCursor(queries[ts_language])
         rel_path = path.relative_to(repo_path).as_posix()
         for _pattern_index, captures in cursor.matches(tree.root_node):
-            results.append(
-                {
-                    "file": rel_path,
-                    "captures": {
-                        name: [
-                            {
-                                "text": node.text.decode("utf-8", errors="replace"),
-                                "start_line": node.start_point.row + 1,
-                                "end_line": node.end_point.row + 1,
-                            }
-                            for node in nodes
-                        ]
-                        for name, nodes in captures.items()
-                    },
-                }
+            if len(results) >= _AST_PATTERN_MATCH_CAP:
+                truncated = True
+                break
+            match_captures = {
+                name: [
+                    {
+                        "text": node.text.decode("utf-8", errors="replace"),
+                        "start_line": node.start_point.row + 1,
+                        "end_line": node.end_point.row + 1,
+                    }
+                    for node in nodes
+                ]
+                for name, nodes in captures.items()
+            }
+            # Sized BEFORE appending, not checked-then-appended-regardless -
+            # Flash Review on this PR caught a real overshoot: the prior
+            # version only checked whether total_chars had ALREADY reached
+            # the budget, so one match whose own captures were larger than
+            # the whole remaining budget still went in, in full, pushing
+            # the real total arbitrarily far past
+            # _AST_PATTERN_TOTAL_CHAR_BUDGET. A match that alone exceeds
+            # the budget is dropped, not truncated mid-capture - a partial
+            # capture's text would be misleading, not just short.
+            match_chars = sum(
+                len(capture["text"])
+                for capture_list in match_captures.values()
+                for capture in capture_list
             )
+            if total_chars + match_chars > _AST_PATTERN_TOTAL_CHAR_BUDGET:
+                truncated = True
+                break
+            results.append({"file": rel_path, "captures": match_captures})
+            total_chars += match_chars
         # Explicit, not left to reassignment next iteration: Node/Tree form
         # a reference cycle in this tree-sitter binding, so plain refcounting
         # never frees them - only the cyclic GC does, on its own schedule.
@@ -117,6 +165,10 @@ def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> lis
         # directly running this function against this project's own 116
         # source files: a build with `del` here never crashes, one without
         # it does, deterministically, every time. Deleting each iteration
-        # keeps the cycle count at most one at a time.
+        # keeps the cycle count at most one at a time. Runs even on the
+        # truncating iteration, before the outer break below - this file's
+        # tree/cursor were still created and still need the same cleanup.
         del tree, cursor
-    return results
+        if truncated:
+            break
+    return {"matches": results, "truncated": truncated}
