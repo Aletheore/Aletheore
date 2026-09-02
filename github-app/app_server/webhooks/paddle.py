@@ -40,17 +40,19 @@ logger = logging.getLogger(__name__)
 # handler simply never runs. A real refund or chargeback would have left
 # the referring affiliate's commission un-reversed indefinitely.
 #
-# The full set of events this file's code paths actually handle, which
-# must always be a subset of the live destination's subscribed_events:
-# transaction.completed, adjustment.created, transaction.updated (only
-# checked for a refunded/partially_refunded/charged_back status - not
-# currently subscribed live either, since Paddle's own adjustment.created
-# already covers refunds/chargebacks and no other transaction.updated
-# status is acted on here), and every name in _SUBSCRIPTION_EVENT_TYPES
-# below. Adding a new event_type branch to this file without also adding
-# it to the live destination reproduces exactly this bug - silently, with
-# no test able to catch it, since nothing here can observe Paddle's own
-# dashboard state.
+# The events this file's code paths handle: transaction.completed,
+# adjustment.created, transaction.updated, and every name in
+# _SUBSCRIPTION_EVENT_TYPES below. All of those except transaction.updated
+# must always be a subset of the live destination's subscribed_events -
+# transaction.updated is the deliberate exception: it's only checked for a
+# refunded/partially_refunded/charged_back status, which Paddle's own
+# adjustment.created already covers, so it's intentionally left
+# unsubscribed live rather than added as a second path to the same
+# reversal logic. Adding a new event_type branch to this file (other than
+# that one deliberate exception) without also adding it to the live
+# destination reproduces exactly the gap above - silently, with no test
+# able to catch it, since nothing here can observe Paddle's own dashboard
+# state.
 
 # Every subscription lifecycle event that can change what plan an
 # installation should be on. Previously only subscription.created was
