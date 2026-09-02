@@ -19,7 +19,42 @@ from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api
 
 FALLBACK_CHUNK_MAX_LINES = 200
 DEFAULT_EMBEDDING_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
+# Was nomic-embed-text until a real, measured comparison on this repo's own
+# hardware (Apple M4, Metal-accelerated Ollama): the same model as the
+# hosted path, served locally via its official int8 GGUF quantization,
+# embedded thrift (the largest corpus benchmarked, 13,444 chunks) in 754.7s
+# versus nomic's 828.6s - 9% faster, not slower, despite being the "heavier"
+# model. It also carries the retrieval-quality edge already established for
+# jina over nomic (+3.9pp top-1 mean, see the embedding-model-comparison
+# work), and Q8_0 is a high-fidelity quantization, not the aggressive kind
+# that would give that edge back. No real downside found: both are 768-dim,
+# so the switch is a routine embedder-identity change the existing
+# dimension/identity guard in build_index already rebuilds safely on.
+#
+# hf.co/ggml-org/... rather than an Ollama-library name because there is no
+# first-party Ollama listing for this model (confirmed: ollama.com/library
+# 404s on it) - ggml-org is llama.cpp's own HuggingFace org, and this GGUF
+# is an auto-conversion (HF's "gguf-my-repo" tool) of the real, official
+# jinaai/jina-embeddings-v2-base-code weights, Apache-2.0, not a random
+# third party's repack. Ollama's hf.co puller only accepts a quantization
+# tag or "latest" - not a pinned commit, confirmed by testing a SHA against
+# it directly and getting a 400 - so ":latest" is the only value Ollama
+# will accept here. Real commit as of this change, for audit if the
+# tag's target ever needs to be diffed against what was actually tested:
+# 05e79e9a6c8b99491e92ebb28d753268f8601e3c.
+DEFAULT_EMBEDDING_MODEL = "hf.co/ggml-org/jina-embeddings-v2-base-code-Q8_0-GGUF:latest"
+
+# Real Ollama-computed content digest of the exact blob this default was
+# tested against (from `ollama pull` + `GET /api/tags`, matching the
+# commit above), not a guess. Since Ollama's hf.co puller has no way to
+# pin a commit (see the comment above - a real 400 confirmed that), this
+# is the defense-in-depth Flash Review flagged on #516: `:latest` moving
+# underneath a user is undetectable without checking what actually
+# landed. _verify_ollama_model_digest compares this against the real
+# digest of whatever was just pulled and warns - not fails - on a
+# mismatch, since a legitimate upstream update shouldn't block indexing
+# outright, only be visible if it happens.
+_EXPECTED_DEFAULT_MODEL_DIGEST = "e2c7054365dd21c26616f32358065f248888b0b9d1c1106b903334f10e5fa472"
 OPENAI_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 HOSTED_EMBEDDING_MODEL = "jina-embeddings-v2-base-code"
@@ -27,8 +62,11 @@ HOSTED_EMBEDDING_MODEL = "jina-embeddings-v2-base-code"
 # Aletheore's own embedding endpoint, used when a saved API token belongs to
 # an entitled installation. It serves HOSTED_EMBEDDING_MODEL. The client
 # does not hardcode its dimension: the provider's returned vector length is
-# what the index drift check observes. Local Ollama remains nomic-embed-text;
-# switching between those providers rebuilds the index, correctly.
+# what the index drift check observes. Local Ollama now defaults to the same
+# model (DEFAULT_EMBEDDING_MODEL, above), served via a different backend and
+# quantization - the embedder-identity guard still treats hosted and local
+# as distinct providers regardless, since their outputs are not proven
+# identical; switching between them rebuilds the index, correctly.
 HOSTED_EMBEDDING_PATH = "/v1/embeddings"
 DEFAULT_API_BASE_URL = "https://app.aletheore.com"
 INDEX_DIRNAME = "index.lancedb"
@@ -790,7 +828,44 @@ def _detail_of(response: httpx.Response) -> str:
 OLLAMA_PULL_TIMEOUT_SECONDS = 300
 
 
-def _try_auto_pull_ollama_model(model: str) -> bool:
+def _verify_ollama_model_digest(model: str, base_url: str) -> None:
+    """Warn if the model Ollama actually resolved doesn't match the digest
+    this default was tested against - see _EXPECTED_DEFAULT_MODEL_DIGEST's
+    own comment for why this exists (":latest" can't be pinned).
+
+    Only meaningful for DEFAULT_EMBEDDING_MODEL - no expected digest is
+    recorded for any other model (a custom one via env override, or a
+    caller's own choice), so there is nothing to compare and no HTTP call
+    is made. Best-effort like the pull itself: any failure to reach
+    Ollama's native API (wrong version, network hiccup, endpoint moved)
+    just skips the check silently rather than blocking a pull that
+    otherwise succeeded.
+    """
+    if model != DEFAULT_EMBEDDING_MODEL:
+        return
+    # base_url is the OpenAI-compatible path (".../v1"); Ollama's own
+    # native API - the only one that reports a model's content digest -
+    # lives at the host root instead.
+    native_root = base_url.rstrip("/").removesuffix("/v1")
+    try:
+        response = httpx.get(f"{native_root}/api/tags", timeout=10.0)
+        response.raise_for_status()
+        models = response.json().get("models", [])
+        digest = next((m["digest"] for m in models if m.get("name") == model), None)
+    except Exception:  # noqa: BLE001
+        return
+    if digest and digest != _EXPECTED_DEFAULT_MODEL_DIGEST:
+        print(
+            f"aletheore: warning - '{model}' resolved to digest {digest[:12]}, "
+            f"not the {_EXPECTED_DEFAULT_MODEL_DIGEST[:12]} this default was tested "
+            "against. The upstream model may have changed; embeddings should still "
+            "work, but retrieval quality is no longer verified against this exact "
+            "build.",
+            file=sys.stderr,
+        )
+
+
+def _try_auto_pull_ollama_model(model: str, base_url: str = DEFAULT_EMBEDDING_BASE_URL) -> bool:
     """Ollama is reachable but doesn't have `model` pulled yet - a normal
     first-run state, not a real failure - so pull it automatically instead
     of making the user run a separate command before trying again. Returns
@@ -825,6 +900,7 @@ def _try_auto_pull_ollama_model(model: str) -> bool:
         )
         return False
     print(f"aletheore: pulled '{model}'", file=sys.stderr)
+    _verify_ollama_model_digest(model, base_url)
     return True
 
 
@@ -853,7 +929,7 @@ def embed_texts(
         response = client.embeddings.create(model=model, input=texts)
         return [item.embedding for item in response.data]
     except Exception as ollama_exc:
-        if isinstance(ollama_exc, NotFoundError) and _try_auto_pull_ollama_model(model):
+        if isinstance(ollama_exc, NotFoundError) and _try_auto_pull_ollama_model(model, base_url):
             try:
                 response = client.embeddings.create(model=model, input=texts)
                 return [item.embedding for item in response.data]
