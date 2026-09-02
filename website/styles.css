@@ -286,12 +286,18 @@ code {
 .evidence-preview {
   /* Deliberately its own self-contained dark widget (a terminal/demo
      card), not part of the page's light glass theme - scoped local
-     overrides so its children's var(--accent-soft)/var(--text-muted)
-     reads stay legible instead of picking up the page's light-theme
-     values (var(--bg-dark) itself is already dark at the root). */
+     overrides so its children's var(--accent-soft)/var(--text-muted)/
+     var(--text-primary) reads stay legible instead of picking up the
+     page's light-theme values (var(--bg-dark) itself is already dark at
+     the root). --text-primary was missing here until this comment's own
+     "stay legible" claim was checked against a real render: every value
+     using it (the endpoint path, the evidence-grid values, the file:line)
+     rendered at #18140f on this card's #201b14 background - two
+     near-identical near-blacks, effectively invisible. */
   --accent-soft: #3a2a18;
   --border-subtle: rgba(243, 238, 227, 0.13);
   --text-muted: #b9b1a4;
+  --text-primary: #f3eee3;
   position: relative;
   overflow: hidden;
   border: 1px solid rgba(243, 238, 227, 0.13);
@@ -349,6 +355,15 @@ code {
   padding: 28px 24px 10px;
   font-size: 30px;
   line-height: 1.2;
+  /* Without this, the bare text below (the endpoint path) inherits
+     body's already-computed color - evaluated at the root against the
+     page's light-theme --text-primary, long before this dark card's own
+     local override ever applies. A variable override only reaches an
+     element that itself references the variable at that point in the
+     tree; inheriting an ancestor's already-resolved value skips it
+     entirely. Confirmed live: the override alone left this text at the
+     old #18140f against this card's #201b14 background. */
+  color: var(--text-primary);
 }
 
 .preview-title span {
@@ -391,6 +406,10 @@ code {
   font-weight: 650;
 }
 
+.preview-code strong {
+  color: var(--text-primary);
+}
+
 .evidence-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -417,6 +436,7 @@ code {
 }
 
 .evidence-grid dd {
+  color: var(--text-primary);
   font-family: "SF Mono", Menlo, Consolas, monospace;
   font-size: 13px;
   font-weight: 700;
