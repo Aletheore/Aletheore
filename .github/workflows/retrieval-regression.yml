@@ -58,7 +58,7 @@ jobs:
             curl -sf http://localhost:11434/api/tags >/dev/null && break
             sleep 1
           done
-          "$PWD/ollama-install/bin/ollama" pull nomic-embed-text
+          "$PWD/ollama-install/bin/ollama" pull hf.co/ggml-org/jina-embeddings-v2-base-code-Q8_0-GGUF
 
       # Keyed on the fixture pin AND the two files this gate exists to
       # guard, not fixture.json alone - build_fixture.py skips scan+index

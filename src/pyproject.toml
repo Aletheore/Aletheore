@@ -1,12 +1,22 @@
 [project]
 name = "aletheore"
-version = "0.9.10"
+version = "0.9.11"
 description = "Evidence-grounded repository audit CLI: deterministic scanner, MCP server, live dashboard, and a GitHub Action that posts PR diffs."
 readme = "README.md"
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Arihant Kaul", email = "arihantkaul@outlook.com" }]
-requires-python = ">=3.11"
+# Upper-bounded at 3.14: aletheore_ast_pattern's use of tree_sitter's
+# Query/QueryCursor segfaults reliably on Python 3.14 (reproduced directly -
+# the exact same code against the exact same repo runs clean on 3.12) once
+# enough real files/matches accumulate in one process for the cyclic GC to
+# touch tree-sitter's Node/Tree/QueryCursor object graph. Not a bug in this
+# package's own code - `aletheore scan` itself, which uses tree_sitter's
+# Parser/Tree/Node but never Query/QueryCursor, runs fine on 3.14. CI only
+# tests 3.11/3.12 (see .github/workflows/tests.yml), so this bound is the
+# honest floor until either tree-sitter ships a fix or the crash is
+# isolated some other way (e.g. running the query in a subprocess).
+requires-python = ">=3.11,<3.14"
 keywords = ["code-review", "static-analysis", "secrets-detection", "dependency-vulnerabilities", "mcp-server"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -66,6 +76,13 @@ dependencies = [
     "watchdog>=4.0,<7.0",
     "rich>=13.0",
     "tomli-w>=1.0,<2.0",
+    # Real client-side token counting for hosted-embedding batching (see
+    # search_index.py's HOSTED_EMBED_MAX_CHARS history) - a Rust-backed
+    # WordPiece tokenizer, not a network call: the matching tokenizer.json
+    # for jina-embeddings-v2-base-code ships as package data instead of
+    # being fetched from HuggingFace Hub at runtime, so indexing never
+    # gains a new network dependency.
+    "tokenizers>=0.20,<0.24",
 ]
 
 [project.optional-dependencies]
@@ -87,7 +104,7 @@ build-backend = "setuptools.build_meta"
 include = ["aletheore*"]
 
 [tool.setuptools.package-data]
-aletheore = ["static/*.png", "manual/*.md"]
+aletheore = ["static/*.png", "manual/*.md", "data/*.json"]
 
 [tool.pytest.ini_options]
 addopts = ["-p", "no:randomly"]

@@ -1,3 +1,4 @@
+import re
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -141,7 +142,7 @@ def test_embed_texts_returns_one_vector_per_input(mock_openai_class):
     assert result == [[0.1, 0.2], [0.3, 0.4]]
     call = mock_client.embeddings.create.call_args
     assert call.kwargs["input"] == ["chunk one", "chunk two"]
-    assert call.kwargs["model"] == "nomic-embed-text"
+    assert call.kwargs["model"] == search_index_module.DEFAULT_EMBEDDING_MODEL
 
 
 @patch("aletheore.search_index.OpenAI")
@@ -150,7 +151,10 @@ def test_embed_texts_raises_actionable_error_when_model_unavailable(mock_openai_
     mock_openai_class.return_value = mock_client
     mock_client.embeddings.create.side_effect = RuntimeError("model not found")
 
-    with pytest.raises(EmbeddingProviderUnavailableError, match="ollama pull nomic-embed-text"):
+    default_model = re.escape(search_index_module.DEFAULT_EMBEDDING_MODEL)
+    with pytest.raises(
+        EmbeddingProviderUnavailableError, match=f"ollama pull {default_model}"
+    ):
         embed_texts(["chunk one"])
 
 
@@ -186,7 +190,9 @@ def test_embed_texts_auto_pulls_and_retries_when_model_not_found(
     result = embed_texts(["chunk one"])
 
     assert result == [[0.1, 0.2]]
-    mock_auto_pull.assert_called_once_with("nomic-embed-text")
+    mock_auto_pull.assert_called_once_with(
+        search_index_module.DEFAULT_EMBEDDING_MODEL, search_index_module.DEFAULT_EMBEDDING_BASE_URL
+    )
     assert mock_client.embeddings.create.call_count == 2
 
 
@@ -200,10 +206,15 @@ def test_embed_texts_raises_actionable_error_when_auto_pull_fails(
     mock_openai_class.return_value = mock_client
     mock_client.embeddings.create.side_effect = _ollama_not_found_error()
 
-    with pytest.raises(EmbeddingProviderUnavailableError, match="ollama pull nomic-embed-text"):
+    default_model = re.escape(search_index_module.DEFAULT_EMBEDDING_MODEL)
+    with pytest.raises(
+        EmbeddingProviderUnavailableError, match=f"ollama pull {default_model}"
+    ):
         embed_texts(["chunk one"])
 
-    mock_auto_pull.assert_called_once_with("nomic-embed-text")
+    mock_auto_pull.assert_called_once_with(
+        search_index_module.DEFAULT_EMBEDDING_MODEL, search_index_module.DEFAULT_EMBEDDING_BASE_URL
+    )
 
 
 @patch("aletheore.search_index.has_api_key", return_value=False)
@@ -223,7 +234,7 @@ def test_embed_texts_shows_setup_instructions_when_ollama_unreachable(
 
     message = str(exc_info.value)
     assert "ollama.com" in message
-    assert "ollama pull nomic-embed-text" in message
+    assert f"ollama pull {search_index_module.DEFAULT_EMBEDDING_MODEL}" in message
     assert "ollama serve" in message
 
 
@@ -241,6 +252,102 @@ def test_try_auto_pull_returns_true_on_successful_pull(mock_which, mock_run):
 
     args = mock_run.call_args[0][0]
     assert args == ["ollama", "pull", "nomic-embed-text"]
+
+
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_try_auto_pull_skips_digest_check_for_a_non_default_model(mock_which, mock_run, mock_get):
+    """The expected digest is only known for DEFAULT_EMBEDDING_MODEL - a
+    custom model (env override, or these tests' own generic example
+    string) has nothing to verify against, so no HTTP call should happen
+    at all for it, not a call that trivially "passes" some other way."""
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    assert _try_auto_pull_ollama_model("nomic-embed-text") is True
+
+    mock_get.assert_not_called()
+
+
+@patch("aletheore.search_index.httpx.get")
+def test_verify_ollama_model_digest_strips_a_trailing_slash_before_the_v1_suffix(mock_get):
+    """Flash Review on #516: base_url.removesuffix('/v1').removesuffix('/')
+    is a no-op on a trailing-slash input ('.../v1/' doesn't end in '/v1'),
+    so the request went to '.../v1/api/tags' instead of Ollama's real
+    '.../api/tags' - silently skipping the check for that valid URL form.
+    """
+    mock_get.return_value = MagicMock(status_code=200, json=lambda: {"models": []})
+
+    search_index_module._verify_ollama_model_digest(
+        search_index_module.DEFAULT_EMBEDDING_MODEL, "http://localhost:11434/v1/"
+    )
+
+    mock_get.assert_called_once_with("http://localhost:11434/api/tags", timeout=10.0)
+
+
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_try_auto_pull_warns_when_the_default_models_digest_has_drifted(
+    mock_which, mock_run, mock_get, capsys
+):
+    """Flash Review on #516: `:latest` is mutable and Ollama has no way to
+    pin a commit (confirmed - see DEFAULT_EMBEDDING_MODEL's own comment).
+    A mismatch must warn, not silently proceed - but also must not fail
+    the pull outright, since a legitimate upstream update shouldn't block
+    indexing, only be visible."""
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    mock_get.return_value = MagicMock(
+        status_code=200,
+        json=lambda: {
+            "models": [
+                {"name": search_index_module.DEFAULT_EMBEDDING_MODEL, "digest": "deadbeef" * 8}
+            ]
+        },
+    )
+
+    result = _try_auto_pull_ollama_model(search_index_module.DEFAULT_EMBEDDING_MODEL)
+
+    assert result is True
+    warning = capsys.readouterr().err
+    assert "digest" in warning.lower()
+    assert search_index_module._EXPECTED_DEFAULT_MODEL_DIGEST[:12] in warning
+    assert "deadbeef" in warning
+
+
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_try_auto_pull_does_not_warn_when_the_digest_matches(mock_which, mock_run, mock_get, capsys):
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    mock_get.return_value = MagicMock(
+        status_code=200,
+        json=lambda: {
+            "models": [
+                {
+                    "name": search_index_module.DEFAULT_EMBEDDING_MODEL,
+                    "digest": search_index_module._EXPECTED_DEFAULT_MODEL_DIGEST,
+                }
+            ]
+        },
+    )
+
+    result = _try_auto_pull_ollama_model(search_index_module.DEFAULT_EMBEDDING_MODEL)
+
+    assert result is True
+    assert "digest" not in capsys.readouterr().err.lower()
+
+
+@patch("aletheore.search_index.httpx.get", side_effect=RuntimeError("connection refused"))
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_try_auto_pull_survives_a_failed_digest_check(mock_which, mock_run, mock_get):
+    """Best-effort like everything else in this function - the digest
+    check is a defense-in-depth extra, not a new way for a real pull to
+    start failing."""
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    assert _try_auto_pull_ollama_model(search_index_module.DEFAULT_EMBEDDING_MODEL) is True
 
 
 @patch("aletheore.search_index.subprocess.run")
@@ -266,7 +373,10 @@ def test_embed_texts_raises_ollama_error_when_no_openai_key_configured(
     mock_openai_class.return_value = mock_client
     mock_client.embeddings.create.side_effect = RuntimeError("connection refused")
 
-    with pytest.raises(EmbeddingProviderUnavailableError, match="ollama pull nomic-embed-text"):
+    default_model = re.escape(search_index_module.DEFAULT_EMBEDDING_MODEL)
+    with pytest.raises(
+        EmbeddingProviderUnavailableError, match=f"ollama pull {default_model}"
+    ):
         embed_texts(["chunk one"], credentials_path=tmp_path / "credentials.json")
 
     mock_has_api_key.assert_called_once_with(
@@ -1577,7 +1687,7 @@ def test_reusable_vectors_returns_the_embedder_identity_stamped_in_the_index(tmp
         build_index(tmp_path, evidence)
 
     _, embedder = _reusable_vectors(_index_path(tmp_path))
-    assert embedder == "local:nomic-embed-text"
+    assert embedder == f"local:{search_index_module.DEFAULT_EMBEDDING_MODEL}"
 
 
 def test_search_index_raises_when_query_embedder_differs_from_the_indexs_despite_matching_dimension(tmp_path):
@@ -1610,10 +1720,11 @@ def test_search_index_raises_when_query_embedder_differs_from_the_indexs_despite
         ],
     )
 
+    local_id = re.escape(f"local:{search_index_module.DEFAULT_EMBEDDING_MODEL}")
     with patch("aletheore.search_index.get_api_key", return_value=None), \
          patch("aletheore.search_index.embed_texts", return_value=[[0.0] * 768]):
         with pytest.raises(
-            IndexDimensionMismatchError, match="hosted:jina.*local:nomic|local:nomic.*hosted:jina"
+            IndexDimensionMismatchError, match=f"hosted:jina.*{local_id}|{local_id}.*hosted:jina"
         ):
             search_index(repo, "where is foo")
 
@@ -2149,42 +2260,81 @@ def test_detect_query_language_reads_the_plain_in_cpp_and_in_csharp_phrasing():
     assert _detect_query_language("Where is this implemented in C") == "c"
 
 
-def test_hosted_batches_bound_a_request_by_characters_not_just_count():
-    """The hosted embedder costs per character; EMBED_BATCH_SIZE was tuned
-    against Ollama, where it costs per request. A 200-chunk batch of real code
-    is ~1MB, which needed roughly eleven minutes against embeddings_api's 60s
-    timeout - so it returned 502 and silently fell back to local on every
-    hosted index build.
+_HOSTED_BATCH_TEST_UNIT = (
+    "def handle_request(request, context):\n"
+    "    if not context.authenticated:\n"
+    "        raise PermissionError('missing credentials')\n"
+    "    payload = deserialize(request.body)\n"
+    "    result = process(payload, context.user_id)\n"
+    "    return serialize(result)\n\n"
+)
 
-    Sized relative to HOSTED_EMBED_MAX_CHARS rather than a literal, so this
-    keeps testing the same thing after that cap is raised on new throughput
-    evidence: four chunks each exactly half the cap, so pairs fit a request
-    (2 * half <= cap) but a third would not (3 * half > cap) - well under the
-    EMBED_BATCH_SIZE count cap, so the character bound is what forces the
-    split into two spans of two."""
-    half_cap = search_index_module.HOSTED_EMBED_MAX_CHARS // 2
-    texts = ["x" * half_cap] * 4
+
+def _real_token_count(text: str) -> int:
+    """Ground truth via the actual bundled tokenizer, not an assumed ratio."""
+    return len(search_index_module._hosted_tokenizer().encode(text).ids)
+
+
+def _repeat_below_token_target(unit: str, target_tokens: int) -> str:
+    """Repeat `unit` as many whole times as fit under target_tokens.
+
+    Floors rather than rounds so the result's real token count never exceeds
+    target_tokens - callers rely on that to reason about sums of copies.
+    """
+    unit_tokens = _real_token_count(unit)
+    reps = max(1, target_tokens // unit_tokens)
+    return unit * reps
+
+
+def test_hosted_batches_bound_a_request_by_tokens_not_just_count():
+    """The hosted embedder's real cost is per token; EMBED_BATCH_SIZE was
+    tuned against Ollama, where it costs per request. A char-count proxy for
+    tokens went through eight recalibrations chasing a chars-per-token ratio
+    that varies 2.564-4.08 across real corpora (see search_index.py's
+    HOSTED_EMBED_MAX_TOKENS comment) - real token counts replace the guess.
+
+    Four chunks each sized (by real tokenizer measurement, not a character
+    literal) to just under half HOSTED_EMBED_MAX_TOKENS, so pairs fit a
+    request but a third would not - well under the EMBED_BATCH_SIZE count
+    cap, so the token bound is what forces the split into two spans of two.
+    """
+    half_cap = search_index_module.HOSTED_EMBED_MAX_TOKENS // 2
+    half_text = _repeat_below_token_target(_HOSTED_BATCH_TEST_UNIT, half_cap)
+    half_tokens = _real_token_count(half_text)
+    # Preconditions the split below relies on - fail loudly here rather than
+    # silently passing on a wrong assumption if tokenizer behavior changes.
+    assert 2 * half_tokens <= search_index_module.HOSTED_EMBED_MAX_TOKENS
+    assert 3 * half_tokens > search_index_module.HOSTED_EMBED_MAX_TOKENS
+
+    texts = [half_text] * 4
     spans = search_index_module._hosted_batches(texts, search_index_module.EMBED_BATCH_SIZE)
 
-    assert len(spans) == 2, "characters over the cap must not go out as one request"
+    assert len(spans) == 2, "tokens over the cap must not go out as one request"
     for start, end in spans:
-        assert sum(len(t) for t in texts[start:end]) <= search_index_module.HOSTED_EMBED_MAX_CHARS
+        span_tokens = sum(_real_token_count(t) for t in texts[start:end])
+        assert span_tokens <= search_index_module.HOSTED_EMBED_MAX_TOKENS
 
 
 def test_hosted_batches_still_respect_the_count_cap_for_small_texts():
-    """Character-bounding is additional, not a replacement: many tiny chunks
-    are cheap per character but still one request's worth of overhead each."""
-    texts = ["y" * 10] * 300
+    """Token-bounding is additional, not a replacement: many tiny chunks are
+    cheap per token but still one request's worth of overhead each."""
+    texts = ["def f(): pass\n"] * 300
     spans = search_index_module._hosted_batches(texts, search_index_module.EMBED_BATCH_SIZE)
 
     assert [end - start for start, end in spans] == [200, 100]
 
 
-def test_hosted_batches_never_drop_a_text_larger_than_the_character_cap():
+def test_hosted_batches_never_drop_a_text_larger_than_the_token_cap():
     """Chunks are truncated upstream, so this only fires on a pathological
     input - and embedding it slowly beats not embedding it at all, which is
     what silently skipping it would mean for that file's searchability."""
-    oversized = "z" * (search_index_module.HOSTED_EMBED_MAX_CHARS * 3)
+    oversized = _repeat_below_token_target(
+        _HOSTED_BATCH_TEST_UNIT, search_index_module.HOSTED_EMBED_MAX_TOKENS * 3
+    )
+    # _repeat_below_token_target floors to stay *under* its target, so bump
+    # it past the real cap explicitly rather than trusting the 3x headroom.
+    oversized *= 2
+    assert _real_token_count(oversized) > search_index_module.HOSTED_EMBED_MAX_TOKENS
     texts = ["small", oversized, "small"]
     spans = search_index_module._hosted_batches(texts, search_index_module.EMBED_BATCH_SIZE)
 

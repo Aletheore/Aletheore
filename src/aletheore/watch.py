@@ -219,11 +219,16 @@ def _observer_handler(handler: "_DebouncedHandler"):
 def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
     """One scan-and-reindex cycle.
 
-    Vulnerability, license and git-history checks are skipped. They are the
-    network-bound and history-bound parts of a scan, they take seconds to
-    minutes, and none of them change because a function body was edited -
-    running them on every save would make the loop unusable while adding
-    nothing. A full `aletheore scan` still does all of them.
+    Vulnerability, license, git-history, architecture-analysis, and hotspot
+    checks are skipped. Vulnerability/license/history are network-bound and
+    history-bound; architecture analysis (clustering + layer violations) and
+    hotspots are driven by the import graph and commit history respectively,
+    neither of which moves when a function body is edited. All take seconds
+    to minutes - clustering alone measured at 1.9s on a 42-module repo, the
+    dominant cost of an incremental rebuild by far (confirmed by direct
+    profiling) - and running any of them on every save would make the loop
+    unusable while adding nothing. A full `aletheore scan` still does all of
+    them.
 
     The index is only refreshed if one already exists. Building a first
     index means embedding every chunk, which needs a provider and real time;
@@ -236,6 +241,8 @@ def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
         check_vulnerabilities=False,
         check_licenses=False,
         scan_git_history=False,
+        analyze_architecture=False,
+        check_hotspots=False,
     )
     write_evidence(evidence, repo_path)
     report("evidence updated")

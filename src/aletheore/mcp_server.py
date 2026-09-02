@@ -539,6 +539,31 @@ def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
         return _toon_result(result)
 
 
+def _register_ast_pattern_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_ast_pattern", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_ast_pattern(language: str, query: str) -> str:
+        """Structural search: find code by shape rather than by words, via a
+        raw tree-sitter S-expression query - e.g. functions that catch a
+        specific exception type, or classes implementing a given interface,
+        regardless of naming. language is one of the scanner's supported
+        languages (python, javascript, typescript, go, rust, java, kotlin,
+        ruby, php, c, cpp, csharp, swift). Re-parses source from disk at
+        call time - unlike most other tools here, this does not read
+        air.json, since a structural match needs the actual parse tree,
+        which air.json never stores. Only whatever the query itself names
+        with @capture is returned - a query with no captures matches
+        structure but reports no text or location, so name at least one
+        node you care about."""
+        from aletheore.ast_pattern import InvalidPatternError, UnknownLanguageError, search_ast_pattern
+
+        try:
+            return _toon_result(search_ast_pattern(repo_path, language, query))
+        except UnknownLanguageError as exc:
+            return _toon_result({"error": str(exc)})
+        except InvalidPatternError as exc:
+            return _toon_result({"error": f"invalid tree-sitter query: {exc}"})
+
+
 def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
     @mcp_instance.tool(name="aletheore_symbol_source", annotations=READ_ONLY_ANNOTATIONS)
     def aletheore_symbol_source(module: str, symbol: str) -> str:
@@ -832,6 +857,7 @@ def build_server(
     _register_list_tool(mcp_instance, repo_path)
     _register_overview_tool(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
+    _register_ast_pattern_tool(mcp_instance, repo_path)
     _register_symbol_source_tool(mcp_instance, repo_path)
     _register_verify_citations_tool(mcp_instance, repo_path)
     _register_code_evidence_tools(mcp_instance, repo_path)
