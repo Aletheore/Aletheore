@@ -2149,42 +2149,81 @@ def test_detect_query_language_reads_the_plain_in_cpp_and_in_csharp_phrasing():
     assert _detect_query_language("Where is this implemented in C") == "c"
 
 
-def test_hosted_batches_bound_a_request_by_characters_not_just_count():
-    """The hosted embedder costs per character; EMBED_BATCH_SIZE was tuned
-    against Ollama, where it costs per request. A 200-chunk batch of real code
-    is ~1MB, which needed roughly eleven minutes against embeddings_api's 60s
-    timeout - so it returned 502 and silently fell back to local on every
-    hosted index build.
+_HOSTED_BATCH_TEST_UNIT = (
+    "def handle_request(request, context):\n"
+    "    if not context.authenticated:\n"
+    "        raise PermissionError('missing credentials')\n"
+    "    payload = deserialize(request.body)\n"
+    "    result = process(payload, context.user_id)\n"
+    "    return serialize(result)\n\n"
+)
 
-    Sized relative to HOSTED_EMBED_MAX_CHARS rather than a literal, so this
-    keeps testing the same thing after that cap is raised on new throughput
-    evidence: four chunks each exactly half the cap, so pairs fit a request
-    (2 * half <= cap) but a third would not (3 * half > cap) - well under the
-    EMBED_BATCH_SIZE count cap, so the character bound is what forces the
-    split into two spans of two."""
-    half_cap = search_index_module.HOSTED_EMBED_MAX_CHARS // 2
-    texts = ["x" * half_cap] * 4
+
+def _real_token_count(text: str) -> int:
+    """Ground truth via the actual bundled tokenizer, not an assumed ratio."""
+    return len(search_index_module._hosted_tokenizer().encode(text).ids)
+
+
+def _repeat_below_token_target(unit: str, target_tokens: int) -> str:
+    """Repeat `unit` as many whole times as fit under target_tokens.
+
+    Floors rather than rounds so the result's real token count never exceeds
+    target_tokens - callers rely on that to reason about sums of copies.
+    """
+    unit_tokens = _real_token_count(unit)
+    reps = max(1, target_tokens // unit_tokens)
+    return unit * reps
+
+
+def test_hosted_batches_bound_a_request_by_tokens_not_just_count():
+    """The hosted embedder's real cost is per token; EMBED_BATCH_SIZE was
+    tuned against Ollama, where it costs per request. A char-count proxy for
+    tokens went through eight recalibrations chasing a chars-per-token ratio
+    that varies 2.564-4.08 across real corpora (see search_index.py's
+    HOSTED_EMBED_MAX_TOKENS comment) - real token counts replace the guess.
+
+    Four chunks each sized (by real tokenizer measurement, not a character
+    literal) to just under half HOSTED_EMBED_MAX_TOKENS, so pairs fit a
+    request but a third would not - well under the EMBED_BATCH_SIZE count
+    cap, so the token bound is what forces the split into two spans of two.
+    """
+    half_cap = search_index_module.HOSTED_EMBED_MAX_TOKENS // 2
+    half_text = _repeat_below_token_target(_HOSTED_BATCH_TEST_UNIT, half_cap)
+    half_tokens = _real_token_count(half_text)
+    # Preconditions the split below relies on - fail loudly here rather than
+    # silently passing on a wrong assumption if tokenizer behavior changes.
+    assert 2 * half_tokens <= search_index_module.HOSTED_EMBED_MAX_TOKENS
+    assert 3 * half_tokens > search_index_module.HOSTED_EMBED_MAX_TOKENS
+
+    texts = [half_text] * 4
     spans = search_index_module._hosted_batches(texts, search_index_module.EMBED_BATCH_SIZE)
 
-    assert len(spans) == 2, "characters over the cap must not go out as one request"
+    assert len(spans) == 2, "tokens over the cap must not go out as one request"
     for start, end in spans:
-        assert sum(len(t) for t in texts[start:end]) <= search_index_module.HOSTED_EMBED_MAX_CHARS
+        span_tokens = sum(_real_token_count(t) for t in texts[start:end])
+        assert span_tokens <= search_index_module.HOSTED_EMBED_MAX_TOKENS
 
 
 def test_hosted_batches_still_respect_the_count_cap_for_small_texts():
-    """Character-bounding is additional, not a replacement: many tiny chunks
-    are cheap per character but still one request's worth of overhead each."""
-    texts = ["y" * 10] * 300
+    """Token-bounding is additional, not a replacement: many tiny chunks are
+    cheap per token but still one request's worth of overhead each."""
+    texts = ["def f(): pass\n"] * 300
     spans = search_index_module._hosted_batches(texts, search_index_module.EMBED_BATCH_SIZE)
 
     assert [end - start for start, end in spans] == [200, 100]
 
 
-def test_hosted_batches_never_drop_a_text_larger_than_the_character_cap():
+def test_hosted_batches_never_drop_a_text_larger_than_the_token_cap():
     """Chunks are truncated upstream, so this only fires on a pathological
     input - and embedding it slowly beats not embedding it at all, which is
     what silently skipping it would mean for that file's searchability."""
-    oversized = "z" * (search_index_module.HOSTED_EMBED_MAX_CHARS * 3)
+    oversized = _repeat_below_token_target(
+        _HOSTED_BATCH_TEST_UNIT, search_index_module.HOSTED_EMBED_MAX_TOKENS * 3
+    )
+    # _repeat_below_token_target floors to stay *under* its target, so bump
+    # it past the real cap explicitly rather than trusting the 3x headroom.
+    oversized *= 2
+    assert _real_token_count(oversized) > search_index_module.HOSTED_EMBED_MAX_TOKENS
     texts = ["small", oversized, "small"]
     spans = search_index_module._hosted_batches(texts, search_index_module.EMBED_BATCH_SIZE)
 

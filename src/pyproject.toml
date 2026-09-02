@@ -76,6 +76,13 @@ dependencies = [
     "watchdog>=4.0,<7.0",
     "rich>=13.0",
     "tomli-w>=1.0,<2.0",
+    # Real client-side token counting for hosted-embedding batching (see
+    # search_index.py's HOSTED_EMBED_MAX_CHARS history) - a Rust-backed
+    # WordPiece tokenizer, not a network call: the matching tokenizer.json
+    # for jina-embeddings-v2-base-code ships as package data instead of
+    # being fetched from HuggingFace Hub at runtime, so indexing never
+    # gains a new network dependency.
+    "tokenizers>=0.20,<0.24",
 ]
 
 [project.optional-dependencies]
@@ -97,7 +104,7 @@ build-backend = "setuptools.build_meta"
 include = ["aletheore*"]
 
 [tool.setuptools.package-data]
-aletheore = ["static/*.png", "manual/*.md"]
+aletheore = ["static/*.png", "manual/*.md", "data/*.json"]
 
 [tool.pytest.ini_options]
 addopts = ["-p", "no:randomly"]
