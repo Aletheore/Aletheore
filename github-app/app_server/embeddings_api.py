@@ -118,14 +118,16 @@ def get_jina_client() -> httpx.Client:
     # binding constraint underneath, cutting itself off at half the budget
     # the CLI already tolerates waiting for. Real requests through this
     # endpoint stay well under this ceiling: they're bounded by the CLI's
-    # own HOSTED_EMBED_MAX_CHARS cap (100,000 chars as of #268, ~25,700
-    # tokens at the measured ~3.89 chars/token), and the closest real
-    # measurement above that - 59,903 tokens in 83.24s against jina-embed
-    # post-#267 (2 instances) - leaves ~37s of margin against 120s. The
-    # 88,859-token/124.70s point from that same measurement run is larger
-    # than any request this cap can actually produce; it was one input to
-    # the interpolation in search_index.py's HOSTED_EMBED_MAX_CHARS
-    # comment, not a size this timeout needs to cover.
+    # own HOSTED_EMBED_MAX_TOKENS cap (search_index.py - 50,000 real
+    # tokens, counted directly via the bundled jina tokenizer rather than
+    # estimated from a char count, since the token-based batching rewrite
+    # that replaced the old char-count HOSTED_EMBED_MAX_CHARS cap). 50,000
+    # was chosen to preserve the same ~41% margin against this 120s budget
+    # that the old char cap's own history had already derived (the closest
+    # real measurement, 59,903 tokens in 83.24s against jina-embed
+    # post-#267 (2 instances), leaves ~37s of margin at that size) - so
+    # this timeout's safety margin is unchanged even though the cap it's
+    # measured against no longer exists in char form.
     return httpx.Client(base_url=JINA_EMBED_BASE_URL, timeout=120.0)
 
 
