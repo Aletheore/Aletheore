@@ -190,7 +190,9 @@ def test_embed_texts_auto_pulls_and_retries_when_model_not_found(
     result = embed_texts(["chunk one"])
 
     assert result == [[0.1, 0.2]]
-    mock_auto_pull.assert_called_once_with(search_index_module.DEFAULT_EMBEDDING_MODEL)
+    mock_auto_pull.assert_called_once_with(
+        search_index_module.DEFAULT_EMBEDDING_MODEL, search_index_module.DEFAULT_EMBEDDING_BASE_URL
+    )
     assert mock_client.embeddings.create.call_count == 2
 
 
@@ -210,7 +212,9 @@ def test_embed_texts_raises_actionable_error_when_auto_pull_fails(
     ):
         embed_texts(["chunk one"])
 
-    mock_auto_pull.assert_called_once_with(search_index_module.DEFAULT_EMBEDDING_MODEL)
+    mock_auto_pull.assert_called_once_with(
+        search_index_module.DEFAULT_EMBEDDING_MODEL, search_index_module.DEFAULT_EMBEDDING_BASE_URL
+    )
 
 
 @patch("aletheore.search_index.has_api_key", return_value=False)
@@ -248,6 +252,86 @@ def test_try_auto_pull_returns_true_on_successful_pull(mock_which, mock_run):
 
     args = mock_run.call_args[0][0]
     assert args == ["ollama", "pull", "nomic-embed-text"]
+
+
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_try_auto_pull_skips_digest_check_for_a_non_default_model(mock_which, mock_run, mock_get):
+    """The expected digest is only known for DEFAULT_EMBEDDING_MODEL - a
+    custom model (env override, or these tests' own generic example
+    string) has nothing to verify against, so no HTTP call should happen
+    at all for it, not a call that trivially "passes" some other way."""
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    assert _try_auto_pull_ollama_model("nomic-embed-text") is True
+
+    mock_get.assert_not_called()
+
+
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_try_auto_pull_warns_when_the_default_models_digest_has_drifted(
+    mock_which, mock_run, mock_get, capsys
+):
+    """Flash Review on #516: `:latest` is mutable and Ollama has no way to
+    pin a commit (confirmed - see DEFAULT_EMBEDDING_MODEL's own comment).
+    A mismatch must warn, not silently proceed - but also must not fail
+    the pull outright, since a legitimate upstream update shouldn't block
+    indexing, only be visible."""
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    mock_get.return_value = MagicMock(
+        status_code=200,
+        json=lambda: {
+            "models": [
+                {"name": search_index_module.DEFAULT_EMBEDDING_MODEL, "digest": "deadbeef" * 8}
+            ]
+        },
+    )
+
+    result = _try_auto_pull_ollama_model(search_index_module.DEFAULT_EMBEDDING_MODEL)
+
+    assert result is True
+    warning = capsys.readouterr().err
+    assert "digest" in warning.lower()
+    assert search_index_module._EXPECTED_DEFAULT_MODEL_DIGEST[:12] in warning
+    assert "deadbeef" in warning
+
+
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_try_auto_pull_does_not_warn_when_the_digest_matches(mock_which, mock_run, mock_get, capsys):
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    mock_get.return_value = MagicMock(
+        status_code=200,
+        json=lambda: {
+            "models": [
+                {
+                    "name": search_index_module.DEFAULT_EMBEDDING_MODEL,
+                    "digest": search_index_module._EXPECTED_DEFAULT_MODEL_DIGEST,
+                }
+            ]
+        },
+    )
+
+    result = _try_auto_pull_ollama_model(search_index_module.DEFAULT_EMBEDDING_MODEL)
+
+    assert result is True
+    assert "digest" not in capsys.readouterr().err.lower()
+
+
+@patch("aletheore.search_index.httpx.get", side_effect=RuntimeError("connection refused"))
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_try_auto_pull_survives_a_failed_digest_check(mock_which, mock_run, mock_get):
+    """Best-effort like everything else in this function - the digest
+    check is a defense-in-depth extra, not a new way for a real pull to
+    start failing."""
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    assert _try_auto_pull_ollama_model(search_index_module.DEFAULT_EMBEDDING_MODEL) is True
 
 
 @patch("aletheore.search_index.subprocess.run")
