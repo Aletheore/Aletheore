@@ -270,6 +270,22 @@ def test_try_auto_pull_skips_digest_check_for_a_non_default_model(mock_which, mo
 
 
 @patch("aletheore.search_index.httpx.get")
+def test_verify_ollama_model_digest_strips_a_trailing_slash_before_the_v1_suffix(mock_get):
+    """Flash Review on #516: base_url.removesuffix('/v1').removesuffix('/')
+    is a no-op on a trailing-slash input ('.../v1/' doesn't end in '/v1'),
+    so the request went to '.../v1/api/tags' instead of Ollama's real
+    '.../api/tags' - silently skipping the check for that valid URL form.
+    """
+    mock_get.return_value = MagicMock(status_code=200, json=lambda: {"models": []})
+
+    search_index_module._verify_ollama_model_digest(
+        search_index_module.DEFAULT_EMBEDDING_MODEL, "http://localhost:11434/v1/"
+    )
+
+    mock_get.assert_called_once_with("http://localhost:11434/api/tags", timeout=10.0)
+
+
+@patch("aletheore.search_index.httpx.get")
 @patch("aletheore.search_index.subprocess.run")
 @patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
 def test_try_auto_pull_warns_when_the_default_models_digest_has_drifted(

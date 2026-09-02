@@ -846,7 +846,7 @@ def _verify_ollama_model_digest(model: str, base_url: str) -> None:
     # base_url is the OpenAI-compatible path (".../v1"); Ollama's own
     # native API - the only one that reports a model's content digest -
     # lives at the host root instead.
-    native_root = base_url.removesuffix("/v1").removesuffix("/")
+    native_root = base_url.rstrip("/").removesuffix("/v1")
     try:
         response = httpx.get(f"{native_root}/api/tags", timeout=10.0)
         response.raise_for_status()
