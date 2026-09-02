@@ -298,6 +298,14 @@ def test_scan_repository_skips_architecture_analysis_when_disabled(tmp_path):
     assert evidence["architecture"]["cross_cluster_edges"] == []
     assert evidence["architecture"]["layer_violations"]["convention_detected"] is False
     assert evidence["architecture"]["layer_violations"]["violations"] == []
+    # A first version of this placeholder omitted "layers" - passed every
+    # assertion above (none of them touch that key) but failed AIR schema
+    # validation the moment anything called load_evidence() on it, raising
+    # MalformedEvidenceError instead of the shape mismatch this comment's
+    # docstring warns about. write_evidence + load_evidence is the real
+    # round trip a watch session's evidence goes through.
+    write_evidence(evidence, repo)
+    load_evidence(repo)
 
 
 def test_scan_repository_skips_hotspots_when_disabled(tmp_path):

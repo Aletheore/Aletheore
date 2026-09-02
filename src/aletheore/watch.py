@@ -216,6 +216,40 @@ def _observer_handler(handler: "_DebouncedHandler"):
     return _Adapter()
 
 
+def _carry_forward_architecture(evidence: dict, repo_path: Path) -> None:
+    """Replace scan_repository's skipped-analysis placeholder (clusters,
+    cross_cluster_edges, layer_violations, git.hotspots) with the last real
+    full scan's values, in place.
+
+    Flash review on #517 caught the gap this closes: without this, every
+    watch rebuild wrote the placeholder as final evidence, so a dashboard
+    or MCP server reading it mid-session saw "no architecture" for the
+    whole session instead of the last known-good state. This only ever
+    improves on the placeholder - if no prior evidence exists yet (no
+    `aletheore scan` has run), or it can't be read, the placeholder simply
+    stands, same as before this function existed.
+    """
+    from aletheore.evidence import load_evidence
+
+    try:
+        previous = load_evidence(repo_path)
+    except Exception:  # noqa: BLE001
+        return
+
+    previous_architecture = previous.get("architecture")
+    if previous_architecture:
+        evidence.setdefault("architecture", {}).update(
+            clusters=previous_architecture.get("clusters", []),
+            cross_cluster_edges=previous_architecture.get("cross_cluster_edges", []),
+            layer_violations=previous_architecture.get("layer_violations")
+            or evidence.get("architecture", {}).get("layer_violations"),
+        )
+
+    previous_hotspots = previous.get("git", {}).get("hotspots")
+    if previous_hotspots is not None:
+        evidence.setdefault("git", {})["hotspots"] = previous_hotspots
+
+
 def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
     """One scan-and-reindex cycle.
 
@@ -228,7 +262,11 @@ def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
     dominant cost of an incremental rebuild by far (confirmed by direct
     profiling) - and running any of them on every save would make the loop
     unusable while adding nothing. A full `aletheore scan` still does all of
-    them.
+    them. The architecture/hotspot fields aren't left blank in the
+    meantime - _carry_forward_architecture reuses the last real full
+    scan's values, so a dashboard or MCP server reading evidence written
+    mid-session sees the last known-good state rather than "nothing"
+    until the next full scan recomputes it for real.
 
     The index is only refreshed if one already exists. Building a first
     index means embedding every chunk, which needs a provider and real time;
@@ -244,6 +282,7 @@ def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
         analyze_architecture=False,
         check_hotspots=False,
     )
+    _carry_forward_architecture(evidence, repo_path)
     write_evidence(evidence, repo_path)
     report("evidence updated")
 
