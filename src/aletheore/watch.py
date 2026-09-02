@@ -216,18 +216,26 @@ def _observer_handler(handler: "_DebouncedHandler"):
     return _Adapter()
 
 
-def _carry_forward_architecture(evidence: dict, repo_path: Path) -> None:
-    """Replace scan_repository's skipped-analysis placeholder (clusters,
-    cross_cluster_edges, layer_violations, git.hotspots) with the last real
-    full scan's values, in place.
+def _carry_forward_skipped_analysis(evidence: dict, repo_path: Path) -> None:
+    """Replace scan_repository's skipped-analysis placeholders (clusters,
+    cross_cluster_edges, layer_violations, git.hotspots, and - as of this
+    fix - dependency_vulnerabilities/dependency_licenses/git-history secret
+    findings) with the last real full scan's values, in place.
 
-    Flash review on #517 caught the gap this closes: without this, every
-    watch rebuild wrote the placeholder as final evidence, so a dashboard
-    or MCP server reading it mid-session saw "no architecture" for the
-    whole session instead of the last known-good state. This only ever
-    improves on the placeholder - if no prior evidence exists yet (no
-    `aletheore scan` has run), or it can't be read, the placeholder simply
-    stands, same as before this function existed.
+    Flash review on #517 caught the architecture/hotspots half of this gap
+    (this function was named _carry_forward_architecture for exactly that
+    scope). The backward PR-gap audit that followed found the other half
+    the same day: vulnerabilities and licenses are ALSO skipped by every
+    `rebuild()` call (see below) but were never carried forward, so a
+    dashboard or MCP server reading evidence mid-watch-session saw "0
+    vulnerabilities" / "no license data" for the whole session even when
+    the last real scan found real findings - verified directly: a repo
+    with 32 real vulnerability findings from a full scan showed all 32
+    silently vanish (checked: False, findings: []) after one incremental
+    rebuild, before this fix. Same failure shape as the architecture gap,
+    same fix shape: only ever improves on the placeholder - no prior
+    evidence, or a read failure, leaves the placeholder standing exactly
+    as before this function existed.
     """
     from aletheore.evidence import load_evidence
 
@@ -249,6 +257,32 @@ def _carry_forward_architecture(evidence: dict, repo_path: Path) -> None:
     if previous_hotspots is not None:
         evidence.setdefault("git", {})["hotspots"] = previous_hotspots
 
+    previous_security = previous.get("security") or {}
+    previous_vulnerabilities = previous_security.get("dependency_vulnerabilities")
+    if previous_vulnerabilities and previous_vulnerabilities.get("checked"):
+        evidence.setdefault("security", {})["dependency_vulnerabilities"] = previous_vulnerabilities
+    previous_licenses = previous_security.get("dependency_licenses")
+    if previous_licenses and previous_licenses.get("checked"):
+        evidence.setdefault("security", {})["dependency_licenses"] = previous_licenses
+
+    # scan_git_history=False resets history_findings/history_scanned_commits
+    # to empty on every rebuild (evidence.py: history_data defaults to
+    # {"history_scanned_commits": 0, "history_findings": []} when the check
+    # is skipped) - same failure shape as vulnerabilities/licenses above,
+    # just nested under security.secrets instead of its own top-level key.
+    # Only the history half is carried forward, not the whole secrets dict:
+    # this rebuild's own secrets_data["findings"] (the working-tree scan)
+    # is real and fresh every time - scan_git_history never gates it - so
+    # overwriting the whole dict would discard THIS run's real results to
+    # reuse an OLDER run's, backwards from what carry-forward is for.
+    previous_history_findings = previous_security.get("secrets", {}).get("history_findings")
+    if previous_history_findings:
+        current_secrets = evidence.setdefault("security", {}).setdefault("secrets", {})
+        current_secrets["history_findings"] = previous_history_findings
+        current_secrets["history_scanned_commits"] = previous_security.get("secrets", {}).get(
+            "history_scanned_commits", 0
+        )
+
 
 def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
     """One scan-and-reindex cycle.
@@ -262,9 +296,10 @@ def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
     dominant cost of an incremental rebuild by far (confirmed by direct
     profiling) - and running any of them on every save would make the loop
     unusable while adding nothing. A full `aletheore scan` still does all of
-    them. The architecture/hotspot fields aren't left blank in the
-    meantime - _carry_forward_architecture reuses the last real full
-    scan's values, so a dashboard or MCP server reading evidence written
+    them. The skipped fields (architecture, hotspots, vulnerabilities,
+    licenses, git-history secrets) aren't left blank in the meantime -
+    _carry_forward_skipped_analysis reuses the last real full scan's
+    values for each, so a dashboard or MCP server reading evidence written
     mid-session sees the last known-good state rather than "nothing"
     until the next full scan recomputes it for real.
 
@@ -282,7 +317,7 @@ def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
         analyze_architecture=False,
         check_hotspots=False,
     )
-    _carry_forward_architecture(evidence, repo_path)
+    _carry_forward_skipped_analysis(evidence, repo_path)
     write_evidence(evidence, repo_path)
     report("evidence updated")
 
