@@ -1,3 +1,4 @@
+import re
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -141,7 +142,7 @@ def test_embed_texts_returns_one_vector_per_input(mock_openai_class):
     assert result == [[0.1, 0.2], [0.3, 0.4]]
     call = mock_client.embeddings.create.call_args
     assert call.kwargs["input"] == ["chunk one", "chunk two"]
-    assert call.kwargs["model"] == "nomic-embed-text"
+    assert call.kwargs["model"] == search_index_module.DEFAULT_EMBEDDING_MODEL
 
 
 @patch("aletheore.search_index.OpenAI")
@@ -150,7 +151,10 @@ def test_embed_texts_raises_actionable_error_when_model_unavailable(mock_openai_
     mock_openai_class.return_value = mock_client
     mock_client.embeddings.create.side_effect = RuntimeError("model not found")
 
-    with pytest.raises(EmbeddingProviderUnavailableError, match="ollama pull nomic-embed-text"):
+    default_model = re.escape(search_index_module.DEFAULT_EMBEDDING_MODEL)
+    with pytest.raises(
+        EmbeddingProviderUnavailableError, match=f"ollama pull {default_model}"
+    ):
         embed_texts(["chunk one"])
 
 
@@ -186,7 +190,7 @@ def test_embed_texts_auto_pulls_and_retries_when_model_not_found(
     result = embed_texts(["chunk one"])
 
     assert result == [[0.1, 0.2]]
-    mock_auto_pull.assert_called_once_with("nomic-embed-text")
+    mock_auto_pull.assert_called_once_with(search_index_module.DEFAULT_EMBEDDING_MODEL)
     assert mock_client.embeddings.create.call_count == 2
 
 
@@ -200,10 +204,13 @@ def test_embed_texts_raises_actionable_error_when_auto_pull_fails(
     mock_openai_class.return_value = mock_client
     mock_client.embeddings.create.side_effect = _ollama_not_found_error()
 
-    with pytest.raises(EmbeddingProviderUnavailableError, match="ollama pull nomic-embed-text"):
+    default_model = re.escape(search_index_module.DEFAULT_EMBEDDING_MODEL)
+    with pytest.raises(
+        EmbeddingProviderUnavailableError, match=f"ollama pull {default_model}"
+    ):
         embed_texts(["chunk one"])
 
-    mock_auto_pull.assert_called_once_with("nomic-embed-text")
+    mock_auto_pull.assert_called_once_with(search_index_module.DEFAULT_EMBEDDING_MODEL)
 
 
 @patch("aletheore.search_index.has_api_key", return_value=False)
@@ -223,7 +230,7 @@ def test_embed_texts_shows_setup_instructions_when_ollama_unreachable(
 
     message = str(exc_info.value)
     assert "ollama.com" in message
-    assert "ollama pull nomic-embed-text" in message
+    assert f"ollama pull {search_index_module.DEFAULT_EMBEDDING_MODEL}" in message
     assert "ollama serve" in message
 
 
@@ -266,7 +273,10 @@ def test_embed_texts_raises_ollama_error_when_no_openai_key_configured(
     mock_openai_class.return_value = mock_client
     mock_client.embeddings.create.side_effect = RuntimeError("connection refused")
 
-    with pytest.raises(EmbeddingProviderUnavailableError, match="ollama pull nomic-embed-text"):
+    default_model = re.escape(search_index_module.DEFAULT_EMBEDDING_MODEL)
+    with pytest.raises(
+        EmbeddingProviderUnavailableError, match=f"ollama pull {default_model}"
+    ):
         embed_texts(["chunk one"], credentials_path=tmp_path / "credentials.json")
 
     mock_has_api_key.assert_called_once_with(
@@ -1577,7 +1587,7 @@ def test_reusable_vectors_returns_the_embedder_identity_stamped_in_the_index(tmp
         build_index(tmp_path, evidence)
 
     _, embedder = _reusable_vectors(_index_path(tmp_path))
-    assert embedder == "local:nomic-embed-text"
+    assert embedder == f"local:{search_index_module.DEFAULT_EMBEDDING_MODEL}"
 
 
 def test_search_index_raises_when_query_embedder_differs_from_the_indexs_despite_matching_dimension(tmp_path):
@@ -1610,10 +1620,11 @@ def test_search_index_raises_when_query_embedder_differs_from_the_indexs_despite
         ],
     )
 
+    local_id = re.escape(f"local:{search_index_module.DEFAULT_EMBEDDING_MODEL}")
     with patch("aletheore.search_index.get_api_key", return_value=None), \
          patch("aletheore.search_index.embed_texts", return_value=[[0.0] * 768]):
         with pytest.raises(
-            IndexDimensionMismatchError, match="hosted:jina.*local:nomic|local:nomic.*hosted:jina"
+            IndexDimensionMismatchError, match=f"hosted:jina.*{local_id}|{local_id}.*hosted:jina"
         ):
             search_index(repo, "where is foo")
 

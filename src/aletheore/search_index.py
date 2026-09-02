@@ -18,7 +18,30 @@ from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api
 
 FALLBACK_CHUNK_MAX_LINES = 200
 DEFAULT_EMBEDDING_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
+# Was nomic-embed-text until a real, measured comparison on this repo's own
+# hardware (Apple M4, Metal-accelerated Ollama): the same model as the
+# hosted path, served locally via its official int8 GGUF quantization,
+# embedded thrift (the largest corpus benchmarked, 13,444 chunks) in 754.7s
+# versus nomic's 828.6s - 9% faster, not slower, despite being the "heavier"
+# model. It also carries the retrieval-quality edge already established for
+# jina over nomic (+3.9pp top-1 mean, see the embedding-model-comparison
+# work), and Q8_0 is a high-fidelity quantization, not the aggressive kind
+# that would give that edge back. No real downside found: both are 768-dim,
+# so the switch is a routine embedder-identity change the existing
+# dimension/identity guard in build_index already rebuilds safely on.
+#
+# hf.co/ggml-org/... rather than an Ollama-library name because there is no
+# first-party Ollama listing for this model (confirmed: ollama.com/library
+# 404s on it) - ggml-org is llama.cpp's own HuggingFace org, and this GGUF
+# is an auto-conversion (HF's "gguf-my-repo" tool) of the real, official
+# jinaai/jina-embeddings-v2-base-code weights, Apache-2.0, not a random
+# third party's repack. Ollama's hf.co puller only accepts a quantization
+# tag or "latest" - not a pinned commit, confirmed by testing a SHA against
+# it directly and getting a 400 - so ":latest" is the only value Ollama
+# will accept here. Real commit as of this change, for audit if the
+# tag's target ever needs to be diffed against what was actually tested:
+# 05e79e9a6c8b99491e92ebb28d753268f8601e3c.
+DEFAULT_EMBEDDING_MODEL = "hf.co/ggml-org/jina-embeddings-v2-base-code-Q8_0-GGUF:latest"
 OPENAI_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 HOSTED_EMBEDDING_MODEL = "jina-embeddings-v2-base-code"
@@ -26,8 +49,11 @@ HOSTED_EMBEDDING_MODEL = "jina-embeddings-v2-base-code"
 # Aletheore's own embedding endpoint, used when a saved API token belongs to
 # an entitled installation. It serves HOSTED_EMBEDDING_MODEL. The client
 # does not hardcode its dimension: the provider's returned vector length is
-# what the index drift check observes. Local Ollama remains nomic-embed-text;
-# switching between those providers rebuilds the index, correctly.
+# what the index drift check observes. Local Ollama now defaults to the same
+# model (DEFAULT_EMBEDDING_MODEL, above), served via a different backend and
+# quantization - the embedder-identity guard still treats hosted and local
+# as distinct providers regardless, since their outputs are not proven
+# identical; switching between them rebuilds the index, correctly.
 HOSTED_EMBEDDING_PATH = "/v1/embeddings"
 DEFAULT_API_BASE_URL = "https://app.aletheore.com"
 INDEX_DIRNAME = "index.lancedb"
