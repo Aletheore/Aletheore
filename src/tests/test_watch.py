@@ -344,6 +344,37 @@ def test_rebuild_carries_forward_git_history_secrets_but_keeps_working_tree_find
     assert after["security"]["secrets"]["findings"] == []
 
 
+def test_rebuild_carries_forward_a_clean_git_history_scan_not_just_a_dirty_one(tmp_path):
+    """Flash Review finding on this PR: gating the carry-forward on
+    non-empty history_findings meant a real prior scan that walked commit
+    history and found ZERO secrets (a normal, common, and entirely valid
+    outcome) was indistinguishable from "never scanned" - the placeholder's
+    history_scanned_commits: 0 stood after rebuild, falsely implying
+    history was never checked. A clean scan (commits > 0, findings == [])
+    must still carry its real history_scanned_commits forward."""
+    from aletheore.evidence import load_evidence, scan_repository, write_evidence
+
+    repo = _git_repo(tmp_path)
+    (repo / "app.py").write_text("x = 1\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "no secrets here"], cwd=repo, check=True, capture_output=True
+    )
+
+    full_evidence = scan_repository(
+        repo, check_vulnerabilities=False, check_licenses=False, scan_git_history=True
+    )
+    write_evidence(full_evidence, repo)
+    assert full_evidence["security"]["secrets"]["history_scanned_commits"] > 0
+    assert full_evidence["security"]["secrets"]["history_findings"] == []
+
+    rebuild(repo, lambda _message: None)
+
+    after = load_evidence(repo)
+    assert after["security"]["secrets"]["history_scanned_commits"] > 0
+    assert after["security"]["secrets"]["history_findings"] == []
+
+
 def test_rebuild_leaves_the_skip_placeholder_when_no_prior_scan_exists(tmp_path):
     """No .aletheore/air.json to carry forward from yet - the placeholder
     from scan_repository's analyze_architecture=False must stand, not

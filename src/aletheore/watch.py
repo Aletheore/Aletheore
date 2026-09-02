@@ -275,13 +275,20 @@ def _carry_forward_skipped_analysis(evidence: dict, repo_path: Path) -> None:
     # is real and fresh every time - scan_git_history never gates it - so
     # overwriting the whole dict would discard THIS run's real results to
     # reuse an OLDER run's, backwards from what carry-forward is for.
-    previous_history_findings = previous_security.get("secrets", {}).get("history_findings")
-    if previous_history_findings:
+    #
+    # Flash Review on this PR caught a real gap: gating on non-empty
+    # history_findings treats "scanned and found nothing" the same as
+    # "never scanned" - a real prior scan that found zero secrets in
+    # history (a normal, common outcome) would leave the placeholder's
+    # history_scanned_commits: 0 standing, falsely implying history was
+    # never scanned. Gate on history_scanned_commits > 0 instead - that's
+    # only ever positive after a real scan actually walked commits.
+    previous_secrets = previous_security.get("secrets", {})
+    previous_history_scanned_commits = previous_secrets.get("history_scanned_commits", 0)
+    if previous_history_scanned_commits > 0:
         current_secrets = evidence.setdefault("security", {}).setdefault("secrets", {})
-        current_secrets["history_findings"] = previous_history_findings
-        current_secrets["history_scanned_commits"] = previous_security.get("secrets", {}).get(
-            "history_scanned_commits", 0
-        )
+        current_secrets["history_findings"] = previous_secrets.get("history_findings", [])
+        current_secrets["history_scanned_commits"] = previous_history_scanned_commits
 
 
 def rebuild(repo_path: Path, report: Callable[[str], None]) -> None:
