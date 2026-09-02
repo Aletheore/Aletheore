@@ -210,6 +210,73 @@ def test_rebuild_refreshes_evidence_and_skips_the_slow_checks(tmp_path):
     }
 
 
+def test_rebuild_carries_forward_the_last_real_architecture_analysis(tmp_path):
+    """Flash Review on #517 caught this: scan_repository's skipped-analysis
+    placeholder for clusters/cross_cluster_edges/layer_violations was being
+    written as-is on every watch rebuild, discarding the last real full
+    scan's architecture data instead of preserving it - so a dashboard or
+    MCP server reading evidence mid-watch-session saw "no architecture" for
+    the entire session rather than the last known-good state."""
+    from aletheore.evidence import load_evidence, scan_repository, write_evidence
+
+    repo = _git_repo(tmp_path)
+    (repo / "b.py").write_text("import app\n")
+
+    # A real full scan, exactly as `aletheore scan` would produce - this is
+    # the "last known-good" architecture data rebuild() must preserve.
+    full_evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+    write_evidence(full_evidence, repo)
+    assert "checked" not in full_evidence["architecture"]["layer_violations"], (
+        "a real detect_layer_violations() result has no 'checked' key - only the "
+        "skipped-analysis placeholder does, so its presence below would mean the "
+        "placeholder leaked through instead of the real prior value"
+    )
+
+    (repo / "app.py").write_text("def f():\n    return 1\n\ndef added_later():\n    return 2\n")
+    rebuild(repo, lambda _message: None)
+
+    after = load_evidence(repo)
+    assert after["architecture"]["clusters"] == full_evidence["architecture"]["clusters"]
+    assert (
+        after["architecture"]["cross_cluster_edges"]
+        == full_evidence["architecture"]["cross_cluster_edges"]
+    )
+    assert "checked" not in after["architecture"]["layer_violations"]
+    assert (
+        after["architecture"]["layer_violations"]["convention_detected"]
+        == full_evidence["architecture"]["layer_violations"]["convention_detected"]
+    )
+
+
+def test_rebuild_carries_forward_hotspots_too(tmp_path):
+    from aletheore.evidence import load_evidence, scan_repository, write_evidence
+
+    repo = _git_repo(tmp_path)
+    full_evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+    write_evidence(full_evidence, repo)
+    assert "hotspots" in full_evidence["git"]
+
+    (repo / "app.py").write_text("def f():\n    return 1\n\ndef added_later():\n    return 2\n")
+    rebuild(repo, lambda _message: None)
+
+    after = load_evidence(repo)
+    assert after["git"]["hotspots"] == full_evidence["git"]["hotspots"]
+
+
+def test_rebuild_leaves_the_skip_placeholder_when_no_prior_scan_exists(tmp_path):
+    """No .aletheore/air.json to carry forward from yet - the placeholder
+    from scan_repository's analyze_architecture=False must stand, not
+    crash trying to read evidence that was never written."""
+    from aletheore.evidence import load_evidence
+
+    repo = _git_repo(tmp_path)
+    rebuild(repo, lambda _message: None)
+
+    after = load_evidence(repo)
+    assert after["architecture"]["clusters"] == []
+    assert after["architecture"]["layer_violations"]["checked"] is False
+
+
 def test_rebuild_does_not_build_a_first_index_unasked(tmp_path):
     """Building a first index embeds every chunk - it needs a provider and
     real time. Starting that because someone edited a file would surprise."""

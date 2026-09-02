@@ -498,12 +498,20 @@ def scan_repository(
         layer_violations = detect_layer_violations(dependency_graph, custom_markers=custom_markers)
     else:
         clusters, cross_cluster_edges = [], []
-        # Matches detect_layer_violations' real return shape for the two
-        # keys dashboard.py/mcp_server.py actually read - a bare skip
-        # marker would KeyError the next time either reads evidence written
-        # during a watch session, before the next full `aletheore scan`.
+        # Matches detect_layer_violations' real return shape exactly
+        # (convention_detected/layers/violations - confirmed against its
+        # source, not guessed) plus checked/reason: a shape missing any of
+        # the first three fails validate_evidence's schema check (found by
+        # a first version of this that omitted "layers" - MalformedEvidenceError
+        # on the very next load_evidence call, worse than the KeyError this
+        # was written to avoid). dashboard.py/mcp_server.py read
+        # convention_detected/violations directly - a bare skip marker
+        # missing those would KeyError the next time either reads evidence
+        # written during a watch session, before the next full `aletheore
+        # scan`.
         layer_violations = {
             "convention_detected": False,
+            "layers": [],
             "violations": [],
             "checked": False,
             "reason": "skipped (architecture analysis disabled)",
