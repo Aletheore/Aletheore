@@ -898,9 +898,10 @@ async def test_aletheore_ast_pattern_finds_a_structural_match(tmp_path):
         },
     )
 
-    matches = tool_result_body(result)["result"]
-    assert len(matches) == 1
-    assert matches[0]["captures"]["name"][0]["text"] == "guarded"
+    body = tool_result_body(result)["result"]
+    assert body["truncated"] is False
+    assert len(body["matches"]) == 1
+    assert body["matches"][0]["captures"]["name"][0]["text"] == "guarded"
 
 
 @pytest.mark.asyncio
