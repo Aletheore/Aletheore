@@ -3,6 +3,79 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.11 — 2026-09-02
+
+- **Added structural code search: `aletheore query ast-pattern` and the
+  `aletheore_ast_pattern` MCP tool.** Find code by shape, not words - a
+  raw tree-sitter query against every file of one language, re-parsed
+  from disk (not from cached evidence, which never stores a full parse
+  tree). Works across all 13 already-supported languages for free,
+  since the matching mechanism doesn't depend on which grammar it's
+  handed. Capped `requires-python` at `<3.14`: `tree_sitter`'s
+  `Query`/`QueryCursor` (the first use of that API in this codebase)
+  segfaults reliably on Python 3.14 once enough real files/matches
+  accumulate for the cyclic garbage collector to touch the resulting
+  object graph - reproduced directly against this project's own
+  116-file source tree, confirmed absent on 3.12. Not fixable at the
+  Python level; every other feature is unaffected.
+- **Added `aletheore_get_blast_radius`, an MCP tool for coding agents**:
+  one call returns a file's full transitive dependent set (a real BFS,
+  not a single hop) plus, given a symbol name, which of its direct
+  dependents actually call that symbol - confirmed against real file
+  content, not just an import relationship.
+- **The semantic-search index no longer reconnects to disk on every
+  query.** `open_index()` previously reopened the LanceDB table on
+  every single call, including from a long-lived process like the MCP
+  server - now caches the opened handle per index path and refreshes
+  it in place. Also added a rank penalty for barrel/re-export files
+  (`packages/*/src/index.ts`-shaped files that import a large slice of
+  a repo while adding little of their own), so they no longer
+  outrank the real implementation they merely point at.
+- **Fixed a real recursion-depth risk in endpoint detection**:
+  Flask/FastAPI route extraction walked the parse tree recursively,
+  risking a `RecursionError` on a deeply nested real file; now
+  iterative, matching the scanner's own convention elsewhere.
+- **Fixed six more real bugs**, found the same way the language-support
+  fixes above were - re-verifying already-merged PRs against real
+  repositories and real behavior, not trusting their own tests:
+  - Kotlin local functions (declared inside another function's body)
+    were incorrectly reported as public - Kotlin can't even attach a
+    visibility modifier to one, so every local function fell through
+    to the "no modifier means public" default. Every other supported
+    language already excluded nested-in-function declarations from
+    this same check; Kotlin's own visibility check never got the
+    same guard when Kotlin support shipped.
+  - A Rust `use` statement's nested-wildcard form
+    (`use foo::{bar::*, Baz};`) was silently dropped from import
+    resolution - the existing fix for nested scoped/aliased `use`
+    groups was one tree-sitter node type short of complete.
+  - A Ruby constant declared inside a conditional or
+    `begin`/`rescue` block one or more levels below its enclosing
+    class/module body (a `RUBY_VERSION` guard, a defensive fallback)
+    was missed - exactly as idiomatic a class-body constant as the
+    unwrapped case.
+  - `requirements.txt` dependency lines without an exact `==` pin (a
+    bare `requests`, or `requests>=2.0`) were silently dropped from
+    both vulnerability scanning and license checking by a
+    hand-rolled parser that only recognized exact pins - now reuses
+    the project's own already-correct PEP 508 parser instead of a
+    second, independently drifting implementation of the same
+    grammar.
+  - A secret-detection check for a credential assigned via
+    bracket-subscript (`os.environ["API_KEY"] = "..."`,
+    `config["SECRET"] = "..."`) was missing - only the equally
+    common quoted-key form was covered.
+  - A dependency-license check's own abandoned-thread timeout fix
+    introduced a real race: a worker thread left running past the
+    wall-clock timeout could still write to a shared cache dict while
+    the main thread was serializing it, occasionally raising instead
+    of degrading gracefully as intended. A lock now guards both sides.
+  - An OpenAI-compatible adapter's reserved-token-budget release only
+    fired from an exception handler - a 200 response with no `usage`
+    field (a real shape from some gateways/proxies) hit neither the
+    success nor the failure path, leaving the reservation stuck
+    against zero real usage.
+
 ## 0.9.10 — 2026-08-31
 
 - **Added Kotlin and Swift as fully supported scanner languages** (13
