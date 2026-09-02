@@ -230,7 +230,8 @@ semantic code index below.
 
 Builds a local LanceDB vector index over the repository's code chunks from an existing scan.
 This is explicit and never runs as a side effect of `scan`. Embeddings use local Ollama's
-OpenAI-compatible endpoint and the `nomic-embed-text` model.
+OpenAI-compatible endpoint and `jina-embeddings-v2-base-code` (the same model Aletheore's
+hosted tier uses, served locally via its official int8 GGUF quantization).
 
 If Ollama is unreachable and `OPENAI_API_KEY` is configured (same lookup `audit` already uses -
 environment variable first, then a saved credential), Aletheore asks for explicit confirmation
@@ -240,7 +241,7 @@ non-interactively (e.g. from the MCP server).
 
 ```bash
 aletheore scan .
-ollama pull nomic-embed-text
+ollama pull hf.co/ggml-org/jina-embeddings-v2-base-code-Q8_0-GGUF
 aletheore index .
 ```
 
