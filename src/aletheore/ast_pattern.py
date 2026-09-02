@@ -123,7 +123,7 @@ def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> dic
         cursor = QueryCursor(queries[ts_language])
         rel_path = path.relative_to(repo_path).as_posix()
         for _pattern_index, captures in cursor.matches(tree.root_node):
-            if len(results) >= _AST_PATTERN_MATCH_CAP or total_chars >= _AST_PATTERN_TOTAL_CHAR_BUDGET:
+            if len(results) >= _AST_PATTERN_MATCH_CAP:
                 truncated = True
                 break
             match_captures = {
@@ -137,12 +137,25 @@ def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> dic
                 ]
                 for name, nodes in captures.items()
             }
-            results.append({"file": rel_path, "captures": match_captures})
-            total_chars += sum(
+            # Sized BEFORE appending, not checked-then-appended-regardless -
+            # Flash Review on this PR caught a real overshoot: the prior
+            # version only checked whether total_chars had ALREADY reached
+            # the budget, so one match whose own captures were larger than
+            # the whole remaining budget still went in, in full, pushing
+            # the real total arbitrarily far past
+            # _AST_PATTERN_TOTAL_CHAR_BUDGET. A match that alone exceeds
+            # the budget is dropped, not truncated mid-capture - a partial
+            # capture's text would be misleading, not just short.
+            match_chars = sum(
                 len(capture["text"])
                 for capture_list in match_captures.values()
                 for capture in capture_list
             )
+            if total_chars + match_chars > _AST_PATTERN_TOTAL_CHAR_BUDGET:
+                truncated = True
+                break
+            results.append({"file": rel_path, "captures": match_captures})
+            total_chars += match_chars
         # Explicit, not left to reassignment next iteration: Node/Tree form
         # a reference cycle in this tree-sitter binding, so plain refcounting
         # never frees them - only the cyclic GC does, on its own schedule.

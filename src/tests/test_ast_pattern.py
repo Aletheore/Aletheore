@@ -169,3 +169,32 @@ def test_search_ast_pattern_truncates_past_the_char_budget(tmp_path, monkeypatch
 
     assert len(result["matches"]) < 10
     assert result["truncated"] is True
+
+
+def test_search_ast_pattern_drops_a_single_match_that_alone_exceeds_the_char_budget(
+    tmp_path, monkeypatch
+):
+    """Real Flash Review finding on this PR: checking only whether
+    total_chars had ALREADY reached the budget let one oversized match
+    through in full regardless of size, pushing the real total arbitrarily
+    far past _AST_PATTERN_TOTAL_CHAR_BUDGET. A match whose own captures
+    alone exceed the budget must be dropped entirely, not appended and
+    then merely flagged."""
+    import aletheore.ast_pattern as ast_pattern_module
+
+    monkeypatch.setattr(ast_pattern_module, "_AST_PATTERN_TOTAL_CHAR_BUDGET", 20)
+    (tmp_path / "app.py").write_text(
+        "def small():\n    pass\n\n"
+        "def big():\n    " + "x = 1\n    " * 20 + "\n"
+    )
+
+    result = search_ast_pattern(tmp_path, "python", "(function_definition) @f")
+
+    total_chars = sum(
+        len(capture["text"])
+        for match in result["matches"]
+        for capture_list in match["captures"].values()
+        for capture in capture_list
+    )
+    assert total_chars <= 20
+    assert result["truncated"] is True
