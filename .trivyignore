@@ -31,14 +31,15 @@ CVE-2026-5241
 stripe-secret-token
 
 # github-app-token: same situation as stripe-secret-token above, added by
-# #527. KNOWN_VENDOR_EXAMPLE_VALUES also contains GitHub's own published
-# OpenAPI-spec example installation/user-to-server tokens
-# (ghs_16C7e42F292c6912E7710c838347Ae178B4a,
-# ghu_16C7e42F292c6912E7710c838347Ae178B4a) verbatim, for the same reason:
-# so the secrets scanner recognizes these exact values as documented
-# placeholders rather than flagging them as real leaked credentials (see
-# secrets.py's own comment on that block). The ghs_/ghu_ prefix is exactly
-# what Trivy's github-app-token rule matches on, so it flags the same
-# literal strings inside the built image - expected, not a leak: these are
-# GitHub's own documented example values, not real tokens for any account.
+# #527. KNOWN_VENDOR_EXAMPLE_VALUES also contains two of GitHub's own
+# published OpenAPI-spec example tokens verbatim (see secrets.py's own
+# comment on that block for the exact values and why they're there), for
+# the same reason: so the secrets scanner recognizes them as documented
+# placeholders rather than flagging them as real leaked credentials. Their
+# ghs_/ghu_ prefix is exactly what Trivy's github-app-token rule matches
+# on, so it flags the same literal strings inside the built image -
+# expected, not a leak: these are GitHub's own documented example values,
+# not real tokens for any account. (Not re-quoted here on purpose - this
+# file's own comment would otherwise trip Aletheore's own secrets check
+# the same way REPORT.md's prose quoting them did.)
 github-app-token
