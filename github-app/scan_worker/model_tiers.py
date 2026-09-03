@@ -155,7 +155,7 @@ def resolve_model(fallback_model: str) -> str:
 
 def writing_adapter_for(
     fallback_model: str,
-    on_usage: Callable[[int, int], None] | None = None,
+    on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
     allow_partial_report: bool = False,
     _prefer_luna: bool = True,
@@ -199,7 +199,7 @@ def writing_adapter_for(
 
 def writing_adapter_for_airview(
     fallback_model: str,
-    on_usage: Callable[[int, int], None] | None = None,
+    on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
 ) -> OpenAICompatibleAdapter:
     """Always DeepSeek for AIRview specifically - never Luna, regardless of
@@ -231,7 +231,7 @@ MANAGED_AUDIT_MODEL = "deepseek-v4-flash"
 
 
 def writing_adapter_for_managed_audit(
-    on_usage: Callable[[int, int], None] | None = None,
+    on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
     allow_partial_report: bool = False,
 ) -> OpenAICompatibleAdapter:
@@ -272,7 +272,7 @@ def model_for_plan(plan: str) -> str:
 
 def writing_adapter_for_plan(
     plan: str,
-    on_usage: Callable[[int, int], None] | None = None,
+    on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
     allow_partial_report: bool = False,
 ) -> OpenAICompatibleAdapter:
@@ -285,7 +285,7 @@ def writing_adapter_for_plan(
 
 
 def verification_adapter(
-    on_usage: Callable[[int, int], None] | None = None,
+    on_usage: Callable[[int, int, int], None] | None = None,
 ) -> OpenAICompatibleAdapter:
     """Always DeepSeek V4 Flash, regardless of whether OpenAI is configured -
     unlike writing_adapter_for, which prefers OpenAI when available and only
@@ -311,7 +311,7 @@ def verification_adapter(
 
 def writing_adapter_chain_for_free_tier(
     redis_conn,
-    on_usage: Callable[[int, int], None] | None = None,
+    on_usage: Callable[[int, int, int], None] | None = None,
 ) -> list[OpenAICompatibleAdapter]:
     """Build one OpenAICompatibleAdapter per free-tier provider whose env var
     is configured, in fallback priority order: Groq, Gemini, OpenAI free-tier
@@ -349,10 +349,12 @@ def writing_adapter_chain_for_free_tier(
         logger.info("free-tier: GEMINI_API_KEY not configured, skipping Gemini")
 
     if has_api_key("OPENAI_FREE_TIER_API_KEY", "OpenAI-FreeTier"):
-        def _on_openai_free_tier_usage(prompt_tokens: int, completion_tokens: int) -> None:
+        def _on_openai_free_tier_usage(
+            prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
+        ) -> None:
             _true_up_openai_free_tier_reservation(redis_conn, prompt_tokens + completion_tokens)
             if on_usage is not None:
-                on_usage(prompt_tokens, completion_tokens)
+                on_usage(prompt_tokens, completion_tokens, cached_tokens)
 
         # The daily cap is enforced via before_llm_call, not by deciding
         # here whether to include this adapter - see

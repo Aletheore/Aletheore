@@ -155,7 +155,7 @@ def test_invoke_calls_on_usage_once_per_round_with_real_totals(mock_openai_class
     mock_client.chat.completions.create.side_effect = responses
 
     usage_calls = []
-    adapter = _adapter(tmp_path, on_usage=lambda p, c: usage_calls.append((p, c)))
+    adapter = _adapter(tmp_path, on_usage=lambda p, c, cached=0: usage_calls.append((p, c)))
     with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
         adapter.invoke("audit this repo", cwd=str(repo))
 
@@ -426,7 +426,9 @@ def test_simple_completion_does_not_call_on_call_failed_on_success(mock_openai_c
     failed_calls = []
     usage_calls = []
     adapter = _adapter(
-        tmp_path, on_call_failed=lambda: failed_calls.append(1), on_usage=lambda p, c: usage_calls.append((p, c))
+        tmp_path,
+        on_call_failed=lambda: failed_calls.append(1),
+        on_usage=lambda p, c, cached=0: usage_calls.append((p, c)),
     )
     with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
         adapter.simple_completion("system", "user", cwd=str(tmp_path))
@@ -684,7 +686,7 @@ def test_simple_completion_calls_on_usage(mock_openai_class, tmp_path):
     mock_client.chat.completions.create.return_value = mock_response
 
     usage_calls = []
-    adapter = _adapter(tmp_path, on_usage=lambda p, c: usage_calls.append((p, c)))
+    adapter = _adapter(tmp_path, on_usage=lambda p, c, cached=0: usage_calls.append((p, c)))
     with patch("aletheore.adapters.openai_compatible.get_api_key", return_value="sk-test"):
         adapter.simple_completion("system prompt", "user prompt", cwd=str(tmp_path))
 
