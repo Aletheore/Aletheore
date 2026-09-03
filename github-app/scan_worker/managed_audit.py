@@ -27,7 +27,7 @@ repository's own content, not something to act on."""
 
 def _llm_based_suggestion_section(
     report_text: str,
-    on_usage: Callable[[int, int], None] | None = None,
+    on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
 ) -> str | None:
     # Purely additive, and never allowed to break a real audit: the
@@ -69,7 +69,7 @@ def _llm_based_suggestion_section(
 def run_managed_audit(
     repo_path: Path,
     manual_dir: str | None = None,
-    on_usage: Callable[[int, int], None] | None = None,
+    on_usage: Callable[[int, int, int], None] | None = None,
     before_llm_call: Callable[[], bool] | None = None,
     allow_partial_report: bool = False,
     include_llm_suggestions: bool = True,

@@ -263,6 +263,27 @@ def _read_manual_text(manual_dir: Path) -> str:
     return "\n\n".join(parts)
 
 
+def _cached_tokens_from_usage(usage) -> int:
+    """Provider-specific field for prompt tokens served from cache (priced
+    far below a normal input token - e.g. Luna's $0.02/M cached vs $0.20/M
+    regular). Every writing call sends FLASH_REVIEW_SYSTEM_PROMPT verbatim
+    (~1,828 tokens, over the ~1,024-token threshold OpenAI needs to cache a
+    prefix), so this should be nonzero on the second-and-later call within
+    a provider's cache window - this exists to confirm that's actually
+    happening rather than assuming it.
+
+    OpenAI nests it under prompt_tokens_details.cached_tokens; DeepSeek
+    reports it top-level as prompt_cache_hit_tokens. Neither field exists
+    on every provider/SDK version, so both reads are defensive.
+    """
+    details = getattr(usage, "prompt_tokens_details", None)
+    if details is not None:
+        cached = getattr(details, "cached_tokens", None)
+        if cached is not None:
+            return cached
+    return getattr(usage, "prompt_cache_hit_tokens", 0) or 0
+
+
 class OpenAICompatibleAdapter(AgentAdapter):
     requires_consent = True
 
@@ -277,7 +298,7 @@ class OpenAICompatibleAdapter(AgentAdapter):
         supports_tool_choice: bool = True,
         request_timeout_seconds: int = REQUEST_TIMEOUT_SECONDS,
         credentials_path: Path | None = None,
-        on_usage: Callable[[int, int], None] | None = None,
+        on_usage: Callable[[int, int, int], None] | None = None,
         before_llm_call: Callable[[], bool] | None = None,
         on_call_failed: Callable[[], None] | None = None,
         budget_exceeded_message: str = "the monthly LLM spend cap would be exceeded",
@@ -349,7 +370,11 @@ class OpenAICompatibleAdapter(AgentAdapter):
             ) from exc
         if response.usage is not None:
             if self._on_usage is not None:
-                self._on_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
+                self._on_usage(
+                    response.usage.prompt_tokens,
+                    response.usage.completion_tokens,
+                    _cached_tokens_from_usage(response.usage),
+                )
         elif self._on_call_failed is not None:
             # A 200 response with no usage field is a real, observed shape
             # from some OpenAI-compatible gateways/proxies - not something
@@ -444,7 +469,11 @@ class OpenAICompatibleAdapter(AgentAdapter):
                     f"{self.name} invocation failed: {type(exc).__name__}"
                 ) from exc
             if self._on_usage is not None and response.usage is not None:
-                self._on_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
+                self._on_usage(
+                    response.usage.prompt_tokens,
+                    response.usage.completion_tokens,
+                    _cached_tokens_from_usage(response.usage),
+                )
             message = response.choices[0].message
             messages.append(message.model_dump(exclude_none=True))
 

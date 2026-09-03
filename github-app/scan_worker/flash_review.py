@@ -1094,7 +1094,7 @@ def _verification_user_prompt(diff_text: str, finding: dict) -> str:
 def _verify_findings_with_second_model(
     findings: list[dict],
     diff_text: str,
-    on_usage: Callable[[int, int], None] | None = None,
+    on_usage: Callable[[int, int, int], None] | None = None,
 ) -> list[dict]:
     """Independently re-checks each finding against the diff with a second
     model (deepseek-v4-flash) before it's ever shown to a user - the same
@@ -1184,7 +1184,7 @@ def review_diff(
     diff_text: str,
     file_context: str = "",
     code_evidence_context: str = "",
-    on_usage: Callable[[int, int], None] | None = None,
+    on_usage: Callable[[int, int, int], None] | None = None,
     *,
     referenced_symbol_context: str = "",
     pr_context: str = "",
@@ -1198,7 +1198,7 @@ def review_diff(
     adapter_chain: list | None = None,
     on_free_tier_exhausted: Callable[[list[tuple[str, Exception]]], None] | None = None,
     verify_with_second_model: bool = False,
-    on_verification_usage: Callable[[int, int], None] | None = None,
+    on_verification_usage: Callable[[int, int, int], None] | None = None,
 ) -> list[dict]:
     if not diff_text.strip():
         return []
