@@ -39,9 +39,29 @@ for name in REPOS:
     vuln_result = check_vulnerabilities(repo_path, cache_path=cache_path)
     t2 = time.time()
 
+    # A CodeQL "clear-text logging of sensitive information" alert on this
+    # script pointed here - find_secrets()'s finding dicts never actually
+    # carry a raw secret value (match_preview is already a salted sha256
+    # hash, see secrets.py's _redact()), but this rebuilds each finding
+    # explicitly by field rather than writing the dict straight through, so
+    # that's true by construction here too, not just true two modules away.
+    # If any of these 20 real repos ever contains a genuine accidentally-
+    # committed credential (none has so far - see ../REPORT.md), this is
+    # what stops it from ever reaching results.json or CI logs unredacted.
+    safe_secrets_findings = [
+        {
+            "path": f["path"],
+            "line": f["line"],
+            "pattern": f["pattern"],
+            "match_preview": f["match_preview"],
+            "likely_placeholder": f["likely_placeholder"],
+        }
+        for f in secrets_result["findings"]
+    ]
+
     results[name] = {
         "scanned_files": secrets_result["scanned_files"],
-        "secrets_findings": secrets_result["findings"],
+        "secrets_findings": safe_secrets_findings,
         "secrets_seconds": round(t1 - t0, 2),
         "vuln_checked": vuln_result["checked"],
         "vuln_reason": vuln_result["reason"],

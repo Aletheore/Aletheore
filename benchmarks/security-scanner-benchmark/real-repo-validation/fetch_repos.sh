@@ -35,12 +35,28 @@ declare -a repos=(
   "react|facebook/react|d9f4e76bd6582ef86048fefcedda9d5b041ae62f"
 )
 
+# Flash Review finding on this PR: a directory existing was previously
+# sufficient to skip re-fetching it, with no check that its content
+# actually matched the pinned SHA above - a stale directory from a
+# partial prior run, or a manual test, would silently get scanned and
+# reported on as if it were the declared, pinned commit. Each successful
+# extraction now writes a marker recording exactly which SHA it fetched;
+# skip only fires when that marker matches the SHA this run asked for.
 for entry in "${repos[@]}"; do
   IFS='|' read -r name org_repo sha <<< "$entry"
-  if [ -d "$name" ]; then echo "skip $name (exists)"; continue; fi
+  marker="$name/.fetched_sha"
+  if [ -f "$marker" ] && [ "$(cat "$marker")" = "$sha" ]; then
+    echo "skip $name (already at $sha)"
+    continue
+  fi
+  if [ -d "$name" ]; then
+    echo "$name exists but not at $sha - re-fetching"
+    rm -rf "$name"
+  fi
   echo "fetching $name ($org_repo @ $sha)"
   curl -sL --max-time 60 "https://github.com/$org_repo/archive/$sha.tar.gz" -o "$name.tar.gz"
   mkdir -p "$name"
   tar -xzf "$name.tar.gz" -C "$name" --strip-components=1
   rm -f "$name.tar.gz"
+  echo "$sha" > "$marker"
 done

@@ -2,11 +2,37 @@
   "layer_markers": { "aletheore": 0, "github-app": 1 },
   "cluster_resolution": 1.0,
   "dead_code_entry_points": [],
-  "accepted_secrets": [],
+  "accepted_secrets": [
+    {
+      "path": "src/aletheore/secrets.py",
+      "pattern": "stripe_key",
+      "match_preview": "sha256:5ab786092fe9",
+      "note": "Stripe's own published docs example key, in KNOWN_VENDOR_EXAMPLE_VALUES - the scanner's own pattern-definition data unavoidably matches itself."
+    },
+    {
+      "path": "src/aletheore/secrets.py",
+      "pattern": "github_token",
+      "match_preview": "sha256:a2d610090e02",
+      "note": "GitHub's own published OpenAPI-spec example token, in KNOWN_VENDOR_EXAMPLE_VALUES - same self-reference as the Stripe entry above."
+    },
+    {
+      "path": "src/aletheore/secrets.py",
+      "pattern": "github_token",
+      "match_preview": "sha256:683989d59e5a",
+      "note": "GitHub's own published OpenAPI-spec example token, in KNOWN_VENDOR_EXAMPLE_VALUES - same self-reference as the Stripe entry above."
+    },
+    {
+      "path": "src/aletheore/secrets.py",
+      "pattern": "private_key_header",
+      "match_preview": "sha256:40f75f63f07b",
+      "note": "The PEM header text appears in a docstring/comment example, not an actual key - the pattern's own literal regex source unavoidably matches itself."
+    }
+  ],
   "ignored_paths": [
     "src/tests",
     "github-app/tests",
-    "docs/superpowers/plans"
+    "docs/superpowers/plans",
+    "benchmarks/security-scanner-benchmark/secrets/cases"
   ],
   "disabled_checks": [],
   "severity_threshold": null

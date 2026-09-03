@@ -13,9 +13,35 @@ from pathlib import Path
 
 import yaml
 
-from aletheore.vulnerabilities import check_vulnerabilities
+from aletheore.vulnerabilities import DEFAULT_TIMEOUT_SECONDS, _fetch_vuln_detail, check_vulnerabilities
 
 CASES_DIR = Path(__file__).parent.parent / "cases"
+
+_OSV_ALIAS_CACHE: dict[str, list[str]] = {}
+
+
+def _osv_aliases(advisory_id: str) -> list[str]:
+    # Flash Review finding on this PR: the original matcher only checked
+    # package name + installed version, ignoring ground_truth's cve_id
+    # entirely - for a package/version with multiple advisories (real for
+    # both cve_id cases here: log4j-core 2.14.1 has 7 distinct OSV entries,
+    # lodash 4.17.15 has 5), ANY of them would score a true positive, not
+    # necessarily the specific CVE the case is meant to test for.
+    # check_vulnerabilities()'s own finding dict doesn't carry `aliases`
+    # (only advisory_id, summary, severity), and OSV's advisory_id for a
+    # GitHub-sourced entry is its own GHSA id, not the CVE - confirmed
+    # directly: log4j-core 2.14.1's Log4Shell entry is GHSA-jfh8-c2jp-5v3q
+    # with CVE-2021-44228 only present as an alias. Reuses
+    # aletheore.vulnerabilities' own _fetch_vuln_detail (same OSV vuln-detail
+    # endpoint check_vulnerabilities itself calls) rather than a second,
+    # separately-written urllib call - that would have had to rediscover the
+    # certifi CA-bundle fix _fetch_vuln_detail's own module docstring already
+    # explains was needed for this exact call on macOS. Cached per
+    # advisory_id since a case can re-query the same id.
+    if advisory_id not in _OSV_ALIAS_CACHE:
+        detail = _fetch_vuln_detail(advisory_id, DEFAULT_TIMEOUT_SECONDS)
+        _OSV_ALIAS_CACHE[advisory_id] = [detail.get("id", "")] + list(detail.get("aliases", []))
+    return _OSV_ALIAS_CACHE[advisory_id]
 
 
 def _load_ground_truth(case_dir: Path) -> dict:
@@ -33,14 +59,20 @@ def _score_case(case_dir: Path, cache_path: Path) -> dict:
         verdict["detail"] = result["reason"]
         return verdict
 
-    match = next(
-        (
-            f
-            for f in result["findings"]
-            if f["package"] == truth["package"] and f["installed_version"] == truth["version"]
-        ),
-        None,
-    )
+    candidates = [
+        f for f in result["findings"] if f["package"] == truth["package"] and f["installed_version"] == truth["version"]
+    ]
+
+    cve_id = truth.get("cve_id")
+    if cve_id:
+        # A specific CVE is under test - at least one candidate advisory
+        # must actually alias it, not just share the package/version.
+        match = next((f for f in candidates if cve_id in _osv_aliases(f["advisory_id"])), None)
+    else:
+        # No specific CVE named (both current cve_id: null cases document
+        # why: several advisories apply, or the advisory shape varies) -
+        # package/version presence is the documented, intentional check.
+        match = candidates[0] if candidates else None
 
     if truth["category"] == "true_positive":
         verdict["outcome"] = "TP" if match else "FN"
