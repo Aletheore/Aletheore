@@ -7,15 +7,25 @@ license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Arihant Kaul", email = "arihantkaul@outlook.com" }]
 # Upper-bounded at 3.14: aletheore_ast_pattern's use of tree_sitter's
-# Query/QueryCursor segfaults reliably on Python 3.14 (reproduced directly -
-# the exact same code against the exact same repo runs clean on 3.12) once
-# enough real files/matches accumulate in one process for the cyclic GC to
-# touch tree-sitter's Node/Tree/QueryCursor object graph. Not a bug in this
+# Query/QueryCursor segfaults reliably on Python 3.14 once enough real
+# files/matches accumulate in one process for the cyclic GC to touch
+# tree-sitter's Node/Tree/QueryCursor object graph. Not a bug in this
 # package's own code - `aletheore scan` itself, which uses tree_sitter's
-# Parser/Tree/Node but never Query/QueryCursor, runs fine on 3.14. CI only
-# tests 3.11/3.12 (see .github/workflows/tests.yml), so this bound is the
-# honest floor until either tree-sitter ships a fix or the crash is
-# isolated some other way (e.g. running the query in a subprocess).
+# Parser/Tree/Node but never Query/QueryCursor, runs fine on 3.14.
+#
+# This comment used to claim "the exact same code against the exact same
+# repo runs clean on 3.12" - true only at the small scale it was checked
+# at (this project's own ~116 files). Confirmed false at real scale
+# (2026-09-04): a low-match-density query against Django's real ~2,930
+# file Python tree segfaults reliably on 3.12 too - see
+# src/aletheore/ast_pattern.py's module docstring for the full
+# characterization. CI only tests 3.11/3.12 (see .github/workflows/
+# tests.yml), so the crash isn't actually fully excluded by this bound
+# for a large-enough real repo - it's the honest floor for the *known,
+# already-reproduced* case (3.14 with any repo size), not a guarantee
+# for every repo on 3.11/3.12 - until either tree-sitter ships a fix or
+# the crash is isolated some other way (e.g. running the query in a
+# subprocess - a real design trade-off, not attempted yet).
 requires-python = ">=3.11,<3.14"
 keywords = ["code-review", "static-analysis", "secrets-detection", "dependency-vulnerabilities", "mcp-server"]
 classifiers = [

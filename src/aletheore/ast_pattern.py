@@ -11,13 +11,43 @@ Only user of tree_sitter's Query/QueryCursor API in this codebase - every
 other module uses Parser/Tree/Node directly. That distinction matters: this
 module's real-repo use of Query/QueryCursor segfaults reliably on Python
 3.14 once enough files/matches accumulate for the cyclic GC to touch the
-resulting Node/Tree/QueryCursor object graph (reproduced directly, same
-code runs clean on 3.12 - see pyproject.toml's `requires-python` upper
-bound). Not fixed by explicit `del`, `gc.disable()`, or forced
-`gc.collect()` per iteration - tried all three, none prevented it. If the
-`<3.14` bound is ever loosened, re-verify this module specifically against
-a real, many-file repo before trusting it, not just the unit tests (which
-use single-digit-file fixtures too small to trigger it).
+resulting Node/Tree/QueryCursor object graph (see pyproject.toml's
+`requires-python` upper bound). Not fixed by explicit `del`,
+`gc.disable()`, or forced `gc.collect()` per iteration - tried all three,
+none prevented it.
+
+CORRECTION (2026-09-04, dead-code/ast-pattern overnight benchmark pass):
+this module's own prior claim that "the exact same code runs clean on
+3.12" is **false for real repos at real scale** - it was only ever
+verified against this project's own ~116 source files. Confirmed
+directly on Python 3.12.10, tree-sitter 0.26.0: a low-match-density
+query (`(try_statement) @try`, a shape that doesn't hit
+`_AST_PATTERN_MATCH_CAP`/`_AST_PATTERN_TOTAL_CHAR_BUDGET` early and so
+lets many files fully process) against Django's real ~2,930-file Python
+tree segfaults reliably, twice in a row, exit code 139. A
+higher-match-density query against the same repo
+(`(function_definition) @fn`, which hits the char budget after ~126
+matches and stops early) completes cleanly - and two other real, large
+repos (react/JS, client-go/Go) both completed cleanly too, because their
+test queries happened to hit `_AST_PATTERN_MATCH_CAP` (200) within the
+first few files. The crash correlates with *files fully processed
+before any cap triggers*, not language, matches found, or Python version
+alone - a query that happens to be selective enough to run long against
+a big enough repo can hit this on 3.11/3.12 too, inside the officially
+supported range, not only on the already-excluded 3.14.
+
+Not re-fixed here: the two most obvious untried mitigations both carry
+real design trade-offs (subprocess isolation adds latency to every call
+to protect the rare large/low-density case; a file-count-based
+pre-emptive truncation needs a threshold chosen without a clean way to
+predict it) that deserve human sign-off given two prior fix attempts
+already failed - flagged for follow-up, not shipped speculatively. If a
+future fix attempt narrows the threshold further or changes the
+mitigation strategy, re-verify against a real multi-thousand-file repo
+specifically (Django or similar), not just the unit tests (which use
+single-digit-file fixtures far too small to trigger this) and not just
+this project's own ~116 files (too small too - that's exactly the gap
+this correction found).
 """
 
 from pathlib import Path
