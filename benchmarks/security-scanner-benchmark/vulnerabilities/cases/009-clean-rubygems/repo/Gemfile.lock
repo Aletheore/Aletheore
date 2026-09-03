@@ -1,0 +1,13 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    did_you_mean (1.6.3)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  did_you_mean
+
+BUNDLED WITH
+   2.4.13

@@ -88,17 +88,17 @@ python3 run_real_repos.py
 
 ## Known limitations (pilot)
 
-1. **Small pilot, not a full corpus.** All 7 secret patterns now have at
-   least one pilot case (`private_key_header` and three
-   `generic_credential_assignment`/`private_key_header` false-positive
-   shapes were added after the real-repo run found real gaps in them);
-   vulnerabilities pilot cases still cover only 4 of the 10 ecosystems
-   `vulnerabilities.py` parses (the other 6 - crates.io, RubyGems,
-   Packagist, NuGet, Gradle, Swift - are proven correct via the real-repo
-   run instead, which doesn't substitute for a hand-verified pilot case
-   per ecosystem). The secrets pilot has 5 true-negative cases now (up
-   from 1); vulnerabilities still has exactly 1 - its false-positive-rate
-   number is not yet statistically meaningful on its own.
+1. **Small pilot, not a full corpus.** All 7 secret patterns and all 10
+   vulnerability ecosystems now have at least one pilot case
+   (`private_key_header` and three `generic_credential_assignment`/
+   `private_key_header` false-positive shapes were added after the
+   real-repo run found real gaps in them; crates.io/RubyGems/Packagist/
+   NuGet/Gradle/Swift were added after being proven correct via the
+   real-repo run first, then given a dedicated hand-verified-CVE case
+   each). The secrets pilot has 5 true-negative cases now (up from 1);
+   vulnerabilities has 7 (up from 1, one per ecosystem) - still enough to
+   catch a broken parser, not enough for a statistically meaningful
+   per-ecosystem false-positive-rate claim on its own.
 2. **The vulnerabilities benchmark's ground truth *is* OSV.dev**, the
    same source `check_vulnerabilities` queries live. This isn't an
    independent oracle the way the secrets corpus's hand-authored ground
