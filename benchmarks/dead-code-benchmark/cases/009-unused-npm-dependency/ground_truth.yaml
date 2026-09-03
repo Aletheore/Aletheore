@@ -1,0 +1,9 @@
+case_id: 009-unused-npm-dependency
+scanner: dead_code
+category: true_positive
+finding_type: unused_dependency
+expected_package: lodash
+expected_ecosystem: npm
+description: >
+  package.json declares "lodash" but no file in the repo imports it.
+  Should appear in unused_dependencies.

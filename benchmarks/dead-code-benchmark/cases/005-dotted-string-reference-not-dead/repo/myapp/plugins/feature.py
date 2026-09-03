@@ -1,0 +1,2 @@
+class FeatureConfig:
+    name = "feature"

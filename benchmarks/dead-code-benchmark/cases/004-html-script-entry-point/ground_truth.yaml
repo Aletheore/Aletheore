@@ -1,0 +1,11 @@
+case_id: 004-html-script-entry-point
+scanner: dead_code
+category: true_negative
+finding_type: unreachable_module
+expected_path: app.js
+description: >
+  A plain <script src="app.js"> tag with no bundler/ES-module import
+  graph - invisible to JS import resolution, the real gap this repo's
+  own code comment documents finding on its own website/. Must be
+  detected as an entry point via _html_script_entry_points, not flagged
+  unreachable.
