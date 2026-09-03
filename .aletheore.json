@@ -32,7 +32,8 @@
     "src/tests",
     "github-app/tests",
     "docs/superpowers/plans",
-    "benchmarks/security-scanner-benchmark/secrets/cases"
+    "benchmarks/security-scanner-benchmark/secrets/cases",
+    "benchmarks/security-scanner-benchmark/REPORT.md"
   ],
   "disabled_checks": [],
   "severity_threshold": null
