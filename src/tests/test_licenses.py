@@ -65,6 +65,30 @@ def test_categorize_license_unknown_for_none_or_unrecognized():
     assert categorize_license("Some Custom Proprietary License") == "unknown"
 
 
+def test_categorize_license_recognizes_bsd_license_body_text_with_no_bsd_keyword():
+    # Found via a real-repo stress test (flask, gorilla/mux): neither the
+    # 2-clause nor 3-clause BSD license BODY text contains the literal word
+    # "bsd" anywhere - it's a purely descriptive redistribution-terms text
+    # that never names itself. A real BSD LICENSE file with no machine-
+    # readable metadata (no pyproject.toml/package.json license field)
+    # categorized "unknown" for this reason before this fix.
+    body = (
+        "Copyright (c) 2023 The Gorilla Authors. All rights reserved.\n\n"
+        "Redistribution and use in source and binary forms, with or without\n"
+        "modification, are permitted provided that the following conditions are\n"
+        "met:\n\n"
+        "THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS...\n"
+    )
+    assert categorize_license(body) == "permissive"
+
+
+def test_categorize_license_recognizes_cddl():
+    # Found via a real-repo stress test (gson's own javax.annotation:jsr250-api
+    # dependency): CDDL is a real, standard weak-copyleft license family
+    # (same SPDX/OSI bucket as MPL/EPL), not an unrecognizable one.
+    assert categorize_license("COMMON DEVELOPMENT AND DISTRIBUTION LICENSE (CDDL) Version 1.0") == "copyleft-weak"
+
+
 def test_detect_repo_license_from_pyproject_toml_string_field(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -163,6 +187,25 @@ def test_detect_repo_license_from_real_apache_license_file_text(tmp_path):
 
     assert result["category"] == "permissive"
     assert "LICENSE" in result["detected_from"]
+
+
+def test_detect_repo_license_from_license_rst_file(tmp_path):
+    # Found via a real-repo stress test: Flask's own real repo uses exactly
+    # this filename (a common reStructuredText-docs-style Python project
+    # convention) and was invisible to the checked filename list entirely.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "LICENSE.rst").write_text(
+        "Copyright 2010 Pallets\n\n"
+        "Redistribution and use in source and binary forms, with or without\n"
+        "modification, are permitted provided that the following conditions are\n"
+        "met:\n"
+    )
+
+    result = detect_repo_license(repo)
+
+    assert result["category"] == "permissive"
+    assert result["detected_from"] == "LICENSE.rst text match"
 
 
 def test_detect_repo_license_from_mit_license_file_text(tmp_path):
@@ -601,6 +644,60 @@ def test_fetch_maven_license_parses_pom_xml():
         result = _fetch_maven_license("org.springframework:spring-core", "6.1.14", timeout=10)
 
     assert result == "Apache License, Version 2.0"
+
+
+def test_fetch_maven_license_falls_back_to_the_parent_pom(tmp_path):
+    # Found via a real-repo stress test (gson's own pom.xml, which pins
+    # Guava): a very common real Maven convention puts the <licenses>
+    # block on a shared parent POM, not the artifact's own - Guava's real
+    # pom.xml has no <licenses> element at all, only a <parent> reference;
+    # its parent POM is where "Apache License, Version 2.0" actually
+    # lives. A single-level fetch (the pre-fix behavior) always returned
+    # None for a real artifact shaped exactly like this.
+    from aletheore.licenses import _fetch_maven_license
+
+    artifact_pom = (
+        b'<project xmlns="http://maven.apache.org/POM/4.0.0">'
+        b"<parent><groupId>com.example</groupId><artifactId>example-parent</artifactId>"
+        b"<version>1.0.0</version></parent>"
+        b"<artifactId>example-lib</artifactId>"
+        b"</project>"
+    )
+    parent_pom = (
+        b'<project xmlns="http://maven.apache.org/POM/4.0.0">'
+        b"<licenses><license><name>Apache License, Version 2.0</name></license></licenses>"
+        b"</project>"
+    )
+
+    with patch(
+        "aletheore.licenses.urllib.request.urlopen",
+        side_effect=[_mock_bytes_response(artifact_pom), _mock_bytes_response(parent_pom)],
+    ):
+        result = _fetch_maven_license("com.example:example-lib", "1.0.0", timeout=10)
+
+    assert result == "Apache License, Version 2.0"
+
+
+def test_fetch_maven_license_gives_up_past_the_max_parent_hops(tmp_path):
+    # Guard against a real network-loop risk: a parent chain that never
+    # terminates (a real cycle, or one deeper than any known real Maven
+    # project) must not turn one dependency's license lookup into an
+    # unbounded fetch loop.
+    from aletheore.licenses import _fetch_maven_license
+
+    def make_pom(next_version: str) -> bytes:
+        return (
+            b'<project xmlns="http://maven.apache.org/POM/4.0.0">'
+            b"<parent><groupId>com.example</groupId><artifactId>chain</artifactId>"
+            b"<version>" + next_version.encode() + b"</version></parent>"
+            b"</project>"
+        )
+
+    responses = [_mock_bytes_response(make_pom(f"{i}.0.0")) for i in range(1, 6)]
+    with patch("aletheore.licenses.urllib.request.urlopen", side_effect=responses):
+        result = _fetch_maven_license("com.example:chain", "0.0.0", timeout=10)
+
+    assert result is None
 
 
 def test_check_dependency_licenses_reports_a_maven_dependency(tmp_path):
