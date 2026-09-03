@@ -1,0 +1,13 @@
+case_id: 016-swift-nio-crlf-injection-swift
+scanner: vulnerabilities
+category: true_positive
+ecosystem: SwiftURL
+package: github.com/apple/swift-nio
+version: "2.29.0"
+cve_id: CVE-2022-3215
+description: >
+  Real, publicly documented HTTP response splitting via CRLF injection
+  in SwiftNIO (GHSA-7fj7-39wj-c64f), confirmed present against live
+  OSV.dev data for this exact package/version at corpus-build time
+  (2026-09-03). First Swift-ecosystem pilot case (Package.resolved,
+  schema v2).

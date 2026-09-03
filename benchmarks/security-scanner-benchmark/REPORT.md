@@ -35,27 +35,49 @@ report.
 
 | case_id | ecosystem | category | outcome |
 |---|---|---|---|
-| 001-log4shell-maven | Maven | true_positive | TP |
+| 001-log4shell-maven | Maven (pom.xml) | true_positive | TP |
 | 002-flask-pypi | PyPI | true_positive | TP |
 | 003-jwt-go-algorithm-confusion | Go | true_positive | TP |
 | 004-lodash-redos-npm | npm | true_positive | TP |
 | 005-six-clean-pypi | PyPI | true_negative | TN |
+| 006-time-crate-segfault-cratesio | crates.io | true_positive | TP |
+| 007-clean-cratesio | crates.io | true_negative | TN |
+| 008-rack-dos-rubygems | RubyGems | true_positive | TP |
+| 009-clean-rubygems | RubyGems | true_negative | TN |
+| 010-guzzle-psr7-header-injection-packagist | Packagist | true_positive | TP |
+| 011-clean-packagist | Packagist | true_negative | TN |
+| 012-newtonsoft-json-nuget | NuGet | true_positive | TP |
+| 013-clean-nuget | NuGet | true_negative | TN |
+| 014-jackson-databind-xxe-gradle | Maven (build.gradle) | true_positive | TP |
+| 015-clean-gradle | Maven (build.gradle) | true_negative | TN |
+| 016-swift-nio-crlf-injection-swift | SwiftURL | true_positive | TP |
+| 017-clean-swift | SwiftURL | true_negative | TN |
 
-**vulnerabilities: recall 4/4, false positives 0/1.**
+**vulnerabilities: recall 10/10, false positives 0/7 — all 10 ecosystems
+`vulnerabilities.py` parses now have a pilot case.** Cases 006-017 close
+out the gap this report's original "Suggested next steps" flagged
+(crates.io, RubyGems, Packagist, NuGet, Gradle, Swift never had a
+hand-verified CVE case, only real-repo-run coverage). Every true-positive
+case's CVE was independently confirmed against live OSV.dev at
+corpus-build time (2026-09-03), same rigor as the original 4; case 014
+deliberately uses Gradle's Groovy-DSL manifest format (not pom.xml) to
+get real parser coverage distinct from case 001 despite sharing the same
+underlying OSV "Maven" ecosystem. No gaps found — every ecosystem's
+manifest parser produced the correct recall/false-positive result on the
+first pass.
 
 Both scanners run for real here, not mocked: `find_secrets()` scans
 actual materialized fixture files, `check_vulnerabilities()` makes real,
 live calls to OSV.dev — the same functions and API production uses.
 
-**Caveats**: N is still small — enough to catch a broken pattern, not
-enough for a statistically meaningful claim on its own (false-positive
-rate in particular rests on only 5 secrets / 1 vulnerabilities
-true-negative case). Format/ecosystem coverage is partial (all 7 secret
-patterns now have a case; 4 of 10 vulnerability ecosystems). The vulnerabilities arm's
-ground truth is OSV.dev itself, the same source the scanner queries live
-— a clean pass mainly confirms manifest-parsing/OSV-integration
-correctness, not independent real-world accuracy. See `README.md`'s
-"Known limitations" for the full list.
+**Caveats**: N is still small per ecosystem (1 true-positive + 1
+true-negative case each, except PyPI/Maven with more) — enough to catch
+a broken parser, not enough for a statistically meaningful per-ecosystem
+claim on its own. The vulnerabilities arm's ground truth is OSV.dev
+itself, the same source the scanner queries live — a clean pass mainly
+confirms manifest-parsing/OSV-integration correctness, not independent
+real-world accuracy. See `README.md`'s "Known limitations" for the full
+list.
 
 ## Real-repo validation
 
@@ -267,10 +289,9 @@ already-flagged-correctly cases, not private leaks.)
 
 ## Suggested next steps (not started)
 
-- Expand vulnerabilities pilot corpus: remaining ecosystems not yet
-  exercised at the pilot-case level (crates.io/RubyGems/Packagist/NuGet/
-  Gradle/Swift all now proven correct via the real-repo run, but have no
-  dedicated pilot case with a hand-verified CVE the way Maven/PyPI/Go/npm do).
+- ~~Expand vulnerabilities pilot corpus: remaining ecosystems not yet
+  exercised at the pilot-case level~~ — **done**, see cases 006-017 above
+  (all 10 ecosystems, 10/10 recall, 0/7 false positives, zero gaps found).
 - Expand the real-repo sample further (more repos per ecosystem) for a
   larger-denominator FP-rate number - 21,430 files is much stronger than
   the original 2,325, but still a fixed, non-random sample.

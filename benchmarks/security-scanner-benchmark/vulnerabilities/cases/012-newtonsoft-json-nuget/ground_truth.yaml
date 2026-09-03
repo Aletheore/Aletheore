@@ -1,0 +1,13 @@
+case_id: 012-newtonsoft-json-nuget
+scanner: vulnerabilities
+category: true_positive
+ecosystem: NuGet
+package: Newtonsoft.Json
+version: "12.0.1"
+cve_id: CVE-2024-21907
+description: >
+  Real, publicly documented improper handling of exceptional conditions
+  in Newtonsoft.Json (GHSA-5crp-9r3c-p9vr), confirmed present against
+  live OSV.dev data for this exact package/version at corpus-build time
+  (2026-09-03). First NuGet-ecosystem pilot case (direct .csproj
+  PackageReference, not central package management or packages.lock.json).

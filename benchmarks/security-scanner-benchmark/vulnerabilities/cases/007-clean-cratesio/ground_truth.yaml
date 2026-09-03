@@ -1,0 +1,11 @@
+case_id: 007-clean-cratesio
+scanner: vulnerabilities
+category: true_negative
+ecosystem: crates.io
+package: itoa
+version: "1.0.10"
+cve_id: null
+description: >
+  Confirmed zero OSV.dev advisories for this exact package/version at
+  corpus-build time (2026-09-03). Measures false-positive rate for the
+  crates.io ecosystem specifically.
