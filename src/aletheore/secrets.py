@@ -52,7 +52,9 @@ PLACEHOLDER_PATH_MARKERS = ("example", "test", "fixture", "mock")
 # spelled out literally here - this file's own aws_access_key_id pattern
 # below would match it, and this path doesn't carry a PLACEHOLDER_PATH_MARKERS
 # term, so it wouldn't get the placeholder benefit of the doubt.
-PLACEHOLDER_VALUE_MARKERS = ("example", "xxxx", "changeme", "dummy", "placeholder", "sample", "fake", "yourkey")
+PLACEHOLDER_VALUE_MARKERS = (
+    "example", "xxxx", "changeme", "dummy", "placeholder", "sample", "fake", "yourkey", "default",
+)
 
 # Exact, publicly documented example/test values a vendor ships in its own
 # docs, common enough in real repos (copy-pasted into READMEs, tutorials,
@@ -64,6 +66,15 @@ PLACEHOLDER_VALUE_MARKERS = ("example", "xxxx", "changeme", "dummy", "placeholde
 KNOWN_VENDOR_EXAMPLE_VALUES = frozenset(
     {
         "sk_test_4eC39HqLyjWDarjtT1zdp7dc",  # Stripe's own API docs example key
+        # GitHub's own official OpenAPI spec (github/rest-api-description,
+        # commonly vendored verbatim into other repos - confirmed present
+        # this way in a real, unrelated open-source repo during this
+        # benchmark's real-repo validation run) uses these exact fixed
+        # values across its documented example App/installation JSON.
+        "1726be1638095a19edd134c77bde3aa2ece1e5d8",  # example client_secret
+        "e340154128314309424b7c8e90325147d99fdafa",  # example webhook_secret
+        "ghs_16C7e42F292c6912E7710c838347Ae178B4a",  # example installation token
+        "ghu_16C7e42F292c6912E7710c838347Ae178B4a",  # example user-to-server token
     }
 )
 
@@ -201,7 +212,91 @@ def _value_looks_synthetically_repeated(value: str) -> bool:
     return (compressed_length / len(value)) < _SYNTHETIC_REPETITION_RATIO_THRESHOLD
 
 
-def _is_likely_placeholder(rel_path: str, value: str) -> bool:
+# A run of 3+ literal dots is how documentation conventionally marks
+# elided/truncated content (e.g. "99ae8af...snip...ec0f262ac" - found this
+# way in a real repo's README during this benchmark's real-repo validation
+# run). No real credential format (base64, hex, JWT segments joined by
+# single dots) produces this substring, so it's an unambiguous signal
+# regardless of path, the same way a marker word is.
+_TRUNCATION_MARKER_RE = re.compile(r"\.\.\.")
+
+
+def _value_looks_truncated(value: str) -> bool:
+    return bool(_TRUNCATION_MARKER_RE.search(value))
+
+
+# Matches a bare dotted identifier/property-access chain (config.SECRET_KEY,
+# TokenRequest.ClientSecret, settings.SECRET_KEY) rather than a literal
+# value. generic_credential_assignment's value character class includes "."
+# specifically to support real dotted-key assignment shapes (self.PASSWORD=,
+# cfg.API_KEY=), but that same allowance means `secret = obj.Attribute` -
+# ordinary variable/property-reference code, not a hardcoded credential -
+# matches too. Confirmed as a real, repeated false positive across three
+# independent real codebases during this benchmark's real-repo validation
+# run: RestSharp's OAuth2 authenticators (C#, `client_secret = TokenRequest.ClientSecret`),
+# client-go's kubeconfig merging (Go, `Password = configAuthInfo.Password`),
+# and Django's own salted_hmac() (Python, `secret = settings.SECRET_KEY`).
+_IDENTIFIER_REFERENCE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+")
+
+# Real identifier/property names run short (the longest segment across the
+# three real cases above is "promptedCredentials" at 19 chars); a real
+# dotted credential value's segment can run much longer (Google AI Studio's
+# newer key format, e.g. "AQ.NotARealKey0123456789ABCDEFGHIJKLMNOPqrstuv",
+# has a 43-char second segment) - gating on segment length keeps this check
+# from swallowing that real, already-regression-tested format
+# (test_find_secrets_detects_credential_value_containing_a_dot). Set with
+# real margin above the longest known-real identifier segment and real
+# margin below the shortest known-real credential segment.
+_IDENTIFIER_SEGMENT_MAX_LENGTH = 32
+
+
+def _value_looks_like_an_identifier_reference(value: str) -> bool:
+    if not _IDENTIFIER_REFERENCE_RE.fullmatch(value):
+        return False
+    return all(len(segment) <= _IDENTIFIER_SEGMENT_MAX_LENGTH for segment in value.split("."))
+
+
+# A real embedded PEM block always has several lines of near-pure base64
+# body between its BEGIN/END header lines (conventionally wrapped at 64-76
+# chars per RFC 7468) - boilerplate code that just emits the header/footer
+# text around a key computed elsewhere (e.g. Kotlin's
+# `append("-----BEGIN PRIVATE KEY-----\n")` followed by a function call,
+# not literal base64) has no such run. Confirmed as a real false positive
+# during this benchmark's real-repo validation run: okhttp's own
+# HeldCertificate.kt (the source of its `privateKeyPkcs8Pem()`/
+# `privateKeyPkcs1Pem()` PEM-formatting functions) matched
+# private_key_header at a normal (non-test) path with no key material
+# anywhere nearby - just the header string being built. 32 chars is well
+# above any single code identifier this benchmark's real-repo run
+# encountered next to a header match (the longest, "encodeBase64Lines(...",
+# breaks at "(" after 17) and well below a real base64 PEM line's length.
+_KEY_BODY_MIN_RUN_LENGTH = 32
+_KEY_BODY_RUN_RE = re.compile(rf"[A-Za-z0-9+/]{{{_KEY_BODY_MIN_RUN_LENGTH},}}")
+
+# How many non-blank lines after a header match to look at before
+# concluding no body follows - bounded so a huge file with a stray header
+# line can't turn this into an unbounded scan.
+_KEY_BODY_LOOKAHEAD_LINES = 3
+
+
+def _private_key_header_has_no_body(lines: list[str], header_line_no: int) -> bool:
+    """header_line_no is the 1-indexed line the header itself matched on;
+    lines is the full file, 0-indexed - so lines[header_line_no:] is
+    everything after it."""
+    checked = 0
+    for candidate in lines[header_line_no:]:
+        stripped = candidate.strip()
+        if not stripped:
+            continue
+        if _KEY_BODY_RUN_RE.search(stripped):
+            return False
+        checked += 1
+        if checked >= _KEY_BODY_LOOKAHEAD_LINES:
+            break
+    return True
+
+
+def _is_likely_placeholder(rel_path: str, value: str, pattern_name: str | None = None) -> bool:
     # A value that names itself a placeholder (AWS's own docs example key
     # literally spells "EXAMPLE"; Django's docs use "changeme", etc.) is an
     # unambiguous signal on its own - no real credential generator emits
@@ -221,6 +316,13 @@ def _is_likely_placeholder(rel_path: str, value: str) -> bool:
     if _value_looks_synthetically_repeated(value) or value in KNOWN_VENDOR_EXAMPLE_VALUES:
         return True
 
+    # A truncation marker (see _value_looks_truncated) or a bare
+    # variable/property reference (see _value_looks_like_an_identifier_reference)
+    # are the same kind of unambiguous, path-independent signal: neither
+    # shape is something a real credential's value would ever take.
+    if _value_looks_truncated(value) or _value_looks_like_an_identifier_reference(value):
+        return True
+
     # Low entropy alone is a much weaker signal (a short, low-entropy value
     # can still be someone's genuinely weak real password) - path alone used
     # to be sufficient for this case too, and a real secret living at a path
@@ -232,6 +334,24 @@ def _is_likely_placeholder(rel_path: str, value: str) -> bool:
     path_suggests_placeholder = any(marker in rel_path.lower() for marker in PLACEHOLDER_PATH_MARKERS)
     if not path_suggests_placeholder:
         return False
+
+    # private_key_header's "value" (see SECRET_PATTERNS) is the fixed
+    # "-----BEGIN ... PRIVATE KEY-----" header line, not the key material
+    # itself - its entropy is essentially constant (~3.3-3.5) regardless of
+    # whether the key behind it is a real leaked credential or a throwaway
+    # self-signed test certificate, so it never crosses _LOW_ENTROPY_THRESHOLD
+    # and the check below always says "not a placeholder" even at an
+    # obviously test-suggestive path. Confirmed as a real false negative by
+    # scanning real repos: axios's and gin's own committed TLS test
+    # certificates (tests/unit/adapters/key.pem, testdata/certificate/key.pem)
+    # both went unflagged this way. The key material's own entropy would be
+    # uniformly high for a real OR fake key too (both are, or resemble,
+    # random bytes) - entropy can't distinguish them for this pattern either
+    # way, so path is the only usable signal here, same as the marker-word
+    # and repetition checks above being unambiguous regardless of path.
+    if pattern_name == "private_key_header":
+        return True
+
     return _shannon_entropy(value) < _LOW_ENTROPY_THRESHOLD
 
 
@@ -299,18 +419,32 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
             continue
 
         rel_path = path.relative_to(repo_path).as_posix()
-        for line_no, line in enumerate(text.splitlines(), start=1):
+        lines = text.splitlines()
+        for line_no, line in enumerate(lines, start=1):
             for pattern_name, pattern, value_group in SECRET_PATTERNS:
                 for match in pattern.finditer(line):
                     value = match.group(value_group)
                     match_preview = _redact(value, f"{rel_path}:{pattern_name}")
+                    likely_placeholder = _is_likely_placeholder(rel_path, value, pattern_name)
+                    # Only find_secrets (a full-file, current-tree scan) has
+                    # convenient access to the lines following a match -
+                    # find_secrets_in_history streams individual diff-added
+                    # lines and doesn't have this context, so this check is
+                    # scoped to here rather than folded into
+                    # _is_likely_placeholder itself.
+                    if (
+                        not likely_placeholder
+                        and pattern_name == "private_key_header"
+                        and _private_key_header_has_no_body(lines, line_no)
+                    ):
+                        likely_placeholder = True
                     findings.append(
                         {
                             "path": rel_path,
                             "line": line_no,
                             "pattern": pattern_name,
                             "match_preview": match_preview,
-                            "likely_placeholder": _is_likely_placeholder(rel_path, value),
+                            "likely_placeholder": likely_placeholder,
                             "accepted": _is_accepted(accepted_keys, rel_path, pattern_name, value),
                         }
                     )
@@ -408,7 +542,7 @@ def find_secrets_in_history(
                             "path": current_file,
                             "pattern": pattern_name,
                             "match_preview": match_preview,
-                            "likely_placeholder": _is_likely_placeholder(current_file or "", value),
+                            "likely_placeholder": _is_likely_placeholder(current_file or "", value, pattern_name),
                             "accepted": _is_accepted(accepted_keys, current_file, pattern_name, value),
                         }
                     )

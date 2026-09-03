@@ -176,6 +176,179 @@ def test_find_secrets_detects_github_token_and_private_key_header(tmp_path):
     assert "private_key_header" in patterns_found
 
 
+def test_find_secrets_flags_a_test_tls_certificate_as_likely_placeholder(tmp_path):
+    # Found by running find_secrets() against real open-source repos
+    # (security-scanner-benchmark's real-repo validation run): axios's and
+    # gin's own committed TLS test certificates (tests/unit/adapters/key.pem,
+    # testdata/certificate/key.pem) were reported as live findings despite
+    # sitting at an unambiguously test-suggestive path. Root cause: the
+    # path-gated entropy check treats private_key_header's "value" as the
+    # fixed "-----BEGIN ... PRIVATE KEY-----" header line, whose entropy
+    # (~3.3-3.5) sits just above _LOW_ENTROPY_THRESHOLD (3.0) regardless of
+    # whether the key behind it is real or a throwaway test fixture - so the
+    # entropy check could never fire for this pattern. Path is now treated
+    # as sufficient on its own for private_key_header, same as the
+    # marker-word and repetition checks are for every pattern.
+    repo = tmp_path / "repo"
+    (repo / "tests" / "fixtures").mkdir(parents=True)
+    (repo / "tests" / "fixtures" / "key.pem").write_text(
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIBogIBAAJ...\n-----END RSA PRIVATE KEY-----\n"
+    )
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["pattern"] == "private_key_header"
+    assert result["findings"][0]["likely_placeholder"] is True
+
+
+def test_find_secrets_does_not_downgrade_a_private_key_header_outside_a_test_path(tmp_path):
+    # Companion to the test above: private_key_header's new "path is
+    # sufficient" rule must stay gated behind path_suggests_placeholder,
+    # same as every other pattern - a real key committed at a normal path
+    # (no test/fixture/mock/example marker), with a real base64 body
+    # following its header, must still be reported live.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "id_rsa").write_text(
+        "-----BEGIN RSA PRIVATE KEY-----\n"
+        "MIIBogIBAAJBAMYyESZLdNb8DPh2SXP0h9E5cLXCwd6P8XkYzWuJZR3kV0Cw6R7X\n"
+        "-----END RSA PRIVATE KEY-----\n"
+    )
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["pattern"] == "private_key_header"
+    assert result["findings"][0]["likely_placeholder"] is False
+
+
+def test_find_secrets_flags_a_private_key_header_with_no_body_as_likely_placeholder(tmp_path):
+    # Found by running find_secrets() against real open-source repos
+    # (security-scanner-benchmark's real-repo validation run): okhttp's own
+    # HeldCertificate.kt - the source of its privateKeyPkcs8Pem()/
+    # privateKeyPkcs1Pem() PEM-formatting functions - matched
+    # private_key_header at a normal (non-test) path even though there's no
+    # actual key material nearby, just code building the header/footer
+    # strings around a key computed elsewhere. A real embedded key always
+    # has a base64 body between BEGIN/END; boilerplate string-building code
+    # doesn't, so a missing body is now sufficient to flag a placeholder
+    # regardless of path - same tier as the marker-word check.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "HeldCertificate.kt").write_text(
+        'fun privateKeyPkcs8Pem(): String = buildString {\n'
+        '  append("-----BEGIN PRIVATE KEY-----\\n")\n'
+        '  encodeBase64Lines(keyPair.private.encoded.toByteString())\n'
+        '  append("-----END PRIVATE KEY-----\\n")\n'
+        "}\n"
+    )
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["pattern"] == "private_key_header"
+    assert result["findings"][0]["likely_placeholder"] is True
+
+
+def test_find_secrets_recognizes_a_key_body_wrapped_in_comment_markup(tmp_path):
+    # Guards the no-body check against a false positive of its own: a real
+    # key body quoted inside a doc comment or markdown table (the real
+    # shape found in okhttp's own changelog and KDoc comments during the
+    # real-repo validation run) is still a real body, just prefixed with
+    # " * " or "|" on each line - the body-detection regex must search
+    # past that prefix rather than requiring the line to be pure base64.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Certs.kt").write_text(
+        "  /**\n"
+        "   * ```\n"
+        "   * -----BEGIN PRIVATE KEY-----\n"
+        "   * MIIBogIBAAJBAMYyESZLdNb8DPh2SXP0h9E5cLXCwd6P8XkYzWuJZR3kV0Cw6R7X\n"
+        "   * -----END PRIVATE KEY-----\n"
+        "   * ```\n"
+        "   */\n"
+    )
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["pattern"] == "private_key_header"
+    assert result["findings"][0]["likely_placeholder"] is False
+
+
+def test_find_secrets_flags_a_property_reference_as_likely_placeholder(tmp_path):
+    # Found by running find_secrets() against real open-source repos
+    # (security-scanner-benchmark's real-repo validation run), independently
+    # in three unrelated codebases: RestSharp's C# OAuth2 authenticators
+    # (`["client_secret"] = TokenRequest.ClientSecret`), client-go's Go
+    # kubeconfig merging (`mergedConfig.Password = configAuthInfo.Password`),
+    # and Django's own Python salted_hmac() (`secret = settings.SECRET_KEY`).
+    # None of these assign a literal credential - they pass an existing
+    # variable/property value through - but generic_credential_assignment's
+    # value class includes "." (to support real self.PASSWORD=/cfg.API_KEY=
+    # shapes), so a dotted property reference matched as if it were one.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "auth.py").write_text('secret = settings.SECRET_KEY\n')
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["pattern"] == "generic_credential_assignment"
+    assert result["findings"][0]["likely_placeholder"] is True
+
+
+def test_find_secrets_does_not_flag_a_real_dotted_credential_value_as_a_property_reference(tmp_path):
+    # Guards the property-reference check above against the false-negative
+    # risk it introduces: Google AI Studio's newer key format is itself a
+    # real, two-segment dotted value ("AQ.<random>") - it must not get
+    # swept up by the same heuristic that catches TokenRequest.ClientSecret.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".env").write_text(
+        "GEMINI_API_KEY=AQ.NotARealKey0123456789ABCDEFGHIJKLMNOPqrstuv\n"
+    )
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["pattern"] == "generic_credential_assignment"
+    assert result["findings"][0]["likely_placeholder"] is False
+
+
+def test_find_secrets_flags_a_truncated_documentation_example_as_likely_placeholder(tmp_path):
+    # Found scanning a real repo's README during the real-repo validation
+    # run: "..." is documentation's conventional way to mark elided content
+    # (e.g. "99ae8af...snip...ec0f262ac"), and no real credential format
+    # (base64, hex, JWT segments joined by single dots) ever contains a
+    # run of 3+ literal dots.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text(
+        'echo "export SESSION_SECRET=99ae8af...snip...ec0f262ac"\n'
+    )
+
+    result = find_secrets(repo)
+
+    assert result["findings"][0]["pattern"] == "generic_credential_assignment"
+    assert result["findings"][0]["likely_placeholder"] is True
+
+
+def test_find_secrets_recognizes_githubs_own_published_openapi_example_values(tmp_path):
+    # Found scanning a real repo vendoring GitHub's official OpenAPI spec
+    # (github/rest-api-description) during the real-repo validation run:
+    # its documented example App JSON uses these exact fixed values across
+    # every repo that vendors it verbatim - high-entropy and non-repeating,
+    # so neither the marker-word nor the repetition check catches them.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "openapi.yaml").write_text(
+        "client_secret: 1726be1638095a19edd134c77bde3aa2ece1e5d8\n"
+        "webhook_secret: e340154128314309424b7c8e90325147d99fdafa\n"
+        "token: ghs_16C7e42F292c6912E7710c838347Ae178B4a\n"
+    )
+
+    result = find_secrets(repo)
+
+    assert len(result["findings"]) == 3
+    assert all(f["likely_placeholder"] is True for f in result["findings"])
+
+
 def test_find_secrets_detects_unquoted_generic_credentials_and_multiple_matches(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

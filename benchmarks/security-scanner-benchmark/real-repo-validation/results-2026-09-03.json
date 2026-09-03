@@ -1,0 +1,3759 @@
+{
+  "flask": {
+    "scanned_files": 242,
+    "secrets_findings": [],
+    "secrets_seconds": 0.06,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-29vq-49wr-vm6x",
+        "summary": " Werkzeug safe_join() allows Windows special device names",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-2g68-c3qc-8985",
+        "summary": "Werkzeug debugger vulnerable to remote execution when interacting with attacker controlled domain",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-87hc-h4r5-73f7",
+        "summary": " Werkzeug safe_join() allows Windows special device names with compound extensions",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-f9vj-2wh5-fj8j",
+        "summary": "Werkzeug safe_join not safe on Windows",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-hgf8-39gv-g3f2",
+        "summary": "Werkzeug safe_join() allows Windows special device names",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-hrfv-mqp8-q5rw",
+        "summary": "Werkzeug DoS: High resource usage when parsing multipart/form-data containing a large part with CR/LF character at the beginning",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:A/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-q34m-jh98-gwm2",
+        "summary": "Werkzeug possible resource exhaustion when parsing file data in forms",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "PYSEC-2023-221",
+        "summary": "Werkzeug is a comprehensive WSGI web application library. If an upload of a file that starts with CR or LF and then is followed by megabytes of data without these characters: all of these bytes are ap",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "PYSEC-2026-2043",
+        "summary": "Werkzeug debugger vulnerable to remote execution when interacting with attacker controlled domain",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "PYSEC-2026-2044",
+        "summary": " Werkzeug safe_join() allows Windows special device names with compound extensions",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "PYSEC-2026-2045",
+        "summary": "Werkzeug safe_join not safe on Windows",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "PYSEC-2026-2046",
+        "summary": "Werkzeug safe_join() allows Windows special device names",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "PYSEC-2026-2320",
+        "summary": "Werkzeug is a comprehensive WSGI web application library. Versions 3.1.5 and below, the safe_join function allows Windows device names as filenames if preceded by other path segments. This was previou",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "werkzeug",
+        "installed_version": "3.0.0",
+        "advisory_id": "PYSEC-2026-3417",
+        "summary": "Werkzeug possible resource exhaustion when parsing file data in forms",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "jinja2",
+        "installed_version": "3.1.2",
+        "advisory_id": "GHSA-cpwx-vrp4-4pq7",
+        "summary": "Jinja2 vulnerable to sandbox breakout through attr filter selecting format method",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:L/AC:L/AT:P/PR:L/UI:P/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "jinja2",
+        "installed_version": "3.1.2",
+        "advisory_id": "GHSA-gmj6-6f8f-6699",
+        "summary": "Jinja has a sandbox breakout through malicious filenames",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:L/AC:L/AT:P/PR:L/UI:P/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "jinja2",
+        "installed_version": "3.1.2",
+        "advisory_id": "GHSA-h5c8-rqwp-cp95",
+        "summary": "Jinja vulnerable to HTML attribute injection when passing user input as keys to xmlattr filter",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "jinja2",
+        "installed_version": "3.1.2",
+        "advisory_id": "GHSA-h75v-3vvj-5mfj",
+        "summary": "Jinja vulnerable to HTML attribute injection when passing user input as keys to xmlattr filter",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "jinja2",
+        "installed_version": "3.1.2",
+        "advisory_id": "GHSA-q2x7-8rv6-6q7h",
+        "summary": "Jinja has a sandbox breakout through indirect reference to format method",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:L/AC:L/AT:P/PR:L/UI:P/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "jinja2",
+        "installed_version": "3.1.2",
+        "advisory_id": "PYSEC-2026-1471",
+        "summary": "Jinja2 vulnerable to sandbox breakout through attr filter selecting format method",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:L/AC:L/AT:P/PR:L/UI:P/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "jinja2",
+        "installed_version": "3.1.2",
+        "advisory_id": "PYSEC-2026-1472",
+        "summary": "Jinja has a sandbox breakout through malicious filenames",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:L/AC:L/AT:P/PR:L/UI:P/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "jinja2",
+        "installed_version": "3.1.2",
+        "advisory_id": "PYSEC-2026-1473",
+        "summary": "Jinja vulnerable to HTML attribute injection when passing user input as keys to xmlattr filter",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "jinja2",
+        "installed_version": "3.1.2",
+        "advisory_id": "PYSEC-2026-1474",
+        "summary": "Jinja vulnerable to HTML attribute injection when passing user input as keys to xmlattr filter",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "jinja2",
+        "installed_version": "3.1.2",
+        "advisory_id": "PYSEC-2026-1475",
+        "summary": "Jinja has a sandbox breakout through indirect reference to format method",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:L/AC:L/AT:P/PR:L/UI:P/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "click",
+        "installed_version": "8.1.3",
+        "advisory_id": "PYSEC-2026-2132",
+        "summary": "Pallets Click, versions 8.3.2 and below, contain a command injection vulnerability in the click.edit() function, allowing attackers to pass arbitrary OS commands from an unprivileged account.",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:C/C:H/I:H/A:H"
+          }
+        ]
+      }
+    ],
+    "vuln_seconds": 12.88
+  },
+  "requests": {
+    "scanned_files": 92,
+    "secrets_findings": [],
+    "secrets_seconds": 0.15,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [],
+    "vuln_seconds": 0.0
+  },
+  "click": {
+    "scanned_files": 145,
+    "secrets_findings": [],
+    "secrets_seconds": 0.07,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [],
+    "vuln_seconds": 1.11
+  },
+  "express": {
+    "scanned_files": 213,
+    "secrets_findings": [],
+    "secrets_seconds": 0.07,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [
+      {
+        "ecosystem": "npm",
+        "package": "body-parser",
+        "installed_version": "2.2.1",
+        "advisory_id": "GHSA-v422-hmwv-36x6",
+        "summary": "body-parser vulnerable to denial of service when invalid limit value silently disables size enforcement",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "qs",
+        "installed_version": "6.15.2",
+        "advisory_id": "GHSA-4mjr-xmp4-gh2g",
+        "summary": "qs: Denial of Service via Attacker Controlled isBuffer",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "qs",
+        "installed_version": "6.15.2",
+        "advisory_id": "GHSA-x5fp-wj9c-mxmx",
+        "summary": "qs array-limit bypass via bracket-key comma parsing",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "morgan",
+        "installed_version": "1.10.1",
+        "advisory_id": "GHSA-4vj7-5mj6-jm8m",
+        "summary": "morgan vulnerable to Log Forging via unneutralized control characters in :remote-user",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          }
+        ]
+      }
+    ],
+    "vuln_seconds": 2.48
+  },
+  "lodash": {
+    "scanned_files": 95,
+    "secrets_findings": [],
+    "secrets_seconds": 0.2,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [
+      {
+        "ecosystem": "npm",
+        "package": "async",
+        "installed_version": "2.6.3",
+        "advisory_id": "GHSA-fwr7-v2mv-hh25",
+        "summary": "Prototype Pollution in async",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "dojo",
+        "installed_version": "1.15.0",
+        "advisory_id": "GHSA-jxfh-8wgv-vfr2",
+        "summary": "Prototype pollution in dojo",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:R/S:C/C:H/I:H/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "dojo",
+        "installed_version": "1.15.0",
+        "advisory_id": "GHSA-m8gw-hjpr-rjv7",
+        "summary": "Prototype Pollution in dojo",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "ecstatic",
+        "installed_version": "2.2.2",
+        "advisory_id": "GHSA-jc84-3g44-wf2q",
+        "summary": "Denial of Service in ecstatic",
+        "severity": []
+      },
+      {
+        "ecosystem": "npm",
+        "package": "jquery",
+        "installed_version": "3.4.1",
+        "advisory_id": "GHSA-gxr4-xjj5-5px2",
+        "summary": "Potential XSS vulnerability in jQuery",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "jquery",
+        "installed_version": "3.4.1",
+        "advisory_id": "GHSA-jpcq-cgw6-v4j6",
+        "summary": "Potential XSS vulnerability in jQuery",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N/E:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "lodash",
+        "installed_version": "4.17.20",
+        "advisory_id": "GHSA-29mw-wpgm-hmr9",
+        "summary": "Regular Expression Denial of Service (ReDoS) in lodash",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "lodash",
+        "installed_version": "4.17.20",
+        "advisory_id": "GHSA-35jh-r3h4-6jhm",
+        "summary": "Command Injection in lodash",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "lodash",
+        "installed_version": "4.17.20",
+        "advisory_id": "GHSA-f23m-r3pf-42rh",
+        "summary": "lodash vulnerable to Prototype Pollution via array path bypass in `_.unset` and `_.omit`",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "lodash",
+        "installed_version": "4.17.20",
+        "advisory_id": "GHSA-r5fr-rjxr-66jc",
+        "summary": "lodash vulnerable to Code Injection via `_.template` imports key names",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "lodash",
+        "installed_version": "4.17.20",
+        "advisory_id": "GHSA-xxjr-mmjv-4gpg",
+        "summary": "Lodash has Prototype Pollution Vulnerability in `_.unset` and `_.omit` functions",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:L/SC:H/SI:H/SA:H/E:P"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "request",
+        "installed_version": "2.88.0",
+        "advisory_id": "GHSA-p8p7-x288-28g6",
+        "summary": "Server-Side Request Forgery in Request",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "requirejs",
+        "installed_version": "2.3.6",
+        "advisory_id": "GHSA-x3m3-4wpv-5vgc",
+        "summary": "jrburke requirejs vulnerable to prototype pollution",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N/E:P"
+          }
+        ]
+      }
+    ],
+    "vuln_seconds": 7.06
+  },
+  "axios": {
+    "scanned_files": 442,
+    "secrets_findings": [
+      {
+        "path": "tests/unit/adapters/key.pem",
+        "line": 1,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:aa8f5434d4aa",
+        "likely_placeholder": true,
+        "accepted": false
+      }
+    ],
+    "secrets_seconds": 0.19,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [
+      {
+        "ecosystem": "npm",
+        "package": "@humanfs/node",
+        "installed_version": "0.16.7",
+        "advisory_id": "GHSA-p498-v437-472g",
+        "summary": "humanfs: Recursive copy follows symlinked files and copies data from outside the source tree",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:L/AC:L/AT:P/PR:N/UI:P/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "@vitest/browser",
+        "installed_version": "4.1.9",
+        "advisory_id": "GHSA-p63j-vcc4-9vmv",
+        "summary": "@vitest/browser: Browser Mode provider commands bypass the file-access permission gate",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "brace-expansion",
+        "installed_version": "5.0.6",
+        "advisory_id": "GHSA-3jxr-9vmj-r5cp",
+        "summary": "brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N/E:P/S:N/AU:Y/R:U/V:D/RE:M/U:Amber"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "brace-expansion",
+        "installed_version": "5.0.6",
+        "advisory_id": "GHSA-mh99-v99m-4gvg",
+        "summary": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "brace-expansion",
+        "installed_version": "5.0.6",
+        "advisory_id": "GHSA-rgw5-rvv9-x895",
+        "summary": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "browserslist",
+        "installed_version": "4.28.1",
+        "advisory_id": "GHSA-73wf-gq98-2v4g",
+        "summary": "Browserslist: Uncaught crash / prototype write via untrusted browserslist-stats.json custom stats (normalizeStats)",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "browserslist",
+        "installed_version": "4.28.1",
+        "advisory_id": "GHSA-c83g-rgw3-j3cx",
+        "summary": "Browserslist: Unbounded memory growth (no cache eviction) via distinct query results, leading to eventual OOM",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "fast-uri",
+        "installed_version": "3.1.2",
+        "advisory_id": "GHSA-4c8g-83qw-93j6",
+        "summary": "fast-uri vulnerable to host confusion via failed IDN canonicalization",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "fast-uri",
+        "installed_version": "3.1.2",
+        "advisory_id": "GHSA-7p8r-x3mc-p8w7",
+        "summary": "fast-uri vulnerable to host confusion via backslash authority introducer",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "fast-uri",
+        "installed_version": "3.1.2",
+        "advisory_id": "GHSA-f65p-4m7j-42xc",
+        "summary": "fast-uri vulnerable to server-side request forgery via malformed IPv6 normalization",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "fast-uri",
+        "installed_version": "3.1.2",
+        "advisory_id": "GHSA-fph4-wmhf-6fwf",
+        "summary": "fast-uri vulnerable to server-side request forgery via repeated hostname percent-decoding",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "fast-uri",
+        "installed_version": "3.1.2",
+        "advisory_id": "GHSA-jqff-g426-hqxp",
+        "summary": "fast-uri vulnerable to host confusion via percent-encoded scheme normalization",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "fast-uri",
+        "installed_version": "3.1.2",
+        "advisory_id": "GHSA-v2hh-gcrm-f6hx",
+        "summary": "fast-uri vulnerable to host confusion via literal backslash authority delimiter",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "js-yaml",
+        "installed_version": "4.2.0",
+        "advisory_id": "GHSA-52cp-r559-cp3m",
+        "summary": "js-yaml: YAML merge-key chains can force quadratic CPU consumption",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "js-yaml",
+        "installed_version": "4.2.0",
+        "advisory_id": "GHSA-5p4m-2wfm-xmqj",
+        "summary": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) \u2014 CVE-2026-59870 fix not backported",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "nanoid",
+        "installed_version": "3.3.12",
+        "advisory_id": "GHSA-28wg-ghj8-5hjv",
+        "summary": "nanoid: non-secure generators can loop indefinitely with negative size",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "nanoid",
+        "installed_version": "3.3.12",
+        "advisory_id": "GHSA-2v37-7h3g-55p8",
+        "summary": "nanoid: custom generators can loop indefinitely when size is zero",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "postcss",
+        "installed_version": "8.5.15",
+        "advisory_id": "GHSA-fxqj-rqcc-2cmp",
+        "summary": "PostCSS: incomplete fix of GHSA-6g55-p6wh-862q \u2014 attacker-controlled sourceMappingURL reads arbitrary .map files when `from` is unset",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "postcss",
+        "installed_version": "8.5.15",
+        "advisory_id": "GHSA-r28c-9q8g-f849",
+        "summary": "PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "qs",
+        "installed_version": "6.15.2",
+        "advisory_id": "GHSA-4mjr-xmp4-gh2g",
+        "summary": "qs: Denial of Service via Attacker Controlled isBuffer",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "qs",
+        "installed_version": "6.15.2",
+        "advisory_id": "GHSA-x5fp-wj9c-mxmx",
+        "summary": "qs array-limit bypass via bracket-key comma parsing",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "ws",
+        "installed_version": "8.20.1",
+        "advisory_id": "GHSA-96hv-2xvq-fx4p",
+        "summary": "ws: Memory exhaustion DoS from tiny fragments and data chunks",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      }
+    ],
+    "vuln_seconds": 12.61
+  },
+  "cobra": {
+    "scanned_files": 65,
+    "secrets_findings": [],
+    "secrets_seconds": 0.06,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [],
+    "vuln_seconds": 0.56
+  },
+  "gin": {
+    "scanned_files": 127,
+    "secrets_findings": [
+      {
+        "path": "testdata/certificate/key.pem",
+        "line": 1,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:e3a4b825b06d",
+        "likely_placeholder": true,
+        "accepted": false
+      }
+    ],
+    "secrets_seconds": 0.08,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [
+      {
+        "ecosystem": "Go",
+        "package": "github.com/quic-go/quic-go",
+        "installed_version": "v0.55.0",
+        "advisory_id": "GHSA-g754-hx8w-x2g6",
+        "summary": "quic-go HTTP/3 QPACK Header Expansion DoS",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "github.com/quic-go/quic-go",
+        "installed_version": "v0.55.0",
+        "advisory_id": "GHSA-vvgj-x9jq-8cj9",
+        "summary": "quic-go: HTTP/3 QPACK Trailer Expansion Memory Exhaustion ",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "github.com/quic-go/quic-go",
+        "installed_version": "v0.55.0",
+        "advisory_id": "GO-2025-4233",
+        "summary": "HTTP/3 QPACK Header Expansion DoS in github.com/quic-go/quic-go",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "github.com/quic-go/quic-go",
+        "installed_version": "v0.55.0",
+        "advisory_id": "GO-2026-5676",
+        "summary": "HTTP/3 QPACK Trailer Expansion Memory Exhaustion in github.com/quic-go/quic-go",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/net",
+        "installed_version": "v0.46.0",
+        "advisory_id": "GHSA-5cv4-jp36-h3mw",
+        "summary": "Go Net HTML parser is vulnerable to denial of service",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/net",
+        "installed_version": "v0.46.0",
+        "advisory_id": "GO-2026-4918",
+        "summary": "Infinite loop in HTTP/2 transport when given bad SETTINGS_MAX_FRAME_SIZE in net/http/internal/http2 in golang.org/x/net",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/net",
+        "installed_version": "v0.46.0",
+        "advisory_id": "GO-2026-5025",
+        "summary": "Invoking incorrect handling of namespaced elements in foreign content in golang.org/x/net/html",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/net",
+        "installed_version": "v0.46.0",
+        "advisory_id": "GO-2026-5026",
+        "summary": "Invoking failure to reject ASCII-only Punycode-encoded labels in golang.org/x/net/idna",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/net",
+        "installed_version": "v0.46.0",
+        "advisory_id": "GO-2026-5027",
+        "summary": "Invoking incorrect handling of HTML elements in foreign content in golang.org/x/net/html",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/net",
+        "installed_version": "v0.46.0",
+        "advisory_id": "GO-2026-5028",
+        "summary": "Invoking denial of service when parsing arbitrary HTML in golang.org/x/net/html",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/net",
+        "installed_version": "v0.46.0",
+        "advisory_id": "GO-2026-5029",
+        "summary": "Invoking incorrect handling of character references in DOCTYPE nodes in golang.org/x/net/html",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/net",
+        "installed_version": "v0.46.0",
+        "advisory_id": "GO-2026-5030",
+        "summary": "Invoking duplicate attributes can cause XSS in golang.org/x/net/html",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/net",
+        "installed_version": "v0.46.0",
+        "advisory_id": "GO-2026-5942",
+        "summary": "Parsing an invalid SVCB or HTTPS RR can panic in golang.org/x/net/dns/dnsmessage",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-45gg-vh54-h5m9",
+        "summary": "golang.org/x/crypto vulnerable to invoking bypass of certificate restrictions",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-5cgq-3rg8-m6cv",
+        "summary": "golang.org/x/crypto vulnerable to auth bypass via unenforced @revoked status",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-78mq-xcr3-xm33",
+        "summary": "golang.org/x/crypto is vulnerable to invoking server panic during CheckHostKey/Authenticate flow",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-89gr-r52h-f8rx",
+        "summary": "golang.org/x/crypto: FIDO/U2F security key physical presence check can be bypassed",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-9m57-25v3-79x9",
+        "summary": "golang.org/x/crypto: Invoking pathological inputs can lead to client panic",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-f5wc-c3c7-36mc",
+        "summary": "golang.org/x/crypto doesn't drop invoking agent constraints when forwarding keys",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-f6x5-jh6r-wrfv",
+        "summary": "golang.org/x/crypto/ssh/agent vulnerable to panic if message is malformed due to out of bounds read",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-j5w8-q4qc-rx2x",
+        "summary": "golang.org/x/crypto/ssh allows an attacker to cause unbounded memory consumption",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-jppx-rxg9-jmrx",
+        "summary": "golang.org/x/crypto doesn't enforce invoking key constraints",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-q4h4-gmj2-qvw2",
+        "summary": "golang.org/x/crypto: Invoking byte arithmetic causes underflow and panic",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-qpw4-5x99-6vjp",
+        "summary": "golang.org/x/crypto: Invoking memory leak when rejecting channels can lead to DoS",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-rm3j-f69w-wqmq",
+        "summary": "golang.org/x/crypto vulnerable to infinite loop on large channel writes",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-vgwf-h737-ff37",
+        "summary": "golang.org/x/crypto: Invoking client can cause server deadlock on unexpected responses",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-w879-237q-wc7r",
+        "summary": "golang.org/x/crypto: Invoking pathological RSA/DSA parameters may cause DoS",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GHSA-x527-x647-q7gg",
+        "summary": "golang.org/x/crypto: Invoking VerifiedPublicKeyCallback permissions skip enforcement",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2025-4134",
+        "summary": "Unbounded memory consumption in golang.org/x/crypto/ssh",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2025-4135",
+        "summary": "Malformed constraint may cause denial of service in golang.org/x/crypto/ssh/agent",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5005",
+        "summary": "Invoking key constraints not enforced in golang.org/x/crypto/ssh/agent",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5006",
+        "summary": "Invoking agent constraints dropped when forwarding keys in golang.org/x/crypto/ssh/agent",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5013",
+        "summary": "Invoking byte arithmetic causes underflow and panic in golang.org/x/crypto/ssh",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5014",
+        "summary": "Invoking bypass of certificate restrictions in golang.org/x/crypto/ssh",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5015",
+        "summary": "Invoking server panic during CheckHostKey/Authenticate in golang.org/x/crypto/ssh",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5016",
+        "summary": "Invoking memory leak when rejecting channels can lead to DoS in golang.org/x/crypto/ssh",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5017",
+        "summary": "Invoking client can cause server deadlock on unexpected responses in golang.org/x/crypto/ssh",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5018",
+        "summary": "Invoking pathological RSA/DSA parameters may cause DoS in golang.org/x/crypto/ssh",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5019",
+        "summary": "Invoking bypass of FIDO/U2F security keys physical interaction in golang.org/x/crypto/ssh",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5020",
+        "summary": "Invoking infinite loop on large channel writes in golang.org/x/crypto/ssh",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5021",
+        "summary": "Invoking auth bypass via unenforced @revoked status in golang.org/x/crypto/ssh/knownhosts",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5023",
+        "summary": "Invoking VerifiedPublicKeyCallback permissions skip enforcement in golang.org/x/crypto/ssh",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5033",
+        "summary": "Invoking pathological inputs can lead to client panic in golang.org/x/crypto/ssh/agent",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-5932",
+        "summary": "The golang.org/x/crypto/openpgp package is unmaintained, unsafe by design, and has known security issues",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-6303",
+        "summary": "Source-address critical option not enforced for non-public-key auth callbacks in golang.org/x/crypto/ssh",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-6354",
+        "summary": "Prevent DoS on deadlocked undecided channel in golang.org/x/crypto/ssh",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/crypto",
+        "installed_version": "v0.43.0",
+        "advisory_id": "GO-2026-6355",
+        "summary": "Prevent DoS on deadlocked established channel in golang.org/x/crypto/ssh",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/mod",
+        "installed_version": "v0.28.0",
+        "advisory_id": "GO-2026-6179",
+        "summary": "Fix transparency log tile verification bypass in golang.org/x/mod/sumdb/tlog",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/mod",
+        "installed_version": "v0.28.0",
+        "advisory_id": "GO-2026-6180",
+        "summary": "Ignore unrelated, unauthenticated hashes in Lookup in golang.org/x/mod/sumdb",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/sys",
+        "installed_version": "v0.37.0",
+        "advisory_id": "GO-2026-5024",
+        "summary": "Invoking integer overflow in NewNTUnicodeString in golang.org/x/sys/windows",
+        "severity": []
+      },
+      {
+        "ecosystem": "Go",
+        "package": "golang.org/x/text",
+        "installed_version": "v0.30.0",
+        "advisory_id": "GO-2026-5970",
+        "summary": "Infinite loop on invalid input in golang.org/x/text",
+        "severity": []
+      }
+    ],
+    "vuln_seconds": 35.61
+  },
+  "gorilla-mux": {
+    "scanned_files": 26,
+    "secrets_findings": [],
+    "secrets_seconds": 0.03,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [],
+    "vuln_seconds": 0.0
+  },
+  "gson": {
+    "scanned_files": 312,
+    "secrets_findings": [],
+    "secrets_seconds": 0.14,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [],
+    "vuln_seconds": 0.58
+  },
+  "junit4": {
+    "scanned_files": 566,
+    "secrets_findings": [],
+    "secrets_seconds": 0.17,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [],
+    "vuln_seconds": 0.53
+  },
+  "clap": {
+    "scanned_files": 612,
+    "secrets_findings": [],
+    "secrets_seconds": 0.24,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [
+      {
+        "ecosystem": "crates.io",
+        "package": "adler",
+        "installed_version": "1.0.2",
+        "advisory_id": "RUSTSEC-2025-0056",
+        "summary": "adler crate is unmaintained, use adler2 instead",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "crossbeam-channel",
+        "installed_version": "0.5.13",
+        "advisory_id": "GHSA-pg9f-39pc-qf8g",
+        "summary": "crossbeam-channel Vulnerable to Double Free on Drop",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:L/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "crossbeam-channel",
+        "installed_version": "0.5.13",
+        "advisory_id": "RUSTSEC-2025-0024",
+        "summary": "crossbeam-channel: double free on Drop",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "crossbeam-epoch",
+        "installed_version": "0.9.18",
+        "advisory_id": "RUSTSEC-2026-0204",
+        "summary": "Invalid pointer dereference in `fmt::Pointer` impl for `Atomic` and `Shared` when the underlying pointer is invalid",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "idna",
+        "installed_version": "0.5.0",
+        "advisory_id": "GHSA-h97m-ww89-6jmq",
+        "summary": "`idna` accepts Punycode labels that do not produce any non-ASCII when decoded",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "idna",
+        "installed_version": "0.5.0",
+        "advisory_id": "RUSTSEC-2024-0421",
+        "summary": "`idna` accepts Punycode labels that do not produce any non-ASCII when decoded",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "instant",
+        "installed_version": "0.1.13",
+        "advisory_id": "RUSTSEC-2024-0384",
+        "summary": "`instant` is unmaintained",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "lru",
+        "installed_version": "0.12.3",
+        "advisory_id": "GHSA-rhfx-m35p-ff5j",
+        "summary": "`IterMut` violates Stacked Borrows by invalidating internal pointer",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N/E:U"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "lru",
+        "installed_version": "0.12.3",
+        "advisory_id": "RUSTSEC-2026-0002",
+        "summary": "`IterMut` violates Stacked Borrows by invalidating internal pointer",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "lru",
+        "installed_version": "0.12.3",
+        "advisory_id": "RUSTSEC-2026-0253",
+        "summary": "Potential use-after-free due to lack of panic safety in `LruCache::pop()`",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "number_prefix",
+        "installed_version": "0.4.0",
+        "advisory_id": "RUSTSEC-2025-0119",
+        "summary": "number_prefix crate is unmaintained",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "GHSA-4fcv-w3qc-ppgg",
+        "summary": "rust-openssl Use-After-Free in `Md::fetch` and `Cipher::fetch`",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "GHSA-8c75-8mhr-p7r9",
+        "summary": "rust-openssl has incorrect bounds assertion in aes key wrap",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N/E:U"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "GHSA-ghm9-cr32-g9qj",
+        "summary": "rust-openssl: rustMdCtxRef::digest_final() writes past caller buffer with no length check",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N/E:U"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "GHSA-hppc-g8h3-xhp3",
+        "summary": "rust-openssl: Unchecked callback length in PSK/cookie trampolines leaks adjacent memory to peer",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "GHSA-phqj-4mhp-q6mq",
+        "summary": "rust-openssl: Potential out-of-bounds write in `CipherCtxRef::cipher_update_inplace` for AES-KW-PAD ciphers",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "GHSA-pqf5-4pqq-29f5",
+        "summary": "rust-openssl: Deriver::derive and PkeyCtxRef::derive can overflow short buffers on OpenSSL 1.1.1",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N/E:U"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "GHSA-q445-7m23-qrmw",
+        "summary": "openssl's `MemBio::get_buf` has undefined behavior with empty buffers",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "GHSA-rpmj-rpgj-qmpm",
+        "summary": "rust-openssl ssl::select_next_proto use after free",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:L/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "GHSA-xmgf-hq76-4vx2",
+        "summary": "rust-opennssl has an Out-of-bounds read in PEM password callback when returning an oversized length",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:L/SC:N/SI:N/SA:N/E:U"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "GHSA-xp3w-r5p5-63rr",
+        "summary": "rust-openssl has undefined behavior in X509Ref::ocsp_responders for certificates with non-UTF-8 OCSP URLs",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "GHSA-xv59-967r-8726",
+        "summary": "rust-openssl vulnerable to heap buffer overflow when encrypting with AES key-wrap-with-padding",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "RUSTSEC-2024-0357",
+        "summary": "`MemBio::get_buf` has undefined behavior with empty buffers",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "RUSTSEC-2025-0004",
+        "summary": "ssl::select_next_proto use after free",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "openssl",
+        "installed_version": "0.10.64",
+        "advisory_id": "RUSTSEC-2025-0022",
+        "summary": "Use-After-Free in `Md::fetch` and `Cipher::fetch`",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "proc-macro-error2",
+        "installed_version": "2.0.1",
+        "advisory_id": "RUSTSEC-2026-0173",
+        "summary": "proc-macro-error2 is unmaintained",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "quick-xml",
+        "installed_version": "0.30.0",
+        "advisory_id": "RUSTSEC-2026-0194",
+        "summary": "Quadratic run time when checking a start tag for duplicate attribute names",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "quick-xml",
+        "installed_version": "0.30.0",
+        "advisory_id": "RUSTSEC-2026-0195",
+        "summary": "Unbounded namespace-declaration allocation in `NsReader` enables memory-exhaustion denial of service",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "rand",
+        "installed_version": "0.8.5",
+        "advisory_id": "GHSA-cq8v-f236-94qc",
+        "summary": "Rand is unsound with a custom logger using rand::rng()",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "rand",
+        "installed_version": "0.8.5",
+        "advisory_id": "RUSTSEC-2026-0097",
+        "summary": "Rand is unsound with a custom logger using `rand::rng()`",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "time",
+        "installed_version": "0.3.36",
+        "advisory_id": "GHSA-r6v5-fh4h-64xc",
+        "summary": "time vulnerable to stack exhaustion Denial of Service attack",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:H/AT:N/PR:L/UI:A/VC:N/VI:N/VA:H/SC:N/SI:N/SA:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "time",
+        "installed_version": "0.3.36",
+        "advisory_id": "RUSTSEC-2026-0009",
+        "summary": "Denial of Service via Stack Exhaustion",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:H/AT:N/PR:L/UI:A/VC:N/VI:N/VA:H/SC:N/SI:N/SA:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "unic-char-property",
+        "installed_version": "0.9.0",
+        "advisory_id": "RUSTSEC-2025-0081",
+        "summary": "`unic-char-property` is unmaintained",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "unic-char-range",
+        "installed_version": "0.9.0",
+        "advisory_id": "RUSTSEC-2025-0075",
+        "summary": "`unic-char-range` is unmaintained",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "unic-common",
+        "installed_version": "0.9.0",
+        "advisory_id": "RUSTSEC-2025-0080",
+        "summary": "`unic-common` is unmaintained",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "unic-emoji-char",
+        "installed_version": "0.9.0",
+        "advisory_id": "RUSTSEC-2025-0090",
+        "summary": "`unic-emoji-char` is unmaintained",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "unic-ucd-version",
+        "installed_version": "0.9.0",
+        "advisory_id": "RUSTSEC-2025-0098",
+        "summary": "`unic-ucd-version` is unmaintained",
+        "severity": []
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "uu_cp",
+        "installed_version": "0.0.23",
+        "advisory_id": "GHSA-8vrf-r662-2w2v",
+        "summary": "cp: -R reads device nodes as streams, destroying device semantics",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:L/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "uu_mkdir",
+        "installed_version": "0.0.23",
+        "advisory_id": "GHSA-mj6p-44ch-cq69",
+        "summary": "mkdir: -m exposes directory with umask perms before chmod (race window)",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "uu_mktemp",
+        "installed_version": "0.0.23",
+        "advisory_id": "GHSA-2w8r-9xj7-69j5",
+        "summary": "mktemp: empty TMPDIR creates temp files in CWD instead of /tmp",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:N/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "uucore",
+        "installed_version": "0.0.27",
+        "advisory_id": "GHSA-fqf6-gxhh-2xhw",
+        "summary": "uutils coreutils: cp/install/mv/ln --suffix alone does not enable backup mode (silent data loss vs GNU)",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "crates.io",
+        "package": "uucore",
+        "installed_version": "0.0.27",
+        "advisory_id": "GHSA-w6xc-g9qj-vp32",
+        "summary": "uucore: safe_traversal TOCTOU protection only enabled on Linux",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:L/I:L/A:N"
+          }
+        ]
+      }
+    ],
+    "vuln_seconds": 22.12
+  },
+  "sinatra": {
+    "scanned_files": 289,
+    "secrets_findings": [
+      {
+        "path": "README.md",
+        "line": 1215,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:7afb2dd625f7",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "rack-protection/lib/rack/protection/authenticity_token.rb",
+        "line": 61,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:ce8468ccfa4d",
+        "likely_placeholder": true,
+        "accepted": false
+      }
+    ],
+    "secrets_seconds": 0.09,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-22f2-v57c-j9cx",
+        "summary": "Rack vulnerable to ReDoS in content type parsing (2nd degree polynomial)",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-3h57-hmj3-gj3p",
+        "summary": "Rack has possible DoS Vulnerability in Multipart MIME parsing",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-54rr-7fvw-6x8f",
+        "summary": "Rack Header Parsing leads to Possible Denial of Service Vulnerability",
+        "severity": []
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-65f5-mfpf-vfhj",
+        "summary": "Denial of service via header parsing in Rack",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-6xw4-3v39-52mm",
+        "summary": "Rack is vulnerable to a memory-exhaustion DoS through unbounded URL-encoded body parsing",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-7g2v-jj9q-g3rg",
+        "summary": "Possible Log Injection in Rack::CommonLogger",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:N"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:L/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N/E:P"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-7mqq-6cf9-v2qp",
+        "summary": "Rack has a root directory disclosure via unescaped regex interpolation in Rack::Directory",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-7wqh-767x-r66v",
+        "summary": "Local File Inclusion in Rack::Static",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-8cgq-6mh2-7j6v",
+        "summary": "Escape Sequence Injection vulnerability in Rack lead to Possible Log Injection",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N/E:X/CR:X/IR:X/AR:X/MAV:X/MAC:X/MAT:X/MPR:X/MUI:X/MVC:X/MVI:X/MVA:X/MSC:X/MSI:X/MSA:X/S:X/AU:X/R:X/V:X/RE:X/U:X"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-8vqr-qjwx-82mw",
+        "summary": "Rack's multipart parsing without Content-Length header allows unbounded chunked file uploads",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-93pm-5p5f-3ghx",
+        "summary": "Denial of Service Vulnerability in Rack Content-Disposition parsing",
+        "severity": []
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-c6qg-cjj8-47qp",
+        "summary": "Possible Denial of Service Vulnerability in Rack's header parsing",
+        "severity": []
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-g2pf-xv49-m2h5",
+        "summary": "Rack::Request accepts invalid Host characters, enabling host allowlist bypass",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-gjh7-p2fx-99vx",
+        "summary": "Rack has an Unbounded-Parameter DoS in Rack::QueryParser",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-h2jq-g4cq-5ppq",
+        "summary": "Rack::Static prefix matching can expose unintended files under the static root",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-mxw3-3hh2-x2mh",
+        "summary": "Rack has a Directory Traversal via Rack:Directory",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-q2ww-5357-x388",
+        "summary": "Rack has Content-Length mismatch in Rack::Files error responses",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-q4qf-9j86-f5mh",
+        "summary": "Rack:: Static header_rules bypass via URL-encoded paths",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-qfgr-crr9-7r49",
+        "summary": "Rack: Forwarded Header semicolon injection enables Host and Scheme spoofing",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-qv7j-4883-hwh7",
+        "summary": "Rack::Sendfile header-based X-Accel-Mapping regex injection enables unauthorized X-Accel-Redirect",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-r657-rxjc-j557",
+        "summary": "Rack has a Possible Information Disclosure Vulnerability",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:N/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-rqv2-275x-2jq5",
+        "summary": "Denial of service via multipart parsing in Rack",
+        "severity": []
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-v569-hp3g-36wr",
+        "summary": "Rack has quadratic complexity in Rack::Utils.select_best_encoding via wildcard Accept-Encoding header",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-v6x5-cg8r-vv6x",
+        "summary": "Rack's multipart header parsing allows Denial of Service via escape-heavy quoted parameters",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-vgpv-f759-9wx3",
+        "summary": "Rack's greedy multipart boundary parsing can cause parser differentials and WAF bypass.",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-whrj-4476-wvmp",
+        "summary": "Stored XSS in Rack::Directory via javascript: filenames rendered into anchor href",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:C/C:L/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-x8cg-fq8g-mxfx",
+        "summary": "Rack's multipart byte range processing allows denial of service via excessive overlapping ranges",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack",
+        "installed_version": "3.0.0",
+        "advisory_id": "GHSA-xj5v-6v4g-jfw6",
+        "summary": "Rack has possible DoS Vulnerability with Range Header",
+        "severity": []
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack-session",
+        "installed_version": "2.0.0",
+        "advisory_id": "GHSA-33qg-7wpp-89cq",
+        "summary": "Rack::Session::Cookie secrets: decrypt failure fallback enables secretless session forgery and Marshal deserialization",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "RubyGems",
+        "package": "rack-session",
+        "installed_version": "2.0.0",
+        "advisory_id": "GHSA-9j94-67jr-4cqj",
+        "summary": "Rack session gets restored after deletion",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:L/I:L/A:N"
+          }
+        ]
+      }
+    ],
+    "vuln_seconds": 16.4
+  },
+  "laravel": {
+    "scanned_files": 56,
+    "secrets_findings": [],
+    "secrets_seconds": 0.02,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [
+      {
+        "ecosystem": "npm",
+        "package": "vite",
+        "installed_version": "8.0.0",
+        "advisory_id": "GHSA-4w7w-66w2-5vf9",
+        "summary": "Vite Vulnerable to Path Traversal in Optimized Deps `.map` Handling",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "vite",
+        "installed_version": "8.0.0",
+        "advisory_id": "GHSA-fx2h-pf6j-xcff",
+        "summary": "vite: `server.fs.deny` bypass on Windows alternate paths",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+          },
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "vite",
+        "installed_version": "8.0.0",
+        "advisory_id": "GHSA-p9ff-h696-f583",
+        "summary": "Vite Vulnerable to Arbitrary File Read via Vite Dev Server WebSocket",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "vite",
+        "installed_version": "8.0.0",
+        "advisory_id": "GHSA-v2wj-q39q-566r",
+        "summary": "Vite: `server.fs.deny` bypassed with queries",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "vite",
+        "installed_version": "8.0.0",
+        "advisory_id": "GHSA-v6wh-96g9-6wx3",
+        "summary": "launch-editor: NTLMv2 hash disclosure via UNC path handling on Windows",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:A/VC:N/VI:N/VA:N/SC:H/SI:H/SA:H"
+          }
+        ]
+      }
+    ],
+    "vuln_seconds": 3.09
+  },
+  "restsharp": {
+    "scanned_files": 466,
+    "secrets_findings": [
+      {
+        "path": "docs/plans/2026-03-01-oauth2-token-lifecycle-plan.md",
+        "line": 256,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:198918b54ae5",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "docs/plans/2026-03-01-oauth2-token-lifecycle-plan.md",
+        "line": 574,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:198918b54ae5",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "src/RestSharp/Authenticators/OAuth2/OAuth2ClientCredentialsAuthenticator.cs",
+        "line": 30,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:0e560b70e428",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "src/RestSharp/Authenticators/OAuth2/OAuth2RefreshTokenAuthenticator.cs",
+        "line": 45,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:f85ae30be6f9",
+        "likely_placeholder": true,
+        "accepted": false
+      }
+    ],
+    "secrets_seconds": 0.12,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [],
+    "vuln_seconds": 0.61
+  },
+  "okhttp": {
+    "scanned_files": 835,
+    "secrets_findings": [
+      {
+        "path": "docs/changelogs/changelog_4x.md",
+        "line": 460,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:9d553867167e",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "samples/guide/src/main/java/okhttp3/recipes/RequestBodyCompression.java",
+        "line": 38,
+        "pattern": "google_api_key",
+        "match_preview": "sha256:99a5881d036a",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "samples/guide/src/main/java/okhttp3/recipes/RequestBodyCompression.java",
+        "line": 38,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:171cdde63537",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "samples/slack/src/main/java/okhttp3/slack/SlackClient.java",
+        "line": 91,
+        "pattern": "slack_token",
+        "match_preview": "sha256:f47e9bf67635",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/README.md",
+        "line": 196,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:12644888109c",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/src/test/java/okhttp3/tls/HeldCertificateTest.kt",
+        "line": 186,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:5fe2d6973eb6",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/src/test/java/okhttp3/tls/HeldCertificateTest.kt",
+        "line": 206,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:b37cfb729a45",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/src/test/java/okhttp3/tls/HeldCertificateTest.kt",
+        "line": 294,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:b37cfb729a45",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/src/test/java/okhttp3/tls/HeldCertificateTest.kt",
+        "line": 302,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:b37cfb729a45",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/src/test/java/okhttp3/tls/HeldCertificateTest.kt",
+        "line": 355,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:b37cfb729a45",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/src/test/java/okhttp3/tls/HeldCertificateTest.kt",
+        "line": 412,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:b37cfb729a45",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/src/test/java/okhttp3/tls/HeldCertificateTest.kt",
+        "line": 474,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:b37cfb729a45",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/src/test/java/okhttp3/tls/HeldCertificateTest.kt",
+        "line": 514,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:5fe2d6973eb6",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/src/test/java/okhttp3/tls/HeldCertificateTest.kt",
+        "line": 534,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:b37cfb729a45",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/src/test/java/okhttp3/tls/HeldCertificateTest.kt",
+        "line": 560,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:b37cfb729a45",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/src/main/kotlin/okhttp3/tls/HeldCertificate.kt",
+        "line": 164,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:6f5158f468f0",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/src/main/kotlin/okhttp3/tls/HeldCertificate.kt",
+        "line": 178,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:8246db290f10",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "okhttp-tls/src/main/kotlin/okhttp3/tls/HeldCertificate.kt",
+        "line": 529,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:6f5158f468f0",
+        "likely_placeholder": false,
+        "accepted": false
+      }
+    ],
+    "secrets_seconds": 0.41,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [
+      {
+        "ecosystem": "Maven",
+        "package": "com.squareup.okhttp3:okhttp",
+        "installed_version": "",
+        "advisory_id": "GHSA-3cqm-mf7h-prrj",
+        "summary": "Square OkHttp can accept the wrong certificate",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Maven",
+        "package": "com.squareup.okhttp3:okhttp",
+        "installed_version": "",
+        "advisory_id": "GHSA-4hc2-jh7r-wrc3",
+        "summary": "Improper Certificate Validation in OkHttp",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          }
+        ]
+      }
+    ],
+    "vuln_seconds": 1.7
+  },
+  "penny-bot": {
+    "scanned_files": 244,
+    "secrets_findings": [
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 4041,
+        "pattern": "github_token",
+        "match_preview": "sha256:842830adc7f0",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 4042,
+        "pattern": "github_token",
+        "match_preview": "sha256:b9139b5547d3",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 4043,
+        "pattern": "github_token",
+        "match_preview": "sha256:ab70b1ed9f6d",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 4044,
+        "pattern": "github_token",
+        "match_preview": "sha256:d047787dd53d",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 4045,
+        "pattern": "github_token",
+        "match_preview": "sha256:49bb3dd75530",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 227276,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:e4dbc25f6d7d",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 227277,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:c8ba9400359c",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 227279,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:1c01ef02ae4a",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 227511,
+        "pattern": "github_token",
+        "match_preview": "sha256:a1ae42f1de9c",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 227642,
+        "pattern": "github_token",
+        "match_preview": "sha256:728abd450b34",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 227679,
+        "pattern": "github_token",
+        "match_preview": "sha256:728abd450b34",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 237854,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:19506ff90f0c",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 250376,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:19506ff90f0c",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 250468,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:ca1d5ea7da19",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 250514,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:ca1d5ea7da19",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/GitHubAPI/openapi.yaml",
+        "line": 256363,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:ca1d5ea7da19",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "Lambdas/LambdasShared/SecretsRetriever.swift",
+        "line": 82,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:7006124c399d",
+        "likely_placeholder": true,
+        "accepted": false
+      }
+    ],
+    "secrets_seconds": 0.55,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [],
+    "vuln_seconds": 0.67
+  },
+  "django": {
+    "scanned_files": 6979,
+    "secrets_findings": [
+      {
+        "path": "tests/auth_tests/test_management.py",
+        "line": 829,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:cbeef09e80c9",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_management.py",
+        "line": 857,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:3f43cedcb885",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_management.py",
+        "line": 904,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:3f43cedcb885",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_management.py",
+        "line": 952,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:3f43cedcb885",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_management.py",
+        "line": 1002,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:3f43cedcb885",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_management.py",
+        "line": 1125,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:cbeef09e80c9",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_management.py",
+        "line": 1172,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:cbeef09e80c9",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_management.py",
+        "line": 1208,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:cbeef09e80c9",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_management.py",
+        "line": 1251,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:cbeef09e80c9",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_management.py",
+        "line": 1288,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:0fa1b6539efd",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_management.py",
+        "line": 1324,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:65479f04746d",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_auth_backends.py",
+        "line": 1053,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:1fea012206e1",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_auth_backends.py",
+        "line": 1128,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:eee8ae37ebe0",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_auth_backends.py",
+        "line": 1149,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:eee8ae37ebe0",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_auth_backends.py",
+        "line": 1168,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:eee8ae37ebe0",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_auth_backends.py",
+        "line": 1186,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:eee8ae37ebe0",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_auth_backends.py",
+        "line": 1226,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:eee8ae37ebe0",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_auth_backends.py",
+        "line": 1306,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:eee8ae37ebe0",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/auth_tests/test_auth_backends.py",
+        "line": 1361,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:9d537d8252a1",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/forms_tests/tests/test_forms.py",
+        "line": 4732,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:03b1216fd243",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/view_tests/tests/test_debug.py",
+        "line": 1903,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:af99770fb6f8",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/view_tests/tests/test_debug.py",
+        "line": 1914,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:af99770fb6f8",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/view_tests/tests/test_debug.py",
+        "line": 1926,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:040712c0e0ac",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/view_tests/tests/test_debug.py",
+        "line": 1927,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:ffbf4a5141da",
+        "likely_placeholder": false,
+        "accepted": false
+      },
+      {
+        "path": "tests/view_tests/tests/test_debug.py",
+        "line": 1936,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:af99770fb6f8",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/view_tests/tests/test_debug.py",
+        "line": 1938,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:af99770fb6f8",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/view_tests/tests/test_debug.py",
+        "line": 1939,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:af99770fb6f8",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/admin_views/tests.py",
+        "line": 4010,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:cb31b51ae715",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/utils_tests/test_crypto.py",
+        "line": 131,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:67089e9f664e",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tests/csrf_tests/tests.py",
+        "line": 40,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:27f52138c050",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "docs/howto/mailers-migration.txt",
+        "line": 388,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:847741be1abc",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "django/utils/crypto.py",
+        "line": 44,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:7174dd3d3c65",
+        "likely_placeholder": true,
+        "accepted": false
+      }
+    ],
+    "secrets_seconds": 2.57,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [
+      {
+        "ecosystem": "PyPI",
+        "package": "sqlparse",
+        "installed_version": "0.5.0",
+        "advisory_id": "GHSA-27jp-wm6q-gp25",
+        "summary": "sqlparse: formatting list of tuples leads to denial of service",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "sqlparse",
+        "installed_version": "0.5.0",
+        "advisory_id": "GHSA-3496-9g83-7v6x",
+        "summary": "sqlparse: Generated Python and PHP snippets allow SQL string breakout through unescaped backslashes",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:P/VC:N/VI:N/VA:N/SC:H/SI:H/SA:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "sqlparse",
+        "installed_version": "0.5.0",
+        "advisory_id": "GHSA-cfqr-cjx5-5jcm",
+        "summary": "sqlparse: Reindentation of tuple lists causes near-cap quadratic CPU consumption",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "sqlparse",
+        "installed_version": "0.5.0",
+        "advisory_id": "GHSA-f2ff-p2ww-7p4p",
+        "summary": "sqlparse: Quadratic O(n\u00b2) DoS in group_comments",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "sqlparse",
+        "installed_version": "0.5.0",
+        "advisory_id": "GHSA-prg7-hcfm-mfcr",
+        "summary": "sqlparse: Inefficient Regex Handling of Dollar-Quoted SQL Literals Leads to ReDoS (Denial of Service)",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "sqlparse",
+        "installed_version": "0.5.0",
+        "advisory_id": "GHSA-pwgv-4x5q-6m9f",
+        "summary": "sqlparse: TokenList.__init__ materializes O(subtree) value per group, causing CPU DoS before depth/token caps trigger",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "sqlparse",
+        "installed_version": "0.5.0",
+        "advisory_id": "PYSEC-2026-3696",
+        "summary": "sqlparse: Generated Python and PHP snippets allow SQL string breakout through unescaped backslashes",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:L/AC:L/AT:N/PR:N/UI:P/VC:N/VI:N/VA:N/SC:H/SI:H/SA:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "sqlparse",
+        "installed_version": "0.5.0",
+        "advisory_id": "PYSEC-2026-3697",
+        "summary": "sqlparse: Quadratic O(n\u00b2) DoS in group_comments",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "sqlparse",
+        "installed_version": "0.5.0",
+        "advisory_id": "PYSEC-2026-3698",
+        "summary": "sqlparse: Inefficient Regex Handling of Dollar-Quoted SQL Literals Leads to ReDoS (Denial of Service)",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "PyPI",
+        "package": "sqlparse",
+        "installed_version": "0.5.0",
+        "advisory_id": "PYSEC-2026-3699",
+        "summary": "sqlparse: TokenList.__init__ materializes O(subtree) value per group, causing CPU DoS before depth/token caps trigger",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+          }
+        ]
+      }
+    ],
+    "vuln_seconds": 5.69
+  },
+  "client-go": {
+    "scanned_files": 2531,
+    "secrets_findings": [
+      {
+        "path": "tools/clientcmd/client_config.go",
+        "line": 304,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:3b89662c3e24",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tools/clientcmd/client_config.go",
+        "line": 320,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:6ba25c49ab66",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tools/clientcmd/client_config.go",
+        "line": 338,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:626a2dede95e",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "tools/remotecommand/fallback_test.go",
+        "line": 333,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:f1b46ba3b659",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "transport/transport_test.go",
+        "line": 72,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:e876fd82e48b",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/certificate/certificate_manager_test.go",
+        "line": 67,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:03df8bfdea1c",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/certificate/certificate_manager_test.go",
+        "line": 112,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:03df8bfdea1c",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/certificate/certificate_manager_test.go",
+        "line": 146,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:03df8bfdea1c",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/certificate/certificate_manager_test.go",
+        "line": 171,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:03df8bfdea1c",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/certificate/certificate_manager_test.go",
+        "line": 196,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:03df8bfdea1c",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/certificate/certificate_manager_test.go",
+        "line": 1193,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:13a98e53fc36",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/certificate/certificate_manager_test.go",
+        "line": 1202,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:13a98e53fc36",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/certificate/certificate_manager_test.go",
+        "line": 1211,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:4b16ed21a420",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/certificate/certificate_manager_test.go",
+        "line": 1243,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:4b16ed21a420",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/certificate/certificate_manager_test.go",
+        "line": 1263,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:4b16ed21a420",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/keyutil/key_test.go",
+        "line": 27,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:9c234aec7748",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/keyutil/key_test.go",
+        "line": 94,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:0a2b23ee8024",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/keyutil/key_test.go",
+        "line": 102,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:0a2b23ee8024",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "util/cert/testdata/dontUseThisKey.pem",
+        "line": 1,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:8366326bedbd",
+        "likely_placeholder": true,
+        "accepted": false
+      },
+      {
+        "path": "plugin/pkg/client/auth/exec/exec_test.go",
+        "line": 71,
+        "pattern": "private_key_header",
+        "match_preview": "sha256:f35a2ff5764c",
+        "likely_placeholder": true,
+        "accepted": false
+      }
+    ],
+    "secrets_seconds": 0.92,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [
+      {
+        "ecosystem": "Go",
+        "package": "k8s.io/apimachinery",
+        "installed_version": "v0.0.0-20260902054759-19da3e68aab0",
+        "advisory_id": "GHSA-33c5-9fx5-fvjm",
+        "summary": "Privilege Escalation in Kubernetes",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:H/UI:R/S:U/C:H/I:H/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "Go",
+        "package": "k8s.io/apimachinery",
+        "installed_version": "v0.0.0-20260902054759-19da3e68aab0",
+        "advisory_id": "GO-2024-2748",
+        "summary": "Privilege Escalation in Kubernetes in k8s.io/apimachinery",
+        "severity": []
+      }
+    ],
+    "vuln_seconds": 1.64
+  },
+  "react": {
+    "scanned_files": 7093,
+    "secrets_findings": [
+      {
+        "path": "packages/react-client/src/__tests__/ReactFlight-test.js",
+        "line": 2427,
+        "pattern": "generic_credential_assignment",
+        "match_preview": "sha256:270130a2ff45",
+        "likely_placeholder": false,
+        "accepted": false
+      }
+    ],
+    "secrets_seconds": 2.41,
+    "vuln_checked": true,
+    "vuln_reason": null,
+    "vuln_findings": [
+      {
+        "ecosystem": "npm",
+        "package": "@babel/core",
+        "installed_version": "7.11.1",
+        "advisory_id": "GHSA-4x5r-pxfx-6jf8",
+        "summary": "@babel/core: Arbitrary File Read via sourceMappingURL Comment",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:C/C:L/I:N/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "@babel/traverse",
+        "installed_version": "7.11.0",
+        "advisory_id": "GHSA-67hx-6x53-jw92",
+        "summary": "Babel vulnerable to arbitrary code execution when compiling specifically crafted malicious code",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "minimatch",
+        "installed_version": "3.0.4",
+        "advisory_id": "GHSA-23c5-xmqv-rm74",
+        "summary": "minimatch ReDoS: nested *() extglobs generate catastrophically backtracking regular expressions",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "minimatch",
+        "installed_version": "3.0.4",
+        "advisory_id": "GHSA-3ppc-4f35-3m26",
+        "summary": "minimatch has a ReDoS via repeated wildcards with non-matching literal in pattern",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "minimatch",
+        "installed_version": "3.0.4",
+        "advisory_id": "GHSA-7r86-cg39-jmmj",
+        "summary": "minimatch has ReDoS: matchOne() combinatorial backtracking via multiple non-adjacent GLOBSTAR segments",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "minimatch",
+        "installed_version": "3.0.4",
+        "advisory_id": "GHSA-f8q6-p94x-37v3",
+        "summary": "minimatch ReDoS vulnerability",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "minimist",
+        "installed_version": "1.2.3",
+        "advisory_id": "GHSA-xvch-5gv4-984h",
+        "summary": "Prototype Pollution in minimist",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "rollup",
+        "installed_version": "3.29.5",
+        "advisory_id": "GHSA-mw96-cpmx-2vgc",
+        "summary": "Rollup 4 has Arbitrary File Write via Path Traversal",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N/E:P"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "semver",
+        "installed_version": "7.1.1",
+        "advisory_id": "GHSA-c2qf-rxjj-qqgw",
+        "summary": "semver vulnerable to Regular Expression Denial of Service",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "tmp",
+        "installed_version": "0.1.0",
+        "advisory_id": "GHSA-52f5-9888-hmc6",
+        "summary": "tmp allows arbitrary temporary file / directory write via symbolic link `dir` parameter",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "tmp",
+        "installed_version": "0.1.0",
+        "advisory_id": "GHSA-ph9p-34f9-6g65",
+        "summary": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape",
+        "severity": [
+          {
+            "type": "CVSS_V4",
+            "score": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N/E:P"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-2mjp-6q6p-2qxm",
+        "summary": "Undici has an HTTP Request/Response Smuggling issue",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-35p6-xmwp-9g52",
+        "summary": "undici vulnerable to HTTP response queue poisoning via keep-alive socket reuse",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-4992-7rv2-5pvq",
+        "summary": "Undici has CRLF Injection in undici via `upgrade` option",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:U/C:L/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-8xcm-r25x-g524",
+        "summary": "undici vulnerable to downstream response desynchronization via retry interceptor",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-c76h-2ccp-4975",
+        "summary": "Use of Insufficiently Random Values in undici",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-cxrh-j4jr-qwg3",
+        "summary": "undici Denial of Service attack via bad certificate data",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:N/I:N/A:L"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-g8m3-5g58-fq7m",
+        "summary": "undici vulnerable to Set-Cookie SameSite attribute downgrade via permissive substring matching",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-g9mf-h72j-4rw9",
+        "summary": "Undici has an unbounded decompression chain in HTTP responses on Node.js Fetch API via Content-Encoding leads to resource exhaustion",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-m8rv-5g2x-5cg5",
+        "summary": "undici vulnerable to CRLF Injection via blob-like body 'type' property",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-p88m-4jfj-68fv",
+        "summary": "undici vulnerable to HTTP header injection via Set-Cookie percent-decoding",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-v3r7-h72x-cjcm",
+        "summary": "undici vulnerable to cookie attribute injection via unsanitized domain and unparsed setCookie fields",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-v9p9-hfj2-hcw8",
+        "summary": "Undici has Unhandled Exception in WebSocket Client Due to Invalid server_max_window_bits Validation",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-vrm6-8vpv-qv8q",
+        "summary": "Undici has Unbounded Memory Consumption in WebSocket permessage-deflate Decompression",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      },
+      {
+        "ecosystem": "npm",
+        "package": "undici",
+        "installed_version": "5.28.4",
+        "advisory_id": "GHSA-vxpw-j846-p89q",
+        "summary": "undici WebSocket client vulnerable to denial of service via fragment count bypass",
+        "severity": [
+          {
+            "type": "CVSS_V3",
+            "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          }
+        ]
+      }
+    ],
+    "vuln_seconds": 20.46
+  }
+}
