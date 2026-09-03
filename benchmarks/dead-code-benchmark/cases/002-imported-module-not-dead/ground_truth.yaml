@@ -1,0 +1,8 @@
+case_id: 002-imported-module-not-dead
+scanner: dead_code
+category: true_negative
+finding_type: unreachable_module
+expected_path: src/helper.py
+description: >
+  A module imported by another file in the same tree (src/main.py).
+  Must not appear in unreachable_modules.

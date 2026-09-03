@@ -1,0 +1,9 @@
+case_id: 001-unreachable-module
+scanner: dead_code
+category: true_positive
+finding_type: unreachable_module
+expected_path: src/orphan.py
+description: >
+  A plain Python file with no importers, no main guard, no test-path
+  marker, no entry-point signal of any kind. Should appear in
+  unreachable_modules.

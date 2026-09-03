@@ -1,0 +1,9 @@
+case_id: 007-unused-pip-dependency
+scanner: dead_code
+category: true_positive
+finding_type: unused_dependency
+expected_package: requests
+expected_ecosystem: PyPI
+description: >
+  requirements.txt declares "requests" but no file in the repo imports
+  it. Should appear in unused_dependencies.

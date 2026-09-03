@@ -1,0 +1,9 @@
+case_id: 010-used-npm-dependency
+scanner: dead_code
+category: true_negative
+finding_type: unused_dependency
+expected_package: lodash
+expected_ecosystem: npm
+description: >
+  package.json declares "lodash" and index.js imports it. Must not
+  appear in unused_dependencies.

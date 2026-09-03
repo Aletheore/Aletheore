@@ -429,13 +429,72 @@ def is_test_file(path: str) -> bool:
     return any(pattern.search(path) for pattern in TEST_PATH_PATTERNS)
 
 
+def _import_root(imported: str) -> str:
+    return imported.split("/", 1)[0].split(".", 1)[0].lower().replace("-", "_")
+
+
 def _import_roots(modules: list[dict]) -> set[str]:
     roots = set()
     for module in modules:
         for imported in module.get("imports", []):
-            root = imported.split("/", 1)[0].split(".", 1)[0].lower()
+            root = _import_root(imported)
             if root:
-                roots.add(root.replace("-", "_"))
+                roots.add(root)
+    return roots
+
+
+# module["imports"] (scanner/graph.py's resolved_imports) only ever holds
+# import targets that resolved to another file INSIDE the repo - the
+# resolvers there deliberately drop the raw import name entirely once
+# resolution to a repo-internal file fails (an external package is never
+# a resolution target, by definition). That means _import_roots() above
+# structurally can never see an external package import at all, which
+# made the unused_dependencies check below always report every real
+# dependency as unused - confirmed directly, not hypothetical: scanning
+# this repo's own Flask fixture reported werkzeug/jinja2/itsdangerous/
+# click/blinker/importlib-metadata (Flask's actual, definitely-used
+# runtime dependencies) as 100% unused.
+#
+# This re-reads each Python/JS/TS source file directly and regex-extracts
+# raw import roots regardless of whether they'd resolve internally -
+# scoped to dead-code.py rather than changing what scanner/graph.py's
+# resolvers keep, since that field also feeds the import GRAPH (edges,
+# imported_by, hotspots, MCP's aletheore_imports) where only real
+# repo-internal edges belong; conflating "resolved" and "external, only
+# useful for this one check" into the same field would be a much larger,
+# riskier change than this narrowly-scoped, single-purpose regex pass.
+#
+# Known limitation, matching this file's existing Gradle-Groovy-regex
+# precedent below: only the first name on a comma-separated
+# `import a, b, c` line is captured (`from x import (a, b, c)` is
+# unaffected - the from-clause itself is what's captured, not what's
+# imported from it). PEP 8 discourages multi-import lines; accepted as a
+# narrower, explicit heuristic rather than a full parse, the same
+# trade-off _parse_gradle_groovy_pins documents for itself.
+_PY_PLAIN_IMPORT_RE = re.compile(r"^\s*import\s+([A-Za-z_][\w.]*)", re.MULTILINE)
+_PY_FROM_IMPORT_RE = re.compile(r"^\s*from\s+([A-Za-z_][\w.]*)\s+import\b", re.MULTILINE)
+_JS_IMPORT_RE = re.compile(r"""(?:from|require\()\s*['"]([^'"]+)['"]""")
+
+
+def _raw_external_import_roots(repo_path: Path, modules: list[dict]) -> set[str]:
+    roots: set[str] = set()
+    for module in modules:
+        path = module["path"]
+        if path.endswith(".py"):
+            pattern_pairs = (_PY_PLAIN_IMPORT_RE, _PY_FROM_IMPORT_RE)
+        elif path.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
+            pattern_pairs = (_JS_IMPORT_RE,)
+        else:
+            continue
+        try:
+            source = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for pattern in pattern_pairs:
+            for match in pattern.finditer(source):
+                root = _import_root(match.group(1))
+                if root:
+                    roots.add(root)
     return roots
 
 
@@ -509,7 +568,7 @@ def find_dead_code(
                 still_unreachable.append(entry)
         unreachable_modules = still_unreachable
 
-    imported_roots = _import_roots(modules)
+    imported_roots = _import_roots(modules) | _raw_external_import_roots(repo_path, modules)
     unused_dependencies = []
     for name, _version, ecosystem in _parse_pip_pins(repo_path) + _parse_npm_direct_pins(repo_path):
         # Static import-name matching is intentionally conservative. Some packages expose

@@ -1,0 +1,9 @@
+case_id: 006-test-file-not-flagged
+scanner: dead_code
+category: true_negative
+finding_type: unreachable_module
+expected_path: tests/test_something.py
+description: >
+  A test file, never imported by anything (pytest discovers it by
+  convention, not by import). Must be excluded from unreachable_modules
+  via is_test_file(), same as a real test suite's collection mechanism.
