@@ -1,0 +1,11 @@
+case_id: 017-clean-swift
+scanner: vulnerabilities
+category: true_negative
+ecosystem: SwiftURL
+package: github.com/apple/swift-log
+version: "1.6.1"
+cve_id: null
+description: >
+  Confirmed zero OSV.dev advisories for this exact package/version at
+  corpus-build time (2026-09-03). Measures false-positive rate for the
+  Swift ecosystem specifically.

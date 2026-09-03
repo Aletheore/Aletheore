@@ -1,0 +1,7 @@
+{
+  "name": "demo/app",
+  "require": {
+    "php": "^8.1",
+    "psr/log": "3.0.2"
+  }
+}

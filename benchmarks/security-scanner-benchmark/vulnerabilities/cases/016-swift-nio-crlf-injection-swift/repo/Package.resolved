@@ -1,0 +1,14 @@
+{
+  "pins": [
+    {
+      "identity": "swift-nio",
+      "kind": "remoteSourceControl",
+      "location": "https://github.com/apple/swift-nio.git",
+      "state": {
+        "revision": "6feb5f5148c72127014b34b304c4148e3e28f92",
+        "version": "2.29.0"
+      }
+    }
+  ],
+  "version": 2
+}

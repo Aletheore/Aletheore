@@ -1,0 +1,12 @@
+case_id: 010-guzzle-psr7-header-injection-packagist
+scanner: vulnerabilities
+category: true_positive
+ecosystem: Packagist
+package: guzzlehttp/psr7
+version: "1.8.3"
+cve_id: CVE-2023-29197
+description: >
+  Real, publicly documented improper header-name validation in
+  guzzlehttp/psr7 (GHSA-wxmh-65f7-jcvw), confirmed present against live
+  OSV.dev data for this exact package/version at corpus-build time
+  (2026-09-03). First Packagist-ecosystem pilot case.
