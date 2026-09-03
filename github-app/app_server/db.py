@@ -12,7 +12,20 @@ logger = logging.getLogger(__name__)
 
 
 async def create_pool(dsn: str) -> asyncpg.Pool:
-    return await asyncpg.create_pool(dsn)
+    # asyncpg's own default (min_size=10, max_size=10) is thin for the only
+    # persistent DB pool in the system - every other consumer (scan-worker
+    # and friends) uses short-lived sync connections, not a pool, and
+    # postgres's own max_connections defaults to 100, so 20 here is safe
+    # headroom. NOTE: a docker-mimic load test of the real 1-CPU/768MB
+    # app-server container found throughput degrading past ~200 concurrent
+    # /webhook requests (600 req/s -> ~280 req/s, p50 latency to ~1.7s at
+    # 500 concurrent) - re-tested with this change and the degradation at
+    # 500 concurrent was unchanged, so the pool was NOT that bottleneck
+    # (most likely the single uvicorn process's one CPU core/event loop
+    # instead, not yet root-caused). This bump is still worth having on its
+    # own: a genuinely low default with no downside to raising it, not a
+    # fix for the high-concurrency ceiling.
+    return await asyncpg.create_pool(dsn, min_size=5, max_size=20)
 
 
 async def get_flash_review_finding_comment_by_github_id(
