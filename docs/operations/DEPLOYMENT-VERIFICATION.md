@@ -4,8 +4,8 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-02
-**Snapshot Freshness:** CURRENT as of 2026-09-02 - production was redeployed to `master` (commit `1795104`, tagged `github-app-deploy-2026-09-02`) and re-verified live via SSH the same day. Most critical of the 19 commits deployed: PR #506's Flash price bump ($6->$8) - prod had been running 19 commits behind, so `resolve_plan_for_price_id` still only recognized the old, archived $6 price while the live site was already selling the new $8 one. A real Flash signup in that window would have been charged but never activated (unresolvable price id -> webhook silently drops the plan flip). Verified fixed post-deploy: `docker exec app-server python3 -c "from app_server.paddle_pricing import resolve_plan_for_price_id; ..."` returns `'flash'` for the new price id. Also deployed the same day: PR #512's fix to the live Paddle webhook destination itself (added the missing `adjustment.created` subscription via the Paddle API, independently re-verified) - a separate, pre-existing gap where refund/chargeback affiliate-commission reversal could never fire since Paddle never delivered that event. (This doc's snapshot history has gaps at the 2026-08-28 and 2026-08-30 deploys, tagged `github-app-deploy-2026-08-28`/`-08-30` but not separately logged here - see `github-app/CHANGELOG.md` for those.)
+**Last Updated:** 2026-09-03
+**Snapshot Freshness:** CURRENT as of 2026-09-03 - production was redeployed to `master` (commit `e655be2`, tagged `github-app-deploy-2026-09-03`) and re-verified live via SSH the same day. Prod had been running 13 commits (and 8 days) behind since `github-app-deploy-2026-08-26`. Most notable of the batch: PR #522 - a real correctness bug where `watch`'s incremental rebuild path discarded security findings entirely, not just the architecture-analysis/hotspots work #517 deliberately skips there. Also deployed: #524 (asyncpg's DB pool was running on the library default of 10 connections - the only persistent pool in the system - raised to a 5/20 min/max after a docker-mimic load test of the real 1-CPU/768MB app-server container found throughput degrading past ~200 concurrent `/webhook` requests; re-tested post-fix and the degradation at 500 concurrent was unchanged, so the pool wasn't that specific bottleneck - documented as an open question, not oversold as a fix) and #525 (prompt-cache hit-rate visibility for LLM writing calls - Aletheore's own Flash review caught a real gap in that PR's own diff before merge: the second-model verification usage callback accepted the new `cached_tokens` parameter but never logged it, fixed same-day before merge). (This doc's snapshot history has gaps at the 2026-08-28 and 2026-08-30 deploys, tagged `github-app-deploy-2026-08-28`/`-08-30` but not separately logged here - see `github-app/CHANGELOG.md` for those.)
 
 ## Purpose
 
@@ -29,6 +29,49 @@ Before claiming a hardening change is live, verify:
 - Restore drill target database availability.
 
 ## Current Server Snapshot
+
+As of 2026-09-03, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` - a plain `git reset --hard` was blocked by this session's own destructive-command guard, but the working tree was already confirmed clean so a fast-forward merge landed the identical result - + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `e655be2`.
+- Working tree: clean aside from the expected untracked `github-app/backups/` directory.
+- 13 commits since the previous deploy tag (`github-app-deploy-2026-08-26`): #513 (docs-only,
+  no-op), #514 (release 0.9.11, bundling #499/#503/#504/#505/#508/#509/#510/#511 - already covered
+  by earlier snapshots' own commit ranges), #515 (real token-based batching for hosted embedding
+  indexing), #517 (`watch`'s incremental rebuild skips architecture analysis and hotspots - a
+  deliberate perf trade-off, not a bug), #516 (local embedding now defaults to jina, matching the
+  hosted model), #518 (carries the pre-existing architecture analysis forward during that same
+  incremental rebuild, so #517's skip doesn't silently blank it out over time), #519/#520 (docs-only
+  comment fixes), #521 (`aletheore_ast_pattern` now caps results and doesn't crash on an unreadable
+  file), #522 (real correctness bug: unlike #517's deliberate skip, `watch`'s incremental rebuild
+  path was discarding real security findings too - fixed), #523 (docs-only), #524 (asyncpg pool
+  size), #525 (LLM prompt-cache hit-rate visibility). See each PR for its own full writeup;
+  `github-app/CHANGELOG.md` for the running log.
+- All five app-relevant services rebuilt (`app-server`, `scan-worker`, `scan-worker-2`,
+  `health-worker`, `scheduler` - `src/aletheore` changed extensively across this range, and all five
+  copy it into their image) - `jina-embed` left untouched (its Dockerfile never copies
+  `src/aletheore`; it's self-contained with its own baked-in model weights, so the new
+  `src/aletheore/data/jina_v2_base_code_tokenizer.json` file added in this range doesn't affect it),
+  `demo-scan-worker`/`demo-sandbox-runner` also untouched since neither's own source changed.
+- Services running: all five `Up`, all five reporting Docker-healthcheck `healthy` within ~30
+  seconds of recreation.
+- No pending migrations - `app-server`'s startup log shows `no pending migrations` (none of this
+  range's changes touched the DB schema).
+- Post-deploy, verified live (not just that the deploy succeeded) by executing directly inside the
+  running containers, not by re-reading the repo: `inspect.getsource` on `app_server.db.create_pool`
+  confirms `min_size=5, max_size=20`; `inspect.getsource` on
+  `scan_worker.jobs._IncrementalSpendBudget.record_usage` confirms the new cache-hit logging line.
+- Health checks: internal `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`;
+  real production request traffic (dashboard, audit endpoints) flowing normally in the access log
+  immediately after restart.
+- No errors, tracebacks, or exceptions in `app-server`, `scan-worker`, `scan-worker-2`,
+  `health-worker`, or `scheduler` logs in the 60 seconds after restart.
+- Not re-verified this pass (no relevant Dockerfile/host changes): Docker socket mount absence,
+  non-root users, CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill
+  target availability, disk space - each last directly verified 2026-08-10 (restore drill itself
+  upgraded 2026-08-24, see below).
+
+## 2026-08-27 (fifth deploy) Snapshot
 
 As of 2026-08-27 (fifth deploy), following a redeploy to `master` (`git fetch` + `git reset --hard origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five), live inspection found:
 
