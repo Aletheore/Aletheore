@@ -77,13 +77,21 @@ for name in REPOS:
     # though none of its arguments were ever match_preview or any other
     # per-finding field - scanned_files, the two counts, and checked are
     # exactly the plain int/bool values a status line needs, nothing else
-    # reachable from either scan result.
-    # codeql[py/clear-text-logging-sensitive-data]
+    # reachable from either scan result. The alert names two flows here,
+    # secrets_findings_count and vuln_findings_count - both are a bare
+    # len(), not the finding content itself, confirming this is
+    # taint-tracking on find_secrets()'s return value rather than a real
+    # leak (the suppression below has to sit ON the print() line itself -
+    # a few lines above with an explanatory comment block in between, as
+    # an earlier version of this fix had it, does not count as adjacent).
     scanned_files_count = secrets_result["scanned_files"]
     secrets_findings_count = len(secrets_result["findings"])
     vuln_findings_count = len(vuln_result["findings"])
     vuln_checked = vuln_result["checked"]
-    print(f"{name:<15} files={scanned_files_count:<5} secrets_findings={secrets_findings_count:<3} vuln_findings={vuln_findings_count:<4} checked={vuln_checked}")
+    print(  # codeql[py/clear-text-logging-sensitive-data]
+        f"{name:<15} files={scanned_files_count:<5} secrets_findings={secrets_findings_count:<3} "
+        f"vuln_findings={vuln_findings_count:<4} checked={vuln_checked}"
+    )
 
 (ROOT / "results.json").write_text(json.dumps(results, indent=2))
 print("\nWrote results.json")
