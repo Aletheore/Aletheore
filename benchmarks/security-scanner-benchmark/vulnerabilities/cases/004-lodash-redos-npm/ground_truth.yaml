@@ -1,0 +1,11 @@
+case_id: 004-lodash-redos-npm
+scanner: vulnerabilities
+category: true_positive
+ecosystem: npm
+package: lodash
+version: 4.17.15
+cve_id: CVE-2020-28500
+description: >
+  Real, publicly documented ReDoS in lodash's trim/toNumber/trimEnd
+  (GHSA-29mw-wpgm-hmr9), confirmed present against live OSV.dev data
+  for this exact package/version at corpus-build time (2026-09-03).

@@ -1,0 +1,12 @@
+case_id: 003-jwt-go-algorithm-confusion
+scanner: vulnerabilities
+category: true_positive
+ecosystem: Go
+package: github.com/dgrijalva/jwt-go
+version: v3.2.0+incompatible
+cve_id: null
+description: >
+  dgrijalva/jwt-go's known algorithm-confusion / unmaintained-package
+  advisory (GHSA-w73w-5m7g-f7qc, GO-2020-0017), confirmed present
+  against live OSV.dev data for this exact module/version at
+  corpus-build time (2026-09-03).

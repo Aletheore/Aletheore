@@ -1,0 +1,11 @@
+case_id: 005-six-clean-pypi
+scanner: vulnerabilities
+category: true_negative
+ecosystem: PyPI
+package: six
+version: 1.16.0
+cve_id: null
+description: >
+  Confirmed zero OSV.dev advisories for this exact package/version at
+  corpus-build time (2026-09-03). Measures false-positive rate: a clean
+  manifest should produce no findings for this package.
