@@ -2032,6 +2032,12 @@ def _run_flash_review(
         def _on_verification_usage(
             prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
         ) -> None:
+            if cached_tokens:
+                logging.getLogger("scan_worker.jobs").info(
+                    "llm cache hit: model=%s feature=flash_review_verification "
+                    "cached=%d/%d prompt tokens",
+                    VERIFICATION_MODEL, cached_tokens, prompt_tokens,
+                )
             # Verification always runs on deepseek-v4-flash regardless of
             # which model generated the finding (see model_tiers.
             # verification_adapter), so its cost is priced at that model's
