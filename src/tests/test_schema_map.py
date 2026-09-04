@@ -294,7 +294,10 @@ def test_an_unbalanced_paren_inside_a_comment_does_not_swallow_the_next_table(tm
     table_names = [t["name"] for t in result["tables"]]
     assert "orders" in table_names
     assert [c["name"] for c in result["tables"][table_names.index("users")]["columns"]] == ["id", "name"]
-    assert {"from_table": "orders", "from_column": "user_id", "to_table": "users", "to_column": "id", "on_delete": None} in [
+    assert {
+        "from_table": "orders", "from_column": "user_id", "to_table": "users",
+        "to_column": "id", "on_delete": None, "name": "orders_user_id_fkey",
+    } in [
         {k: v for k, v in r.items() if k != "file" and k != "line"} for r in result["relations"]
     ]
 
@@ -401,16 +404,64 @@ def test_composite_primary_key_and_table_level_unique(tmp_path):
     assert columns["user_id"]["unique"] is True
 
 
-def test_check_constraint_is_recorded_not_silently_dropped(tmp_path):
+def test_column_level_check_constraint_is_modeled(tmp_path):
     repo = write_migrations(
         tmp_path,
         {"001.sql": "CREATE TABLE t (id BIGINT PRIMARY KEY, role TEXT CHECK (role IN ('a', 'b')));"},
     )
     result = extract_schema(repo, ["migrations"])
 
-    assert len(result["unsupported"]) == 1
-    assert "CHECK" in result["unsupported"][0]["statement"]
-    assert "role" in result["unsupported"][0]["statement"]
+    assert result["unsupported"] == []
+    checks = result["tables"][0]["checks"]
+    assert len(checks) == 1
+    assert checks[0]["column"] == "role"
+    assert checks[0]["name"] is None
+    assert "role" in checks[0]["expression"]
+    assert "'a'" in checks[0]["expression"]
+
+
+def test_table_level_named_check_constraint_is_modeled(tmp_path):
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE t (
+                id BIGINT PRIMARY KEY,
+                min_val INT,
+                max_val INT,
+                CONSTRAINT valid_range CHECK (min_val <= max_val)
+            );
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert result["unsupported"] == []
+    checks = result["tables"][0]["checks"]
+    assert len(checks) == 1
+    assert checks[0]["name"] == "valid_range"
+    assert checks[0]["column"] is None
+
+
+def test_check_constraint_added_via_alter_table_is_modeled(tmp_path):
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE t (id BIGINT PRIMARY KEY, age INT);
+            ALTER TABLE t ADD CONSTRAINT age_check CHECK (age > 0);
+            ALTER TABLE t ADD COLUMN role TEXT CHECK (role IN ('a', 'b'));
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert result["unsupported"] == []
+    checks = result["tables"][0]["checks"]
+    assert len(checks) == 2
+    names_and_columns = {(c["name"], c["column"]) for c in checks}
+    assert ("age_check", None) in names_and_columns
+    assert (None, "role") in names_and_columns
 
 
 def test_drop_table_removes_table_and_its_relations(tmp_path):
@@ -602,7 +653,11 @@ def test_create_and_drop_index(tmp_path):
     assert result["indexes"] == []
 
 
-def test_drop_constraint_and_views_and_grants_are_unsupported(tmp_path):
+def test_drop_constraint_by_name_removes_the_matching_relation(tmp_path):
+    """A named FK constraint's name is tracked (explicit, or Postgres' own
+    auto-generated <table>_<column>_fkey for an unnamed one), so a later
+    DROP CONSTRAINT by that name can actually be resolved instead of
+    always falling to unsupported."""
     repo = write_migrations(
         tmp_path,
         {
@@ -610,6 +665,41 @@ def test_drop_constraint_and_views_and_grants_are_unsupported(tmp_path):
             CREATE TABLE t (id BIGINT PRIMARY KEY);
             ALTER TABLE t ADD CONSTRAINT fk_x FOREIGN KEY (id) REFERENCES t(id);
             ALTER TABLE t DROP CONSTRAINT fk_x;
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert result["relations"] == []
+    assert not any("DROP CONSTRAINT" in u["statement"] for u in result["unsupported"])
+
+
+def test_drop_constraint_with_no_matching_relation_stays_unsupported(tmp_path):
+    """A DROP CONSTRAINT targeting a name that isn't a tracked relation -
+    most likely a named UNIQUE/CHECK/PRIMARY KEY constraint - still falls
+    back to unsupported (with the real statement text) rather than
+    silently doing nothing."""
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE t (id BIGINT PRIMARY KEY, email TEXT);
+            ALTER TABLE t ADD CONSTRAINT uq_email UNIQUE (email);
+            ALTER TABLE t DROP CONSTRAINT uq_email;
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert any("DROP CONSTRAINT uq_email" in u["statement"] for u in result["unsupported"])
+
+
+def test_views_and_grants_are_unsupported(tmp_path):
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE t (id BIGINT PRIMARY KEY);
             CREATE VIEW v AS SELECT * FROM t;
             GRANT SELECT ON t TO readonly;
             """
@@ -618,7 +708,6 @@ def test_drop_constraint_and_views_and_grants_are_unsupported(tmp_path):
     result = extract_schema(repo, ["migrations"])
     statements = [u["statement"] for u in result["unsupported"]]
 
-    assert any("DROP CONSTRAINT" in s for s in statements)
     assert any("CREATE VIEW" in s for s in statements)
     assert any("GRANT" in s for s in statements)
 

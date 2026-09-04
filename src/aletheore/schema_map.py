@@ -1,8 +1,19 @@
 """Deterministic database-schema extraction from Postgres DDL migrations.
 
 Produces the `repository.database.schema` AIR section: the tables, columns,
-foreign-key relations, and indexes a repository's migrations define, each
-resolving to the file:line that introduced it.
+foreign-key relations, indexes, and CHECK constraints a repository's
+migrations define, each resolving to the file:line that introduced it.
+
+Every relation carries a `name`: an explicit `CONSTRAINT name FOREIGN KEY
+...` uses it as given, and an unnamed single-column FK is auto-named
+following Postgres' own real, documented default convention
+(`<table>_<column>_fkey`) rather than left nameless - not a guess, the
+same name Postgres itself would assign. This is what makes a later `ALTER
+TABLE ... DROP CONSTRAINT <name>` resolvable (removes the matching
+relation) instead of always falling to `unsupported`; a name that matches
+no tracked relation - most likely a named UNIQUE/CHECK/PRIMARY KEY
+constraint, not individually addressable yet - still falls back to
+`unsupported` with the real statement text, never silently no-ops.
 
 Parsing is via sqlglot rather than a hand-written tokenizer (which this
 module used through 2026-09-04). The hand-written tokenizer silently
@@ -26,23 +37,27 @@ linear-time hand-written scanner, the same design this module used before.
 
 Scope is deliberately Postgres-only for v1 (`read="postgres"` is fixed,
 though sqlglot itself supports 30+ dialects), and deliberately narrower
-than Postgres: only CREATE TABLE, CREATE INDEX, DROP TABLE, DROP INDEX,
-and every ALTER TABLE action with a clear, unambiguous DDL meaning (ADD/
-DROP/RENAME COLUMN, RENAME TO, ALTER COLUMN TYPE/SET-DROP NOT NULL/SET
-DEFAULT, ADD CONSTRAINT UNIQUE/FOREIGN KEY/PRIMARY KEY) are modeled.
-CHECK/EXCLUDE constraints, DROP CONSTRAINT (which constraint gets dropped
-isn't tracked precisely enough on relations to resolve), views, sequences,
-types, extensions, functions/triggers, GRANT/REVOKE, and raw DML are
-recorded in `unsupported` (with the real reconstructed SQL text, not a
-truncated token dump) rather than modeled - a repository is free to
-contain SQL this does not model, and a partial schema is more useful than
-a failed scan. Never raises on malformed SQL: a statement sqlglot cannot
-parse falls back to a generic Command node scoped to that one statement,
-not the whole file; a file with a truly unterminated string or
-dollar-quote (which sqlglot's tokenizer cannot recover from at all, unlike
-an ordinary unparseable statement) is re-tokenized up to the error's own
-reported position to salvage whatever complete statements came before it,
-with an `unsupported` entry noting the rest of the file was unreadable.
+than Postgres: CREATE TABLE, CREATE INDEX, DROP TABLE, DROP INDEX, every
+ALTER TABLE action with a clear, unambiguous DDL meaning (ADD/DROP/RENAME
+COLUMN, RENAME TO, ALTER COLUMN TYPE/SET-DROP NOT NULL/SET DEFAULT, ADD
+CONSTRAINT UNIQUE/FOREIGN KEY/PRIMARY KEY/CHECK, and - where the name
+resolves - DROP CONSTRAINT), and CHECK constraints (column- or
+table-level, named or not - stored as `{name, column, expression}` on the
+owning table, `expression` the real reconstructed SQL text rather than an
+evaluated boolean, since evaluating an arbitrary CHECK expression is not
+this module's job) are modeled. EXCLUDE constraints, an unresolvable DROP
+CONSTRAINT, views, sequences, types, extensions, functions/triggers,
+GRANT/REVOKE, and raw DML are recorded in `unsupported` (with the real
+reconstructed SQL text, not a truncated token dump) rather than modeled -
+a repository is free to contain SQL this does not model, and a partial
+schema is more useful than a failed scan. Never raises on malformed SQL: a
+statement sqlglot cannot parse falls back to a generic Command node scoped
+to that one statement, not the whole file; a file with a truly
+unterminated string or dollar-quote (which sqlglot's tokenizer cannot
+recover from at all, unlike an ordinary unparseable statement) is
+re-tokenized up to the error's own reported position to salvage whatever
+complete statements came before it, with an `unsupported` entry noting the
+rest of the file was unreadable.
 """
 
 from __future__ import annotations
@@ -182,7 +197,8 @@ def _sql_on_delete(options: list | None) -> str | None:
 
 
 def _sql_relation_from_reference(
-    local_column: str, reference: exp.Expression, rel_path: str, line: int
+    local_column: str, reference: exp.Expression, rel_path: str, line: int,
+    *, table: str | None = None, name: str | None = None,
 ) -> dict | None:
     target = reference.args.get("this")
     if target is None:
@@ -195,7 +211,15 @@ def _sql_relation_from_reference(
     to_column = to_columns[0].name if to_columns else "id"
     if not to_table:
         return None
+    # An explicit `CONSTRAINT name ...` wins; otherwise this is the real,
+    # documented Postgres default naming convention for an unnamed
+    # single-column FK constraint - not a guess. Tracking it (rather than
+    # leaving every relation nameless) is what makes a later
+    # `DROP CONSTRAINT <name>` resolvable instead of a permanent
+    # unsupported entry.
+    constraint_name = name or (f"{table}_{local_column}_fkey" if table else None)
     return {
+        "name": constraint_name,
         "from_column": local_column,
         "to_table": to_table,
         "to_column": to_column,
@@ -206,14 +230,15 @@ def _sql_relation_from_reference(
 
 
 def _sql_column_from_columndef(
-    coldef: exp.ColumnDef, rel_path: str, line: int
-) -> tuple[dict, dict | None, list[dict]]:
+    coldef: exp.ColumnDef, rel_path: str, line: int, *, table: str | None = None
+) -> tuple[dict, dict | None, list[dict], list[dict]]:
     column = {
         "name": coldef.name, "type": _sql_type_text(coldef), "primary_key": False,
         "nullable": True, "unique": False, "default": None, "file": rel_path, "line": line,
     }
     relation = None
     unsupported: list[dict] = []
+    checks: list[dict] = []
     for constraint in coldef.args.get("constraints") or []:
         kind = constraint.kind
         if isinstance(kind, exp.PrimaryKeyColumnConstraint):
@@ -231,9 +256,15 @@ def _sql_column_from_columndef(
             if default_node is not None:
                 column["default"] = default_node.sql(dialect=_SQL_DIALECT)
         elif isinstance(kind, exp.Reference):
-            relation = _sql_relation_from_reference(column["name"], kind, rel_path, line)
+            relation = _sql_relation_from_reference(column["name"], kind, rel_path, line, table=table)
+        elif isinstance(kind, exp.CheckColumnConstraint):
+            checks.append(
+                {"name": None, "column": column["name"],
+                 "expression": kind.args["this"].sql(dialect=_SQL_DIALECT),
+                 "file": rel_path, "line": line}
+            )
         else:
-            # CHECK, COLLATE, GENERATED AS IDENTITY, EXCLUDE-shaped column
+            # COLLATE, GENERATED AS IDENTITY, EXCLUDE-shaped column
             # constraints: real SQL, no shape-changing effect this module
             # models, recorded with the real reconstructed text rather than
             # silently dropped.
@@ -241,19 +272,27 @@ def _sql_column_from_columndef(
                 {"file": rel_path, "line": line,
                  "statement": _summarize(f"{column['name']} {kind.sql(dialect=_SQL_DIALECT)}")}
             )
-    return column, relation, unsupported
+    return column, relation, checks, unsupported
 
 
 def _sql_foreign_key_relations(
-    fk: exp.ForeignKey, rel_path: str, line: int
+    fk: exp.ForeignKey, rel_path: str, line: int, *, table: str | None = None, name: str | None = None
 ) -> list[dict]:
     local_columns = [c.name for c in fk.args.get("expressions") or []]
     reference = fk.args.get("reference")
     if not local_columns or reference is None:
         return []
     relations = []
+    # A composite FK's auto-generated Postgres name isn't reliably
+    # predictable from the column list alone, so auto-naming (as opposed to
+    # an explicit CONSTRAINT name) is only attempted for the common
+    # single-column case - `naming_table` is left unset otherwise so
+    # _sql_relation_from_reference's own fallback doesn't guess one either.
+    naming_table = table if (name or len(local_columns) == 1) else None
     for local_column in local_columns:
-        relation = _sql_relation_from_reference(local_column, reference, rel_path, line)
+        relation = _sql_relation_from_reference(
+            local_column, reference, rel_path, line, table=naming_table, name=name
+        )
         if relation is not None:
             relations.append(relation)
     return relations
@@ -263,16 +302,20 @@ def _sql_apply_table_constraint(
     node: exp.Expression,
     by_name: dict[str, dict],
     relations: list[dict],
+    checks: list[dict],
     unsupported: list[dict],
     rel_path: str,
     line: int,
     label: str,
+    *,
+    table: str | None = None,
+    constraint_name: str | None = None,
 ) -> None:
-    """Applies one table-level constraint (PRIMARY KEY/UNIQUE/FOREIGN KEY,
-    bare or wrapped in a named `CONSTRAINT name (...)`) to the columns
-    already built for this table. `label` is what an unhandled constraint
-    is reported against (the table name for a bare constraint, the
-    constraint's own name for a named one)."""
+    """Applies one table-level constraint (PRIMARY KEY/UNIQUE/FOREIGN KEY/
+    CHECK, bare or wrapped in a named `CONSTRAINT name (...)`) to the
+    columns already built for this table. `label` is what an unhandled
+    constraint is reported against (the table name for a bare constraint,
+    the constraint's own name for a named one)."""
     if isinstance(node, exp.PrimaryKey):
         for identifier in node.expressions:
             name = identifier.name if hasattr(identifier, "name") else str(identifier)
@@ -288,7 +331,14 @@ def _sql_apply_table_constraint(
             if column is not None:
                 column["unique"] = True
     elif isinstance(node, exp.ForeignKey):
-        relations.extend(_sql_foreign_key_relations(node, rel_path, line))
+        relations.extend(
+            _sql_foreign_key_relations(node, rel_path, line, table=table, name=constraint_name)
+        )
+    elif isinstance(node, exp.CheckColumnConstraint):
+        checks.append(
+            {"name": constraint_name, "column": None,
+             "expression": node.args["this"].sql(dialect=_SQL_DIALECT), "file": rel_path, "line": line}
+        )
     else:
         unsupported.append(
             {"file": rel_path, "line": line,
@@ -311,25 +361,32 @@ def _sql_create_table_event(stmt: exp.Create, rel_path: str, line: int) -> tuple
 
     columns: list[dict] = []
     relations: list[dict] = []
+    checks: list[dict] = []
     unsupported: list[dict] = []
     by_name: dict[str, dict] = {}
 
     expressions = schema.expressions if isinstance(schema, exp.Schema) else []
     for member in expressions:
         if isinstance(member, exp.ColumnDef):
-            column, relation, column_unsupported = _sql_column_from_columndef(member, rel_path, line)
+            column, relation, column_checks, column_unsupported = _sql_column_from_columndef(
+                member, rel_path, line, table=table
+            )
             columns.append(column)
             by_name[column["name"]] = column
             if relation is not None:
                 relations.append(relation)
+            checks.extend(column_checks)
             unsupported.extend(column_unsupported)
         elif isinstance(member, exp.Constraint):
             for inner in member.expressions:
                 _sql_apply_table_constraint(
-                    inner, by_name, relations, unsupported, rel_path, line, f"CONSTRAINT {member.name}"
+                    inner, by_name, relations, checks, unsupported, rel_path, line,
+                    f"CONSTRAINT {member.name}", table=table, constraint_name=member.name,
                 )
-        elif isinstance(member, (exp.PrimaryKey, exp.UniqueColumnConstraint, exp.ForeignKey)):
-            _sql_apply_table_constraint(member, by_name, relations, unsupported, rel_path, line, table)
+        elif isinstance(member, (exp.PrimaryKey, exp.UniqueColumnConstraint, exp.ForeignKey, exp.CheckColumnConstraint)):
+            _sql_apply_table_constraint(
+                member, by_name, relations, checks, unsupported, rel_path, line, table, table=table
+            )
         else:
             unsupported.append(
                 {"file": rel_path, "line": line,
@@ -338,7 +395,7 @@ def _sql_create_table_event(stmt: exp.Create, rel_path: str, line: int) -> tuple
 
     return (
         {"kind": "create_table", "table": table, "file": rel_path, "line": line,
-         "columns": columns, "relations": relations},
+         "columns": columns, "relations": relations, "checks": checks},
         unsupported,
     )
 
@@ -370,7 +427,12 @@ def _sql_alter_table_events(stmt: exp.Alter, rel_path: str, line: int) -> list[d
 
     for action in stmt.args.get("actions") or []:
         if isinstance(action, exp.ColumnDef):
-            column, relation, column_unsupported = _sql_column_from_columndef(action, rel_path, line)
+            column, relation, column_checks, column_unsupported = _sql_column_from_columndef(
+                action, rel_path, line, table=table
+            )
+            events.extend(
+                {"kind": "add_check", "table": table, "check": check} for check in column_checks
+            )
             events.extend(
                 {"kind": "unsupported", **entry} for entry in column_unsupported
             )
@@ -387,9 +449,19 @@ def _sql_alter_table_events(stmt: exp.Alter, rel_path: str, line: int) -> list[d
                     )
         elif isinstance(action, exp.Drop) and action.args.get("kind") == "CONSTRAINT":
             for target in action.args.get("tables") or []:
+                if not target.name:
+                    continue
+                # Most real DROP CONSTRAINT targets are foreign keys, whose
+                # constraint name (explicit or Postgres' own auto-generated
+                # <table>_<column>_fkey) is now tracked on the relation - so
+                # this can actually be resolved instead of only ever being
+                # unsupported. Falls back to unsupported (with the real
+                # statement text) at merge time if no tracked relation has
+                # that name - a named UNIQUE/CHECK/PK constraint, most
+                # likely, which isn't individually addressable yet.
                 events.append(
-                    {"kind": "unsupported", "file": rel_path, "line": line,
-                     "statement": _summarize(f"ALTER TABLE {table} DROP CONSTRAINT {target.name}")}
+                    {"kind": "remove_relation", "name": target.name, "file": rel_path, "line": line,
+                     "fallback_statement": _summarize(f"ALTER TABLE {table} DROP CONSTRAINT {target.name}")}
                 )
         elif isinstance(action, exp.RenameColumn):
             old_name = action.args.get("this")
@@ -448,10 +520,13 @@ def _sql_alter_table_events(stmt: exp.Alter, rel_path: str, line: int) -> list[d
                 )
         elif isinstance(action, exp.AddConstraint):
             for wrapper in action.expressions:
+                explicit_name = wrapper.name if isinstance(wrapper, exp.Constraint) else None
                 inner_list = wrapper.expressions if isinstance(wrapper, exp.Constraint) else [wrapper]
                 for inner in inner_list:
                     if isinstance(inner, exp.ForeignKey):
-                        for relation in _sql_foreign_key_relations(inner, rel_path, line):
+                        for relation in _sql_foreign_key_relations(
+                            inner, rel_path, line, table=table, name=explicit_name
+                        ):
                             events.append(
                                 {"kind": "add_relation", "table": table, "relation": relation,
                                  "file": rel_path, "line": line}
@@ -472,6 +547,13 @@ def _sql_alter_table_events(stmt: exp.Alter, rel_path: str, line: int) -> list[d
                                  "changes": {"primary_key": True, "nullable": False},
                                  "file": rel_path, "line": line}
                             )
+                    elif isinstance(inner, exp.CheckColumnConstraint):
+                        events.append(
+                            {"kind": "add_check", "table": table,
+                             "check": {"name": explicit_name, "column": None,
+                                       "expression": inner.args["this"].sql(dialect=_SQL_DIALECT),
+                                       "file": rel_path, "line": line}}
+                        )
                     else:
                         events.append(
                             {"kind": "unsupported", "file": rel_path, "line": line,
@@ -569,6 +651,7 @@ def _merge_schema_events(
                 continue
             tables[event["table"]] = {
                 "name": event["table"], "columns": event["columns"],
+                "checks": list(event.get("checks", [])),
                 "file": event["file"], "line": event["line"],
             }
             for relation in event["relations"]:
@@ -655,6 +738,23 @@ def _merge_schema_events(
             for index in indexes:
                 if index["name"] == event["old_name"]:
                     index["name"] = event["new_name"]
+        elif kind == "add_check":
+            table = tables.get(event["table"])
+            if table is not None:
+                table.setdefault("checks", []).append(event["check"])
+        elif kind == "remove_relation":
+            matched = [r for r in relations if r.get("name") == event["name"]]
+            if matched:
+                relations[:] = [r for r in relations if r.get("name") != event["name"]]
+            else:
+                # Not a tracked foreign key - most likely a named UNIQUE,
+                # CHECK, or PRIMARY KEY constraint, which isn't individually
+                # addressable by name yet. Recorded rather than silently
+                # doing nothing, same as before this event kind existed.
+                unsupported.append(
+                    {"file": event["file"], "line": event["line"],
+                     "statement": event["fallback_statement"]}
+                )
         elif kind == "raw_sql":
             sql_events, sql_unsupported = _sql_events_from_text(event["sql"], event["file"])
             unsupported.extend(sql_unsupported)
