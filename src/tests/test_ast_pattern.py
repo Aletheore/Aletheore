@@ -106,39 +106,38 @@ def test_search_ast_pattern_typescript_covers_both_ts_and_tsx_grammars(tmp_path)
     assert matched_files == {"plain.ts", "component.tsx"}
 
 
-def test_search_ast_pattern_skips_a_file_over_the_size_cap(tmp_path, monkeypatch):
-    import aletheore.ast_pattern as ast_pattern_module
+def test_search_ast_pattern_skips_a_file_over_the_size_cap(tmp_path):
+    # Real MAX_SOURCE_FILE_BYTES (2MB), not a monkeypatched constant - the
+    # actual parse-and-query work now runs inside a subprocess (see
+    # ast_pattern.py's module docstring), which does its own fresh import
+    # and never sees a patch applied to this test's own process.
+    from aletheore.scanner.graph import MAX_SOURCE_FILE_BYTES
 
-    monkeypatch.setattr(ast_pattern_module, "MAX_SOURCE_FILE_BYTES", 10)
-    (tmp_path / "app.py").write_text("def f():\n    pass\n")  # well over 10 bytes
+    (tmp_path / "app.py").write_text(
+        "def f():\n    pass\n" + ("# padding\n" * (MAX_SOURCE_FILE_BYTES // 10))
+    )
 
     result = search_ast_pattern(tmp_path, "python", "(function_definition) @f")
 
     assert result["matches"] == []
 
 
-def test_search_ast_pattern_skips_an_unreadable_file_without_losing_other_results(
-    tmp_path, monkeypatch
-):
+def test_search_ast_pattern_skips_an_unreadable_file_without_losing_other_results(tmp_path):
     """Real regression: an unhandled OSError on one file used to crash the
-    whole call, losing every other file's real matches too - verified by
-    reproducing it against a real chmod-000 file before this fix existed."""
+    whole call, losing every other file's real matches too. A genuine
+    chmod-000 file, not a monkeypatched _read_and_parse - the parse-and-
+    query work now runs inside a subprocess (see ast_pattern.py's module
+    docstring), which does its own fresh import and never sees a patch
+    applied to this test's own process; real filesystem permissions do
+    propagate correctly."""
     (tmp_path / "good.py").write_text("def real_match():\n    pass\n")
     bad = tmp_path / "bad.py"
     bad.write_text("def also_matches():\n    pass\n")
-
-    import aletheore.ast_pattern as ast_pattern_module
-
-    real_read_and_parse = ast_pattern_module._read_and_parse
-
-    def flaky_read_and_parse(path, parser, ts_language):
-        if path.name == "bad.py":
-            raise OSError("permission denied")
-        return real_read_and_parse(path, parser, ts_language)
-
-    monkeypatch.setattr(ast_pattern_module, "_read_and_parse", flaky_read_and_parse)
-
-    result = search_ast_pattern(tmp_path, "python", "(function_definition) @f")
+    bad.chmod(0)
+    try:
+        result = search_ast_pattern(tmp_path, "python", "(function_definition) @f")
+    finally:
+        bad.chmod(0o644)  # tmp_path cleanup needs this back or it can't delete the file
 
     matched_files = {m["file"] for m in result["matches"]}
     assert matched_files == {"good.py"}
