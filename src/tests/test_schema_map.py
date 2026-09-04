@@ -747,6 +747,26 @@ def test_create_and_drop_index(tmp_path):
     assert result["indexes"] == []
 
 
+def test_truncated_create_index_is_unsupported_not_a_crash(tmp_path):
+    """Found via real-repo stress testing on Discourse: a Rails migration
+    builds its CREATE INDEX statement dynamically via string interpolation
+    (`execute "CREATE INDEX #{...} name ON table (col)"`), and the raw-SQL
+    extraction only captures the literal prefix `"CREATE INDEX "`. sqlglot
+    parses the keywords but leaves the Index node itself as None, which used
+    to crash `_sql_create_index_event` with an AttributeError instead of
+    degrading to unsupported like every other unparseable statement."""
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": "CREATE INDEX ",
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert result["indexes"] == []
+    assert any("CREATE INDEX" in entry["statement"] for entry in result["unsupported"])
+
+
 def test_drop_constraint_by_name_removes_the_matching_relation(tmp_path):
     """A named FK constraint's name is tracked (explicit, or Postgres' own
     auto-generated <table>_<column>_fkey for an unnamed one), so a later

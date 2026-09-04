@@ -361,6 +361,44 @@ end
     assert result["unsupported"] == []
 
 
+def test_rails_add_index_with_constant_name_falls_back_to_auto_name(tmp_path):
+    """Found via real-repo stress testing on Discourse: `add_index` with a
+    `name:` kwarg that references a constant (not a static string/symbol
+    literal) can't be resolved by `_rb_symbol_text`, so `index_name` was left
+    None instead of falling back to Rails' own auto-generated name - which
+    then crashed `extract_schema`'s final `indexes.sort()` on a NoneType
+    comparison instead of degrading gracefully."""
+    repo = write_files(
+        tmp_path,
+        {
+            "db/migrate/20230101000000_create_events.rb": """
+class CreateEvents < ActiveRecord::Migration[7.0]
+  def change
+    create_table :events do |t|
+      t.string :kind
+    end
+  end
+end
+""",
+            "db/migrate/20230102000000_add_kind_index.rb": """
+class AddKindIndex < ActiveRecord::Migration[7.0]
+  INDEX_NAME = "idx_events_kind"
+
+  def up
+    add_index :events, :kind, name: INDEX_NAME
+  end
+end
+""",
+        },
+    )
+    result = extract_schema(repo, ["db/migrate"])
+    assert len(result["indexes"]) == 1
+    index = result["indexes"][0]
+    assert index["table"] == "events"
+    assert index["columns"] == ["kind"]
+    assert index["name"] == "index_events_on_kind"
+
+
 def test_rails_rename_column_rename_table_drop_table(tmp_path):
     repo = write_files(
         tmp_path,
@@ -514,6 +552,9 @@ def test_alembic_create_table_only_reads_upgrade(tmp_path):
 from alembic import op
 import sqlalchemy as sa
 
+revision = "abc123"
+down_revision = None
+
 def upgrade():
     op.create_table('accounts',
         sa.Column('id', sa.Integer(), primary_key=True),
@@ -544,12 +585,18 @@ def test_alembic_inline_foreign_key_and_add_column_and_index(tmp_path):
 from alembic import op
 import sqlalchemy as sa
 
+revision = "abc123"
+down_revision = None
+
 def upgrade():
     op.create_table('accounts', sa.Column('id', sa.Integer(), primary_key=True))
 """,
             "alembic/versions/def456_add_posts.py": """
 from alembic import op
 import sqlalchemy as sa
+
+revision = "abc123"
+down_revision = None
 
 def upgrade():
     op.create_table('posts',
@@ -579,6 +626,9 @@ def test_alembic_drop_table_and_execute_are_modeled(tmp_path):
 from alembic import op
 import sqlalchemy as sa
 
+revision = "abc123"
+down_revision = None
+
 def upgrade():
     op.create_table('legacy', sa.Column('id', sa.Integer(), primary_key=True))
     op.execute("CREATE TABLE audit (id INTEGER PRIMARY KEY, note TEXT);")
@@ -599,6 +649,9 @@ def test_alembic_drop_column_alter_column_drop_index_rename_table(tmp_path):
             "alembic/versions/abc123_init.py": """
 from alembic import op
 import sqlalchemy as sa
+
+revision = "abc123"
+down_revision = None
 
 def upgrade():
     op.create_table('accounts',
@@ -633,6 +686,9 @@ def test_alembic_drop_constraint_stays_unsupported(tmp_path):
         {
             "alembic/versions/abc123_init.py": """
 from alembic import op
+
+revision = "abc123"
+down_revision = None
 
 def upgrade():
     op.drop_constraint('fk_accounts_user_id', 'accounts', type_='foreignkey')

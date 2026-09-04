@@ -586,6 +586,12 @@ def _sql_create_table_event(stmt: exp.Create, rel_path: str, line: int) -> tuple
 
 def _sql_create_index_event(stmt: exp.Create, rel_path: str, line: int) -> dict | None:
     index = stmt.this
+    if index is None:
+        # Malformed/incomplete CREATE INDEX (e.g. a raw-SQL statement built
+        # dynamically at runtime in the source migration, captured only as a
+        # literal fragment) - sqlglot parses the keywords but leaves nothing
+        # to fill the Index node.
+        return None
     table_node = index.args.get("table")
     if table_node is None or not table_node.name:
         return None
@@ -810,7 +816,10 @@ def _sql_events_from_statement(stmt: exp.Expression, rel_path: str, line: int) -
         return ([event] if event is not None else []), unsupported
     if isinstance(stmt, exp.Create) and stmt.args.get("kind") == "INDEX":
         event = _sql_create_index_event(stmt, rel_path, line)
-        return ([event] if event is not None else []), []
+        if event is not None:
+            return [event], []
+        text = _summarize(stmt.sql(dialect=_SQL_DIALECT))
+        return [], [{"file": rel_path, "line": line, "statement": text}]
     if isinstance(stmt, exp.Alter) and stmt.args.get("kind") == "TABLE":
         return _sql_alter_table_events(stmt, rel_path, line), []
     if isinstance(stmt, exp.Alter) and stmt.args.get("kind") == "INDEX":

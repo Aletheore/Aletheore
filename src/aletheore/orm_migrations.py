@@ -855,7 +855,18 @@ def extract_alembic_migrations(
     sources: list[str] = []
     parser = _py_parser()
     for directory in migration_directories:
-        if directory != "alembic/versions" and not directory.endswith("/alembic/versions"):
+        # Alembic's own generator names the migrations directory "alembic"
+        # by default, but real projects commonly rename it - Apache
+        # Superset (a large, well-known real repo) uses migrations/
+        # versions, not alembic/versions; matching only the literal
+        # default missed it entirely, confirmed directly. "versions" is
+        # genuinely Alembic's fixed subdirectory name regardless of what
+        # its parent is called, so any directory literally named
+        # "versions" is a candidate here - each file is still content-
+        # verified below (a real `down_revision =` assignment) before
+        # being treated as Alembic, since "versions" alone is a more
+        # generic name than this module's other directory checks.
+        if Path(directory).name != "versions":
             continue
         base = repo_path / directory
         if not base.is_dir():
@@ -869,6 +880,8 @@ def extract_alembic_migrations(
             try:
                 source = path.read_bytes()
             except OSError:
+                continue
+            if b"down_revision" not in source:
                 continue
             sources.append(rel_path)
             tree = parser.parse(source)
@@ -1165,7 +1178,12 @@ def _rails_top_level_events(call: Node, source: bytes, rel_path: str) -> list[di
         if not table or not columns:
             return []
         name_kw = _rb_kwarg(args, "name", source)
-        index_name = _rb_symbol_text(name_kw, source) if name_kw else f"index_{table}_on_{'_'.join(columns)}"
+        index_name = _rb_symbol_text(name_kw, source) if name_kw else None
+        if not index_name:
+            # Explicit name: given but not a statically-resolvable string/symbol
+            # literal (e.g. a constant reference) - fall back to Rails' own
+            # auto-generated name rather than emitting a nameless index.
+            index_name = f"index_{table}_on_{'_'.join(columns)}"
         return [{"kind": "create_index", "table": table, "name": index_name,
                  "columns": columns, "unique": _rb_bool_kwarg(args, "unique", source) is True,
                  "file": rel_path, "line": line}]

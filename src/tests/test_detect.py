@@ -454,12 +454,48 @@ def test_detect_database_finds_alembic_versions(tmp_path):
     repo = tmp_path / "repo"
     versions = repo / "alembic" / "versions"
     versions.mkdir(parents=True)
-    (versions / "abc123_initial.py").write_text("def upgrade():\n    pass\n")
-    (versions / "def456_add_index.py").write_text("def upgrade():\n    pass\n")
+    (versions / "abc123_initial.py").write_text(
+        "revision = 'abc123'\ndown_revision = None\n\ndef upgrade():\n    pass\n"
+    )
+    (versions / "def456_add_index.py").write_text(
+        "revision = 'def456'\ndown_revision = 'abc123'\n\ndef upgrade():\n    pass\n"
+    )
 
     result = detect_database(repo)
 
     assert {"path": "alembic/versions", "file_count": 2} in result["migration_directories"]
+
+
+def test_detect_database_finds_renamed_alembic_versions_directory(tmp_path):
+    """Found via real-repo stress testing (Apache Superset, a large,
+    well-known real repo): Alembic's own generator names the migrations
+    directory "alembic" by default, but real projects commonly rename it
+    - Superset uses migrations/versions, not alembic/versions. "versions"
+    is genuinely Alembic's fixed subdirectory name regardless of what its
+    parent is called, so any directory literally named "versions" is now
+    a candidate, content-verified (a real down_revision assignment) so an
+    unrelated "versions" directory doesn't false-positive."""
+    repo = tmp_path / "repo"
+    versions = repo / "superset" / "migrations" / "versions"
+    versions.mkdir(parents=True)
+    (versions / "abc123_initial.py").write_text(
+        "revision = 'abc123'\ndown_revision = None\n\ndef upgrade():\n    pass\n"
+    )
+
+    result = detect_database(repo)
+
+    assert {"path": "superset/migrations/versions", "file_count": 1} in result["migration_directories"]
+
+
+def test_detect_database_ignores_unrelated_versions_directory(tmp_path):
+    repo = tmp_path / "repo"
+    versions = repo / "api" / "versions"
+    versions.mkdir(parents=True)
+    (versions / "v1.py").write_text("VERSION = '1.0'\n")
+
+    result = detect_database(repo)
+
+    assert not any(d["path"] == "api/versions" for d in result["migration_directories"])
 
 
 def test_detect_database_finds_rails_style_migrate_dir(tmp_path):

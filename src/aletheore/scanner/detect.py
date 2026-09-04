@@ -425,10 +425,25 @@ def detect_monorepo(repo_path: Path) -> dict:
     return {"detected": False, "workspaces": []}
 
 
+def _looks_like_alembic_versions_file(path: Path) -> bool:
+    """`down_revision = ` is distinctive enough to real Alembic migration
+    files (Alembic's own generator always writes it, even when None) that
+    it safely tells a real "versions" directory apart from an unrelated
+    one - same content-verification role Django migrations already get
+    via orm_migrations.looks_like_django_migration."""
+    try:
+        return "down_revision" in path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+
+
 def _detect_migration_directories(repo_path: Path, pruned_tree=None) -> list[dict]:
     results: list[dict] = []
-    if pruned_tree is None:
-        pruned_tree = _iter_pruned_tree(repo_path)
+    # Materialized to a list (not left as a generator) even when the
+    # caller passes nothing - this function now walks it twice (once for
+    # the plain name markers, once below for "versions"), and a generator
+    # would be silently exhausted after the first pass.
+    pruned_tree = list(pruned_tree) if pruned_tree is not None else list(_iter_pruned_tree(repo_path))
     for path, is_dir in pruned_tree:
         if not is_dir:
             continue
@@ -443,10 +458,28 @@ def _detect_migration_directories(repo_path: Path, pruned_tree=None) -> list[dic
             {"path": path.relative_to(repo_path).as_posix(), "file_count": file_count}
         )
 
-    alembic_versions = repo_path / "alembic" / "versions"
-    if alembic_versions.is_dir():
-        file_count = sum(1 for f in alembic_versions.iterdir() if f.is_file() and f.suffix == ".py")
-        results.append({"path": "alembic/versions", "file_count": file_count})
+    # Alembic's own generator names the migrations directory "alembic" by
+    # default, but real projects very commonly rename it - Apache Superset
+    # (a large, well-known real repo) uses migrations/versions, not
+    # alembic/versions; hardcoding the default alone missed it entirely,
+    # confirmed directly. "versions" is genuinely Alembic's fixed
+    # subdirectory name regardless of what its parent is called, so any
+    # directory literally named "versions" is a candidate - content-
+    # verified (at least one .py file has a real `down_revision =`
+    # assignment, distinctive enough to Alembic that an unrelated
+    # "versions" directory for something else won't false-positive) before
+    # being reported, since "versions" alone is a more generic name than
+    # "migrations"/"migration" and isn't paired with content-sniffing
+    # anywhere else in this function.
+    for path, is_dir in pruned_tree:
+        if not is_dir or path.name != "versions":
+            continue
+        py_files = [f for f in path.iterdir() if f.is_file() and f.suffix == ".py"]
+        if not any(_looks_like_alembic_versions_file(f) for f in py_files):
+            continue
+        results.append(
+            {"path": path.relative_to(repo_path).as_posix(), "file_count": len(py_files)}
+        )
 
     rails_migrate = repo_path / "db" / "migrate"
     if rails_migrate.is_dir():
