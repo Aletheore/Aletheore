@@ -797,3 +797,58 @@ class Migration(migrations.Migration):
 
     empty = extract_schema(repo, [])
     assert empty["dialect"] is None
+
+
+def test_alembic_create_table_without_explicit_pk_gets_no_implicit_id(tmp_path):
+    # Alembic/SQLAlchemy never synthesizes an id column the way Django's
+    # AutoField or Rails' create_table default does - a table genuinely
+    # created without one has no primary key at all.
+    repo = write_files(
+        tmp_path,
+        {
+            "alembic/versions/abc123_audit.py": """
+from alembic import op
+import sqlalchemy as sa
+
+def upgrade():
+    op.create_table('audit', sa.Column('message', sa.Text()))
+"""
+        },
+    )
+    events, _ = extract_alembic_migrations(repo, ["alembic/versions"])
+    assert len(events) == 1
+    create = events[0]
+    assert create["table"] == "audit"
+    assert [c["name"] for c in create["columns"]] == ["message"]
+
+
+def test_extract_schema_replays_mixed_sql_and_orm_sources_in_path_order(tmp_path):
+    # A Django migration creates `app_item`; a raw .sql migration then
+    # alters it. "app/migrations/..." sorts before "db/sql/..." so the
+    # correct replay order is Django-first. Applying every .sql file before
+    # any ORM migration (regardless of path) would run the ALTER before the
+    # table exists, dropping the column into `unsupported` instead of the
+    # schema.
+    repo = write_files(
+        tmp_path,
+        {
+            "app/migrations/0001_initial.py": """
+from django.db import migrations, models
+
+class Migration(migrations.Migration):
+    operations = [
+        migrations.CreateModel(
+            name='Item',
+            fields=[('id', models.AutoField(primary_key=True))],
+        ),
+    ]
+""",
+            "db/sql/0002_add_description.sql": (
+                "ALTER TABLE app_item ADD COLUMN description text;"
+            ),
+        },
+    )
+    result = extract_schema(repo, ["app/migrations", "db/sql"])
+    item = next(t for t in result["tables"] if t["name"] == "app_item")
+    assert [c["name"] for c in item["columns"]] == ["id", "description"]
+    assert result["unsupported"] == []
