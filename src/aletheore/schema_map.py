@@ -27,6 +27,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from aletheore.orm_migrations import (
+    extract_alembic_migrations,
+    extract_django_migrations,
+    extract_rails_migrations,
+)
+
 class _Cursor:
     """A forward-only reader over one migration file.
 
@@ -615,6 +621,172 @@ def _iter_migration_files(repo_path: Path, migration_directories: list[str]) -> 
     return sorted(files, key=lambda path: path.relative_to(repo_path).as_posix())
 
 
+def _merge_orm_events(
+    tables: dict[str, dict],
+    relations: list[dict],
+    indexes: list[dict],
+    unsupported: list[dict],
+    events: list[dict],
+) -> None:
+    """Folds pre-built ORM events (Django/Rails/Alembic - see
+    orm_migrations.py) into the same accumulators the SQL replay loop above
+    fills, with the same semantics: a CREATE on a table that already exists
+    is a no-op, an ADD COLUMN only applies to a table already known, columns
+    keep declaration order."""
+    for event in events:
+        kind = event["kind"]
+        if kind == "create_table":
+            if event["table"] in tables:
+                continue
+            tables[event["table"]] = {
+                "name": event["table"], "columns": event["columns"],
+                "file": event["file"], "line": event["line"],
+            }
+            for relation in event["relations"]:
+                relations.append({"from_table": event["table"], **relation})
+        elif kind == "add_column":
+            table = tables.get(event["table"])
+            column = event.get("column")
+            if table is not None and column is not None and not any(
+                c["name"] == column["name"] for c in table["columns"]
+            ):
+                table["columns"].append(column)
+            relation = event.get("relation")
+            if relation is not None:
+                relations.append({"from_table": event["table"], **relation})
+        elif kind == "add_relation":
+            relations.append({"from_table": event["table"], **event["relation"]})
+        elif kind == "create_index":
+            indexes.append(
+                {"name": event["name"], "table": event["table"], "columns": event["columns"],
+                 "unique": event["unique"], "file": event["file"], "line": event["line"]}
+            )
+        elif kind == "remove_column":
+            table = tables.get(event["table"])
+            if table is not None:
+                table["columns"] = [c for c in table["columns"] if c["name"] != event["name"]]
+        elif kind == "alter_column":
+            table = tables.get(event["table"])
+            column = None if table is None else next(
+                (c for c in table["columns"] if c["name"] == event["name"]), None
+            )
+            if column is not None:
+                for field in ("type", "nullable", "unique", "default"):
+                    if field in event["changes"]:
+                        column[field] = event["changes"][field]
+        elif kind == "rename_column":
+            table = tables.get(event["table"])
+            column = None if table is None else next(
+                (c for c in table["columns"] if c["name"] == event["old_name"]), None
+            )
+            if column is not None:
+                column["name"] = event["new_name"]
+        elif kind == "remove_table":
+            tables.pop(event["table"], None)
+            relations[:] = [
+                r for r in relations
+                if r["from_table"] != event["table"] and r["to_table"] != event["table"]
+            ]
+            indexes[:] = [i for i in indexes if i["table"] != event["table"]]
+        elif kind == "rename_table":
+            table = tables.pop(event["old_table"], None)
+            if table is not None:
+                table["name"] = event["new_table"]
+                tables[event["new_table"]] = table
+                for relation in relations:
+                    if relation["from_table"] == event["old_table"]:
+                        relation["from_table"] = event["new_table"]
+                    if relation["to_table"] == event["old_table"]:
+                        relation["to_table"] = event["new_table"]
+                for index in indexes:
+                    if index["table"] == event["old_table"]:
+                        index["table"] = event["new_table"]
+        elif kind == "remove_index":
+            indexes[:] = [
+                i for i in indexes
+                if not (i["table"] == event["table"] and i["name"] == event["name"])
+            ]
+        elif kind == "raw_sql":
+            parsed = _parse_file(event["sql"], event["file"])
+            unsupported.extend(parsed["unsupported"])
+            _apply_sql_events(tables, relations, indexes, unsupported, event["file"], parsed["events"])
+        elif kind == "unsupported":
+            unsupported.append(
+                {"file": event["file"], "line": event["line"], "statement": event["statement"]}
+            )
+
+
+def _apply_sql_events(
+    tables: dict[str, dict],
+    relations: list[dict],
+    indexes: list[dict],
+    unsupported: list[dict],
+    rel_path: str,
+    events: list[dict],
+) -> None:
+    """The Postgres-DDL replay loop, factored out so a raw SQL string that
+    arrives via an ORM escape hatch (Django's RunSQL, Alembic's op.execute)
+    replays through the exact same logic a real .sql migration file does."""
+    for event in events:
+        if event["kind"] == "create_table":
+            # CREATE TABLE IF NOT EXISTS on a table an earlier migration
+            # already created is a no-op in Postgres, so it must be one
+            # here too - re-applying it would duplicate every column.
+            if event["table"] in tables:
+                continue
+            columns: list[dict] = []
+            for definition in _split_top_level(event["body"]):
+                column, relation = _parse_column_definition(definition, rel_path, event["line"])
+                if column is not None:
+                    columns.append(column)
+                if relation is not None:
+                    relations.append({"from_table": event["table"], **relation})
+            tables[event["table"]] = {
+                "name": event["table"],
+                "columns": columns,
+                "file": rel_path,
+                "line": event["line"],
+            }
+        elif event["kind"] == "add_column":
+            table = tables.get(event["table"])
+            if table is None:
+                # An ALTER against a table no CREATE was seen for: the
+                # migration set is partial (a squashed baseline, or a
+                # table created outside these directories). Recorded
+                # rather than inventing a table with one column, which
+                # would render as a phantom node in the diagram.
+                unsupported.append(
+                    {
+                        "file": rel_path,
+                        "line": event["line"],
+                        "statement": _summarize(
+                            f"ALTER TABLE {event['table']} ADD COLUMN on an unknown table"
+                        ),
+                    }
+                )
+                continue
+            column, relation = _parse_column_definition(event["body"], rel_path, event["line"])
+            if column is not None and not any(c["name"] == column["name"] for c in table["columns"]):
+                table["columns"].append(column)
+            if relation is not None:
+                relations.append({"from_table": event["table"], **relation})
+        elif event["kind"] == "create_index":
+            index_columns = [
+                _strip_identifier(part.split()[0]) if part.split() else ""
+                for part in _split_top_level(event["body"])
+            ]
+            indexes.append(
+                {
+                    "name": event["name"],
+                    "table": event["table"],
+                    "columns": [c for c in index_columns if c],
+                    "unique": event["unique"],
+                    "file": rel_path,
+                    "line": event["line"],
+                }
+            )
+
+
 def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
     """Replay migration DDL into the schema it defines.
 
@@ -628,6 +800,15 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
     unsupported: list[dict] = []
     sources: list[str] = []
 
+    # Parse every source's events first, grouped per file, without applying
+    # any of them yet - replaying is deferred to a single pass below, sorted
+    # by path across ALL sources together. A repo that adopted an ORM
+    # partway through its history (or vice versa) mixes .sql migrations with
+    # Django/Rails/Alembic ones; applying every .sql file before any ORM
+    # migration - regardless of which one actually came first by path -
+    # would run a later SQL statement against a table an earlier ORM
+    # migration hadn't created yet.
+    sql_events_by_file: dict[str, list[dict]] = {}
     for path in _iter_migration_files(repo_path, migration_directories):
         rel_path = path.relative_to(repo_path).as_posix()
         try:
@@ -643,65 +824,36 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
         sources.append(rel_path)
         parsed = _parse_file(text, rel_path)
         unsupported.extend(parsed["unsupported"])
+        sql_events_by_file[rel_path] = parsed["events"]
 
-        for event in parsed["events"]:
-            if event["kind"] == "create_table":
-                # CREATE TABLE IF NOT EXISTS on a table an earlier migration
-                # already created is a no-op in Postgres, so it must be one
-                # here too - re-applying it would duplicate every column.
-                if event["table"] in tables:
-                    continue
-                columns: list[dict] = []
-                for definition in _split_top_level(event["body"]):
-                    column, relation = _parse_column_definition(definition, rel_path, event["line"])
-                    if column is not None:
-                        columns.append(column)
-                    if relation is not None:
-                        relations.append({"from_table": event["table"], **relation})
-                tables[event["table"]] = {
-                    "name": event["table"],
-                    "columns": columns,
-                    "file": rel_path,
-                    "line": event["line"],
-                }
-            elif event["kind"] == "add_column":
-                table = tables.get(event["table"])
-                if table is None:
-                    # An ALTER against a table no CREATE was seen for: the
-                    # migration set is partial (a squashed baseline, or a
-                    # table created outside these directories). Recorded
-                    # rather than inventing a table with one column, which
-                    # would render as a phantom node in the diagram.
-                    unsupported.append(
-                        {
-                            "file": rel_path,
-                            "line": event["line"],
-                            "statement": _summarize(
-                                f"ALTER TABLE {event['table']} ADD COLUMN on an unknown table"
-                            ),
-                        }
-                    )
-                    continue
-                column, relation = _parse_column_definition(event["body"], rel_path, event["line"])
-                if column is not None and not any(c["name"] == column["name"] for c in table["columns"]):
-                    table["columns"].append(column)
-                if relation is not None:
-                    relations.append({"from_table": event["table"], **relation})
-            elif event["kind"] == "create_index":
-                index_columns = [
-                    _strip_identifier(part.split()[0]) if part.split() else ""
-                    for part in _split_top_level(event["body"])
-                ]
-                indexes.append(
-                    {
-                        "name": event["name"],
-                        "table": event["table"],
-                        "columns": [c for c in index_columns if c],
-                        "unique": event["unique"],
-                        "file": rel_path,
-                        "line": event["line"],
-                    }
-                )
+    dialects: list[str] = ["postgresql"] if sql_events_by_file else []
+
+    orm_events_by_file: dict[str, list[dict]] = {}
+    for extractor, dialect_name in (
+        (extract_django_migrations, "django"),
+        (extract_rails_migrations, "rails"),
+        (extract_alembic_migrations, "alembic"),
+    ):
+        orm_events, orm_sources = extractor(repo_path, migration_directories)
+        if orm_sources:
+            dialects.append(dialect_name)
+            sources.extend(orm_sources)
+            for event in orm_events:
+                orm_events_by_file.setdefault(event["file"], []).append(event)
+
+    # A given path is exactly one of SQL or ORM (the extension alone
+    # decides), so this is an unambiguous per-file dispatch - just replayed
+    # in path order across both groups together, matching how each group
+    # already ordered itself internally.
+    for rel_path in sorted(set(sql_events_by_file) | set(orm_events_by_file)):
+        if rel_path in sql_events_by_file:
+            _apply_sql_events(
+                tables, relations, indexes, unsupported, rel_path, sql_events_by_file[rel_path]
+            )
+        else:
+            _merge_orm_events(
+                tables, relations, indexes, unsupported, orm_events_by_file[rel_path]
+            )
 
     # Sorted on every axis so identical migrations always produce identical
     # evidence. Columns keep their declaration order - that is the schema's
@@ -714,7 +866,7 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
     return {
         "checked": True,
         "reason": None,
-        "dialect": "postgresql",
+        "dialect": sorted(set(dialects)) or None,
         "tables": ordered_tables,
         "relations": relations,
         "indexes": indexes,
