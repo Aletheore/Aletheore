@@ -186,6 +186,35 @@ def _detect_sql_dialect(repo_path: Path) -> str:
     return _DEFAULT_SQL_DIALECT
 
 
+# A migration file's own path can name its dialect directly - real,
+# common convention for a project that ships migrations for more than one
+# backend (Rust/Diesel apps in particular document this exact layout:
+# migrations/postgresql/, migrations/mysql/, migrations/sqlite/, each with
+# its own real dialect-specific SQL - confirmed directly on a real repo,
+# where scanning all three together under one guessed dialect would have
+# mis-parsed two thirds of the files). Checked per file, before falling
+# back to the repo-wide config-file signal - it is closer to the actual
+# SQL being read, so it wins when the two would ever disagree (e.g. a
+# monorepo with one schema.prisma but a differently-shaped raw-SQL
+# migration set elsewhere).
+_DIALECT_DIR_NAMES = {
+    "postgres": "postgres", "postgresql": "postgres", "pg": "postgres",
+    "cockroachdb": "postgres",
+    "mysql": "mysql", "mariadb": "mysql",
+    "sqlite": "sqlite", "sqlite3": "sqlite",
+    "mssql": "tsql", "sqlserver": "tsql", "tsql": "tsql",
+    "oracle": "oracle",
+}
+
+
+def _dialect_from_path(rel_path: str) -> str | None:
+    for part in Path(rel_path).parts[:-1]:
+        dialect = _DIALECT_DIR_NAMES.get(part.lower())
+        if dialect is not None:
+            return dialect
+    return None
+
+
 _SUMMARY_LIMIT = 80
 
 
@@ -227,34 +256,84 @@ def _iter_migration_files(repo_path: Path, migration_directories: list[str]) -> 
     return sorted(files, key=lambda path: path.relative_to(repo_path).as_posix())
 
 
-def _tokenize_statements(text: str, tokens: list) -> list[tuple[str, int]]:
-    """(statement_text, start_line) for every semicolon-terminated
-    statement among already-tokenized `tokens`, in source order."""
-    statements: list[tuple[str, int]] = []
+_BODY_STATEMENT_KINDS = frozenset(
+    {sqlglot.TokenType.TRIGGER, sqlglot.TokenType.FUNCTION, sqlglot.TokenType.PROCEDURE}
+)
+
+
+def _tokenize_statements(text: str, tokens: list) -> list[tuple[str, int, bool]]:
+    """(statement_text, start_line, is_body_statement) for every
+    semicolon-terminated statement among already-tokenized `tokens`, in
+    source order.
+
+    A Postgres function's dollar-quoted body is already consumed into a
+    single token by the tokenizer, confirmed directly, so it never reaches
+    this loop as separate statements to begin with. MySQL/SQLite
+    triggers/functions/procedures use a bare `BEGIN ... END` body instead
+    (no dollar-quoting), whose own internal semicolons are ordinary
+    top-level SEMICOLON tokens - found via a real repo (usememos/memos'
+    SQLite trigger migrations): a naive split broke each trigger into a
+    truncated fragment plus a stray bare "END" fragment. BEGIN/END depth
+    is tracked once a statement is confirmed (by its own first few tokens)
+    to be a CREATE TRIGGER/FUNCTION/PROCEDURE - deliberately not tracked
+    for any other statement, so an ordinary `BEGIN;`/`COMMIT;` transaction
+    pair (ubiquitous, and already correctly split as trivial standalone
+    statements) is untouched.
+
+    `is_body_statement` matters one level up too: sqlglot.parse() does its
+    *own* semicolon-based splitting internally, with no BEGIN/END
+    awareness at all, so even handing it this correctly-bounded chunk
+    still produces the same fragments back (a Command for the CREATE
+    TRIGGER, a stray separate EndStatement for the bare "END") - confirmed
+    directly. The caller uses this flag to skip sqlglot.parse() entirely
+    for a body statement and record it as one clean unsupported entry
+    instead, which is correct anyway since none of the three is modeled.
+    """
+    statements: list[tuple[str, int, bool]] = []
     start = 0
     start_line = 1
     open_statement = False
+    is_create = False
+    is_body_statement = False
+    begin_depth = 0
+    stmt_token_count = 0
     for token in tokens:
         if not open_statement:
             start = token.start
             start_line = token.line
             open_statement = True
-        if token.token_type == sqlglot.TokenType.SEMICOLON:
+            is_create = False
+            is_body_statement = False
+            begin_depth = 0
+            stmt_token_count = 0
+        stmt_token_count += 1
+        if stmt_token_count == 1:
+            is_create = token.token_type == sqlglot.TokenType.CREATE
+        elif is_create and not is_body_statement and stmt_token_count <= 5:
+            if token.token_type in _BODY_STATEMENT_KINDS:
+                is_body_statement = True
+        if is_body_statement:
+            if token.token_type == sqlglot.TokenType.BEGIN:
+                begin_depth += 1
+            elif token.token_type == sqlglot.TokenType.END:
+                begin_depth = max(0, begin_depth - 1)
+        if token.token_type == sqlglot.TokenType.SEMICOLON and (not is_body_statement or begin_depth == 0):
             chunk = text[start : token.start].strip()
             if chunk:
-                statements.append((chunk, start_line))
+                statements.append((chunk, start_line, is_body_statement))
             open_statement = False
     if open_statement:
         chunk = text[start:].strip()
         if chunk:
-            statements.append((chunk, start_line))
+            statements.append((chunk, start_line, is_body_statement))
     return statements
 
 
-def _split_sql_statements(text: str) -> tuple[list[tuple[str, int]], bool]:
-    """(statements, truncated) - statements is (statement_text, start_line)
-    for every semicolon-terminated statement in the file, in source order;
-    truncated is True when a tokenizer-fatal error (an unterminated string
+def _split_sql_statements(text: str) -> tuple[list[tuple[str, int, bool]], bool]:
+    """(statements, truncated) - statements is (statement_text, start_line,
+    is_body_statement) for every semicolon-terminated statement in the
+    file, in source order; truncated is True when a tokenizer-fatal error
+    (an unterminated string
     or dollar-quote - the one failure mode sqlglot's tokenizer cannot
     isolate to a single statement the way it isolates an ordinary
     unparseable statement to a Command node) meant part of the file could
@@ -623,6 +702,57 @@ def _sql_alter_table_events(stmt: exp.Alter, rel_path: str, line: int) -> list[d
                     {"kind": "alter_column", "table": table, "name": col_node.name,
                      "changes": changes, "file": rel_path, "line": line}
                 )
+        elif isinstance(action, exp.ModifyColumn):
+            # MySQL's CHANGE COLUMN (old_name new_name type ...) and MODIFY
+            # COLUMN (col type ...) both parse to this one action - the
+            # only difference is whether rename_from is present. The new
+            # ColumnDef carries the column's full post-change definition,
+            # so it's rebuilt the same way a real ADD COLUMN's ColumnDef
+            # is, then applied as a rename (if renamed) plus a type/
+            # constraint update - never invented, all read from the
+            # statement's own new definition.
+            coldef = action.args.get("this")
+            if coldef is None or not coldef.name:
+                continue
+            new_column, relation, column_checks, column_unsupported = _sql_column_from_columndef(
+                coldef, rel_path, line, table=table
+            )
+            rename_from = action.args.get("rename_from")
+            events.extend({"kind": "add_check", "table": table, "check": check} for check in column_checks)
+            events.extend({"kind": "unsupported", **entry} for entry in column_unsupported)
+            if rename_from is not None and rename_from.name != new_column["name"]:
+                events.append(
+                    {"kind": "rename_column", "table": table, "old_name": rename_from.name,
+                     "new_name": new_column["name"], "file": rel_path, "line": line}
+                )
+            # type/nullable are what CHANGE/MODIFY COLUMN is always really
+            # about, so always applied. unique/default/primary_key are only
+            # applied when the new definition actually states them - unlike
+            # type/nullable, a real CHANGE/MODIFY COLUMN that stays silent
+            # on these isn't necessarily dropping them, and this module's
+            # own column-building always initializes them False/None when
+            # a statement doesn't mention them, indistinguishable here from
+            # an explicit clear - so, to avoid clobbering a UNIQUE/DEFAULT/
+            # PRIMARY KEY a separate earlier constraint already set,
+            # forward only the ones this statement positively asserts.
+            changes = {"type": new_column["type"], "nullable": new_column["nullable"]}
+            if new_column["unique"]:
+                changes["unique"] = True
+            if new_column["default"] is not None:
+                changes["default"] = new_column["default"]
+            if new_column["primary_key"]:
+                changes["primary_key"] = True
+            events.append(
+                {"kind": "alter_column", "table": table, "name": new_column["name"],
+                 "changes": changes, "file": rel_path, "line": line}
+            )
+            if relation is not None:
+                events.append(
+                    {"kind": "add_relation", "table": table, "relation": relation,
+                     "file": rel_path, "line": line}
+                )
+        elif isinstance(action, exp.DropPrimaryKey):
+            events.append({"kind": "drop_primary_key", "table": table})
         elif isinstance(action, exp.AddConstraint):
             for wrapper in action.expressions:
                 explicit_name = wrapper.name if isinstance(wrapper, exp.Constraint) else None
@@ -724,7 +854,18 @@ def _sql_events_from_text(text: str, rel_path: str) -> tuple[list[dict], list[di
             {"file": rel_path, "line": 1,
              "statement": "rest of file could not be tokenized (unterminated string or dollar-quote)"}
         )
-    for statement_text, line in statements:
+    for statement_text, line, is_body_statement in statements:
+        if is_body_statement:
+            # sqlglot.parse() does its own semicolon-based splitting with
+            # no BEGIN/END awareness, so handing it this already correctly
+            # bounded chunk would still re-fragment it (confirmed
+            # directly: a Command for the CREATE TRIGGER/FUNCTION/
+            # PROCEDURE plus a stray separate "END"). None of the three is
+            # modeled anyway, so record it as one clean entry instead.
+            unsupported.append(
+                {"file": rel_path, "line": line, "statement": _summarize(statement_text)}
+            )
+            continue
         parsed = sqlglot.parse(statement_text, read=_SQL_DIALECT, error_level=sqlglot.ErrorLevel.IGNORE)
         for stmt in parsed:
             if stmt is None:
@@ -806,6 +947,12 @@ def _merge_schema_events(
                 for field in ("type", "nullable", "unique", "default", "primary_key"):
                     if field in event["changes"]:
                         column[field] = event["changes"][field]
+        elif kind == "drop_primary_key":
+            table = tables.get(event["table"])
+            if table is not None:
+                for column in table["columns"]:
+                    if column["primary_key"]:
+                        column["primary_key"] = False
         elif kind == "rename_column":
             table = tables.get(event["table"])
             column = None if table is None else next(
@@ -878,13 +1025,14 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
     statement that cannot be parsed is recorded and skipped.
     """
     global _SQL_DIALECT
-    _SQL_DIALECT = _detect_sql_dialect(repo_path)
+    repo_default_dialect = _detect_sql_dialect(repo_path)
 
     tables: dict[str, dict] = {}
     relations: list[dict] = []
     indexes: list[dict] = []
     unsupported: list[dict] = []
     sources: list[str] = []
+    dialects_used: set[str] = set()
 
     for path in _iter_migration_files(repo_path, migration_directories):
         rel_path = path.relative_to(repo_path).as_posix()
@@ -898,6 +1046,10 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
         except OSError:
             continue
 
+        # A file's own path (e.g. migrations/mysql/...) wins over the
+        # repo-wide config signal when both exist - see _dialect_from_path.
+        _SQL_DIALECT = _dialect_from_path(rel_path) or repo_default_dialect
+        dialects_used.add(_SQL_DIALECT)
         sources.append(rel_path)
         events, file_unsupported = _sql_events_from_text(text, rel_path)
         unsupported.extend(file_unsupported)
@@ -906,9 +1058,13 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
     # "postgresql" for display consistency with this module's original,
     # still most common target; every other detected dialect uses its own
     # sqlglot name (mysql/sqlite/tsql/oracle) since there's no established
-    # display convention for those yet.
-    sql_dialect_label = "postgresql" if _SQL_DIALECT == "postgres" else _SQL_DIALECT
-    dialects: list[str] = [sql_dialect_label] if sources else []
+    # display convention for those yet. dialects_used, not the now
+    # per-file _SQL_DIALECT, so a repo whose migrations span more than one
+    # real dialect (see _dialect_from_path) reports all of them, not just
+    # whichever file happened to be read last.
+    dialects: list[str] = sorted(
+        "postgresql" if d == "postgres" else d for d in dialects_used
+    )
 
     for extractor, dialect_name in (
         (extract_django_migrations, "django"),

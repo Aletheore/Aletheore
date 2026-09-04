@@ -545,6 +545,100 @@ def test_alter_column_type_and_nullability(tmp_path):
     assert note["nullable"] is False
 
 
+def write_mysql_migrations(tmp_path: Path, files: dict[str, str]) -> Path:
+    """Same as write_migrations, but also drops a schema.prisma declaring
+    the mysql provider so extract_schema parses with the mysql dialect."""
+    (tmp_path / "prisma").mkdir(exist_ok=True)
+    (tmp_path / "prisma" / "schema.prisma").write_text(
+        'datasource db {\n  provider = "mysql"\n  url = env("DATABASE_URL")\n}\n'
+    )
+    return write_migrations(tmp_path, files)
+
+
+def test_mysql_change_column_renames_and_retypes(tmp_path):
+    """Found via real-repo stress testing (vaultwarden's real MySQL
+    migrations): CHANGE COLUMN (rename + retype in one clause, a real,
+    common MySQL-specific ALTER TABLE form with no Postgres equivalent)
+    fell to the generic unsupported catch-all entirely - a real gap in
+    the multi-dialect support just added, not previously exercised
+    because every prior corpus tested was Postgres."""
+    repo = write_mysql_migrations(
+        tmp_path,
+        {
+            "001.sql": (
+                "CREATE TABLE t (id INT PRIMARY KEY, akey TEXT);"
+                "ALTER TABLE t CHANGE COLUMN akey `key` TEXT NOT NULL;"
+            )
+        },
+    )
+    columns = extract_schema(repo, ["migrations"])["tables"][0]["columns"]
+
+    assert [c["name"] for c in columns] == ["id", "key"]
+    assert columns[1]["type"] == "TEXT"
+    assert columns[1]["nullable"] is False
+
+
+def test_mysql_modify_column_retypes_without_renaming(tmp_path):
+    repo = write_mysql_migrations(
+        tmp_path,
+        {
+            "001.sql": (
+                "CREATE TABLE t (id INT PRIMARY KEY, note TEXT);"
+                "ALTER TABLE t MODIFY COLUMN note VARCHAR(255) NOT NULL;"
+            )
+        },
+    )
+    columns = extract_schema(repo, ["migrations"])["tables"][0]["columns"]
+
+    assert [c["name"] for c in columns] == ["id", "note"]
+    assert columns[1]["type"] == "VARCHAR(255)"
+    assert columns[1]["nullable"] is False
+
+
+def test_mysql_modify_column_does_not_clear_existing_unique(tmp_path):
+    """type/nullable are always applied (that's what CHANGE/MODIFY COLUMN
+    is really about); unique/default/primary_key are only applied when
+    the new definition actually states them, so a MODIFY COLUMN that's
+    silent on UNIQUE doesn't clobber one a separate, earlier ADD
+    CONSTRAINT UNIQUE already set."""
+    repo = write_mysql_migrations(
+        tmp_path,
+        {
+            "001.sql": (
+                "CREATE TABLE t (id INT PRIMARY KEY, email TEXT);"
+                "ALTER TABLE t ADD CONSTRAINT uq_email UNIQUE (email);"
+                "ALTER TABLE t MODIFY COLUMN email VARCHAR(255) NOT NULL;"
+            )
+        },
+    )
+    email = extract_schema(repo, ["migrations"])["tables"][0]["columns"][1]
+
+    assert email["type"] == "VARCHAR(255)"
+    assert email["unique"] is True
+
+
+def test_mysql_drop_primary_key_then_add_composite_primary_key(tmp_path):
+    """Found via real-repo stress testing (vaultwarden): a real migration
+    sequence drops a table's original single-column primary key, then
+    adds a new composite one - both must apply in order for the final
+    state to be correct."""
+    repo = write_mysql_migrations(
+        tmp_path,
+        {
+            "001.sql": (
+                "CREATE TABLE t (uuid VARCHAR(36) PRIMARY KEY, user_uuid VARCHAR(36) NOT NULL);"
+                "ALTER TABLE t DROP PRIMARY KEY;"
+                "ALTER TABLE t ADD PRIMARY KEY (uuid, user_uuid);"
+            )
+        },
+    )
+    columns = extract_schema(repo, ["migrations"])["tables"][0]["columns"]
+    by_name = {c["name"]: c for c in columns}
+
+    assert by_name["uuid"]["primary_key"] is True
+    assert by_name["user_uuid"]["primary_key"] is True
+
+
 def test_add_constraint_unique_and_foreign_key(tmp_path):
     repo = write_migrations(
         tmp_path,
@@ -783,6 +877,31 @@ def test_fk_auto_naming_is_postgres_only(tmp_path):
     assert result["tables"][0]["columns"][0]["primary_key"] is True
 
 
+def test_dialect_detected_per_migration_directory(tmp_path):
+    """Found via real-repo stress testing (vaultwarden, memos): a real,
+    common convention for a project shipping migrations for more than one
+    backend is a dialect-named subdirectory per backend (migrations/mysql/,
+    migrations/postgresql/, migrations/sqlite/), each with real
+    dialect-specific SQL. Before this, the whole call used one
+    repo-wide-detected dialect, which would mis-parse two thirds of a
+    three-backend repo like this. A migration file's own path is now
+    checked per file and wins over the repo-wide config signal."""
+    (tmp_path / "mysql").mkdir()
+    (tmp_path / "mysql" / "001.sql").write_text(
+        "CREATE TABLE `t` (`id` INT NOT NULL AUTO_INCREMENT, PRIMARY KEY (`id`));"
+    )
+    (tmp_path / "sqlite").mkdir()
+    (tmp_path / "sqlite" / "001.sql").write_text(
+        "CREATE TABLE t2 (id INTEGER PRIMARY KEY AUTOINCREMENT);"
+    )
+    result = extract_schema(tmp_path, ["mysql", "sqlite"])
+
+    assert result["dialect"] == ["mysql", "sqlite"]
+    assert {t["name"] for t in result["tables"]} == {"t", "t2"}
+    for table in result["tables"]:
+        assert table["columns"][0]["primary_key"] is True
+
+
 def test_rails_database_yml_sqlite_detected_and_parsed_correctly(tmp_path):
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "database.yml").write_text(
@@ -821,3 +940,34 @@ def test_knexfile_dialect_detected(tmp_path):
     repo = write_migrations(tmp_path, {"001.sql": "CREATE TABLE t (id INTEGER PRIMARY KEY);"})
     result = extract_schema(repo, ["migrations"])
     assert result["dialect"] == ["sqlite"]
+
+
+def test_sqlite_trigger_with_internal_semicolons_is_not_fragmented(tmp_path):
+    """Found via real-repo stress testing (usememos/memos' real SQLite
+    trigger migrations): a bare BEGIN...END trigger body (no dollar-
+    quoting, unlike Postgres functions) has its own internal semicolons,
+    which a naive split treated as real statement boundaries - breaking
+    one CREATE TRIGGER into a truncated fragment plus a stray bare "END"
+    entry. Both must now come back as a single clean unsupported entry
+    (CREATE TRIGGER is correctly out of scope either way, but the
+    reporting itself must not be corrupted), and a real statement
+    following the trigger in the same file must still parse correctly."""
+    (tmp_path / "knexfile.js").write_text("module.exports = { client: 'sqlite3' };\n")
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE t (id INTEGER PRIMARY KEY, updated_ts INTEGER);
+            CREATE TRIGGER trig AFTER UPDATE ON t BEGIN
+            UPDATE t SET updated_ts = 1 WHERE rowid = old.rowid;
+            END;
+            CREATE TABLE t2 (id INTEGER PRIMARY KEY);
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert [t["name"] for t in result["tables"]] == ["t", "t2"]
+    trigger_entries = [u for u in result["unsupported"] if u["statement"].startswith("CREATE TRIGGER")]
+    assert len(trigger_entries) == 1
+    assert not any(u["statement"].strip() == "END" for u in result["unsupported"])
