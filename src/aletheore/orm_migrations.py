@@ -468,7 +468,8 @@ def _django_model_operations(
             if model_name is None:
                 continue
             events.append(
-                {"kind": "remove_table", "table": _django_table_name(app_label, model_name)}
+                {"kind": "remove_table", "table": _django_table_name(app_label, model_name),
+                 "file": rel_path, "line": line}
             )
             continue
 
@@ -482,7 +483,8 @@ def _django_model_operations(
             events.append(
                 {"kind": "rename_table",
                  "old_table": _django_table_name(app_label, old_name),
-                 "new_table": _django_table_name(app_label, new_name)}
+                 "new_table": _django_table_name(app_label, new_name),
+                 "file": rel_path, "line": line}
             )
             continue
 
@@ -495,7 +497,7 @@ def _django_model_operations(
                 continue
             events.append(
                 {"kind": "remove_index", "table": _django_table_name(app_label, model_name),
-                 "name": index_name}
+                 "name": index_name, "file": rel_path, "line": line}
             )
             continue
 
@@ -665,7 +667,6 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
                 continue
             columns: list[dict] = []
             relations: list[dict] = []
-            has_pk = False
             for member in positional[1:]:
                 if member.type != "call":
                     continue
@@ -673,8 +674,6 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
                 if member_name == "Column":
                     column, relation = _alembic_column_from_call(member, source, rel_path, line)
                     if column is not None:
-                        if column["primary_key"]:
-                            has_pk = True
                         columns.append(column)
                     if relation is not None:
                         relations.append({**relation, "from_column": relation["from_column"]})
@@ -696,12 +695,9 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
                                  "to_column": to_column, "on_delete": None,
                                  "file": rel_path, "line": line}
                             )
-            if not has_pk:
-                columns.insert(
-                    0,
-                    {"name": "id", "type": "INTEGER", "primary_key": True, "nullable": False,
-                     "unique": True, "default": None, "file": rel_path, "line": line},
-                )
+            # Unlike Django's AutoField or Rails' create_table default,
+            # Alembic/SQLAlchemy never synthesizes an id column - a table
+            # created without an explicit primary key genuinely has none.
             events.append(
                 {"kind": "create_table", "table": table, "file": rel_path, "line": line,
                  "columns": columns, "relations": relations}
@@ -769,7 +765,9 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
                 continue
             table = _py_string_text(positional[0], source)
             if table:
-                events.append({"kind": "remove_table", "table": table})
+                events.append(
+                    {"kind": "remove_table", "table": table, "file": rel_path, "line": line}
+                )
             continue
 
         if op_name == "drop_column":
@@ -817,7 +815,10 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
                 _py_string_text(positional[1], source) if len(positional) > 1 else None
             )
             if index_name and table:
-                events.append({"kind": "remove_index", "table": table, "name": index_name})
+                events.append(
+                    {"kind": "remove_index", "table": table, "name": index_name,
+                     "file": rel_path, "line": line}
+                )
             continue
 
         if op_name == "rename_table":
@@ -827,7 +828,8 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
             new_table = _py_string_text(positional[1], source)
             if old_table and new_table:
                 events.append(
-                    {"kind": "rename_table", "old_table": old_table, "new_table": new_table}
+                    {"kind": "rename_table", "old_table": old_table, "new_table": new_table,
+                     "file": rel_path, "line": line}
                 )
             continue
 
@@ -1200,7 +1202,8 @@ def _rails_top_level_events(call: Node, source: bytes, rel_path: str) -> list[di
         if not positional:
             return []
         table = _rb_symbol_text(positional[0], source)
-        return [{"kind": "remove_table", "table": table}] if table else []
+        return [{"kind": "remove_table", "table": table, "file": rel_path, "line": line}] \
+            if table else []
 
     if method == "rename_column":
         if len(positional) < 3:
@@ -1218,7 +1221,8 @@ def _rails_top_level_events(call: Node, source: bytes, rel_path: str) -> list[di
             return []
         old_table = _rb_symbol_text(positional[0], source)
         new_table = _rb_symbol_text(positional[1], source)
-        return [{"kind": "rename_table", "old_table": old_table, "new_table": new_table}] \
+        return [{"kind": "rename_table", "old_table": old_table, "new_table": new_table,
+                 "file": rel_path, "line": line}] \
             if old_table and new_table else []
 
     if method == "change_column":
@@ -1253,7 +1257,8 @@ def _rails_top_level_events(call: Node, source: bytes, rel_path: str) -> list[di
             index_name = f"index_{table}_on_{col_name}" if col_name else None
         if not table or not index_name:
             return []
-        return [{"kind": "remove_index", "table": table, "name": index_name}]
+        return [{"kind": "remove_index", "table": table, "name": index_name,
+                 "file": rel_path, "line": line}]
 
     if method == "change_table":
         return _rails_change_table_events(call, source, rel_path)

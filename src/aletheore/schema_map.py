@@ -800,6 +800,15 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
     unsupported: list[dict] = []
     sources: list[str] = []
 
+    # Parse every source's events first, grouped per file, without applying
+    # any of them yet - replaying is deferred to a single pass below, sorted
+    # by path across ALL sources together. A repo that adopted an ORM
+    # partway through its history (or vice versa) mixes .sql migrations with
+    # Django/Rails/Alembic ones; applying every .sql file before any ORM
+    # migration - regardless of which one actually came first by path -
+    # would run a later SQL statement against a table an earlier ORM
+    # migration hadn't created yet.
+    sql_events_by_file: dict[str, list[dict]] = {}
     for path in _iter_migration_files(repo_path, migration_directories):
         rel_path = path.relative_to(repo_path).as_posix()
         try:
@@ -815,10 +824,11 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
         sources.append(rel_path)
         parsed = _parse_file(text, rel_path)
         unsupported.extend(parsed["unsupported"])
-        _apply_sql_events(tables, relations, indexes, unsupported, rel_path, parsed["events"])
+        sql_events_by_file[rel_path] = parsed["events"]
 
-    dialects: list[str] = ["postgresql"] if sources else []
+    dialects: list[str] = ["postgresql"] if sql_events_by_file else []
 
+    orm_events_by_file: dict[str, list[dict]] = {}
     for extractor, dialect_name in (
         (extract_django_migrations, "django"),
         (extract_rails_migrations, "rails"),
@@ -828,7 +838,22 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
         if orm_sources:
             dialects.append(dialect_name)
             sources.extend(orm_sources)
-            _merge_orm_events(tables, relations, indexes, unsupported, orm_events)
+            for event in orm_events:
+                orm_events_by_file.setdefault(event["file"], []).append(event)
+
+    # A given path is exactly one of SQL or ORM (the extension alone
+    # decides), so this is an unambiguous per-file dispatch - just replayed
+    # in path order across both groups together, matching how each group
+    # already ordered itself internally.
+    for rel_path in sorted(set(sql_events_by_file) | set(orm_events_by_file)):
+        if rel_path in sql_events_by_file:
+            _apply_sql_events(
+                tables, relations, indexes, unsupported, rel_path, sql_events_by_file[rel_path]
+            )
+        else:
+            _merge_orm_events(
+                tables, relations, indexes, unsupported, orm_events_by_file[rel_path]
+            )
 
     # Sorted on every axis so identical migrations always produce identical
     # evidence. Columns keep their declaration order - that is the schema's
