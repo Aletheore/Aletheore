@@ -400,6 +400,30 @@ def _sql_alter_table_events(stmt: exp.Alter, rel_path: str, line: int) -> list[d
                      "new_name": new_name.name, "file": rel_path, "line": line}
                 )
         elif isinstance(action, exp.AlterRename):
+            # `RENAME old TO new` (COLUMN keyword optional in Postgres) and
+            # `RENAME TO new` (whole-table rename) parse to the same
+            # AlterRename action - confirmed directly, the only
+            # distinguishing signal is a stray top-level ToTableProperty in
+            # the statement's own `options` for the column-rename shorthand,
+            # holding the real new name (AlterRename.this ends up holding
+            # the *old* column name in that case, not a new table name).
+            # Without this check, `RENAME description TO readme` silently
+            # renamed the whole table to "description" - found via a real
+            # migration (coder/coder), losing the table under its expected
+            # name for every subsequent migration that referenced it.
+            to_table_property = next(
+                (o for o in (stmt.args.get("options") or []) if isinstance(o, exp.ToTableProperty)),
+                None,
+            )
+            if to_table_property is not None:
+                old_name = action.args.get("this")
+                new_name = to_table_property.args.get("this")
+                if old_name is not None and old_name.name and new_name is not None and new_name.name:
+                    events.append(
+                        {"kind": "rename_column", "table": table, "old_name": old_name.name,
+                         "new_name": new_name.name, "file": rel_path, "line": line}
+                    )
+                continue
             new_table = action.args.get("this")
             if new_table is not None and new_table.name:
                 events.append(

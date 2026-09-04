@@ -449,6 +449,34 @@ def test_drop_column_rename_column_rename_table(tmp_path):
     assert names == ["id", "label"]
 
 
+def test_rename_column_without_column_keyword(tmp_path):
+    """Found via real-repo stress testing (coder/coder): Postgres allows
+    omitting COLUMN in a rename (`RENAME old TO new`), and sqlglot parses
+    that identically to a whole-table rename (`RENAME TO new`) at the
+    action level - the real new column name only shows up in a separate
+    ToTableProperty on the statement's own `options`. Without checking for
+    it, `RENAME description TO readme` silently renamed the whole table to
+    "description" - confirmed directly on a real migration, where it made
+    the table invisible under its real name to every later migration that
+    referenced it by name."""
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE template_versions (id BIGINT PRIMARY KEY, description TEXT);
+            ALTER TABLE template_versions RENAME description TO readme;
+            ALTER TABLE template_versions ADD COLUMN job_id BIGINT;
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert [t["name"] for t in result["tables"]] == ["template_versions"]
+    names = [c["name"] for c in result["tables"][0]["columns"]]
+    assert names == ["id", "readme", "job_id"]
+    assert not any("unknown table" in u["statement"] for u in result["unsupported"])
+
+
 def test_alter_column_type_and_nullability(tmp_path):
     repo = write_migrations(
         tmp_path,
