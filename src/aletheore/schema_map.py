@@ -259,6 +259,43 @@ def _sql_foreign_key_relations(
     return relations
 
 
+def _sql_apply_table_constraint(
+    node: exp.Expression,
+    by_name: dict[str, dict],
+    relations: list[dict],
+    unsupported: list[dict],
+    rel_path: str,
+    line: int,
+    label: str,
+) -> None:
+    """Applies one table-level constraint (PRIMARY KEY/UNIQUE/FOREIGN KEY,
+    bare or wrapped in a named `CONSTRAINT name (...)`) to the columns
+    already built for this table. `label` is what an unhandled constraint
+    is reported against (the table name for a bare constraint, the
+    constraint's own name for a named one)."""
+    if isinstance(node, exp.PrimaryKey):
+        for identifier in node.expressions:
+            name = identifier.name if hasattr(identifier, "name") else str(identifier)
+            column = by_name.get(name)
+            if column is not None:
+                column["primary_key"] = True
+                column["nullable"] = False
+    elif isinstance(node, exp.UniqueColumnConstraint):
+        target = node.args.get("this")
+        names = target.expressions if isinstance(target, exp.Schema) else []
+        for identifier in names:
+            column = by_name.get(identifier.name)
+            if column is not None:
+                column["unique"] = True
+    elif isinstance(node, exp.ForeignKey):
+        relations.extend(_sql_foreign_key_relations(node, rel_path, line))
+    else:
+        unsupported.append(
+            {"file": rel_path, "line": line,
+             "statement": _summarize(f"{label} {node.sql(dialect=_SQL_DIALECT)}")}
+        )
+
+
 def _sql_create_table_event(stmt: exp.Create, rel_path: str, line: int) -> tuple[dict | None, list[dict]]:
     """A `CREATE TABLE` statement -> (create_table event, unsupported list).
 
@@ -286,38 +323,13 @@ def _sql_create_table_event(stmt: exp.Create, rel_path: str, line: int) -> tuple
             if relation is not None:
                 relations.append(relation)
             unsupported.extend(column_unsupported)
-        elif isinstance(member, exp.PrimaryKey):
-            for identifier in member.expressions:
-                name = identifier.name if hasattr(identifier, "name") else str(identifier)
-                column = by_name.get(name)
-                if column is not None:
-                    column["primary_key"] = True
-                    column["nullable"] = False
-        elif isinstance(member, exp.UniqueColumnConstraint):
-            target = member.args.get("this")
-            names = target.expressions if isinstance(target, exp.Schema) else []
-            for identifier in names:
-                column = by_name.get(identifier.name)
-                if column is not None:
-                    column["unique"] = True
-        elif isinstance(member, exp.ForeignKey):
-            relations.extend(_sql_foreign_key_relations(member, rel_path, line))
         elif isinstance(member, exp.Constraint):
             for inner in member.expressions:
-                if isinstance(inner, exp.ForeignKey):
-                    relations.extend(_sql_foreign_key_relations(inner, rel_path, line))
-                elif isinstance(inner, exp.UniqueColumnConstraint):
-                    target = inner.args.get("this")
-                    names = target.expressions if isinstance(target, exp.Schema) else []
-                    for identifier in names:
-                        column = by_name.get(identifier.name)
-                        if column is not None:
-                            column["unique"] = True
-                else:
-                    unsupported.append(
-                        {"file": rel_path, "line": line,
-                         "statement": _summarize(f"CONSTRAINT {member.name} {inner.sql(dialect=_SQL_DIALECT)}")}
-                    )
+                _sql_apply_table_constraint(
+                    inner, by_name, relations, unsupported, rel_path, line, f"CONSTRAINT {member.name}"
+                )
+        elif isinstance(member, (exp.PrimaryKey, exp.UniqueColumnConstraint, exp.ForeignKey)):
+            _sql_apply_table_constraint(member, by_name, relations, unsupported, rel_path, line, table)
         else:
             unsupported.append(
                 {"file": rel_path, "line": line,
@@ -460,6 +472,15 @@ def _sql_events_from_statement(stmt: exp.Expression, rel_path: str, line: int) -
         return ([event] if event is not None else []), []
     if isinstance(stmt, exp.Alter) and stmt.args.get("kind") == "TABLE":
         return _sql_alter_table_events(stmt, rel_path, line), []
+    if isinstance(stmt, exp.Alter) and stmt.args.get("kind") == "INDEX":
+        index_node = stmt.this
+        actions = stmt.args.get("actions") or []
+        if index_node is not None and index_node.name and len(actions) == 1 and isinstance(actions[0], exp.AlterRename):
+            new_name = actions[0].args.get("this")
+            if new_name is not None and new_name.name:
+                return [{"kind": "rename_index", "old_name": index_node.name, "new_name": new_name.name}], []
+        text = _summarize(stmt.sql(dialect=_SQL_DIALECT))
+        return [], [{"file": rel_path, "line": line, "statement": text}]
     if isinstance(stmt, exp.Drop) and stmt.args.get("kind") == "TABLE":
         events = [
             {"kind": "remove_table", "table": target.name}
@@ -606,6 +627,10 @@ def _merge_schema_events(
                 i for i in indexes
                 if i["name"] != event["name"] or (table is not None and i["table"] != table)
             ]
+        elif kind == "rename_index":
+            for index in indexes:
+                if index["name"] == event["old_name"]:
+                    index["name"] = event["new_name"]
         elif kind == "raw_sql":
             sql_events, sql_unsupported = _sql_events_from_text(event["sql"], event["file"])
             unsupported.extend(sql_unsupported)

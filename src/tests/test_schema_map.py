@@ -488,6 +488,76 @@ def test_add_constraint_unique_and_foreign_key(tmp_path):
     assert relation["on_delete"] == "SET NULL"
 
 
+def test_named_table_level_primary_key_and_unique_constraints(tmp_path):
+    """Found via real-repo stress testing (cal.com's Prisma-generated
+    migrations, a common pg_dump/ORM convention): a *named*
+    `CONSTRAINT x_pkey PRIMARY KEY (...)` wraps its PrimaryKey/
+    UniqueColumnConstraint node inside a Constraint node - the unnamed
+    (bare) form was already handled, the named form was not, so every
+    Prisma-style migration's primary key came back unmarked."""
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE accounts (
+                id BIGINT NOT NULL,
+                email TEXT NOT NULL,
+                CONSTRAINT accounts_pkey PRIMARY KEY (id),
+                CONSTRAINT accounts_email_key UNIQUE (email)
+            );
+            """
+        },
+    )
+    columns = {c["name"]: c for c in extract_schema(repo, ["migrations"])["tables"][0]["columns"]}
+
+    assert columns["id"]["primary_key"] is True
+    assert columns["id"]["nullable"] is False
+    assert columns["email"]["unique"] is True
+
+
+def test_named_table_level_foreign_key_constraint(tmp_path):
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE parents (id BIGINT PRIMARY KEY);
+            CREATE TABLE children (
+                id BIGINT PRIMARY KEY,
+                parent_id BIGINT NOT NULL,
+                CONSTRAINT children_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES parents(id) ON DELETE CASCADE
+            );
+            """
+        },
+    )
+    relations = extract_schema(repo, ["migrations"])["relations"]
+
+    assert len(relations) == 1
+    assert relations[0]["from_table"] == "children"
+    assert relations[0]["to_table"] == "parents"
+    assert relations[0]["on_delete"] == "CASCADE"
+
+
+def test_alter_index_rename(tmp_path):
+    """Found via real-repo stress testing: `ALTER INDEX ... RENAME TO ...`
+    is a distinct statement kind (Alter with kind=INDEX), not an ALTER
+    TABLE action - it fell straight through to the generic unsupported
+    catch-all with no handling at all."""
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE t (id BIGINT PRIMARY KEY, email TEXT);
+            CREATE UNIQUE INDEX t_email_idx ON t (email);
+            ALTER INDEX t_email_idx RENAME TO t_email_unique_idx;
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert len(result["indexes"]) == 1
+    assert result["indexes"][0]["name"] == "t_email_unique_idx"
+
+
 def test_create_and_drop_index(tmp_path):
     repo = write_migrations(
         tmp_path,
