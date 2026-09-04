@@ -77,7 +77,14 @@ from aletheore.scanner.graph import PY_LANGUAGE, RUBY_LANGUAGE
 _DJANGO_SNIFF_MARKERS = (b"django.db", b"migrations.Migration")
 
 _DJANGO_PK_FIELD_TYPES = {"AUTOFIELD", "BIGAUTOFIELD", "SMALLAUTOFIELD"}
-_DJANGO_RELATION_FIELD_TYPES = {"FOREIGNKEY", "ONETOONEFIELD"}
+# FLEXIBLEFOREIGNKEY: Sentry's own field (sentry/db/models/fields/foreignkey.py)
+# is a thin `django.db.models.ForeignKey` subclass (only defaults on_delete) -
+# a real DB-level FK constraint, verified by reading its source. Deliberately
+# NOT included: Sentry's HybridCloudForeignKey, which looks similar by name
+# but its own docstring confirms it is "just a dumb BigIntegerField" with no
+# real integrity constraint - modeling it as a relation would fabricate a
+# constraint that does not exist in the schema.
+_DJANGO_RELATION_FIELD_TYPES = {"FOREIGNKEY", "ONETOONEFIELD", "FLEXIBLEFOREIGNKEY"}
 # Genuinely unmodelable (RunPython: arbitrary code) or metadata-only with no
 # DB-shape effect (AlterModelOptions covers things like `ordering`/
 # `verbose_name`; AlterUniqueTogether/AlterModelTable are legacy Django <2.2
@@ -250,7 +257,7 @@ def _django_resolve_target_table(target_text: str, app_label: str, current_model
 def _django_column_from_field(
     field_name: str, field_call: Node, source: bytes, rel_path: str, line: int,
     app_label: str = "", current_model: str = "",
-) -> tuple[dict, dict | None]:
+) -> tuple[dict, dict | None, str | None]:
     field_type = _py_call_name(field_call, source) or "UNKNOWN"
     args = _py_args(field_call)
 
@@ -271,11 +278,17 @@ def _django_column_from_field(
         column["nullable"] = False
 
     relation = None
+    unresolved = None
     if field_type.upper() in _DJANGO_RELATION_FIELD_TYPES:
         target = _py_kwarg(args, "to", source)
         if target is None:
             positional = _py_positional(args)
             target = positional[0] if positional else None
+        # `to=` is nearly always a literal string ("self" / "Model" /
+        # "app.Model"), but real code also passes an indirection like
+        # settings.AUTH_USER_MODEL - not statically resolvable without
+        # loading Django settings, so record it rather than fabricate a
+        # relation with no real target table.
         target_raw = _py_string_text(target, source) if target is not None else None
         target_text = (
             _django_resolve_target_table(target_raw, app_label, current_model)
@@ -294,16 +307,23 @@ def _django_column_from_field(
                 on_delete_name if on_delete_name is not None else on_delete_node, source
             ).upper()
         column["name"] = f"{field_name}_id"
-        relation = {
-            "from_column": column["name"],
-            "to_table": target_text,
-            "to_column": "id",
-            "on_delete": on_delete,
-            "file": rel_path,
-            "line": line,
-        }
+        if target_text is not None:
+            relation = {
+                "from_column": column["name"],
+                "to_table": target_text,
+                "to_column": "id",
+                "on_delete": on_delete,
+                "file": rel_path,
+                "line": line,
+            }
+        else:
+            target_text_raw = _py_text(target, source) if target is not None else "?"
+            unresolved = (
+                f"{field_type}({column['name']}) to={target_text_raw} - "
+                "relation target could not be statically resolved"
+            )
 
-    return column, relation
+    return column, relation, unresolved
 
 
 def _django_model_operations(
@@ -335,8 +355,9 @@ def _django_model_operations(
                 fname = _py_string_text(fname_node, source)
                 if fname is None or fcall_node.type != "call":
                     continue
-                column, relation = _django_column_from_field(
-                    fname, fcall_node, source, rel_path, field_tuple.start_point[0] + 1,
+                field_line = field_tuple.start_point[0] + 1
+                column, relation, unresolved = _django_column_from_field(
+                    fname, fcall_node, source, rel_path, field_line,
                     app_label=app_label, current_model=model_name,
                 )
                 if column["primary_key"] or (_py_call_name(fcall_node, source) or "").upper() in _DJANGO_PK_FIELD_TYPES:
@@ -344,6 +365,11 @@ def _django_model_operations(
                 columns.append(column)
                 if relation is not None:
                     relations.append(relation)
+                if unresolved is not None:
+                    events.append(
+                        {"kind": "unsupported", "file": rel_path, "line": field_line,
+                         "statement": unresolved}
+                    )
             if not has_pk:
                 columns.insert(
                     0,
@@ -370,7 +396,7 @@ def _django_model_operations(
             if model_name is None or fname is None or field_node is None or field_node.type != "call":
                 continue
             table = _django_table_name(app_label, model_name)
-            column, relation = _django_column_from_field(
+            column, relation, unresolved = _django_column_from_field(
                 fname, field_node, source, rel_path, line,
                 app_label=app_label, current_model=model_name,
             )
@@ -378,6 +404,10 @@ def _django_model_operations(
                 {"kind": "add_column", "table": table, "file": rel_path, "line": line,
                  "column": column, "relation": relation}
             )
+            if unresolved is not None:
+                events.append(
+                    {"kind": "unsupported", "file": rel_path, "line": line, "statement": unresolved}
+                )
             continue
 
         if op_name == "AddIndex":
@@ -427,7 +457,7 @@ def _django_model_operations(
             if model_name is None or fname is None or field_node is None or field_node.type != "call":
                 continue
             table = _django_table_name(app_label, model_name)
-            column, relation = _django_column_from_field(
+            column, relation, unresolved = _django_column_from_field(
                 fname, field_node, source, rel_path, line,
                 app_label=app_label, current_model=model_name,
             )
@@ -442,6 +472,10 @@ def _django_model_operations(
             if relation is not None:
                 events.append({"kind": "add_relation", "table": table, "relation": relation,
                                 "file": rel_path, "line": line})
+            if unresolved is not None:
+                events.append(
+                    {"kind": "unsupported", "file": rel_path, "line": line, "statement": unresolved}
+                )
             continue
 
         if op_name == "RenameField":

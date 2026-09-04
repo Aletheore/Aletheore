@@ -85,6 +85,78 @@ class Migration(migrations.Migration):
     assert any(c["name"] == "author_id" for c in create["columns"])
 
 
+def test_django_flexible_foreign_key_subclass_is_a_real_relation(tmp_path):
+    """Found via real-repo stress testing on Sentry: 249 real FK fields in
+    a single squashed migration use Sentry's own
+    sentry.db.models.fields.foreignkey.FlexibleForeignKey - a thin,
+    verified `django.db.models.ForeignKey` subclass (only defaults
+    on_delete) - which the field-type check missed entirely since it only
+    recognized the literal names ForeignKey/OneToOneField."""
+    repo = write_files(
+        tmp_path,
+        {
+            "blog/migrations/0001_initial.py": """
+from django.db import migrations, models
+import sentry.db.models.fields.foreignkey
+
+class Migration(migrations.Migration):
+    operations = [
+        migrations.CreateModel(
+            name='Post',
+            fields=[
+                ('id', models.AutoField(primary_key=True)),
+                ('owner', sentry.db.models.fields.foreignkey.FlexibleForeignKey(
+                    to='accounts.User', on_delete=models.CASCADE,
+                )),
+            ],
+        ),
+    ]
+"""
+        },
+    )
+    events, _ = extract_django_migrations(repo, ["blog/migrations"])
+    create = next(e for e in events if e["kind"] == "create_table")
+    assert len(create["relations"]) == 1
+    relation = create["relations"][0]
+    assert relation["from_column"] == "owner_id"
+    assert relation["to_table"] == "accounts_user"
+
+
+def test_django_unresolvable_foreign_key_target_is_unsupported_not_a_broken_relation(tmp_path):
+    """Found via real-repo stress testing on Sentry: `to=settings.AUTH_USER_MODEL`
+    is a real, common idiom - not a static string literal, so the target
+    table can't be resolved. This used to still emit a "relation" with
+    to_table=None instead of recording the gap as unsupported."""
+    repo = write_files(
+        tmp_path,
+        {
+            "blog/migrations/0001_initial.py": """
+from django.conf import settings
+from django.db import migrations, models
+
+class Migration(migrations.Migration):
+    operations = [
+        migrations.CreateModel(
+            name='Post',
+            fields=[
+                ('id', models.AutoField(primary_key=True)),
+                ('owner', models.ForeignKey(to=settings.AUTH_USER_MODEL, on_delete=models.CASCADE)),
+            ],
+        ),
+    ]
+"""
+        },
+    )
+    events, _ = extract_django_migrations(repo, ["blog/migrations"])
+    create = next(e for e in events if e["kind"] == "create_table")
+    assert create["relations"] == []
+    assert any(c["name"] == "owner_id" for c in create["columns"])
+    unsupported = [e for e in events if e["kind"] == "unsupported"]
+    assert len(unsupported) == 1
+    assert "owner_id" in unsupported[0]["statement"]
+    assert "settings.AUTH_USER_MODEL" in unsupported[0]["statement"]
+
+
 def test_django_self_referential_foreign_key(tmp_path):
     repo = write_files(
         tmp_path,
