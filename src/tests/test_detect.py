@@ -419,6 +419,26 @@ def test_detect_database_finds_generic_migrations_directory(tmp_path):
     assert result["migration_directories"] == [{"path": "migrations", "file_count": 2}]
 
 
+def test_detect_database_finds_flyway_style_singular_migration_directory(tmp_path):
+    """Found via real-repo stress testing (killbill, a real Java/Flyway
+    billing platform): "migration" (singular) is Flyway's own documented
+    default convention (src/main/resources/db/migration,
+    V<version>__<description>.sql) - without it, migration_directories
+    came back empty for a real Flyway project, so schema_map.extract_schema
+    was never even invoked with the right path."""
+    repo = tmp_path / "repo"
+    migration = repo / "src" / "main" / "resources" / "db" / "migration"
+    migration.mkdir(parents=True)
+    (migration / "V1__initial.sql").write_text("CREATE TABLE x (id INT);\n")
+    (migration / "V2__add_column.sql").write_text("ALTER TABLE x ADD y INT;\n")
+
+    result = detect_database(repo)
+
+    assert result["migration_directories"] == [
+        {"path": "src/main/resources/db/migration", "file_count": 2}
+    ]
+
+
 def test_detect_database_finds_nested_django_style_migrations(tmp_path):
     repo = tmp_path / "repo"
     migrations = repo / "app" / "migrations"

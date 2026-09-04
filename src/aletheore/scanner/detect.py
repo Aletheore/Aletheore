@@ -113,7 +113,15 @@ DB_ORM_MARKERS_JS = {
     "knex": "knex",
 }
 
-MIGRATION_DIR_NAME_MARKERS = ("migrations",)
+# "migration" (singular) is Flyway's own documented default convention
+# (`src/main/resources/db/migration`, `V<version>__<description>.sql`) -
+# confirmed on a real repo (killbill, a Java billing platform): without
+# it, a Flyway-based project's migration directory was never detected at
+# all, so detect_database's migration_directories came back empty and
+# schema_map.extract_schema was never even invoked with the right path -
+# not a parsing gap, the feature silently produced nothing for the whole
+# project.
+MIGRATION_DIR_NAME_MARKERS = ("migrations", "migration")
 
 SCHEMA_FILE_MARKERS = (
     "prisma/schema.prisma",
