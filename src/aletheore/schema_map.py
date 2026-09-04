@@ -27,6 +27,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from aletheore.orm_migrations import (
+    extract_alembic_migrations,
+    extract_django_migrations,
+    extract_rails_migrations,
+)
+
 class _Cursor:
     """A forward-only reader over one migration file.
 
@@ -615,6 +621,52 @@ def _iter_migration_files(repo_path: Path, migration_directories: list[str]) -> 
     return sorted(files, key=lambda path: path.relative_to(repo_path).as_posix())
 
 
+def _merge_orm_events(
+    tables: dict[str, dict],
+    relations: list[dict],
+    indexes: list[dict],
+    unsupported: list[dict],
+    events: list[dict],
+) -> None:
+    """Folds pre-built ORM events (Django/Rails/Alembic - see
+    orm_migrations.py) into the same accumulators the SQL replay loop above
+    fills, with the same semantics: a CREATE on a table that already exists
+    is a no-op, an ADD COLUMN only applies to a table already known, columns
+    keep declaration order."""
+    for event in events:
+        kind = event["kind"]
+        if kind == "create_table":
+            if event["table"] in tables:
+                continue
+            tables[event["table"]] = {
+                "name": event["table"], "columns": event["columns"],
+                "file": event["file"], "line": event["line"],
+            }
+            for relation in event["relations"]:
+                relations.append({"from_table": event["table"], **relation})
+        elif kind == "add_column":
+            table = tables.get(event["table"])
+            column = event.get("column")
+            if table is not None and column is not None and not any(
+                c["name"] == column["name"] for c in table["columns"]
+            ):
+                table["columns"].append(column)
+            relation = event.get("relation")
+            if relation is not None:
+                relations.append({"from_table": event["table"], **relation})
+        elif kind == "add_relation":
+            relations.append({"from_table": event["table"], **event["relation"]})
+        elif kind == "create_index":
+            indexes.append(
+                {"name": event["name"], "table": event["table"], "columns": event["columns"],
+                 "unique": event["unique"], "file": event["file"], "line": event["line"]}
+            )
+        elif kind == "unsupported":
+            unsupported.append(
+                {"file": event["file"], "line": event["line"], "statement": event["statement"]}
+            )
+
+
 def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
     """Replay migration DDL into the schema it defines.
 
@@ -703,6 +755,19 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
                     }
                 )
 
+    dialects: list[str] = ["postgresql"] if sources else []
+
+    for extractor, dialect_name in (
+        (extract_django_migrations, "django"),
+        (extract_rails_migrations, "rails"),
+        (extract_alembic_migrations, "alembic"),
+    ):
+        orm_events, orm_sources = extractor(repo_path, migration_directories)
+        if orm_sources:
+            dialects.append(dialect_name)
+            sources.extend(orm_sources)
+            _merge_orm_events(tables, relations, indexes, unsupported, orm_events)
+
     # Sorted on every axis so identical migrations always produce identical
     # evidence. Columns keep their declaration order - that is the schema's
     # own order and carries meaning a sort would destroy.
@@ -714,7 +779,7 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
     return {
         "checked": True,
         "reason": None,
-        "dialect": "postgresql",
+        "dialect": sorted(set(dialects)) or None,
         "tables": ordered_tables,
         "relations": relations,
         "indexes": indexes,
