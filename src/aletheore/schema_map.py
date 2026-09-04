@@ -1,4 +1,6 @@
-"""Deterministic database-schema extraction from Postgres DDL migrations.
+"""Deterministic database-schema extraction from a repository's own DDL
+migrations - Postgres, MySQL, SQLite, SQL Server, or Oracle, detected from
+the repo's own config (see the dialect-detection note below).
 
 Produces the `repository.database.schema` AIR section: the tables, columns,
 foreign-key relations, indexes, and CHECK constraints a repository's
@@ -35,9 +37,19 @@ the exact shape of the ReDoS fixed in PR #190. Not a concern here - this
 module never builds its own backtracking pattern; sqlglot's tokenizer is a
 linear-time hand-written scanner, the same design this module used before.
 
-Scope is deliberately Postgres-only for v1 (`read="postgres"` is fixed,
-though sqlglot itself supports 30+ dialects), and deliberately narrower
-than Postgres: CREATE TABLE, CREATE INDEX, DROP TABLE, DROP INDEX, every
+The SQL dialect (postgres/mysql/sqlite/tsql/oracle) is read from a real,
+explicit config file the repo itself already has - a Prisma
+`schema.prisma`'s `datasource` block, `alembic.ini`'s `sqlalchemy.url`
+scheme, Rails' `database.yml` `adapter:`, Django `settings.py`'s `ENGINE`,
+or a `knexfile.js`/`.sequelizerc`'s `client`/`dialect` - never inferred
+from the SQL text itself (see `_detect_sql_dialect`): a wrong guess there
+could silently produce a plausible-looking but factually wrong schema, a
+materially worse failure mode than this module's ordinary honest
+"recorded as unsupported" fallback. Falls back to postgres, this module's
+original and still most common target, when no such file is found.
+
+Deliberately narrower than any of those dialects, regardless of which one
+is active: CREATE TABLE, CREATE INDEX, DROP TABLE, DROP INDEX, every
 ALTER TABLE action with a clear, unambiguous DDL meaning (ADD/DROP/RENAME
 COLUMN, RENAME TO, ALTER COLUMN TYPE/SET-DROP NOT NULL/SET DEFAULT, ADD
 CONSTRAINT UNIQUE/FOREIGN KEY/PRIMARY KEY/CHECK, and - where the name
@@ -63,11 +75,15 @@ rest of the file was unreadable.
 from __future__ import annotations
 
 import logging
+import os
+import re
 from pathlib import Path
 
 import sqlglot
 from sqlglot import expressions as exp
 from sqlglot.errors import TokenError
+
+from aletheore.scanner.detect import IGNORED_DIRS
 
 from aletheore.orm_migrations import (
     extract_alembic_migrations,
@@ -82,7 +98,92 @@ from aletheore.orm_migrations import (
 # any non-modeled SQL in it.
 logging.getLogger("sqlglot").setLevel(logging.ERROR)
 
-_SQL_DIALECT = "postgres"
+_DEFAULT_SQL_DIALECT = "postgres"
+
+# Set once per extract_schema() call (see _detect_sql_dialect) and read by
+# every parse/render call below. A plain module variable rather than a
+# parameter threaded through every function that touches SQL text - safe
+# because this module has no concurrent or re-entrant call pattern
+# (extract_schema always runs to completion, including its raw_sql
+# recursion for RunSQL/execute/op.execute, before another call can start).
+_SQL_DIALECT = _DEFAULT_SQL_DIALECT
+
+# Real config files that explicitly declare a project's SQL dialect, and
+# how to read each one - never inferred from the SQL text itself. A wrong
+# guess there could silently produce a plausible-looking but factually
+# wrong schema, a materially worse failure mode than this module's
+# ordinary honest "recorded as unsupported" fallback. Falls back to
+# _DEFAULT_SQL_DIALECT when no such file is found, which is this module's
+# original and still most common target.
+_PRISMA_PROVIDER_TO_DIALECT = {
+    "postgresql": "postgres", "postgres": "postgres", "cockroachdb": "postgres",
+    "mysql": "mysql", "sqlite": "sqlite", "sqlserver": "tsql",
+}
+_URL_SCHEME_TO_DIALECT = {
+    "postgresql": "postgres", "postgres": "postgres", "cockroachdb": "postgres",
+    "mysql": "mysql", "sqlite": "sqlite", "mssql": "tsql", "oracle": "oracle",
+}
+_RAILS_ADAPTER_TO_DIALECT = {
+    "postgresql": "postgres", "mysql2": "mysql", "mysql": "mysql", "sqlite3": "sqlite",
+    "sqlserver": "tsql",
+}
+_DJANGO_ENGINE_TO_DIALECT = {
+    "postgresql": "postgres", "postgresql_psycopg2": "postgres", "mysql": "mysql",
+    "sqlite3": "sqlite", "oracle": "oracle",
+}
+_JS_CLIENT_TO_DIALECT = {
+    "pg": "postgres", "postgres": "postgres", "postgresql": "postgres",
+    "mysql": "mysql", "mysql2": "mysql", "sqlite3": "sqlite", "mssql": "tsql",
+}
+
+
+def _dialect_from_config_file(path: Path, filename: str) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+
+    if filename == "schema.prisma":
+        match = re.search(r'datasource\s+\w+\s*\{[^}]*?provider\s*=\s*"(\w+)"', text, re.DOTALL)
+        return _PRISMA_PROVIDER_TO_DIALECT.get(match.group(1)) if match else None
+    if filename == "alembic.ini":
+        match = re.search(r"sqlalchemy\.url\s*=\s*([a-zA-Z0-9+]+)://", text)
+        if not match:
+            return None
+        scheme = match.group(1).split("+")[0]
+        return _URL_SCHEME_TO_DIALECT.get(scheme)
+    if filename == "database.yml":
+        match = re.search(r"^\s*adapter:\s*(\w+)", text, re.MULTILINE)
+        return _RAILS_ADAPTER_TO_DIALECT.get(match.group(1)) if match else None
+    if filename == "settings.py":
+        match = re.search(r"django\.db\.backends\.(\w+)", text)
+        return _DJANGO_ENGINE_TO_DIALECT.get(match.group(1)) if match else None
+    if filename in ("knexfile.js", ".sequelizerc"):
+        match = re.search(r"""(?:client|dialect)\s*:\s*['"](\w+)['"]""", text)
+        return _JS_CLIENT_TO_DIALECT.get(match.group(1)) if match else None
+    return None
+
+
+_DIALECT_CONFIG_FILENAMES = frozenset(
+    {"schema.prisma", "alembic.ini", "database.yml", "settings.py", "knexfile.js", ".sequelizerc"}
+)
+
+
+def _detect_sql_dialect(repo_path: Path) -> str:
+    """The real, explicit dialect a repo's own config declares. Walks the
+    tree once (pruning the same noise directories the rest of the scanner
+    ignores) looking for the first recognized config file with a resolvable
+    provider/adapter/URL-scheme value; the first match wins. Returns
+    _DEFAULT_SQL_DIALECT when nothing is found."""
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        for filename in filenames:
+            if filename not in _DIALECT_CONFIG_FILENAMES:
+                continue
+            dialect = _dialect_from_config_file(Path(dirpath) / filename, filename)
+            if dialect is not None:
+                return dialect
+    return _DEFAULT_SQL_DIALECT
 
 
 _SUMMARY_LIMIT = 80
@@ -211,13 +312,17 @@ def _sql_relation_from_reference(
     to_column = to_columns[0].name if to_columns else "id"
     if not to_table:
         return None
-    # An explicit `CONSTRAINT name ...` wins; otherwise this is the real,
-    # documented Postgres default naming convention for an unnamed
-    # single-column FK constraint - not a guess. Tracking it (rather than
-    # leaving every relation nameless) is what makes a later
-    # `DROP CONSTRAINT <name>` resolvable instead of a permanent
-    # unsupported entry.
-    constraint_name = name or (f"{table}_{local_column}_fkey" if table else None)
+    # An explicit `CONSTRAINT name ...` wins; otherwise `<table>_<column>_fkey`
+    # is the real, documented Postgres default naming convention for an
+    # unnamed single-column FK constraint - not a guess, but specific to
+    # Postgres (MySQL's own auto-naming is a sequential `<table>_ibfk_<n>`,
+    # not derivable from the column name at all; SQLite doesn't assign one
+    # the same way). Applying the Postgres convention under a different
+    # active dialect would fabricate a name that's simply wrong, so it's
+    # gated on _SQL_DIALECT rather than applied unconditionally.
+    constraint_name = name or (
+        f"{table}_{local_column}_fkey" if table and _SQL_DIALECT == "postgres" else None
+    )
     return {
         "name": constraint_name,
         "from_column": local_column,
@@ -772,6 +877,9 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
     and the statements it did not model. Never raises on malformed SQL: a
     statement that cannot be parsed is recorded and skipped.
     """
+    global _SQL_DIALECT
+    _SQL_DIALECT = _detect_sql_dialect(repo_path)
+
     tables: dict[str, dict] = {}
     relations: list[dict] = []
     indexes: list[dict] = []
@@ -795,7 +903,12 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
         unsupported.extend(file_unsupported)
         _merge_schema_events(tables, relations, indexes, unsupported, events)
 
-    dialects: list[str] = ["postgresql"] if sources else []
+    # "postgresql" for display consistency with this module's original,
+    # still most common target; every other detected dialect uses its own
+    # sqlglot name (mysql/sqlite/tsql/oracle) since there's no established
+    # display convention for those yet.
+    sql_dialect_label = "postgresql" if _SQL_DIALECT == "postgres" else _SQL_DIALECT
+    dialects: list[str] = [sql_dialect_label] if sources else []
 
     for extractor, dialect_name in (
         (extract_django_migrations, "django"),

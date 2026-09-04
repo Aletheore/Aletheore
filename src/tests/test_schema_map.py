@@ -720,3 +720,104 @@ def test_malformed_sql_does_not_raise(tmp_path):
     result = extract_schema(repo, ["migrations"])
 
     assert [t["name"] for t in result["tables"]] == ["good"]
+
+
+# ---------------------------------------------------------------------------
+# Dialect detection - explicit config signals only, never guessed from SQL
+# ---------------------------------------------------------------------------
+
+
+def test_no_config_file_defaults_to_postgres(tmp_path):
+    repo = write_migrations(tmp_path, {"001.sql": "CREATE TABLE t (id BIGINT PRIMARY KEY);"})
+    result = extract_schema(repo, ["migrations"])
+    assert result["dialect"] == ["postgresql"]
+
+
+def test_prisma_schema_mysql_detected_and_parsed_correctly(tmp_path):
+    (tmp_path / "prisma").mkdir()
+    (tmp_path / "prisma" / "schema.prisma").write_text(
+        'datasource db {\n  provider = "mysql"\n  url = env("DATABASE_URL")\n}\n'
+    )
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": (
+                "CREATE TABLE `users` (`id` INT NOT NULL AUTO_INCREMENT, "
+                "`email` VARCHAR(255) NOT NULL, PRIMARY KEY (`id`)) ENGINE=InnoDB;"
+            )
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert result["dialect"] == ["mysql"]
+    assert [c["name"] for c in result["tables"][0]["columns"]] == ["id", "email"]
+
+
+def test_fk_auto_naming_is_postgres_only(tmp_path):
+    """<table>_<column>_fkey is a real Postgres default-naming convention,
+    not a general SQL one - MySQL auto-names FKs `<table>_ibfk_<n>`
+    (sequential, not derivable from the column name at all) and SQLite
+    doesn't assign one the same way. Applying the Postgres convention
+    under a different active dialect would fabricate a wrong name, which
+    would then make DROP CONSTRAINT resolution match on a name Postgres
+    itself would never actually produce."""
+    (tmp_path / "prisma").mkdir()
+    (tmp_path / "prisma" / "schema.prisma").write_text(
+        'datasource db {\n  provider = "mysql"\n  url = env("DATABASE_URL")\n}\n'
+    )
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": (
+                "CREATE TABLE `accounts` (`id` INT NOT NULL, PRIMARY KEY (`id`));"
+                "CREATE TABLE `users` (`id` INT NOT NULL, `account_id` INT, "
+                "PRIMARY KEY (`id`), FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`));"
+            )
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert result["dialect"] == ["mysql"]
+    assert len(result["relations"]) == 1
+    assert result["relations"][0]["name"] is None
+    assert result["tables"][0]["columns"][0]["primary_key"] is True
+
+
+def test_rails_database_yml_sqlite_detected_and_parsed_correctly(tmp_path):
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "database.yml").write_text(
+        "production:\n  adapter: sqlite3\n  database: db/production.sqlite3\n"
+    )
+    repo = write_migrations(
+        tmp_path,
+        {"001.sql": "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL);"},
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert result["dialect"] == ["sqlite"]
+    assert [c["name"] for c in result["tables"][0]["columns"]] == ["id", "email"]
+
+
+def test_alembic_ini_mysql_url_detected(tmp_path):
+    (tmp_path / "alembic.ini").write_text(
+        "[alembic]\nsqlalchemy.url = mysql+pymysql://user:pass@localhost/dbname\n"
+    )
+    repo = write_migrations(tmp_path, {"001.sql": "CREATE TABLE t (id BIGINT PRIMARY KEY);"})
+    result = extract_schema(repo, ["migrations"])
+    assert result["dialect"] == ["mysql"]
+
+
+def test_django_settings_postgres_engine_detected(tmp_path):
+    (tmp_path / "settings.py").write_text(
+        "DATABASES = {'default': {'ENGINE': 'django.db.backends.postgresql'}}\n"
+    )
+    repo = write_migrations(tmp_path, {"001.sql": "CREATE TABLE t (id BIGINT PRIMARY KEY);"})
+    result = extract_schema(repo, ["migrations"])
+    assert result["dialect"] == ["postgresql"]
+
+
+def test_knexfile_dialect_detected(tmp_path):
+    (tmp_path / "knexfile.js").write_text("module.exports = { client: 'sqlite3' };\n")
+    repo = write_migrations(tmp_path, {"001.sql": "CREATE TABLE t (id INTEGER PRIMARY KEY);"})
+    result = extract_schema(repo, ["migrations"])
+    assert result["dialect"] == ["sqlite"]
