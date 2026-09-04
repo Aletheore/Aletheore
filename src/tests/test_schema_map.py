@@ -171,7 +171,9 @@ def test_commas_inside_a_type_do_not_split_columns(tmp_path):
     columns = extract_schema(repo, ["migrations"])["tables"][0]["columns"]
 
     assert [c["name"] for c in columns] == ["amount", "label"]
-    assert columns[0]["type"] == "NUMERIC(10,_2)".replace("_", " ")
+    # sqlglot normalizes NUMERIC to its exact Postgres synonym DECIMAL -
+    # same type, different canonical spelling.
+    assert columns[0]["type"] == "DECIMAL(10,_2)".replace("_", " ")
     assert columns[1]["type"] == "DOUBLE PRECISION"
 
 
@@ -366,3 +368,168 @@ def test_diagram_renders_entities_and_relations(tmp_path):
     assert "parents ||--|| children" in diagram
     # ON DELETE CASCADE is an identifying relationship; anything else is not.
     assert build_schema_diagram(evidence) == diagram
+
+
+# ---------------------------------------------------------------------------
+# sqlglot-parsed statement forms (composite constraints, DROP/ALTER/RENAME)
+# ---------------------------------------------------------------------------
+
+
+def test_composite_primary_key_and_table_level_unique(tmp_path):
+    """The bug that motivated switching off the hand-written tokenizer: a
+    table-level PRIMARY KEY/UNIQUE used to be silently dropped, with no
+    unsupported entry to say why - every column came back non-primary-key."""
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE members (
+                org_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                PRIMARY KEY (org_id, user_id),
+                UNIQUE (user_id)
+            );
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+    columns = {c["name"]: c for c in result["tables"][0]["columns"]}
+
+    assert columns["org_id"]["primary_key"] is True
+    assert columns["org_id"]["nullable"] is False
+    assert columns["user_id"]["primary_key"] is True
+    assert columns["user_id"]["unique"] is True
+
+
+def test_check_constraint_is_recorded_not_silently_dropped(tmp_path):
+    repo = write_migrations(
+        tmp_path,
+        {"001.sql": "CREATE TABLE t (id BIGINT PRIMARY KEY, role TEXT CHECK (role IN ('a', 'b')));"},
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert len(result["unsupported"]) == 1
+    assert "CHECK" in result["unsupported"][0]["statement"]
+    assert "role" in result["unsupported"][0]["statement"]
+
+
+def test_drop_table_removes_table_and_its_relations(tmp_path):
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE parents (id BIGINT PRIMARY KEY);
+            CREATE TABLE children (id BIGINT PRIMARY KEY, parent_id BIGINT REFERENCES parents(id));
+            DROP TABLE children;
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert [t["name"] for t in result["tables"]] == ["parents"]
+    assert result["relations"] == []
+
+
+def test_drop_column_rename_column_rename_table(tmp_path):
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE widgets (id BIGINT PRIMARY KEY, old_name TEXT, junk TEXT);
+            ALTER TABLE widgets DROP COLUMN junk;
+            ALTER TABLE widgets RENAME COLUMN old_name TO label;
+            ALTER TABLE widgets RENAME TO gadgets;
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert [t["name"] for t in result["tables"]] == ["gadgets"]
+    names = [c["name"] for c in result["tables"][0]["columns"]]
+    assert names == ["id", "label"]
+
+
+def test_alter_column_type_and_nullability(tmp_path):
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE t (id BIGINT PRIMARY KEY, note TEXT);
+            ALTER TABLE t ALTER COLUMN note TYPE VARCHAR(200);
+            ALTER TABLE t ALTER COLUMN note SET NOT NULL;
+            """
+        },
+    )
+    note = extract_schema(repo, ["migrations"])["tables"][0]["columns"][1]
+
+    assert note["type"] == "VARCHAR(200)"
+    assert note["nullable"] is False
+
+
+def test_add_constraint_unique_and_foreign_key(tmp_path):
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE accounts (id BIGINT PRIMARY KEY);
+            CREATE TABLE users (id BIGINT PRIMARY KEY, email TEXT, account_id BIGINT);
+            ALTER TABLE users ADD CONSTRAINT uq_email UNIQUE (email);
+            ALTER TABLE users ADD CONSTRAINT fk_account FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL;
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+    users = next(t for t in result["tables"] if t["name"] == "users")
+    email = next(c for c in users["columns"] if c["name"] == "email")
+
+    assert email["unique"] is True
+    relation = next(r for r in result["relations"] if r["from_column"] == "account_id")
+    assert relation["to_table"] == "accounts"
+    assert relation["on_delete"] == "SET NULL"
+
+
+def test_create_and_drop_index(tmp_path):
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE t (id BIGINT PRIMARY KEY, email TEXT);
+            CREATE UNIQUE INDEX idx_t_email ON t (email);
+            DROP INDEX idx_t_email;
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert result["indexes"] == []
+
+
+def test_drop_constraint_and_views_and_grants_are_unsupported(tmp_path):
+    repo = write_migrations(
+        tmp_path,
+        {
+            "001.sql": """
+            CREATE TABLE t (id BIGINT PRIMARY KEY);
+            ALTER TABLE t ADD CONSTRAINT fk_x FOREIGN KEY (id) REFERENCES t(id);
+            ALTER TABLE t DROP CONSTRAINT fk_x;
+            CREATE VIEW v AS SELECT * FROM t;
+            GRANT SELECT ON t TO readonly;
+            """
+        },
+    )
+    result = extract_schema(repo, ["migrations"])
+    statements = [u["statement"] for u in result["unsupported"]]
+
+    assert any("DROP CONSTRAINT" in s for s in statements)
+    assert any("CREATE VIEW" in s for s in statements)
+    assert any("GRANT" in s for s in statements)
+
+
+def test_malformed_sql_does_not_raise(tmp_path):
+    repo = write_migrations(
+        tmp_path,
+        {"001.sql": "CREATE TABLE good (id BIGINT PRIMARY KEY); THIS IS $$ NOT VALID ! ! !"},
+    )
+    result = extract_schema(repo, ["migrations"])
+
+    assert [t["name"] for t in result["tables"]] == ["good"]
