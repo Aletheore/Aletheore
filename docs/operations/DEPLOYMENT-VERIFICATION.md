@@ -4,8 +4,8 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-03
-**Snapshot Freshness:** CURRENT as of 2026-09-03 - production was redeployed to `master` (commit `e655be2`, tagged `github-app-deploy-2026-09-03`) and re-verified live via SSH the same day. Prod had been running 13 commits (and 8 days) behind since `github-app-deploy-2026-08-26`. Most notable of the batch: PR #522 - a real correctness bug where `watch`'s incremental rebuild path discarded security findings entirely, not just the architecture-analysis/hotspots work #517 deliberately skips there. Also deployed: #524 (asyncpg's DB pool was running on the library default of 10 connections - the only persistent pool in the system - raised to a 5/20 min/max after a docker-mimic load test of the real 1-CPU/768MB app-server container found throughput degrading past ~200 concurrent `/webhook` requests; re-tested post-fix and the degradation at 500 concurrent was unchanged, so the pool wasn't that specific bottleneck - documented as an open question, not oversold as a fix) and #525 (prompt-cache hit-rate visibility for LLM writing calls - Aletheore's own Flash review caught a real gap in that PR's own diff before merge: the second-model verification usage callback accepted the new `cached_tokens` parameter but never logged it, fixed same-day before merge). (This doc's snapshot history has gaps at the 2026-08-28 and 2026-08-30 deploys, tagged `github-app-deploy-2026-08-28`/`-08-30` but not separately logged here - see `github-app/CHANGELOG.md` for those.)
+**Last Updated:** 2026-09-04
+**Snapshot Freshness:** CURRENT as of 2026-09-04 - production was redeployed to `master` (commit `8bf52ef`, tagged `github-app-deploy-2026-09-04`) and re-verified live via SSH the same day. This batch is entirely overnight-benchmark output: a second Claude session (`veridion-ca`) ran real-repo stress tests against the deterministic scanners that had only ever had reactive bug fixes, never a systematic accuracy measurement - secrets (#527, six real gaps in `_is_likely_placeholder`), vulnerabilities corpus completion for all 10 ecosystems (#532, clean pass), dead-code detection (#529), license detection (#531), and an ast_pattern documentation correction (#530). Most significant: #529 found `unused_dependencies` had been reporting **every real dependency as unused** - `module["imports"]` (the field the check reads) structurally can only ever contain repo-internal resolved file paths, never external package names, so the check was comparing against a field that could never match; confirmed at real scale (Flask's own 6 actual runtime dependencies all came back "unused"), root-caused independently by this session before merging. Two known-open items intentionally NOT fixed tonight, left for Arihant's own call rather than a unilateral 2am decision: the `ast_pattern`/tree-sitter segfault (#530 corrects a false "3.14-only" claim - reproduced at real scale on 3.12 too, against Django's ~2,930-file tree) and a missing `accepted_vulnerabilities`-equivalent suppression mechanism (vulnerabilities.py has no `ignored_paths` support the way secrets.py does, discovered when #532's own deliberately-vulnerable test fixture permanently trips the "Aletheore dependency vulnerability check" CI gate with no way to allowlist it). Also worth noting: merging #527 with `--delete-branch` accidentally auto-closed #528 (stacked on #527's branch, not master) - recovered cleanly via cherry-pick onto a fresh branch (merged as #532), no content lost, but `--delete-branch` was dropped for the rest of this session's merges as a result. (This doc's snapshot history has gaps at the 2026-08-28 and 2026-08-30 deploys, tagged `github-app-deploy-2026-08-28`/`-08-30` but not separately logged here - see `github-app/CHANGELOG.md` for those.)
 
 ## Purpose
 
@@ -29,6 +29,46 @@ Before claiming a hardening change is live, verify:
 - Restore drill target database availability.
 
 ## Current Server Snapshot
+
+As of 2026-09-04, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - same five as every prior deploy, since none of this batch touched `github-app/app_server`/`github-app/scan_worker` directly, only `src/aletheore/*`, which all five images `pip install` as a package), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `8bf52ef`.
+- Working tree: clean aside from the expected untracked `github-app/backups/` directory.
+- 6 commits since the previous deploy tag (`github-app-deploy-2026-09-03`): #526 (this doc, no-op),
+  #527 (six real secrets-scanner gaps in `_is_likely_placeholder` - private-key-header path
+  suppression, generic-credential-assignment false-matching bare property references, missing
+  truncation-marker/`"default"` placeholder recognition, PEM-boilerplate-without-a-key-body), #532
+  (vulnerabilities pilot corpus completed for all 10 ecosystems - a clean pass, 10/10 recall, 0/7
+  false positives, no code changes), #529 (the real `unused_dependencies` bug described above -
+  see Snapshot Freshness for the root cause), #530 (docs-only - corrects `ast_pattern.py`'s and
+  `pyproject.toml`'s false claim that the tree-sitter segfault is 3.14-only), #531 (three real
+  license-detection gaps - BSD license bodies never contain the literal word "bsd" so
+  `flask`/`gorilla-mux` came back "unknown" despite being unambiguously BSD-licensed, `LICENSE.rst`
+  was missing from the checked filename list, Maven license lookup never followed `<parent>` POM
+  references so `Guava`/`Protobuf-java` came back "unknown" via `gson`'s real `pom.xml`; also added
+  CDDL to the weak-copyleft bucket).
+- All five app-relevant services rebuilt (`app-server`, `scan-worker`, `scan-worker-2`,
+  `health-worker`, `scheduler`) - `jina-embed` left untouched (its Dockerfile never copies
+  `src/aletheore`), `demo-scan-worker`/`demo-sandbox-runner` also untouched.
+- Services running: all five `Up`, all five reporting Docker-healthcheck `healthy` within ~20
+  seconds of recreation.
+- No pending migrations - `app-server`'s startup log shows `no pending migrations` (none of this
+  batch touched the DB schema).
+- Post-deploy, verified live by executing directly inside the running `scan-worker` container, not
+  by re-reading the repo: `from aletheore.dead_code import _raw_external_import_roots` imports
+  cleanly (the new function #529 adds); `'cddl' in aletheore.licenses._WEAK_COPYLEFT_MARKERS` is
+  `True`; `len(aletheore.secrets.KNOWN_VENDOR_EXAMPLE_VALUES) == 5` (the two new GitHub-token
+  examples #527 adds, on top of the three pre-existing ones).
+- Health checks: internal `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
+- No errors, tracebacks, or exceptions in `app-server`, `scan-worker`, `scan-worker-2`,
+  `health-worker`, or `scheduler` logs in the 60 seconds after restart.
+- Not re-verified this pass (no relevant Dockerfile/host changes): Docker socket mount absence,
+  non-root users, CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill
+  target availability, disk space - each last directly verified 2026-08-10 (restore drill itself
+  upgraded 2026-08-24, see below).
+
+## 2026-09-03 Snapshot
 
 As of 2026-09-03, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` - a plain `git reset --hard` was blocked by this session's own destructive-command guard, but the working tree was already confirmed clean so a fast-forward merge landed the identical result - + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five), live inspection found:
 
