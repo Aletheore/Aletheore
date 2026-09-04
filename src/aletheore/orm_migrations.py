@@ -8,41 +8,62 @@ three (all three are explicitly recognized ORMs in `scanner/detect.py`'s
 cases in `_detect_migration_directories`) previously produced a schema
 that silently looked identical to "no schema at all."
 
-This module produces the same event shapes `schema_map.py`'s SQL replay
-loop already merges (`create_table` / `add_column` / `create_index`
-/ `unsupported`), but pre-built rather than raw SQL text - each ORM's own
-call syntax is walked directly with tree-sitter rather than routed through
-the SQL tokenizer, since none of these three is SQL.
+This module produces the same event shapes `schema_map.py`'s replay loop
+already merges (`create_table` / `add_column` / `create_index` /
+`remove_column` / `alter_column` / `rename_column` / `remove_table` /
+`rename_table` / `remove_index` / `raw_sql` / `unsupported`), but
+pre-built rather than raw SQL text - each ORM's own call syntax is walked
+directly with tree-sitter rather than routed through the SQL tokenizer,
+since none of these three is SQL. The one exception is `raw_sql`: Django's
+`RunSQL`, Alembic's `op.execute`, and Rails' `execute` all accept a literal
+SQL string, which is handed to schema_map.py's own Postgres parser and
+replayed exactly like a real `.sql` file's statement - not re-implemented
+here.
 
 Scope, deliberately narrower than each framework's full DSL, mirroring
-schema_map.py's own restraint: only the operations real migrations
-commonly use to define shape. Everything else becomes an `unsupported`
-entry rather than a guess.
+schema_map.py's own restraint: model every operation with a clear,
+unambiguous DDL meaning; record anything else as `unsupported` rather
+than guess. What's still `unsupported`, and why each one specifically:
 
-- Django: `CreateModel` and `AddField` (with the implicit `id` primary key
-  Django adds when no field is marked `primary_key=True`), `ForeignKey`/
-  `OneToOneField` as relations, `AddIndex` best-effort. `ManyToManyField`
-  (an implicit through-table), `AlterField`, `RemoveField`, `RenameField`,
-  `DeleteModel`, and `RunSQL`/`RunPython` are recorded as unsupported, not
-  modeled. Table names follow Django's default `<app_label>_<model>`
-  convention (app_label taken from the migration file's own app directory);
-  an explicit `Meta.db_table` override is not read.
-- Rails: `create_table` blocks, `t.<type>`, `t.references`/`t.belongs_to`,
-  `t.timestamps`, standalone `add_column`/`add_index`/`add_foreign_key`.
-  Pluralization (for `references`' implied target table) is a simple
-  regular-noun heuristic, not a full inflector - irregular plurals
-  (`person` -> `people`) will resolve wrong.
-  `change_table`/`remove_column`/`drop_table`/`rename_column` are recorded
-  as unsupported.
-- Alembic: `op.create_table`, `op.add_column`, `op.create_index`,
-  `op.create_foreign_key`, and an inline `sa.ForeignKey(...)`/
-  `sa.ForeignKeyConstraint(...)` inside either. Only statements inside
-  `def upgrade():` are read; `downgrade()` is ignored. Alembic orders
-  migrations via each file's own `revision`/`down_revision` chain, not
-  filename - this module does not resolve that graph and instead sorts
-  files by path like every other migration source, which is a known,
-  documented approximation, not the guaranteed real replay order.
-  `op.drop_*`/`op.alter_column`/`op.execute` are recorded as unsupported.
+- Django: `RunPython` (arbitrary code - not statically modelable),
+  `AlterModelOptions`/`AlterUniqueTogether`/`AlterModelTable` (legacy
+  APIs superseded by `Meta.constraints`/per-field `db_column`, rare in
+  real migrations), `ManyToManyField` (an implicit through-table this
+  module does not construct). Everything else - `CreateModel`, `AddField`,
+  `RemoveField`, `AlterField`, `RenameField`, `DeleteModel`, `RenameModel`,
+  `AddIndex`, `RemoveIndex`, `RunSQL` - is modeled, including the implicit
+  `id` primary key Django adds when no field is marked `primary_key=True`.
+  Table names follow Django's default `<app_label>_<model>` convention
+  (app_label taken from the migration file's own app directory); an
+  explicit `Meta.db_table` override on `CreateModel` itself is not read.
+- Rails: `create_join_table` (the implicit join-table name follows a
+  real but fiddlier alphabetical-pluralization rule not worth the added
+  surface) and `remove_foreign_key` (relations are not individually
+  addressable for removal without risking dropping the wrong one when a
+  table has more than one FK to the same target) are recorded, not
+  modeled. Everything else - `create_table`/`change_table` blocks,
+  `t.<type>`/`t.references`/`t.belongs_to`/`t.timestamps`, standalone
+  `add_column`/`remove_column`/`rename_column`/`change_column`/
+  `change_column_null`/`change_column_default`/`add_index`/`remove_index`/
+  `add_foreign_key`/`drop_table`/`rename_table`/`execute` - is modeled.
+  Any Ruby method call that isn't a recognized Rails migration DSL method
+  (`_RAILS_KNOWN_METHODS`) is silently ignored rather than flagged, so a
+  seed-data helper or a `reversible`/`say` wrapper doesn't drown real
+  findings in noise. Pluralization (for `references`'/`belongs_to`'s
+  implied target table) is a simple regular-noun heuristic, not a full
+  inflector - irregular plurals (`person` -> `people`) resolve wrong.
+- Alembic: `op.drop_constraint` (constraint names are not tracked
+  precisely enough on relations to resolve which one to remove) is
+  recorded, not modeled. Everything else - `op.create_table`,
+  `op.add_column`, `op.create_index`, `op.create_foreign_key` (plus an
+  inline `sa.ForeignKey(...)`/`sa.ForeignKeyConstraint(...)` inside
+  either), `op.drop_table`, `op.drop_column`, `op.alter_column`,
+  `op.drop_index`, `op.rename_table`, `op.execute` - is modeled. Only
+  statements inside `def upgrade():` are read; `downgrade()` is ignored.
+  Alembic orders migrations via each file's own `revision`/`down_revision`
+  chain, not filename - this module does not resolve that graph and
+  instead sorts files by path like every other migration source, which is
+  a known, documented approximation, not the guaranteed real replay order.
 """
 
 from __future__ import annotations
@@ -57,10 +78,14 @@ _DJANGO_SNIFF_MARKERS = (b"django.db", b"migrations.Migration")
 
 _DJANGO_PK_FIELD_TYPES = {"AUTOFIELD", "BIGAUTOFIELD", "SMALLAUTOFIELD"}
 _DJANGO_RELATION_FIELD_TYPES = {"FOREIGNKEY", "ONETOONEFIELD"}
+# Genuinely unmodelable (RunPython: arbitrary code) or metadata-only with no
+# DB-shape effect (AlterModelOptions covers things like `ordering`/
+# `verbose_name`; AlterUniqueTogether/AlterModelTable are legacy Django <2.2
+# APIs superseded by Meta.constraints/db_table on the field itself, rare
+# enough in real migrations that modeling them is not worth the added
+# surface - still recorded, not silently dropped).
 _DJANGO_UNSUPPORTED_OPS = {
-    "AlterField", "RemoveField", "RenameField", "DeleteModel",
-    "RenameModel", "AlterModelOptions", "AlterUniqueTogether",
-    "RunSQL", "RunPython", "RemoveIndex", "AlterModelTable",
+    "AlterModelOptions", "AlterUniqueTogether", "RunPython", "AlterModelTable",
 }
 
 _RAILS_TYPE_METHODS = {
@@ -68,15 +93,24 @@ _RAILS_TYPE_METHODS = {
     "datetime", "timestamp", "time", "date", "binary", "boolean", "json",
     "jsonb", "uuid",
 }
-_RAILS_UNSUPPORTED_METHODS = {
-    "change_table", "remove_column", "drop_table", "rename_column",
-    "rename_table", "change_column", "remove_index",
+# create_join_table's implicit table name follows a real but fiddlier rule
+# (the two model names, alphabetically sorted, pluralized, underscore-
+# joined) - real and common enough to name explicitly rather than silently
+# drop, not common enough to be worth the added surface here.
+_RAILS_UNSUPPORTED_METHODS = {"create_join_table"}
+# The full set of recognized Rails migration DSL methods (modeled ones plus
+# the unsupported ones above) - anything else encountered is ordinary Ruby
+# (a seed-data helper, `reversible`/`up_only` wrappers, `say`, application
+# code) and must be silently ignored, not flagged, or every migration file
+# would drown in false "unsupported" noise for non-schema calls.
+_RAILS_KNOWN_METHODS = _RAILS_UNSUPPORTED_METHODS | {
+    "create_table", "add_column", "add_index", "add_foreign_key",
+    "remove_column", "drop_table", "rename_column", "rename_table",
+    "change_column", "remove_index", "change_table", "remove_foreign_key",
+    "change_column_null", "change_column_default", "execute",
 }
 
-_ALEMBIC_UNSUPPORTED_OPS = {
-    "drop_table", "drop_column", "alter_column", "execute", "drop_index",
-    "drop_constraint", "rename_table",
-}
+_ALEMBIC_UNSUPPORTED_OPS = {"drop_constraint"}
 
 
 def _py_parser() -> Parser:
@@ -371,6 +405,127 @@ def _django_model_operations(
             )
             continue
 
+        if op_name == "RemoveField":
+            model_node = _py_kwarg(args, "model_name", source)
+            name_node = _py_kwarg(args, "name", source)
+            model_name = _py_string_text(model_node, source) if model_node else None
+            fname = _py_string_text(name_node, source) if name_node else None
+            if model_name is None or fname is None:
+                continue
+            events.append(
+                {"kind": "remove_column", "table": _django_table_name(app_label, model_name),
+                 "name": fname, "file": rel_path, "line": line}
+            )
+            continue
+
+        if op_name == "AlterField":
+            model_node = _py_kwarg(args, "model_name", source)
+            name_node = _py_kwarg(args, "name", source)
+            field_node = _py_kwarg(args, "field", source)
+            model_name = _py_string_text(model_node, source) if model_node else None
+            fname = _py_string_text(name_node, source) if name_node else None
+            if model_name is None or fname is None or field_node is None or field_node.type != "call":
+                continue
+            table = _django_table_name(app_label, model_name)
+            column, relation = _django_column_from_field(
+                fname, field_node, source, rel_path, line,
+                app_label=app_label, current_model=model_name,
+            )
+            events.append(
+                {"kind": "alter_column", "table": table, "name": column["name"],
+                 "changes": {
+                     "type": column["type"], "nullable": column["nullable"],
+                     "unique": column["unique"], "default": column["default"],
+                 },
+                 "file": rel_path, "line": line}
+            )
+            if relation is not None:
+                events.append({"kind": "add_relation", "table": table, "relation": relation,
+                                "file": rel_path, "line": line})
+            continue
+
+        if op_name == "RenameField":
+            model_node = _py_kwarg(args, "model_name", source)
+            old_node = _py_kwarg(args, "old_name", source)
+            new_node = _py_kwarg(args, "new_name", source)
+            model_name = _py_string_text(model_node, source) if model_node else None
+            old_name = _py_string_text(old_node, source) if old_node else None
+            new_name = _py_string_text(new_node, source) if new_node else None
+            if model_name is None or old_name is None or new_name is None:
+                continue
+            events.append(
+                {"kind": "rename_column", "table": _django_table_name(app_label, model_name),
+                 "old_name": old_name, "new_name": new_name, "file": rel_path, "line": line}
+            )
+            continue
+
+        if op_name == "DeleteModel":
+            name_node = _py_kwarg(args, "name", source)
+            if name_node is None:
+                positional = _py_positional(args)
+                name_node = positional[0] if positional else None
+            model_name = _py_string_text(name_node, source) if name_node else None
+            if model_name is None:
+                continue
+            events.append(
+                {"kind": "remove_table", "table": _django_table_name(app_label, model_name)}
+            )
+            continue
+
+        if op_name == "RenameModel":
+            old_node = _py_kwarg(args, "old_name", source)
+            new_node = _py_kwarg(args, "new_name", source)
+            old_name = _py_string_text(old_node, source) if old_node else None
+            new_name = _py_string_text(new_node, source) if new_node else None
+            if old_name is None or new_name is None:
+                continue
+            events.append(
+                {"kind": "rename_table",
+                 "old_table": _django_table_name(app_label, old_name),
+                 "new_table": _django_table_name(app_label, new_name)}
+            )
+            continue
+
+        if op_name == "RemoveIndex":
+            model_node = _py_kwarg(args, "model_name", source)
+            name_node = _py_kwarg(args, "name", source)
+            model_name = _py_string_text(model_node, source) if model_node else None
+            index_name = _py_string_text(name_node, source) if name_node else None
+            if model_name is None or index_name is None:
+                continue
+            events.append(
+                {"kind": "remove_index", "table": _django_table_name(app_label, model_name),
+                 "name": index_name}
+            )
+            continue
+
+        if op_name == "RunSQL":
+            sql_node = _py_kwarg(args, "sql", source)
+            if sql_node is None:
+                positional = _py_positional(args)
+                sql_node = positional[0] if positional else None
+            if sql_node is None:
+                continue
+            # `sql=` is a single string or a list of (query,) / (query, params)
+            # entries - RunSQL replays them in order, same as separate
+            # statements in one .sql file would.
+            statements: list[str] = []
+            if sql_node.type == "string":
+                text = _py_string_text(sql_node, source)
+                if text:
+                    statements.append(text)
+            elif sql_node.type == "list":
+                for entry in sql_node.named_children:
+                    target = entry.named_children[0] if entry.type == "tuple" and entry.named_children else entry
+                    text = _py_string_text(target, source)
+                    if text:
+                        statements.append(text)
+            if statements:
+                events.append(
+                    {"kind": "raw_sql", "sql": "\n".join(statements), "file": rel_path, "line": line}
+                )
+            continue
+
         if op_name in _DJANGO_UNSUPPORTED_OPS:
             events.append(
                 {"kind": "unsupported", "file": rel_path, "line": line,
@@ -433,7 +588,7 @@ def extract_django_migrations(
                 ):
                     events.extend(_django_model_operations(right, source, rel_path, app_label))
                     continue
-            stack.extend(node.children)
+            stack.extend(reversed(node.children))
 
     return events, sources
 
@@ -609,6 +764,81 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
                     )
             continue
 
+        if op_name == "drop_table":
+            if not positional:
+                continue
+            table = _py_string_text(positional[0], source)
+            if table:
+                events.append({"kind": "remove_table", "table": table})
+            continue
+
+        if op_name == "drop_column":
+            if len(positional) < 2:
+                continue
+            table = _py_string_text(positional[0], source)
+            col_name = _py_string_text(positional[1], source)
+            if table and col_name:
+                events.append(
+                    {"kind": "remove_column", "table": table, "name": col_name,
+                     "file": rel_path, "line": line}
+                )
+            continue
+
+        if op_name == "alter_column":
+            if len(positional) < 2:
+                continue
+            table = _py_string_text(positional[0], source)
+            col_name = _py_string_text(positional[1], source)
+            if not table or not col_name:
+                continue
+            changes: dict = {}
+            type_kw = _py_kwarg(args, "type_", source)
+            if type_kw is not None and type_kw.type == "call":
+                changes["type"] = (_py_call_name(type_kw, source) or "UNKNOWN").upper()
+            nullable_kw = _py_kwarg(args, "nullable", source)
+            if nullable_kw is not None:
+                changes["nullable"] = nullable_kw.type == "true"
+            default_kw = _py_kwarg(args, "server_default", source)
+            if default_kw is not None:
+                changes["default"] = _py_scalar_default(default_kw, source)
+            if changes:
+                events.append(
+                    {"kind": "alter_column", "table": table, "name": col_name,
+                     "changes": changes, "file": rel_path, "line": line}
+                )
+            continue
+
+        if op_name == "drop_index":
+            if not positional:
+                continue
+            index_name = _py_string_text(positional[0], source)
+            table_kw = _py_kwarg(args, "table_name", source)
+            table = _py_string_text(table_kw, source) if table_kw else (
+                _py_string_text(positional[1], source) if len(positional) > 1 else None
+            )
+            if index_name and table:
+                events.append({"kind": "remove_index", "table": table, "name": index_name})
+            continue
+
+        if op_name == "rename_table":
+            if len(positional) < 2:
+                continue
+            old_table = _py_string_text(positional[0], source)
+            new_table = _py_string_text(positional[1], source)
+            if old_table and new_table:
+                events.append(
+                    {"kind": "rename_table", "old_table": old_table, "new_table": new_table}
+                )
+            continue
+
+        if op_name == "execute":
+            if not positional:
+                continue
+            text = _py_string_text(positional[0], source)
+            if text:
+                events.append({"kind": "raw_sql", "sql": text, "file": rel_path, "line": line})
+            continue
+
         if op_name in _ALEMBIC_UNSUPPORTED_OPS:
             events.append(
                 {"kind": "unsupported", "file": rel_path, "line": line,
@@ -642,7 +872,7 @@ def extract_alembic_migrations(
                 continue
             sources.append(rel_path)
             tree = parser.parse(source)
-            stack = list(tree.root_node.children)
+            stack = list(reversed(tree.root_node.children))
             while stack:
                 node = stack.pop()
                 if node.type == "function_definition":
@@ -652,7 +882,7 @@ def extract_alembic_migrations(
                         if body is not None:
                             events.extend(_alembic_upgrade_events(body, source, rel_path))
                     continue
-                stack.extend(node.children)
+                stack.extend(reversed(node.children))
     return events, sources
 
 
@@ -817,6 +1047,85 @@ def _rails_create_table_events(call: Node, source: bytes, rel_path: str) -> list
     ]
 
 
+def _rails_change_table_events(call: Node, source: bytes, rel_path: str) -> list[dict]:
+    """`change_table :table do |t| ... end` - the same `t.<type>`/
+    `t.references`/`t.timestamps` calls create_table's block accepts, plus
+    `t.remove`/`t.rename`, applied to an existing table rather than a new
+    one."""
+    args = _rb_args(call)
+    positional = [a for a in args if a.type != "pair"]
+    if not positional:
+        return []
+    table = _rb_symbol_text(positional[0], source)
+    if not table:
+        return []
+
+    events: list[dict] = []
+    do_block = call.child_by_field_name("block") or next(
+        (c for c in call.children if c.type == "do_block"), None
+    )
+    if do_block is None:
+        return []
+    body = do_block.child_by_field_name("body")
+    inner_calls = body.named_children if body is not None else []
+    for inner in inner_calls:
+        if inner.type != "call":
+            continue
+        method = _rb_call_name(inner, source)
+        inner_line = inner.start_point[0] + 1
+        inner_args = _rb_args(inner)
+        inner_positional = [a for a in inner_args if a.type != "pair"]
+
+        if method == "remove":
+            for target in inner_positional:
+                col_name = _rb_symbol_text(target, source)
+                if col_name:
+                    events.append(
+                        {"kind": "remove_column", "table": table, "name": col_name,
+                         "file": rel_path, "line": inner_line}
+                    )
+            continue
+        if method == "rename":
+            if len(inner_positional) >= 2:
+                old_name = _rb_symbol_text(inner_positional[0], source)
+                new_name = _rb_symbol_text(inner_positional[1], source)
+                if old_name and new_name:
+                    events.append(
+                        {"kind": "rename_column", "table": table, "old_name": old_name,
+                         "new_name": new_name, "file": rel_path, "line": inner_line}
+                    )
+            continue
+        if method == "index":
+            if inner_positional:
+                col_name = _rb_symbol_text(inner_positional[0], source)
+                if col_name:
+                    events.append(
+                        {"kind": "create_index", "table": table,
+                         "name": f"index_{table}_on_{col_name}", "columns": [col_name],
+                         "unique": _rb_bool_kwarg(inner_args, "unique", source) is True,
+                         "file": rel_path, "line": inner_line}
+                    )
+            continue
+        if method == "timestamps":
+            for tcol in ("created_at", "updated_at"):
+                events.append(
+                    {"kind": "add_column", "table": table, "file": rel_path, "line": inner_line,
+                     "column": {"name": tcol, "type": "DATETIME", "primary_key": False,
+                                "nullable": False, "unique": False, "default": None,
+                                "file": rel_path, "line": inner_line},
+                     "relation": None}
+                )
+            continue
+        column, relation = _rails_column_from_typed_call(inner, source, rel_path, inner_line)
+        if column is not None:
+            events.append(
+                {"kind": "add_column", "table": table, "file": rel_path, "line": inner_line,
+                 "column": column, "relation": relation}
+            )
+
+    return events
+
+
 def _rails_top_level_events(call: Node, source: bytes, rel_path: str) -> list[dict]:
     method = _rb_call_name(call, source)
     line = call.start_point[0] + 1
@@ -877,11 +1186,115 @@ def _rails_top_level_events(call: Node, source: bytes, rel_path: str) -> list[di
                               "on_delete": on_delete.upper() if on_delete else None,
                               "file": rel_path, "line": line}}]
 
-    if method in _RAILS_UNSUPPORTED_METHODS:
-        return [{"kind": "unsupported", "file": rel_path, "line": line,
-                 "statement": f"{method}(...) not modeled"}]
+    if method == "remove_column":
+        if len(positional) < 2:
+            return []
+        table = _rb_symbol_text(positional[0], source)
+        col_name = _rb_symbol_text(positional[1], source)
+        if not table or not col_name:
+            return []
+        return [{"kind": "remove_column", "table": table, "name": col_name,
+                 "file": rel_path, "line": line}]
 
-    return []
+    if method == "drop_table":
+        if not positional:
+            return []
+        table = _rb_symbol_text(positional[0], source)
+        return [{"kind": "remove_table", "table": table}] if table else []
+
+    if method == "rename_column":
+        if len(positional) < 3:
+            return []
+        table = _rb_symbol_text(positional[0], source)
+        old_name = _rb_symbol_text(positional[1], source)
+        new_name = _rb_symbol_text(positional[2], source)
+        if not table or not old_name or not new_name:
+            return []
+        return [{"kind": "rename_column", "table": table, "old_name": old_name,
+                 "new_name": new_name, "file": rel_path, "line": line}]
+
+    if method == "rename_table":
+        if len(positional) < 2:
+            return []
+        old_table = _rb_symbol_text(positional[0], source)
+        new_table = _rb_symbol_text(positional[1], source)
+        return [{"kind": "rename_table", "old_table": old_table, "new_table": new_table}] \
+            if old_table and new_table else []
+
+    if method == "change_column":
+        if len(positional) < 3:
+            return []
+        table = _rb_symbol_text(positional[0], source)
+        col_name = _rb_symbol_text(positional[1], source)
+        col_type = _rb_symbol_text(positional[2], source)
+        if not table or not col_name or not col_type:
+            return []
+        null_kw = _rb_bool_kwarg(args, "null", source)
+        changes = {"type": col_type.upper()}
+        if null_kw is not None:
+            changes["nullable"] = null_kw
+        return [{"kind": "alter_column", "table": table, "name": col_name, "changes": changes,
+                 "file": rel_path, "line": line}]
+
+    if method == "remove_index":
+        if not positional:
+            return []
+        table = _rb_symbol_text(positional[0], source)
+        name_kw = _rb_kwarg(args, "name", source)
+        if name_kw is not None:
+            index_name = _rb_symbol_text(name_kw, source)
+        elif len(positional) > 1:
+            col_kw = positional[1]
+            col_name = _rb_symbol_text(col_kw, source)
+            index_name = f"index_{table}_on_{col_name}" if col_name else None
+        else:
+            column_kw = _rb_kwarg(args, "column", source)
+            col_name = _rb_symbol_text(column_kw, source) if column_kw else None
+            index_name = f"index_{table}_on_{col_name}" if col_name else None
+        if not table or not index_name:
+            return []
+        return [{"kind": "remove_index", "table": table, "name": index_name}]
+
+    if method == "change_table":
+        return _rails_change_table_events(call, source, rel_path)
+
+    if method == "remove_foreign_key":
+        if len(positional) < 2:
+            return []
+        from_table = _rb_symbol_text(positional[0], source)
+        to_table = _rb_symbol_text(positional[1], source)
+        if not from_table or not to_table:
+            return []
+        return [{"kind": "unsupported", "file": rel_path, "line": line,
+                 "statement": f"remove_foreign_key({from_table}, {to_table}) not modeled "
+                               "(relations are not individually addressable for removal)"}]
+
+    if method in ("change_column_null", "change_column_default"):
+        if len(positional) < 3:
+            return []
+        table = _rb_symbol_text(positional[0], source)
+        col_name = _rb_symbol_text(positional[1], source)
+        if not table or not col_name:
+            return []
+        value_node = positional[2]
+        if method == "change_column_null":
+            changes = {"nullable": value_node.type == "true"}
+        else:
+            changes = {"default": _rb_text(value_node, source)}
+        return [{"kind": "alter_column", "table": table, "name": col_name, "changes": changes,
+                 "file": rel_path, "line": line}]
+
+    if method == "execute":
+        if not positional:
+            return []
+        text = _rb_symbol_text(positional[0], source)
+        return [{"kind": "raw_sql", "sql": text, "file": rel_path, "line": line}] if text else []
+
+    if method not in _RAILS_KNOWN_METHODS:
+        return []
+
+    return [{"kind": "unsupported", "file": rel_path, "line": line,
+             "statement": f"{method}(...) not modeled"}]
 
 
 def extract_rails_migrations(
@@ -908,6 +1321,11 @@ def extract_rails_migrations(
                 continue
             sources.append(rel_path)
             tree = parser.parse(source)
+            # A plain (non-reversed) push+pop here would visit sibling
+            # statements in reverse source order - confirmed via a real
+            # multi-statement `change` block (rename_column, rename_table,
+            # drop_table all in one method): events came out drop/rename/
+            # rename instead of source order, silently reordering replay.
             stack = [tree.root_node]
             while stack:
                 node = stack.pop()
@@ -916,6 +1334,9 @@ def extract_rails_migrations(
                     if name == "create_table":
                         events.extend(_rails_create_table_events(node, source, rel_path))
                         continue
+                    if name == "change_table":
+                        events.extend(_rails_change_table_events(node, source, rel_path))
+                        continue
                     events.extend(_rails_top_level_events(node, source, rel_path))
-                stack.extend(node.children)
+                stack.extend(reversed(node.children))
     return events, sources
