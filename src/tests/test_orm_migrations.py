@@ -810,6 +810,9 @@ def test_alembic_create_table_without_explicit_pk_gets_no_implicit_id(tmp_path):
 from alembic import op
 import sqlalchemy as sa
 
+revision = "abc123"
+down_revision = None
+
 def upgrade():
     op.create_table('audit', sa.Column('message', sa.Text()))
 """
