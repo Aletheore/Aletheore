@@ -18,38 +18,59 @@ none prevented it.
 
 CORRECTION (2026-09-04, dead-code/ast-pattern overnight benchmark pass):
 this module's own prior claim that "the exact same code runs clean on
-3.12" is **false for real repos at real scale** - it was only ever
-verified against this project's own ~116 source files. Confirmed
-directly on Python 3.12.10, tree-sitter 0.26.0: a low-match-density
-query (`(try_statement) @try`, a shape that doesn't hit
-`_AST_PATTERN_MATCH_CAP`/`_AST_PATTERN_TOTAL_CHAR_BUDGET` early and so
-lets many files fully process) against Django's real ~2,930-file Python
-tree segfaults reliably, twice in a row, exit code 139. A
-higher-match-density query against the same repo
-(`(function_definition) @fn`, which hits the char budget after ~126
-matches and stops early) completes cleanly - and two other real, large
-repos (react/JS, client-go/Go) both completed cleanly too, because their
-test queries happened to hit `_AST_PATTERN_MATCH_CAP` (200) within the
-first few files. The crash correlates with *files fully processed
-before any cap triggers*, not language, matches found, or Python version
-alone - a query that happens to be selective enough to run long against
-a big enough repo can hit this on 3.11/3.12 too, inside the officially
-supported range, not only on the already-excluded 3.14.
+3.12" was false for real repos at real scale - it was only ever verified
+against this project's own ~116 source files. Confirmed directly on
+Python 3.12.10, tree-sitter 0.26.0: a low-match-density query
+(`(try_statement) @try`) against Django's real ~2,930-file Python tree
+segfaults reliably - reproduced independently a second time the same day
+(3 of 4 runs, exit code 139 each time; the one clean run confirms this is
+probabilistic/timing-dependent, not deterministic - consistent with a
+memory-corruption-class bug, not a logic bug). The crash correlates with
+*files fully processed before any cap triggers*, not language, matches
+found, or Python version alone - a query selective enough to run long
+against a big enough repo can hit this on 3.11/3.12 too, inside the
+officially supported range, not only on the already-excluded 3.14.
 
-Not re-fixed here: the two most obvious untried mitigations both carry
-real design trade-offs (subprocess isolation adds latency to every call
-to protect the rare large/low-density case; a file-count-based
-pre-emptive truncation needs a threshold chosen without a clean way to
-predict it) that deserve human sign-off given two prior fix attempts
-already failed - flagged for follow-up, not shipped speculatively. If a
-future fix attempt narrows the threshold further or changes the
-mitigation strategy, re-verify against a real multi-thousand-file repo
-specifically (Django or similar), not just the unit tests (which use
-single-digit-file fixtures far too small to trigger this) and not just
-this project's own ~116 files (too small too - that's exactly the gap
-this correction found).
+FIX (2026-09-04): batched subprocess isolation. Each batch of
+_AST_PATTERN_BATCH_SIZE files runs in its own fresh worker process
+(ProcessPoolExecutor with max_tasks_per_child=1 - the default reuses one
+worker across every submitted task, which would recreate the exact same
+unbounded accumulation this fix exists to prevent). A segfault kills that
+one batch's worker, not the whole call: caught as BrokenProcessPool,
+every earlier batch's real results are kept, the remainder is marked
+truncated - the same honest-truncation contract _AST_PATTERN_MATCH_CAP/
+_AST_PATTERN_TOTAL_CHAR_BUDGET already use, not a silent gap. Verified
+against the exact case that crashed above: `(try_statement) @try` against
+Django's real tree, 20 consecutive runs, 0 crashes (see
+benchmarks/ast-pattern-benchmark/ for the full before/after methodology).
+Chosen over the two mitigations this module previously flagged as
+untried-and-risky: unbatched (one-process-per-call) subprocess isolation
+doesn't actually fix anything (the same accumulation happens inside that
+one child); pre-emptive file-count truncation needs a threshold with no
+clean way to calibrate it, and is silently wrong if that guess is off -
+batching costs real per-batch subprocess-spawn latency too, but a wrong
+batch-size guess degrades to "that batch's worker dies, cleanly caught,
+marked truncated," never a silently incomplete result.
+
+VERIFIED ON 3.14 ITSELF (2026-09-04, same pass): the crash does reproduce
+on 3.14 (tree-sitter 0.26.0) - but not from one big single-process call
+the way it does on 3.12. 16 consecutive single-call runs of a
+full-scan-forcing query (`(match_statement) @m` against Django, 4 real
+matches) were all clean; the crash only appeared when the SAME unfixed
+process called `search_ast_pattern` repeatedly without restarting -
+exactly how a long-lived MCP server process actually behaves (one call
+per tool invocation, same process). Segfaulted (exit 139) on the 3rd
+repeated call. This means single-call testing alone understates real
+risk on 3.14: the object graph accumulates *across* calls, not only
+within one. The fix holds under this harder, more realistic scenario
+too - 20 consecutive repeated in-process calls of the same query, 0
+crashes, because each call's own ProcessPoolExecutor tears its workers
+down at call end, so nothing carries over into the next call's object
+graph regardless of how many calls the parent process lives through.
 """
 
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
 from tree_sitter import Parser, Query, QueryCursor, QueryError
@@ -76,12 +97,17 @@ class InvalidPatternError(Exception):
 # anything in this module on its own, and a real unscoped query against
 # this repo alone was measured to return ~5.6M characters - ~14x past
 # the ~390,000-char limit that sank an earlier unbounded MCP result (see
-# _search_files' own history). No timeout/subprocess isolation needed
-# here unlike the regex-search sibling: QueryCursor.matches() is a
-# deterministic tree walk, not backtracking regex, so there's no
-# pathological-slowness risk to guard against, only pathological size.
+# _search_files' own history).
 _AST_PATTERN_MATCH_CAP = 200
 _AST_PATTERN_TOTAL_CHAR_BUDGET = 100_000
+
+# See module docstring's FIX note. 200 chosen as a starting point matching
+# _AST_PATTERN_MATCH_CAP's own number for a simple mental model - the two
+# bound different things (result count vs. files-per-worker-process) and
+# aren't required to match; unlike a truncation threshold, a wrong guess
+# here just changes how often a batch's worker gets recycled, not whether
+# results are silently incomplete.
+_AST_PATTERN_BATCH_SIZE = 200
 
 
 def _extensions_and_languages_for(language: str) -> list[tuple[str, object]]:
@@ -96,25 +122,7 @@ def _extensions_and_languages_for(language: str) -> list[tuple[str, object]]:
     return matches
 
 
-def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> dict:
-    """Runs a tree-sitter S-expression query against every file of
-    `language` under repo_path. Returns `{"matches": [...], "truncated": bool}` -
-    one dict per match in "matches":
-    `{"file": ..., "captures": {name: [{"text", "start_line", "end_line"}, ...]}}`
-    - captures are exactly what the query itself names with `@capture`,
-    nothing synthesized. A query with no captures at all matches structure
-    but returns no text/location - the caller's query must name at least
-    one node it cares about. "truncated" is honest, not assumed: a broad
-    structural query is capped at _AST_PATTERN_MATCH_CAP matches and
-    _AST_PATTERN_TOTAL_CHAR_BUDGET total captured characters, same
-    reasoning as mcp_server.py's file-search tool.
-
-    Raises UnknownLanguageError for a language name LANGUAGE_BY_EXTENSION
-    doesn't recognize, InvalidPatternError for a query_source that fails
-    to compile against the language's grammar.
-    """
-    ext_languages = _extensions_and_languages_for(language)
-
+def _compile_queries(ext_languages: list[tuple[str, object]], query_source: str) -> dict:
     # A Query is compiled against one specific grammar object - typescript
     # spans two (.ts/.tsx use different grammars: TS_LANGUAGE/TSX_LANGUAGE,
     # see LANGUAGE_BY_EXTENSION), so compile once per distinct grammar the
@@ -126,13 +134,37 @@ def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> dic
             queries[ts_language] = Query(ts_language, query_source)
         except QueryError as exc:
             raise InvalidPatternError(str(exc)) from exc
+    return queries
 
+
+def _search_file_batch(
+    repo_path_str: str,
+    language: str,
+    query_source: str,
+    rel_paths: list[str],
+    results_remaining: int,
+    chars_remaining: int,
+) -> tuple[list[dict], int, bool]:
+    """Runs inside its own fresh worker process (see search_ast_pattern) -
+    recompiles the query itself since compiled tree_sitter Query/Language
+    objects wrap C pointers and aren't picklable across the process
+    boundary, so every batch's worker reconstructs its own. Processes only
+    `rel_paths` (one batch), honoring `results_remaining`/`chars_remaining`
+    - this call's share of the cross-batch cumulative caps, so a match cap
+    hit mid-batch still stops exactly where the old single-process version
+    would have. Returns (matches, chars_used_by_this_batch,
+    truncated_within_this_batch).
+    """
+    repo_path = Path(repo_path_str)
+    ext_languages = _extensions_and_languages_for(language)
+    queries = _compile_queries(ext_languages, query_source)
     ext_to_ts_language = dict(ext_languages)
     parser = Parser()
     results: list[dict] = []
     total_chars = 0
     truncated = False
-    for path in _iter_source_files(repo_path):
+    for rel_path in rel_paths:
+        path = repo_path / rel_path
         ts_language = ext_to_ts_language.get(path.suffix)
         if ts_language is None:
             continue
@@ -141,19 +173,13 @@ def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> dic
                 continue
             _, tree = _read_and_parse(path, parser, ts_language)
         except OSError:
-            # A file can vanish or become unreadable between
-            # _iter_source_files listing its full path set upfront and this
-            # read - deleted mid-query, permissions changed, a concurrent
-            # `aletheore watch` touching it. Skipping it must not cost
-            # every other file's results, which an unhandled crash here
-            # previously did (verified: a chmod-000 file in a two-file repo
-            # lost the OTHER, readable file's real match too, not just its
-            # own - the whole call raised before returning anything).
+            # See search_ast_pattern's own history: a file vanishing or
+            # becoming unreadable mid-batch must not cost the rest of this
+            # batch's real results.
             continue
         cursor = QueryCursor(queries[ts_language])
-        rel_path = path.relative_to(repo_path).as_posix()
         for _pattern_index, captures in cursor.matches(tree.root_node):
-            if len(results) >= _AST_PATTERN_MATCH_CAP:
+            if len(results) >= results_remaining:
                 truncated = True
                 break
             match_captures = {
@@ -168,37 +194,97 @@ def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> dic
                 for name, nodes in captures.items()
             }
             # Sized BEFORE appending, not checked-then-appended-regardless -
-            # Flash Review on this PR caught a real overshoot: the prior
-            # version only checked whether total_chars had ALREADY reached
-            # the budget, so one match whose own captures were larger than
-            # the whole remaining budget still went in, in full, pushing
-            # the real total arbitrarily far past
-            # _AST_PATTERN_TOTAL_CHAR_BUDGET. A match that alone exceeds
-            # the budget is dropped, not truncated mid-capture - a partial
-            # capture's text would be misleading, not just short.
+            # a match whose own captures alone exceed the remaining budget
+            # is dropped, not truncated mid-capture (see search_ast_pattern's
+            # own history - a partial capture's text would be misleading,
+            # not just short).
             match_chars = sum(
                 len(capture["text"])
                 for capture_list in match_captures.values()
                 for capture in capture_list
             )
-            if total_chars + match_chars > _AST_PATTERN_TOTAL_CHAR_BUDGET:
+            if total_chars + match_chars > chars_remaining:
                 truncated = True
                 break
             results.append({"file": rel_path, "captures": match_captures})
             total_chars += match_chars
-        # Explicit, not left to reassignment next iteration: Node/Tree form
-        # a reference cycle in this tree-sitter binding, so plain refcounting
-        # never frees them - only the cyclic GC does, on its own schedule.
-        # Left alone, cyclic garbage from every file in a large repo (100+)
-        # piles up until an eventual mass collection (or process exit)
-        # frees many Tree objects at once, which segfaults - reproduced
-        # directly running this function against this project's own 116
-        # source files: a build with `del` here never crashes, one without
-        # it does, deterministically, every time. Deleting each iteration
-        # keeps the cycle count at most one at a time. Runs even on the
-        # truncating iteration, before the outer break below - this file's
-        # tree/cursor were still created and still need the same cleanup.
         del tree, cursor
         if truncated:
             break
+    return results, total_chars, truncated
+
+
+def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> dict:
+    """Runs a tree-sitter S-expression query against every file of
+    `language` under repo_path. Returns `{"matches": [...], "truncated": bool}` -
+    one dict per match in "matches":
+    `{"file": ..., "captures": {name: [{"text", "start_line", "end_line"}, ...]}}`
+    - captures are exactly what the query itself names with `@capture`,
+    nothing synthesized. A query with no captures at all matches structure
+    but returns no text/location - the caller's query must name at least
+    one node it cares about. "truncated" is honest, not assumed: a broad
+    structural query is capped at _AST_PATTERN_MATCH_CAP matches and
+    _AST_PATTERN_TOTAL_CHAR_BUDGET total captured characters, same
+    reasoning as mcp_server.py's file-search tool - and also set when a
+    batch's worker process crashes before finishing (see module docstring).
+
+    Raises UnknownLanguageError for a language name LANGUAGE_BY_EXTENSION
+    doesn't recognize, InvalidPatternError for a query_source that fails
+    to compile against the language's grammar.
+    """
+    ext_languages = _extensions_and_languages_for(language)
+    _compile_queries(ext_languages, query_source)  # fail fast, before spawning anything
+
+    valid_extensions = {ext for ext, _ in ext_languages}
+    rel_paths = [
+        path.relative_to(repo_path).as_posix()
+        for path in _iter_source_files(repo_path)
+        if path.suffix in valid_extensions
+    ]
+    batches = [
+        rel_paths[i : i + _AST_PATTERN_BATCH_SIZE]
+        for i in range(0, len(rel_paths), _AST_PATTERN_BATCH_SIZE)
+    ]
+
+    results: list[dict] = []
+    total_chars = 0
+    truncated = False
+    repo_path_str = str(repo_path)
+    # max_tasks_per_child=1 is load-bearing, not a tuning knob: without it
+    # ProcessPoolExecutor reuses one worker across every submitted batch,
+    # which would recreate the exact unbounded in-process accumulation
+    # this fix exists to bound. This forces a genuinely fresh process per
+    # batch, matching "recycle before the object graph gets big enough to
+    # crash" rather than "spawn once, then behave like the old code."
+    with ProcessPoolExecutor(max_workers=1, max_tasks_per_child=1) as executor:
+        for batch in batches:
+            results_remaining = _AST_PATTERN_MATCH_CAP - len(results)
+            chars_remaining = _AST_PATTERN_TOTAL_CHAR_BUDGET - total_chars
+            if results_remaining <= 0 or chars_remaining <= 0:
+                truncated = True
+                break
+            future = executor.submit(
+                _search_file_batch,
+                repo_path_str,
+                language,
+                query_source,
+                batch,
+                results_remaining,
+                chars_remaining,
+            )
+            try:
+                batch_results, batch_chars, batch_truncated = future.result()
+            except BrokenProcessPool:
+                # This batch's worker segfaulted (see module docstring's
+                # FIX note). Every earlier batch's results are real and
+                # already in `results` - kept, not discarded. This batch's
+                # own in-flight work is lost, same as any other
+                # truncation: honest, not silent.
+                truncated = True
+                break
+            results.extend(batch_results)
+            total_chars += batch_chars
+            if batch_truncated:
+                truncated = True
+                break
     return {"matches": results, "truncated": truncated}
