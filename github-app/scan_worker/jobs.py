@@ -4390,7 +4390,7 @@ def _maybe_sync_docs_to_repo(dsn: str, installation_id: int, repo_full_name: str
             }
         modules = build_api_reference(evidence, ai_descriptions_by_module)
         bot_login = f"{get_settings().github_app_slug}[bot]"
-        result = sync_docs_to_repo(client, token, repo_full_name, modules, settings, bot_login)
+        result = sync_docs_to_repo(client, token, repo_full_name, modules, settings, bot_login, evidence)
         if result is not None:
             content_hash, pr_number = result
             record_docs_repo_commit(dsn, installation_id, repo_full_name, content_hash, pr_number)

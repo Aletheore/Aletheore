@@ -76,6 +76,64 @@ def test_pushes_file_and_opens_pr_when_content_changed():
     assert ("POST", "/repos/octocat/hello-world/pulls") in calls
 
 
+def test_pushed_markdown_includes_schema_and_endpoints_when_evidence_given():
+    # Real production wiring: sync_docs_to_repo must actually thread
+    # evidence into build_combined_reference, not just accept the
+    # parameter without using it.
+    evidence = {
+        "repository": {
+            "database": {"schema": {
+                "checked": True,
+                "tables": [{"name": "users", "columns": [
+                    {"name": "id", "type": "BIGSERIAL", "primary_key": True, "nullable": False,
+                     "unique": False, "default": None},
+                ]}],
+                "relations": [],
+            }},
+            "api_endpoints": {"checked": True, "endpoints": [
+                {"method": "GET", "path": "/users/{id}", "unresolved": False,
+                 "file": "app/routes.py", "line": 10, "handler": "get_user"},
+            ]},
+        }
+    }
+    pushed_content = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/octocat/hello-world" and request.method == "GET":
+            return httpx.Response(200, json={"default_branch": "main"})
+        if request.url.path == "/repos/octocat/hello-world/commits/main":
+            return httpx.Response(200, json={"sha": "base-sha"})
+        if request.url.path == f"/repos/octocat/hello-world/git/ref/heads/{DOCS_COMMIT_BRANCH}":
+            return httpx.Response(404)
+        if request.url.path == "/repos/octocat/hello-world/git/refs":
+            return httpx.Response(201, json={})
+        if request.url.path == f"/repos/octocat/hello-world/contents/{DOCS_COMMIT_PATH}":
+            if request.method == "GET":
+                return httpx.Response(404)
+            pushed_content["body"] = request.content
+            return httpx.Response(201, json={"content": {"sha": "new"}})
+        if request.url.path == "/repos/octocat/hello-world/pulls" and request.method == "GET":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/repos/octocat/hello-world/pulls" and request.method == "POST":
+            return httpx.Response(201, json={"number": 11})
+        raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    settings = {"enabled": True, "last_content_hash": None, "pr_number": None}
+
+    result = sync_docs_to_repo(
+        client, "token", "octocat/hello-world", MODULES, settings, BOT_LOGIN, evidence,
+    )
+
+    assert result is not None
+    import base64
+    import json
+    pushed_markdown = base64.b64decode(json.loads(pushed_content["body"])["content"]).decode("utf-8")
+    assert "## API Endpoints" in pushed_markdown
+    assert "## Database Schema" in pushed_markdown
+    assert "`/users/{id}`" in pushed_markdown
+
+
 def test_reuses_existing_open_pr_instead_of_creating_new_one():
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/repos/octocat/hello-world" and request.method == "GET":

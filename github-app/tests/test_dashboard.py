@@ -1823,6 +1823,41 @@ async def test_dashboard_docs_export_sanitizes_unsafe_characters_in_filename(poo
         response = await client.get('/app/octocat/weird%22repo/docs/export')
 
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_dashboard_docs_export_includes_schema_and_endpoints_sections(pool, monkeypatch):
+    # get_dashboard_docs_export fetches evidence separately from
+    # _build_docs_modules's own internal fetch specifically to reach these
+    # two new overview sections - this guards that real wiring, not just
+    # docs_reference.py's own unit-level rendering.
+    evidence = _evidence_with_module("a.py", "add", "Adds two numbers.")
+    evidence["repository"]["database"] = {"schema": {
+        "checked": True,
+        "tables": [{"name": "users", "columns": [
+            {"name": "id", "type": "BIGSERIAL", "primary_key": True, "nullable": False,
+             "unique": False, "default": None},
+        ]}],
+        "relations": [],
+    }}
+    evidence["repository"]["api_endpoints"] = {"checked": True, "endpoints": [
+        {"method": "GET", "path": "/users/{id}", "unresolved": False,
+         "file": "app/routes.py", "line": 10, "handler": "get_user"},
+    ]}
+    await upsert_installation(pool, 710, "octocat")
+    await set_installation_plan(pool, 710, "air")
+    await insert_repo_history(pool, 710, "octocat/hello-world", datetime.now(timezone.utc), evidence)
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[710])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/docs/export")
+
+    assert response.status_code == 200
+    body = response.text
+    assert "[API Endpoints](#api-endpoints)" in body
+    assert "[Database Schema](#database-schema)" in body
+    assert "| GET | `/users/{id}` | `get_user` | `app/routes.py:10` |" in body
+    assert "### `users`" in body
+    assert body.index("## API Endpoints") < body.index("## Database Schema") < body.index("# a.py")
     assert response.headers["content-disposition"] == 'attachment; filename="weird_repo-api-reference.md"'
 
 
