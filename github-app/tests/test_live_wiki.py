@@ -881,6 +881,39 @@ def test_generate_subsystems_computes_skip_files_per_cluster_in_a_batched_call()
     assert captured_items["1"]["skip_files"] == []
 
 
+def test_generate_file_pages_batched_repo_context_sent_once_not_per_item():
+    evidence = {
+        "repository": {
+            "modules": [
+                {"path": f"pkg{i}/mod.py", "language": "python", "imports": [], "imported_by": [],
+                 "symbols": {"functions": [{"name": f"do_{i}", "start_line": 1, "end_line": 2}], "classes": []}}
+                for i in range(2)
+            ],
+            "api_endpoints": {
+                "checked": True,
+                "endpoints": [{"method": "GET", "path": "/x", "file": "pkg0/mod.py", "line": 1, "handler": "h"}],
+            },
+        },
+    }
+    captured_body = {}
+
+    def _respond(_system_prompt, user_prompt, cwd):
+        captured_body.update(json.loads(user_prompt))
+        items = captured_body["items"]
+        return json.dumps({item["id"]: {"detail": "stuff."} for item in items})
+
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = _respond
+
+    generate_file_pages(
+        evidence, writing_adapter,
+        paths=["pkg0/mod.py", "pkg1/mod.py"], include_repo_context=True,
+    )
+
+    assert "repo_context" in captured_body
+    assert all("repo_context" not in item for item in captured_body["items"])
+
+
 def _n_cluster_evidence(n: int) -> dict:
     modules = [
         {

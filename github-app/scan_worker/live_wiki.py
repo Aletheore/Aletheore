@@ -29,6 +29,8 @@ from aletheore.evidence_packet import build_evidence_packet
 from aletheore.wiki_diagrams import build_overview_diagram, build_subsystem_diagram
 from aletheore.wiki_mapping import build_cluster_briefs, is_demoted_path, rank_files_by_importance
 
+from scan_worker.airview_scanner_context import build_repo_context
+
 FLASH_MODEL = "deepseek-v4-flash"
 UPDATE_MODEL = "deepseek-v4-flash"
 
@@ -196,7 +198,10 @@ FILE_PAGE_WRITING_SYSTEM_PROMPT = (
     """You write the reference page for a single source file in a codebase wiki.
 You are given the file's path, its key functions/classes with line numbers, the subsystem it
 belongs to, the files it imports and is imported by, and - in `related_symbols` - a few named
-functions/classes with line numbers from those related files. Respond with ONLY a JSON object:
+functions/classes with line numbers from those related files. You may also be given
+`repo_context`: repo-wide facts from other scanners (database schema, API endpoints, dependency
+vulnerabilities/licenses, dead code, infrastructure, environment variables) - see the "How it
+works"/"Gotchas" guidance below for when to use it. Respond with ONLY a JSON object:
 {"detail": "<markdown, 250-400 words>"}
 
 Structure the markdown with these headings, in order:
@@ -218,15 +223,25 @@ A short bulleted list: `` `name` (path:line) `` followed by what it does and whe
 
 ## Gotchas
 Anything surprising a reader would otherwise trip on - ordering constraints, mutation,
-deprecations. Omit this heading if the code shows nothing surprising; do not invent one.
+deprecations. If `repo_context` shows this file defines a route in `api_endpoints`, maps to a
+`database_schema` table, or touches a flagged dependency/vulnerability, that belongs here or in
+"How it works" - only when genuinely relevant to this specific file, never forced in. Omit this
+heading if the code shows nothing surprising; do not invent one.
 
 Prefer depth over breadth within each heading: a reader who opens a file page wants the
 mechanism, not a restatement of the symbol list they can already see.
 
 Cite as `path/to/file.py:123`, using only line numbers you were given. You may cite the imported
 and importing files, not just this one - use `related_symbols` for those, it is the only source of
-real line numbers outside this file. A cross-file citation using a name or line not present there
-will fail verification, so do not guess at a related file's internals beyond what it lists. Every
+real line numbers outside this file. Exactly two kinds of entry inside `repo_context` carry a real,
+citable `file`/`line` and may be cited the same way: `database_schema.relations` (each foreign-key
+relation) and `api_endpoints` (each HTTP route). Every other field in `repo_context` -
+`database_schema.tables` (name and column names only - NO location), vulnerabilities, licenses,
+dead code, infrastructure, environment variables - has NO file or line attached. You may mention
+one of these by name in prose, but NEVER write a `path:line` citation for one - there is no real
+location to cite, and a fabricated one fails verification and discards the whole page. A cross-file
+citation using a name or line not present there will fail verification, so do not guess at a
+related file's internals beyond what it lists. Every
 citation is checked against the scan and the page is discarded if any citation does not resolve.
 Describe only what the given symbols support - never invent a symbol, a line number, or behaviour
 you cannot see. No markdown fences around the whole response."""
@@ -1122,6 +1137,7 @@ def build_file_page_record(
     *,
     subsystem_name: str = "",
     fetch_line_count: Callable[[str], int | None] | None = None,
+    repo_context: dict | None = None,
 ) -> str | None:
     """Writes one file's reference page, or None if it could not be verified.
 
@@ -1163,17 +1179,18 @@ def build_file_page_record(
         if symbols_here:
             related_symbols[related_path] = symbols_here
 
-    user_prompt = json.dumps(
-        {
-            "path": path,
-            "language": module.get("language"),
-            "subsystem": subsystem_name,
-            "key_symbols": key_symbols,
-            "imports": list(module.get("imports", []) or [])[:MAX_RELATED_FILES],
-            "imported_by": list(module.get("imported_by", []) or [])[:MAX_RELATED_FILES],
-            "related_symbols": related_symbols,
-        }
-    )
+    file_page_payload = {
+        "path": path,
+        "language": module.get("language"),
+        "subsystem": subsystem_name,
+        "key_symbols": key_symbols,
+        "imports": list(module.get("imports", []) or [])[:MAX_RELATED_FILES],
+        "imported_by": list(module.get("imported_by", []) or [])[:MAX_RELATED_FILES],
+        "related_symbols": related_symbols,
+    }
+    if repo_context is not None:
+        file_page_payload["repo_context"] = repo_context
+    user_prompt = json.dumps(file_page_payload)
 
     last_detail: str | None = None
     last_unverified: list[dict] = []
@@ -1217,11 +1234,24 @@ FILE_PAGE_WRITE_BATCH_SIZE = 5
 
 BATCH_FILE_PAGE_WRITING_SYSTEM_PROMPT = (
     """You write the reference page for EACH of several source files in a codebase wiki, in a
-single response. You are given a JSON array of file items, each with an "id" (echo this back
-exactly as the key in your response - never invent your own id), the file's path, its key
-functions/classes with line numbers, the subsystem it belongs to, the files it imports and is
-imported by, and - in `related_symbols` - a few named functions/classes with line numbers from
-those related files.
+single response. The input is normally a JSON array of file items directly. If repo-wide context
+is available for this build, the input is instead a JSON object {"items": [...], "repo_context":
+{...}} - in that case "items" is that same array of file items, and "repo_context" (see below)
+applies to every item in it. Either way, each file item has an "id" (echo this back exactly as the
+key in your response - never invent your own id), the file's path, its key functions/classes with
+line numbers, the subsystem it belongs to, the files it imports and is imported by, and - in
+`related_symbols` - a few named functions/classes with line numbers from those related files.
+
+"repo_context", when present, is repo-wide facts from other scanners - the same value applies to
+every item, not just one. Use it in an item's own page only when genuinely relevant to THAT item's
+file - never force it in, and never use it to write content for a different item. Exactly two kinds
+of entry inside it carry a real, citable `file`/`line` and may be cited the same as any other
+citation: `database_schema.relations` (each foreign-key relation) and `api_endpoints` (each HTTP
+route). Every other field - `database_schema.tables` (name and column names only - NO location),
+`dependency_vulnerabilities`, `dependency_licenses`, `dead_code`, `infrastructure`, and
+`environment_variables` - has NO file or line attached at all. You may mention one of these by name
+in an item's page, but NEVER write a `path:line` citation for one - it is fabricated and will fail
+verification, discarding that item's whole page.
 
 Respond with ONLY a single JSON object with one entry per item you were given, keyed by that
 item's "id" (as a string): {"<id>": {"detail": "<markdown, 250-400 words>"}, "<id>": {...}, ...}
@@ -1330,16 +1360,22 @@ def _write_file_page_batch(
     targets: list[_FilePageWriteTarget],
     writing_adapter,
     fetch_line_count: Callable[[str], int | None] | None,
+    repo_context: dict | None = None,
 ) -> dict[str, tuple[str, str | None, list[dict]]]:
     """One LLM call covering every target in this batch. Returns
     path -> (status, detail_or_None, unverified) where status is "verified"
     or "failed" - callers use the (last detail, unverified) pair for
     salvage on final exhaustion, matching build_file_page_record's own
     single-item salvage behavior.
+
+    repo_context, when given, is sent once at the request's top level, not
+    duplicated onto every item - see _write_subsystem_batch's identical note
+    on why.
     """
-    payload = [{"id": t.path, **t.request_item} for t in targets]
+    items = [{"id": t.path, **t.request_item} for t in targets]
+    request_body = {"items": items, "repo_context": repo_context} if repo_context is not None else items
     raw = writing_adapter.simple_completion(
-        BATCH_FILE_PAGE_WRITING_SYSTEM_PROMPT, json.dumps(payload), cwd="."
+        BATCH_FILE_PAGE_WRITING_SYSTEM_PROMPT, json.dumps(request_body), cwd="."
     )
     parsed_batch = _parse_json_object(raw) or {}
 
@@ -1369,6 +1405,7 @@ def _generate_file_pages_for_targets(
     targets: list[_FilePageWriteTarget],
     writing_adapter,
     fetch_line_count: Callable[[str], int | None] | None,
+    repo_context: dict | None = None,
 ) -> dict[str, str]:
     """Writes every target's page, batching multiple targets per call and
     retrying only the specific paths whose citations failed verification -
@@ -1392,7 +1429,9 @@ def _generate_file_pages_for_targets(
     remaining = _run_batched_with_retry(
         targets,
         target_id=lambda t: t.path,
-        write_batch=lambda chunk: _write_file_page_batch(evidence, chunk, writing_adapter, fetch_line_count),
+        write_batch=lambda chunk: _write_file_page_batch(
+            evidence, chunk, writing_adapter, fetch_line_count, repo_context=repo_context
+        ),
         on_round_result=_on_result,
         is_resolved=lambda result: result[0] == "verified",
         attempts=SUBSYSTEM_WRITE_ATTEMPTS,
@@ -1423,6 +1462,7 @@ def generate_file_pages(
     max_files: int = DEFAULT_MAX_FILE_PAGES,
     subsystem_by_path: dict[str, str] | None = None,
     fetch_line_count: Callable[[str], int | None] | None = None,
+    include_repo_context: bool = False,
 ) -> dict[str, str]:
     """Reference pages for the most important files, keyed by path.
 
@@ -1430,7 +1470,16 @@ def generate_file_pages(
     "how does this specific file work", which is the question a reader actually
     arrives with. Pass `paths` to regenerate only some files (incremental
     update); otherwise the top `max_files` by importance are written.
+
+    include_repo_context: attach airview_scanner_context.build_repo_context's
+    repo-wide scanner summary (schema/endpoints/vulnerabilities/licenses/
+    dead code/infrastructure/env vars) to every write. Off by default -
+    existing callers are unaffected.
     """
+    # `or None`: build_repo_context returns {} when nothing was scanned/found
+    # at all - treated the same as "nothing to attach", not an empty object
+    # every downstream request would otherwise carry for no benefit.
+    repo_context = (build_repo_context(evidence) or None) if include_repo_context else None
     targets = paths if paths is not None else select_file_page_paths(evidence, max_files=max_files)
     subsystem_by_path = subsystem_by_path or {}
 
@@ -1448,10 +1497,13 @@ def generate_file_pages(
             evidence, t.path, writing_adapter,
             subsystem_name=subsystem_by_path.get(t.path, ""),
             fetch_line_count=fetch_line_count,
+            repo_context=repo_context,
         )
         pages = {t.path: detail} if detail else {}
     elif write_targets:
-        pages = _generate_file_pages_for_targets(evidence, write_targets, writing_adapter, fetch_line_count)
+        pages = _generate_file_pages_for_targets(
+            evidence, write_targets, writing_adapter, fetch_line_count, repo_context=repo_context
+        )
     else:
         pages = {}
 
