@@ -4983,8 +4983,11 @@ def test_attach_wiki_file_pages_scopes_planned_pages_to_changed_files(monkeypatc
     )
     captured = {}
 
-    def _fake_generate_file_pages(evidence, writing_adapter, *, paths, subsystem_by_path, fetch_line_count):
+    def _fake_generate_file_pages(
+        evidence, writing_adapter, *, paths, subsystem_by_path, fetch_line_count, include_repo_context=False
+    ):
         captured["paths"] = paths
+        captured["include_repo_context"] = include_repo_context
         return {p: f"page for {p}" for p in paths}
 
     monkeypatch.setattr("scan_worker.jobs.live_wiki.generate_file_pages", _fake_generate_file_pages)
@@ -5010,6 +5013,10 @@ def test_attach_wiki_file_pages_scopes_planned_pages_to_changed_files(monkeypatc
     )
 
     assert captured["paths"] == ["auth/login.py"]
+    # Real production wiring: file pages must actually get the repo-wide
+    # scanner context (schema/endpoints/etc.), not just have the capability
+    # exist unused in live_wiki.py.
+    assert captured["include_repo_context"] is True
     by_path = {f["path"]: f for f in result[0]["files"]}
     assert by_path["auth/login.py"]["detail"] == "page for auth/login.py"
     # Untouched file keeps whatever detail it already carries (spliced from
@@ -5029,7 +5036,9 @@ def test_attach_wiki_file_pages_regenerates_every_page_when_changed_files_is_non
     )
     captured = {}
 
-    def _fake_generate_file_pages(evidence, writing_adapter, *, paths, subsystem_by_path, fetch_line_count):
+    def _fake_generate_file_pages(
+        evidence, writing_adapter, *, paths, subsystem_by_path, fetch_line_count, include_repo_context=False
+    ):
         captured["paths"] = paths
         return {}
 

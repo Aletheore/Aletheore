@@ -3942,6 +3942,7 @@ def _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count
         paths=planned,
         subsystem_by_path=subsystem_by_path,
         fetch_line_count=fetch_line_count,
+        include_repo_context=True,
     )
     return live_wiki.attach_file_pages(records, pages)
 
