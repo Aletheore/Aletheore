@@ -52,6 +52,11 @@ github-app/repo-checkouts/
 # Aletheore prototype scan output (generated locally by `aletheore audit`)
 .aletheore/
 
+# Cloned fixture repo + built index for the retrieval-regression Bench-CI
+# gate (benchmarks/retrieval-regression/build_fixture.py) - real third-party
+# source, rebuilt from fixture.json's pin, never something to commit.
+benchmarks/retrieval-regression/.fixture-cache/
+
 # Machine-local dev-server launch config (points at whatever repo you're using to test
 # the dashboard against - not something to share)
 .claude/

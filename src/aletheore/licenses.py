@@ -70,10 +70,36 @@ _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 _AGPL_MARKERS = ("agpl", "affero general public license")
 _LGPL_MARKERS = ("lgpl", "lesser general public license")
 _GPL_MARKERS = ("gpl", "general public license")
-_WEAK_COPYLEFT_MARKERS = ("mpl", "mozilla public license", "eclipse public license", "epl")
+# cddl added after finding a real, live Maven dependency (javax.annotation:
+# jsr250-api, pulled in by gson's own pom.xml) whose real, correctly-fetched
+# license text ("COMMON DEVELOPMENT AND DISTRIBUTION LICENSE (CDDL) Version
+# 1.0") fell through every existing bucket to "unknown" - CDDL is a real,
+# file-level weak-copyleft license family (same category as MPL/EPL by
+# standard SPDX/OSI classification), not an unrecognizable one.
+_WEAK_COPYLEFT_MARKERS = (
+    "mpl", "mozilla public license", "eclipse public license", "epl",
+    "cddl", "common development and distribution license",
+)
 _PERMISSIVE_MARKERS = (
     "mit", "bsd", "apache", "isc", "unlicense", "0bsd", "zlib", "boost",
     "python software foundation", "psf", "python-2.0", "wtfpl", "blueoak",
+    # Found via ast-pattern/dead-code/licenses overnight benchmark pass,
+    # real-repo stress test: neither the 2-clause nor 3-clause BSD license
+    # BODY text contains the literal word "bsd" anywhere - it's a purely
+    # descriptive redistribution-terms text that never names itself. The
+    # "bsd" marker above only ever matches when a project's LICENSE file
+    # is preceded by a header naming it, or when detect_repo_license()
+    # already succeeded via pyproject.toml's/package.json's machine-
+    # readable license field (which DOES say "BSD-3-Clause" etc.) - for a
+    # project with no such metadata, relying purely on the LICENSE file's
+    # prose body (Flask's and gorilla/mux's real situation, confirmed
+    # directly: both categorized "unknown" despite being unambiguously
+    # BSD-licensed, real projects, real LICENSE files), the body alone was
+    # unrecognizable. This exact opening phrase is the canonical,
+    # near-universal signature both BSD variants share and open with -
+    # confirmed present verbatim in 4 of the real repos checked during
+    # this benchmark run (click, flask, django, gorilla-mux).
+    "redistribution and use in source and binary forms",
 )
 
 
@@ -149,7 +175,11 @@ def detect_repo_license(repo_path: Path) -> dict:
                 "detected_from": f"package.json: {license_field}",
             }
 
-    for filename in ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"):
+    # LICENSE.rst added after this benchmark's real-repo stress test:
+    # Flask's own real repo uses exactly this filename (a common
+    # convention for reStructuredText-docs-style Python projects) and
+    # was invisible to this list entirely.
+    for filename in ("LICENSE", "LICENSE.md", "LICENSE.txt", "LICENSE.rst", "COPYING"):
         candidate = repo_path / filename
         if candidate.exists():
             text = candidate.read_text(encoding="utf-8", errors="ignore")
@@ -207,8 +237,23 @@ def _fetch_crates_license(name: str, version: str, timeout: int) -> str | None:
     return data.get("version", {}).get("license")
 
 
-def _fetch_maven_license(name: str, version: str, timeout: int) -> str | None:
-    group, _, artifact = name.partition(":")
+# A very common real Maven convention (Guava's own pom.xml uses it,
+# confirmed directly): the <licenses> block lives on a shared <parent>
+# POM, not the artifact's own - the artifact pom.xml's own comment even
+# says why ("copied from the parent pom because..."). A single-level
+# fetch missed this entirely: Guava, Guava-testlib, and Protobuf-java (a
+# different Google project with the same parent-POM convention) all came
+# back "unknown" despite being real, unambiguously Apache-2.0-licensed
+# artifacts, found while stress-testing this benchmark against a real
+# repo (gson, whose own pom.xml pins all three). Bounded depth (real
+# parent chains are 1-2 levels; this guards against an unexpected cycle
+# or unusually deep chain turning one dependency's lookup into an
+# unbounded fetch loop), not unlimited recursion.
+_MAVEN_POM_NS = {"m": "http://maven.apache.org/POM/4.0.0"}
+_MAVEN_PARENT_LOOKUP_MAX_HOPS = 3
+
+
+def _fetch_maven_pom(group: str, artifact: str, version: str, timeout: int) -> ElementTree.Element:
     group_path = group.replace(".", "/")
     url = (
         f"https://repo1.maven.org/maven2/{group_path}/{artifact}/{version}/"
@@ -217,10 +262,33 @@ def _fetch_maven_license(name: str, version: str, timeout: int) -> str | None:
     request = urllib.request.Request(url)
     with urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT) as response:
         pom_text = response.read()
-    root = ElementTree.fromstring(pom_text)
-    ns = {"m": "http://maven.apache.org/POM/4.0.0"}
-    license_name = root.find(".//m:licenses/m:license/m:name", ns)
-    return license_name.text.strip() if license_name is not None and license_name.text else None
+    return ElementTree.fromstring(pom_text)
+
+
+def _fetch_maven_license(name: str, version: str, timeout: int) -> str | None:
+    group, _, artifact = name.partition(":")
+    coordinates = (group, artifact, version)
+    for _ in range(_MAVEN_PARENT_LOOKUP_MAX_HOPS):
+        group, artifact, version = coordinates
+        root = _fetch_maven_pom(group, artifact, version, timeout)
+        license_name = root.find(".//m:licenses/m:license/m:name", _MAVEN_POM_NS)
+        if license_name is not None and license_name.text:
+            return license_name.text.strip()
+        parent = root.find("m:parent", _MAVEN_POM_NS)
+        if parent is None:
+            return None
+        parent_group_el = parent.find("m:groupId", _MAVEN_POM_NS)
+        parent_artifact_el = parent.find("m:artifactId", _MAVEN_POM_NS)
+        parent_version_el = parent.find("m:version", _MAVEN_POM_NS)
+        if parent_group_el is None or parent_artifact_el is None or parent_version_el is None:
+            return None
+        if not (parent_group_el.text and parent_artifact_el.text and parent_version_el.text):
+            return None
+        next_coordinates = (parent_group_el.text.strip(), parent_artifact_el.text.strip(), parent_version_el.text.strip())
+        if next_coordinates == coordinates:
+            return None
+        coordinates = next_coordinates
+    return None
 
 
 def _fetch_rubygems_license(name: str, version: str, timeout: int) -> str | None:

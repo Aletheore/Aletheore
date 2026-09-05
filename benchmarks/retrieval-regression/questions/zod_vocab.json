@@ -1,0 +1,122 @@
+[
+ {
+  "id": "vts01",
+  "question": "Where is zod's _parse defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/parse.ts"
+  ],
+  "verification_anchor": "export const _parse"
+ },
+ {
+  "id": "vts02",
+  "question": "Where is zod's $ZodType defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/schemas.ts"
+  ],
+  "verification_anchor": "export interface $ZodType"
+ },
+ {
+  "id": "vts03",
+  "question": "Where is zod's $ZodCheck defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/checks.ts"
+  ],
+  "verification_anchor": "export interface $ZodCheck"
+ },
+ {
+  "id": "vts04",
+  "question": "Where is zod's $ZodIssueBase defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/errors.ts"
+  ],
+  "verification_anchor": "export interface $ZodIssueBase"
+ },
+ {
+  "id": "vts05",
+  "question": "Where is zod's globalRegistry defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/registries.ts"
+  ],
+  "verification_anchor": "export const globalRegistry"
+ },
+ {
+  "id": "vts06",
+  "question": "Where is zod's uuid defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/regexes.ts"
+  ],
+  "verification_anchor": "export const uuid"
+ },
+ {
+  "id": "vts07",
+  "question": "Where is zod's JSONSchemaGenerator defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/json-schema-generator.ts"
+  ],
+  "verification_anchor": "export class JSONSchemaGenerator"
+ },
+ {
+  "id": "vts08",
+  "question": "Where is zod's StandardSchemaV1 defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/standard-schema.ts"
+  ],
+  "verification_anchor": "export interface StandardSchemaV1"
+ },
+ {
+  "id": "vts09",
+  "question": "Where is zod's string defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/classic/coerce.ts"
+  ],
+  "verification_anchor": "export function string"
+ },
+ {
+  "id": "vts10",
+  "question": "Where is zod's datetime defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/classic/iso.ts"
+  ],
+  "verification_anchor": "export function datetime"
+ },
+ {
+  "id": "vts11",
+  "question": "Where is zod's ZodString defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/classic/schemas.ts"
+  ],
+  "verification_anchor": "export interface ZodString"
+ },
+ {
+  "id": "vts12",
+  "question": "Where is zod's fromJSONSchema defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/classic/from-json-schema.ts"
+  ],
+  "verification_anchor": "export function fromJSONSchema"
+ },
+ {
+  "id": "vts13",
+  "question": "Where is zod's globalConfig defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/config.ts"
+  ],
+  "verification_anchor": "export const globalConfig"
+ },
+ {
+  "id": "vts14",
+  "question": "Where is zod's assertEqual defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/core/util.ts"
+  ],
+  "verification_anchor": "export function assertEqual"
+ },
+ {
+  "id": "vts15",
+  "question": "Where is zod's export defined?",
+  "ground_truth_files": [
+   "packages/zod/src/v4/classic/external.ts"
+  ],
+  "verification_anchor": "export * as core from \"../core/index.js\""
+ }
+]

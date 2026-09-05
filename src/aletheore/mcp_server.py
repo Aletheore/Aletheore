@@ -25,6 +25,7 @@ from aletheore.managed_audit_client import run_managed_audit_request
 from aletheore.query import (
     ModuleNotFoundInEvidenceError,
     QUERY_FUNCTIONS,
+    find_blast_radius,
     find_code_evidence_for_dependency,
     find_code_evidence_for_endpoint,
     find_code_evidence_for_symbol,
@@ -439,6 +440,31 @@ def _register_neighborhood_tool(mcp_instance: MCPServer, repo_path: Path) -> Non
         )
 
 
+def _register_blast_radius_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_get_blast_radius", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_get_blast_radius(target: str, symbol: str | None = None) -> str:
+        """Everything that would be affected by changing `target` (a file
+        path) - one call instead of manually chasing aletheore_imported_by
+        recursively. Direct AND transitive dependents (a real multi-hop
+        walk, not just one level like aletheore_neighborhood), plus any
+        existing layer-boundary violations already touching a module in
+        that blast radius.
+
+        Pass `symbol` (a function/class name defined in target) to also get
+        confirmed_callers: which of the direct dependents actually CALL
+        that symbol, verified against their real file content - not just
+        "imports the file", which says nothing about which of possibly
+        many exported names is actually used.
+
+        layer_violations are EXISTING violations already on record, not a
+        prediction of what a signature change to `symbol` would newly
+        break - this repo has no per-call-site type/signature data to
+        simulate that against.
+        """
+        evidence = read_evidence(repo_path)
+        return _toon_result(find_blast_radius(evidence, repo_path, target, symbol))
+
+
 _LIST_KIND_TO_FUNCTION = {
     "modules": list_modules,
     "clusters": list_clusters,
@@ -511,6 +537,34 @@ def _register_search_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
             )
         process.join()
         return _toon_result(result)
+
+
+def _register_ast_pattern_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
+    @mcp_instance.tool(name="aletheore_ast_pattern", annotations=READ_ONLY_ANNOTATIONS)
+    def aletheore_ast_pattern(language: str, query: str) -> str:
+        """Structural search: find code by shape rather than by words, via a
+        raw tree-sitter S-expression query - e.g. functions that catch a
+        specific exception type, or classes implementing a given interface,
+        regardless of naming. language is one of the scanner's supported
+        languages (python, javascript, typescript, go, rust, java, kotlin,
+        ruby, php, c, cpp, csharp, swift). Re-parses source from disk at
+        call time - unlike most other tools here, this does not read
+        air.json, since a structural match needs the actual parse tree,
+        which air.json never stores. Only whatever the query itself names
+        with @capture is returned - a query with no captures matches
+        structure but reports no text or location, so name at least one
+        node you care about. Returns {matches, truncated} - a broad
+        structural query is capped by match count and total captured
+        characters; truncated=true means real results exist beyond what's
+        returned, so narrow the query rather than assume it's exhaustive."""
+        from aletheore.ast_pattern import InvalidPatternError, UnknownLanguageError, search_ast_pattern
+
+        try:
+            return _toon_result(search_ast_pattern(repo_path, language, query))
+        except UnknownLanguageError as exc:
+            return _toon_result({"error": str(exc)})
+        except InvalidPatternError as exc:
+            return _toon_result({"error": f"invalid tree-sitter query: {exc}"})
 
 
 def _register_symbol_source_tool(mcp_instance: MCPServer, repo_path: Path) -> None:
@@ -802,9 +856,11 @@ def build_server(
     _register_query_wrapper_tools(mcp_instance, repo_path)
     _register_changes_tool(mcp_instance, repo_path)
     _register_neighborhood_tool(mcp_instance, repo_path)
+    _register_blast_radius_tool(mcp_instance, repo_path)
     _register_list_tool(mcp_instance, repo_path)
     _register_overview_tool(mcp_instance, repo_path)
     _register_search_tool(mcp_instance, repo_path)
+    _register_ast_pattern_tool(mcp_instance, repo_path)
     _register_symbol_source_tool(mcp_instance, repo_path)
     _register_verify_citations_tool(mcp_instance, repo_path)
     _register_code_evidence_tools(mcp_instance, repo_path)

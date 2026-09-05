@@ -1,12 +1,32 @@
 [project]
 name = "aletheore"
-version = "0.9.10"
+version = "0.9.11"
 description = "Evidence-grounded repository audit CLI: deterministic scanner, MCP server, live dashboard, and a GitHub Action that posts PR diffs."
 readme = "README.md"
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Arihant Kaul", email = "arihantkaul@outlook.com" }]
-requires-python = ">=3.11"
+# Upper-bounded at 3.14: aletheore_ast_pattern's use of tree_sitter's
+# Query/QueryCursor segfaults reliably on Python 3.14 once enough real
+# files/matches accumulate in one process for the cyclic GC to touch
+# tree-sitter's Node/Tree/QueryCursor object graph. Not a bug in this
+# package's own code - `aletheore scan` itself, which uses tree_sitter's
+# Parser/Tree/Node but never Query/QueryCursor, runs fine on 3.14.
+#
+# This comment used to claim "the exact same code against the exact same
+# repo runs clean on 3.12" - true only at the small scale it was checked
+# at (this project's own ~116 files). Confirmed false at real scale
+# (2026-09-04): a low-match-density query against Django's real ~2,930
+# file Python tree segfaults reliably on 3.12 too - see
+# src/aletheore/ast_pattern.py's module docstring for the full
+# characterization. CI only tests 3.11/3.12 (see .github/workflows/
+# tests.yml), so the crash isn't actually fully excluded by this bound
+# for a large-enough real repo - it's the honest floor for the *known,
+# already-reproduced* case (3.14 with any repo size), not a guarantee
+# for every repo on 3.11/3.12 - until either tree-sitter ships a fix or
+# the crash is isolated some other way (e.g. running the query in a
+# subprocess - a real design trade-off, not attempted yet).
+requires-python = ">=3.11,<3.14"
 keywords = ["code-review", "static-analysis", "secrets-detection", "dependency-vulnerabilities", "mcp-server"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -49,6 +69,15 @@ dependencies = [
     "python-toon>=0.1.3,<0.2",
     "pyyaml>=6.0,<7.0",
     "typer>=0.24,<0.28",
+    # click only ever arrives transitively via typer, but pinned explicitly
+    # here because 8.5.0 has a real, verified regression: typer.Argument's
+    # own help= text (e.g. the query command's `kind` argument) stops
+    # rendering in --help output entirely, confirmed by bisecting a minimal
+    # typer app across versions - 8.4.2, 8.4.0, and 8.3.3 all render it
+    # correctly, only 8.5.0 doesn't. Real user-facing regression, not just
+    # a test artifact: anyone running `aletheore query --help` with an
+    # unpinned install got argument descriptions silently dropped.
+    "click<8.5.0",
     # `aletheore watch` only. OS-level file events (FSEvents on macOS,
     # inotify on Linux) rather than polling: measured on this repository,
     # walking and stat-ing the tree costs 841 ms for 644 files, so a
@@ -57,6 +86,27 @@ dependencies = [
     "watchdog>=4.0,<7.0",
     "rich>=13.0",
     "tomli-w>=1.0,<2.0",
+    # Real client-side token counting for hosted-embedding batching (see
+    # search_index.py's HOSTED_EMBED_MAX_CHARS history) - a Rust-backed
+    # WordPiece tokenizer, not a network call: the matching tokenizer.json
+    # for jina-embeddings-v2-base-code ships as package data instead of
+    # being fetched from HuggingFace Hub at runtime, so indexing never
+    # gains a new network dependency.
+    "tokenizers>=0.20,<0.24",
+    # Replaces schema_map.py's hand-written Postgres DDL tokenizer, which
+    # silently dropped every table-level constraint except FOREIGN KEY - a
+    # composite PRIMARY KEY (the common shape for every join/junction
+    # table) came back with no column marked primary_key at all, with no
+    # unsupported entry to say why. sqlglot is MIT-licensed, has zero
+    # transitive dependencies of its own (a pure-Python wheel, not a
+    # compiled grammar needing per-platform wheels), and its AST cleanly
+    # discriminates every CREATE/ALTER/DROP action this module replays -
+    # confirmed directly against the composite-PK repro plus every ALTER
+    # TABLE form (ADD/DROP/RENAME COLUMN, RENAME TO, ADD/DROP CONSTRAINT)
+    # before adopting it. Malformed SQL never raises - a statement sqlglot
+    # can't parse falls back to a generic Command node, isolated to that
+    # one statement, not the whole file.
+    "sqlglot>=30.0,<31.0",
 ]
 
 [project.optional-dependencies]
@@ -78,7 +128,7 @@ build-backend = "setuptools.build_meta"
 include = ["aletheore*"]
 
 [tool.setuptools.package-data]
-aletheore = ["static/*.png", "manual/*.md"]
+aletheore = ["static/*.png", "manual/*.md", "data/*.json"]
 
 [tool.pytest.ini_options]
 addopts = ["-p", "no:randomly"]

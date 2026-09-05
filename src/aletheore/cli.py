@@ -140,6 +140,7 @@ QUERY_KIND_GROUPS: dict[str, list[str]] = {
         "layer-violations",
         "dead-code",
         "schema",
+        "ast-pattern",
     ],
     "Security": ["secrets", "vulnerabilities", "licenses"],
     "Runtime": ["endpoints", "database", "infrastructure", "environment-variables"],
@@ -428,7 +429,8 @@ def _resolve_check_toggles(
     scan_git_history: bool | None,
     check_licenses: bool | None,
     map_endpoints: bool | None,
-) -> tuple[bool, bool, bool, bool]:
+    map_schema: bool | None,
+) -> tuple[bool, bool, bool, bool, bool]:
     """Each toggle is bool|None from the CLI: None means "no explicit flag
     passed", so the repo's .aletheore.json disabled_checks decides. An
     explicit --check-x/--no-check-x flag always overrides the config,
@@ -439,33 +441,8 @@ def _resolve_check_toggles(
         scan_git_history if scan_git_history is not None else "secrets_history" not in disabled,
         check_licenses if check_licenses is not None else "licenses" not in disabled,
         map_endpoints if map_endpoints is not None else "endpoints" not in disabled,
+        map_schema if map_schema is not None else "schema" not in disabled,
     )
-
-
-_SCHEMA_UNENTITLED_REASON = (
-    "requires a paid plan - run 'aletheore login' to connect an entitled installation"
-)
-
-
-def _resolve_schema_entitlement() -> tuple[bool, str]:
-    """Whether this machine may run schema mapping, and why not if not.
-
-    Resolved from the saved managed-audit token via the existing /v1/whoami,
-    not from a new licensing mechanism - `status` already does exactly this.
-    Any failure (no token, offline, API down, free plan) is treated as
-    unentitled rather than raised: a scan must still produce evidence when
-    the entitlement service is unreachable, it just produces it with the
-    schema section unchecked and a reason saying so.
-    """
-    token = get_api_key("ALETHEORE_API_TOKEN", "aletheore-managed-audit", prompt_fn=lambda _: "")
-    if not token:
-        return False, _SCHEMA_UNENTITLED_REASON
-    who = _fetch_whoami(token)
-    if who is None:
-        return False, "could not reach the entitlement service - schema mapping skipped"
-    if who.get("plan", "free") == "free":
-        return False, _SCHEMA_UNENTITLED_REASON
-    return True, ""
 
 
 def _scan(
@@ -477,13 +454,12 @@ def _scan(
     map_schema: bool | None = None,
 ) -> tuple[int, dict, Path]:
     repo = Path(repo_path).resolve()
-    resolved_vulnerabilities, resolved_git_history, resolved_licenses, resolved_endpoints = (
-        _resolve_check_toggles(repo, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints)
+    (
+        resolved_vulnerabilities, resolved_git_history, resolved_licenses,
+        resolved_endpoints, resolved_schema,
+    ) = _resolve_check_toggles(
+        repo, check_vulnerabilities, scan_git_history, check_licenses, map_endpoints, map_schema
     )
-    if map_schema is False:
-        resolved_schema, schema_reason = False, "skipped (--no-map-schema)"
-    else:
-        resolved_schema, schema_reason = _resolve_schema_entitlement()
 
     console.print(f"Scanning {repo}...")
     try:
@@ -494,7 +470,6 @@ def _scan(
             check_licenses=resolved_licenses,
             map_endpoints=resolved_endpoints,
             map_schema=resolved_schema,
-            map_schema_skip_reason=schema_reason,
             progress=_make_progress_printer(),
         )
     except GitAnalysisError as exc:
@@ -813,6 +788,30 @@ def _query(
             return 1
         except IndexDimensionMismatchError as exc:
             console.print(f"[bold red]error:[/bold red] {exc}")
+            return 1
+        _print_query_result(result)
+        return 0
+
+    if kind == "ast-pattern":
+        if target is None:
+            print("error: query type 'ast-pattern' requires a tree-sitter query as TARGET")
+            return 1
+        if language is None:
+            print("error: query type 'ast-pattern' requires --language (which grammar to compile the query against)")
+            return 1
+        from aletheore.ast_pattern import (
+            InvalidPatternError,
+            UnknownLanguageError,
+            search_ast_pattern,
+        )
+
+        try:
+            result = search_ast_pattern(Path(repo_path).resolve(), language, target)
+        except UnknownLanguageError as exc:
+            console.print(f"[bold red]error:[/bold red] {exc}")
+            return 1
+        except InvalidPatternError as exc:
+            console.print(f"[bold red]error:[/bold red] invalid tree-sitter query: {exc}")
             return 1
         _print_query_result(result)
         return 0
@@ -1372,7 +1371,7 @@ def audit(
     map_schema: Optional[bool] = typer.Option(
         None,
         "--map-schema/--no-map-schema",
-        help="map database schema from migrations (paid plans; on by default when entitled)",
+        help="map database schema from migrations (on by default, or set by .aletheore.json's disabled_checks)",
     ),
     map_endpoints: Optional[bool] = typer.Option(
         None,
@@ -1434,7 +1433,7 @@ def scan(
     map_schema: Optional[bool] = typer.Option(
         None,
         "--map-schema/--no-map-schema",
-        help="map database schema from migrations (paid plans; on by default when entitled)",
+        help="map database schema from migrations (on by default, or set by .aletheore.json's disabled_checks)",
     ),
     map_endpoints: Optional[bool] = typer.Option(
         None,
@@ -1560,7 +1559,9 @@ def query(
     agent: Optional[str] = typer.Option(None, "--agent", help="provider for 'answer'"),
     k: int = typer.Option(10, "--k", help="number of semantic search results"),
     language: Optional[str] = typer.Option(
-        None, "--language", help="restrict 'search-codebase' to one language, e.g. python"
+        None,
+        "--language",
+        help="restrict 'search-codebase' to one language, e.g. python; required for 'ast-pattern'",
     ),
 ) -> None:
     if kind is None:

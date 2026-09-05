@@ -1,0 +1,13 @@
+case_id: 002-flask-pypi
+scanner: vulnerabilities
+category: true_positive
+ecosystem: PyPI
+package: flask
+version: "0.12"
+cve_id: null
+description: >
+  Old Flask release with multiple real, publicly documented advisories,
+  confirmed present against live OSV.dev data for this exact
+  package/version at corpus-build time (2026-09-03). No single CVE
+  called out - several GHSA/PYSEC advisories apply; the check is "at
+  least one finding reported", not a specific advisory id.

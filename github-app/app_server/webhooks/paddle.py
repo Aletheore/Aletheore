@@ -28,6 +28,32 @@ from app_server.paddle_webhook_verify import verify_paddle_signature
 paddle_webhook_router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# Real gap found and fixed 2026-09-02, before this had ever been exercised
+# by a real customer: this handler code has always understood
+# "adjustment.created" (reverses an affiliate's commission on a refund or
+# chargeback, see _handle_adjustment_created), but the live Paddle
+# notification destination (Paddle dashboard > Developer tools >
+# Notifications > "Paddle Webhook", ntfset_01kyksktbmvr49pyygmxa3vfjz) was
+# never actually subscribed to it - confirmed directly via the Paddle API,
+# not assumed from this file's own code. Code handling an event Paddle
+# never delivers is invisible: no error, no log line, nothing - the
+# handler simply never runs. A real refund or chargeback would have left
+# the referring affiliate's commission un-reversed indefinitely.
+#
+# The events this file's code paths handle: transaction.completed,
+# adjustment.created, transaction.updated, and every name in
+# _SUBSCRIPTION_EVENT_TYPES below. All of those except transaction.updated
+# must always be a subset of the live destination's subscribed_events -
+# transaction.updated is the deliberate exception: it's only checked for a
+# refunded/partially_refunded/charged_back status, which Paddle's own
+# adjustment.created already covers, so it's intentionally left
+# unsubscribed live rather than added as a second path to the same
+# reversal logic. Adding a new event_type branch to this file (other than
+# that one deliberate exception) without also adding it to the live
+# destination reproduces exactly the gap above - silently, with no test
+# able to catch it, since nothing here can observe Paddle's own dashboard
+# state.
+
 # Every subscription lifecycle event that can change what plan an
 # installation should be on. Previously only subscription.created was
 # handled - a cancellation, a card declining until the subscription lapsed,

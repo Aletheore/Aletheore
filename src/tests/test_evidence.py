@@ -277,6 +277,54 @@ def test_scan_repository_includes_dead_code_and_hotspots(tmp_path):
     assert evidence["git"]["hotspots"][0]["path"] == "main.py"
 
 
+def test_scan_repository_skips_architecture_analysis_when_disabled(tmp_path):
+    """Clustering (greedy_modularity_communities) is a global graph
+    algorithm with no meaningful incremental version, and is driven by the
+    import graph, not function bodies - measured at 1.9s on a 42-module
+    repo, the dominant cost of watch.py's incremental rebuild by far.
+    Skipping it must still leave the shapes dashboard.py/mcp_server.py
+    read (architecture.layer_violations.convention_detected/.violations)
+    intact rather than absent, so a watch-mode write doesn't crash them."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("import b\n")
+    (repo / "b.py").write_text("x = 1\n")
+
+    evidence = scan_repository(
+        repo, check_vulnerabilities=False, check_licenses=False, analyze_architecture=False
+    )
+
+    assert evidence["architecture"]["clusters"] == []
+    assert evidence["architecture"]["cross_cluster_edges"] == []
+    assert evidence["architecture"]["layer_violations"]["convention_detected"] is False
+    assert evidence["architecture"]["layer_violations"]["violations"] == []
+    # A first version of this placeholder omitted "layers" - passed every
+    # assertion above (none of them touch that key) but failed AIR schema
+    # validation the moment anything called load_evidence() on it, raising
+    # MalformedEvidenceError instead of the shape mismatch this comment's
+    # docstring warns about. write_evidence + load_evidence is the real
+    # round trip a watch session's evidence goes through.
+    write_evidence(evidence, repo)
+    load_evidence(repo)
+
+
+def test_scan_repository_skips_hotspots_when_disabled(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "a@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "A"], cwd=repo, check=True)
+    (repo / "main.py").write_text("def run():\n    pass\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=repo, check=True)
+
+    evidence = scan_repository(
+        repo, check_vulnerabilities=False, check_licenses=False, check_hotspots=False
+    )
+
+    assert "hotspots" not in evidence["git"]
+
+
 def test_scan_repository_honors_git_history_depth_cap_env_var(tmp_path, monkeypatch):
     # Proves the hosted scan-worker's ALETHEORE_GIT_HISTORY_DEPTH_CAP env
     # var (set before invoking `aletheore scan` as a subprocess, see

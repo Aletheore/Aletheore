@@ -5,6 +5,7 @@ from aletheore.query import (
     BranchNotFoundInEvidenceError,
     ModuleNotFoundInEvidenceError,
     SymbolNotFoundInEvidenceError,
+    find_blast_radius,
     find_branch,
     find_cluster,
     find_code_evidence_for_dependency,
@@ -316,6 +317,108 @@ def test_find_cluster_raises_for_unknown_path():
 def test_find_layer_violations_returns_the_whole_block_ignoring_target():
     result = find_layer_violations(make_evidence(), None)
     assert result == make_evidence()["architecture"]["layer_violations"]
+
+
+def _blast_radius_evidence():
+    return {
+        "repository": {
+            "modules": [
+                {"path": "core/util.py", "imports": [], "imported_by": ["service/handler.py"]},
+                {
+                    "path": "service/handler.py",
+                    "imports": ["core/util.py"],
+                    "imported_by": ["api/routes.py"],
+                },
+                {
+                    "path": "api/routes.py",
+                    "imports": ["service/handler.py"],
+                    "imported_by": ["web/app.py"],
+                },
+                {"path": "web/app.py", "imports": ["api/routes.py"], "imported_by": []},
+                {"path": "unrelated/other.py", "imports": [], "imported_by": []},
+            ],
+        },
+        "architecture": {
+            "layer_violations": {
+                "convention_detected": True,
+                "layers": [],
+                "violations": [
+                    {"from": "service/handler.py", "to": "web/app.py", "reason": "inner imports outer"},
+                    {"from": "unrelated/other.py", "to": "unrelated/other.py", "reason": "irrelevant"},
+                ],
+            }
+        },
+    }
+
+
+def test_find_blast_radius_returns_direct_and_transitive_dependents(tmp_path):
+    result = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py")
+
+    assert result["target"] == "core/util.py"
+    assert result["direct_dependents"] == ["service/handler.py"]
+    assert set(result["transitive_dependents"]) == {"api/routes.py", "web/app.py"}
+    assert result["transitive_dependents_truncated"] is False
+
+
+def test_find_blast_radius_raises_for_unknown_target(tmp_path):
+    with pytest.raises(ModuleNotFoundInEvidenceError):
+        find_blast_radius(_blast_radius_evidence(), tmp_path, "does/not/exist.py")
+
+
+def test_find_blast_radius_filters_layer_violations_to_the_radius(tmp_path):
+    result = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py")
+
+    # Both endpoints of the kept violation are in util.py's blast radius
+    # (handler.py is direct, app.py is transitive); the unrelated.py
+    # self-violation touches nothing in the radius and must be excluded.
+    assert result["layer_violations"] == [
+        {"from": "service/handler.py", "to": "web/app.py", "reason": "inner imports outer"}
+    ]
+
+
+def test_find_blast_radius_truncates_transitive_dependents_past_the_cap(tmp_path, monkeypatch):
+    import aletheore.query as query_module
+
+    monkeypatch.setattr(query_module, "_BLAST_RADIUS_MAX_TRANSITIVE", 1)
+
+    result = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py")
+
+    assert len(result["transitive_dependents"]) == 1
+    assert result["transitive_dependents_truncated"] is True
+
+
+def test_find_blast_radius_omits_confirmed_callers_without_a_symbol(tmp_path):
+    result = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py")
+    assert "confirmed_callers" not in result
+    assert "symbol" not in result
+
+
+def test_find_blast_radius_confirms_callers_via_real_file_content(tmp_path):
+    """The high-confidence guarantee: a candidate only counts if the real
+    file content actually calls the symbol, not merely imports its module -
+    mirrors scan_worker/flash_review.py's build_blast_radius_context."""
+    (tmp_path / "service").mkdir()
+    (tmp_path / "service" / "handler.py").write_text(
+        "from core.util import parse_config\nresult = parse_config(raw)\n"
+    )
+
+    result = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py", symbol="parse_config")
+
+    assert result["symbol"] == "parse_config"
+    assert result["confirmed_callers"] == ["service/handler.py"]
+
+
+def test_find_blast_radius_excludes_a_dependent_that_only_imports_not_calls(tmp_path):
+    (tmp_path / "service").mkdir()
+    # Imports the module but never actually calls parse_config - a bare
+    # "imports the file" relationship must not count as confirmed.
+    (tmp_path / "service" / "handler.py").write_text(
+        "from core.util import parse_config\nother_function()\n"
+    )
+
+    result = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py", symbol="parse_config")
+
+    assert result["confirmed_callers"] == []
 
 
 def test_find_dead_code_evidence_returns_the_whole_block_ignoring_target():

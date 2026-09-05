@@ -249,9 +249,11 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_environment_variables",
         "aletheore_changes",
         "aletheore_neighborhood",
+        "aletheore_get_blast_radius",
         "aletheore_list",
         "aletheore_overview",
         "aletheore_search",
+        "aletheore_ast_pattern",
         "aletheore_symbol_source",
         "aletheore_verify_citations",
         "aletheore_scan",
@@ -264,7 +266,7 @@ async def test_build_server_registers_expected_tools(tmp_path):
         "aletheore_find_evidence_for_dependency",
     }
     assert expected.issubset(names)
-    assert len(names) == 31
+    assert len(names) == 33
     assert "aletheore_answer" not in names
 
 
@@ -819,6 +821,43 @@ async def test_aletheore_neighborhood_raises_for_unknown_module(tmp_path):
         await server.call_tool("aletheore_neighborhood", {"target": "does/not/exist.py"})
 
 
+@pytest.mark.asyncio
+async def test_aletheore_get_blast_radius_returns_direct_dependents(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_get_blast_radius", {"target": "b.py"})
+
+    body = tool_result_body(result)["result"]
+    assert body["target"] == "b.py"
+    assert body["direct_dependents"] == ["a.py"]
+    assert "confirmed_callers" not in body
+
+
+@pytest.mark.asyncio
+async def test_aletheore_get_blast_radius_with_symbol_confirms_real_callers(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    (repo / "a.py").write_text("from b import helper\nhelper()\n")
+    server = build_server(repo)
+
+    result = await server.call_tool(
+        "aletheore_get_blast_radius", {"target": "b.py", "symbol": "helper"}
+    )
+
+    body = tool_result_body(result)["result"]
+    assert body["symbol"] == "helper"
+    assert body["confirmed_callers"] == ["a.py"]
+
+
+@pytest.mark.asyncio
+async def test_aletheore_get_blast_radius_raises_for_unknown_module(tmp_path):
+    repo = make_repo_with_evidence(tmp_path)
+    server = build_server(repo)
+
+    with pytest.raises(ToolError):
+        await server.call_tool("aletheore_get_blast_radius", {"target": "does/not/exist.py"})
+
+
 def make_repo_with_files(tmp_path: Path, files: dict[str, str]) -> Path:
     repo = tmp_path / "search_repo"
     repo.mkdir()
@@ -841,6 +880,50 @@ async def test_aletheore_search_finds_a_literal_match(tmp_path):
     matches = tool_result_body(result)["result"]["matches"]
     assert len(matches) == 1
     assert matches[0] == {"path": "app/main.py", "line": 1, "text": "def hello():"}
+
+
+@pytest.mark.asyncio
+async def test_aletheore_ast_pattern_finds_a_structural_match(tmp_path):
+    repo = make_repo_with_files(
+        tmp_path,
+        {"app.py": "def plain():\n    pass\n\ndef guarded():\n    try:\n        pass\n    except ValueError:\n        pass\n"},
+    )
+    server = build_server(repo)
+
+    result = await server.call_tool(
+        "aletheore_ast_pattern",
+        {
+            "language": "python",
+            "query": "(function_definition name: (identifier) @name body: (block (try_statement))) @whole",
+        },
+    )
+
+    body = tool_result_body(result)["result"]
+    assert body["truncated"] is False
+    assert len(body["matches"]) == 1
+    assert body["matches"][0]["captures"]["name"][0]["text"] == "guarded"
+
+
+@pytest.mark.asyncio
+async def test_aletheore_ast_pattern_reports_an_unknown_language_as_an_error_not_a_crash(tmp_path):
+    repo = make_repo_with_files(tmp_path, {"app.py": "pass\n"})
+    server = build_server(repo)
+
+    result = await server.call_tool("aletheore_ast_pattern", {"language": "cobol", "query": "(anything)"})
+
+    assert "unknown language" in tool_result_body(result)["result"]["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_aletheore_ast_pattern_reports_an_invalid_query_as_an_error_not_a_crash(tmp_path):
+    repo = make_repo_with_files(tmp_path, {"app.py": "pass\n"})
+    server = build_server(repo)
+
+    result = await server.call_tool(
+        "aletheore_ast_pattern", {"language": "python", "query": "(this_node_type_does_not_exist)"}
+    )
+
+    assert "invalid tree-sitter query" in tool_result_body(result)["result"]["error"].lower()
 
 
 @pytest.mark.asyncio

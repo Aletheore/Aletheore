@@ -1,577 +1,218 @@
-"""Deterministic database-schema extraction from Postgres DDL migrations.
+"""Deterministic database-schema extraction from a repository's own DDL
+migrations - Postgres, MySQL, SQLite, SQL Server, or Oracle, detected from
+the repo's own config (see the dialect-detection note below).
 
 Produces the `repository.database.schema` AIR section: the tables, columns,
-foreign-key relations, and indexes a repository's migrations define, each
-resolving to the file:line that introduced it.
+foreign-key relations, indexes, and CHECK constraints a repository's
+migrations define, each resolving to the file:line that introduced it.
 
-Why a hand-written tokenizer rather than a grammar: the scanner ships no SQL
-grammar (LANGUAGE_BY_EXTENSION covers 13 languages, none of them SQL), and
-adding one would put a dialect-fragile dependency in the free CLI's install
-path while still leaving the ALTER-replay logic to be written by hand. This
-mirrors endpoints.py, which is purpose-built per-framework extraction for the
-same reason.
+Every relation carries a `name`: an explicit `CONSTRAINT name FOREIGN KEY
+...` uses it as given, and an unnamed single-column FK is auto-named
+following Postgres' own real, documented default convention
+(`<table>_<column>_fkey`) rather than left nameless - not a guess, the
+same name Postgres itself would assign. This is what makes a later `ALTER
+TABLE ... DROP CONSTRAINT <name>` resolvable (removes the matching
+relation) instead of always falling to `unsupported`; a name that matches
+no tracked relation - most likely a named UNIQUE/CHECK/PRIMARY KEY
+constraint, not individually addressable yet - still falls back to
+`unsupported` with the real statement text, never silently no-ops.
 
-Why not regex: a backtracking pattern over attacker-supplied SQL is the exact
-shape of the ReDoS fixed in PR #190 (~23s for one crafted 29-character line).
-Everything here is a single forward pass with no backtracking, so runtime is
-linear in input size regardless of content.
+Parsing is via sqlglot rather than a hand-written tokenizer (which this
+module used through 2026-09-04). The hand-written tokenizer silently
+dropped every table-level constraint except FOREIGN KEY - a composite
+`PRIMARY KEY (a, b)` (the ordinary shape for every join/junction table)
+came back with no column marked `primary_key` at all, with no
+`unsupported` entry to say why. sqlglot is MIT-licensed, has zero
+transitive dependencies of its own (a pure-Python wheel, not a compiled
+grammar needing per-platform wheels), and its AST cleanly discriminates
+every CREATE/ALTER/DROP action this module replays. Line numbers are not
+exposed on sqlglot's parsed expressions, so this module splits the file
+into statements itself first using sqlglot's own tokenizer (which already
+handles Postgres string literals and dollar-quoted bodies correctly - no
+need to re-track quote/comment/depth state by hand) purely to record each
+statement's starting line, then parses each statement's text individually.
 
-Scope is deliberately Postgres-only for v1, and deliberately narrower than
-Postgres: only the statements real migrations use to define shape. Anything
-else is recorded in `unsupported` and skipped, never raised - a repository is
-free to contain SQL this does not model, and a partial schema is more useful
-than a failed scan.
+Why not regex, still: a backtracking pattern over attacker-supplied SQL is
+the exact shape of the ReDoS fixed in PR #190. Not a concern here - this
+module never builds its own backtracking pattern; sqlglot's tokenizer is a
+linear-time hand-written scanner, the same design this module used before.
+
+The SQL dialect (postgres/mysql/sqlite/tsql/oracle) is read from a real,
+explicit config file the repo itself already has - a Prisma
+`schema.prisma`'s `datasource` block, `alembic.ini`'s `sqlalchemy.url`
+scheme, Rails' `database.yml` `adapter:`, Django `settings.py`'s `ENGINE`,
+or a `knexfile.js`/`.sequelizerc`'s `client`/`dialect` - never inferred
+from the SQL text itself (see `_detect_sql_dialect`): a wrong guess there
+could silently produce a plausible-looking but factually wrong schema, a
+materially worse failure mode than this module's ordinary honest
+"recorded as unsupported" fallback. Falls back to postgres, this module's
+original and still most common target, when no such file is found.
+
+Deliberately narrower than any of those dialects, regardless of which one
+is active: CREATE TABLE, CREATE INDEX, DROP TABLE, DROP INDEX, every
+ALTER TABLE action with a clear, unambiguous DDL meaning (ADD/DROP/RENAME
+COLUMN, RENAME TO, ALTER COLUMN TYPE/SET-DROP NOT NULL/SET DEFAULT, ADD
+CONSTRAINT UNIQUE/FOREIGN KEY/PRIMARY KEY/CHECK, and - where the name
+resolves - DROP CONSTRAINT), and CHECK constraints (column- or
+table-level, named or not - stored as `{name, column, expression}` on the
+owning table, `expression` the real reconstructed SQL text rather than an
+evaluated boolean, since evaluating an arbitrary CHECK expression is not
+this module's job) are modeled. EXCLUDE constraints, an unresolvable DROP
+CONSTRAINT, views, sequences, types, extensions, functions/triggers,
+GRANT/REVOKE, and raw DML are recorded in `unsupported` (with the real
+reconstructed SQL text, not a truncated token dump) rather than modeled -
+a repository is free to contain SQL this does not model, and a partial
+schema is more useful than a failed scan. Never raises on malformed SQL: a
+statement sqlglot cannot parse falls back to a generic Command node scoped
+to that one statement, not the whole file; a file with a truly
+unterminated string or dollar-quote (which sqlglot's tokenizer cannot
+recover from at all, unlike an ordinary unparseable statement) is
+re-tokenized up to the error's own reported position to salvage whatever
+complete statements came before it, with an `unsupported` entry noting the
+rest of the file was unreadable.
 """
 
 from __future__ import annotations
 
+import logging
+import os
+import re
 from pathlib import Path
 
-class _Cursor:
-    """A forward-only reader over one migration file.
+import sqlglot
+from sqlglot import expressions as exp
+from sqlglot.errors import TokenError
 
-    Tracks line numbers alongside offsets so every emitted table and column
-    can cite the exact file:line it came from - the citation is the point of
-    the whole section, so position tracking is not optional bookkeeping.
-    """
+from aletheore.scanner.detect import IGNORED_DIRS
 
-    def __init__(self, text: str) -> None:
-        self.text = text
-        self.pos = 0
-        self.line = 1
-
-    def eof(self) -> bool:
-        return self.pos >= len(self.text)
-
-    def advance(self, count: int = 1) -> None:
-        for _ in range(count):
-            if self.pos >= len(self.text):
-                return
-            if self.text[self.pos] == "\n":
-                self.line += 1
-            self.pos += 1
-
-    def peek(self, count: int = 1) -> str:
-        return self.text[self.pos : self.pos + count]
-
-    def skip_whitespace_and_comments(self) -> None:
-        """Whitespace, `-- line` comments, and `/* block */` comments.
-
-        Block comments do not nest in this implementation. Postgres allows
-        nesting, but an unterminated or nested block comment only causes this
-        to consume to EOF, which degrades to "no more statements in this
-        file" - the failure mode is missing data, never a hang or a crash.
-        """
-        while not self.eof():
-            char = self.text[self.pos]
-            if char in " \t\r\n":
-                self.advance()
-            elif self.peek(2) == "--":
-                while not self.eof() and self.text[self.pos] != "\n":
-                    self.advance()
-            elif self.peek(2) == "/*":
-                self.advance(2)
-                while not self.eof() and self.peek(2) != "*/":
-                    self.advance()
-                self.advance(2)
-            else:
-                return
-
-
-def _comment_end(text: str, index: int) -> int:
-    """If a `--` or `/* */` comment starts at `index`, the index just past
-    it - otherwise `index` unchanged.
-
-    Shared by every scanner below that walks a plain string (not a
-    _Cursor) rather than duplicating comment detection three times: a
-    `CREATE TABLE` body is read once via _read_parenthesised_body (a
-    _Cursor consumer, handled separately below) but then re-scanned as a
-    plain string by _split_top_level and _tokenize_column_definition, and
-    an inline `--`/`/* */` comment inside a column list is ordinary,
-    common SQL that all three must skip past identically or the comment
-    text gets parsed as if it were column-definition source. Callers are
-    responsible for having already established `index` is not inside a
-    string literal - `--`/`/*` are not comment starts inside a Postgres
-    string literal, but no caller here ever reaches this check from
-    inside one (the `'` branch above it always continues past the whole
-    literal first).
-    """
-    if text[index : index + 2] == "--":
-        newline = text.find("\n", index)
-        return len(text) if newline == -1 else newline
-    if text[index : index + 2] == "/*":
-        end = text.find("*/", index + 2)
-        return len(text) if end == -1 else end + 2
-    return index
-
-
-def _read_identifier(cursor: _Cursor) -> str:
-    """A bare or double-quoted identifier, optionally schema-qualified.
-
-    Returns the *last* dotted segment: `public.users` and `users` are the
-    same table, and treating them as two would split one table's columns
-    across two entries in the diagram.
-    """
-    cursor.skip_whitespace_and_comments()
-    parts: list[str] = []
-    while True:
-        if cursor.peek() == '"':
-            cursor.advance()
-            start = cursor.pos
-            while not cursor.eof() and cursor.peek() != '"':
-                cursor.advance()
-            parts.append(cursor.text[start : cursor.pos])
-            cursor.advance()
-        else:
-            start = cursor.pos
-            while not cursor.eof() and (cursor.text[cursor.pos].isalnum() or cursor.text[cursor.pos] == "_"):
-                cursor.advance()
-            if cursor.pos == start:
-                break
-            parts.append(cursor.text[start : cursor.pos])
-        if cursor.peek() == ".":
-            cursor.advance()
-            continue
-        break
-    return parts[-1] if parts else ""
-
-
-def _skip_to_statement_end(cursor: _Cursor) -> None:
-    """Consume through the next top-level `;`.
-
-    Depth-aware and literal-aware: a semicolon inside parentheses, a quoted
-    string, or a dollar-quoted body is not a statement terminator. Without
-    this, a `DEFAULT ';'` or a function body would end the statement early
-    and the rest of the file would be parsed as garbage.
-    """
-    depth = 0
-    while not cursor.eof():
-        char = cursor.text[cursor.pos]
-        if char == "'":
-            _skip_single_quoted(cursor)
-            continue
-        if char == "$":
-            if _skip_dollar_quoted(cursor):
-                continue
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth = max(0, depth - 1)
-        elif char == ";" and depth == 0:
-            cursor.advance()
-            return
-        elif char == "-" and cursor.peek(2) == "--":
-            cursor.skip_whitespace_and_comments()
-            continue
-        elif char == "/" and cursor.peek(2) == "/*":
-            cursor.skip_whitespace_and_comments()
-            continue
-        cursor.advance()
-
-
-def _skip_single_quoted(cursor: _Cursor) -> None:
-    # Postgres escapes a quote by doubling it ('it''s'), so a doubled quote
-    # continues the literal rather than ending it.
-    cursor.advance()
-    while not cursor.eof():
-        if cursor.peek() == "'":
-            if cursor.peek(2) == "''":
-                cursor.advance(2)
-                continue
-            cursor.advance()
-            return
-        cursor.advance()
-
-
-def _skip_dollar_quoted(cursor: _Cursor) -> bool:
-    """Skip a `$tag$ ... $tag$` body, returning whether one was found.
-
-    Returns False for a bare `$` that is not a dollar-quote opener (e.g. a
-    positional parameter like `$1`), leaving the cursor untouched so the
-    caller can treat it as an ordinary character.
-    """
-    start = cursor.pos
-    scan = cursor.pos + 1
-    while scan < len(cursor.text) and (cursor.text[scan].isalnum() or cursor.text[scan] == "_"):
-        scan += 1
-    if scan >= len(cursor.text) or cursor.text[scan] != "$":
-        return False
-    tag = cursor.text[start : scan + 1]
-    closing = cursor.text.find(tag, scan + 1)
-    end = len(cursor.text) if closing == -1 else closing + len(tag)
-    cursor.advance(end - cursor.pos)
-    return True
-
-
-def _split_top_level(body: str) -> list[str]:
-    """Split a parenthesised column list on top-level commas.
-
-    Depth- and literal-aware for the same reason as _skip_to_statement_end:
-    `NUMERIC(10, 2)` and `DEFAULT 'a,b'` both contain commas that do not
-    separate column definitions.
-    """
-    parts: list[str] = []
-    current: list[str] = []
-    depth = 0
-    index = 0
-    while index < len(body):
-        char = body[index]
-        if char == "'":
-            end = index + 1
-            while end < len(body):
-                if body[end] == "'":
-                    if body[end : end + 2] == "''":
-                        end += 2
-                        continue
-                    break
-                end += 1
-            current.append(body[index : end + 1])
-            index = end + 1
-            continue
-        comment_end = _comment_end(body, index)
-        if comment_end != index:
-            index = comment_end
-            continue
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth = max(0, depth - 1)
-        elif char == "," and depth == 0:
-            parts.append("".join(current))
-            current = []
-            index += 1
-            continue
-        current.append(char)
-        index += 1
-    if current:
-        parts.append("".join(current))
-    return [part.strip() for part in parts if part.strip()]
-
-
-def _tokenize_column_definition(text: str) -> list[str]:
-    """Split one column definition into words, keeping a parenthesised group
-    attached to the word before it.
-
-    `NUMERIC(10, 2)` has to stay one token or the `, 2)` becomes a stray word
-    and `DEFAULT` detection reads the wrong position. `DOUBLE PRECISION`
-    stays two, which is why the type is accumulated rather than taken as a
-    single token.
-    """
-    tokens: list[str] = []
-    current: list[str] = []
-    depth = 0
-    index = 0
-    while index < len(text):
-        char = text[index]
-        if char == "'":
-            end = index + 1
-            while end < len(text):
-                if text[end] == "'":
-                    if text[end : end + 2] == "''":
-                        end += 2
-                        continue
-                    break
-                end += 1
-            current.append(text[index : end + 1])
-            index = end + 1
-            continue
-        comment_end = _comment_end(text, index)
-        if comment_end != index:
-            index = comment_end
-            continue
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth = max(0, depth - 1)
-        if char in " \t\r\n" and depth == 0:
-            if current:
-                tokens.append("".join(current))
-                current = []
-            index += 1
-            continue
-        current.append(char)
-        index += 1
-    if current:
-        tokens.append("".join(current))
-    return tokens
-
-
-_CONSTRAINT_STARTERS = frozenset(
-    {"primary", "not", "null", "unique", "references", "default", "check", "generated", "collate", "constraint"}
+from aletheore.orm_migrations import (
+    extract_alembic_migrations,
+    extract_django_migrations,
+    extract_rails_migrations,
 )
 
-# A table-level constraint rather than a column: `PRIMARY KEY (a, b)`,
-# `FOREIGN KEY (x) REFERENCES ...`, `CONSTRAINT name ...`. These start with a
-# keyword where a column name would be, which is how they are told apart.
-_TABLE_CONSTRAINT_STARTERS = frozenset({"primary", "foreign", "unique", "constraint", "check", "exclude"})
+# sqlglot logs a warning per statement it can't fully parse ("Falling back
+# to parsing as a 'Command'") - this module already surfaces that same
+# information as a real `unsupported` entry with the actual SQL text, so
+# the log line would just be duplicate noise on every scan of a repo with
+# any non-modeled SQL in it.
+logging.getLogger("sqlglot").setLevel(logging.ERROR)
+
+_DEFAULT_SQL_DIALECT = "postgres"
+
+# Set once per extract_schema() call (see _detect_sql_dialect) and read by
+# every parse/render call below. A plain module variable rather than a
+# parameter threaded through every function that touches SQL text - safe
+# because this module has no concurrent or re-entrant call pattern
+# (extract_schema always runs to completion, including its raw_sql
+# recursion for RunSQL/execute/op.execute, before another call can start).
+_SQL_DIALECT = _DEFAULT_SQL_DIALECT
+
+# Real config files that explicitly declare a project's SQL dialect, and
+# how to read each one - never inferred from the SQL text itself. A wrong
+# guess there could silently produce a plausible-looking but factually
+# wrong schema, a materially worse failure mode than this module's
+# ordinary honest "recorded as unsupported" fallback. Falls back to
+# _DEFAULT_SQL_DIALECT when no such file is found, which is this module's
+# original and still most common target.
+_PRISMA_PROVIDER_TO_DIALECT = {
+    "postgresql": "postgres", "postgres": "postgres", "cockroachdb": "postgres",
+    "mysql": "mysql", "sqlite": "sqlite", "sqlserver": "tsql",
+}
+_URL_SCHEME_TO_DIALECT = {
+    "postgresql": "postgres", "postgres": "postgres", "cockroachdb": "postgres",
+    "mysql": "mysql", "sqlite": "sqlite", "mssql": "tsql", "oracle": "oracle",
+}
+_RAILS_ADAPTER_TO_DIALECT = {
+    "postgresql": "postgres", "mysql2": "mysql", "mysql": "mysql", "sqlite3": "sqlite",
+    "sqlserver": "tsql",
+}
+_DJANGO_ENGINE_TO_DIALECT = {
+    "postgresql": "postgres", "postgresql_psycopg2": "postgres", "mysql": "mysql",
+    "sqlite3": "sqlite", "oracle": "oracle",
+}
+_JS_CLIENT_TO_DIALECT = {
+    "pg": "postgres", "postgres": "postgres", "postgresql": "postgres",
+    "mysql": "mysql", "mysql2": "mysql", "sqlite3": "sqlite", "mssql": "tsql",
+}
 
 
-def _strip_identifier(raw: str) -> str:
-    return raw.strip().strip('"').split(".")[-1]
-
-
-def _parse_references(tokens: list[str], start: int) -> tuple[str, str, str | None] | None:
-    """`REFERENCES table(column) [ON DELETE action]` -> (table, column, action)."""
-    if start + 1 >= len(tokens):
+def _dialect_from_config_file(path: Path, filename: str) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
         return None
-    target = tokens[start + 1]
-    column = ""
-    if "(" in target:
-        table_part, _, rest = target.partition("(")
-        column = rest.rstrip(")").strip()
-        target = table_part
-    elif start + 2 < len(tokens) and tokens[start + 2].startswith("("):
-        column = tokens[start + 2].strip("()").strip()
 
-    on_delete = None
-    lowered = [token.lower() for token in tokens]
-    for index in range(start, len(lowered) - 2):
-        if lowered[index] == "on" and lowered[index + 1] == "delete":
-            action_words = []
-            for word in lowered[index + 2 :]:
-                if word in {"on", "deferrable", "initially"}:
-                    break
-                action_words.append(word)
-                if " ".join(action_words) in {"cascade", "restrict", "no action", "set null", "set default"}:
-                    break
-            if action_words:
-                on_delete = " ".join(action_words).upper()
-            break
-
-    return _strip_identifier(target), _strip_identifier(column), on_delete
+    if filename == "schema.prisma":
+        match = re.search(r'datasource\s+\w+\s*\{[^}]*?provider\s*=\s*"(\w+)"', text, re.DOTALL)
+        return _PRISMA_PROVIDER_TO_DIALECT.get(match.group(1)) if match else None
+    if filename == "alembic.ini":
+        match = re.search(r"sqlalchemy\.url\s*=\s*([a-zA-Z0-9+]+)://", text)
+        if not match:
+            return None
+        scheme = match.group(1).split("+")[0]
+        return _URL_SCHEME_TO_DIALECT.get(scheme)
+    if filename == "database.yml":
+        match = re.search(r"^\s*adapter:\s*(\w+)", text, re.MULTILINE)
+        return _RAILS_ADAPTER_TO_DIALECT.get(match.group(1)) if match else None
+    if filename == "settings.py":
+        match = re.search(r"django\.db\.backends\.(\w+)", text)
+        return _DJANGO_ENGINE_TO_DIALECT.get(match.group(1)) if match else None
+    if filename in ("knexfile.js", ".sequelizerc"):
+        match = re.search(r"""(?:client|dialect)\s*:\s*['"](\w+)['"]""", text)
+        return _JS_CLIENT_TO_DIALECT.get(match.group(1)) if match else None
+    return None
 
 
-def _parse_column_definition(text: str, file: str, line: int) -> tuple[dict | None, dict | None]:
-    """One column definition -> (column, relation).
-
-    Returns (None, relation) for a table-level FOREIGN KEY, and (None, None)
-    for any other table-level constraint - those carry no column of their
-    own but may still carry an edge the diagram needs.
-    """
-    tokens = _tokenize_column_definition(text)
-    if not tokens:
-        return None, None
-
-    lowered = [token.lower() for token in tokens]
-    if lowered[0] in _TABLE_CONSTRAINT_STARTERS:
-        if lowered[0] == "foreign" or (lowered[0] == "constraint" and "foreign" in lowered):
-            try:
-                ref_index = lowered.index("references")
-            except ValueError:
-                return None, None
-            key_index = lowered.index("foreign")
-            local_column = ""
-            if key_index + 2 < len(tokens) and tokens[key_index + 2].startswith("("):
-                local_column = _strip_identifier(tokens[key_index + 2].strip("()"))
-            parsed = _parse_references(tokens, ref_index)
-            if parsed is None:
-                return None, None
-            to_table, to_column, on_delete = parsed
-            return None, {
-                "from_column": local_column,
-                "to_table": to_table,
-                "to_column": to_column,
-                "on_delete": on_delete,
-                "file": file,
-                "line": line,
-            }
-        return None, None
-
-    name = _strip_identifier(tokens[0])
-    type_words: list[str] = []
-    index = 1
-    while index < len(tokens) and lowered[index] not in _CONSTRAINT_STARTERS:
-        type_words.append(tokens[index])
-        index += 1
-
-    column = {
-        "name": name,
-        "type": " ".join(type_words).upper() or "UNKNOWN",
-        "primary_key": False,
-        "nullable": True,
-        "unique": False,
-        "default": None,
-        "file": file,
-        "line": line,
-    }
-
-    relation = None
-    cursor = index
-    while cursor < len(tokens):
-        word = lowered[cursor]
-        if word == "primary" and cursor + 1 < len(lowered) and lowered[cursor + 1] == "key":
-            column["primary_key"] = True
-            # A PRIMARY KEY column is NOT NULL by definition in Postgres,
-            # whether or not the migration spells it out - recording it as
-            # nullable would make the diagram contradict the database.
-            column["nullable"] = False
-            cursor += 2
-            continue
-        if word == "not" and cursor + 1 < len(lowered) and lowered[cursor + 1] == "null":
-            column["nullable"] = False
-            cursor += 2
-            continue
-        if word == "unique":
-            column["unique"] = True
-            cursor += 1
-            continue
-        if word == "default":
-            default_words = []
-            scan = cursor + 1
-            while scan < len(tokens) and lowered[scan] not in _CONSTRAINT_STARTERS:
-                default_words.append(tokens[scan])
-                scan += 1
-            column["default"] = " ".join(default_words) or None
-            cursor = scan
-            continue
-        if word == "references":
-            parsed = _parse_references(tokens, cursor)
-            if parsed is not None:
-                to_table, to_column, on_delete = parsed
-                relation = {
-                    "from_column": name,
-                    "to_table": to_table,
-                    "to_column": to_column,
-                    "on_delete": on_delete,
-                    "file": file,
-                    "line": line,
-                }
-            cursor += 1
-            continue
-        cursor += 1
-
-    return column, relation
+_DIALECT_CONFIG_FILENAMES = frozenset(
+    {"schema.prisma", "alembic.ini", "database.yml", "settings.py", "knexfile.js", ".sequelizerc"}
+)
 
 
-def _read_parenthesised_body(cursor: _Cursor) -> str | None:
-    """The text between a balanced `( ... )`, cursor left after the close."""
-    cursor.skip_whitespace_and_comments()
-    if cursor.peek() != "(":
-        return None
-    cursor.advance()
-    start = cursor.pos
-    depth = 1
-    while not cursor.eof() and depth > 0:
-        char = cursor.text[cursor.pos]
-        if char == "'":
-            _skip_single_quoted(cursor)
-            continue
-        comment_end = _comment_end(cursor.text, cursor.pos)
-        if comment_end != cursor.pos:
-            cursor.advance(comment_end - cursor.pos)
-            continue
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-            if depth == 0:
-                break
-        cursor.advance()
-    body = cursor.text[start : cursor.pos]
-    cursor.advance()
-    return body
-
-
-def _match_keywords(cursor: _Cursor, words: list[str]) -> bool:
-    """Whether the next tokens are these keywords, consuming them if so.
-
-    Position is restored on a partial match, so a failed probe for
-    `CREATE UNIQUE INDEX` leaves the cursor free to probe `CREATE INDEX`.
-    """
-    saved_pos, saved_line = cursor.pos, cursor.line
-    for word in words:
-        cursor.skip_whitespace_and_comments()
-        start = cursor.pos
-        while not cursor.eof() and (cursor.text[cursor.pos].isalnum() or cursor.text[cursor.pos] == "_"):
-            cursor.advance()
-        if cursor.text[start : cursor.pos].lower() != word:
-            cursor.pos, cursor.line = saved_pos, saved_line
-            return False
-    return True
-
-
-def _parse_file(text: str, rel_path: str) -> dict:
-    """Every shape-defining statement in one migration file, in file order."""
-    cursor = _Cursor(text)
-    events: list[dict] = []
-    unsupported: list[dict] = []
-
-    while True:
-        cursor.skip_whitespace_and_comments()
-        if cursor.eof():
-            break
-        line = cursor.line
-
-        if _match_keywords(cursor, ["create", "table"]):
-            _match_keywords(cursor, ["if", "not", "exists"])
-            name = _read_identifier(cursor)
-            body = _read_parenthesised_body(cursor)
-            _skip_to_statement_end(cursor)
-            if name and body is not None:
-                events.append({"kind": "create_table", "table": name, "body": body, "line": line})
-            continue
-
-        if _match_keywords(cursor, ["alter", "table"]):
-            _match_keywords(cursor, ["if", "exists"])
-            _match_keywords(cursor, ["only"])
-            name = _read_identifier(cursor)
-            if _match_keywords(cursor, ["add", "column"]):
-                _match_keywords(cursor, ["if", "not", "exists"])
-                start = cursor.pos
-                _skip_to_statement_end(cursor)
-                definition = cursor.text[start : cursor.pos].rstrip(";").strip()
-                if name and definition:
-                    events.append(
-                        {"kind": "add_column", "table": name, "body": definition, "line": line}
-                    )
+def _detect_sql_dialect(repo_path: Path) -> str:
+    """The real, explicit dialect a repo's own config declares. Walks the
+    tree once (pruning the same noise directories the rest of the scanner
+    ignores) looking for the first recognized config file with a resolvable
+    provider/adapter/URL-scheme value; the first match wins. Returns
+    _DEFAULT_SQL_DIALECT when nothing is found."""
+    for dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+        for filename in filenames:
+            if filename not in _DIALECT_CONFIG_FILENAMES:
                 continue
-            # Any other ALTER (DROP COLUMN, RENAME, ALTER TYPE, ADD
-            # CONSTRAINT): recorded rather than guessed at. v1 models only
-            # the operations this repo's own migrations actually use.
-            start = cursor.pos
-            _skip_to_statement_end(cursor)
-            unsupported.append(
-                {
-                    "file": rel_path,
-                    "line": line,
-                    "statement": _summarize(f"ALTER TABLE {name} {cursor.text[start : cursor.pos]}"),
-                }
-            )
-            continue
+            dialect = _dialect_from_config_file(Path(dirpath) / filename, filename)
+            if dialect is not None:
+                return dialect
+    return _DEFAULT_SQL_DIALECT
 
-        is_unique = _match_keywords(cursor, ["create", "unique", "index"])
-        if is_unique or _match_keywords(cursor, ["create", "index"]):
-            _match_keywords(cursor, ["concurrently"])
-            _match_keywords(cursor, ["if", "not", "exists"])
-            index_name = _read_identifier(cursor)
-            table = ""
-            if _match_keywords(cursor, ["on"]):
-                table = _read_identifier(cursor)
-            _match_keywords(cursor, ["using", "btree"])
-            body = _read_parenthesised_body(cursor)
-            _skip_to_statement_end(cursor)
-            if index_name and table:
-                events.append(
-                    {
-                        "kind": "create_index",
-                        "table": table,
-                        "name": index_name,
-                        "body": body or "",
-                        "unique": is_unique,
-                        "line": line,
-                    }
-                )
-            continue
 
-        start = cursor.pos
-        _skip_to_statement_end(cursor)
-        statement = cursor.text[start : cursor.pos].strip()
-        if statement and statement != ";":
-            unsupported.append(
-                {"file": rel_path, "line": line, "statement": _summarize(statement)}
-            )
+# A migration file's own path can name its dialect directly - real,
+# common convention for a project that ships migrations for more than one
+# backend (Rust/Diesel apps in particular document this exact layout:
+# migrations/postgresql/, migrations/mysql/, migrations/sqlite/, each with
+# its own real dialect-specific SQL - confirmed directly on a real repo,
+# where scanning all three together under one guessed dialect would have
+# mis-parsed two thirds of the files). Checked per file, before falling
+# back to the repo-wide config-file signal - it is closer to the actual
+# SQL being read, so it wins when the two would ever disagree (e.g. a
+# monorepo with one schema.prisma but a differently-shaped raw-SQL
+# migration set elsewhere).
+_DIALECT_DIR_NAMES = {
+    "postgres": "postgres", "postgresql": "postgres", "pg": "postgres",
+    "cockroachdb": "postgres",
+    "mysql": "mysql", "mariadb": "mysql",
+    "sqlite": "sqlite", "sqlite3": "sqlite",
+    "mssql": "tsql", "sqlserver": "tsql", "tsql": "tsql",
+    "oracle": "oracle",
+}
 
-    return {"events": events, "unsupported": unsupported}
+
+def _dialect_from_path(rel_path: str) -> str | None:
+    for part in Path(rel_path).parts[:-1]:
+        dialect = _DIALECT_DIR_NAMES.get(part.lower())
+        if dialect is not None:
+            return dialect
+    return None
 
 
 _SUMMARY_LIMIT = 80
@@ -615,6 +256,776 @@ def _iter_migration_files(repo_path: Path, migration_directories: list[str]) -> 
     return sorted(files, key=lambda path: path.relative_to(repo_path).as_posix())
 
 
+_BODY_STATEMENT_KINDS = frozenset(
+    {sqlglot.TokenType.TRIGGER, sqlglot.TokenType.FUNCTION, sqlglot.TokenType.PROCEDURE}
+)
+
+
+def _tokenize_statements(text: str, tokens: list) -> list[tuple[str, int, bool]]:
+    """(statement_text, start_line, is_body_statement) for every
+    semicolon-terminated statement among already-tokenized `tokens`, in
+    source order.
+
+    A Postgres function's dollar-quoted body is already consumed into a
+    single token by the tokenizer, confirmed directly, so it never reaches
+    this loop as separate statements to begin with. MySQL/SQLite
+    triggers/functions/procedures use a bare `BEGIN ... END` body instead
+    (no dollar-quoting), whose own internal semicolons are ordinary
+    top-level SEMICOLON tokens - found via a real repo (usememos/memos'
+    SQLite trigger migrations): a naive split broke each trigger into a
+    truncated fragment plus a stray bare "END" fragment. BEGIN/END depth
+    is tracked once a statement is confirmed (by its own first few tokens)
+    to be a CREATE TRIGGER/FUNCTION/PROCEDURE - deliberately not tracked
+    for any other statement, so an ordinary `BEGIN;`/`COMMIT;` transaction
+    pair (ubiquitous, and already correctly split as trivial standalone
+    statements) is untouched.
+
+    `is_body_statement` matters one level up too: sqlglot.parse() does its
+    *own* semicolon-based splitting internally, with no BEGIN/END
+    awareness at all, so even handing it this correctly-bounded chunk
+    still produces the same fragments back (a Command for the CREATE
+    TRIGGER, a stray separate EndStatement for the bare "END") - confirmed
+    directly. The caller uses this flag to skip sqlglot.parse() entirely
+    for a body statement and record it as one clean unsupported entry
+    instead, which is correct anyway since none of the three is modeled.
+    """
+    statements: list[tuple[str, int, bool]] = []
+    start = 0
+    start_line = 1
+    open_statement = False
+    is_create = False
+    is_body_statement = False
+    begin_depth = 0
+    stmt_token_count = 0
+    for token in tokens:
+        if not open_statement:
+            start = token.start
+            start_line = token.line
+            open_statement = True
+            is_create = False
+            is_body_statement = False
+            begin_depth = 0
+            stmt_token_count = 0
+        stmt_token_count += 1
+        if stmt_token_count == 1:
+            is_create = token.token_type == sqlglot.TokenType.CREATE
+        elif is_create and not is_body_statement and stmt_token_count <= 5:
+            if token.token_type in _BODY_STATEMENT_KINDS:
+                is_body_statement = True
+        if is_body_statement:
+            if token.token_type == sqlglot.TokenType.BEGIN:
+                begin_depth += 1
+            elif token.token_type == sqlglot.TokenType.END:
+                begin_depth = max(0, begin_depth - 1)
+        if token.token_type == sqlglot.TokenType.SEMICOLON and (not is_body_statement or begin_depth == 0):
+            chunk = text[start : token.start].strip()
+            if chunk:
+                statements.append((chunk, start_line, is_body_statement))
+            open_statement = False
+    if open_statement:
+        chunk = text[start:].strip()
+        if chunk:
+            statements.append((chunk, start_line, is_body_statement))
+    return statements
+
+
+def _split_sql_statements(text: str) -> tuple[list[tuple[str, int, bool]], bool]:
+    """(statements, truncated) - statements is (statement_text, start_line,
+    is_body_statement) for every semicolon-terminated statement in the
+    file, in source order; truncated is True when a tokenizer-fatal error
+    (an unterminated string
+    or dollar-quote - the one failure mode sqlglot's tokenizer cannot
+    isolate to a single statement the way it isolates an ordinary
+    unparseable statement to a Command node) meant part of the file could
+    not be read.
+
+    Splits purely on top-level SEMICOLON tokens from sqlglot's own
+    tokenizer - a semicolon inside a string literal or a dollar-quoted
+    function body is already consumed into that single token by the
+    tokenizer, confirmed directly, so no separate depth/quote tracking is
+    needed here the way the old hand-written cursor required.
+
+    Never raises: on a tokenizer-fatal error, retries against the text up
+    to the error's own reported start offset - a known-good prefix - to
+    salvage whatever complete statements came before the broken part
+    rather than losing the whole file to one downstream typo.
+    """
+    try:
+        return _tokenize_statements(text, sqlglot.tokenize(text, read=_SQL_DIALECT)), False
+    except TokenError as error:
+        prefix_end = error.start if isinstance(error.start, int) else 0
+        if prefix_end <= 0:
+            return [], True
+        try:
+            prefix_tokens = sqlglot.tokenize(text[:prefix_end], read=_SQL_DIALECT)
+        except TokenError:
+            return [], True
+        return _tokenize_statements(text[:prefix_end], prefix_tokens), True
+
+
+def _sql_type_text(coldef: exp.ColumnDef) -> str:
+    kind = coldef.args.get("kind")
+    return kind.sql(dialect=_SQL_DIALECT).upper() if kind is not None else "UNKNOWN"
+
+
+def _sql_on_delete(options: list | None) -> str | None:
+    for option in options or []:
+        text = str(option).upper()
+        if text.startswith("ON DELETE "):
+            return text[len("ON DELETE ") :]
+    return None
+
+
+def _sql_relation_from_reference(
+    local_column: str, reference: exp.Expression, rel_path: str, line: int,
+    *, table: str | None = None, name: str | None = None,
+) -> dict | None:
+    target = reference.args.get("this")
+    if target is None:
+        return None
+    table_node = target.args.get("this") if isinstance(target, exp.Schema) else target
+    if table_node is None:
+        return None
+    to_table = table_node.name
+    to_columns = target.expressions if isinstance(target, exp.Schema) else []
+    to_column = to_columns[0].name if to_columns else "id"
+    if not to_table:
+        return None
+    # An explicit `CONSTRAINT name ...` wins; otherwise `<table>_<column>_fkey`
+    # is the real, documented Postgres default naming convention for an
+    # unnamed single-column FK constraint - not a guess, but specific to
+    # Postgres (MySQL's own auto-naming is a sequential `<table>_ibfk_<n>`,
+    # not derivable from the column name at all; SQLite doesn't assign one
+    # the same way). Applying the Postgres convention under a different
+    # active dialect would fabricate a name that's simply wrong, so it's
+    # gated on _SQL_DIALECT rather than applied unconditionally.
+    constraint_name = name or (
+        f"{table}_{local_column}_fkey" if table and _SQL_DIALECT == "postgres" else None
+    )
+    return {
+        "name": constraint_name,
+        "from_column": local_column,
+        "to_table": to_table,
+        "to_column": to_column,
+        "on_delete": _sql_on_delete(reference.args.get("options")),
+        "file": rel_path,
+        "line": line,
+    }
+
+
+def _sql_column_from_columndef(
+    coldef: exp.ColumnDef, rel_path: str, line: int, *, table: str | None = None
+) -> tuple[dict, dict | None, list[dict], list[dict]]:
+    column = {
+        "name": coldef.name, "type": _sql_type_text(coldef), "primary_key": False,
+        "nullable": True, "unique": False, "default": None, "file": rel_path, "line": line,
+    }
+    relation = None
+    unsupported: list[dict] = []
+    checks: list[dict] = []
+    for constraint in coldef.args.get("constraints") or []:
+        kind = constraint.kind
+        if isinstance(kind, exp.PrimaryKeyColumnConstraint):
+            column["primary_key"] = True
+            # A PRIMARY KEY column is NOT NULL by definition in Postgres,
+            # whether or not the migration spells it out - recording it as
+            # nullable would make the diagram contradict the database.
+            column["nullable"] = False
+        elif isinstance(kind, exp.NotNullColumnConstraint):
+            column["nullable"] = bool(kind.args.get("allow_null"))
+        elif isinstance(kind, exp.UniqueColumnConstraint):
+            column["unique"] = True
+        elif isinstance(kind, exp.DefaultColumnConstraint):
+            default_node = kind.args.get("this")
+            if default_node is not None:
+                column["default"] = default_node.sql(dialect=_SQL_DIALECT)
+        elif isinstance(kind, exp.Reference):
+            relation = _sql_relation_from_reference(column["name"], kind, rel_path, line, table=table)
+        elif isinstance(kind, exp.CheckColumnConstraint):
+            checks.append(
+                {"name": None, "column": column["name"],
+                 "expression": kind.args["this"].sql(dialect=_SQL_DIALECT),
+                 "file": rel_path, "line": line}
+            )
+        else:
+            # COLLATE, GENERATED AS IDENTITY, EXCLUDE-shaped column
+            # constraints: real SQL, no shape-changing effect this module
+            # models, recorded with the real reconstructed text rather than
+            # silently dropped.
+            unsupported.append(
+                {"file": rel_path, "line": line,
+                 "statement": _summarize(f"{column['name']} {kind.sql(dialect=_SQL_DIALECT)}")}
+            )
+    return column, relation, checks, unsupported
+
+
+def _sql_foreign_key_relations(
+    fk: exp.ForeignKey, rel_path: str, line: int, *, table: str | None = None, name: str | None = None
+) -> list[dict]:
+    local_columns = [c.name for c in fk.args.get("expressions") or []]
+    reference = fk.args.get("reference")
+    if not local_columns or reference is None:
+        return []
+    relations = []
+    # A composite FK's auto-generated Postgres name isn't reliably
+    # predictable from the column list alone, so auto-naming (as opposed to
+    # an explicit CONSTRAINT name) is only attempted for the common
+    # single-column case - `naming_table` is left unset otherwise so
+    # _sql_relation_from_reference's own fallback doesn't guess one either.
+    naming_table = table if (name or len(local_columns) == 1) else None
+    for local_column in local_columns:
+        relation = _sql_relation_from_reference(
+            local_column, reference, rel_path, line, table=naming_table, name=name
+        )
+        if relation is not None:
+            relations.append(relation)
+    return relations
+
+
+def _sql_apply_table_constraint(
+    node: exp.Expression,
+    by_name: dict[str, dict],
+    relations: list[dict],
+    checks: list[dict],
+    unsupported: list[dict],
+    rel_path: str,
+    line: int,
+    label: str,
+    *,
+    table: str | None = None,
+    constraint_name: str | None = None,
+) -> None:
+    """Applies one table-level constraint (PRIMARY KEY/UNIQUE/FOREIGN KEY/
+    CHECK, bare or wrapped in a named `CONSTRAINT name (...)`) to the
+    columns already built for this table. `label` is what an unhandled
+    constraint is reported against (the table name for a bare constraint,
+    the constraint's own name for a named one)."""
+    if isinstance(node, exp.PrimaryKey):
+        for identifier in node.expressions:
+            name = identifier.name if hasattr(identifier, "name") else str(identifier)
+            column = by_name.get(name)
+            if column is not None:
+                column["primary_key"] = True
+                column["nullable"] = False
+    elif isinstance(node, exp.UniqueColumnConstraint):
+        target = node.args.get("this")
+        names = target.expressions if isinstance(target, exp.Schema) else []
+        for identifier in names:
+            column = by_name.get(identifier.name)
+            if column is not None:
+                column["unique"] = True
+    elif isinstance(node, exp.ForeignKey):
+        relations.extend(
+            _sql_foreign_key_relations(node, rel_path, line, table=table, name=constraint_name)
+        )
+    elif isinstance(node, exp.CheckColumnConstraint):
+        checks.append(
+            {"name": constraint_name, "column": None,
+             "expression": node.args["this"].sql(dialect=_SQL_DIALECT), "file": rel_path, "line": line}
+        )
+    else:
+        unsupported.append(
+            {"file": rel_path, "line": line,
+             "statement": _summarize(f"{label} {node.sql(dialect=_SQL_DIALECT)}")}
+        )
+
+
+def _sql_create_table_event(stmt: exp.Create, rel_path: str, line: int) -> tuple[dict | None, list[dict]]:
+    """A `CREATE TABLE` statement -> (create_table event, unsupported list).
+
+    Table-level constraints (composite PRIMARY KEY/UNIQUE, CHECK, EXCLUDE)
+    are handled in a second pass over the already-built column list, since
+    they refer to columns by name rather than carrying their own.
+    """
+    schema = stmt.this
+    table_node = schema.args.get("this") if isinstance(schema, exp.Schema) else schema
+    if table_node is None or not table_node.name:
+        return None, []
+    table = table_node.name
+
+    columns: list[dict] = []
+    relations: list[dict] = []
+    checks: list[dict] = []
+    unsupported: list[dict] = []
+    by_name: dict[str, dict] = {}
+
+    expressions = schema.expressions if isinstance(schema, exp.Schema) else []
+    for member in expressions:
+        if isinstance(member, exp.ColumnDef):
+            column, relation, column_checks, column_unsupported = _sql_column_from_columndef(
+                member, rel_path, line, table=table
+            )
+            columns.append(column)
+            by_name[column["name"]] = column
+            if relation is not None:
+                relations.append(relation)
+            checks.extend(column_checks)
+            unsupported.extend(column_unsupported)
+        elif isinstance(member, exp.Constraint):
+            for inner in member.expressions:
+                _sql_apply_table_constraint(
+                    inner, by_name, relations, checks, unsupported, rel_path, line,
+                    f"CONSTRAINT {member.name}", table=table, constraint_name=member.name,
+                )
+        elif isinstance(member, (exp.PrimaryKey, exp.UniqueColumnConstraint, exp.ForeignKey, exp.CheckColumnConstraint)):
+            _sql_apply_table_constraint(
+                member, by_name, relations, checks, unsupported, rel_path, line, table, table=table
+            )
+        else:
+            unsupported.append(
+                {"file": rel_path, "line": line,
+                 "statement": _summarize(f"{table}: {member.sql(dialect=_SQL_DIALECT)}")}
+            )
+
+    return (
+        {"kind": "create_table", "table": table, "file": rel_path, "line": line,
+         "columns": columns, "relations": relations, "checks": checks},
+        unsupported,
+    )
+
+
+def _sql_create_index_event(stmt: exp.Create, rel_path: str, line: int) -> dict | None:
+    index = stmt.this
+    if index is None:
+        # Malformed/incomplete CREATE INDEX (e.g. a raw-SQL statement built
+        # dynamically at runtime in the source migration, captured only as a
+        # literal fragment) - sqlglot parses the keywords but leaves nothing
+        # to fill the Index node.
+        return None
+    table_node = index.args.get("table")
+    if table_node is None or not table_node.name:
+        return None
+    columns = []
+    params = index.args.get("params")
+    for ordered in (params.args.get("columns") if params is not None else None) or []:
+        target = ordered.this if isinstance(ordered, exp.Ordered) else ordered
+        if hasattr(target, "name") and target.name:
+            columns.append(target.name)
+    return {
+        "kind": "create_index", "table": table_node.name, "name": index.name,
+        "columns": columns, "unique": bool(stmt.args.get("unique")),
+        "file": rel_path, "line": line,
+    }
+
+
+def _sql_alter_table_events(stmt: exp.Alter, rel_path: str, line: int) -> list[dict]:
+    table_node = stmt.this
+    if table_node is None or not table_node.name:
+        return []
+    table = table_node.name
+    events: list[dict] = []
+
+    for action in stmt.args.get("actions") or []:
+        if isinstance(action, exp.ColumnDef):
+            column, relation, column_checks, column_unsupported = _sql_column_from_columndef(
+                action, rel_path, line, table=table
+            )
+            events.extend(
+                {"kind": "add_check", "table": table, "check": check} for check in column_checks
+            )
+            events.extend(
+                {"kind": "unsupported", **entry} for entry in column_unsupported
+            )
+            events.append(
+                {"kind": "add_column", "table": table, "file": rel_path, "line": line,
+                 "column": column, "relation": relation}
+            )
+        elif isinstance(action, exp.Drop) and action.args.get("kind") == "COLUMN":
+            for target in action.args.get("tables") or []:
+                if target.name:
+                    events.append(
+                        {"kind": "remove_column", "table": table, "name": target.name,
+                         "file": rel_path, "line": line}
+                    )
+        elif isinstance(action, exp.Drop) and action.args.get("kind") == "CONSTRAINT":
+            for target in action.args.get("tables") or []:
+                if not target.name:
+                    continue
+                # Most real DROP CONSTRAINT targets are foreign keys, whose
+                # constraint name (explicit or Postgres' own auto-generated
+                # <table>_<column>_fkey) is now tracked on the relation - so
+                # this can actually be resolved instead of only ever being
+                # unsupported. Falls back to unsupported (with the real
+                # statement text) at merge time if no tracked relation has
+                # that name - a named UNIQUE/CHECK/PK constraint, most
+                # likely, which isn't individually addressable yet.
+                events.append(
+                    {"kind": "remove_relation", "name": target.name, "file": rel_path, "line": line,
+                     "fallback_statement": _summarize(f"ALTER TABLE {table} DROP CONSTRAINT {target.name}")}
+                )
+        elif isinstance(action, exp.RenameColumn):
+            old_name = action.args.get("this")
+            new_name = action.args.get("to")
+            if old_name is not None and new_name is not None:
+                events.append(
+                    {"kind": "rename_column", "table": table, "old_name": old_name.name,
+                     "new_name": new_name.name, "file": rel_path, "line": line}
+                )
+        elif isinstance(action, exp.AlterRename):
+            # `RENAME old TO new` (COLUMN keyword optional in Postgres) and
+            # `RENAME TO new` (whole-table rename) parse to the same
+            # AlterRename action - confirmed directly, the only
+            # distinguishing signal is a stray top-level ToTableProperty in
+            # the statement's own `options` for the column-rename shorthand,
+            # holding the real new name (AlterRename.this ends up holding
+            # the *old* column name in that case, not a new table name).
+            # Without this check, `RENAME description TO readme` silently
+            # renamed the whole table to "description" - found via a real
+            # migration (coder/coder), losing the table under its expected
+            # name for every subsequent migration that referenced it.
+            to_table_property = next(
+                (o for o in (stmt.args.get("options") or []) if isinstance(o, exp.ToTableProperty)),
+                None,
+            )
+            if to_table_property is not None:
+                old_name = action.args.get("this")
+                new_name = to_table_property.args.get("this")
+                if old_name is not None and old_name.name and new_name is not None and new_name.name:
+                    events.append(
+                        {"kind": "rename_column", "table": table, "old_name": old_name.name,
+                         "new_name": new_name.name, "file": rel_path, "line": line}
+                    )
+                continue
+            new_table = action.args.get("this")
+            if new_table is not None and new_table.name:
+                events.append(
+                    {"kind": "rename_table", "old_table": table, "new_table": new_table.name}
+                )
+        elif isinstance(action, exp.AlterColumn):
+            col_node = action.args.get("this")
+            if col_node is None or not col_node.name:
+                continue
+            changes: dict = {}
+            dtype = action.args.get("dtype")
+            if dtype is not None:
+                changes["type"] = dtype.sql(dialect=_SQL_DIALECT).upper()
+            if "allow_null" in action.args:
+                changes["nullable"] = bool(action.args.get("allow_null"))
+            if "default" in action.args and action.args.get("default") is not None:
+                changes["default"] = action.args["default"].sql(dialect=_SQL_DIALECT)
+            if changes:
+                events.append(
+                    {"kind": "alter_column", "table": table, "name": col_node.name,
+                     "changes": changes, "file": rel_path, "line": line}
+                )
+        elif isinstance(action, exp.ModifyColumn):
+            # MySQL's CHANGE COLUMN (old_name new_name type ...) and MODIFY
+            # COLUMN (col type ...) both parse to this one action - the
+            # only difference is whether rename_from is present. The new
+            # ColumnDef carries the column's full post-change definition,
+            # so it's rebuilt the same way a real ADD COLUMN's ColumnDef
+            # is, then applied as a rename (if renamed) plus a type/
+            # constraint update - never invented, all read from the
+            # statement's own new definition.
+            coldef = action.args.get("this")
+            if coldef is None or not coldef.name:
+                continue
+            new_column, relation, column_checks, column_unsupported = _sql_column_from_columndef(
+                coldef, rel_path, line, table=table
+            )
+            rename_from = action.args.get("rename_from")
+            events.extend({"kind": "add_check", "table": table, "check": check} for check in column_checks)
+            events.extend({"kind": "unsupported", **entry} for entry in column_unsupported)
+            if rename_from is not None and rename_from.name != new_column["name"]:
+                events.append(
+                    {"kind": "rename_column", "table": table, "old_name": rename_from.name,
+                     "new_name": new_column["name"], "file": rel_path, "line": line}
+                )
+            # type/nullable are what CHANGE/MODIFY COLUMN is always really
+            # about, so always applied. unique/default/primary_key are only
+            # applied when the new definition actually states them - unlike
+            # type/nullable, a real CHANGE/MODIFY COLUMN that stays silent
+            # on these isn't necessarily dropping them, and this module's
+            # own column-building always initializes them False/None when
+            # a statement doesn't mention them, indistinguishable here from
+            # an explicit clear - so, to avoid clobbering a UNIQUE/DEFAULT/
+            # PRIMARY KEY a separate earlier constraint already set,
+            # forward only the ones this statement positively asserts.
+            changes = {"type": new_column["type"], "nullable": new_column["nullable"]}
+            if new_column["unique"]:
+                changes["unique"] = True
+            if new_column["default"] is not None:
+                changes["default"] = new_column["default"]
+            if new_column["primary_key"]:
+                changes["primary_key"] = True
+            events.append(
+                {"kind": "alter_column", "table": table, "name": new_column["name"],
+                 "changes": changes, "file": rel_path, "line": line}
+            )
+            if relation is not None:
+                events.append(
+                    {"kind": "add_relation", "table": table, "relation": relation,
+                     "file": rel_path, "line": line}
+                )
+        elif isinstance(action, exp.DropPrimaryKey):
+            events.append({"kind": "drop_primary_key", "table": table})
+        elif isinstance(action, exp.AddConstraint):
+            for wrapper in action.expressions:
+                explicit_name = wrapper.name if isinstance(wrapper, exp.Constraint) else None
+                inner_list = wrapper.expressions if isinstance(wrapper, exp.Constraint) else [wrapper]
+                for inner in inner_list:
+                    if isinstance(inner, exp.ForeignKey):
+                        for relation in _sql_foreign_key_relations(
+                            inner, rel_path, line, table=table, name=explicit_name
+                        ):
+                            events.append(
+                                {"kind": "add_relation", "table": table, "relation": relation,
+                                 "file": rel_path, "line": line}
+                            )
+                    elif isinstance(inner, exp.UniqueColumnConstraint):
+                        target = inner.args.get("this")
+                        names = target.expressions if isinstance(target, exp.Schema) else []
+                        for identifier in names:
+                            events.append(
+                                {"kind": "alter_column", "table": table, "name": identifier.name,
+                                 "changes": {"unique": True}, "file": rel_path, "line": line}
+                            )
+                    elif isinstance(inner, (exp.PrimaryKeyColumnConstraint, exp.PrimaryKey)):
+                        names = inner.expressions if isinstance(inner, exp.PrimaryKey) else []
+                        for identifier in names:
+                            events.append(
+                                {"kind": "alter_column", "table": table, "name": identifier.name,
+                                 "changes": {"primary_key": True, "nullable": False},
+                                 "file": rel_path, "line": line}
+                            )
+                    elif isinstance(inner, exp.CheckColumnConstraint):
+                        events.append(
+                            {"kind": "add_check", "table": table,
+                             "check": {"name": explicit_name, "column": None,
+                                       "expression": inner.args["this"].sql(dialect=_SQL_DIALECT),
+                                       "file": rel_path, "line": line}}
+                        )
+                    else:
+                        events.append(
+                            {"kind": "unsupported", "file": rel_path, "line": line,
+                             "statement": _summarize(f"ALTER TABLE {table} ADD CONSTRAINT {inner.sql(dialect=_SQL_DIALECT)}")}
+                        )
+        else:
+            events.append(
+                {"kind": "unsupported", "file": rel_path, "line": line,
+                 "statement": _summarize(f"ALTER TABLE {table} {action.sql(dialect=_SQL_DIALECT)}")}
+            )
+
+    return events
+
+
+def _sql_events_from_statement(stmt: exp.Expression, rel_path: str, line: int) -> tuple[list[dict], list[dict]]:
+    """One parsed statement -> (events, unsupported)."""
+    if isinstance(stmt, exp.Create) and stmt.args.get("kind") == "TABLE":
+        event, unsupported = _sql_create_table_event(stmt, rel_path, line)
+        return ([event] if event is not None else []), unsupported
+    if isinstance(stmt, exp.Create) and stmt.args.get("kind") == "INDEX":
+        event = _sql_create_index_event(stmt, rel_path, line)
+        if event is not None:
+            return [event], []
+        text = _summarize(stmt.sql(dialect=_SQL_DIALECT))
+        return [], [{"file": rel_path, "line": line, "statement": text}]
+    if isinstance(stmt, exp.Alter) and stmt.args.get("kind") == "TABLE":
+        return _sql_alter_table_events(stmt, rel_path, line), []
+    if isinstance(stmt, exp.Alter) and stmt.args.get("kind") == "INDEX":
+        index_node = stmt.this
+        actions = stmt.args.get("actions") or []
+        if index_node is not None and index_node.name and len(actions) == 1 and isinstance(actions[0], exp.AlterRename):
+            new_name = actions[0].args.get("this")
+            if new_name is not None and new_name.name:
+                return [{"kind": "rename_index", "old_name": index_node.name, "new_name": new_name.name}], []
+        text = _summarize(stmt.sql(dialect=_SQL_DIALECT))
+        return [], [{"file": rel_path, "line": line, "statement": text}]
+    if isinstance(stmt, exp.Drop) and stmt.args.get("kind") == "TABLE":
+        events = [
+            {"kind": "remove_table", "table": target.name}
+            for target in stmt.args.get("tables") or []
+            if target.name
+        ]
+        return events, []
+    if isinstance(stmt, exp.Drop) and stmt.args.get("kind") == "INDEX":
+        # No table context on a bare DROP INDEX - matched by name alone.
+        events = [
+            {"kind": "remove_index", "table": None, "name": target.name}
+            for target in stmt.args.get("tables") or []
+            if target.name
+        ]
+        return events, []
+
+    text = _summarize(stmt.sql(dialect=_SQL_DIALECT))
+    return [], [{"file": rel_path, "line": line, "statement": text}]
+
+
+def _sql_events_from_text(text: str, rel_path: str) -> tuple[list[dict], list[dict]]:
+    """Every migration-relevant event in one migration file's raw SQL text
+    -> (events, unsupported)."""
+    statements, truncated = _split_sql_statements(text)
+
+    events: list[dict] = []
+    unsupported: list[dict] = []
+    if truncated:
+        unsupported.append(
+            {"file": rel_path, "line": 1,
+             "statement": "rest of file could not be tokenized (unterminated string or dollar-quote)"}
+        )
+    for statement_text, line, is_body_statement in statements:
+        if is_body_statement:
+            # sqlglot.parse() does its own semicolon-based splitting with
+            # no BEGIN/END awareness, so handing it this already correctly
+            # bounded chunk would still re-fragment it (confirmed
+            # directly: a Command for the CREATE TRIGGER/FUNCTION/
+            # PROCEDURE plus a stray separate "END"). None of the three is
+            # modeled anyway, so record it as one clean entry instead.
+            unsupported.append(
+                {"file": rel_path, "line": line, "statement": _summarize(statement_text)}
+            )
+            continue
+        parsed = sqlglot.parse(statement_text, read=_SQL_DIALECT, error_level=sqlglot.ErrorLevel.IGNORE)
+        for stmt in parsed:
+            if stmt is None:
+                continue
+            stmt_events, stmt_unsupported = _sql_events_from_statement(stmt, rel_path, line)
+            events.extend(stmt_events)
+            unsupported.extend(stmt_unsupported)
+    return events, unsupported
+
+
+def _merge_schema_events(
+    tables: dict[str, dict],
+    relations: list[dict],
+    indexes: list[dict],
+    unsupported: list[dict],
+    events: list[dict],
+) -> None:
+    """Folds a stream of pre-built schema events - from a real .sql file,
+    an ORM migration (Django/Rails/Alembic - see orm_migrations.py), or a
+    raw-SQL escape hatch inside one of those (Django's RunSQL, Rails'
+    execute, Alembic's op.execute) - into the running schema, with
+    consistent semantics regardless of source: a CREATE on a table that
+    already exists is a no-op, an ADD COLUMN only applies to a table
+    already known, columns keep declaration order."""
+    for event in events:
+        kind = event["kind"]
+        if kind == "create_table":
+            if event["table"] in tables:
+                continue
+            tables[event["table"]] = {
+                "name": event["table"], "columns": event["columns"],
+                "checks": list(event.get("checks", [])),
+                "file": event["file"], "line": event["line"],
+            }
+            for relation in event["relations"]:
+                relations.append({"from_table": event["table"], **relation})
+        elif kind == "add_column":
+            table = tables.get(event["table"])
+            column = event.get("column")
+            if table is None:
+                # A migration set is partial (a squashed baseline, or a
+                # table created outside these directories). Recorded
+                # rather than inventing a table with one column, which
+                # would render as a phantom node in the diagram.
+                unsupported.append(
+                    {
+                        "file": event["file"],
+                        "line": event["line"],
+                        "statement": _summarize(
+                            f"ADD COLUMN on an unknown table {event['table']}"
+                        ),
+                    }
+                )
+                continue
+            if column is not None and not any(
+                c["name"] == column["name"] for c in table["columns"]
+            ):
+                table["columns"].append(column)
+            relation = event.get("relation")
+            if relation is not None:
+                relations.append({"from_table": event["table"], **relation})
+        elif kind == "add_relation":
+            relations.append({"from_table": event["table"], **event["relation"]})
+        elif kind == "create_index":
+            indexes.append(
+                {"name": event["name"], "table": event["table"], "columns": event["columns"],
+                 "unique": event["unique"], "file": event["file"], "line": event["line"]}
+            )
+        elif kind == "remove_column":
+            table = tables.get(event["table"])
+            if table is not None:
+                table["columns"] = [c for c in table["columns"] if c["name"] != event["name"]]
+        elif kind == "alter_column":
+            table = tables.get(event["table"])
+            column = None if table is None else next(
+                (c for c in table["columns"] if c["name"] == event["name"]), None
+            )
+            if column is not None:
+                for field in ("type", "nullable", "unique", "default", "primary_key"):
+                    if field in event["changes"]:
+                        column[field] = event["changes"][field]
+        elif kind == "drop_primary_key":
+            table = tables.get(event["table"])
+            if table is not None:
+                for column in table["columns"]:
+                    if column["primary_key"]:
+                        column["primary_key"] = False
+        elif kind == "rename_column":
+            table = tables.get(event["table"])
+            column = None if table is None else next(
+                (c for c in table["columns"] if c["name"] == event["old_name"]), None
+            )
+            if column is not None:
+                column["name"] = event["new_name"]
+        elif kind == "remove_table":
+            tables.pop(event["table"], None)
+            relations[:] = [
+                r for r in relations
+                if r["from_table"] != event["table"] and r["to_table"] != event["table"]
+            ]
+            indexes[:] = [i for i in indexes if i["table"] != event["table"]]
+        elif kind == "rename_table":
+            table = tables.pop(event["old_table"], None)
+            if table is not None:
+                table["name"] = event["new_table"]
+                tables[event["new_table"]] = table
+                for relation in relations:
+                    if relation["from_table"] == event["old_table"]:
+                        relation["from_table"] = event["new_table"]
+                    if relation["to_table"] == event["old_table"]:
+                        relation["to_table"] = event["new_table"]
+                for index in indexes:
+                    if index["table"] == event["old_table"]:
+                        index["table"] = event["new_table"]
+        elif kind == "remove_index":
+            table = event.get("table")
+            indexes[:] = [
+                i for i in indexes
+                if i["name"] != event["name"] or (table is not None and i["table"] != table)
+            ]
+        elif kind == "rename_index":
+            for index in indexes:
+                if index["name"] == event["old_name"]:
+                    index["name"] = event["new_name"]
+        elif kind == "add_check":
+            table = tables.get(event["table"])
+            if table is not None:
+                table.setdefault("checks", []).append(event["check"])
+        elif kind == "remove_relation":
+            matched = [r for r in relations if r.get("name") == event["name"]]
+            if matched:
+                relations[:] = [r for r in relations if r.get("name") != event["name"]]
+            else:
+                # Not a tracked foreign key - most likely a named UNIQUE,
+                # CHECK, or PRIMARY KEY constraint, which isn't individually
+                # addressable by name yet. Recorded rather than silently
+                # doing nothing, same as before this event kind existed.
+                unsupported.append(
+                    {"file": event["file"], "line": event["line"],
+                     "statement": event["fallback_statement"]}
+                )
+        elif kind == "raw_sql":
+            sql_events, sql_unsupported = _sql_events_from_text(event["sql"], event["file"])
+            unsupported.extend(sql_unsupported)
+            _merge_schema_events(tables, relations, indexes, unsupported, sql_events)
+        elif kind == "unsupported":
+            unsupported.append(
+                {"file": event["file"], "line": event["line"], "statement": event["statement"]}
+            )
+
+
 def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
     """Replay migration DDL into the schema it defines.
 
@@ -622,12 +1033,25 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
     and the statements it did not model. Never raises on malformed SQL: a
     statement that cannot be parsed is recorded and skipped.
     """
+    global _SQL_DIALECT
+    repo_default_dialect = _detect_sql_dialect(repo_path)
+
     tables: dict[str, dict] = {}
     relations: list[dict] = []
     indexes: list[dict] = []
     unsupported: list[dict] = []
     sources: list[str] = []
+    dialects_used: set[str] = set()
 
+    # Parse every source's events first, grouped per file, without applying
+    # any of them yet - replaying is deferred to a single pass below, sorted
+    # by path across ALL sources together. A repo that adopted an ORM
+    # partway through its history (or vice versa) mixes .sql migrations with
+    # Django/Rails/Alembic ones; applying every .sql file before any ORM
+    # migration - regardless of which one actually came first by path -
+    # would run a later SQL statement against a table an earlier ORM
+    # migration hadn't created yet.
+    sql_events_by_file: dict[str, list[dict]] = {}
     for path in _iter_migration_files(repo_path, migration_directories):
         rel_path = path.relative_to(repo_path).as_posix()
         try:
@@ -640,68 +1064,48 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
         except OSError:
             continue
 
+        # A file's own path (e.g. migrations/mysql/...) wins over the
+        # repo-wide config signal when both exist - see _dialect_from_path.
+        _SQL_DIALECT = _dialect_from_path(rel_path) or repo_default_dialect
+        dialects_used.add(_SQL_DIALECT)
         sources.append(rel_path)
-        parsed = _parse_file(text, rel_path)
-        unsupported.extend(parsed["unsupported"])
+        events, file_unsupported = _sql_events_from_text(text, rel_path)
+        unsupported.extend(file_unsupported)
+        sql_events_by_file[rel_path] = events
 
-        for event in parsed["events"]:
-            if event["kind"] == "create_table":
-                # CREATE TABLE IF NOT EXISTS on a table an earlier migration
-                # already created is a no-op in Postgres, so it must be one
-                # here too - re-applying it would duplicate every column.
-                if event["table"] in tables:
-                    continue
-                columns: list[dict] = []
-                for definition in _split_top_level(event["body"]):
-                    column, relation = _parse_column_definition(definition, rel_path, event["line"])
-                    if column is not None:
-                        columns.append(column)
-                    if relation is not None:
-                        relations.append({"from_table": event["table"], **relation})
-                tables[event["table"]] = {
-                    "name": event["table"],
-                    "columns": columns,
-                    "file": rel_path,
-                    "line": event["line"],
-                }
-            elif event["kind"] == "add_column":
-                table = tables.get(event["table"])
-                if table is None:
-                    # An ALTER against a table no CREATE was seen for: the
-                    # migration set is partial (a squashed baseline, or a
-                    # table created outside these directories). Recorded
-                    # rather than inventing a table with one column, which
-                    # would render as a phantom node in the diagram.
-                    unsupported.append(
-                        {
-                            "file": rel_path,
-                            "line": event["line"],
-                            "statement": _summarize(
-                                f"ALTER TABLE {event['table']} ADD COLUMN on an unknown table"
-                            ),
-                        }
-                    )
-                    continue
-                column, relation = _parse_column_definition(event["body"], rel_path, event["line"])
-                if column is not None and not any(c["name"] == column["name"] for c in table["columns"]):
-                    table["columns"].append(column)
-                if relation is not None:
-                    relations.append({"from_table": event["table"], **relation})
-            elif event["kind"] == "create_index":
-                index_columns = [
-                    _strip_identifier(part.split()[0]) if part.split() else ""
-                    for part in _split_top_level(event["body"])
-                ]
-                indexes.append(
-                    {
-                        "name": event["name"],
-                        "table": event["table"],
-                        "columns": [c for c in index_columns if c],
-                        "unique": event["unique"],
-                        "file": rel_path,
-                        "line": event["line"],
-                    }
-                )
+    # "postgresql" for display consistency with this module's original,
+    # still most common target; every other detected dialect uses its own
+    # sqlglot name (mysql/sqlite/tsql/oracle) since there's no established
+    # display convention for those yet. dialects_used, not the now
+    # per-file _SQL_DIALECT, so a repo whose migrations span more than one
+    # real dialect (see _dialect_from_path) reports all of them, not just
+    # whichever file happened to be read last.
+    dialects: list[str] = sorted(
+        "postgresql" if d == "postgres" else d for d in dialects_used
+    )
+
+    orm_events_by_file: dict[str, list[dict]] = {}
+    for extractor, dialect_name in (
+        (extract_django_migrations, "django"),
+        (extract_rails_migrations, "rails"),
+        (extract_alembic_migrations, "alembic"),
+    ):
+        orm_events, orm_sources = extractor(repo_path, migration_directories)
+        if orm_sources:
+            dialects.append(dialect_name)
+            sources.extend(orm_sources)
+            for event in orm_events:
+                orm_events_by_file.setdefault(event["file"], []).append(event)
+
+    # A given path is exactly one of SQL or ORM (the extension alone
+    # decides), so grouping by file and replaying in path order across both
+    # groups together is unambiguous - matching how each group already
+    # ordered itself internally. _merge_schema_events already understands
+    # both event shapes uniformly, so every file's events - regardless of
+    # source - replay through the same call.
+    events_by_file = sql_events_by_file | orm_events_by_file
+    for rel_path in sorted(events_by_file):
+        _merge_schema_events(tables, relations, indexes, unsupported, events_by_file[rel_path])
 
     # Sorted on every axis so identical migrations always produce identical
     # evidence. Columns keep their declaration order - that is the schema's
@@ -714,7 +1118,7 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
     return {
         "checked": True,
         "reason": None,
-        "dialect": "postgresql",
+        "dialect": sorted(set(dialects)) or None,
         "tables": ordered_tables,
         "relations": relations,
         "indexes": indexes,

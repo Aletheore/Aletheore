@@ -367,6 +367,21 @@ def scan_repository(
     check_licenses: bool = True,
     map_endpoints: bool = True,
     map_schema: bool = True,
+    # Named to avoid shadowing the build_clusters/compute_hotspots imports
+    # this function calls - a same-named bool parameter would silently
+    # replace the function reference inside this function's own body.
+    # Both default True (unchanged `aletheore scan` behavior); watch.py's
+    # rebuild() passes both False alongside the other slow-check skips
+    # above. Clustering (greedy_modularity_communities, a global graph
+    # algorithm with no meaningful incremental version) measured at 1.9s on
+    # a 42-module repo - the dominant cost of an incremental rebuild by
+    # far, confirmed by direct per-function profiling, not estimated - and
+    # is driven by the import graph, which doesn't move when a function
+    # body is edited. Hotspots is git-churn data, same "doesn't change
+    # because of this edit" reasoning as the already-skipped git-history
+    # scan.
+    analyze_architecture: bool = True,
+    check_hotspots: bool = True,
     # Why a caller-supplied reason rather than a fixed literal: this section
     # is skipped for two unrelated causes - an explicit --no-map-schema, or
     # an installation without the entitlement - and a reader who sees
@@ -474,17 +489,38 @@ def scan_repository(
         history_data = {"history_scanned_commits": 0, "history_findings": []}
     secrets_data = {**secrets_data, **history_data}
 
-    report("Clustering modules and checking layer conventions")
     architecture_config = load_architecture_config(repo_path)
-    resolution = architecture_config["cluster_resolution"] if architecture_config else 1.0
-    custom_markers = architecture_config["layer_markers"] if architecture_config else None
-    clusters, cross_cluster_edges = build_clusters(dependency_graph, resolution=resolution)
-    layer_violations = detect_layer_violations(dependency_graph, custom_markers=custom_markers)
+    if analyze_architecture:
+        report("Clustering modules and checking layer conventions")
+        resolution = architecture_config["cluster_resolution"] if architecture_config else 1.0
+        custom_markers = architecture_config["layer_markers"] if architecture_config else None
+        clusters, cross_cluster_edges = build_clusters(dependency_graph, resolution=resolution)
+        layer_violations = detect_layer_violations(dependency_graph, custom_markers=custom_markers)
+    else:
+        clusters, cross_cluster_edges = [], []
+        # Matches detect_layer_violations' real return shape exactly
+        # (convention_detected/layers/violations - confirmed against its
+        # source, not guessed) plus checked/reason: a shape missing any of
+        # the first three fails validate_evidence's schema check (found by
+        # a first version of this that omitted "layers" - MalformedEvidenceError
+        # on the very next load_evidence call, worse than the KeyError this
+        # was written to avoid). dashboard.py/mcp_server.py read
+        # convention_detected/violations directly - a bare skip marker
+        # missing those would KeyError the next time either reads evidence
+        # written during a watch session, before the next full `aletheore
+        # scan`.
+        layer_violations = {
+            "convention_detected": False,
+            "layers": [],
+            "violations": [],
+            "checked": False,
+            "reason": "skipped (architecture analysis disabled)",
+        }
 
     report("Detecting dead code")
     dead_code_data = find_dead_code(repo_path, modules, architecture_config, ignored_paths)
 
-    if git_data.get("available"):
+    if check_hotspots and git_data.get("available"):
         report("Computing git hotspots")
         git_data["hotspots"] = compute_hotspots(repo_path, modules)
 

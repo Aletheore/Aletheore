@@ -1,0 +1,11 @@
+case_id: 015-clean-gradle
+scanner: vulnerabilities
+category: true_negative
+ecosystem: Maven
+package: org.slf4j:slf4j-api
+version: "2.0.13"
+cve_id: null
+description: >
+  Confirmed zero OSV.dev advisories for this exact package/version at
+  corpus-build time (2026-09-03). Measures false-positive rate for the
+  Gradle Groovy-DSL manifest parser specifically.

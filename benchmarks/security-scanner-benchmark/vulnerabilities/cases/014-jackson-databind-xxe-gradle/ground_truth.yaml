@@ -1,0 +1,15 @@
+case_id: 014-jackson-databind-xxe-gradle
+scanner: vulnerabilities
+category: true_positive
+ecosystem: Maven
+package: com.fasterxml.jackson.core:jackson-databind
+version: "2.9.8"
+cve_id: CVE-2020-25649
+description: >
+  Real, publicly documented XXE injection in Jackson Databind
+  (GHSA-288c-cq4h-88gq), confirmed present against live OSV.dev data for
+  this exact package/version at corpus-build time (2026-09-03). OSV
+  ecosystem is "Maven" (Gradle deps resolve through the same Maven
+  Central coordinates), but the manifest format is Gradle Groovy DSL
+  (build.gradle), not pom.xml - distinct real-world parsing coverage
+  from case 001's pom.xml, same underlying ecosystem.

@@ -1,6 +1,6 @@
 import re
 
-from aletheore.dead_code import _dotted_path_candidates, find_dead_code
+from aletheore.dead_code import _dotted_path_candidates, _raw_external_import_roots, find_dead_code
 
 
 def _module(path, imported_by=None):
@@ -409,6 +409,62 @@ def test_unused_dependency_flagged_when_never_imported(tmp_path):
     unused = {(dependency["ecosystem"], dependency["package"]) for dependency in result["unused_dependencies"]}
     assert ("PyPI", "requests") in unused
     assert ("PyPI", "flask") not in unused
+
+
+def test_unused_dependency_check_reflects_a_real_scan_not_a_hand_built_modules_list(tmp_path):
+    # Found via security-scanner-benchmark's overnight dead-code pilot,
+    # then confirmed at real scale (Flask's own actual dependencies -
+    # werkzeug, jinja2, itsdangerous, click, blinker, importlib-metadata -
+    # were ALL reported unused when scanned for real). Root cause: the
+    # test above (and every other unused_dependencies test in this file)
+    # hand-sets modules[0]["imports"] = ["flask"] - a raw package name -
+    # but scanner/graph.py's resolved_imports (what a real scan actually
+    # produces for this field) only ever contains OTHER FILES INSIDE THE
+    # REPO that an import successfully resolved to; an external package
+    # import that never resolves to a repo-internal file is silently
+    # dropped there and never appears in "imports" at all. Every
+    # hand-built modules list in this file was accidentally testing a
+    # shape the real scanner never produces. This test goes through a
+    # real scan_repository() instead, so it would have caught the bug the
+    # rest of this file's tests structurally could not.
+    from aletheore.evidence import scan_repository
+
+    (tmp_path / "requirements.txt").write_text("requests==2.31.0\n")
+    (tmp_path / "app.py").write_text("import requests\n\nrequests.get('https://example.com')\n")
+
+    evidence = scan_repository(
+        tmp_path,
+        check_vulnerabilities=False,
+        scan_git_history=False,
+        check_licenses=False,
+        map_endpoints=False,
+        map_schema=False,
+    )
+
+    assert evidence["repository"]["dead_code"]["unused_dependencies"] == []
+
+
+def test_raw_external_import_roots_finds_python_plain_and_from_imports(tmp_path):
+    (tmp_path / "app.py").write_text(
+        "import requests\nfrom flask import Flask\nfrom . import local_module\n"
+    )
+    modules = [{"path": "app.py", "imports": [], "imported_by": []}]
+    roots = _raw_external_import_roots(tmp_path, modules)
+    assert "requests" in roots
+    assert "flask" in roots
+    # A relative from-import (`from . import ...`) has no external package
+    # name - must not contribute a bogus root.
+    assert "local_module" not in roots
+
+
+def test_raw_external_import_roots_finds_js_import_and_require(tmp_path):
+    (tmp_path / "index.js").write_text(
+        "import _ from 'lodash';\nconst axios = require('axios');\n"
+    )
+    modules = [{"path": "index.js", "imports": [], "imported_by": []}]
+    roots = _raw_external_import_roots(tmp_path, modules)
+    assert "lodash" in roots
+    assert "axios" in roots
 
 
 def test_script_with_main_guard_is_never_unreachable(tmp_path):

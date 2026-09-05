@@ -1,0 +1,12 @@
+case_id: 013-clean-nuget
+scanner: vulnerabilities
+category: true_negative
+ecosystem: NuGet
+package: Newtonsoft.Json
+version: "13.0.3"
+cve_id: null
+description: >
+  Confirmed zero OSV.dev advisories for this exact package/version at
+  corpus-build time (2026-09-03). Same package as case 012 at a fixed
+  version, deliberately - measures that a version bump alone clears the
+  finding, not just a different clean package.

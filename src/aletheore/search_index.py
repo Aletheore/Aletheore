@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -12,12 +13,48 @@ import httpx
 import lancedb
 from lancedb.index import FTS
 from openai import APIConnectionError, NotFoundError, OpenAI
+from tokenizers import Tokenizer
 
 from aletheore.credentials import DEFAULT_CREDENTIALS_PATH, get_api_key, has_api_key
 
 FALLBACK_CHUNK_MAX_LINES = 200
 DEFAULT_EMBEDDING_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
+# Was nomic-embed-text until a real, measured comparison on this repo's own
+# hardware (Apple M4, Metal-accelerated Ollama): the same model as the
+# hosted path, served locally via its official int8 GGUF quantization,
+# embedded thrift (the largest corpus benchmarked, 13,444 chunks) in 754.7s
+# versus nomic's 828.6s - 9% faster, not slower, despite being the "heavier"
+# model. It also carries the retrieval-quality edge already established for
+# jina over nomic (+3.9pp top-1 mean, see the embedding-model-comparison
+# work), and Q8_0 is a high-fidelity quantization, not the aggressive kind
+# that would give that edge back. No real downside found: both are 768-dim,
+# so the switch is a routine embedder-identity change the existing
+# dimension/identity guard in build_index already rebuilds safely on.
+#
+# hf.co/ggml-org/... rather than an Ollama-library name because there is no
+# first-party Ollama listing for this model (confirmed: ollama.com/library
+# 404s on it) - ggml-org is llama.cpp's own HuggingFace org, and this GGUF
+# is an auto-conversion (HF's "gguf-my-repo" tool) of the real, official
+# jinaai/jina-embeddings-v2-base-code weights, Apache-2.0, not a random
+# third party's repack. Ollama's hf.co puller only accepts a quantization
+# tag or "latest" - not a pinned commit, confirmed by testing a SHA against
+# it directly and getting a 400 - so ":latest" is the only value Ollama
+# will accept here. Real commit as of this change, for audit if the
+# tag's target ever needs to be diffed against what was actually tested:
+# 05e79e9a6c8b99491e92ebb28d753268f8601e3c.
+DEFAULT_EMBEDDING_MODEL = "hf.co/ggml-org/jina-embeddings-v2-base-code-Q8_0-GGUF:latest"
+
+# Real Ollama-computed content digest of the exact blob this default was
+# tested against (from `ollama pull` + `GET /api/tags`, matching the
+# commit above), not a guess. Since Ollama's hf.co puller has no way to
+# pin a commit (see the comment above - a real 400 confirmed that), this
+# is the defense-in-depth Flash Review flagged on #516: `:latest` moving
+# underneath a user is undetectable without checking what actually
+# landed. _verify_ollama_model_digest compares this against the real
+# digest of whatever was just pulled and warns - not fails - on a
+# mismatch, since a legitimate upstream update shouldn't block indexing
+# outright, only be visible if it happens.
+_EXPECTED_DEFAULT_MODEL_DIGEST = "e2c7054365dd21c26616f32358065f248888b0b9d1c1106b903334f10e5fa472"
 OPENAI_EMBEDDING_BASE_URL = "https://api.openai.com/v1"
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 HOSTED_EMBEDDING_MODEL = "jina-embeddings-v2-base-code"
@@ -25,8 +62,11 @@ HOSTED_EMBEDDING_MODEL = "jina-embeddings-v2-base-code"
 # Aletheore's own embedding endpoint, used when a saved API token belongs to
 # an entitled installation. It serves HOSTED_EMBEDDING_MODEL. The client
 # does not hardcode its dimension: the provider's returned vector length is
-# what the index drift check observes. Local Ollama remains nomic-embed-text;
-# switching between those providers rebuilds the index, correctly.
+# what the index drift check observes. Local Ollama now defaults to the same
+# model (DEFAULT_EMBEDDING_MODEL, above), served via a different backend and
+# quantization - the embedder-identity guard still treats hosted and local
+# as distinct providers regardless, since their outputs are not proven
+# identical; switching between them rebuilds the index, correctly.
 HOSTED_EMBEDDING_PATH = "/v1/embeddings"
 DEFAULT_API_BASE_URL = "https://app.aletheore.com"
 INDEX_DIRNAME = "index.lancedb"
@@ -403,6 +443,33 @@ def _is_declaration_only_file(module_path: str, language: str, source: str) -> b
     return False
 
 
+# A barrel/re-export file (packages/*/src/index.ts, a locales/*.ts
+# catalogue) imports a large slice of the repo while adding little of its
+# own - both conditions matter, not just a high import count: a large,
+# genuinely-implemented module can legitimately import 20+ collaborators
+# across hundreds of lines (a low ratio), while a thin index.ts of nothing
+# but `export * from './x'` statements hits both a high absolute count and
+# a high fraction of its (short) file. Line count, not stripped
+# "executable" lines - the file's `lines` list is already read for
+# everything else in this loop, and a barrel file's own line count is
+# almost entirely import/export statements anyway, so the simpler measure
+# lands in the same place here.
+#
+# Thresholds are a reasoned starting point (colinhacks/zod's
+# packages/*/src/index.ts files are the motivating case), not measured
+# against a labelled barrel-file corpus - retune once Bench-CI or a real
+# polyglot fixture makes that measurement possible.
+_BARREL_MIN_IMPORTS = 15
+_BARREL_MIN_FANOUT_RATIO = 0.3
+
+
+def _is_barrel_file(imports: list, line_count: int) -> bool:
+    """Whether a file is mostly a thin re-export surface over other files."""
+    if len(imports) < _BARREL_MIN_IMPORTS:
+        return False
+    return len(imports) / max(line_count, 1) >= _BARREL_MIN_FANOUT_RATIO
+
+
 _BOILERPLATE_MIN_REPEAT_COUNT = 2
 
 
@@ -487,6 +554,14 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
         # _is_declaration_only_file and the rank penalty in _rrf_fuse.
         is_declaration_only = _is_declaration_only_file(module_path, language, "\n".join(lines))
 
+        # Same pattern, for the opposite problem: a barrel/re-export file
+        # (packages/*/src/index.ts, a locales/*.ts catalogue) that imports
+        # or re-exports a large slice of the repo has an embedding close to
+        # nearly everything, so it competes against - and sometimes beats -
+        # the real implementation it merely points at. See
+        # _is_barrel_file and the rank penalty in _rrf_fuse.
+        is_barrel_file = _is_barrel_file(imports, len(lines))
+
         code_symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
         # Constants are indexed only for files that define nothing else.
         #
@@ -520,6 +595,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "language": language,
                     "imports": imports,
                     "is_declaration_only": is_declaration_only,
+                    "is_barrel_file": is_barrel_file,
                     "text": _truncate_for_embedding(f"{module_path} (no extracted symbols)\n{snippet}"),
                 }
             )
@@ -564,6 +640,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                         "language": language,
                         "imports": imports,
                         "is_declaration_only": is_declaration_only,
+                        "is_barrel_file": is_barrel_file,
                         # Path and symbol list join the docstring so the chunk
                         # is reachable by what the module *contains*, not only
                         # by how its author happened to describe it.
@@ -606,6 +683,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "language": language,
                     "imports": imports,
                     "is_declaration_only": is_declaration_only or symbol.get("is_pure_declaration", False),
+                    "is_barrel_file": is_barrel_file,
                     "text": _truncate_for_embedding(f"{header}\n{source}"),
                 }
             )
@@ -633,6 +711,7 @@ def build_chunks(evidence: dict, repo_path: Path) -> list[dict]:
                     "language": language,
                     "imports": imports,
                     "is_declaration_only": is_declaration_only,
+                    "is_barrel_file": is_barrel_file,
                     "text": _truncate_for_embedding(
                         f"{module_path} (module-level declarations)\n"
                         f"declares: {names}\n{declared}"
@@ -749,7 +828,44 @@ def _detail_of(response: httpx.Response) -> str:
 OLLAMA_PULL_TIMEOUT_SECONDS = 300
 
 
-def _try_auto_pull_ollama_model(model: str) -> bool:
+def _verify_ollama_model_digest(model: str, base_url: str) -> None:
+    """Warn if the model Ollama actually resolved doesn't match the digest
+    this default was tested against - see _EXPECTED_DEFAULT_MODEL_DIGEST's
+    own comment for why this exists (":latest" can't be pinned).
+
+    Only meaningful for DEFAULT_EMBEDDING_MODEL - no expected digest is
+    recorded for any other model (a custom one via env override, or a
+    caller's own choice), so there is nothing to compare and no HTTP call
+    is made. Best-effort like the pull itself: any failure to reach
+    Ollama's native API (wrong version, network hiccup, endpoint moved)
+    just skips the check silently rather than blocking a pull that
+    otherwise succeeded.
+    """
+    if model != DEFAULT_EMBEDDING_MODEL:
+        return
+    # base_url is the OpenAI-compatible path (".../v1"); Ollama's own
+    # native API - the only one that reports a model's content digest -
+    # lives at the host root instead.
+    native_root = base_url.rstrip("/").removesuffix("/v1")
+    try:
+        response = httpx.get(f"{native_root}/api/tags", timeout=10.0)
+        response.raise_for_status()
+        models = response.json().get("models", [])
+        digest = next((m["digest"] for m in models if m.get("name") == model), None)
+    except Exception:  # noqa: BLE001
+        return
+    if digest and digest != _EXPECTED_DEFAULT_MODEL_DIGEST:
+        print(
+            f"aletheore: warning - '{model}' resolved to digest {digest[:12]}, "
+            f"not the {_EXPECTED_DEFAULT_MODEL_DIGEST[:12]} this default was tested "
+            "against. The upstream model may have changed; embeddings should still "
+            "work, but retrieval quality is no longer verified against this exact "
+            "build.",
+            file=sys.stderr,
+        )
+
+
+def _try_auto_pull_ollama_model(model: str, base_url: str = DEFAULT_EMBEDDING_BASE_URL) -> bool:
     """Ollama is reachable but doesn't have `model` pulled yet - a normal
     first-run state, not a real failure - so pull it automatically instead
     of making the user run a separate command before trying again. Returns
@@ -784,6 +900,7 @@ def _try_auto_pull_ollama_model(model: str) -> bool:
         )
         return False
     print(f"aletheore: pulled '{model}'", file=sys.stderr)
+    _verify_ollama_model_digest(model, base_url)
     return True
 
 
@@ -812,7 +929,7 @@ def embed_texts(
         response = client.embeddings.create(model=model, input=texts)
         return [item.embedding for item in response.data]
     except Exception as ollama_exc:
-        if isinstance(ollama_exc, NotFoundError) and _try_auto_pull_ollama_model(model):
+        if isinstance(ollama_exc, NotFoundError) and _try_auto_pull_ollama_model(model, base_url):
             try:
                 response = client.embeddings.create(model=model, input=texts)
                 return [item.embedding for item in response.data]
@@ -884,142 +1001,68 @@ def _escape_sql_literal(value: str) -> str:
 # it.
 EMBED_BATCH_SIZE = 200
 
-# Hosted batches are bounded by characters as well as by count, because the
-# hosted embedder's cost is per character while EMBED_BATCH_SIZE was tuned
-# against Ollama, where it is per request.
-#
-# embeddings_api gives the embedding service a 60s timeout. Measured against
-# production at `cpus: "1.0"`, throughput was a flat ~340 characters/second
-# regardless of batch size - so a 200-chunk batch of real code (~1MB) needed
-# roughly eleven minutes, blew that timeout, came back 502, and fell back to
-# the local embedder. Every hosted index build did this, which is why the
-# feature looked configured and never actually ran.
-#
-# After fixing the thread-pool oversubscription (JINA_EMBED_THREADS matched
-# to `cpus: "2.0"` instead of torch sizing its pool from the host's core
-# count), measured throughput against the deployed service came back at
-# ~9,800-13,150 characters/second across batch sizes 2/5/8/12 - a floor of
-# roughly 30x the old ~340 chars/s. That number briefly raised this cap to
-# 150,000 (see git history), which turned out to be wrong: the probe text was
-# a single character repeated (~15.5 chars/token), while real source averages
-# ~3.97 chars/token - measured directly against a real flask-source batch,
-# whose first internal sub-batch alone took 164s and whose full ~133k-char
-# request pushed jina-embed to ~6GB and got OOM-killed at a 6000m mem_limit
-# raised specifically to accommodate it. Character count was never a valid
-# proxy for the model's real cost on that backend; token count is, and this
-# was verified with text that hid that fact. Reverted to 20,000 - the one
-# number in that cap's history actually measured against real production
-# traffic on that backend.
-#
-# Raised again to 130,000 once the backend itself changed (see
-# jina_embed/server.py: sentence-transformers/PyTorch replaced with
-# llama.cpp against a Q8_0 GGUF), which made the OOM measurement above stale
-# rather than a permanent ceiling: the exact same ~133k-char real flask
-# batch that OOM-killed the old backend was re-measured directly against
-# the new one and peaked at 375MB, not 6GB+ - see docker-compose.yml's
-# jina-embed mem_limit comment. That leaves roughly 5x headroom under the
-# container's 2000m limit, and the request itself completed in 24.55s,
-# comfortably inside embeddings_api's 60s timeout. Real per-corpus indexing
-# (thrift, the largest benchmark corpus) was independently observed taking
-# over an hour at the 20,000 cap - 60-150+ sequential ~7-12s round-trips for
-# a large repo, each paying fixed per-request overhead regardless of size
-# (see project_indexing_speed_needs_investigation memory). 130,000 matches
-# the one figure on this backend that has real measured evidence behind it,
-# rather than extrapolating past it; it is not yet the token-count-based
-# batching redesign this comment has long called for, just the same
-# character-count approach re-benchmarked against the backend that
-# currently exists.
-#
-# Lowered to 60,000 after 130,000 caused a real production failure: a
-# thrift index build hit `ReadTimeout` at exactly 60.1s and lost 22 minutes
-# of progress (_embed_in_batches only falls back before the first
-# successful batch - see that function's own comment). The 24.55s
-# reference measurement above had zero concurrent load; #264's own
-# reasoning is that concurrent callers (two scan-worker replicas,
-# demo-scan-worker, hosted index builds) are the normal case for this
-# service, all queued behind one locked model instance, so real latency is
-# the reference compute time *plus* queueing delay under contention -
-# 130,000 chars at the measured ~2,630 chars/s real-world aggregate
-# throughput (project_indexing_speed_needs_investigation memory) is
-# already ~49.4s before any queueing, leaving under 11s of margin against
-# the 60s timeout. 60,000 chars is ~22.8s at that same rate, leaving ~37s
-# of margin - still 3x the original 20,000 baseline, not a full revert.
-# A `JINA_EMBED_INSTANCES` multi-instance change is in progress
-# specifically to reduce queueing delay under concurrent load (separate
-# from raw per-request compute time), which should allow raising this
-# again with real headroom once deployed and measured, rather than
-# guessing forward from an isolated single-request number a second time.
-#
-# Raised to 100,000 on exactly that real evidence, not another
-# extrapolation. Timed real batches of known token count (llama.cpp's own
-# tokenizer, not a char-count guess) directly against jina-embed with the
-# #267 multi-instance change deployed: 14,897 tokens/20.18s, 29,681/35.28s,
-# 44,419/60.10s - the last one lands almost exactly on the 60s ceiling in
-# isolation, with zero queueing. 30,000 tokens (35.28s, 41% margin) is the
-# real safe target this cap should protect. Converting back to characters
-# uses the more conservative (token-dense) ratio measured across corpora -
-# thrift's 3.89 chars/token, not flask's safer 4.08 - so a token-dense
-# corpus doesn't silently exceed the real margin a char cap can't see:
-# 30,000 tokens / 3.89 chars-per-token =~ 116,700 chars, rounded down to
-# 100,000 for headroom. This is still a char cap, not the token-count-based
-# batching this comment has called for since #262 - true token-based
-# batching needs the CLI to tokenize client-side, which means bundling a
-# tokenizer (or the model itself) as a new dependency, scoped as separate,
-# larger follow-up work, not folded into this recalibration.
-#
-# Raised again to 180,000 after app-server's own timeout to jina-embed
-# went from 60s to 120s (embeddings_api.get_jina_client) - it was cutting
-# itself off at half the budget the CLI's own client already tolerated
-# waiting (this file's HTTP client has used timeout=120.0 all along).
-# Interpolated within the already-measured range above rather than
-# extrapolating past it: the real 44,419/60.10s and 59,903/83.24s points
-# bracket a ~669 tok/s rate in that segment; targeting the same ~41%
-# margin against the new 120s budget (70.8s) lands at ~51,600 tokens,
-# rounded down to 50,000 for headroom - comfortably inside both tested
-# points, not a new extreme. 50,000 / 3.89 =~ 200,600 chars, rounded down
-# to 180,000.
-#
-# Lowered to 120,000 - 180,000 was still using 3.89 (thrift's *corpus-wide
-# average*) as the worst-case ratio, but individual batches vary around
-# that average, and _hosted_batches' real output was never checked against
-# a real tokenizer before this. Simulated the actual batches this function
-# produces across 13 benchmark corpora with jina-embeddings-v2-base-code's
-# real tokenizer (jinaai/jina-embeddings-v2-base-code, WordPiece, 61,056
-# vocab - loaded via HF `tokenizers` against tokenizer.json, not llama.cpp,
-# to check the *char cap's* assumption independent of the serving stack):
-# three corpora (zod, thrift, jq) already produce real batches over the
-# 50,000-token target this cap exists to protect, up to 59,895 tokens
-# (~89.5s at the measured ~669 tok/s, still under the 120s timeout but
-# eating into intended margin). The worst single real batch found - jq,
-# ordinary pointer-heavy C source, nothing anomalous - was 125,514 chars /
-# 48,944 tokens, a 2.564 chars/token ratio, denser than 3.89 assumed.
-# 50,000 tokens * 2.564 =~ 128,200 chars; rounded down to 120,000 for
-# headroom, the same margin discipline as every cap change above. A stopgap
-# on the existing char-cap design, not the fix: true token-based batching
-# (see the "not folded into this recalibration" comment above) removes
-# this whole failure mode by bounding batches on real per-chunk token
-# counts instead of a char proxy with an assumed ratio, however carefully
-# that ratio is chosen.
-HOSTED_EMBED_MAX_CHARS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_CHARS", "120000"))
+# Hosted batches were bounded by characters as well as by count, because
+# the hosted embedder's real cost is per token while EMBED_BATCH_SIZE was
+# tuned against Ollama, where it is per request. That char cap went through
+# eight recalibrations (20,000 -> 130,000 -> 60,000 -> 100,000 -> 180,000
+# -> 120,000, see git history on this comment) chasing a moving target: a
+# chars-per-token ratio that varies 2.564-4.08 across real corpora, so any
+# single ratio either wastes margin on dense corpora or risks the 120s
+# embeddings_api timeout on sparse ones. The last recalibration (see git
+# history) simulated real batches against jina-embeddings-v2-base-code's
+# actual tokenizer and confirmed the char cap was letting through batches
+# up to 59,895 tokens against a derived-safe 50,000-token target - the
+# fix flagged since #262 was always to stop guessing the ratio and count
+# real tokens client-side. That's what this does now: HOSTED_EMBED_MAX_TOKENS
+# is that same measured-safe 50,000-token target (~41% margin against the
+# 120s timeout at the ~669 tok/s throughput measured in the char-cap
+# history above), and _hosted_batches bins on tokenizers.Tokenizer's real
+# per-chunk counts instead of an assumed ratio.
+HOSTED_EMBED_MAX_TOKENS = int(os.environ.get("ALETHEORE_HOSTED_EMBED_MAX_TOKENS", "50000"))
+
+_HOSTED_TOKENIZER_PATH = Path(__file__).resolve().parent / "data" / "jina_v2_base_code_tokenizer.json"
+_hosted_tokenizer_cache: Tokenizer | None = None
+
+
+def _hosted_tokenizer() -> Tokenizer:
+    """Lazily load jina-embeddings-v2-base-code's real WordPiece tokenizer.
+
+    Bundled as package data (see pyproject.toml) rather than fetched from
+    HuggingFace Hub at runtime, so indexing gains no new network dependency.
+    Cached at module level: real per-chunk tokenization is called once per
+    hosted index build, and Tokenizer.from_file() re-parses the full
+    ~2.4MB vocab/merges file on every call otherwise.
+    """
+    global _hosted_tokenizer_cache
+    if _hosted_tokenizer_cache is None:
+        _hosted_tokenizer_cache = Tokenizer.from_file(str(_HOSTED_TOKENIZER_PATH))
+    return _hosted_tokenizer_cache
 
 
 def _hosted_batches(texts: list[str], batch_size: int) -> list[tuple[int, int]]:
-    """(start, end) spans respecting both the count and character caps.
+    """(start, end) spans respecting both the count and token caps.
 
-    A single text longer than the character cap still goes out on its own
+    A single text longer than the token cap still goes out on its own
     rather than being dropped or split: chunks are already truncated upstream
     (_truncate_for_embedding), so this only ever fires on a pathological
     input, and embedding it slowly beats not embedding it at all.
+
+    Tokenizes everything up front via encode_batch rather than one encode()
+    call per text - measured ~4.4x faster (0.062ms/chunk vs 0.271ms/chunk)
+    and tokenization is single-digit milliseconds total even on a large
+    repo, negligible next to the network-bound embedding calls this exists
+    to batch for.
     """
+    token_counts = [len(e.ids) for e in _hosted_tokenizer().encode_batch(texts)]
     spans: list[tuple[int, int]] = []
     start = 0
     while start < len(texts):
         end = start
-        chars = 0
+        tokens = 0
         while end < len(texts):
-            if end > start and (end - start >= batch_size or chars + len(texts[end]) > HOSTED_EMBED_MAX_CHARS):
+            if end > start and (end - start >= batch_size or tokens + token_counts[end] > HOSTED_EMBED_MAX_TOKENS):
                 break
-            chars += len(texts[end])
+            tokens += token_counts[end]
             end += 1
         spans.append((start, end))
         start = end
@@ -1165,7 +1208,14 @@ def _reusable_vectors(index_path: Path) -> tuple[dict[str, list[float]], str | N
     if not index_path.exists():
         return {}, None
     try:
-        rows = lancedb.connect(str(index_path)).open_table(TABLE_NAME).to_arrow().to_pylist()
+        table = lancedb.connect(str(index_path)).open_table(TABLE_NAME)
+        # Projected to the three columns this needs, not every column in the
+        # table (notably "text" - the full chunk source, the largest column
+        # by far): a full-repo index rebuild otherwise reads back the entire
+        # previous table's text just to discard it, doubling the bytes moved
+        # for no reason. limit(None) turns off search()'s default top-k cap
+        # so this still returns every row, not just the first page.
+        rows = table.search().select(["chunk_hash", "vector", "embedder"]).limit(None).to_list()
         vectors = {row["chunk_hash"]: row["vector"] for row in rows if row.get("chunk_hash")}
         embedder = next((row["embedder"] for row in rows if row.get("embedder")), None)
         return vectors, embedder
@@ -1298,14 +1348,52 @@ def build_index(
     return len(rows)
 
 
+# In-process cache of opened table handles, keyed by index path - open_index
+# used to reconnect() and open_table() from disk on every single call,
+# including from a long-lived process (the MCP server especially) that
+# calls it once per query. checkout_latest() is LanceDB's own supported way
+# to refresh an already-open handle to the newest version in place, and is
+# cheap where a full reconnect isn't. Verified empirically that it sees a
+# full mode="overwrite" rebuild done through an entirely separate
+# connection (exactly what build_index does): open a handle, overwrite the
+# table via a second connection, call checkout_latest() on the first
+# handle, and the new rows are there - not just an update through the same
+# handle. Locked because the MCP server can serve concurrent tool calls.
+_TABLE_CACHE: dict[str, object] = {}
+_table_cache_lock = threading.Lock()
+
+
 def open_index(repo_path: Path):
     index_path = _index_path(repo_path)
     if not index_path.exists():
         raise IndexNotFoundError(
             f"no index found at {index_path} - run 'aletheore index {repo_path}' first"
         )
-    db = lancedb.connect(str(index_path))
-    return db.open_table(TABLE_NAME)
+    key = str(index_path)
+    # The whole check-then-act sequence has to be one critical section, not
+    # a lock around the dict read and a separate one around the dict write:
+    # split that way, concurrent callers can all see a cache miss before
+    # any of them stores a handle, each does its own full reconnect, and
+    # whichever finishes last "wins" the cache slot while the others still
+    # return their own distinct (and now orphaned) table object - the exact
+    # race this lock exists to prevent, caught by a real concurrent-callers
+    # test, not assumed away.
+    with _table_cache_lock:
+        table = _TABLE_CACHE.get(key)
+        if table is not None:
+            try:
+                table.checkout_latest()
+                return table
+            except Exception:  # noqa: BLE001
+                # The cached handle itself is broken (not just stale data)
+                # - drop it and fall through to a full reconnect rather
+                # than raise from what a caller has every reason to expect
+                # is a cheap, side-effect-free cache hit.
+                _TABLE_CACHE.pop(key, None)
+        db = lancedb.connect(str(index_path))
+        table = db.open_table(TABLE_NAME)
+        _TABLE_CACHE[key] = table
+        return table
 
 
 # How many chunks one file may contribute to a single result set, and how
@@ -1363,6 +1451,12 @@ _AUX_DIR_MARKERS = frozenset({
 # matches.
 _AUXILIARY_RANK_PENALTY = 8
 
+# Analogous to _AUXILIARY_RANK_PENALTY, and deliberately a little higher: an
+# examples/ file occasionally IS the only place a feature is shown (worth
+# demoting, not excluding), but a pure re-export has essentially never been
+# the chunk a real question was looking for.
+_BARREL_OR_REEXPORT_RANK_PENALTY = 10
+
 
 
 def _is_auxiliary_path(module_path: str) -> bool:
@@ -1392,6 +1486,8 @@ def _rrf_fuse(vector_hits: list[dict], text_hits: list[dict]) -> list[dict]:
             effective_rank = rank
             if hit.get("is_declaration_only"):
                 effective_rank += _DECLARATION_ONLY_RANK_PENALTY
+            if hit.get("is_barrel_file"):
+                effective_rank += _BARREL_OR_REEXPORT_RANK_PENALTY
             if _is_auxiliary_path(hit.get("module_path") or ""):
                 effective_rank += _AUXILIARY_RANK_PENALTY
             scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_K + effective_rank + 1)

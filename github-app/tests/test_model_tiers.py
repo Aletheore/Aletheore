@@ -309,7 +309,9 @@ def test_writing_adapter_chain_for_free_tier_orders_openai_before_openrouter(mon
 def test_writing_adapter_chain_for_free_tier_passes_on_usage(monkeypatch):
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
     received = []
-    chain = writing_adapter_chain_for_free_tier(_FakeRedis(), on_usage=lambda p, c: received.append((p, c)))
+    chain = writing_adapter_chain_for_free_tier(
+        _FakeRedis(), on_usage=lambda p, c, cached=0: received.append((p, c))
+    )
     for adapter in chain:
         adapter._on_usage(10, 20)
     assert received == [(10, 20)] * len(chain)
@@ -460,7 +462,7 @@ def test_openai_free_tier_usage_still_forwards_to_the_shared_on_usage(monkeypatc
     monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
     received = []
     chain = writing_adapter_chain_for_free_tier(
-        _FakeRedis(), on_usage=lambda p, c: received.append((p, c))
+        _FakeRedis(), on_usage=lambda p, c, cached=0: received.append((p, c))
     )
     openai_adapter = next(a for a in chain if a.name == "OpenAI-FreeTier")
 

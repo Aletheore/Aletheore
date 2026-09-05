@@ -1,0 +1,9 @@
+case_id: 008-used-pip-dependency
+scanner: dead_code
+category: true_negative
+finding_type: unused_dependency
+expected_package: requests
+expected_ecosystem: PyPI
+description: >
+  requirements.txt declares "requests" and app.py imports it. Must not
+  appear in unused_dependencies.

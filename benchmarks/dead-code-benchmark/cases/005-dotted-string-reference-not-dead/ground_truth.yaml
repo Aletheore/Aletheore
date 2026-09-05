@@ -1,0 +1,11 @@
+case_id: 005-dotted-string-reference-not-dead
+scanner: dead_code
+category: true_negative
+finding_type: unreachable_module
+expected_path: myapp/plugins/feature.py
+description: >
+  A module never `import`-ed anywhere, only referenced by dotted-string
+  name (settings.py's INSTALLED_APPS = ["myapp.plugins.feature"]) - the
+  real Django/Frappe-style dynamic-loading shape
+  _dotted_string_token_index exists to catch. Must not be flagged
+  unreachable.

@@ -1,0 +1,5 @@
+[[package]]
+name = "time"
+version = "0.2.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9accc2fa06a4b93df80efe1f8ce56cf5824bd2d24fda7ea431ac6b4fb1c8e13"

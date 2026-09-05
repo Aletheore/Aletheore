@@ -187,7 +187,12 @@ def test_a_deleted_file_is_always_a_real_change(tmp_path):
 def test_rebuild_refreshes_evidence_and_skips_the_slow_checks(tmp_path):
     """Vulnerability, license and history checks are network- and
     history-bound, take seconds to minutes, and do not change because a
-    function body was edited."""
+    function body was edited. Same reasoning extends to architecture
+    analysis (clustering + layer violations) and git hotspots: both are
+    driven by the import graph and commit history, neither of which moves
+    when a function body is edited, and clustering alone measured at 1.9s
+    on a 42-module repo - the dominant cost of an incremental rebuild by
+    far, confirmed by direct profiling, not estimated."""
     repo = _git_repo(tmp_path)
     (repo / "app.py").write_text("def f():\n    return 1\n\ndef added_later():\n    return 2\n")
 
@@ -200,7 +205,210 @@ def test_rebuild_refreshes_evidence_and_skips_the_slow_checks(tmp_path):
         "check_vulnerabilities": False,
         "check_licenses": False,
         "scan_git_history": False,
+        "analyze_architecture": False,
+        "check_hotspots": False,
     }
+
+
+def test_rebuild_carries_forward_the_last_real_architecture_analysis(tmp_path):
+    """Flash Review on #517 caught this: scan_repository's skipped-analysis
+    placeholder for clusters/cross_cluster_edges/layer_violations was being
+    written as-is on every watch rebuild, discarding the last real full
+    scan's architecture data instead of preserving it - so a dashboard or
+    MCP server reading evidence mid-watch-session saw "no architecture" for
+    the entire session rather than the last known-good state."""
+    from aletheore.evidence import load_evidence, scan_repository, write_evidence
+
+    repo = _git_repo(tmp_path)
+    (repo / "b.py").write_text("import app\n")
+
+    # A real full scan, exactly as `aletheore scan` would produce - this is
+    # the "last known-good" architecture data rebuild() must preserve.
+    full_evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+    write_evidence(full_evidence, repo)
+    assert "checked" not in full_evidence["architecture"]["layer_violations"], (
+        "a real detect_layer_violations() result has no 'checked' key - only the "
+        "skipped-analysis placeholder does, so its presence below would mean the "
+        "placeholder leaked through instead of the real prior value"
+    )
+
+    (repo / "app.py").write_text("def f():\n    return 1\n\ndef added_later():\n    return 2\n")
+    rebuild(repo, lambda _message: None)
+
+    after = load_evidence(repo)
+    assert after["architecture"]["clusters"] == full_evidence["architecture"]["clusters"]
+    assert (
+        after["architecture"]["cross_cluster_edges"]
+        == full_evidence["architecture"]["cross_cluster_edges"]
+    )
+    assert "checked" not in after["architecture"]["layer_violations"]
+    assert (
+        after["architecture"]["layer_violations"]["convention_detected"]
+        == full_evidence["architecture"]["layer_violations"]["convention_detected"]
+    )
+
+
+def test_rebuild_carries_forward_hotspots_too(tmp_path):
+    from aletheore.evidence import load_evidence, scan_repository, write_evidence
+
+    repo = _git_repo(tmp_path)
+    full_evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+    write_evidence(full_evidence, repo)
+    assert "hotspots" in full_evidence["git"]
+
+    (repo / "app.py").write_text("def f():\n    return 1\n\ndef added_later():\n    return 2\n")
+    rebuild(repo, lambda _message: None)
+
+    after = load_evidence(repo)
+    assert after["git"]["hotspots"] == full_evidence["git"]["hotspots"]
+
+
+def test_rebuild_carries_forward_vulnerabilities_and_licenses(tmp_path):
+    """Same gap class as the architecture carry-forward above, found by the
+    backward PR-gap audit that followed #518: rebuild() passes
+    check_vulnerabilities=False/check_licenses=False, and without carrying
+    the last real scan's values forward, a real repo with real findings
+    would show "0 vulnerabilities" / "no license data" for an entire watch
+    session - verified directly against a fake-but-real 32-finding
+    vulnerability result, not assumed from reading the code."""
+    from aletheore.evidence import load_evidence, scan_repository, write_evidence
+
+    repo = _git_repo(tmp_path)
+
+    fake_vulnerabilities = {
+        "checked": True,
+        "reason": None,
+        "findings": [{"package": "django", "severity": "high", "id": "CVE-2024-FAKE"}] * 32,
+    }
+    fake_licenses = {
+        "checked": True,
+        "reason": None,
+        "repo_license": {"category": "permissive", "detected_from": "LICENSE"},
+        "findings": [{"package": "some-gpl-pkg", "license": "GPL-3.0"}],
+    }
+    with patch(
+        "aletheore.evidence.check_dependency_vulnerabilities", return_value=fake_vulnerabilities
+    ), patch("aletheore.evidence.check_dependency_licenses", return_value=fake_licenses):
+        full_evidence = scan_repository(repo, check_vulnerabilities=True, check_licenses=True)
+    write_evidence(full_evidence, repo)
+    assert len(full_evidence["security"]["dependency_vulnerabilities"]["findings"]) == 32
+
+    (repo / "app.py").write_text("def f():\n    return 1\n\ndef added_later():\n    return 2\n")
+    rebuild(repo, lambda _message: None)
+
+    after = load_evidence(repo)
+    assert after["security"]["dependency_vulnerabilities"]["checked"] is True
+    assert len(after["security"]["dependency_vulnerabilities"]["findings"]) == 32
+    assert after["security"]["dependency_licenses"]["checked"] is True
+    assert len(after["security"]["dependency_licenses"]["findings"]) == 1
+
+
+def test_rebuild_carries_forward_git_history_secrets_but_keeps_working_tree_findings_fresh(
+    tmp_path,
+):
+    """scan_git_history=False resets history_findings to empty on every
+    rebuild (evidence.py's own skip-default), the same failure shape as
+    vulnerabilities/licenses above - a real secret committed then removed
+    (only git history has it, verified via a real `find_secrets_in_history`
+    call, not mocked) must survive an incremental rebuild. The working-tree
+    half of secrets_data must NOT be carried forward alongside it - that
+    part is real and fresh on every rebuild regardless of
+    scan_git_history, so reusing an older run's would discard what THIS
+    run actually found in favor of a stale value, backwards from the
+    point of carry-forward."""
+    from aletheore.evidence import load_evidence, scan_repository, write_evidence
+
+    repo = _git_repo(tmp_path)
+    (repo / "config.py").write_text('AWS_KEY = "AKIAIOSFODNN7EXAMPLE"\n')
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "oops, committed a key"], cwd=repo, check=True, capture_output=True
+    )
+    (repo / "config.py").write_text("AWS_KEY = None  # removed\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-q", "-m", "remove key"], cwd=repo, check=True, capture_output=True)
+
+    full_evidence = scan_repository(
+        repo, check_vulnerabilities=False, check_licenses=False, scan_git_history=True
+    )
+    write_evidence(full_evidence, repo)
+    assert len(full_evidence["security"]["secrets"]["history_findings"]) == 1
+
+    rebuild(repo, lambda _message: None)
+
+    after = load_evidence(repo)
+    assert len(after["security"]["secrets"]["history_findings"]) == 1
+    # The key was removed from the working tree before either scan, so an
+    # empty list here is the real, fresh, correct result for THIS run -
+    # not a leftover from carrying forward the wrong half of secrets_data.
+    assert after["security"]["secrets"]["findings"] == []
+
+
+def test_rebuild_carries_forward_a_clean_git_history_scan_not_just_a_dirty_one(tmp_path):
+    """Flash Review finding on this PR: gating the carry-forward on
+    non-empty history_findings meant a real prior scan that walked commit
+    history and found ZERO secrets (a normal, common, and entirely valid
+    outcome) was indistinguishable from "never scanned" - the placeholder's
+    history_scanned_commits: 0 stood after rebuild, falsely implying
+    history was never checked. A clean scan (commits > 0, findings == [])
+    must still carry its real history_scanned_commits forward."""
+    from aletheore.evidence import load_evidence, scan_repository, write_evidence
+
+    repo = _git_repo(tmp_path)
+    (repo / "app.py").write_text("x = 1\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "no secrets here"], cwd=repo, check=True, capture_output=True
+    )
+
+    full_evidence = scan_repository(
+        repo, check_vulnerabilities=False, check_licenses=False, scan_git_history=True
+    )
+    write_evidence(full_evidence, repo)
+    assert full_evidence["security"]["secrets"]["history_scanned_commits"] > 0
+    assert full_evidence["security"]["secrets"]["history_findings"] == []
+
+    rebuild(repo, lambda _message: None)
+
+    after = load_evidence(repo)
+    assert after["security"]["secrets"]["history_scanned_commits"] > 0
+    assert after["security"]["secrets"]["history_findings"] == []
+
+
+def test_rebuild_leaves_the_skip_placeholder_when_no_prior_scan_exists(tmp_path):
+    """No .aletheore/air.json to carry forward from yet - the placeholder
+    from scan_repository's analyze_architecture=False must stand, not
+    crash trying to read evidence that was never written."""
+    from aletheore.evidence import load_evidence
+
+    repo = _git_repo(tmp_path)
+    rebuild(repo, lambda _message: None)
+
+    after = load_evidence(repo)
+    assert after["architecture"]["clusters"] == []
+    assert after["architecture"]["layer_violations"]["checked"] is False
+    assert after["security"]["dependency_vulnerabilities"]["checked"] is False
+    assert after["security"]["dependency_licenses"]["checked"] is False
+    assert after["security"]["secrets"]["history_findings"] == []
+
+
+def test_rebuild_does_not_carry_forward_an_unchecked_prior_vulnerability_scan(tmp_path):
+    """A prior scan that itself skipped vulnerability checking has nothing
+    real to offer - carrying its checked=False placeholder forward would be
+    a no-op at best and confusing at worst (a stale "reason" string from an
+    older run). This run's own fresh placeholder must stand instead."""
+    from aletheore.evidence import load_evidence, scan_repository, write_evidence
+
+    repo = _git_repo(tmp_path)
+    full_evidence = scan_repository(repo, check_vulnerabilities=False, check_licenses=False)
+    write_evidence(full_evidence, repo)
+    assert full_evidence["security"]["dependency_vulnerabilities"]["checked"] is False
+
+    rebuild(repo, lambda _message: None)
+
+    after = load_evidence(repo)
+    assert after["security"]["dependency_vulnerabilities"]["checked"] is False
+    assert after["security"]["dependency_vulnerabilities"]["reason"] == "skipped (--no-check-vulnerabilities)"
 
 
 def test_rebuild_does_not_build_a_first_index_unasked(tmp_path):

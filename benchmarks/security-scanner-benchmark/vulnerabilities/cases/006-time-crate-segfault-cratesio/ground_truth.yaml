@@ -1,0 +1,12 @@
+case_id: 006-time-crate-segfault-cratesio
+scanner: vulnerabilities
+category: true_positive
+ecosystem: crates.io
+package: time
+version: "0.2.22"
+cve_id: CVE-2020-26235
+description: >
+  Real, publicly documented segmentation fault in the Rust `time` crate
+  (RUSTSEC-2020-0071 / GHSA-wcg3-cvx6-7396), confirmed present against
+  live OSV.dev data for this exact package/version at corpus-build time
+  (2026-09-03). First crates.io-ecosystem pilot case.
