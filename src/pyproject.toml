@@ -93,6 +93,20 @@ dependencies = [
     # being fetched from HuggingFace Hub at runtime, so indexing never
     # gains a new network dependency.
     "tokenizers>=0.20,<0.24",
+    # Replaces schema_map.py's hand-written Postgres DDL tokenizer, which
+    # silently dropped every table-level constraint except FOREIGN KEY - a
+    # composite PRIMARY KEY (the common shape for every join/junction
+    # table) came back with no column marked primary_key at all, with no
+    # unsupported entry to say why. sqlglot is MIT-licensed, has zero
+    # transitive dependencies of its own (a pure-Python wheel, not a
+    # compiled grammar needing per-platform wheels), and its AST cleanly
+    # discriminates every CREATE/ALTER/DROP action this module replays -
+    # confirmed directly against the composite-PK repro plus every ALTER
+    # TABLE form (ADD/DROP/RENAME COLUMN, RENAME TO, ADD/DROP CONSTRAINT)
+    # before adopting it. Malformed SQL never raises - a statement sqlglot
+    # can't parse falls back to a generic Command node, isolated to that
+    # one statement, not the whole file.
+    "sqlglot>=30.0,<31.0",
 ]
 
 [project.optional-dependencies]
