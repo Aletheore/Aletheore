@@ -42,17 +42,22 @@ def sync_docs_to_repo(
     modules: dict[str, str],
     settings: dict | None,
     bot_login: str,
+    evidence: dict | None = None,
 ) -> tuple[str, int] | None:
     """Returns (content_hash, pr_number) to persist via
     record_docs_repo_commit when a push happened, or None when nothing
     changed (not opted in, or content identical to the last push).
 
     bot_login (e.g. "aletheore[bot]") is used to verify we actually own
-    DOCS_COMMIT_BRANCH before force-pushing over it - see ensure_branch_at."""
+    DOCS_COMMIT_BRANCH before force-pushing over it - see ensure_branch_at.
+
+    evidence, when given, adds the "API Endpoints"/"Database Schema"
+    overview sections build_combined_reference supports - see its own
+    docstring. Omitted (the default) reproduces the exact prior output."""
     if settings is None or not settings.get("enabled"):
         return None
 
-    markdown = build_combined_reference(modules, repo_full_name)
+    markdown = build_combined_reference(modules, repo_full_name, evidence)
     content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
     if settings.get("last_content_hash") == content_hash:
         return None

@@ -4,7 +4,9 @@ from aletheore.docs_reference import (
     UNDOCUMENTED,
     build_api_reference,
     build_combined_reference,
+    build_endpoints_reference,
     build_module_reference,
+    build_schema_reference,
 )
 
 
@@ -186,3 +188,192 @@ def test_build_combined_reference_sorts_modules_by_path():
     }
     md = build_combined_reference(modules, "octocat/hello-world")
     assert md.index("A content.") < md.index("Z content.")
+
+
+def _table(name: str, columns: list[dict]) -> dict:
+    return {"name": name, "columns": columns}
+
+
+def _column(name: str, col_type: str, **overrides) -> dict:
+    base = {"name": name, "type": col_type, "primary_key": False, "nullable": True,
+            "unique": False, "default": None}
+    base.update(overrides)
+    return base
+
+
+def _relation(from_table: str, from_column: str, to_table: str, to_column: str, **overrides) -> dict:
+    base = {"from_table": from_table, "from_column": from_column, "to_table": to_table,
+            "to_column": to_column, "on_delete": None, "file": "migrations/001.sql", "line": 3}
+    base.update(overrides)
+    return base
+
+
+def test_build_schema_reference_returns_empty_string_when_schema_not_checked():
+    evidence = {"repository": {"database": {"schema": {"checked": False}}}}
+    assert build_schema_reference(evidence) == ""
+
+
+def test_build_schema_reference_returns_empty_string_when_no_tables():
+    evidence = {"repository": {"database": {"schema": {"checked": True, "tables": [], "relations": []}}}}
+    assert build_schema_reference(evidence) == ""
+
+
+def test_build_schema_reference_renders_columns_and_constraints():
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("users", [
+            _column("id", "BIGSERIAL", primary_key=True, nullable=False),
+            _column("email", "TEXT", unique=True, nullable=False),
+            _column("bio", "TEXT"),
+            _column("credits", "INTEGER", nullable=False, default="0"),
+        ])],
+        "relations": [],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "### `users`" in md
+    assert "| `id` | BIGSERIAL | PRIMARY KEY, NOT NULL |" in md
+    assert "| `email` | TEXT | UNIQUE, NOT NULL |" in md
+    assert "| `bio` | TEXT |  |" in md
+    assert "| `credits` | INTEGER | NOT NULL, DEFAULT 0 |" in md
+    assert "Foreign keys:" not in md
+
+
+def test_build_schema_reference_renders_foreign_key_relations_with_citation():
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("posts", [_column("author_id", "BIGINT", nullable=False)])],
+        "relations": [_relation(
+            "posts", "author_id", "users", "id",
+            on_delete="CASCADE", file="migrations/002_posts.sql", line=5,
+        )],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "Foreign keys:" in md
+    assert "`author_id` → `users.id` (`ON DELETE CASCADE`) — `migrations/002_posts.sql:5`" in md
+
+
+def test_build_schema_reference_relation_without_on_delete_omits_it():
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("posts", [_column("author_id", "BIGINT")])],
+        "relations": [_relation("posts", "author_id", "users", "id", on_delete=None)],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "`author_id` → `users.id` — `migrations/001.sql:3`" in md
+    assert "ON DELETE" not in md
+
+
+def test_build_schema_reference_sorts_tables_alphabetically():
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("zebras", [_column("id", "INT")]), _table("apples", [_column("id", "INT")])],
+        "relations": [],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert md.index("### `apples`") < md.index("### `zebras`")
+
+
+def test_build_schema_reference_escapes_pipe_characters_in_cells():
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("weird", [_column("a|b", "ENUM('x'|'y')")])],
+        "relations": [],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "a\\|b" in md
+    assert "ENUM('x'\\|'y')" in md
+
+
+def test_build_endpoints_reference_returns_empty_string_when_not_checked():
+    evidence = {"repository": {"api_endpoints": {"checked": False}}}
+    assert build_endpoints_reference(evidence) == ""
+
+
+def test_build_endpoints_reference_returns_empty_string_when_no_resolved_endpoints():
+    evidence = {"repository": {"api_endpoints": {"checked": True, "endpoints": [
+        {"method": "GET", "path": None, "unresolved": True, "file": "a.py", "line": 1, "handler": "h"},
+    ]}}}
+    assert build_endpoints_reference(evidence) == ""
+
+
+def test_build_endpoints_reference_excludes_unresolved_endpoints():
+    evidence = {"repository": {"api_endpoints": {"checked": True, "endpoints": [
+        {"method": "GET", "path": "/known", "unresolved": False, "file": "a.py", "line": 1, "handler": "h"},
+        {"method": "GET", "path": None, "unresolved": True, "file": "b.py", "line": 2, "handler": "dynamic"},
+    ]}}}
+    md = build_endpoints_reference(evidence)
+    assert "/known" in md
+    assert "dynamic" not in md
+
+
+def test_build_endpoints_reference_renders_method_path_handler_and_citation():
+    evidence = {"repository": {"api_endpoints": {"checked": True, "endpoints": [
+        {"method": "POST", "path": "/users/{id}", "unresolved": False,
+         "file": "app/routes.py", "line": 42, "handler": "update_user"},
+    ]}}}
+    md = build_endpoints_reference(evidence)
+    assert "| POST | `/users/{id}` | `update_user` | `app/routes.py:42` |" in md
+
+
+def test_build_endpoints_reference_sorts_by_path_then_method():
+    evidence = {"repository": {"api_endpoints": {"checked": True, "endpoints": [
+        {"method": "POST", "path": "/b", "unresolved": False, "file": "a.py", "line": 1, "handler": "h"},
+        {"method": "GET", "path": "/a", "unresolved": False, "file": "a.py", "line": 2, "handler": "h"},
+        {"method": "GET", "path": "/b", "unresolved": False, "file": "a.py", "line": 3, "handler": "h"},
+    ]}}}
+    md = build_endpoints_reference(evidence)
+    assert md.index("/a") < md.index("GET | `/b`") < md.index("POST | `/b`")
+
+
+def test_build_combined_reference_without_evidence_omits_overview_sections():
+    # Backward compatibility: the default (no evidence) reproduces the
+    # exact prior output with no overview sections.
+    modules = {"src/a.py": "# src/a.py\n\nContent.\n"}
+    md = build_combined_reference(modules, "octocat/hello-world")
+    assert "API Endpoints" not in md
+    assert "Database Schema" not in md
+
+
+def test_build_combined_reference_with_evidence_adds_overview_sections_before_modules():
+    modules = {"src/a.py": "# src/a.py\n\nModule content.\n"}
+    evidence = {"repository": {
+        "database": {"schema": {
+            "checked": True,
+            "tables": [_table("users", [_column("id", "INT")])],
+            "relations": [],
+        }},
+        "api_endpoints": {"checked": True, "endpoints": [
+            {"method": "GET", "path": "/x", "unresolved": False, "file": "a.py", "line": 1, "handler": "h"},
+        ]},
+    }}
+    md = build_combined_reference(modules, "octocat/hello-world", evidence)
+    assert "[API Endpoints](#api-endpoints)" in md
+    assert "[Database Schema](#database-schema)" in md
+    assert md.index("## API Endpoints") < md.index("## Database Schema") < md.index("# src/a.py")
+
+
+def test_build_combined_reference_with_evidence_but_no_schema_or_endpoints_omits_sections():
+    modules = {"src/a.py": "# src/a.py\n\nContent.\n"}
+    evidence = {"repository": {
+        "database": {"schema": {"checked": False}},
+        "api_endpoints": {"checked": False},
+    }}
+    md = build_combined_reference(modules, "octocat/hello-world", evidence)
+    assert "API Endpoints" not in md
+    assert "Database Schema" not in md
+
+
+def test_build_combined_reference_renders_overview_sections_even_with_no_modules():
+    # A repo with real schema/endpoints but zero documented public symbols
+    # must not fall into the "No public functions" empty-state message.
+    evidence = {"repository": {
+        "database": {"schema": {
+            "checked": True,
+            "tables": [_table("users", [_column("id", "INT")])],
+            "relations": [],
+        }},
+        "api_endpoints": {"checked": False},
+    }}
+    md = build_combined_reference({}, "octocat/hello-world", evidence)
+    assert "Database Schema" in md
+    assert "No public functions or classes found yet." not in md

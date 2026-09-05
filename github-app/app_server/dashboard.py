@@ -564,8 +564,14 @@ async def get_dashboard_docs_export(org: str, repo: str, request: Request):
     installation_id = installation["installation_id"]
     repo_full_name = f"{org}/{repo}"
 
+    # Fetched separately from _build_docs_modules's own internal fetch
+    # (same cheap lookup this file already repeats per-route elsewhere) -
+    # the combined export is the one caller that also needs the raw
+    # evidence, for the API Endpoints/Database Schema overview sections
+    # build_combined_reference adds ahead of the per-module reference.
+    evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
     modules = await _build_docs_modules(pool, installation_id, repo_full_name)
-    markdown = build_combined_reference(modules, repo_full_name)
+    markdown = build_combined_reference(modules, repo_full_name, evidence)
     filename = f"{_safe_download_filename(repo)}-api-reference.md"
     return Response(
         content=markdown,
