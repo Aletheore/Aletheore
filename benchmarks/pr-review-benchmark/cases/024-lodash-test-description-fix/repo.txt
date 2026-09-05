@@ -1,2 +1,3 @@
 repo_url=https://github.com/lodash/lodash.git
 base_commit=488e62bd79443dd96fd83e631cccf3f68da489b1
+pr_url=https://github.com/ArihantK15/proctor-browser/pull/271
