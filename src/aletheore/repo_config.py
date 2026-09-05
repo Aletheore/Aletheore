@@ -2,7 +2,7 @@ import fnmatch
 import json
 from pathlib import Path
 
-DISABLEABLE_CHECKS = {"vulnerabilities", "licenses", "endpoints", "secrets_history"}
+DISABLEABLE_CHECKS = {"vulnerabilities", "licenses", "endpoints", "secrets_history", "schema"}
 SEVERITY_LEVELS = ("critical", "high", "medium", "low")
 
 DEFAULT_CONFIG = {
