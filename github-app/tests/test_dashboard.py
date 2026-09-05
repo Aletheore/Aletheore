@@ -1858,7 +1858,7 @@ async def test_dashboard_docs_export_includes_schema_and_endpoints_sections(pool
     assert "| GET | `/users/{id}` | `get_user` | `app/routes.py:10` |" in body
     assert "### `users`" in body
     assert body.index("## API Endpoints") < body.index("## Database Schema") < body.index("# a.py")
-    assert response.headers["content-disposition"] == 'attachment; filename="weird_repo-api-reference.md"'
+    assert response.headers["content-disposition"] == 'attachment; filename="hello-world-api-reference.md"'
 
 
 def test_fetch_wiki_file_content_sync_calls_a_function_that_actually_exists(monkeypatch):

@@ -7073,7 +7073,9 @@ def test_maybe_sync_docs_to_repo_pushes_and_records_when_enabled(monkeypatch):
     sync_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs.sync_docs_to_repo",
-        lambda client, token, repo, modules, s, bot_login: sync_calls.append((repo, modules, s, bot_login))
+        lambda client, token, repo, modules, s, bot_login, evidence: sync_calls.append(
+            (repo, modules, s, bot_login)
+        )
         or ("hash123", 7),
     )
     record_calls = []
