@@ -1017,6 +1017,30 @@ def test_main_audit_threads_no_map_schema_flag(tmp_path):
     assert evidence["repository"]["database"]["schema"]["reason"] == "skipped (--no-map-schema)"
 
 
+def test_main_scan_maps_schema_by_default_with_no_entitlement_check(tmp_path, monkeypatch):
+    # Schema mapping used to require a paid-plan entitlement, resolved via a
+    # saved token and a /v1/whoami call - free/offline installs got an empty
+    # schema with "requires a paid plan" even with no flag passed at all. It
+    # now follows the exact same free, opt-out-only pattern as every other
+    # scanner (vulnerabilities/licenses/endpoints/secrets_history).
+    import aletheore.credentials as credentials
+
+    monkeypatch.delenv("ALETHEORE_API_TOKEN", raising=False)
+    monkeypatch.setattr(credentials, "DEFAULT_CREDENTIALS_PATH", Path("/nonexistent/creds.json"))
+
+    repo = tmp_path
+    (repo / "migrations").mkdir()
+    (repo / "migrations" / "001.sql").write_text("CREATE TABLE widgets (id BIGINT PRIMARY KEY);")
+
+    result = runner.invoke(app, ["scan", str(repo)])
+
+    assert result.exit_code == 0
+    evidence = json.loads((repo / ".aletheore" / "air.json").read_text())
+    schema = evidence["repository"]["database"]["schema"]
+    assert schema["checked"] is True
+    assert any(t["name"] == "widgets" for t in schema["tables"])
+
+
 def test_main_managed_audit_threads_no_map_schema_flag(tmp_path):
     repo = tmp_path
     (repo / "main.py").write_text("x = 1\n")
