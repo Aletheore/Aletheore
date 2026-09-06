@@ -25,11 +25,16 @@ schema_map.py's own restraint: model every operation with a clear,
 unambiguous DDL meaning; record anything else as `unsupported` rather
 than guess. What's still `unsupported`, and why each one specifically:
 
-- Django: `RunPython` (arbitrary code - not statically modelable),
-  `AlterModelOptions`/`AlterUniqueTogether`/`AlterModelTable` (legacy
-  APIs superseded by `Meta.constraints`/per-field `db_column`, rare in
-  real migrations), `ManyToManyField` (an implicit through-table this
-  module does not construct). Everything else - `CreateModel`, `AddField`,
+- Django: `RunPython` (arbitrary code - not statically modelable) is
+  recorded, not modeled. Every other operation this module doesn't
+  explicitly model - the legacy `AlterModelOptions`/`AlterUniqueTogether`/
+  `AlterModelTable` APIs (superseded by `Meta.constraints`/per-field
+  `db_column`) as well as newer ones like `AddConstraint`/
+  `RemoveConstraint`/`AlterIndexTogether`/`AlterOrderWithRespectTo`/
+  `SeparateDatabaseAndState` - is caught by a catch-all and recorded as
+  `unsupported` too, rather than silently dropped; `ManyToManyField` (an
+  implicit through-table this module does not construct) likewise falls
+  through to that catch-all. Everything else - `CreateModel`, `AddField`,
   `RemoveField`, `AlterField`, `RenameField`, `DeleteModel`, `RenameModel`,
   `AddIndex`, `RemoveIndex`, `RunSQL` - is modeled, including the implicit
   `id` primary key Django adds when no field is marked `primary_key=True`.
@@ -45,25 +50,40 @@ than guess. What's still `unsupported`, and why each one specifically:
   `t.<type>`/`t.references`/`t.belongs_to`/`t.timestamps`, standalone
   `add_column`/`remove_column`/`rename_column`/`change_column`/
   `change_column_null`/`change_column_default`/`add_index`/`remove_index`/
-  `add_foreign_key`/`drop_table`/`rename_table`/`execute` - is modeled.
-  Any Ruby method call that isn't a recognized Rails migration DSL method
-  (`_RAILS_KNOWN_METHODS`) is silently ignored rather than flagged, so a
-  seed-data helper or a `reversible`/`say` wrapper doesn't drown real
-  findings in noise. Pluralization (for `references`'/`belongs_to`'s
+  `add_foreign_key`/`add_reference`/`add_belongs_to`/`drop_table`/
+  `rename_table`/`execute` - is modeled. Any Ruby method call that isn't a
+  recognized Rails migration DSL method (`_RAILS_KNOWN_METHODS`) is
+  silently ignored rather than flagged, so a seed-data helper or a
+  `reversible`/`say` wrapper doesn't drown real findings in noise.
+  Pluralization (for `references`'/`belongs_to`'s/`add_reference`'s
   implied target table) is a simple regular-noun heuristic, not a full
   inflector - irregular plurals (`person` -> `people`) resolve wrong.
-- Alembic: `op.drop_constraint` (constraint names are not tracked
-  precisely enough on relations to resolve which one to remove) is
-  recorded, not modeled. Everything else - `op.create_table`,
+- Alembic: `op.drop_constraint`/`op.create_check_constraint`/
+  `op.create_unique_constraint`/`op.create_primary_key` (constraint
+  identity is not tracked precisely enough on relations/columns to
+  resolve which one is affected) are recorded, not modeled - both as
+  top-level `op.*` calls and as `batch_op.*` calls inside a `with
+  op.batch_alter_table(table) as batch_op:` block (the standard pattern
+  for SQLite, which can't do most `ALTER TABLE` directly - `batch_op`'s
+  methods have the same argument shape as their `op.*` counterparts minus
+  the table name, implied by the enclosing `with`). Every other operation
+  this module doesn't explicitly model, at either call shape, is likewise
+  caught by a catch-all and recorded as `unsupported` rather than
+  silently dropped - except `op.f(...)`/`op.get_bind()`/`op.get_context()`/
+  `op.inline_literal(...)`, real Alembic calls with no DDL meaning of
+  their own (naming-convention/introspection helpers), which are ignored
+  entirely rather than flagged, matching how an unrecognized Rails DSL
+  call is ignored rather than flagged. Everything else - `op.create_table`,
   `op.add_column`, `op.create_index`, `op.create_foreign_key` (plus an
   inline `sa.ForeignKey(...)`/`sa.ForeignKeyConstraint(...)` inside
   either), `op.drop_table`, `op.drop_column`, `op.alter_column`,
-  `op.drop_index`, `op.rename_table`, `op.execute` - is modeled. Only
-  statements inside `def upgrade():` are read; `downgrade()` is ignored.
-  Alembic orders migrations via each file's own `revision`/`down_revision`
-  chain, not filename - this module does not resolve that graph and
-  instead sorts files by path like every other migration source, which is
-  a known, documented approximation, not the guaranteed real replay order.
+  `op.drop_index`, `op.rename_table`, `op.execute` - is modeled, at both
+  call shapes. Only statements inside `def upgrade():` are read;
+  `downgrade()` is ignored. Alembic orders migrations via each file's own
+  `revision`/`down_revision` chain, not filename - this module does not
+  resolve that graph and instead sorts files by path like every other
+  migration source, which is a known, documented approximation, not the
+  guaranteed real replay order.
 """
 
 from __future__ import annotations
@@ -115,9 +135,36 @@ _RAILS_KNOWN_METHODS = _RAILS_UNSUPPORTED_METHODS | {
     "remove_column", "drop_table", "rename_column", "rename_table",
     "change_column", "remove_index", "change_table", "remove_foreign_key",
     "change_column_null", "change_column_default", "execute",
+    "add_reference", "add_belongs_to",
 }
 
-_ALEMBIC_UNSUPPORTED_OPS = {"drop_constraint"}
+# create_check_constraint/create_unique_constraint/create_primary_key share
+# drop_constraint's own reason for staying unmodeled: constraint identity
+# isn't tracked precisely enough on relations/columns to resolve which one
+# is affected.
+_ALEMBIC_UNSUPPORTED_OPS = {
+    "drop_constraint", "create_check_constraint", "create_unique_constraint",
+    "create_primary_key",
+}
+
+# Real `op.*` calls with no DDL meaning of their own - naming-convention/
+# introspection helpers, not operations - so the catch-all below must never
+# flag them. `op.f(...)` in particular is extremely common: it's how
+# `alembic revision --autogenerate`'s default naming convention wraps every
+# constraint/index name argument (e.g.
+# `op.create_index(op.f('ix_users_email'), 'users', ['email'])`), and
+# _py_walk_calls visits it as its own call since it's nested inside another
+# op.* call's arguments.
+_ALEMBIC_NON_OPERATIONS = {"f", "get_bind", "get_context", "inline_literal"}
+
+# `with op.batch_alter_table("t") as batch_op:` (the standard/required
+# pattern for SQLite, which can't do most ALTER TABLE directly) - batch_op's
+# own methods have the identical argument shape as their `op.<method>`
+# counterparts, minus the table name (implied by the enclosing `with`).
+_ALEMBIC_BATCH_UNSUPPORTED_METHODS = {
+    "drop_constraint", "create_check_constraint", "create_unique_constraint",
+    "create_primary_key",
+}
 
 
 def _py_parser() -> Parser:
@@ -562,11 +609,21 @@ def _django_model_operations(
                 )
             continue
 
-        if op_name in _DJANGO_UNSUPPORTED_OPS:
-            events.append(
-                {"kind": "unsupported", "file": rel_path, "line": line,
-                 "statement": f"migrations.{op_name}(...) not modeled"}
-            )
+        if op_name is None:
+            continue
+
+        # Anything that reached here wasn't handled by any modeled branch
+        # above (each of which ends in `continue`) - flag it as unsupported
+        # rather than silently dropping it. This covers both the explicitly
+        # named ops in _DJANGO_UNSUPPORTED_OPS and any other real Django
+        # operation this module doesn't yet model (e.g. AddConstraint,
+        # RemoveConstraint, AlterIndexTogether, AlterOrderWithRespectTo,
+        # SeparateDatabaseAndState) - a silent drop here would make a
+        # migration with real DB-shape effects look identical to a no-op.
+        events.append(
+            {"kind": "unsupported", "file": rel_path, "line": line,
+             "statement": f"migrations.{op_name}(...) not modeled"}
+        )
 
     return events
 
@@ -650,6 +707,24 @@ def extract_django_migrations(
 # ---------------------------------------------------------------------------
 
 
+def _py_unwrap_op_f(node: Node, source: bytes) -> Node:
+    """`op.f(<string>)` wraps a naming-convention string with no semantic
+    effect beyond being that string - real Alembic autogenerate output
+    routinely wraps index/constraint name arguments this way (e.g.
+    `op.create_index(op.f('ix_users_email'), 'users', ['email'])`).
+    Unwrap it so the plain string-literal extraction below still resolves
+    the real name instead of silently failing on a `call` node it doesn't
+    recognize as a string."""
+    if (
+        node.type == "call" and _py_call_receiver(node, source) == "op"
+        and _py_call_name(node, source) == "f"
+    ):
+        inner = _py_positional(_py_args(node))
+        if inner:
+            return inner[0]
+    return node
+
+
 def _alembic_column_from_call(
     col_call: Node, source: bytes, rel_path: str, line: int
 ) -> tuple[dict | None, dict | None]:
@@ -697,17 +772,192 @@ def _alembic_column_from_call(
     return column, relation
 
 
+def _collect_batch_alter_table_scopes(root: Node, source: bytes) -> dict[tuple[int, int], str]:
+    """Every `batch_op.<method>(...)` call's own (start_byte, end_byte) ->
+    the table name its enclosing `with op.batch_alter_table(table) as
+    batch_op:` names. Byte range, not node identity, is the key - repeated
+    tree walks over the same tree can hand back distinct Node wrapper
+    objects for the same underlying node, so `id(node)` is not a safe key
+    here, only its span is."""
+    scopes: dict[tuple[int, int], str] = {}
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == "with_statement":
+            clause = next((c for c in node.named_children if c.type == "with_clause"), None)
+            block = next((c for c in node.named_children if c.type == "block"), None)
+            if clause is not None and block is not None:
+                for item in clause.named_children:
+                    if item.type != "with_item" or not item.named_children:
+                        continue
+                    inner = item.named_children[0]
+                    call_node, alias_node = None, None
+                    if inner.type == "as_pattern" and len(inner.named_children) >= 2:
+                        call_node, alias_node = inner.named_children[0], inner.named_children[1]
+                    elif inner.type == "call":
+                        call_node = inner
+                    if (
+                        call_node is None or call_node.type != "call" or alias_node is None
+                        or _py_call_receiver(call_node, source) != "op"
+                        or _py_call_name(call_node, source) != "batch_alter_table"
+                    ):
+                        continue
+                    table_args = _py_positional(_py_args(call_node))
+                    table = _py_string_text(table_args[0], source) if table_args else None
+                    alias = _py_text(alias_node, source)
+                    if not table or not alias:
+                        continue
+                    for inner_call in _py_walk_calls(block):
+                        if _py_call_receiver(inner_call, source) == alias:
+                            scopes[(inner_call.start_byte, inner_call.end_byte)] = table
+        for child in node.children:
+            stack.append(child)
+    return scopes
+
+
+def _alembic_batch_op_events(
+    method: str, table: str, positional: list[Node], args: list[Node],
+    source: bytes, rel_path: str, line: int,
+) -> list[dict]:
+    """One `batch_op.<method>(...)` call, translated to the same event
+    shapes `_alembic_upgrade_events` emits for the equivalent top-level
+    `op.<method>(table, ...)` call - batch_op's methods have an identical
+    argument shape minus the table name, which is already known here."""
+    if method == "add_column":
+        if not positional or positional[0].type != "call":
+            return []
+        column, relation = _alembic_column_from_call(positional[0], source, rel_path, line)
+        if column is None:
+            return []
+        return [{"kind": "add_column", "table": table, "file": rel_path, "line": line,
+                 "column": column, "relation": relation}]
+
+    if method == "drop_column":
+        if not positional:
+            return []
+        col_name = _py_string_text(positional[0], source)
+        if not col_name:
+            return []
+        return [{"kind": "remove_column", "table": table, "name": col_name,
+                 "file": rel_path, "line": line}]
+
+    if method == "alter_column":
+        if not positional:
+            return []
+        col_name = _py_string_text(positional[0], source)
+        if not col_name:
+            return []
+        changes: dict = {}
+        type_kw = _py_kwarg(args, "type_", source)
+        if type_kw is not None and type_kw.type == "call":
+            changes["type"] = (_py_call_name(type_kw, source) or "UNKNOWN").upper()
+        nullable_kw = _py_kwarg(args, "nullable", source)
+        if nullable_kw is not None:
+            changes["nullable"] = nullable_kw.type == "true"
+        default_kw = _py_kwarg(args, "server_default", source)
+        if default_kw is not None:
+            changes["default"] = _py_scalar_default(default_kw, source)
+        if not changes:
+            return []
+        return [{"kind": "alter_column", "table": table, "name": col_name,
+                 "changes": changes, "file": rel_path, "line": line}]
+
+    if method == "create_index":
+        if not positional:
+            return []
+        index_name = _py_string_text(_py_unwrap_op_f(positional[0], source), source)
+        if not index_name:
+            return []
+        cols_node = positional[1] if len(positional) > 1 else None
+        columns = []
+        if cols_node is not None and cols_node.type == "list":
+            columns = [c for c in (_py_string_text(n, source) for n in cols_node.named_children) if c]
+        unique = _py_bool_kwarg(args, "unique", source)
+        return [{"kind": "create_index", "table": table, "name": index_name,
+                 "columns": columns, "unique": unique, "file": rel_path, "line": line}]
+
+    if method == "drop_index":
+        if not positional:
+            return []
+        index_name = _py_string_text(_py_unwrap_op_f(positional[0], source), source)
+        if not index_name:
+            return []
+        return [{"kind": "remove_index", "table": table, "name": index_name,
+                 "file": rel_path, "line": line}]
+
+    if method == "create_foreign_key":
+        # batch_op.create_foreign_key(constraint_name, referent_table, local_cols, remote_cols, ...)
+        if len(positional) < 4:
+            return []
+        target_table = _py_string_text(positional[1], source)
+        local_cols_node, remote_cols_node = positional[2], positional[3]
+        if not target_table or local_cols_node.type != "list" or remote_cols_node.type != "list":
+            return []
+        local_cols = [_py_string_text(c, source) for c in local_cols_node.named_children]
+        remote_cols = [_py_string_text(c, source) for c in remote_cols_node.named_children]
+        ondelete_node = _py_kwarg(args, "ondelete", source)
+        on_delete = _py_string_text(ondelete_node, source) if ondelete_node else None
+        events = []
+        for local_col, remote_col in zip(local_cols, remote_cols):
+            if not local_col or not remote_col:
+                continue
+            events.append(
+                {"kind": "add_relation", "table": table, "file": rel_path, "line": line,
+                 "relation": {"from_column": local_col, "to_table": target_table,
+                              "to_column": remote_col,
+                              "on_delete": on_delete.upper() if on_delete else None,
+                              "file": rel_path, "line": line}}
+            )
+        return events
+
+    if method == "execute":
+        if not positional:
+            return []
+        text = _py_string_text(positional[0], source)
+        if not text:
+            return []
+        return [{"kind": "raw_sql", "sql": text, "file": rel_path, "line": line}]
+
+    return []
+
+
 def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) -> list[dict]:
     events: list[dict] = []
+    batch_scopes = _collect_batch_alter_table_scopes(upgrade_body, source)
 
     for call in _py_walk_calls(upgrade_body):
         receiver = _py_call_receiver(call, source)
-        if receiver != "op":
-            continue
         op_name = _py_call_name(call, source)
         line = call.start_point[0] + 1
         args = _py_args(call)
         positional = _py_positional(args)
+
+        if receiver == "op" and op_name in _ALEMBIC_NON_OPERATIONS:
+            continue
+
+        if receiver == "op" and op_name == "batch_alter_table":
+            # The with-header itself; _collect_batch_alter_table_scopes
+            # already captured what it needs from this call.
+            continue
+
+        batch_table = batch_scopes.get((call.start_byte, call.end_byte))
+        if batch_table is not None:
+            if op_name is None:
+                continue
+            if op_name in _ALEMBIC_BATCH_UNSUPPORTED_METHODS:
+                events.append(
+                    {"kind": "unsupported", "file": rel_path, "line": line,
+                     "statement": f"batch_op.{op_name}(...) not modeled"}
+                )
+                continue
+            batch_events = _alembic_batch_op_events(
+                op_name, batch_table, positional, args, source, rel_path, line
+            )
+            events.extend(batch_events)
+            continue
+
+        if receiver != "op":
+            continue
 
         if op_name == "create_table":
             if not positional:
@@ -770,7 +1020,7 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
         if op_name == "create_index":
             if len(positional) < 2:
                 continue
-            index_name = _py_string_text(positional[0], source)
+            index_name = _py_string_text(_py_unwrap_op_f(positional[0], source), source)
             table = _py_string_text(positional[1], source)
             cols_node = positional[2] if len(positional) > 2 else None
             columns = []
@@ -859,7 +1109,7 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
         if op_name == "drop_index":
             if not positional:
                 continue
-            index_name = _py_string_text(positional[0], source)
+            index_name = _py_string_text(_py_unwrap_op_f(positional[0], source), source)
             table_kw = _py_kwarg(args, "table_name", source)
             table = _py_string_text(table_kw, source) if table_kw else (
                 _py_string_text(positional[1], source) if len(positional) > 1 else None
@@ -891,11 +1141,16 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
                 events.append({"kind": "raw_sql", "sql": text, "file": rel_path, "line": line})
             continue
 
-        if op_name in _ALEMBIC_UNSUPPORTED_OPS:
-            events.append(
-                {"kind": "unsupported", "file": rel_path, "line": line,
-                 "statement": f"op.{op_name}(...) not modeled"}
-            )
+        if op_name is None:
+            continue
+
+        # Anything reaching here wasn't handled by any modeled branch above
+        # (each ends in `continue`) - flag it rather than silently dropping
+        # it, same reasoning as Django's catch-all above.
+        events.append(
+            {"kind": "unsupported", "file": rel_path, "line": line,
+             "statement": f"op.{op_name}(...) not modeled"}
+        )
 
     return events
 
@@ -1047,7 +1302,14 @@ def _rails_column_from_typed_call(
             "unique": False, "default": None, "file": rel_path, "line": line,
         }
         relation = None
-        if fk_flag is not False:
+        # Rails' own default for foreign_key: on a reference/belongs_to
+        # column is false - unlike `null:` (nullable by default), a real
+        # FK constraint is opt-in, only added when foreign_key: true is
+        # explicit. Treating a missing kwarg as "assume true" (this
+        # module's behavior until this fix) fabricated a constraint that
+        # does not exist in the real schema for the common, undecorated
+        # `t.references :author` / `add_reference :posts, :author` shape.
+        if fk_flag is True:
             relation = {
                 "from_column": column["name"], "to_table": _pluralize(ref_name),
                 "to_column": "id", "on_delete": None, "file": rel_path, "line": line,
@@ -1251,6 +1513,30 @@ def _rails_top_level_events(call: Node, source: bytes, rel_path: str) -> list[di
         return [{"kind": "create_index", "table": table, "name": index_name,
                  "columns": columns, "unique": _rb_bool_kwarg(args, "unique", source) is True,
                  "file": rel_path, "line": line}]
+
+    if method in ("add_reference", "add_belongs_to"):
+        if len(positional) < 2:
+            return []
+        table = _rb_symbol_text(positional[0], source)
+        ref_name = _rb_symbol_text(positional[1], source)
+        if not table or not ref_name:
+            return []
+        fk_flag = _rb_bool_kwarg(args, "foreign_key", source)
+        column = {
+            "name": f"{ref_name}_id", "type": "BIGINT", "primary_key": False,
+            "nullable": _rb_bool_kwarg(args, "null", source) is not False,
+            "unique": False, "default": None, "file": rel_path, "line": line,
+        }
+        events = [{"kind": "add_column", "table": table, "file": rel_path, "line": line,
+                   "column": column, "relation": None}]
+        if fk_flag is True:
+            events.append(
+                {"kind": "add_relation", "table": table, "file": rel_path, "line": line,
+                 "relation": {"from_column": column["name"], "to_table": _pluralize(ref_name),
+                              "to_column": "id", "on_delete": None,
+                              "file": rel_path, "line": line}}
+            )
+        return events
 
     if method == "add_foreign_key":
         if len(positional) < 2:
