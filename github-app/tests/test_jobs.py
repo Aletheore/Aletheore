@@ -2436,13 +2436,18 @@ def test_flash_review_job_excludes_aletheore_json_ignored_paths_from_the_diff(mo
         ),
     )
     diff_calls = []
+    changed_files_calls = []
 
     def fake_fetch_pr_diff(client, token, repo, base, head, ignored_paths=()):
         diff_calls.append(list(ignored_paths))
         return "--- app.py ---\n+bug"
 
+    def fake_fetch_pr_changed_files(client, token, repo, base, head, ignored_paths=()):
+        changed_files_calls.append(list(ignored_paths))
+        return ["app.py"]
+
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", fake_fetch_pr_diff)
-    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", fake_fetch_pr_changed_files)
     monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda diff_text, file_context="", **kwargs: [])
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
@@ -2467,6 +2472,13 @@ def test_flash_review_job_excludes_aletheore_json_ignored_paths_from_the_diff(mo
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert diff_calls == [["vendor/**"]]
+    # Real bug found via audit: an earlier version of this fix only
+    # threaded ignored_paths into fetch_pr_diff, not fetch_pr_changed_files -
+    # an ignored file's raw diff text was scrubbed from the prompt, but
+    # its full content was still fetched and its schema/endpoint facts
+    # (which build_schema_endpoint_context reads from changed_files, not
+    # diff_text) could still leak into the review.
+    assert changed_files_calls == [["vendor/**"]]
 
 
 def test_flash_review_comment_body_prefixes_the_symbol_when_present():
