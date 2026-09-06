@@ -18,6 +18,7 @@ from aletheore.cli import (
     _resolve_path,
     _aletheore_command,
     _claude_desktop_config_path,
+    _claude_desktop_server_name,
     _ElapsedTicker,
     _MCP_CLIENT_CONFIGS,
     _make_progress_printer,
@@ -521,9 +522,10 @@ def test_mcp_install_writes_claude_desktop_target(tmp_path, monkeypatch):
     config_path = fake_home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
     assert config_path.exists()
     data = json.loads(config_path.read_text())
-    # Keyed by repo name, not plain "aletheore" - this file is shared across
+    # Keyed by repo name plus a hash of its resolved path, not plain
+    # "aletheore" or just the repo name alone - this file is shared across
     # every project on the machine, unlike every other target's per-repo file.
-    entry = data["mcpServers"][f"aletheore-{install_target.name}"]
+    entry = data["mcpServers"][_claude_desktop_server_name(install_target)]
     assert entry == {"command": "aletheore", "args": ["mcp", str(install_target.resolve())]}
 
 
@@ -544,8 +546,41 @@ def test_mcp_install_claude_desktop_keys_by_repo_so_a_second_repo_does_not_clobb
 
     config_path = fake_home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
     servers = json.loads(config_path.read_text())["mcpServers"]
-    assert servers["aletheore-repo-a"]["args"] == ["mcp", str(repo_a.resolve())]
-    assert servers["aletheore-repo-b"]["args"] == ["mcp", str(repo_b.resolve())]
+    assert servers[_claude_desktop_server_name(repo_a)]["args"] == ["mcp", str(repo_a.resolve())]
+    assert servers[_claude_desktop_server_name(repo_b)]["args"] == ["mcp", str(repo_b.resolve())]
+
+
+def test_mcp_install_claude_desktop_keys_by_full_path_not_just_basename(tmp_path, monkeypatch):
+    # Real bug found via audit: keying purely by repo_path.name still
+    # collided for two different repos sharing a directory basename (a
+    # common real pattern - e.g. `~/work/client-a/backend` and
+    # `~/work/client-b/backend`), silently overwriting one repo's entry
+    # with the other's - exactly the class of bug this keying scheme was
+    # written to prevent, just not fully closed by name alone.
+    fake_home = tmp_path / "fake-home"
+    monkeypatch.setattr("aletheore.cli.sys.platform", "darwin")
+    monkeypatch.setenv("HOME", str(fake_home))
+    _no_command_resolvable(monkeypatch, tmp_path)
+    client_a = tmp_path / "client-a" / "backend"
+    client_b = tmp_path / "client-b" / "backend"
+    client_a.mkdir(parents=True)
+    client_b.mkdir(parents=True)
+
+    runner.invoke(app, ["mcp-install", str(client_a), "--target", "claude-desktop"])
+    runner.invoke(app, ["mcp-install", str(client_b), "--target", "claude-desktop"])
+
+    config_path = fake_home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+    servers = json.loads(config_path.read_text())["mcpServers"]
+    key_a = _claude_desktop_server_name(client_a)
+    key_b = _claude_desktop_server_name(client_b)
+    assert key_a != key_b
+    assert servers[key_a]["args"] == ["mcp", str(client_a.resolve())]
+    assert servers[key_b]["args"] == ["mcp", str(client_b.resolve())]
+
+
+def test_claude_desktop_server_name_is_stable_for_the_same_path():
+    path = Path("/some/repo")
+    assert _claude_desktop_server_name(path) == _claude_desktop_server_name(path)
 
 
 def test_mcp_install_skips_claude_desktop_on_unsupported_platform(tmp_path, monkeypatch):
