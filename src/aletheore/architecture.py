@@ -51,7 +51,9 @@ LAYER_FOLDER_MARKERS = {
 }
 
 
-def build_clusters(dependency_graph: dict, resolution: float = 1.0) -> tuple[list[dict], list[dict]]:
+def build_clusters(
+    dependency_graph: dict, resolution: float = 1.0, extra_edges: list[tuple[str, str]] | None = None
+) -> tuple[list[dict], list[dict]]:
     """Group dependency_graph's modules into communities by import density.
 
     Test files are excluded before clustering, not after: they pollute
@@ -65,6 +67,20 @@ def build_clusters(dependency_graph: dict, resolution: float = 1.0) -> tuple[lis
     community or drags a real one apart. Every consumer of these clusters
     (AIRview subsystems, the dashboard's dependency graph, aletheore_cluster)
     wants architecture, not a test suite's own internal structure.
+
+    extra_edges: supplementary relations that are real but were never going
+    to appear in a literal import graph - currently Rails model-to-model
+    associations (see model_associations.rails_model_association_edges).
+    Confirmed real, not hypothetical: a real Discourse scan (app/models +
+    db, 3,051 files) produced 3,044 clusters from the import graph alone -
+    almost exactly one cluster per file - because ActiveRecord associations
+    (`belongs_to`, `has_many`) are declarative, never a literal Ruby
+    require/import, so two obviously-related models (Post and User) share
+    no import edge at all. These only influence which community a node
+    joins - they are deliberately kept out of `edges` below (and so out of
+    internal_edges/cross_cluster_edges), which report only real import
+    density and must not silently start counting relations that aren't
+    imports at all.
     """
     # Deferred: search_index.py pulls in lancedb/openai, which cli.py's
     # import-time footprint must not carry for every command - see
@@ -80,6 +96,8 @@ def build_clusters(dependency_graph: dict, resolution: float = 1.0) -> tuple[lis
     graph = nx.Graph()
     graph.add_nodes_from(nodes)
     graph.add_edges_from(edges)
+    if extra_edges:
+        graph.add_edges_from((a, b) for a, b in extra_edges if a in kept and b in kept)
 
     communities = list(greedy_modularity_communities(graph, resolution=resolution))
 
