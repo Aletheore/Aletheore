@@ -314,6 +314,35 @@ class Migration(migrations.Migration):
     assert "AlterModelOptions" in events[1]["statement"]
 
 
+def test_django_add_constraint_falls_through_to_catch_all_unsupported(tmp_path):
+    # Real bug found via audit: AddConstraint (and any other real Django
+    # operation not explicitly modeled or in the old, narrower
+    # _DJANGO_UNSUPPORTED_OPS deny-list) fell through the whole if/elif
+    # chain with zero event emitted - not even `unsupported` - making a
+    # migration with a real DB-shape effect (a CHECK constraint) look
+    # identical to a no-op migration.
+    repo = write_files(
+        tmp_path,
+        {
+            "blog/migrations/0002_add_constraint.py": """
+from django.db import migrations, models
+
+class Migration(migrations.Migration):
+    operations = [
+        migrations.AddConstraint(
+            model_name='post',
+            constraint=models.CheckConstraint(check=models.Q(views__gte=0), name='views_gte_0'),
+        ),
+    ]
+"""
+        },
+    )
+    events, _ = extract_django_migrations(repo, ["blog/migrations"])
+    assert len(events) == 1
+    assert events[0]["kind"] == "unsupported"
+    assert "AddConstraint" in events[0]["statement"]
+
+
 def test_non_django_migrations_directory_is_ignored(tmp_path):
     """A `migrations/` directory that isn't Django (no django import, no
     Migration class) must not be mis-parsed."""
@@ -365,6 +394,36 @@ end
     assert relation["to_column"] == "id"
     assert relation["on_delete"] is None
     assert relation["file"] == "db/migrate/20230101000000_create_posts.rb"
+
+
+def test_rails_references_without_explicit_foreign_key_adds_no_relation(tmp_path):
+    # Real bug found via audit: Rails' own default for foreign_key: on a
+    # references/belongs_to column is false - a real FK constraint is
+    # opt-in (foreign_key: true), not opt-out. The old code treated a
+    # missing kwarg as "assume true", fabricating a constraint that does
+    # not exist in the real schema for the common, undecorated
+    # `t.references :author` shape (no foreign_key: at all).
+    repo = write_files(
+        tmp_path,
+        {
+            "db/migrate/20230101000000_create_posts.rb": """
+class CreatePosts < ActiveRecord::Migration[7.0]
+  def change
+    create_table :posts do |t|
+      t.references :author
+      t.belongs_to :category, foreign_key: false
+    end
+  end
+end
+"""
+        },
+    )
+    events, _ = extract_rails_migrations(repo, ["db/migrate"])
+    create = next(e for e in events if e["kind"] == "create_table")
+    names = [c["name"] for c in create["columns"]]
+    assert "author_id" in names
+    assert "category_id" in names
+    assert create["relations"] == []
 
 
 def test_rails_up_down_migration_only_reads_up_not_down(tmp_path):
@@ -463,6 +522,47 @@ end
     fk = next(r for r in result["relations"] if r["from_column"] == "account_id")
     assert fk["to_table"] == "accounts"
     assert fk["on_delete"] == "CASCADE"
+    assert result["unsupported"] == []
+
+
+def test_rails_standalone_add_reference_and_add_belongs_to(tmp_path):
+    # Real bug found via audit: add_reference/add_belongs_to (Rails 5+
+    # idiom for adding a FK column outside create_table/change_table, e.g.
+    # `add_reference :posts, :author, foreign_key: true`) weren't in
+    # _RAILS_KNOWN_METHODS, so they were silently ignored like ordinary
+    # non-DSL Ruby - not even flagged unsupported - despite having a real
+    # DB-shape effect identical to the already-modeled `t.references`.
+    repo = write_files(
+        tmp_path,
+        {
+            "db/migrate/20230101000000_create_posts.rb": """
+class CreatePosts < ActiveRecord::Migration[7.0]
+  def change
+    create_table :posts do |t|
+      t.string :title
+    end
+  end
+end
+""",
+            "db/migrate/20230102000000_add_refs.rb": """
+class AddRefs < ActiveRecord::Migration[7.0]
+  def change
+    add_reference :posts, :author, foreign_key: true
+    add_belongs_to :posts, :category
+  end
+end
+""",
+        },
+    )
+    result = extract_schema(repo, ["db/migrate"])
+    table = next(t for t in result["tables"] if t["name"] == "posts")
+    names = [c["name"] for c in table["columns"]]
+    assert "author_id" in names
+    assert "category_id" in names
+    fk = next(r for r in result["relations"] if r["from_column"] == "author_id")
+    assert fk["to_table"] == "authors"
+    assert fk["to_column"] == "id"
+    assert not any(r["from_column"] == "category_id" for r in result["relations"])
     assert result["unsupported"] == []
 
 
@@ -804,6 +904,177 @@ def upgrade():
     assert len(events) == 1
     assert events[0]["kind"] == "unsupported"
     assert "drop_constraint" in events[0]["statement"]
+
+
+def test_alembic_create_check_constraint_and_unique_constraint_stay_unsupported(tmp_path):
+    repo = write_files(
+        tmp_path,
+        {
+            "alembic/versions/abc123_init.py": """
+from alembic import op
+
+revision = "abc123"
+down_revision = None
+
+def upgrade():
+    op.create_check_constraint('ck_accounts_age', 'accounts', 'age >= 0')
+    op.create_unique_constraint('uq_accounts_email', 'accounts', ['email'])
+"""
+        },
+    )
+    events, _ = extract_alembic_migrations(repo, ["alembic/versions"])
+    assert len(events) == 2
+    assert all(e["kind"] == "unsupported" for e in events)
+    assert "create_check_constraint" in events[0]["statement"]
+    assert "create_unique_constraint" in events[1]["statement"]
+
+
+def test_alembic_unmodeled_op_falls_through_to_catch_all_unsupported(tmp_path):
+    # Real bug found via audit: any op.* call not explicitly modeled and
+    # not in the old, narrower _ALEMBIC_UNSUPPORTED_OPS deny-list (e.g.
+    # add_constraint) fell through with zero event emitted.
+    repo = write_files(
+        tmp_path,
+        {
+            "alembic/versions/abc123_init.py": """
+from alembic import op
+import sqlalchemy as sa
+
+revision = "abc123"
+down_revision = None
+
+def upgrade():
+    op.add_constraint(sa.CheckConstraint('age >= 0', name='ck_accounts_age'))
+"""
+        },
+    )
+    events, _ = extract_alembic_migrations(repo, ["alembic/versions"])
+    assert len(events) == 1
+    assert events[0]["kind"] == "unsupported"
+    assert "add_constraint" in events[0]["statement"]
+
+
+def test_alembic_op_f_naming_helper_is_not_flagged_unsupported(tmp_path):
+    # op.f(...) wraps a naming-convention string (autogenerate's default
+    # output) and has no DDL meaning of its own - it must never be
+    # misread as an unmodeled top-level operation just because it's a
+    # nested `op.*` call inside another op.* call's arguments.
+    repo = write_files(
+        tmp_path,
+        {
+            "alembic/versions/abc123_init.py": """
+from alembic import op
+
+revision = "abc123"
+down_revision = None
+
+def upgrade():
+    op.create_index(op.f('ix_users_email'), 'users', ['email'])
+"""
+        },
+    )
+    events, _ = extract_alembic_migrations(repo, ["alembic/versions"])
+    assert len(events) == 1
+    assert events[0]["kind"] == "create_index"
+    assert events[0]["name"] == "ix_users_email"
+
+
+def test_alembic_batch_alter_table_add_drop_column_and_index(tmp_path):
+    # Real bug found via audit: `with op.batch_alter_table(table) as
+    # batch_op:` (the required pattern for SQLite migrations, since
+    # SQLite can't do most ALTER TABLE directly) was invisible twice
+    # over - the batch_alter_table call itself wasn't modeled or flagged,
+    # and every batch_op.<method>(...) call inside the block has receiver
+    # "batch_op" not "op", so the `if receiver != "op": continue` guard
+    # skipped them all, silently.
+    repo = write_files(
+        tmp_path,
+        {
+            "alembic/versions/abc123_init.py": """
+from alembic import op
+import sqlalchemy as sa
+
+revision = "abc123"
+down_revision = None
+
+def upgrade():
+    with op.batch_alter_table('accounts') as batch_op:
+        batch_op.add_column(sa.Column('nickname', sa.String(length=50), nullable=True))
+        batch_op.drop_column('legacy_flag')
+        batch_op.create_index('ix_accounts_nickname', ['nickname'])
+        batch_op.alter_column('nickname', nullable=False)
+"""
+        },
+    )
+    events, _ = extract_alembic_migrations(repo, ["alembic/versions"])
+    add_col = next(e for e in events if e["kind"] == "add_column")
+    assert add_col["table"] == "accounts"
+    assert add_col["column"]["name"] == "nickname"
+    drop_col = next(e for e in events if e["kind"] == "remove_column")
+    assert drop_col == {
+        "kind": "remove_column", "table": "accounts", "name": "legacy_flag",
+        "file": "alembic/versions/abc123_init.py", "line": 11,
+    }
+    index = next(e for e in events if e["kind"] == "create_index")
+    assert index["table"] == "accounts"
+    assert index["name"] == "ix_accounts_nickname"
+    assert index["columns"] == ["nickname"]
+    alter = next(e for e in events if e["kind"] == "alter_column")
+    assert alter["table"] == "accounts"
+    assert alter["name"] == "nickname"
+    assert alter["changes"]["nullable"] is False
+    assert not any(e["kind"] == "unsupported" for e in events)
+
+
+def test_alembic_batch_alter_table_drop_constraint_stays_unsupported(tmp_path):
+    repo = write_files(
+        tmp_path,
+        {
+            "alembic/versions/abc123_init.py": """
+from alembic import op
+
+revision = "abc123"
+down_revision = None
+
+def upgrade():
+    with op.batch_alter_table('accounts') as batch_op:
+        batch_op.drop_constraint('uq_accounts_email', type_='unique')
+"""
+        },
+    )
+    events, _ = extract_alembic_migrations(repo, ["alembic/versions"])
+    assert len(events) == 1
+    assert events[0]["kind"] == "unsupported"
+    assert "drop_constraint" in events[0]["statement"]
+
+
+def test_alembic_batch_alter_table_unmodeled_method_falls_through_to_unsupported(tmp_path):
+    # Real bug found via this PR's own Flash Review: a batch_op method
+    # that's neither modeled nor in _ALEMBIC_BATCH_UNSUPPORTED_METHODS
+    # (e.g. add_constraint) fell through _alembic_batch_op_events' own
+    # `return []` fallback with zero event and no `unsupported` flag -
+    # the exact silent-drop bug class this PR exists to fix, reintroduced
+    # for batch mode specifically.
+    repo = write_files(
+        tmp_path,
+        {
+            "alembic/versions/abc123_init.py": """
+from alembic import op
+import sqlalchemy as sa
+
+revision = "abc123"
+down_revision = None
+
+def upgrade():
+    with op.batch_alter_table('accounts') as batch_op:
+        batch_op.add_constraint(sa.CheckConstraint('age >= 0', name='ck_accounts_age'))
+"""
+        },
+    )
+    events, _ = extract_alembic_migrations(repo, ["alembic/versions"])
+    assert len(events) == 1
+    assert events[0]["kind"] == "unsupported"
+    assert "add_constraint" in events[0]["statement"]
 
 
 # ---------------------------------------------------------------------------
