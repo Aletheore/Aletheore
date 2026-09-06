@@ -885,6 +885,32 @@ def _sql_events_from_text(text: str, rel_path: str) -> tuple[list[dict], list[di
     return events, unsupported
 
 
+def sql_events_from_text(text: str, rel_path: str, dialect: str = _DEFAULT_SQL_DIALECT) -> tuple[list[dict], list[dict]]:
+    """Public single-file entry point: every migration-relevant event in
+    one file's raw SQL text, parsed under an explicit dialect rather than
+    the module-level default - used by Flash Review (see
+    scan_worker/flash_review.py's schema/endpoint context) to parse just a
+    diff's changed migration file, independent of any real_schema()
+    extraction that may be running elsewhere.
+
+    _SQL_DIALECT is saved and restored around the call rather than left
+    mutated: extract_schema's own per-file loop relies on setting it
+    itself immediately before use, and this module's docstring already
+    notes that's only safe because nothing else in the same process
+    re-enters it concurrently - a caller like Flash Review, running in a
+    long-lived scan-worker process alongside real per-repo scans, is
+    exactly the case that guarantee doesn't cover unless this restores
+    what it changed.
+    """
+    global _SQL_DIALECT
+    saved = _SQL_DIALECT
+    _SQL_DIALECT = dialect
+    try:
+        return _sql_events_from_text(text, rel_path)
+    finally:
+        _SQL_DIALECT = saved
+
+
 def _merge_schema_events(
     tables: dict[str, dict],
     relations: list[dict],

@@ -571,6 +571,41 @@ def _django_model_operations(
     return events
 
 
+def django_events_from_source(source: bytes, rel_path: str) -> list[dict]:
+    """One Django migration file's real DDL events, from its raw source
+    bytes - the single-file primitive extract_django_migrations' directory
+    scan is built on, also used directly by Flash Review (see
+    scan_worker/flash_review.py's schema/endpoint context). Does not gate
+    on looks_like_django_migration - the caller already knows this is a
+    Django migration file (it came from a real migration_directories
+    entry during a full scan, or matched an app's migrations/ layout in
+    Flash Review); re-sniffing here would just risk a false negative on a
+    file the caller already identified correctly.
+    """
+    app_label = django_app_label(rel_path)
+    parser = _py_parser()
+    tree = parser.parse(source)
+    events: list[dict] = []
+    # `operations = [...]` is a module-level assignment inside the
+    # Migration class body, found by walking assignments rather than
+    # calls.
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node.type == "assignment":
+            left = node.child_by_field_name("left")
+            right = node.child_by_field_name("right")
+            if (
+                left is not None and left.type == "identifier"
+                and _py_text(left, source) == "operations"
+                and right is not None and right.type == "list"
+            ):
+                events.extend(_django_model_operations(right, source, rel_path, app_label))
+                continue
+        stack.extend(reversed(node.children))
+    return events
+
+
 def extract_django_migrations(
     repo_path: Path, migration_directories: list[str]
 ) -> tuple[list[dict], list[str]]:
@@ -584,7 +619,6 @@ def extract_django_migrations(
     """
     events: list[dict] = []
     sources: list[str] = []
-    parser = _py_parser()
     files: list[Path] = []
     for directory in migration_directories:
         if directory in ("alembic/versions", "db/migrate"):
@@ -606,25 +640,7 @@ def extract_django_migrations(
         if not looks_like_django_migration(source):
             continue
         sources.append(rel_path)
-        app_label = django_app_label(rel_path)
-        tree = parser.parse(source)
-        # `operations = [...]` is a module-level assignment inside the
-        # Migration class body, found by walking assignments rather than
-        # calls.
-        stack = [tree.root_node]
-        while stack:
-            node = stack.pop()
-            if node.type == "assignment":
-                left = node.child_by_field_name("left")
-                right = node.child_by_field_name("right")
-                if (
-                    left is not None and left.type == "identifier"
-                    and _py_text(left, source) == "operations"
-                    and right is not None and right.type == "list"
-                ):
-                    events.extend(_django_model_operations(right, source, rel_path, app_label))
-                    continue
-            stack.extend(reversed(node.children))
+        events.extend(django_events_from_source(source, rel_path))
 
     return events, sources
 
@@ -884,12 +900,35 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
     return events
 
 
+def alembic_events_from_source(source: bytes, rel_path: str) -> list[dict]:
+    """One Alembic migration file's real DDL events, from its raw source
+    bytes - the single-file primitive extract_alembic_migrations' directory
+    scan is built on, also used directly by Flash Review (see
+    scan_worker/flash_review.py's schema/endpoint context). Only
+    statements inside def upgrade(): are read, matching
+    extract_alembic_migrations' own scope."""
+    parser = _py_parser()
+    tree = parser.parse(source)
+    events: list[dict] = []
+    stack = list(reversed(tree.root_node.children))
+    while stack:
+        node = stack.pop()
+        if node.type == "function_definition":
+            name_node = node.child_by_field_name("name")
+            if name_node is not None and _py_text(name_node, source) == "upgrade":
+                body = node.child_by_field_name("body")
+                if body is not None:
+                    events.extend(_alembic_upgrade_events(body, source, rel_path))
+            continue
+        stack.extend(reversed(node.children))
+    return events
+
+
 def extract_alembic_migrations(
     repo_path: Path, migration_directories: list[str]
 ) -> tuple[list[dict], list[str]]:
     events: list[dict] = []
     sources: list[str] = []
-    parser = _py_parser()
     for directory in migration_directories:
         # Alembic's own generator names the migrations directory "alembic"
         # by default, but real projects commonly rename it - Apache
@@ -920,18 +959,7 @@ def extract_alembic_migrations(
             if b"down_revision" not in source:
                 continue
             sources.append(rel_path)
-            tree = parser.parse(source)
-            stack = list(reversed(tree.root_node.children))
-            while stack:
-                node = stack.pop()
-                if node.type == "function_definition":
-                    name_node = node.child_by_field_name("name")
-                    if name_node is not None and _py_text(name_node, source) == "upgrade":
-                        body = node.child_by_field_name("body")
-                        if body is not None:
-                            events.extend(_alembic_upgrade_events(body, source, rel_path))
-                    continue
-                stack.extend(reversed(node.children))
+            events.extend(alembic_events_from_source(source, rel_path))
     return events, sources
 
 
@@ -1354,12 +1382,56 @@ def _rails_top_level_events(call: Node, source: bytes, rel_path: str) -> list[di
              "statement": f"{method}(...) not modeled"}]
 
 
+def rails_events_from_source(source: bytes, rel_path: str) -> list[dict]:
+    """One Rails migration file's real DDL events, from its raw source
+    bytes - the single-file primitive extract_rails_migrations' directory
+    scan is built on, also used directly by Flash Review to parse just a
+    diff's changed migration file without needing it on a real local
+    checkout (see scan_worker/flash_review.py's schema/endpoint context).
+
+    Older Rails migrations (real, common in any app with years of
+    history - found via a real Discourse migration from 2012) use a
+    separate `def up` / `def down` pair instead of one reversible `def
+    change`. `down` is rollback-only code, never applied by a real
+    deploy, and must not be walked: found via that same real file
+    (20120423151548_remove_last_post_id.rb, `up` removes a column,
+    `down` adds it back) - without this exclusion, the down method's
+    add_column was read right alongside up's remove_column, as if the
+    migration both removed and re-added the same column.
+    """
+    events: list[dict] = []
+    parser = _rb_parser()
+    tree = parser.parse(source)
+    # A plain (non-reversed) push+pop here would visit sibling
+    # statements in reverse source order - confirmed via a real
+    # multi-statement `change` block (rename_column, rename_table,
+    # drop_table all in one method): events came out drop/rename/
+    # rename instead of source order, silently reordering replay.
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node.type == "method":
+            name_node = node.child_by_field_name("name")
+            if name_node is not None and _rb_text(name_node, source) == "down":
+                continue  # rollback-only code - never applied by a real deploy
+        if node.type == "call":
+            name = _rb_call_name(node, source)
+            if name == "create_table":
+                events.extend(_rails_create_table_events(node, source, rel_path))
+                continue
+            if name == "change_table":
+                events.extend(_rails_change_table_events(node, source, rel_path))
+                continue
+            events.extend(_rails_top_level_events(node, source, rel_path))
+        stack.extend(reversed(node.children))
+    return events
+
+
 def extract_rails_migrations(
     repo_path: Path, migration_directories: list[str]
 ) -> tuple[list[dict], list[str]]:
     events: list[dict] = []
     sources: list[str] = []
-    parser = _rb_parser()
     for directory in migration_directories:
         if directory != "db/migrate" and not directory.endswith("/db/migrate"):
             continue
@@ -1377,23 +1449,5 @@ def extract_rails_migrations(
             except OSError:
                 continue
             sources.append(rel_path)
-            tree = parser.parse(source)
-            # A plain (non-reversed) push+pop here would visit sibling
-            # statements in reverse source order - confirmed via a real
-            # multi-statement `change` block (rename_column, rename_table,
-            # drop_table all in one method): events came out drop/rename/
-            # rename instead of source order, silently reordering replay.
-            stack = [tree.root_node]
-            while stack:
-                node = stack.pop()
-                if node.type == "call":
-                    name = _rb_call_name(node, source)
-                    if name == "create_table":
-                        events.extend(_rails_create_table_events(node, source, rel_path))
-                        continue
-                    if name == "change_table":
-                        events.extend(_rails_change_table_events(node, source, rel_path))
-                        continue
-                    events.extend(_rails_top_level_events(node, source, rel_path))
-                stack.extend(reversed(node.children))
+            events.extend(rails_events_from_source(source, rel_path))
     return events, sources
