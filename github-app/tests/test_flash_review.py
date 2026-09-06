@@ -3315,3 +3315,34 @@ def test_review_diff_verifies_model_findings_but_not_semantic_findings_in_the_sa
         {"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors", "source": "semantic"}
     ]
     mock_verifier.simple_completion.assert_called_once()
+
+
+def test_system_prompt_warns_that_schema_endpoint_facts_can_be_stale_relative_to_the_diff():
+    # Real false positive found testing flash_review_schema_context.py against a
+    # real, live Discourse PR (#32440, merged 2025-04): the schema/endpoint
+    # evidence came from a scan of the repository's CURRENT HEAD, over a year
+    # after that PR merged. The PR added a controller with create/update/destroy
+    # actions; the evidence's endpoint list showed a LATER refactor's
+    # create_or_update action for the same route. The model confidently reported
+    # a missing-action bug that didn't exist, trusting the "currently defines"
+    # fact over the diff's own controller content. Proves the instruction
+    # exists, not that a live model obeys it - untestable without a real call.
+    normalized = " ".join(FLASH_REVIEW_SYSTEM_PROMPT.lower().split())
+    assert "deterministic schema/endpoint facts" in normalized
+    assert "not guaranteed to be from the same point in time as this diff" in normalized
+    assert "trust the diff and file content you were actually given over the fact" in normalized
+
+
+def test_system_prompt_warns_that_diff_hunk_headers_are_not_proof_of_code_nesting():
+    # Real false positive found on the same real Discourse PR #32440: a
+    # `has_many :topic_localizations` line was added right after code whose
+    # nearest diff hunk header read "@@ ... @@ class NotAllowed < StandardError"
+    # (git's own nearest-preceding-signature heuristic). The model treated that
+    # header as proof the new line was nested inside the NotAllowed exception
+    # class and reported it as broken - verified false against the real file:
+    # the line is correctly part of Topic's own class body, many lines below
+    # where NotAllowed actually closes. Proves the instruction exists, not that
+    # a live model obeys it - untestable without a real call.
+    normalized = " ".join(FLASH_REVIEW_SYSTEM_PROMPT.lower().split())
+    assert "git's own heuristic guess at the nearest" in normalized
+    assert "not proof that the hunk's lines are still nested" in normalized
