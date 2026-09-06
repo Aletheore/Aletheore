@@ -77,6 +77,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 
 import sqlglot
@@ -102,11 +103,15 @@ _DEFAULT_SQL_DIALECT = "postgres"
 
 # Set once per extract_schema() call (see _detect_sql_dialect) and read by
 # every parse/render call below. A plain module variable rather than a
-# parameter threaded through every function that touches SQL text - safe
-# because this module has no concurrent or re-entrant call pattern
-# (extract_schema always runs to completion, including its raw_sql
-# recursion for RunSQL/execute/op.execute, before another call can start).
+# parameter threaded through every function that touches SQL text -
+# extract_schema's own per-file loop relies on running to completion
+# before another call starts, but sql_events_from_text (below) is also a
+# public entry point used from a long-lived scan-worker process that runs
+# real ThreadPoolExecutor-based concurrency elsewhere in the same review
+# (see flash_review.py), so mutation of this global is serialized with
+# _SQL_DIALECT_LOCK rather than assumed single-threaded.
 _SQL_DIALECT = _DEFAULT_SQL_DIALECT
+_SQL_DIALECT_LOCK = threading.Lock()
 
 # Real config files that explicitly declare a project's SQL dialect, and
 # how to read each one - never inferred from the SQL text itself. A wrong
@@ -893,22 +898,25 @@ def sql_events_from_text(text: str, rel_path: str, dialect: str = _DEFAULT_SQL_D
     diff's changed migration file, independent of any real_schema()
     extraction that may be running elsewhere.
 
-    _SQL_DIALECT is saved and restored around the call rather than left
-    mutated: extract_schema's own per-file loop relies on setting it
-    itself immediately before use, and this module's docstring already
-    notes that's only safe because nothing else in the same process
-    re-enters it concurrently - a caller like Flash Review, running in a
-    long-lived scan-worker process alongside real per-repo scans, is
-    exactly the case that guarantee doesn't cover unless this restores
-    what it changed.
+    _SQL_DIALECT is saved and restored around the call under
+    _SQL_DIALECT_LOCK rather than left mutated: extract_schema's own
+    per-file loop relies on setting it itself immediately before use, but
+    a plain save/restore without a lock only protects a single thread's
+    own reentrant calls - it does not stop a second thread (Flash Review
+    runs real ThreadPoolExecutor-based concurrency elsewhere in the same
+    scan-worker process, see flash_review.py) from reading or overwriting
+    _SQL_DIALECT in the window between this function's assignment and its
+    restore. The lock makes the whole set-parse-restore sequence atomic
+    across threads instead of just correct within one.
     """
     global _SQL_DIALECT
-    saved = _SQL_DIALECT
-    _SQL_DIALECT = dialect
-    try:
-        return _sql_events_from_text(text, rel_path)
-    finally:
-        _SQL_DIALECT = saved
+    with _SQL_DIALECT_LOCK:
+        saved = _SQL_DIALECT
+        _SQL_DIALECT = dialect
+        try:
+            return _sql_events_from_text(text, rel_path)
+        finally:
+            _SQL_DIALECT = saved
 
 
 def _merge_schema_events(
@@ -1092,10 +1100,16 @@ def extract_schema(repo_path: Path, migration_directories: list[str]) -> dict:
 
         # A file's own path (e.g. migrations/mysql/...) wins over the
         # repo-wide config signal when both exist - see _dialect_from_path.
-        _SQL_DIALECT = _dialect_from_path(rel_path) or repo_default_dialect
-        dialects_used.add(_SQL_DIALECT)
+        # Set-and-parse is locked with sql_events_from_text's own critical
+        # section (see its docstring) so a concurrent Flash Review call in
+        # the same long-lived scan-worker process can't read or overwrite
+        # _SQL_DIALECT mid-file here.
+        with _SQL_DIALECT_LOCK:
+            _SQL_DIALECT = _dialect_from_path(rel_path) or repo_default_dialect
+            file_dialect = _SQL_DIALECT
+            events, file_unsupported = _sql_events_from_text(text, rel_path)
+        dialects_used.add(file_dialect)
         sources.append(rel_path)
-        events, file_unsupported = _sql_events_from_text(text, rel_path)
         unsupported.extend(file_unsupported)
         sql_events_by_file[rel_path] = events
 

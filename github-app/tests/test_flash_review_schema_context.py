@@ -93,6 +93,46 @@ def test_raw_sql_migration_uses_dialect_from_evidence():
     assert "DROP COLUMN users.legacy_id" in context
 
 
+def test_unsupported_raw_sql_in_migration_is_surfaced_not_lost():
+    evidence = _evidence(migration_dirs=["db/migrate"])
+    content = """
+class AlterSeq < ActiveRecord::Migration[8.0]
+  def up
+    execute "ALTER SEQUENCE web_hook_events_id_seq AS bigint"
+  end
+end
+"""
+    context = build_schema_endpoint_context(
+        evidence, ["db/migrate/004_alter_seq.rb"],
+        {"db/migrate/004_alter_seq.rb": content},
+    )
+    assert "UNSUPPORTED (not modeled, real text): ALTER SEQUENCE web_hook_events_id_seq AS bigint" in context
+
+
+def test_django_migration_containing_the_literal_string_down_revision_is_not_misrouted_to_alembic():
+    # down_revision is Alembic's own marker, but nothing stops it from
+    # appearing incidentally in a real Django migration (a comment, a
+    # docstring, an unrelated string or variable name) - checking for it
+    # before the more specific Django sniff would send a real Django
+    # migration through the Alembic parser instead, silently losing its
+    # real operations.
+    evidence = _evidence(migration_dirs=["blog/migrations"])
+    content = """
+from django.db import migrations, models
+
+# ported from the old alembic setup; that revision's down_revision was 'prior456'
+class Migration(migrations.Migration):
+    operations = [
+        migrations.RemoveField(model_name='post', name='legacy_id'),
+    ]
+"""
+    context = build_schema_endpoint_context(
+        evidence, ["blog/migrations/0003_remove_legacy_id.py"],
+        {"blog/migrations/0003_remove_legacy_id.py": content},
+    )
+    assert "DROP COLUMN blog_post.legacy_id" in context
+
+
 def test_migration_file_with_no_fetched_content_is_skipped_not_crashed():
     evidence = _evidence(migration_dirs=["db/migrate"])
     context = build_schema_endpoint_context(
@@ -151,6 +191,35 @@ def test_both_migration_and_endpoint_facts_can_appear_together():
 
 
 def test_byte_budget_truncates_rather_than_failing():
+    # The real constraint is the total encoded size of what's actually
+    # returned (header + every line + the "\n" separators between them) -
+    # a budget that only counted line bytes would let the returned
+    # context exceed MAX_SCHEMA_ENDPOINT_BYTES by the header/separator
+    # size, so this asserts against the true serialized output, not an
+    # inflated allowance for that gap.
+    import scan_worker.flash_review_schema_context as mod
+
+    evidence = _evidence(migration_dirs=["db/migrate"])
+    content = "add_column :users, :deleted_at, :datetime\nadd_column :users, :verified_at, :datetime"
+    full_context = build_schema_endpoint_context(
+        evidence, ["db/migrate/001.rb"], {"db/migrate/001.rb": content},
+    )
+    assert "deleted_at" in full_context and "verified_at" in full_context
+
+    original = mod.MAX_SCHEMA_ENDPOINT_BYTES
+    mod.MAX_SCHEMA_ENDPOINT_BYTES = len(full_context.encode("utf-8")) - 10
+    try:
+        truncated_context = build_schema_endpoint_context(
+            evidence, ["db/migrate/001.rb"], {"db/migrate/001.rb": content},
+        )
+        assert len(truncated_context.encode("utf-8")) <= mod.MAX_SCHEMA_ENDPOINT_BYTES
+        assert truncated_context != ""
+        assert truncated_context != full_context
+    finally:
+        mod.MAX_SCHEMA_ENDPOINT_BYTES = original
+
+
+def test_byte_budget_smaller_than_the_header_returns_empty_not_oversized():
     import scan_worker.flash_review_schema_context as mod
     original = mod.MAX_SCHEMA_ENDPOINT_BYTES
     mod.MAX_SCHEMA_ENDPOINT_BYTES = 10
@@ -160,9 +229,7 @@ def test_byte_budget_truncates_rather_than_failing():
         context = build_schema_endpoint_context(
             evidence, ["db/migrate/001.rb"], {"db/migrate/001.rb": content},
         )
-        assert len(context.encode("utf-8")) <= 10 + len(
-            "--- deterministic schema/endpoint facts for changed files (not conclusions) ---\n"
-        )
+        assert context == ""
     finally:
         mod.MAX_SCHEMA_ENDPOINT_BYTES = original
 
@@ -223,19 +290,25 @@ class AddIndexViaRawSql < ActiveRecord::Migration[7.0]
   end
 end
 """
-    events = _migration_events_for_file("db/migrate/x.rb", content, "postgres")
+    events, unsupported = _migration_events_for_file("db/migrate/x.rb", content, "postgres")
     assert events == [
         {"kind": "create_index", "table": "users", "name": "idx_users_email",
          "columns": ["email"], "unique": False, "file": "db/migrate/x.rb", "line": 1}
     ]
+    assert unsupported == []
 
 
-def test_rails_execute_with_out_of_scope_sql_stays_silent_not_crashed():
+def test_rails_execute_with_out_of_scope_sql_is_kept_as_unsupported_not_dropped():
     # A real Discourse PR (#42490) used execute("ALTER SEQUENCE ... AS
     # bigint") - ALTER SEQUENCE is a documented, legitimate scope
     # exclusion in schema_map.py (not a table/column/index/relation
-    # change), so this correctly produces no summarizable event rather
-    # than crashing or fabricating one.
+    # change), so this correctly produces no summarizable *event* rather
+    # than crashing or fabricating one. But schema_map.py's own full-scan
+    # merge doesn't just drop unmodeled SQL - it records the real
+    # statement text in `unsupported` instead of silently discarding it
+    # (repository.database.schema.unsupported), and this module must do
+    # the same rather than losing that fact just because it wasn't turned
+    # into a structural event.
     content = """
 class AlterSeq < ActiveRecord::Migration[8.0]
   def up
@@ -243,5 +316,8 @@ class AlterSeq < ActiveRecord::Migration[8.0]
   end
 end
 """
-    events = _migration_events_for_file("db/migrate/x.rb", content, "postgres")
+    events, unsupported = _migration_events_for_file("db/migrate/x.rb", content, "postgres")
     assert events == []
+    assert unsupported == [
+        {"file": "db/migrate/x.rb", "line": 1, "statement": "ALTER SEQUENCE web_hook_events_id_seq AS bigint"}
+    ]

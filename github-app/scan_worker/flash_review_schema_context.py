@@ -60,7 +60,7 @@ def _is_migration_file(evidence: dict, file_path: str) -> bool:
     )
 
 
-def _resolve_raw_sql_events(events: list[dict], sql_dialect: str) -> list[dict]:
+def _resolve_raw_sql_events(events: list[dict], sql_dialect: str) -> tuple[list[dict], list[dict]]:
     """Rails' `execute`, Django's `RunSQL`, and Alembic's `op.execute` all
     surface as a `raw_sql` event carrying literal SQL text, not a
     structural fact on its own - schema_map.py's own full-scan merge
@@ -70,38 +70,52 @@ def _resolve_raw_sql_events(events: list[dict], sql_dialect: str) -> list[dict]:
     DSL doesn't cover directly (confirmed real and common: a real
     Discourse migration used `execute "ALTER SEQUENCE ... AS bigint"`)
     isn't silently invisible here just because it didn't go through
-    add_column/remove_column/etc. directly."""
+    add_column/remove_column/etc. directly. Returns (events, unsupported):
+    unsupported carries real statement text for SQL the extractor can
+    tokenize but not model (GRANT/REVOKE, raw DML, etc.) - schema_map.py's
+    own merge keeps these rather than dropping them, so this does too."""
     resolved: list[dict] = []
+    unsupported: list[dict] = []
     for event in events:
         if event.get("kind") == "raw_sql":
             sql_text = event.get("sql")
             if sql_text:
-                sql_events, _unsupported = sql_events_from_text(sql_text, event["file"], dialect=sql_dialect)
+                sql_events, sql_unsupported = sql_events_from_text(sql_text, event["file"], dialect=sql_dialect)
                 resolved.extend(sql_events)
+                unsupported.extend(sql_unsupported)
             continue
         resolved.append(event)
-    return resolved
+    return resolved, unsupported
 
 
-def _migration_events_for_file(file_path: str, content: str, sql_dialect: str) -> list[dict]:
-    """Real DDL events this one changed file's new content produces -
-    dispatched by extension, then (for .py, which Django and Alembic both
-    use) by the same content sniff orm_migrations.py's own directory scan
-    uses, so a file this module treats as Django/Alembic is identified the
-    same way a real scan would identify it.
+def _migration_events_for_file(
+    file_path: str, content: str, sql_dialect: str
+) -> tuple[list[dict], list[dict]]:
+    """Real DDL events this one changed file's new content produces, and
+    any unsupported (tokenized but not modeled) statements alongside them
+    - dispatched by extension, then (for .py, which Django and Alembic
+    both use) by the same content sniff orm_migrations.py's own directory
+    scan uses, so a file this module treats as Django/Alembic is
+    identified the same way a real scan would identify it. Django is
+    checked before the Alembic content sniff: `_DJANGO_SNIFF_MARKERS`
+    (`django.db`, `migrations.Migration`) only matches real Django
+    migration boilerplate, while the Alembic check is a bare substring
+    test for `down_revision` that a Django file could contain incidentally
+    (a comment, a string, an unrelated variable) - checking the more
+    specific marker first avoids misrouting a Django file to the Alembic
+    parser.
     """
     source = content.encode("utf-8", errors="replace")
     if file_path.endswith(".sql"):
-        events, _unsupported = sql_events_from_text(content, file_path, dialect=sql_dialect)
-        return events
+        return sql_events_from_text(content, file_path, dialect=sql_dialect)
     if file_path.endswith(".rb"):
         return _resolve_raw_sql_events(rails_events_from_source(source, file_path), sql_dialect)
     if file_path.endswith(".py"):
-        if b"down_revision" in source:
-            return _resolve_raw_sql_events(alembic_events_from_source(source, file_path), sql_dialect)
         if looks_like_django_migration(source):
             return _resolve_raw_sql_events(django_events_from_source(source, file_path), sql_dialect)
-    return []
+        if b"down_revision" in source:
+            return _resolve_raw_sql_events(alembic_events_from_source(source, file_path), sql_dialect)
+    return [], []
 
 
 def _summarize_event(event: dict) -> str | None:
@@ -147,6 +161,17 @@ def _summarize_event(event: dict) -> str | None:
     return None
 
 
+def _summarize_unsupported(entry: dict) -> str:
+    """A tokenized-but-not-modeled statement, with its real text - the
+    same "recorded as unsupported, never silently dropped" fact
+    schema_map.py's own full-scan merge exposes via
+    `repository.database.schema.unsupported`, so a migration's raw SQL
+    that the extractor can't structurally model (GRANT/REVOKE, raw DML,
+    an unrecognized DDL shape) is still visible to the reviewing model
+    instead of vanishing without a trace."""
+    return f"UNSUPPORTED (not modeled, real text): {entry.get('statement')}"
+
+
 def build_schema_endpoint_context(
     evidence: dict | None, changed_files: list[str], file_contents: dict[str, str]
 ) -> str:
@@ -164,23 +189,26 @@ def build_schema_endpoint_context(
             endpoints_by_file.setdefault(endpoint["file"], []).append(endpoint)
 
     lines: list[str] = []
-    total_bytes = 0
 
     def emit(line: str) -> bool:
-        nonlocal total_bytes
-        encoded_len = len(line.encode("utf-8"))
-        if total_bytes + encoded_len > MAX_SCHEMA_ENDPOINT_BYTES:
+        # Checks the real encoded size of the final joined output (header
+        # + every line + the "\n" separators between them), not just this
+        # line's own bytes - a running total of line bytes alone under-
+        # counts by the header and every separator, letting the actual
+        # returned context exceed MAX_SCHEMA_ENDPOINT_BYTES by that much.
+        candidate = lines + [line]
+        if len(_joined(candidate).encode("utf-8")) > MAX_SCHEMA_ENDPOINT_BYTES:
             return False
         lines.append(line)
-        total_bytes += encoded_len
         return True
 
     for file_path in changed_files:
         if _is_migration_file(evidence, file_path):
             content = file_contents.get(file_path)
             if content is not None:
-                events = _migration_events_for_file(file_path, content, sql_dialect)
+                events, unsupported = _migration_events_for_file(file_path, content, sql_dialect)
                 summaries = [s for s in (_summarize_event(e) for e in events) if s]
+                summaries += [_summarize_unsupported(u) for u in unsupported]
                 if summaries:
                     if not emit(f"{file_path} is a migration - real schema changes it makes:"):
                         return _joined(lines)
