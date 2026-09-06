@@ -1452,9 +1452,9 @@ def test_vendored_and_minified_files_are_not_indexed(tmp_path):
 
 
 def test_chunk_text_is_truncated_to_the_embedding_limit(tmp_path):
-    """nomic-embed-text has a hard 2048-token context. The hosted side already
-    learned this: 6600 chars succeeded, 6990 failed, and its cache sat at a 0%
-    hit rate for 38 hours because every call was silently failing."""
+    """A genuinely oversized chunk must still be clipped before embedding -
+    see MAX_EMBEDDING_CHARS' own comment for the real jina-tokenizer
+    measurement behind its current value."""
     huge = "x = 1  # " + "y" * 40_000
     (tmp_path / "big.py").write_text(f"def f():\n    {huge}\n")
     evidence = {"repository": {"modules": [{
