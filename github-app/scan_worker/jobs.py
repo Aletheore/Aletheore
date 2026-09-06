@@ -1889,6 +1889,15 @@ def _run_flash_review(
     # everything), matching every other config-read in this codebase's
     # fail-open-on-infra-error discipline - a missing config must never
     # block the review that's this job's actual deliverable.
+    #
+    # Passed to BOTH fetch_pr_diff AND fetch_pr_changed_files below - an
+    # earlier version only threaded it into the diff fetch, so an ignored
+    # file's raw diff text was scrubbed from the prompt but its full
+    # content was still fetched and its schema/endpoint facts (via
+    # build_schema_endpoint_context, which reads from changed_files, not
+    # diff_text) could still surface in commentary about a different,
+    # non-ignored file - the exact leak this whole mechanism exists to
+    # close, just via a second, separate file-listing call.
     try:
         repo_config_text = fetch_file_content(client, token, repo_full_name, ".aletheore.json", ref=head_sha)
     except Exception:  # noqa: BLE001
@@ -1918,7 +1927,9 @@ def _run_flash_review(
             len(diff_budget_omitted_files),
             ", ".join(diff_budget_omitted_files[:10]),
         )
-    changed_files = fetch_pr_changed_files(client, token, repo_full_name, diff_base, head_sha)
+    changed_files = fetch_pr_changed_files(
+        client, token, repo_full_name, diff_base, head_sha, ignored_paths=ignored_paths
+    )
     # GitHub's changed-files listing carries no relevance ordering - sorted
     # once here so every downstream context builder (evidence, dependency
     # impact, referenced symbols, file content) sees the most surgical
