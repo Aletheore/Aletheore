@@ -7,6 +7,53 @@ from aletheore.ast_pattern import (
 )
 
 
+class _FakeFuture:
+    """Stands in for concurrent.futures.Future so batch-outcome handling
+    (BrokenProcessPool / timeout / any other exception) can be exercised
+    deterministically and fast - a real segfault or a real hung worker is
+    exactly what this module's own docstring says is probabilistic and
+    needs a real large repo to reproduce even then, unsuitable for a fast
+    unit test."""
+
+    def __init__(self, value=None, exc=None):
+        self._value = value
+        self._exc = exc
+
+    def result(self, timeout=None):
+        if self._exc is not None:
+            raise self._exc
+        return self._value
+
+
+class _FakeProcess:
+    def __init__(self):
+        self.terminated = False
+
+    def terminate(self):
+        self.terminated = True
+
+
+class _FakeExecutor:
+    """Stands in for ProcessPoolExecutor - submit() hands back the next
+    pre-scripted future in order, one per real batch search_ast_pattern
+    would submit."""
+
+    def __init__(self, futures):
+        self.futures = list(futures)
+        self.submitted_calls = []
+        self._processes = {"fake-pid": _FakeProcess()}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def submit(self, fn, *args, **kwargs):
+        self.submitted_calls.append((fn, args, kwargs))
+        return self.futures.pop(0)
+
+
 def test_search_ast_pattern_matches_a_function_with_a_try_statement(tmp_path):
     (tmp_path / "app.py").write_text(
         "def plain():\n"
@@ -197,3 +244,94 @@ def test_search_ast_pattern_drops_a_single_match_that_alone_exceeds_the_char_bud
     )
     assert total_chars <= 20
     assert result["truncated"] is True
+
+
+def test_search_ast_pattern_keeps_earlier_batches_when_a_later_worker_raises(tmp_path, monkeypatch):
+    """Real bug found via audit: only BrokenProcessPool was caught, so any
+    OTHER exception inside a batch's worker (a bug in match/capture
+    processing, MemoryError/RecursionError on a pathological file)
+    propagated out of search_ast_pattern entirely, discarding every
+    earlier batch's real, already-collected results instead of honoring
+    the same truncation contract a segfault gets."""
+    import aletheore.ast_pattern as ast_pattern_module
+
+    monkeypatch.setattr(ast_pattern_module, "_AST_PATTERN_BATCH_SIZE", 1)
+    (tmp_path / "a.py").write_text("def f():\n    pass\n")
+    (tmp_path / "b.py").write_text("def g():\n    pass\n")
+
+    futures = [
+        _FakeFuture(value=([{"file": "a.py", "captures": {}}], 10, False)),
+        _FakeFuture(exc=RuntimeError("simulated worker bug")),
+    ]
+    fake_executor = _FakeExecutor(futures)
+    monkeypatch.setattr(ast_pattern_module, "ProcessPoolExecutor", lambda *a, **k: fake_executor)
+
+    result = search_ast_pattern(tmp_path, "python", "(function_definition) @f")
+
+    assert result["matches"] == [{"file": "a.py", "captures": {}}]
+    assert result["truncated"] is True
+
+
+def test_search_ast_pattern_terminates_and_truncates_on_a_hung_worker(tmp_path, monkeypatch):
+    """Real bug found via audit: a hung worker (an infinite loop, not a
+    crash) had no time bound at all - future.result() was called with no
+    timeout. On a timeout, the still-alive worker process must be
+    terminated too, or the executor's own shutdown() at the `with` block's
+    exit would block waiting for it to exit, for exactly as long as the
+    hang lasts - defeating the timeout's purpose."""
+    import aletheore.ast_pattern as ast_pattern_module
+
+    monkeypatch.setattr(ast_pattern_module, "_AST_PATTERN_BATCH_SIZE", 1)
+    (tmp_path / "a.py").write_text("def f():\n    pass\n")
+
+    fake_executor = _FakeExecutor([_FakeFuture(exc=ast_pattern_module.FutureTimeoutError())])
+    monkeypatch.setattr(ast_pattern_module, "ProcessPoolExecutor", lambda *a, **k: fake_executor)
+
+    result = search_ast_pattern(tmp_path, "python", "(function_definition) @f")
+
+    assert result["matches"] == []
+    assert result["truncated"] is True
+    assert all(p.terminated for p in fake_executor._processes.values())
+
+
+def test_search_ast_pattern_still_honors_broken_process_pool(tmp_path, monkeypatch):
+    from concurrent.futures.process import BrokenProcessPool
+
+    import aletheore.ast_pattern as ast_pattern_module
+
+    monkeypatch.setattr(ast_pattern_module, "_AST_PATTERN_BATCH_SIZE", 1)
+    (tmp_path / "a.py").write_text("def f():\n    pass\n")
+    (tmp_path / "b.py").write_text("def g():\n    pass\n")
+
+    futures = [
+        _FakeFuture(value=([{"file": "a.py", "captures": {}}], 10, False)),
+        _FakeFuture(exc=BrokenProcessPool("simulated segfault")),
+    ]
+    fake_executor = _FakeExecutor(futures)
+    monkeypatch.setattr(ast_pattern_module, "ProcessPoolExecutor", lambda *a, **k: fake_executor)
+
+    result = search_ast_pattern(tmp_path, "python", "(function_definition) @f")
+
+    assert result["matches"] == [{"file": "a.py", "captures": {}}]
+    assert result["truncated"] is True
+
+
+def test_search_ast_pattern_uses_a_fresh_worker_process_per_batch(tmp_path, monkeypatch):
+    """max_tasks_per_child=1 is load-bearing (see module docstring) - the
+    default reuses one worker across every submitted batch, which would
+    recreate the exact unbounded in-process accumulation the batching fix
+    exists to prevent."""
+    import aletheore.ast_pattern as ast_pattern_module
+
+    captured_kwargs = {}
+
+    def fake_process_pool_executor(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return _FakeExecutor([_FakeFuture(value=([], 0, False))])
+
+    (tmp_path / "a.py").write_text("def f():\n    pass\n")
+    monkeypatch.setattr(ast_pattern_module, "ProcessPoolExecutor", fake_process_pool_executor)
+
+    search_ast_pattern(tmp_path, "python", "(function_definition) @f")
+
+    assert captured_kwargs.get("max_tasks_per_child") == 1

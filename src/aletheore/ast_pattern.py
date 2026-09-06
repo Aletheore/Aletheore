@@ -40,6 +40,17 @@ one batch's worker, not the whole call: caught as BrokenProcessPool,
 every earlier batch's real results are kept, the remainder is marked
 truncated - the same honest-truncation contract _AST_PATTERN_MATCH_CAP/
 _AST_PATTERN_TOTAL_CHAR_BUDGET already use, not a silent gap. Verified
+
+CORRECTION (backward audit, this session): the original fix only caught
+BrokenProcessPool, so any OTHER exception inside a batch's worker (a bug
+in match/capture processing, MemoryError/RecursionError on a pathological
+file) propagated out of search_ast_pattern entirely, discarding every
+earlier batch's real results - not the honest-truncation contract the
+rest of this docstring claims. A hung worker (an infinite loop, not a
+crash) had no time bound at all either. Both fixed: future.result() now
+takes a timeout, and any exception (not just BrokenProcessPool) marks the
+result truncated and returns what was already collected, same as a
+segfault.
 against the exact case that crashed above: `(try_statement) @try` against
 Django's real tree, 20 consecutive runs, 0 crashes (see
 benchmarks/ast-pattern-benchmark/ for the full before/after methodology).
@@ -70,6 +81,7 @@ graph regardless of how many calls the parent process lives through.
 """
 
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 
@@ -108,6 +120,15 @@ _AST_PATTERN_TOTAL_CHAR_BUDGET = 100_000
 # here just changes how often a batch's worker gets recycled, not whether
 # results are silently incomplete.
 _AST_PATTERN_BATCH_SIZE = 200
+
+# A segfault (BrokenProcessPool) is fast and already caught below - this
+# bounds the other failure mode a crash doesn't cover: a worker that never
+# returns at all (an infinite loop or blocked I/O inside a pathological
+# file/query combination). Generous on purpose - a real batch of 200 files
+# is not expected to approach this - since the cost of guessing too low is
+# a real in-progress batch getting killed, not silent incompleteness (same
+# honest-truncation contract as every other cap in this module).
+_AST_PATTERN_BATCH_TIMEOUT_SECONDS = 60.0
 
 
 def _extensions_and_languages_for(language: str) -> list[tuple[str, object]]:
@@ -273,13 +294,39 @@ def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> dic
                 chars_remaining,
             )
             try:
-                batch_results, batch_chars, batch_truncated = future.result()
+                batch_results, batch_chars, batch_truncated = future.result(
+                    timeout=_AST_PATTERN_BATCH_TIMEOUT_SECONDS
+                )
             except BrokenProcessPool:
                 # This batch's worker segfaulted (see module docstring's
                 # FIX note). Every earlier batch's results are real and
                 # already in `results` - kept, not discarded. This batch's
                 # own in-flight work is lost, same as any other
                 # truncation: honest, not silent.
+                truncated = True
+                break
+            except FutureTimeoutError:
+                # Not a crash - the worker is still alive but exceeded its
+                # time budget, a failure mode BrokenProcessPool does not
+                # catch. Best-effort terminate it: the executor's own
+                # shutdown() (below, at the `with` block's exit) waits for
+                # every worker to actually exit, which would block for
+                # exactly as long as the hang lasts otherwise - defeating
+                # the point of a timeout. `_processes` is private API, so
+                # this is wrapped defensively rather than assumed stable.
+                try:
+                    for process in executor._processes.values():
+                        process.terminate()
+                except Exception:
+                    pass
+                truncated = True
+                break
+            except Exception:
+                # Any other failure inside this batch's worker (a bug in
+                # match/capture processing, MemoryError/RecursionError on a
+                # pathological file) must not discard every earlier
+                # batch's real, already-collected results - same
+                # honest-truncation contract as a segfault or a timeout.
                 truncated = True
                 break
             results.extend(batch_results)
