@@ -1048,6 +1048,35 @@ def upgrade():
     assert "drop_constraint" in events[0]["statement"]
 
 
+def test_alembic_batch_alter_table_unmodeled_method_falls_through_to_unsupported(tmp_path):
+    # Real bug found via this PR's own Flash Review: a batch_op method
+    # that's neither modeled nor in _ALEMBIC_BATCH_UNSUPPORTED_METHODS
+    # (e.g. add_constraint) fell through _alembic_batch_op_events' own
+    # `return []` fallback with zero event and no `unsupported` flag -
+    # the exact silent-drop bug class this PR exists to fix, reintroduced
+    # for batch mode specifically.
+    repo = write_files(
+        tmp_path,
+        {
+            "alembic/versions/abc123_init.py": """
+from alembic import op
+import sqlalchemy as sa
+
+revision = "abc123"
+down_revision = None
+
+def upgrade():
+    with op.batch_alter_table('accounts') as batch_op:
+        batch_op.add_constraint(sa.CheckConstraint('age >= 0', name='ck_accounts_age'))
+"""
+        },
+    )
+    events, _ = extract_alembic_migrations(repo, ["alembic/versions"])
+    assert len(events) == 1
+    assert events[0]["kind"] == "unsupported"
+    assert "add_constraint" in events[0]["statement"]
+
+
 # ---------------------------------------------------------------------------
 # extract_schema integration: dialect list + no cross-parser interference
 # ---------------------------------------------------------------------------

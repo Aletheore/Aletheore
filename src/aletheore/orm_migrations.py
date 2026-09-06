@@ -166,6 +166,17 @@ _ALEMBIC_BATCH_UNSUPPORTED_METHODS = {
     "create_primary_key",
 }
 
+# The methods _alembic_batch_op_events actually models. Real Flash Review
+# finding on this PR: a batch_op method that's neither here nor in
+# _ALEMBIC_BATCH_UNSUPPORTED_METHODS (e.g. batch_op.add_constraint) fell
+# through _alembic_batch_op_events' own `return []` fallback with no event
+# and no `unsupported` flag - silently dropped, the exact bug class this
+# whole PR exists to fix, just reintroduced for batch mode specifically.
+_ALEMBIC_BATCH_METHODS = {
+    "add_column", "drop_column", "alter_column", "create_index",
+    "drop_index", "create_foreign_key", "execute",
+}
+
 
 def _py_parser() -> Parser:
     parser = Parser()
@@ -945,6 +956,19 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
             if op_name is None:
                 continue
             if op_name in _ALEMBIC_BATCH_UNSUPPORTED_METHODS:
+                events.append(
+                    {"kind": "unsupported", "file": rel_path, "line": line,
+                     "statement": f"batch_op.{op_name}(...) not modeled"}
+                )
+                continue
+            if op_name not in _ALEMBIC_BATCH_METHODS:
+                # Genuinely unrecognized batch_op method (e.g.
+                # batch_op.add_constraint) - flag it rather than falling
+                # through to _alembic_batch_op_events' own `return []`
+                # fallback, which is reserved for a RECOGNIZED method
+                # whose specific arguments didn't parse (same silent
+                # convention every other op dispatch in this module uses
+                # for that narrower case).
                 events.append(
                     {"kind": "unsupported", "file": rel_path, "line": line,
                      "statement": f"batch_op.{op_name}(...) not modeled"}
