@@ -80,6 +80,7 @@ down at call end, so nothing carries over into the next call's object
 graph regardless of how many calls the parent process lives through.
 """
 
+import logging
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from concurrent.futures.process import BrokenProcessPool
@@ -93,6 +94,9 @@ from aletheore.scanner.graph import (
     _iter_source_files,
     _read_and_parse,
 )
+
+
+logger = logging.getLogger("aletheore.ast_pattern")
 
 
 class UnknownLanguageError(Exception):
@@ -318,7 +322,18 @@ def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> dic
                     for process in executor._processes.values():
                         process.terminate()
                 except Exception:
-                    pass
+                    # `_processes` is private API - if a future Python
+                    # version renames/removes it, this must degrade to
+                    # "the timeout still bounds our own wait, the worker
+                    # may linger a bit longer than ideal" rather than
+                    # crashing the whole search. Logged, not silent -
+                    # a real Flash Review finding on this PR: swallowing
+                    # this with a bare `pass` gave no way to notice if
+                    # the private API ever actually broke.
+                    logger.warning(
+                        "ast_pattern: could not terminate a hung batch worker "
+                        "after timeout (best-effort only)", exc_info=True,
+                    )
                 truncated = True
                 break
             except Exception:

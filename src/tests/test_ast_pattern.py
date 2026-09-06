@@ -54,6 +54,20 @@ class _FakeExecutor:
         return self.futures.pop(0)
 
 
+class _BrokenProcessesExecutor(_FakeExecutor):
+    """Simulates `_processes` being unavailable - e.g. a future Python
+    version renaming/removing the private attribute the best-effort
+    timeout termination relies on."""
+
+    @property
+    def _processes(self):
+        raise AttributeError("simulated: _processes no longer exists")
+
+    @_processes.setter
+    def _processes(self, value):
+        pass
+
+
 def test_search_ast_pattern_matches_a_function_with_a_try_statement(tmp_path):
     (tmp_path / "app.py").write_text(
         "def plain():\n"
@@ -292,6 +306,32 @@ def test_search_ast_pattern_terminates_and_truncates_on_a_hung_worker(tmp_path, 
     assert result["matches"] == []
     assert result["truncated"] is True
     assert all(p.terminated for p in fake_executor._processes.values())
+
+
+def test_search_ast_pattern_logs_but_does_not_crash_if_termination_itself_fails(
+    tmp_path, monkeypatch, caplog
+):
+    """Real Flash Review finding on this PR: the best-effort termination's
+    own `except Exception: pass` swallowed a failure with zero logging -
+    if `_processes` (private API) ever becomes unavailable, there would
+    be no way to notice. Must degrade to "still bounded by the timeout,
+    just couldn't terminate the worker" - never crash the whole search,
+    and never stay silent about it either."""
+    import aletheore.ast_pattern as ast_pattern_module
+
+    monkeypatch.setattr(ast_pattern_module, "_AST_PATTERN_BATCH_SIZE", 1)
+    (tmp_path / "a.py").write_text("def f():\n    pass\n")
+
+    fake_executor = _BrokenProcessesExecutor(
+        [_FakeFuture(exc=ast_pattern_module.FutureTimeoutError())]
+    )
+    monkeypatch.setattr(ast_pattern_module, "ProcessPoolExecutor", lambda *a, **k: fake_executor)
+
+    with caplog.at_level("WARNING", logger="aletheore.ast_pattern"):
+        result = search_ast_pattern(tmp_path, "python", "(function_definition) @f")
+
+    assert result == {"matches": [], "truncated": True}
+    assert any("could not terminate" in record.message for record in caplog.records)
 
 
 def test_search_ast_pattern_still_honors_broken_process_pool(tmp_path, monkeypatch):
