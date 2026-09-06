@@ -3,6 +3,67 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.12 — 2026-09-06
+
+- **Real database schema extraction, on every plan.** `schema_map.py` was rewritten on top of
+  `sqlglot` for multi-dialect SQL parsing, and a new `orm_migrations.py` module models
+  Django/Rails/Alembic migrations natively - tables, columns, and foreign-key relations are
+  extracted correctly instead of via a narrower regex-based pass. Previously gated behind a paid
+  plan; that gate is now removed, so `aletheore query database` and the schema/endpoint sections in
+  Docs export and AIRview work for everyone.
+- **Flash Review and AIRview can now cite real schema and endpoint facts, not just import-graph
+  structure** - a PR review or a generated architecture page can point at an actual table, column,
+  or foreign-key relation, grounded the same way every other citation in this codebase is (see
+  `citation_verifier.py`).
+- **Fixed a real clustering gap for Rails codebases.** `architecture.build_clusters` only ever saw
+  edges from literal import/`require` statements - Rails models relate to each other through
+  declarative `belongs_to`/`has_many` associations that never produce one, so a real 382-file
+  Discourse scan clustered as near-one-file-per-cluster despite obvious, real relationships between
+  models. New `model_associations.py` resolves these (including walking transitive
+  `ActiveRecord::Base` inheritance chains) into extra clustering edges, kept separate from the
+  import-graph edges reported as real dependencies.
+- **`aletheore mcp-install` gained Antigravity and Claude Desktop as targets**, on top of the
+  existing Claude Code / Cursor / VS Code / Kiro / Opencode / Codex CLI support. Claude Desktop's
+  config is architecturally different from every other target - a single file shared across every
+  project on the machine rather than one scoped per repo - so its entries are keyed by repo name to
+  avoid one install silently overwriting another.
+- **`ast_pattern` batch isolation actually isolates now.** A prior fix only caught one failure mode
+  (a worker segfault); any other exception in a batch still discarded every earlier batch's already-
+  collected results, and a hung worker had no timeout at all. Both fixed.
+- **Six real bugs fixed, found the way this project's real-repo audits keep finding them - testing
+  against actual code, not just this project's own test fixtures:**
+  - Scoped npm packages (`@scope/name`) and dotted package names (`normalize.css`, `chart.js`) were
+    both always flagged as unused dependencies, due to two separate string-normalization mismatches
+    - the same severity class of bug as 0.9.11's `unused_dependencies` fix, on a JS/TS-specific code
+      shape that fix's own (Python-only) verification couldn't have caught.
+  - The local embedding truncation cap (`MAX_EMBEDDING_CHARS`) was never revisited after the default
+    local model switched to jina (8192-token context vs. the old model's 2048) - large real chunks
+    were still being truncated at a boundary sized for a model no longer in use.
+  - Three real license-detection gaps: BSD license bodies that never contain the literal word "bsd"
+    (so unambiguously-BSD packages like Flask and gorilla-mux came back "unknown"), `LICENSE.rst`
+    missing from the checked filename list, and Maven license lookup never following `<parent>` POM
+    references.
+  - Six real secrets-scanner gaps in placeholder detection: private-key-header suppression,
+    generic-credential-assignment false-matching bare property references, missing truncation-
+    marker/`"default"` placeholder recognition, and PEM boilerplate with no real key body.
+  - A Markdown table-rendering bug in Docs export: a literal backtick in a column name broke out of
+    its code span (backslash-escaping a backtick isn't valid inside a Markdown code span) - found by
+    Aletheore's own Flash Review reviewing the PR that introduced it, fixed with a properly
+    variable-length fence per the CommonMark spec.
+  - The `ast_pattern`/tree-sitter segfault documented in 0.9.11 as "3.14-only" was confirmed to also
+    reproduce on 3.12 at real scale (Django's ~2,930-file tree) - the docs and `requires-python`
+    guard were corrected; the underlying `<3.14` cap from 0.9.11 was never wrong, just its stated
+    reason.
+- **Performance**: real token-based batching for hosted embedding indexing; local embedding now
+  defaults to jina, matching the hosted model; `watch`'s incremental rebuild skips architecture
+  analysis and hotspots recomputation on each debounced change (a deliberate trade-off) while still
+  carrying the last full analysis forward rather than silently blanking it; prompt-cache hit-rate is
+  now surfaced for LLM writing calls.
+- **Fixed `watch`'s incremental rebuild also discarding real security findings**, not just the
+  architecture-analysis skip above - a correctness bug, not a trade-off.
+- **`aletheore_ast_pattern` (MCP tool and CLI) now caps its result count and doesn't crash on an
+  unreadable file.**
+
 ## 0.9.11 — 2026-09-02
 
 - **Added structural code search: `aletheore query ast-pattern` and the
