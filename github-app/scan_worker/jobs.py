@@ -131,6 +131,7 @@ from scan_worker.flash_review import (
     order_changed_files_by_diff_size,
     review_diff,
 )
+from scan_worker.flash_review_schema_context import build_schema_endpoint_context
 from scan_worker.flash_review_cache import (
     lookup_cached_result as lookup_cached_flash_review_result,
     store_result as store_flash_review_result,
@@ -1999,6 +2000,12 @@ def _run_flash_review(
         if blast_radius_context:
             code_evidence_context = "\n\n".join(
                 part for part in (code_evidence_context, blast_radius_context) if part
+            )
+
+        schema_endpoint_context = build_schema_endpoint_context(evidence, changed_files, file_contents)
+        if schema_endpoint_context:
+            code_evidence_context = "\n\n".join(
+                part for part in (code_evidence_context, schema_endpoint_context) if part
             )
 
         hunk_scope_context = build_hunk_scope_correction_context(file_contents, diff_patches)

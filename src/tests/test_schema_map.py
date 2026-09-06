@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from aletheore.schema_map import extract_schema, skipped_schema
+from aletheore.schema_map import extract_schema, skipped_schema, sql_events_from_text
 from aletheore.wiki_diagrams import build_schema_diagram
 
 
@@ -991,3 +991,44 @@ def test_sqlite_trigger_with_internal_semicolons_is_not_fragmented(tmp_path):
     trigger_entries = [u for u in result["unsupported"] if u["statement"].startswith("CREATE TRIGGER")]
     assert len(trigger_entries) == 1
     assert not any(u["statement"].strip() == "END" for u in result["unsupported"])
+
+
+def test_sql_events_from_text_parses_a_single_statement_under_an_explicit_dialect():
+    # Public single-file entry point used by Flash Review's schema/endpoint
+    # context (github-app/scan_worker/flash_review_schema_context.py) to
+    # parse just a diff's changed migration file, independent of any real
+    # extract_schema() call elsewhere in the same process.
+    events, unsupported = sql_events_from_text(
+        "ALTER TABLE users DROP COLUMN legacy_id;", "migrations/002.sql", dialect="postgres"
+    )
+    assert events == [
+        {"kind": "remove_column", "table": "users", "name": "legacy_id",
+         "file": "migrations/002.sql", "line": 1}
+    ]
+    assert unsupported == []
+
+
+def test_sql_events_from_text_restores_the_module_dialect_after_use():
+    # extract_schema's own per-file loop sets the module-level _SQL_DIALECT
+    # immediately before use and relies on nothing else mutating it
+    # concurrently - a caller like Flash Review, running in a long-lived
+    # scan-worker process alongside real per-repo scans, must not leak a
+    # dialect change across calls.
+    import aletheore.schema_map as schema_map
+
+    schema_map._SQL_DIALECT = "mysql"
+    try:
+        sql_events_from_text("ALTER TABLE users DROP COLUMN legacy_id;", "x.sql", dialect="postgres")
+        assert schema_map._SQL_DIALECT == "mysql"
+    finally:
+        schema_map._SQL_DIALECT = schema_map._DEFAULT_SQL_DIALECT
+
+
+def test_sql_events_from_text_mysql_dialect_parses_change_column():
+    # A real dialect-specific construct (MySQL's CHANGE COLUMN, invalid
+    # under postgres) - confirms the explicit dialect argument actually
+    # takes effect, not just accepted and ignored.
+    events, _unsupported = sql_events_from_text(
+        "ALTER TABLE users CHANGE COLUMN legacy_id id BIGINT;", "x.sql", dialect="mysql"
+    )
+    assert any(e["kind"] == "rename_column" for e in events)
