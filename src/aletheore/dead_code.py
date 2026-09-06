@@ -429,8 +429,38 @@ def is_test_file(path: str) -> bool:
     return any(pattern.search(path) for pattern in TEST_PATH_PATTERNS)
 
 
-def _import_root(imported: str) -> str:
-    return imported.split("/", 1)[0].split(".", 1)[0].lower().replace("-", "_")
+def _import_root(imported: str, *, dotted: bool = True) -> str:
+    # A scoped npm package (`@scope/name`, e.g. `@testing-library/react`,
+    # `@angular/core`) is two path segments, not one - truncating at the
+    # first "/" (the plain-package case below) keeps only the bare scope
+    # (`@testing_library`), which can never match _package_import_names'
+    # normalization of the real package.json dependency key
+    # (`@testing_library/react`, since it only replaces "-" with "_" and
+    # leaves the "/" alone). That made every scoped package - a large
+    # fraction of real Angular/React/Vue/NestJS dependencies - always
+    # report as unused, confirmed directly: scanning a real repo with
+    # `@testing-library/react` as a real, imported dependency still
+    # flagged it unused. A further subpath (`@mui/material/Button`) still
+    # resolves to the installed package (`@mui/material`), matching how
+    # npm resolution itself works, not the file within it.
+    if imported.startswith("@"):
+        root = "/".join(imported.split("/", 2)[:2])
+    else:
+        root = imported.split("/", 1)[0]
+    # `dotted=True` (the default, used for Python) treats "." as a
+    # submodule separator - `import os.path` should resolve to root "os",
+    # matching how requirements.txt/pyproject.toml name the top-level
+    # package. That convention does not exist for npm: a real, published
+    # package can have a literal dot in its own name (`normalize.css`,
+    # `chart.js`, `socket.io-client`) with no submodule meaning at all -
+    # applying Python's rule there truncated the real package name
+    # (`normalize.css` -> `normalize`), which could then never match
+    # _package_import_names' identical, unsplit normalization of the real
+    # package.json key. _raw_external_import_roots passes dotted=False
+    # for JS/TS imports specifically.
+    if dotted:
+        root = root.split(".", 1)[0]
+    return root.lower().replace("-", "_")
 
 
 def _import_roots(modules: list[dict]) -> set[str]:
@@ -473,7 +503,15 @@ def _import_roots(modules: list[dict]) -> set[str]:
 # trade-off _parse_gradle_groovy_pins documents for itself.
 _PY_PLAIN_IMPORT_RE = re.compile(r"^\s*import\s+([A-Za-z_][\w.]*)", re.MULTILINE)
 _PY_FROM_IMPORT_RE = re.compile(r"^\s*from\s+([A-Za-z_][\w.]*)\s+import\b", re.MULTILINE)
-_JS_IMPORT_RE = re.compile(r"""(?:from|require\()\s*['"]([^'"]+)['"]""")
+# `from '...'` (a normal import) and `require('...')` were the only two
+# shapes recognized. Two other real, common shapes were missing entirely:
+# a side-effect-only import (`import 'normalize.css';` - no `from` clause
+# at all, common for CSS/polyfills) and a dynamic import
+# (`import('chart.js')` / `lazy(() => import('some-pkg'))` - common for
+# code-splitting/lazy-loaded libraries). A package imported only one of
+# these two ways was reported as an unused dependency every time.
+_JS_IMPORT_RE = re.compile(r"""(?:from|require\(|import\s*\()\s*['"]([^'"]+)['"]""")
+_JS_SIDE_EFFECT_IMPORT_RE = re.compile(r"""^\s*import\s*['"]([^'"]+)['"]""", re.MULTILINE)
 
 
 def _raw_external_import_roots(repo_path: Path, modules: list[dict]) -> set[str]:
@@ -482,8 +520,10 @@ def _raw_external_import_roots(repo_path: Path, modules: list[dict]) -> set[str]
         path = module["path"]
         if path.endswith(".py"):
             pattern_pairs = (_PY_PLAIN_IMPORT_RE, _PY_FROM_IMPORT_RE)
+            dotted = True
         elif path.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
-            pattern_pairs = (_JS_IMPORT_RE,)
+            pattern_pairs = (_JS_IMPORT_RE, _JS_SIDE_EFFECT_IMPORT_RE)
+            dotted = False
         else:
             continue
         try:
@@ -492,7 +532,7 @@ def _raw_external_import_roots(repo_path: Path, modules: list[dict]) -> set[str]
             continue
         for pattern in pattern_pairs:
             for match in pattern.finditer(source):
-                root = _import_root(match.group(1))
+                root = _import_root(match.group(1), dotted=dotted)
                 if root:
                     roots.add(root)
     return roots

@@ -444,6 +444,35 @@ def test_unused_dependency_check_reflects_a_real_scan_not_a_hand_built_modules_l
     assert evidence["repository"]["dead_code"]["unused_dependencies"] == []
 
 
+def test_unused_dependency_check_recognizes_a_used_scoped_npm_package(tmp_path):
+    # Real bug found via audit: a scoped npm dependency was always
+    # reported unused even when genuinely imported (see
+    # _import_root's docstring) - end-to-end through find_dead_code, the
+    # actual entry point customers see findings from.
+    (tmp_path / "package.json").write_text(
+        '{"dependencies": {"@testing-library/react": "^14.0.0", "normalize.css": "^8.0.1"}}'
+    )
+    (tmp_path / "index.js").write_text(
+        "import { render } from '@testing-library/react';\n"
+        "import 'normalize.css';\n"
+    )
+    modules = [{"path": "index.js", "imports": [], "imported_by": []}]
+    result = find_dead_code(tmp_path, modules, config=None)
+    unused = {(d["ecosystem"], d["package"]) for d in result["unused_dependencies"]}
+    assert ("npm", "@testing-library/react") not in unused
+    assert ("npm", "normalize.css") not in unused
+
+
+def test_import_root_only_splits_on_dot_for_python_not_js(tmp_path):
+    from aletheore.dead_code import _import_root
+
+    # Python's own dotted-submodule convention: `import os.path` -> "os".
+    assert _import_root("os.path") == "os"
+    # No such convention in npm - a literal dot is part of the package's
+    # own real name, not a submodule separator.
+    assert _import_root("chart.js", dotted=False) == "chart.js"
+
+
 def test_raw_external_import_roots_finds_python_plain_and_from_imports(tmp_path):
     (tmp_path / "app.py").write_text(
         "import requests\nfrom flask import Flask\nfrom . import local_module\n"
@@ -465,6 +494,45 @@ def test_raw_external_import_roots_finds_js_import_and_require(tmp_path):
     roots = _raw_external_import_roots(tmp_path, modules)
     assert "lodash" in roots
     assert "axios" in roots
+
+
+def test_raw_external_import_roots_finds_side_effect_and_dynamic_js_imports(tmp_path):
+    # Real bug found via audit: `import '...'` (no `from` clause - CSS/
+    # polyfill side-effect imports) and `import('...')` (dynamic/
+    # code-split imports) were both missing from the regex, so a package
+    # imported only one of these two ways was reported unused every time.
+    (tmp_path / "index.js").write_text(
+        "import 'normalize.css';\n"
+        "const loadChart = () => import('chart.js').then((m) => m.default);\n"
+    )
+    modules = [{"path": "index.js", "imports": [], "imported_by": []}]
+    roots = _raw_external_import_roots(tmp_path, modules)
+    # Real npm package names can contain a literal dot with no submodule
+    # meaning (unlike Python) - must not be truncated at it.
+    assert "normalize.css" in roots
+    assert "chart.js" in roots
+
+
+def test_raw_external_import_roots_resolves_scoped_npm_packages_to_scope_and_name(tmp_path):
+    # Real bug found via audit: _import_root split on the first "/" for
+    # every import, truncating a scoped npm package (`@scope/name`) down
+    # to just its bare scope (`@testing_library`) - which could never
+    # match _package_import_names' normalization of the real package.json
+    # key (`@testing_library/react`), so every scoped dependency
+    # (@angular/*, @babel/*, @nestjs/*, @vue/*, @types/*, etc.) was
+    # unconditionally flagged unused.
+    (tmp_path / "index.js").write_text(
+        "import { render } from '@testing-library/react';\n"
+        "import Button from '@mui/material/Button';\n"
+    )
+    modules = [{"path": "index.js", "imports": [], "imported_by": []}]
+    roots = _raw_external_import_roots(tmp_path, modules)
+    assert "@testing_library/react" in roots
+    assert "@testing_library" not in roots
+    # A subpath import of a scoped package resolves to the installed
+    # package (scope + name), not the file within it.
+    assert "@mui/material" in roots
+    assert "@mui/material/button" not in roots
 
 
 def test_script_with_main_guard_is_never_unreachable(tmp_path):

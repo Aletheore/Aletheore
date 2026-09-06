@@ -447,6 +447,7 @@ def fetch_pr_changed_files(
     repo_full_name: str,
     base_ref: str,
     head_ref: str,
+    ignored_paths: list[str] = (),
 ) -> list[str]:
     headers = {
         "Authorization": f"token {token}",
@@ -457,7 +458,16 @@ def fetch_pr_changed_files(
         headers=headers,
     )
     response.raise_for_status()
-    return [file["filename"] for file in response.json().get("files", [])]
+    filenames = [file["filename"] for file in response.json().get("files", [])]
+    # Same exclusion fetch_pr_diff already applies to diff text - without
+    # it here too, Flash Review's schema/endpoint context and full-file-
+    # content fetch (both built from this list, see _run_flash_review)
+    # could still surface facts about a path a customer explicitly
+    # configured .aletheore.json's ignored_paths to exclude, even though
+    # the diff text itself was correctly scrubbed.
+    if ignored_paths:
+        filenames = [f for f in filenames if not is_ignored(f, ignored_paths)]
+    return filenames
 
 
 def fetch_pr_context(
