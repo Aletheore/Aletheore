@@ -1802,6 +1802,7 @@ def test_flash_review_job_routes_free_tier_to_free_tier_path(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
     monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.build_code_evidence_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_dependency_impact_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_change_impact_context", lambda *a: "")
@@ -1890,6 +1891,8 @@ def test_flash_review_job_reserves_the_free_tier_monthly_count_atomically(monkey
         return True
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"}
     )
@@ -1924,6 +1927,8 @@ def test_flash_review_job_reserves_the_free_tier_monthly_count_atomically(monkey
 
 def test_flash_review_job_skips_when_over_the_free_tier_monthly_cap(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"}
     )
@@ -1999,6 +2004,7 @@ def test_flash_review_job_alerts_ops_when_all_free_tier_providers_fail(monkeypat
     monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
     monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.build_code_evidence_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_dependency_impact_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_change_impact_context", lambda *a: "")
@@ -2084,6 +2090,7 @@ def test_flash_review_does_not_post_or_advance_sha_when_free_tier_exhausted(monk
     monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
     monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.build_code_evidence_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_dependency_impact_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_change_impact_context", lambda *a: "")
@@ -2134,6 +2141,8 @@ def test_flash_review_does_not_post_or_advance_sha_when_free_tier_exhausted(monk
 
 def test_flash_review_job_skips_when_debounced(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
     )
@@ -2166,6 +2175,8 @@ def test_flash_review_job_skips_when_debounced(monkeypatch):
 
 def test_flash_review_job_skips_when_spend_cap_reached(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
     )
@@ -2211,6 +2222,8 @@ def test_flash_review_job_skips_when_spend_cap_reached(monkeypatch):
 
 def test_flash_review_job_skips_when_monthly_review_count_reached(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
     )
@@ -2253,6 +2266,8 @@ def test_flash_review_job_skips_when_monthly_review_count_reached(monkeypatch):
 
 def test_flash_review_job_skips_model_call_for_lockfile_only_diff(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
     )
@@ -2308,6 +2323,8 @@ def test_flash_review_job_skips_model_call_for_lockfile_only_diff(monkeypatch):
 
 def test_flash_review_job_posts_findings_and_updates_state(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
     )
@@ -2401,6 +2418,8 @@ def test_flash_review_job_excludes_aletheore_json_ignored_paths_from_the_diff(mo
     # PR head and threaded into fetch_pr_diff as ignored_paths.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
@@ -2510,6 +2529,7 @@ def test_flash_review_job_attaches_symbol_attribution_from_deterministic_evidenc
             }
         },
     )
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.review_diff",
         lambda diff_text, file_context="", **kwargs: [
@@ -2564,6 +2584,8 @@ def test_flash_review_job_reserves_the_cap_before_running_the_review(monkeypatch
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
@@ -2623,6 +2645,8 @@ def test_flash_review_job_releases_reservation_when_the_review_never_runs(monkey
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "free"})
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
@@ -2672,6 +2696,8 @@ def test_flash_review_job_does_not_release_reservation_after_a_successful_review
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
@@ -2723,6 +2749,8 @@ def test_flash_review_job_does_not_release_reservation_after_a_successful_review
 def test_flash_review_job_posts_grounding_note_when_some_findings_are_dropped(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
@@ -2776,6 +2804,8 @@ def test_flash_review_job_posts_grounding_note_when_some_findings_are_dropped(mo
 def test_flash_review_job_reports_zero_grounded_distinctly_from_no_issues_found(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
@@ -2840,6 +2870,8 @@ def test_flash_review_job_reports_zero_confirmed_distinctly_from_zero_grounded(m
     # distinct second-model verification step.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
@@ -2899,6 +2931,8 @@ def test_flash_review_job_discloses_files_it_never_reviewed(monkeypatch):
     # MAX_CONTEXT_FILES, so this is reachable on any sufficiently large PR.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
     )
@@ -2958,6 +2992,8 @@ def test_flash_review_job_discloses_files_it_never_reviewed(monkeypatch):
 def test_flash_review_job_adds_no_coverage_note_when_every_file_was_read(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
     )
@@ -3014,6 +3050,8 @@ def test_flash_review_job_posts_failure_comment_instead_of_raising(monkeypatch):
     # nothing would tell the customer flash review had failed.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
@@ -3108,6 +3146,7 @@ def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkey
             },
         },
     )
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.fetch_file_content",
         lambda client, token, repo_full_name, path, ref: (
@@ -3173,6 +3212,7 @@ def test_flash_review_job_passes_changed_file_contents_to_review_diff(monkeypatc
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.fetch_review_file_context",
         lambda *a, **k: ("", {"app.py": "real content of app.py"}),
@@ -3227,6 +3267,7 @@ def test_flash_review_job_requests_second_model_verification_on_paid_plan(monkey
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
     captured = {}
     monkeypatch.setattr(
@@ -3282,6 +3323,11 @@ def test_flash_review_job_does_not_request_second_model_verification_on_flash_ti
     # not AIR's 500.
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "flash"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
@@ -3296,6 +3342,7 @@ def test_flash_review_job_does_not_request_second_model_verification_on_flash_ti
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
     captured = {}
     monkeypatch.setattr(
@@ -3347,6 +3394,7 @@ def test_flash_review_job_does_not_request_second_model_verification_on_free_tie
     monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
     monkeypatch.setattr("scan_worker.jobs.files_missing_from_review_context", lambda *a: [])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a: None)
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.build_code_evidence_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_dependency_impact_context", lambda *a: "")
     monkeypatch.setattr("scan_worker.jobs.build_change_impact_context", lambda *a: "")
@@ -3409,6 +3457,7 @@ def test_flash_review_job_never_sends_the_raw_file_context_blob_to_review_diff(m
     )
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
     monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.fetch_review_file_context",
         lambda *a, **k: (
@@ -3455,6 +3504,8 @@ def test_flash_review_job_never_sends_the_raw_file_context_blob_to_review_diff(m
 
 def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestion_syntax(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
     )
@@ -3519,6 +3570,8 @@ def test_flash_review_job_renders_suggestion_as_plain_fence_not_github_suggestio
 
 def test_flash_review_job_posts_no_issues_found_when_findings_empty(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
     )
@@ -5904,6 +5957,8 @@ def test_run_pr_scan_job_free_plan_is_not_subject_to_monthly_scan_cap(bare_repo_
 def test_flash_review_job_skips_paid_repo_past_monthly_scan_cap(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: False)
     attempted = []
     monkeypatch.setattr(
@@ -7759,3 +7814,56 @@ def test_run_git_scrubs_credentialed_url_from_a_failed_clone_error(tmp_path):
 
     assert "supersecrettoken" not in str(exc_info.value)
     assert "https://github.com/acme/does-not-exist.git" in exc_info.value.cmd
+
+
+def test_evidence_for_review_prefers_the_exact_head_sha_scan(monkeypatch):
+    # Real staleness bug this fixes: run_pr_scan_job and run_flash_review_job
+    # are enqueued independently on the same webhook event with no ordering
+    # between them, so _latest_evidence_or_none can point at a completely
+    # different branch/PR's scan than the one actually under review. When an
+    # exact scan for this head_sha exists, it must win over "whatever is
+    # latest for the repo."
+    import scan_worker.jobs as jobs_module
+
+    monkeypatch.setattr(
+        jobs_module, "_evidence_by_head_sha_or_none",
+        lambda dsn, inst, repo, sha: {"v": "exact-match-for-this-pr"},
+    )
+    monkeypatch.setattr(
+        jobs_module, "_latest_evidence_or_none",
+        lambda dsn, inst, repo: {"v": "some-other-branchs-later-scan"},
+    )
+
+    result = jobs_module._evidence_for_review_or_latest("dsn", 1, "a/b", "abc123")
+
+    assert result == {"v": "exact-match-for-this-pr"}
+
+
+def test_evidence_for_review_falls_back_to_latest_when_no_exact_scan_exists(monkeypatch):
+    # A brand-new PR whose own scan job hasn't finished yet (or a plan
+    # without full-scan entitlement) must still get a review - same
+    # staleness exposure as before this existed, never a regression.
+    import scan_worker.jobs as jobs_module
+
+    monkeypatch.setattr(jobs_module, "_evidence_by_head_sha_or_none", lambda dsn, inst, repo, sha: None)
+    monkeypatch.setattr(
+        jobs_module, "_latest_evidence_or_none",
+        lambda dsn, inst, repo: {"v": "latest-fallback"},
+    )
+
+    result = jobs_module._evidence_for_review_or_latest("dsn", 1, "a/b", "abc123")
+
+    assert result == {"v": "latest-fallback"}
+
+
+def test_evidence_by_head_sha_or_none_swallows_any_exception():
+    # A DB outage during this best-effort lookup must degrade to "no exact
+    # match," never propagate and abort the review that's the actual
+    # deliverable here.
+    import scan_worker.jobs as jobs_module
+
+    result = jobs_module._evidence_by_head_sha_or_none(
+        "postgresql://nonexistent-host-for-this-test:5432/x", 1, "a/b", "abc123"
+    )
+
+    assert result is None

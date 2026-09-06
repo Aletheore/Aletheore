@@ -64,8 +64,17 @@ def insert_repo_history(
     scanned_at: datetime,
     evidence: dict,
     keep: int = 20,
+    head_sha: str | None = None,
 ) -> int:
-    encoded = json.dumps(evidence)
+    # head_sha is tagged onto a shallow copy for storage, never onto the
+    # caller's own `evidence` object - run_pr_scan_job and friends keep
+    # using that same dict afterward (diff computation, check-run
+    # rendering) and must never see an extra key they didn't put there.
+    # See get_evidence_by_head_sha for why this exists: get_latest_evidence
+    # ("whatever is newest for this repo") can point at a completely
+    # different branch/PR's scan than the one a caller actually needs.
+    to_store = {**evidence, "_scan_head_sha": head_sha} if head_sha else evidence
+    encoded = json.dumps(to_store)
     check_evidence_size(encoded)
 
     with get_db_pool(dsn).connection() as conn:
@@ -807,6 +816,57 @@ def get_evidence_by_id(
                 WHERE id = %s AND installation_id = %s AND repo_full_name = %s
                 """,
                 (history_id, installation_id, repo_full_name),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+    return _version_gated_evidence(installation_id, repo_full_name, row[0])
+
+
+def get_evidence_by_head_sha(
+    dsn: str, installation_id: int, repo_full_name: str, head_sha: str, timeout: float | None = None
+) -> dict | None:
+    """The most recent scan recorded for this EXACT commit, not just
+    whatever is latest for the repo overall.
+
+    get_latest_evidence's "whatever is newest for this repo" is a real
+    staleness risk for a caller reviewing one specific commit (Flash
+    Review's real motivating case): run_pr_scan_job and run_flash_review_job
+    are enqueued independently on the same webhook event with no ordering
+    between them, and a repo with concurrent PR/push activity can have
+    "latest" point at a completely different branch's scan by the time
+    Flash Review reads it - not stale in the sense of "old," just scanned
+    from different code than the diff actually under review. Every scan
+    job now tags the evidence it persists with the commit it scanned (see
+    insert_repo_history's head_sha parameter), so this can find the exact
+    match instead of guessing from recency.
+
+    Returns None - never a guess - when no scan has recorded this exact
+    head_sha yet (the scan job hasn't finished, failed, or never ran for
+    this commit). Callers must fall back to get_latest_evidence, the same
+    behavior as before this existed - this is a strict improvement when a
+    match exists, never a regression when one doesn't.
+
+    timeout overrides how long to wait for a pool connection (psycopg_pool
+    otherwise retries for its full default ~30s even on an immediate
+    connection-refused, confirmed directly against this exact pool
+    config) - a caller for whom this is a best-effort optimization with an
+    already-defined fallback (see scan_worker.jobs._evidence_by_head_sha_or_none)
+    should pass something much shorter than that default.
+    """
+    connection_ctx = get_db_pool(dsn).connection(timeout) if timeout is not None else get_db_pool(dsn).connection()
+    with connection_ctx as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT evidence
+                FROM repo_history
+                WHERE installation_id = %s AND repo_full_name = %s
+                  AND evidence->>'_scan_head_sha' = %s
+                ORDER BY scanned_at DESC, id DESC
+                LIMIT 1
+                """,
+                (installation_id, repo_full_name, head_sha),
             )
             row = cur.fetchone()
             if row is None:
