@@ -1,6 +1,7 @@
 from scan_worker.flash_review_schema_context import (
     build_schema_endpoint_context,
     _is_migration_file,
+    _migration_events_for_file,
     _sql_dialect_for,
     _summarize_event,
 )
@@ -204,3 +205,43 @@ def test_summarize_event_covers_the_less_obvious_kinds():
                               "changes": {"nullable": None}}) is None
     assert _summarize_event({"kind": "unsupported", "statement": "x"}) is None
     assert _summarize_event({"kind": "raw_sql", "sql": "x"}) is None
+
+
+def test_rails_execute_raw_sql_is_resolved_into_a_real_structural_fact():
+    # Real gap found while testing against a real Discourse PR (#42490):
+    # Rails' execute("..."), Django's RunSQL, and Alembic's op.execute all
+    # surface as a raw_sql event carrying literal SQL text - previously
+    # left opaque here (no summary), even though schema_map.py's own
+    # full-scan merge already re-parses that text. A real migration using
+    # this escape hatch for something the ORM DSL doesn't cover directly
+    # (a real Discourse migration used execute to build an index) was
+    # silently invisible to this module before this fix.
+    content = """
+class AddIndexViaRawSql < ActiveRecord::Migration[7.0]
+  def up
+    execute "CREATE INDEX idx_users_email ON users (email)"
+  end
+end
+"""
+    events = _migration_events_for_file("db/migrate/x.rb", content, "postgres")
+    assert events == [
+        {"kind": "create_index", "table": "users", "name": "idx_users_email",
+         "columns": ["email"], "unique": False, "file": "db/migrate/x.rb", "line": 1}
+    ]
+
+
+def test_rails_execute_with_out_of_scope_sql_stays_silent_not_crashed():
+    # A real Discourse PR (#42490) used execute("ALTER SEQUENCE ... AS
+    # bigint") - ALTER SEQUENCE is a documented, legitimate scope
+    # exclusion in schema_map.py (not a table/column/index/relation
+    # change), so this correctly produces no summarizable event rather
+    # than crashing or fabricating one.
+    content = """
+class AlterSeq < ActiveRecord::Migration[8.0]
+  def up
+    execute "ALTER SEQUENCE web_hook_events_id_seq AS bigint"
+  end
+end
+"""
+    events = _migration_events_for_file("db/migrate/x.rb", content, "postgres")
+    assert events == []

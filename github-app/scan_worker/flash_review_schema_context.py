@@ -60,6 +60,29 @@ def _is_migration_file(evidence: dict, file_path: str) -> bool:
     )
 
 
+def _resolve_raw_sql_events(events: list[dict], sql_dialect: str) -> list[dict]:
+    """Rails' `execute`, Django's `RunSQL`, and Alembic's `op.execute` all
+    surface as a `raw_sql` event carrying literal SQL text, not a
+    structural fact on its own - schema_map.py's own full-scan merge
+    (_merge_schema_events) already re-parses that text through the SQL
+    extractor rather than leaving it opaque, and this does the same, so a
+    real migration using the raw-SQL escape hatch for something the ORM
+    DSL doesn't cover directly (confirmed real and common: a real
+    Discourse migration used `execute "ALTER SEQUENCE ... AS bigint"`)
+    isn't silently invisible here just because it didn't go through
+    add_column/remove_column/etc. directly."""
+    resolved: list[dict] = []
+    for event in events:
+        if event.get("kind") == "raw_sql":
+            sql_text = event.get("sql")
+            if sql_text:
+                sql_events, _unsupported = sql_events_from_text(sql_text, event["file"], dialect=sql_dialect)
+                resolved.extend(sql_events)
+            continue
+        resolved.append(event)
+    return resolved
+
+
 def _migration_events_for_file(file_path: str, content: str, sql_dialect: str) -> list[dict]:
     """Real DDL events this one changed file's new content produces -
     dispatched by extension, then (for .py, which Django and Alembic both
@@ -72,12 +95,12 @@ def _migration_events_for_file(file_path: str, content: str, sql_dialect: str) -
         events, _unsupported = sql_events_from_text(content, file_path, dialect=sql_dialect)
         return events
     if file_path.endswith(".rb"):
-        return rails_events_from_source(source, file_path)
+        return _resolve_raw_sql_events(rails_events_from_source(source, file_path), sql_dialect)
     if file_path.endswith(".py"):
         if b"down_revision" in source:
-            return alembic_events_from_source(source, file_path)
+            return _resolve_raw_sql_events(alembic_events_from_source(source, file_path), sql_dialect)
         if looks_like_django_migration(source):
-            return django_events_from_source(source, file_path)
+            return _resolve_raw_sql_events(django_events_from_source(source, file_path), sql_dialect)
     return []
 
 
