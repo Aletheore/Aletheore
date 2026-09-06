@@ -1,5 +1,6 @@
 import difflib
 import json
+import os
 import shutil
 import socket
 import sys
@@ -1112,7 +1113,26 @@ _MCP_CLIENT_CONFIGS: dict[str, tuple[str, str, Callable[[Path], dict]]] = {
 }
 
 
-def _write_json_mcp_client_config(config_path: Path, top_level_key: str, entry: dict) -> str:
+def _claude_desktop_config_path() -> Path | None:
+    """Claude Desktop's MCP config, verified against Anthropic's own
+    quickstart docs (modelcontextprotocol.io/quickstart/user) - unlike
+    every other target, it's a single global file, not scoped under the
+    repo being installed into. Desktop ships for macOS and Windows only
+    (no Linux build exists), so this returns None there rather than
+    guessing at a path nothing documents - same discipline already
+    applied to PyCharm's config below.
+    """
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        return Path(appdata) / "Claude" / "claude_desktop_config.json" if appdata else None
+    return None
+
+
+def _write_json_mcp_client_config(
+    config_path: Path, top_level_key: str, entry: dict, *, server_name: str = "aletheore"
+) -> str:
     if config_path.exists():
         try:
             data = json.loads(config_path.read_text())
@@ -1127,8 +1147,8 @@ def _write_json_mcp_client_config(config_path: Path, top_level_key: str, entry: 
     if not isinstance(servers, dict):
         return f"skipped (existing '{top_level_key}' is not a JSON object): {config_path}"
 
-    already_present = "aletheore" in servers
-    servers["aletheore"] = entry
+    already_present = server_name in servers
+    servers[server_name] = entry
     data[top_level_key] = servers
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1162,7 +1182,7 @@ def _write_toml_mcp_client_config(config_path: Path, top_level_key: str, entry: 
 
 def _mcp_install(path: str, targets: list[str]) -> int:
     repo_path = Path(path).resolve()
-    all_targets = [*_MCP_CLIENT_CONFIGS.keys(), "codex-cli"]
+    all_targets = [*_MCP_CLIENT_CONFIGS.keys(), "codex-cli", "claude-desktop"]
     selected = targets or all_targets
     unknown = [target for target in selected if target not in all_targets]
     if unknown:
@@ -1177,6 +1197,21 @@ def _mcp_install(path: str, targets: list[str]) -> int:
             config_path = repo_path / ".codex" / "config.toml"
             entry = {"command": _aletheore_command(), "args": ["mcp", str(repo_path)]}
             message = _write_toml_mcp_client_config(config_path, "mcp_servers", entry)
+        elif target == "claude-desktop":
+            config_path = _claude_desktop_config_path()
+            if config_path is None:
+                message = "skipped (Claude Desktop is only available on macOS and Windows)"
+            else:
+                entry = _stdio_entry(repo_path, include_type=False)
+                # Global file shared across every project on this machine -
+                # unlike every other target's per-repo file, keying this
+                # entry as plain "aletheore" would mean installing for a
+                # second repo silently overwrites the first repo's entry
+                # under the same key, since both would collide in the one
+                # shared file.
+                message = _write_json_mcp_client_config(
+                    config_path, "mcpServers", entry, server_name=f"aletheore-{repo_path.name}"
+                )
         else:
             relative_path, top_level_key, entry_builder = _MCP_CLIENT_CONFIGS[target]
             config_path = repo_path / relative_path
@@ -1223,6 +1258,19 @@ def _mcp_install(path: str, targets: list[str]) -> int:
             "check Codex's own trust prompt for this directory. Also note: writing this file "
             "reformats it - any hand-written comments in an existing config.toml are not preserved."
         )
+    if "claude-desktop" in selected:
+        if _claude_desktop_config_path() is None:
+            console.print(
+                "[bold]Claude Desktop:[/bold] skipped - only available on macOS and Windows "
+                "(see https://claude.ai/download)."
+            )
+        else:
+            console.print(
+                f"[bold]Claude Desktop:[/bold] wrote a config shared across every project on this "
+                f"machine, keyed as \"aletheore-{repo_path.name}\" so installing for a different repo "
+                "later won't overwrite this one. Fully quit and reopen Claude Desktop to pick it up - "
+                "MCP servers only load at startup."
+            )
     return 0
 
 
@@ -1646,7 +1694,7 @@ def mcp_install(
         "--target",
         help=(
             "which client(s) to configure (default: all); one of: "
-            f"{', '.join([*_MCP_CLIENT_CONFIGS.keys(), 'codex-cli'])}"
+            f"{', '.join([*_MCP_CLIENT_CONFIGS.keys(), 'codex-cli', 'claude-desktop'])}"
         ),
     ),
 ) -> None:

@@ -17,6 +17,7 @@ from aletheore.cli import (
     QUERY_KIND_GROUPS,
     _resolve_path,
     _aletheore_command,
+    _claude_desktop_config_path,
     _ElapsedTicker,
     _MCP_CLIENT_CONFIGS,
     _make_progress_printer,
@@ -426,7 +427,21 @@ def test_write_toml_mcp_client_config_skips_invalid_toml_without_crashing(tmp_pa
     assert config_path.read_text() == "not [ valid toml"
 
 
-def test_mcp_install_writes_all_json_targets_by_default(tmp_path):
+def _isolate_claude_desktop_home(monkeypatch, tmp_path) -> Path:
+    """Default `mcp-install` now targets claude-desktop too, which writes
+    outside the repo entirely - every test that runs a default (no
+    --target) install must isolate this or it would write into whatever
+    machine happens to run the suite. Forces macOS so behavior is
+    deterministic across dev machines and CI regardless of host OS."""
+    fake_home = tmp_path / "fake-home"
+    monkeypatch.setattr("aletheore.cli.sys.platform", "darwin")
+    monkeypatch.setenv("HOME", str(fake_home))
+    return fake_home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+
+
+def test_mcp_install_writes_all_json_targets_by_default(tmp_path, monkeypatch):
+    claude_desktop_path = _isolate_claude_desktop_home(monkeypatch, tmp_path)
+
     result = runner.invoke(app, ["mcp-install", str(tmp_path)])
 
     assert result.exit_code == 0
@@ -436,6 +451,7 @@ def test_mcp_install_writes_all_json_targets_by_default(tmp_path):
     assert (tmp_path / ".kiro" / "settings" / "mcp.json").exists()
     assert (tmp_path / "opencode.json").exists()
     assert (tmp_path / ".agents" / "mcp_config.json").exists()
+    assert claude_desktop_path.exists()
 
 
 def test_mcp_install_writes_antigravity_target(tmp_path, monkeypatch):
@@ -453,11 +469,93 @@ def test_mcp_install_writes_antigravity_target(tmp_path, monkeypatch):
     assert entry == {"command": "aletheore", "args": ["mcp", str(install_target.resolve())]}
 
 
-def test_mcp_install_default_now_includes_codex_cli(tmp_path):
+def test_mcp_install_default_now_includes_codex_cli(tmp_path, monkeypatch):
+    _isolate_claude_desktop_home(monkeypatch, tmp_path)
+
     result = runner.invoke(app, ["mcp-install", str(tmp_path)])
 
     assert result.exit_code == 0
     assert (tmp_path / ".codex" / "config.toml").exists()
+
+
+def test_claude_desktop_config_path_on_macos(monkeypatch, tmp_path):
+    monkeypatch.setattr("aletheore.cli.sys.platform", "darwin")
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert _claude_desktop_config_path() == (
+        tmp_path / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+    )
+
+
+def test_claude_desktop_config_path_on_windows(monkeypatch, tmp_path):
+    monkeypatch.setattr("aletheore.cli.sys.platform", "win32")
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+
+    assert _claude_desktop_config_path() == tmp_path / "Claude" / "claude_desktop_config.json"
+
+
+def test_claude_desktop_config_path_on_windows_without_appdata_is_none(monkeypatch):
+    monkeypatch.setattr("aletheore.cli.sys.platform", "win32")
+    monkeypatch.delenv("APPDATA", raising=False)
+
+    assert _claude_desktop_config_path() is None
+
+
+def test_claude_desktop_config_path_on_linux_is_none(monkeypatch):
+    monkeypatch.setattr("aletheore.cli.sys.platform", "linux")
+
+    assert _claude_desktop_config_path() is None
+
+
+def test_mcp_install_writes_claude_desktop_target(tmp_path, monkeypatch):
+    fake_home = tmp_path / "fake-home"
+    monkeypatch.setattr("aletheore.cli.sys.platform", "darwin")
+    monkeypatch.setenv("HOME", str(fake_home))
+    install_target = tmp_path / "install-target"
+    install_target.mkdir()
+    _no_command_resolvable(monkeypatch, tmp_path)
+
+    result = runner.invoke(app, ["mcp-install", str(install_target), "--target", "claude-desktop"])
+
+    assert result.exit_code == 0
+    config_path = fake_home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+    assert config_path.exists()
+    data = json.loads(config_path.read_text())
+    # Keyed by repo name, not plain "aletheore" - this file is shared across
+    # every project on the machine, unlike every other target's per-repo file.
+    entry = data["mcpServers"][f"aletheore-{install_target.name}"]
+    assert entry == {"command": "aletheore", "args": ["mcp", str(install_target.resolve())]}
+
+
+def test_mcp_install_claude_desktop_keys_by_repo_so_a_second_repo_does_not_clobber_the_first(
+    tmp_path, monkeypatch
+):
+    fake_home = tmp_path / "fake-home"
+    monkeypatch.setattr("aletheore.cli.sys.platform", "darwin")
+    monkeypatch.setenv("HOME", str(fake_home))
+    _no_command_resolvable(monkeypatch, tmp_path)
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+
+    runner.invoke(app, ["mcp-install", str(repo_a), "--target", "claude-desktop"])
+    runner.invoke(app, ["mcp-install", str(repo_b), "--target", "claude-desktop"])
+
+    config_path = fake_home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+    servers = json.loads(config_path.read_text())["mcpServers"]
+    assert servers["aletheore-repo-a"]["args"] == ["mcp", str(repo_a.resolve())]
+    assert servers["aletheore-repo-b"]["args"] == ["mcp", str(repo_b.resolve())]
+
+
+def test_mcp_install_skips_claude_desktop_on_unsupported_platform(tmp_path, monkeypatch):
+    monkeypatch.setattr("aletheore.cli.sys.platform", "linux")
+
+    result = runner.invoke(app, ["mcp-install", str(tmp_path), "--target", "claude-desktop"])
+
+    assert result.exit_code == 0
+    assert "skipped" in result.stdout
+    assert "macOS and Windows" in result.stdout
 
 
 def test_mcp_install_respects_target_flag(tmp_path):
@@ -556,7 +654,9 @@ def test_mcp_install_preserves_other_servers_already_in_the_file(tmp_path):
     assert "aletheore" in data["mcpServers"]
 
 
-def test_mcp_install_prints_pycharm_and_terminal_editor_guidance(tmp_path):
+def test_mcp_install_prints_pycharm_and_terminal_editor_guidance(tmp_path, monkeypatch):
+    _isolate_claude_desktop_home(monkeypatch, tmp_path)
+
     result = runner.invoke(app, ["mcp-install", str(tmp_path)])
 
     assert "PyCharm" in result.stdout
