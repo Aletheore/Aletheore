@@ -1104,6 +1104,11 @@ _MCP_CLIENT_CONFIGS: dict[str, tuple[str, str, Callable[[Path], dict]]] = {
     "vscode": (".vscode/mcp.json", "servers", lambda p: _stdio_entry(p, include_type=True)),
     "kiro": (".kiro/settings/mcp.json", "mcpServers", lambda p: _stdio_entry(p, include_type=False)),
     "opencode": ("opencode.json", "mcp", _opencode_entry),
+    # Verified against Google's own docs (antigravity.google/docs/ide/mcp/):
+    # workspace-local config lives at .agents/mcp_config.json under
+    # "mcpServers", entries shaped {"command", "args"} with no "type" field -
+    # identical shape to Cursor's entry, just a different path.
+    "antigravity": (".agents/mcp_config.json", "mcpServers", lambda p: _stdio_entry(p, include_type=False)),
 }
 
 

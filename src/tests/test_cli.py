@@ -232,8 +232,15 @@ def test_main_unknown_command_still_errors():
     assert result.exit_code != 0
 
 
-def test_mcp_client_configs_cover_the_five_json_targets():
-    assert set(_MCP_CLIENT_CONFIGS.keys()) == {"claude-code", "cursor", "vscode", "kiro", "opencode"}
+def test_mcp_client_configs_cover_the_six_json_targets():
+    assert set(_MCP_CLIENT_CONFIGS.keys()) == {
+        "claude-code",
+        "cursor",
+        "vscode",
+        "kiro",
+        "opencode",
+        "antigravity",
+    }
 
 
 def _no_command_resolvable(monkeypatch, tmp_path):
@@ -428,6 +435,22 @@ def test_mcp_install_writes_all_json_targets_by_default(tmp_path):
     assert (tmp_path / ".vscode" / "mcp.json").exists()
     assert (tmp_path / ".kiro" / "settings" / "mcp.json").exists()
     assert (tmp_path / "opencode.json").exists()
+    assert (tmp_path / ".agents" / "mcp_config.json").exists()
+
+
+def test_mcp_install_writes_antigravity_target(tmp_path, monkeypatch):
+    install_target = tmp_path / "install-target"
+    install_target.mkdir()
+    _no_command_resolvable(monkeypatch, tmp_path)
+    result = runner.invoke(app, ["mcp-install", str(install_target), "--target", "antigravity"])
+
+    assert result.exit_code == 0
+    config_path = install_target / ".agents" / "mcp_config.json"
+    assert config_path.exists()
+    entry = json.loads(config_path.read_text())["mcpServers"]["aletheore"]
+    # Same shape as Cursor's entry: no "type" field, verified against
+    # Antigravity's own published schema (antigravity.google/docs/ide/mcp/).
+    assert entry == {"command": "aletheore", "args": ["mcp", str(install_target.resolve())]}
 
 
 def test_mcp_install_default_now_includes_codex_cli(tmp_path):
