@@ -190,8 +190,10 @@ def test_build_combined_reference_sorts_modules_by_path():
     assert md.index("A content.") < md.index("Z content.")
 
 
-def _table(name: str, columns: list[dict]) -> dict:
-    return {"name": name, "columns": columns}
+def _table(name: str, columns: list[dict], **overrides) -> dict:
+    base = {"name": name, "columns": columns}
+    base.update(overrides)
+    return base
 
 
 def _column(name: str, col_type: str, **overrides) -> dict:
@@ -261,6 +263,43 @@ def test_build_schema_reference_relation_without_on_delete_omits_it():
     md = build_schema_reference(evidence)
     assert "`author_id` → `users.id` — `migrations/001.sql:3`" in md
     assert "ON DELETE" not in md
+
+
+def test_build_schema_reference_renders_table_location_when_present():
+    # Real gap found via audit: schema_map.py's _merge_schema_events always
+    # attaches file/line to every table (the location of its own
+    # create_table/CREATE TABLE statement, for raw SQL and every ORM
+    # source alike), but this renderer discarded it based on the false
+    # premise that a table has no real location to cite.
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("users", [_column("id", "BIGSERIAL")], file="db/schema.sql", line=12)],
+        "relations": [],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "### `users` — `db/schema.sql:12`" in md
+
+
+def test_build_schema_reference_omits_location_when_table_has_none():
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("users", [_column("id", "BIGSERIAL")])],
+        "relations": [],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "### `users`" in md
+    assert "### `users` —" not in md
+
+
+def test_build_schema_reference_escapes_backtick_characters_in_cells():
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("weird", [_column("a`b", "VARCHAR(`10`)")])],
+        "relations": [],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "a\\`b" in md
+    assert "VARCHAR(\\`10\\`)" in md
 
 
 def test_build_schema_reference_sorts_tables_alphabetically():

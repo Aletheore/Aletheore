@@ -141,8 +141,12 @@ def _escape_table_cell(value: str) -> str:
     # A literal `|` inside a table cell breaks the row into extra columns;
     # a real path/handler/type string is never expected to contain one, but
     # nothing upstream guarantees it (a route registered from a config file,
-    # say), so this is defensive, not decorative.
-    return value.replace("|", "\\|")
+    # say), so this is defensive, not decorative. Most call sites also wrap
+    # their result in a backtick code span (table/column names, endpoint
+    # path/handler) - a literal backtick in the value would break out of
+    # that span the same way, so it's escaped here too rather than only
+    # where it happens to matter today.
+    return value.replace("|", "\\|").replace("`", "\\`")
 
 
 def _render_column(column: dict) -> str:
@@ -172,8 +176,10 @@ def build_schema_reference(evidence: dict) -> str:
 
     A relation carries its own real `file`/`line` (the migration statement
     that created it) and is rendered as a citation. A table itself does
-    NOT - AIR's schema extraction never attaches one column's origin file
-    to the table as a whole, so none is invented here either.
+    too - the location of its own `create_table`/`CREATE TABLE` statement,
+    always attached by schema_map.py's `_merge_schema_events` regardless
+    of source (raw SQL, Django, Rails, or Alembic) - and is rendered the
+    same way.
     """
     schema = evidence.get("repository", {}).get("database", {}).get("schema", {})
     if not schema.get("checked") or not schema.get("tables"):
@@ -185,7 +191,12 @@ def build_schema_reference(evidence: dict) -> str:
 
     sections = ["## Database Schema", ""]
     for table in sorted(schema["tables"], key=lambda t: t["name"]):
-        sections.append(f"### `{table['name']}`")
+        table_location = (
+            f" \u2014 `{table['file']}:{table['line']}`"
+            if table.get("file") and table.get("line")
+            else ""
+        )
+        sections.append(f"### `{table['name']}`{table_location}")
         sections.append("")
         columns = table.get("columns") or []
         if columns:

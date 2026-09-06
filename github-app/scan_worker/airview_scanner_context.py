@@ -57,7 +57,10 @@ def _schema_context(schema: dict) -> dict | None:
     if not schema.get("checked"):
         return None
     tables = [
-        {"name": t["name"], "columns": [c["name"] for c in t.get("columns", [])]}
+        {
+            "name": t["name"], "columns": [c["name"] for c in t.get("columns", [])],
+            "file": t.get("file"), "line": t.get("line"),
+        }
         for t in schema.get("tables", [])
     ]
     relations = [
