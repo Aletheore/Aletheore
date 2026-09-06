@@ -25,8 +25,11 @@ Notable changes to Aletheore, by release. The working code lives in `src/` — s
 - **`aletheore mcp-install` gained Antigravity and Claude Desktop as targets**, on top of the
   existing Claude Code / Cursor / VS Code / Kiro / Opencode / Codex CLI support. Claude Desktop's
   config is architecturally different from every other target - a single file shared across every
-  project on the machine rather than one scoped per repo - so its entries are keyed by repo name to
-  avoid one install silently overwriting another.
+  project on the machine rather than one scoped per repo - so its entries are keyed by a hash of the
+  repo's full resolved path folded in alongside its name, not the trailing directory name alone
+  (found and fixed same-session: two different repos sharing a basename, e.g. two independently
+  cloned `backend` folders under different parents, would otherwise silently overwrite one another's
+  entry in the one shared file).
 - **`ast_pattern` batch isolation actually isolates now.** A prior fix only caught one failure mode
   (a worker segfault); any other exception in a batch still discarded every earlier batch's already-
   collected results, and a hung worker had no timeout at all. Both fixed.
