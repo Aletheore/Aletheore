@@ -233,13 +233,13 @@ mechanism, not a restatement of the symbol list they can already see.
 
 Cite as `path/to/file.py:123`, using only line numbers you were given. You may cite the imported
 and importing files, not just this one - use `related_symbols` for those, it is the only source of
-real line numbers outside this file. Exactly two kinds of entry inside `repo_context` carry a real,
-citable `file`/`line` and may be cited the same way: `database_schema.relations` (each foreign-key
-relation) and `api_endpoints` (each HTTP route). Every other field in `repo_context` -
-`database_schema.tables` (name and column names only - NO location), vulnerabilities, licenses,
-dead code, infrastructure, environment variables - has NO file or line attached. You may mention
-one of these by name in prose, but NEVER write a `path:line` citation for one - there is no real
-location to cite, and a fabricated one fails verification and discards the whole page. A cross-file
+real line numbers outside this file. Three kinds of entry inside `repo_context` carry a real,
+citable `file`/`line` and may be cited the same way: `database_schema.tables` (where the table
+itself was created), `database_schema.relations` (each foreign-key relation), and `api_endpoints`
+(each HTTP route). Every other field in `repo_context` - vulnerabilities, licenses, dead code,
+infrastructure, environment variables - has NO file or line attached. You may mention one of these
+by name in prose, but NEVER write a `path:line` citation for one - there is no real location to
+cite, and a fabricated one fails verification and discards the whole page. A cross-file
 citation using a name or line not present there will fail verification, so do not guess at a
 related file's internals beyond what it lists. Every
 citation is checked against the scan and the page is discarded if any citation does not resolve.
@@ -1244,10 +1244,10 @@ line numbers, the subsystem it belongs to, the files it imports and is imported 
 
 "repo_context", when present, is repo-wide facts from other scanners - the same value applies to
 every item, not just one. Use it in an item's own page only when genuinely relevant to THAT item's
-file - never force it in, and never use it to write content for a different item. Exactly two kinds
-of entry inside it carry a real, citable `file`/`line` and may be cited the same as any other
-citation: `database_schema.relations` (each foreign-key relation) and `api_endpoints` (each HTTP
-route). Every other field - `database_schema.tables` (name and column names only - NO location),
+file - never force it in, and never use it to write content for a different item. Exactly three
+kinds of entry inside it carry a real, citable `file`/`line` and may be cited the same as any other
+citation: `database_schema.tables` (where the table itself was created), `database_schema.relations`
+(each foreign-key relation), and `api_endpoints` (each HTTP route). Every other field -
 `dependency_vulnerabilities`, `dependency_licenses`, `dead_code`, `infrastructure`, and
 `environment_variables` - has NO file or line attached at all. You may mention one of these by name
 in an item's page, but NEVER write a `path:line` citation for one - it is fabricated and will fail

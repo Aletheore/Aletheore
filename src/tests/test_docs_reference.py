@@ -190,8 +190,10 @@ def test_build_combined_reference_sorts_modules_by_path():
     assert md.index("A content.") < md.index("Z content.")
 
 
-def _table(name: str, columns: list[dict]) -> dict:
-    return {"name": name, "columns": columns}
+def _table(name: str, columns: list[dict], **overrides) -> dict:
+    base = {"name": name, "columns": columns}
+    base.update(overrides)
+    return base
 
 
 def _column(name: str, col_type: str, **overrides) -> dict:
@@ -263,6 +265,63 @@ def test_build_schema_reference_relation_without_on_delete_omits_it():
     assert "ON DELETE" not in md
 
 
+def test_build_schema_reference_renders_table_location_when_present():
+    # Real gap found via audit: schema_map.py's _merge_schema_events always
+    # attaches file/line to every table (the location of its own
+    # create_table/CREATE TABLE statement, for raw SQL and every ORM
+    # source alike), but this renderer discarded it based on the false
+    # premise that a table has no real location to cite.
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("users", [_column("id", "BIGSERIAL")], file="db/schema.sql", line=12)],
+        "relations": [],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "### `users` — `db/schema.sql:12`" in md
+
+
+def test_build_schema_reference_omits_location_when_table_has_none():
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("users", [_column("id", "BIGSERIAL")])],
+        "relations": [],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "### `users`" in md
+    assert "### `users` —" not in md
+
+
+def test_build_schema_reference_column_name_with_a_backtick_uses_a_wider_fence():
+    # Real Flash Review finding on the PR that introduced backtick
+    # "escaping": backslash escapes do not work inside a Markdown code
+    # span (CommonMark spec - content between backtick fences is
+    # verbatim), so replacing "`" with "\\`" never actually escaped
+    # anything - the value's own backtick still closed the span early.
+    # The correct fix is a wider fence (more backticks than any run in
+    # the value), not backslash escaping.
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("weird", [_column("a`b", "TEXT")])],
+        "relations": [],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "``a`b``" in md
+    assert "\\`" not in md
+
+
+def test_build_schema_reference_column_name_with_a_double_backtick_run_uses_a_triple_fence():
+    # The fence must be wider than the LONGEST run of consecutive
+    # backticks in the value, not just wider than a single backtick - two
+    # backticks in a row would still close a two-backtick fence early.
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("weird", [_column("a``b", "TEXT")])],
+        "relations": [],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "```a``b```" in md
+
+
 def test_build_schema_reference_sorts_tables_alphabetically():
     evidence = {"repository": {"database": {"schema": {
         "checked": True,
@@ -273,15 +332,31 @@ def test_build_schema_reference_sorts_tables_alphabetically():
     assert md.index("### `apples`") < md.index("### `zebras`")
 
 
-def test_build_schema_reference_escapes_pipe_characters_in_cells():
+def test_build_schema_reference_escapes_pipe_characters_in_plain_cell_text():
+    # Type/constraints cells are plain text, not a code span - a literal
+    # "|" there genuinely does need backslash escaping to avoid breaking
+    # the table row into extra columns.
     evidence = {"repository": {"database": {"schema": {
         "checked": True,
-        "tables": [_table("weird", [_column("a|b", "ENUM('x'|'y')")])],
+        "tables": [_table("weird", [_column("id", "ENUM('x'|'y')")])],
         "relations": [],
     }}}}
     md = build_schema_reference(evidence)
-    assert "a\\|b" in md
     assert "ENUM('x'\\|'y')" in md
+
+
+def test_build_schema_reference_column_name_with_a_pipe_needs_no_escaping():
+    # A column name is rendered inside a code span (_code_span) - GitHub's
+    # table renderer treats inline code as atomic when splitting a row
+    # into cells, so a raw "|" here does not need (and must not receive)
+    # backslash escaping, unlike the plain-text type/constraints cells.
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("weird", [_column("a|b", "TEXT")])],
+        "relations": [],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "`a|b`" in md
 
 
 def test_build_endpoints_reference_returns_empty_string_when_not_checked():
