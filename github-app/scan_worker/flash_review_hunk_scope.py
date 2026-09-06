@@ -35,20 +35,52 @@ def _claimed_scope_name(header_context: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _hunk_starts_with_claimed_scope(patch: str) -> list[tuple[int, str]]:
-    """(new-file start line, claimed class/module name) for every hunk in
-    this one file's patch whose header names a class/module - most hunks
-    name a def or nothing at all and are skipped here, since this module
-    only has a real scope_lookup to check a class/module claim against."""
-    found: list[tuple[int, str]] = []
+def _hunk_claims_with_changed_lines(patch: str) -> list[tuple[str, list[int]]]:
+    """(claimed class/module name, new-file line numbers to check) for
+    every hunk in this one file's patch whose header names a class/module
+    - most hunks name a def or nothing at all and are skipped here, since
+    this module only has a real scope_lookup to check a class/module claim
+    against.
+
+    Checks the hunk's own start line (the header's own positional claim)
+    plus every added line in the hunk body - not just the start. A
+    unified diff hunk can span a class/module boundary, so its first line
+    agreeing with the header is not proof every changed line does: a real
+    gap found via Flash Review's own review of this module (checking only
+    the start line let a later added line genuinely inside a different,
+    nested class slip through unflagged whenever the hunk's first line
+    happened to agree with the header)."""
+    found: list[tuple[str, list[int]]] = []
+    current_line: int | None = None
+    claimed: str | None = None
+    changed: list[int] = []
+
+    def flush() -> None:
+        if claimed is not None:
+            found.append((claimed, changed))
+
     for line in patch.splitlines():
         match = _HUNK_HEADER_RE.match(line)
-        if not match:
+        if match:
+            flush()
+            current_line = int(match.group(1))
+            claimed = _claimed_scope_name(match.group(2))
+            changed = [current_line] if claimed else []
             continue
-        claimed = _claimed_scope_name(match.group(2))
-        if claimed:
-            found.append((int(match.group(1)), claimed))
+        if current_line is None:
+            continue
+        if claimed is not None and line.startswith("+") and not line.startswith("+++"):
+            changed.append(current_line)
+        if not line.startswith("-"):
+            current_line += 1
+    flush()
     return found
+
+
+def _joined(lines: list[str]) -> str:
+    if not lines:
+        return ""
+    return "--- hunk-header scope corrections (verified against real file content) ---\n" + "\n".join(lines)
 
 
 def build_hunk_scope_correction_context(
@@ -58,26 +90,39 @@ def build_hunk_scope_correction_context(
     if not diff_patches:
         return ""
     lines: list[str] = []
-    total_bytes = 0
+
+    def emit(line: str) -> bool:
+        # Checks the real encoded size of the final joined output (header
+        # + every line + the "\n" separators between them), not just this
+        # line's own bytes - a running total of line bytes alone under-
+        # counts by the header and every separator, letting the actual
+        # returned context exceed MAX_HUNK_SCOPE_BYTES by that much.
+        candidate = lines + [line]
+        if len(_joined(candidate).encode("utf-8")) > MAX_HUNK_SCOPE_BYTES:
+            return False
+        lines.append(line)
+        return True
+
     for file_path, patch in diff_patches:
         content = file_contents.get(file_path)
         if content is None:
             continue
-        for hunk_start, claimed in _hunk_starts_with_claimed_scope(patch):
-            real = enclosing_scope_for_line(file_path, content, hunk_start)
-            if real is None or real == claimed:
+        for claimed, changed_lines in _hunk_claims_with_changed_lines(patch):
+            disagreement: tuple[int, str] | None = None
+            for candidate_line in changed_lines:
+                real = enclosing_scope_for_line(file_path, content, candidate_line)
+                if real is not None and real != claimed:
+                    disagreement = (candidate_line, real)
+                    break
+            if disagreement is None:
                 continue
+            hunk_line, real = disagreement
             line = (
-                f"{file_path}:{hunk_start} - the diff hunk header nearby lists `{claimed}` as "
+                f"{file_path}:{hunk_line} - the diff hunk header nearby lists `{claimed}` as "
                 f"context, but this location is actually inside `{real}` (verified against the real "
                 f"file content; a hunk header shows only the nearest preceding signature, not proof "
                 f"of enclosing scope)."
             )
-            encoded_len = len(line.encode("utf-8"))
-            if total_bytes + encoded_len > MAX_HUNK_SCOPE_BYTES:
-                break
-            lines.append(line)
-            total_bytes += encoded_len
-    if not lines:
-        return ""
-    return "--- hunk-header scope corrections (verified against real file content) ---\n" + "\n".join(lines)
+            if not emit(line):
+                return _joined(lines)
+    return _joined(lines)

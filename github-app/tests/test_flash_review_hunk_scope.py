@@ -64,6 +64,31 @@ def test_unsupported_language_produces_no_fact():
 
 
 def test_byte_budget_truncates_rather_than_failing():
+    # The real constraint is the total encoded size of what's actually
+    # returned (header + every line + the "\n" separators between them) -
+    # a budget that only counted line bytes would let the returned
+    # context exceed MAX_HUNK_SCOPE_BYTES by the header/separator size, so
+    # this asserts against the true serialized output, not an inflated
+    # allowance for that gap.
+    import scan_worker.flash_review_hunk_scope as mod
+
+    content = "class Topic\n  class NotAllowed\n  end\n\n  has_many :x\nend\n"
+    patch = "@@ -1,4 +1,6 @@ class NotAllowed\n context\n+ has_many :x\n"
+    diff_patches = (("app/topic.rb", patch),)
+    full_context = build_hunk_scope_correction_context({"app/topic.rb": content}, diff_patches)
+    assert "lists `NotAllowed`" in full_context
+
+    original = mod.MAX_HUNK_SCOPE_BYTES
+    mod.MAX_HUNK_SCOPE_BYTES = len(full_context.encode("utf-8")) - 1
+    try:
+        truncated_context = build_hunk_scope_correction_context({"app/topic.rb": content}, diff_patches)
+        assert len(truncated_context.encode("utf-8")) <= mod.MAX_HUNK_SCOPE_BYTES
+        assert truncated_context != full_context
+    finally:
+        mod.MAX_HUNK_SCOPE_BYTES = original
+
+
+def test_byte_budget_smaller_than_the_header_returns_empty_not_oversized():
     import scan_worker.flash_review_hunk_scope as mod
     original = mod.MAX_HUNK_SCOPE_BYTES
     mod.MAX_HUNK_SCOPE_BYTES = 10
@@ -72,8 +97,38 @@ def test_byte_budget_truncates_rather_than_failing():
         patch = "@@ -1,4 +1,6 @@ class NotAllowed\n context\n+ has_many :x\n"
         diff_patches = (("app/topic.rb", patch),)
         context = build_hunk_scope_correction_context({"app/topic.rb": content}, diff_patches)
-        assert context == "" or len(context.encode("utf-8")) <= 10 + len(
-            "--- hunk-header scope corrections (verified against real file content) ---\n"
-        )
+        assert context == ""
     finally:
         mod.MAX_HUNK_SCOPE_BYTES = original
+
+
+def test_a_later_changed_line_disagreeing_is_caught_even_when_the_hunk_start_agrees():
+    # Real gap found via Flash Review's own review of this module: checking
+    # only the hunk's start line let a later added line genuinely inside a
+    # different, nested class slip through unflagged whenever the hunk's
+    # first line happened to agree with the header - exactly the failure
+    # mode _hunk_claims_with_changed_lines now closes by checking every
+    # added line, not just the first.
+    content = """class Topic < ActiveRecord::Base
+  def existing_method
+    1
+  end
+
+  class NotAllowed < StandardError
+    def newly_added_method
+      raise "boom"
+    end
+  end
+end
+"""
+    # Header claims "Topic" for the hunk's start (line 1) - correct, line 1
+    # really is inside Topic. The added line lands at line 7, genuinely
+    # inside the nested NotAllowed class instead.
+    patch = "@@ -1,4 +1,7 @@ class Topic < ActiveRecord::Base\n a\n b\n c\n d\n e\n f\n+    def newly_added_method\n"
+    diff_patches = (("app/models/topic.rb", patch),)
+
+    context = build_hunk_scope_correction_context({"app/models/topic.rb": content}, diff_patches)
+
+    assert "app/models/topic.rb:7" in context
+    assert "lists `Topic` as" in context
+    assert "actually inside `NotAllowed`" in context

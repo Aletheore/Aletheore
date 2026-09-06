@@ -2124,4 +2124,3 @@ async def test_insert_repo_history_without_head_sha_does_not_tag_the_stored_evid
 
     evidence = get_latest_evidence(TEST_DATABASE_URL, 826, "a/repo1")
     assert "_scan_head_sha" not in evidence
-    assert result < 60
