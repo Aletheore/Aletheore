@@ -39,6 +39,64 @@ def test_build_clusters_finds_two_clusters_with_a_thin_bridge():
     assert bridge["edges"] == [["a.py", "x.py"]]
 
 
+def test_build_clusters_extra_edges_join_nodes_with_no_import_edge():
+    # The real gap extra_edges exists for: two files with zero import-graph
+    # connection (Rails models relate via belongs_to/has_many, never a
+    # literal require) would otherwise land in separate singleton clusters.
+    dependency_graph = {"nodes": ["post.rb", "user.rb"], "edges": []}
+
+    clusters, _ = build_clusters(dependency_graph, extra_edges=[("post.rb", "user.rb")])
+
+    cluster_by_module = {m: c["id"] for c in clusters for m in c["modules"]}
+    assert cluster_by_module["post.rb"] == cluster_by_module["user.rb"]
+
+
+def test_build_clusters_extra_edges_do_not_count_as_real_import_density():
+    # internal_edges/cross_cluster_edges report real import density -
+    # extra_edges must never inflate either, or a consumer reading
+    # "internal_edges" as "these files really import each other" would be
+    # lied to about a relation that was never actually a Ruby require.
+    dependency_graph = {
+        "nodes": ["post.rb", "user.rb", "topic.rb"],
+        "edges": [["post.rb", "topic.rb"], ["topic.rb", "post.rb"]],
+    }
+
+    clusters, cross_cluster_edges = build_clusters(
+        dependency_graph, extra_edges=[("post.rb", "user.rb")]
+    )
+
+    post_cluster = next(c for c in clusters if "post.rb" in c["modules"])
+    # 2, not 1: internal_edges counts each direction in the input
+    # separately (see test_build_clusters_finds_two_clusters_with_a_thin_
+    # bridge's own a<->b pair, counted as 2 for the same reason) - the
+    # real assertion here is that it's still exactly the real import
+    # edges (post.rb<->topic.rb) and extra_edges' post.rb-user.rb link
+    # added nothing to it.
+    assert post_cluster["internal_edges"] == 2
+    assert cross_cluster_edges == []
+
+
+def test_build_clusters_extra_edges_pointing_outside_the_graph_are_ignored():
+    dependency_graph = {"nodes": ["post.rb"], "edges": []}
+
+    clusters, _ = build_clusters(dependency_graph, extra_edges=[("post.rb", "not_scanned.rb")])
+
+    assert clusters == [{"id": 0, "modules": ["post.rb"], "internal_edges": 0}]
+
+
+def test_build_clusters_with_no_extra_edges_behaves_exactly_as_before():
+    dependency_graph = {
+        "nodes": ["a.py", "b.py"],
+        "edges": [["a.py", "b.py"], ["b.py", "a.py"]],
+    }
+
+    with_none = build_clusters(dependency_graph, extra_edges=None)
+    with_empty = build_clusters(dependency_graph, extra_edges=[])
+    without_param = build_clusters(dependency_graph)
+
+    assert with_none == with_empty == without_param
+
+
 def test_build_clusters_excludes_test_files():
     """Test files pollute clustering the same way they polluted retrieval -
     see search_index._is_test_path's own comment. Reproduced directly on

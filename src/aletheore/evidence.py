@@ -14,6 +14,7 @@ from aletheore.endpoints import map_api_endpoints
 from aletheore.evidence_resolution import find_symbol_at_location
 from aletheore.git_intel.analyzer import analyze_git, compute_hotspots
 from aletheore.licenses import check_dependency_licenses
+from aletheore.model_associations import rails_model_association_edges
 from aletheore.repo_config import load_repo_config
 from aletheore.schema_map import extract_schema, skipped_schema
 from aletheore.scanner.detect import (
@@ -360,6 +361,25 @@ def _license_progress_reporter(
     return on_progress
 
 
+def _rails_model_association_edges(repo_path: Path, dependency_graph: dict) -> list[tuple[str, str]]:
+    """Supplementary clustering edges for Rails model files - see
+    architecture.build_clusters' own docstring for why these are needed.
+    Cheap no-op on a non-Ruby repo (no .rb nodes, nothing read) and safe on
+    a Ruby repo with no ActiveRecord models (model_associations does its
+    own real inheritance check per file, so a false-positive .rb read never
+    turns into a wrong edge)."""
+    rb_paths = [n for n in dependency_graph["nodes"] if n.endswith(".rb")]
+    if not rb_paths:
+        return []
+    sources: dict[str, bytes] = {}
+    for rel_path in rb_paths:
+        try:
+            sources[rel_path] = (repo_path / rel_path).read_bytes()
+        except OSError:
+            continue
+    return rails_model_association_edges(sources)
+
+
 def scan_repository(
     repo_path: Path,
     check_vulnerabilities: bool = True,
@@ -494,7 +514,10 @@ def scan_repository(
         report("Clustering modules and checking layer conventions")
         resolution = architecture_config["cluster_resolution"] if architecture_config else 1.0
         custom_markers = architecture_config["layer_markers"] if architecture_config else None
-        clusters, cross_cluster_edges = build_clusters(dependency_graph, resolution=resolution)
+        extra_edges = _rails_model_association_edges(repo_path, dependency_graph)
+        clusters, cross_cluster_edges = build_clusters(
+            dependency_graph, resolution=resolution, extra_edges=extra_edges
+        )
         layer_violations = detect_layer_violations(dependency_graph, custom_markers=custom_markers)
     else:
         clusters, cross_cluster_edges = [], []
