@@ -134,6 +134,7 @@ from scan_worker.flash_review_cache import (
     lookup_cached_result as lookup_cached_flash_review_result,
     store_result as store_flash_review_result,
 )
+from scan_worker.flash_review_hunk_scope import build_hunk_scope_correction_context
 from scan_worker.github_api import (
     MAX_CONTEXT_FILE_BYTES,
     MAX_CONTEXT_FILES,
@@ -1992,6 +1993,12 @@ def _run_flash_review(
         if blast_radius_context:
             code_evidence_context = "\n\n".join(
                 part for part in (code_evidence_context, blast_radius_context) if part
+            )
+
+        hunk_scope_context = build_hunk_scope_correction_context(file_contents, diff_patches)
+        if hunk_scope_context:
+            code_evidence_context = "\n\n".join(
+                part for part in (code_evidence_context, hunk_scope_context) if part
             )
 
         def _fetch_symbol_source(file_path: str, start_line: int, end_line: int) -> str | None:
