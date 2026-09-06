@@ -1,4 +1,5 @@
 import difflib
+import hashlib
 import json
 import os
 import shutil
@@ -1130,6 +1131,23 @@ def _claude_desktop_config_path() -> Path | None:
     return None
 
 
+def _claude_desktop_server_name(repo_path: Path) -> str:
+    """A key for this repo's entry in Claude Desktop's one global,
+    shared-across-every-project config file.
+
+    Real gap found via audit: keying purely by `repo_path.name` (e.g.
+    "aletheore-backend") still collides for two different repos that
+    happen to share a directory basename - a common real pattern
+    (`~/work/client-a/backend` and `~/work/client-b/backend`), which is
+    exactly the class of silent-overwrite bug this keying scheme was
+    written to prevent, just not fully closed. A short hash of the full
+    resolved path guarantees uniqueness regardless of basename, same
+    convention search_index.py's own per-repo cache key already uses.
+    """
+    digest = hashlib.sha256(str(repo_path.resolve()).encode("utf-8")).hexdigest()[:16]
+    return f"aletheore-{repo_path.name}-{digest}"
+
+
 def _write_json_mcp_client_config(
     config_path: Path, top_level_key: str, entry: dict, *, server_name: str = "aletheore"
 ) -> str:
@@ -1208,9 +1226,11 @@ def _mcp_install(path: str, targets: list[str]) -> int:
                 # entry as plain "aletheore" would mean installing for a
                 # second repo silently overwrites the first repo's entry
                 # under the same key, since both would collide in the one
-                # shared file.
+                # shared file. See _claude_desktop_server_name's own
+                # docstring for why a plain repo_path.name isn't enough.
                 message = _write_json_mcp_client_config(
-                    config_path, "mcpServers", entry, server_name=f"aletheore-{repo_path.name}"
+                    config_path, "mcpServers", entry,
+                    server_name=_claude_desktop_server_name(repo_path),
                 )
         else:
             relative_path, top_level_key, entry_builder = _MCP_CLIENT_CONFIGS[target]
@@ -1267,9 +1287,9 @@ def _mcp_install(path: str, targets: list[str]) -> int:
         else:
             console.print(
                 f"[bold]Claude Desktop:[/bold] wrote a config shared across every project on this "
-                f"machine, keyed as \"aletheore-{repo_path.name}\" so installing for a different repo "
-                "later won't overwrite this one. Fully quit and reopen Claude Desktop to pick it up - "
-                "MCP servers only load at startup."
+                f"machine, keyed as \"{_claude_desktop_server_name(repo_path)}\" so installing for a "
+                "different repo later won't overwrite this one. Fully quit and reopen Claude Desktop "
+                "to pick it up - MCP servers only load at startup."
             )
     return 0
 
