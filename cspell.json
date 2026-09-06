@@ -152,6 +152,7 @@
     "signup",
     "signups",
     "slimphp",
+    "sqlglot",
     "stdlib",
     "subrouter",
     "subprocessor",
@@ -164,8 +165,12 @@
     "vport",
     "werkzeug",
     "worklist",
+    "workstream",
+    "workstreams",
     "worktree",
     "worktrees",
+    "writeup",
+    "writeups",
     "xmlattr"
   ]
 }
