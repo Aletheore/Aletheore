@@ -69,7 +69,20 @@ def _hunk_claims_with_changed_lines(patch: str) -> list[tuple[str, list[int]]]:
             continue
         if current_line is None:
             continue
-        if claimed is not None and line.startswith("+") and not line.startswith("+++"):
+        # "\ No newline at end of file" is unified-diff metadata, not a
+        # real file line - it must not advance current_line (a hunk with
+        # this marker before a later line would otherwise number every
+        # subsequent line off by one) or be treated as content.
+        if line.startswith("\\"):
+            continue
+        # No "+++" special-case here: current_line is None (see the check
+        # above) for every line before the first hunk header, which is
+        # where a real file-level "+++ b/path" header line always lives -
+        # a "+++"-prefixed line reaching this point is always a genuine
+        # added line whose own content happens to start with "+" (e.g.
+        # "++i"), not a header, and excluding it would wrongly skip a
+        # real changed line from the scope check.
+        if claimed is not None and line.startswith("+"):
             changed.append(current_line)
         if not line.startswith("-"):
             current_line += 1
@@ -124,5 +137,9 @@ def build_hunk_scope_correction_context(
                 f"of enclosing scope)."
             )
             if not emit(line):
-                return _joined(lines)
+                # Stops this file's remaining corrections, not the whole
+                # builder: a correction from a later file in diff_patches
+                # can still be shorter and fit within what budget remains,
+                # so returning here would wrongly drop it too.
+                break
     return _joined(lines)
