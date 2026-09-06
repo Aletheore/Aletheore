@@ -100,17 +100,26 @@ def _default_confirm_openai_fallback() -> bool:
 # first function doesn't produce one enormous chunk that matches everything.
 MODULE_CHUNK_MAX_LINES = 80
 
-# nomic-embed-text has a hard 2048-token training context, and the hosted
-# side already learned this the expensive way: scan_worker/embedding_client.py
-# records that 6600 chars succeeded and 6990 failed against the real model,
-# and that its cache sat at a 0% hit rate for 38 hours before anyone noticed
-# every call was failing. 5000 keeps that same margin. The constant is
-# restated rather than imported because src/ must not depend on github-app/ -
-# the dependency runs the other way.
+# Was 5000, sized for nomic-embed-text's hard 2048-token training context
+# (scan_worker/embedding_client.py records that 6600 chars succeeded and
+# 6990 failed against that real model). DEFAULT_EMBEDDING_MODEL has since
+# switched to jina-embeddings-v2-base-code (see this file's own history),
+# which supports 8192 tokens - 4x nomic's - but this cap was never
+# re-tuned after that switch, so real function bodies (this is the
+# retrieval-quality path, unlike embedding_client.py's cache-similarity
+# use of the same old number, which stays conservative on purpose since
+# an exact match isn't needed there) were being truncated at only ~18%
+# of the real available context. Re-measured directly against jina's own
+# bundled tokenizer (_hosted_tokenizer, below) on real repo code: 20,000
+# chars tokenizes to ~5,100-5,200 tokens across multiple real files -
+# about a 36% margin under the 8192 real limit, comparable to the
+# original cap's margin under nomic's limit. The constant is restated
+# rather than imported because src/ must not depend on github-app/ - the
+# dependency runs the other way.
 #
 # Truncating rather than skipping: a genuinely large function should still be
 # findable by its opening, which is where the signature and docstring are.
-MAX_EMBEDDING_CHARS = 5000
+MAX_EMBEDDING_CHARS = 20_000
 
 # Directories and suffixes whose contents are not this repository's code.
 # Measured on this repo: one minified bundle (website/vendor/motion.js) was
