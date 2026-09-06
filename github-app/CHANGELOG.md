@@ -12,6 +12,61 @@ re-verified snapshot of exactly what's running in production right now, see
 [`docs/operations/DEPLOYMENT-VERIFICATION.md`](docs/operations/DEPLOYMENT-VERIFICATION.md) — this
 file is the history; that one is the current state.
 
+**Note:** this file has no entries between 2026-08-28 and 2026-09-06 despite deploys continuing
+through that window (tags `github-app-deploy-2026-09-02` through `-09-04` exist) - the rolling
+snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this dated history wasn't.
+Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
+that gap until it is.
+
+## 2026-09-06
+
+Largest single deploy batch since 2026-08-27 (second deploy) - 19 commits, tagged
+`github-app-deploy-2026-09-06` (commit `cf8d40f`), two workstreams landing together:
+
+- **Schema/ORM-migration pipeline, feeding both review surfaces** (#539, #540, #543, #545-#548,
+  #550): a full SQL schema-extraction rewrite (`schema_map.py`, sqlglot-based, multi-dialect) plus a
+  new `orm_migrations.py` module modeling Django/Rails/Alembic migrations natively, wired into both
+  Flash Review (new `flash_review_schema_context.py`/`flash_review_hunk_scope.py`) and AIRview/Docs
+  export (new `airview_scanner_context.py`) so both surfaces can cite real table/column/endpoint
+  facts instead of only import-graph structure. #543 also removed the paid-plan entitlement gate
+  that had been blocking schema mapping entirely. #550 fixed the migration parser silently dropping
+  real operations instead of flagging them as unparseable.
+- **Rails model-association clustering fix** (#556) - this session's own finding, from a real
+  Discourse benchmark run: `architecture.build_clusters` only sees edges from literal
+  import/`require` statements, but Rails models relate via declarative `belongs_to`/`has_many`
+  associations that never produce one, so a real 382-file Discourse scan clustered as near-one-file-
+  per-cluster. New `model_associations.py` module resolves these (including walking transitive
+  `ActiveRecord::Base` inheritance chains) into `extra_edges` for the clustering graph, kept
+  separate from real-import edge reporting.
+- **ast_pattern batch isolation closed properly** (#552) - the 2026-09-04 fix only caught one
+  failure mode (`BrokenProcessPool`/segfault); any other worker exception still discarded every
+  earlier batch's real results, and there was no timeout on a hung worker. Both fixed.
+- **A real npm unused-dependency bug, same severity class as 2026-09-04's #529** (#553) - scoped
+  packages (`@scope/name`) and dotted package names (`normalize.css`, `chart.js`) were both always
+  flagged unused due to two separate normalization mismatches.
+- **Flash Review `ignored_paths` leak via a second, unfiltered file-listing call** (#554) -
+  `fetch_pr_changed_files` (used for full-content fetching, dependency/blast-radius/schema context)
+  had no `ignored_paths` filtering, unlike the diff-text path #504 already fixed - an ignored file's
+  content could still leak into review context via a different table's schema commentary.
+- **Stale embedding-truncation cap** (#555) - `MAX_EMBEDDING_CHARS` was never revisited after the
+  local default switched to jina (8192-token context vs. nomic's 2048); large chunks were being
+  truncated at a boundary sized for a model no longer in use, discarding real embeddable content.
+- **Markdown table-rendering bug in Docs export** (#551) - a literal backtick in a column name broke
+  out of its code span in generated tables (backslash-escaping a backtick isn't valid CommonMark
+  inside a code span). Found by Flash Review's own review of the PR that introduced the bug; fixed
+  with a properly variable-length fence.
+- **`aletheore mcp-install` gained Antigravity and Claude Desktop as targets** (#557) - found via an
+  audit of the MCP layer's cross-client compatibility. Antigravity's config is schema-identical to
+  Cursor's, just a different path. Claude Desktop is architecturally different from every other
+  target - a single global config file shared across every project on the machine, not scoped per
+  repo - so entries there are keyed `aletheore-<repo-name>` rather than the plain `aletheore` every
+  other target uses, so installing for a second repo doesn't silently overwrite the first repo's
+  entry in the one shared file.
+
+No DB migrations in this range. All five app-relevant services (`app-server`, `scan-worker`,
+`scan-worker-2`, `health-worker`, `scheduler`) rebuilt and re-verified live post-deploy - see
+`docs/operations/DEPLOYMENT-VERIFICATION.md`'s Current Server Snapshot for the full verification.
+
 ## 2026-08-28
 
 - **`managed_audit` switched off Luna/deepseek-v4-pro onto deepseek-v4-flash** (#451) - measured
