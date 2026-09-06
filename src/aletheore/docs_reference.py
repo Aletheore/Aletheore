@@ -141,12 +141,45 @@ def _escape_table_cell(value: str) -> str:
     # A literal `|` inside a table cell breaks the row into extra columns;
     # a real path/handler/type string is never expected to contain one, but
     # nothing upstream guarantees it (a route registered from a config file,
-    # say), so this is defensive, not decorative. Most call sites also wrap
-    # their result in a backtick code span (table/column names, endpoint
-    # path/handler) - a literal backtick in the value would break out of
-    # that span the same way, so it's escaped here too rather than only
-    # where it happens to matter today.
-    return value.replace("|", "\\|").replace("`", "\\`")
+    # say), so this is defensive, not decorative. Only for plain (non-code-
+    # span) cell content - see _code_span for values wrapped in backticks,
+    # where a `|` needs no escaping (GitHub renders inline code as atomic
+    # when splitting table cells) and a backtick can't be backslash-escaped
+    # at all.
+    return value.replace("|", "\\|")
+
+
+def _code_span(value: str) -> str:
+    """Wraps `value` in a Markdown inline code span using a fence long
+    enough to contain it safely.
+
+    Real Flash Review finding on the PR that introduced backtick
+    escaping: backslash escapes do NOT work inside a code span (the
+    CommonMark spec says content between backtick fences is verbatim), so
+    `_escape_table_cell`'s old `` "`" -> "\\`" `` replacement never
+    actually escaped a real backtick - it just left a literal backslash
+    character next to the closing fence while the value's own backtick
+    still closed the span early, producing malformed or misleading
+    output. The fence is sized to one more backtick than the longest run
+    already in `value`, with a padding space on each side when `value`
+    starts or ends with a backtick (or is empty) - exactly what the
+    CommonMark spec requires so the padding itself isn't read as content.
+    A `|` inside the span needs no separate escaping: GitHub's table
+    renderer treats inline code as an atomic unit when splitting a row
+    into cells.
+    """
+    longest_run = 0
+    current_run = 0
+    for char in value:
+        if char == "`":
+            current_run += 1
+            longest_run = max(longest_run, current_run)
+        else:
+            current_run = 0
+    fence = "`" * (longest_run + 1)
+    if not value or value.startswith("`") or value.endswith("`"):
+        return f"{fence} {value} {fence}"
+    return f"{fence}{value}{fence}"
 
 
 def _render_column(column: dict) -> str:
@@ -159,9 +192,9 @@ def _render_column(column: dict) -> str:
         constraints.append("NOT NULL")
     if column.get("default") is not None:
         constraints.append(f"DEFAULT {column['default']}")
-    name = _escape_table_cell(column.get("name", ""))
+    name = _code_span(column.get("name", ""))
     col_type = _escape_table_cell(column.get("type") or "")
-    return f"| `{name}` | {col_type} | {_escape_table_cell(', '.join(constraints))} |"
+    return f"| {name} | {col_type} | {_escape_table_cell(', '.join(constraints))} |"
 
 
 def build_schema_reference(evidence: dict) -> str:
@@ -191,12 +224,11 @@ def build_schema_reference(evidence: dict) -> str:
 
     sections = ["## Database Schema", ""]
     for table in sorted(schema["tables"], key=lambda t: t["name"]):
-        table_location = (
-            f" \u2014 `{table['file']}:{table['line']}`"
-            if table.get("file") and table.get("line")
-            else ""
-        )
-        sections.append(f"### `{table['name']}`{table_location}")
+        table_location = ""
+        if table.get("file") and table.get("line"):
+            location_text = f"{table['file']}:{table['line']}"
+            table_location = f" \u2014 {_code_span(location_text)}"
+        sections.append(f"### {_code_span(table['name'])}{table_location}")
         sections.append("")
         columns = table.get("columns") or []
         if columns:
@@ -211,15 +243,18 @@ def build_schema_reference(evidence: dict) -> str:
             sections.append("Foreign keys:")
             sections.append("")
             for relation in table_relations:
-                on_delete = f" (`ON DELETE {relation['on_delete']}`)" if relation.get("on_delete") else ""
-                location = (
-                    f" \u2014 `{relation['file']}:{relation['line']}`"
-                    if relation.get("file") and relation.get("line")
-                    else ""
-                )
+                on_delete = ""
+                if relation.get("on_delete"):
+                    on_delete_text = f"ON DELETE {relation['on_delete']}"
+                    on_delete = f" ({_code_span(on_delete_text)})"
+                location = ""
+                if relation.get("file") and relation.get("line"):
+                    location_text = f"{relation['file']}:{relation['line']}"
+                    location = f" \u2014 {_code_span(location_text)}"
+                target_text = f"{relation['to_table']}.{relation['to_column']}"
                 sections.append(
-                    f"- `{relation['from_column']}` \u2192 "
-                    f"`{relation['to_table']}.{relation['to_column']}`{on_delete}{location}"
+                    f"- {_code_span(relation['from_column'])} \u2192 "
+                    f"{_code_span(target_text)}{on_delete}{location}"
                 )
             sections.append("")
 
@@ -250,14 +285,12 @@ def build_endpoints_reference(evidence: dict) -> str:
     ]
     for endpoint in sorted(endpoints, key=lambda e: (e["path"], e["method"])):
         method = _escape_table_cell(endpoint.get("method") or "")
-        path = _escape_table_cell(endpoint.get("path") or "")
-        handler = _escape_table_cell(endpoint.get("handler") or "")
-        location = (
-            f"`{endpoint['file']}:{endpoint['line']}`"
-            if endpoint.get("file") and endpoint.get("line") is not None
-            else ""
-        )
-        sections.append(f"| {method} | `{path}` | `{handler}` | {location} |")
+        path = _code_span(endpoint.get("path") or "")
+        handler = _code_span(endpoint.get("handler") or "")
+        location = ""
+        if endpoint.get("file") and endpoint.get("line") is not None:
+            location = _code_span(f"{endpoint['file']}:{endpoint['line']}")
+        sections.append(f"| {method} | {path} | {handler} | {location} |")
     sections.append("")
 
     return "\n".join(sections).rstrip() + "\n"

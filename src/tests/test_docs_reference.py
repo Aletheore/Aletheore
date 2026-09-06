@@ -291,15 +291,35 @@ def test_build_schema_reference_omits_location_when_table_has_none():
     assert "### `users` —" not in md
 
 
-def test_build_schema_reference_escapes_backtick_characters_in_cells():
+def test_build_schema_reference_column_name_with_a_backtick_uses_a_wider_fence():
+    # Real Flash Review finding on the PR that introduced backtick
+    # "escaping": backslash escapes do not work inside a Markdown code
+    # span (CommonMark spec - content between backtick fences is
+    # verbatim), so replacing "`" with "\\`" never actually escaped
+    # anything - the value's own backtick still closed the span early.
+    # The correct fix is a wider fence (more backticks than any run in
+    # the value), not backslash escaping.
     evidence = {"repository": {"database": {"schema": {
         "checked": True,
-        "tables": [_table("weird", [_column("a`b", "VARCHAR(`10`)")])],
+        "tables": [_table("weird", [_column("a`b", "TEXT")])],
         "relations": [],
     }}}}
     md = build_schema_reference(evidence)
-    assert "a\\`b" in md
-    assert "VARCHAR(\\`10\\`)" in md
+    assert "``a`b``" in md
+    assert "\\`" not in md
+
+
+def test_build_schema_reference_column_name_with_a_double_backtick_run_uses_a_triple_fence():
+    # The fence must be wider than the LONGEST run of consecutive
+    # backticks in the value, not just wider than a single backtick - two
+    # backticks in a row would still close a two-backtick fence early.
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("weird", [_column("a``b", "TEXT")])],
+        "relations": [],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "```a``b```" in md
 
 
 def test_build_schema_reference_sorts_tables_alphabetically():
@@ -312,15 +332,31 @@ def test_build_schema_reference_sorts_tables_alphabetically():
     assert md.index("### `apples`") < md.index("### `zebras`")
 
 
-def test_build_schema_reference_escapes_pipe_characters_in_cells():
+def test_build_schema_reference_escapes_pipe_characters_in_plain_cell_text():
+    # Type/constraints cells are plain text, not a code span - a literal
+    # "|" there genuinely does need backslash escaping to avoid breaking
+    # the table row into extra columns.
     evidence = {"repository": {"database": {"schema": {
         "checked": True,
-        "tables": [_table("weird", [_column("a|b", "ENUM('x'|'y')")])],
+        "tables": [_table("weird", [_column("id", "ENUM('x'|'y')")])],
         "relations": [],
     }}}}
     md = build_schema_reference(evidence)
-    assert "a\\|b" in md
     assert "ENUM('x'\\|'y')" in md
+
+
+def test_build_schema_reference_column_name_with_a_pipe_needs_no_escaping():
+    # A column name is rendered inside a code span (_code_span) - GitHub's
+    # table renderer treats inline code as atomic when splitting a row
+    # into cells, so a raw "|" here does not need (and must not receive)
+    # backslash escaping, unlike the plain-text type/constraints cells.
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("weird", [_column("a|b", "TEXT")])],
+        "relations": [],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "`a|b`" in md
 
 
 def test_build_endpoints_reference_returns_empty_string_when_not_checked():
