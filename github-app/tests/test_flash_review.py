@@ -3233,21 +3233,119 @@ def test_review_diff_skips_verification_by_default(mock_verification_adapter, mo
 
 
 @patch("scan_worker.model_tiers.verification_adapter")
-def test_review_diff_never_reverifies_a_cache_hit(mock_verification_adapter):
-    # Real regression this guards: verification is an LLM call, the same
-    # cost class as generation - the whole point of the similarity cache is
-    # skipping that cost on a repeat/near-repeat diff. Re-verifying on every
-    # cache hit would make hits cost real money again, defeating the cache.
-    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
-    cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding"}]
+def test_review_diff_does_not_reverify_a_cache_hit_finding_with_verifiable_content(
+    mock_verification_adapter,
+):
+    # A cache-hit finding whose issue text quotes a real literal that still
+    # appears at the cited line already got genuine re-validation from
+    # grounding's own content check (see _has_verifiable_content_citation) -
+    # sending it through the LLM verifier too would be a second, unnecessary
+    # real-money call on every such cache hit, defeating the whole point of
+    # the similarity cache.
+    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('buggy_handle')"
+    cached_findings = [
+        {"file": "app.py", "line": 42, "issue": "the file handle 'buggy_handle' is never closed"}
+    ]
+    file_contents = {"app.py": "\n" * 41 + "f = open('buggy_handle')\n"}
 
     findings = review_diff(
         diff_text,
         cache_lookup=lambda diff: cached_findings,
+        file_contents=file_contents,
         verify_with_second_model=True,
     )
 
     assert findings == [{**cached_findings[0], "source": "llm"}]
+    mock_verification_adapter.assert_not_called()
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_review_diff_rechecks_a_cache_hit_finding_with_no_quotable_content(mock_verification_adapter):
+    # Real gap this guards (found on Flash Review's own PR #547): a cached
+    # finding describing a logical/omission bug ("X is never done") has no
+    # specific buggy literal to quote, so grounding's content check can only
+    # ever fall back to "nothing to check, pass" for it - zero real
+    # re-validation against the *current* diff, even though a cache hit
+    # means this diff is merely similar to, not identical to, whatever was
+    # originally reviewed. This must get a real recheck instead of being
+    # trusted forever.
+    mock_verifier = MagicMock()
+    mock_verifier.is_available.return_value = True
+    mock_verifier.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "still there"}'
+    mock_verification_adapter.return_value = mock_verifier
+
+    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
+    cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding, no quoted literal"}]
+
+    findings = review_diff(diff_text, cache_lookup=lambda diff: cached_findings)
+
+    assert findings == [{**cached_findings[0], "source": "llm"}]
+    mock_verifier.simple_completion.assert_called_once()
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_review_diff_drops_a_cache_hit_finding_the_recheck_rejects(mock_verification_adapter):
+    # The exact PR #547 scenario: a cache-hit finding with no quotable
+    # literal, served again against a new diff that actually fixed the bug
+    # it describes. Without the recheck this survives forever, silently
+    # re-affirmed on every subsequent similar push; with it, a REJECT
+    # verdict finally lets it drop out - the same as _post_flash_review_
+    # finding_comments treating "not reproposed" as fixed.
+    mock_verifier = MagicMock()
+    mock_verifier.is_available.return_value = True
+    mock_verifier.simple_completion.return_value = '{"verdict": "REJECT", "reason": "already fixed"}'
+    mock_verification_adapter.return_value = mock_verifier
+
+    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
+    cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding, no quoted literal"}]
+
+    findings = review_diff(diff_text, cache_lookup=lambda diff: cached_findings)
+
+    assert findings == []
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_review_diff_cache_hit_recheck_prices_as_verification_not_generation(mock_verification_adapter):
+    # on_verification_usage, not on_usage: the recheck always calls
+    # verification_adapter (always DeepSeek), so pricing it at
+    # flash_review_model's rate - Luna, whenever that generated the
+    # original cached finding - would misprice real DeepSeek tokens at a
+    # different, likely more expensive model's cost.
+    mock_verifier = MagicMock()
+    mock_verifier.is_available.return_value = True
+    mock_verifier.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "still there"}'
+    mock_verification_adapter.return_value = mock_verifier
+
+    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
+    cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding, no quoted literal"}]
+    generation_usage = MagicMock()
+    verification_usage = MagicMock()
+
+    review_diff(
+        diff_text,
+        cache_lookup=lambda diff: cached_findings,
+        on_usage=generation_usage,
+        on_verification_usage=verification_usage,
+    )
+
+    mock_verification_adapter.assert_called_once_with(on_usage=verification_usage)
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_review_diff_never_sends_a_cached_semantic_finding_to_the_recheck(mock_verification_adapter):
+    # semantic_findings are deterministic, code-verified evidence (see
+    # find_semantic_regressions), not a model guess that can go stale the
+    # way an LLM's prose claim can - even with no quoted literal and no
+    # file_contents, a cached finding tagged "source": "semantic" must
+    # never be sent through the fallible LLM recheck.
+    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
+    cached_findings = [
+        {"file": "app.py", "line": 42, "issue": "no quoted literal here", "source": "semantic"}
+    ]
+
+    findings = review_diff(diff_text, cache_lookup=lambda diff: cached_findings)
+
+    assert findings == cached_findings
     mock_verification_adapter.assert_not_called()
 
 
@@ -3315,3 +3413,34 @@ def test_review_diff_verifies_model_findings_but_not_semantic_findings_in_the_sa
         {"file": "app.py", "line": 2, "issue": "bare except silently swallows all errors", "source": "semantic"}
     ]
     mock_verifier.simple_completion.assert_called_once()
+
+
+def test_system_prompt_warns_that_schema_endpoint_facts_can_be_stale_relative_to_the_diff():
+    # Real false positive found testing flash_review_schema_context.py against a
+    # real, live Discourse PR (#32440, merged 2025-04): the schema/endpoint
+    # evidence came from a scan of the repository's CURRENT HEAD, over a year
+    # after that PR merged. The PR added a controller with create/update/destroy
+    # actions; the evidence's endpoint list showed a LATER refactor's
+    # create_or_update action for the same route. The model confidently reported
+    # a missing-action bug that didn't exist, trusting the "currently defines"
+    # fact over the diff's own controller content. Proves the instruction
+    # exists, not that a live model obeys it - untestable without a real call.
+    normalized = " ".join(FLASH_REVIEW_SYSTEM_PROMPT.lower().split())
+    assert "deterministic schema/endpoint facts" in normalized
+    assert "not guaranteed to be from the same point in time as this diff" in normalized
+    assert "trust the diff and file content you were actually given over the fact" in normalized
+
+
+def test_system_prompt_warns_that_diff_hunk_headers_are_not_proof_of_code_nesting():
+    # Real false positive found on the same real Discourse PR #32440: a
+    # `has_many :topic_localizations` line was added right after code whose
+    # nearest diff hunk header read "@@ ... @@ class NotAllowed < StandardError"
+    # (git's own nearest-preceding-signature heuristic). The model treated that
+    # header as proof the new line was nested inside the NotAllowed exception
+    # class and reported it as broken - verified false against the real file:
+    # the line is correctly part of Topic's own class body, many lines below
+    # where NotAllowed actually closes. Proves the instruction exists, not that
+    # a live model obeys it - untestable without a real call.
+    normalized = " ".join(FLASH_REVIEW_SYSTEM_PROMPT.lower().split())
+    assert "git's own heuristic guess at the nearest" in normalized
+    assert "not proof that the hunk's lines are still nested" in normalized

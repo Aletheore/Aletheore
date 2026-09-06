@@ -367,6 +367,39 @@ end
     assert relation["file"] == "db/migrate/20230101000000_create_posts.rb"
 
 
+def test_rails_up_down_migration_only_reads_up_not_down(tmp_path):
+    # Real bug, found via a real Discourse migration from 2012
+    # (db/migrate/20120423151548_remove_last_post_id.rb): older Rails
+    # migrations use a separate up/down pair instead of one reversible
+    # `change` method. down is rollback-only code, never applied by a
+    # real deploy - but the tree-walk had no notion of "which method am
+    # I inside", so down's add_column was read right alongside up's
+    # remove_column, as if this migration both removed AND re-added the
+    # same column.
+    repo = write_files(
+        tmp_path,
+        {
+            "db/migrate/20120423151548_remove_last_post_id.rb": """
+class RemoveLastPostId < ActiveRecord::Migration[4.2]
+  def up
+    remove_column :forum_threads, :last_post_id
+  end
+
+  def down
+    add_column :forum_threads, :last_post_id, :integer, default: 0
+  end
+end
+"""
+        },
+    )
+    events, _sources = extract_rails_migrations(repo, ["db/migrate"])
+    assert len(events) == 1
+    assert events[0] == {
+        "kind": "remove_column", "table": "forum_threads", "name": "last_post_id",
+        "file": "db/migrate/20120423151548_remove_last_post_id.rb", "line": 4,
+    }
+
+
 def test_rails_id_false_omits_primary_key(tmp_path):
     repo = write_files(
         tmp_path,
