@@ -2017,4 +2017,110 @@ async def test_get_seconds_since_last_health_check_uses_the_most_recent_row(pool
     result = get_seconds_since_last_health_check(TEST_DATABASE_URL)
 
     assert result is not None
-    assert result < 60
+
+
+@pytest.mark.asyncio
+async def test_get_evidence_by_head_sha_returns_the_exact_scan_not_the_latest(pool):
+    # Real bug this fixes: get_latest_evidence is "whatever is newest for
+    # this repo" - run_pr_scan_job and run_flash_review_job are enqueued
+    # independently on the same webhook event with no ordering between
+    # them, so a repo with concurrent PR/push activity can have "latest"
+    # point at a completely different branch's scan by the time Flash
+    # Review reads it. Found via live testing: evidence scanned long after
+    # a real PR's own merge fabricated findings from a route naming scheme
+    # that PR's diff never saw.
+    from scan_worker.db import get_evidence_by_head_sha
+
+    await _insert_installation(pool, 820, "a")
+    insert_repo_history(
+        TEST_DATABASE_URL, 820, "a/repo1", datetime(2026, 1, 1, tzinfo=timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "this-prs-own-scan"},
+        head_sha="abc123",
+    )
+    insert_repo_history(
+        TEST_DATABASE_URL, 820, "a/repo1", datetime(2026, 1, 2, tzinfo=timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "a-different-branchs-later-scan"},
+        head_sha="def456",
+    )
+
+    evidence = get_evidence_by_head_sha(TEST_DATABASE_URL, 820, "a/repo1", "abc123")
+
+    assert evidence["v"] == "this-prs-own-scan"
+    # Confirms this isn't accidentally equivalent to get_latest_evidence.
+    assert get_latest_evidence(TEST_DATABASE_URL, 820, "a/repo1")["v"] == "a-different-branchs-later-scan"
+
+
+@pytest.mark.asyncio
+async def test_get_evidence_by_head_sha_returns_none_when_no_scan_recorded_that_commit(pool):
+    from scan_worker.db import get_evidence_by_head_sha
+
+    await _insert_installation(pool, 821, "a")
+    insert_repo_history(
+        TEST_DATABASE_URL, 821, "a/repo1", datetime(2026, 1, 1, tzinfo=timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "x"},
+        head_sha="abc123",
+    )
+
+    assert get_evidence_by_head_sha(TEST_DATABASE_URL, 821, "a/repo1", "never-scanned-sha") is None
+
+
+@pytest.mark.asyncio
+async def test_get_evidence_by_head_sha_is_none_for_a_row_inserted_without_one(pool):
+    # A scan job that never passes head_sha (or a row from before this
+    # existed) must not accidentally match a lookup - untagged rows stay
+    # invisible to this lookup, exactly like a real miss.
+    from scan_worker.db import get_evidence_by_head_sha
+
+    await _insert_installation(pool, 822, "a")
+    insert_repo_history(
+        TEST_DATABASE_URL, 822, "a/repo1", datetime(2026, 1, 1, tzinfo=timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "untagged"},
+    )
+
+    assert get_evidence_by_head_sha(TEST_DATABASE_URL, 822, "a/repo1", "abc123") is None
+
+
+@pytest.mark.asyncio
+async def test_get_evidence_by_head_sha_scopes_by_installation_and_repo(pool):
+    from scan_worker.db import get_evidence_by_head_sha
+
+    await _insert_installation(pool, 823, "a")
+    await _insert_installation(pool, 824, "b")
+    insert_repo_history(
+        TEST_DATABASE_URL, 823, "a/repo1", datetime(2026, 1, 1, tzinfo=timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "belongs-to-823"},
+        head_sha="shared-sha",
+    )
+
+    assert get_evidence_by_head_sha(TEST_DATABASE_URL, 824, "a/repo1", "shared-sha") is None
+    assert get_evidence_by_head_sha(TEST_DATABASE_URL, 823, "b/repo1", "shared-sha") is None
+    assert get_evidence_by_head_sha(TEST_DATABASE_URL, 823, "a/repo1", "shared-sha")["v"] == "belongs-to-823"
+
+
+@pytest.mark.asyncio
+async def test_get_evidence_by_head_sha_ignores_an_incompatible_version(pool):
+    from scan_worker.db import get_evidence_by_head_sha
+
+    await _insert_installation(pool, 825, "a")
+    insert_repo_history(
+        TEST_DATABASE_URL, 825, "a/repo1", datetime(2026, 1, 1, tzinfo=timezone.utc),
+        {"aletheore_version": "0.1.0", "repository": {}},
+        head_sha="abc123",
+    )
+
+    assert get_evidence_by_head_sha(TEST_DATABASE_URL, 825, "a/repo1", "abc123") is None
+
+
+@pytest.mark.asyncio
+async def test_insert_repo_history_without_head_sha_does_not_tag_the_stored_evidence(pool):
+    # head_sha is opt-in - a caller that never passes it (or passes None)
+    # must get back exactly the evidence dict it gave, with no _scan_head_sha
+    # key silently appended.
+    await _insert_installation(pool, 826, "a")
+    insert_repo_history(
+        TEST_DATABASE_URL, 826, "a/repo1", datetime(2026, 1, 1, tzinfo=timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "x"},
+    )
+
+    evidence = get_latest_evidence(TEST_DATABASE_URL, 826, "a/repo1")
+    assert "_scan_head_sha" not in evidence

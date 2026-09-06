@@ -76,6 +76,7 @@ from scan_worker.db import (
     get_installation as get_installation_row,
     get_last_endpoint_health,
     get_last_reviewed_sha,
+    get_evidence_by_head_sha,
     get_evidence_by_id,
     get_latest_evidence,
     get_llm_spend_this_month,
@@ -135,6 +136,7 @@ from scan_worker.flash_review_cache import (
     lookup_cached_result as lookup_cached_flash_review_result,
     store_result as store_flash_review_result,
 )
+from scan_worker.flash_review_hunk_scope import build_hunk_scope_correction_context
 from scan_worker.github_api import (
     MAX_CONTEXT_FILE_BYTES,
     MAX_CONTEXT_FILES,
@@ -620,7 +622,9 @@ def _sync_code_graph(installation_id: int, repo_full_name: str, head_sha: str, e
         )
 
 
-def _insert_history(installation_id: int, repo_full_name: str, evidence: dict) -> int:
+def _insert_history(
+    installation_id: int, repo_full_name: str, evidence: dict, head_sha: str | None = None
+) -> int:
     settings = get_settings()
     return insert_repo_history(
         settings.database_url,
@@ -628,6 +632,7 @@ def _insert_history(installation_id: int, repo_full_name: str, evidence: dict) -
         repo_full_name,
         datetime.now(timezone.utc),
         evidence,
+        head_sha=head_sha,
     )
 
 
@@ -1014,7 +1019,7 @@ def run_pr_scan_job(
 
             client = get_github_api_client()
             upsert_pr_comment(client, token, repo_full_name, pr_number, format_diff_comment(diff))
-        history_id = _insert_history(installation_id, repo_full_name, new)
+        history_id = _insert_history(installation_id, repo_full_name, new, head_sha=head_sha)
 
         # These are side effects, not the primary deliverable above - a failure in
         # either (e.g. a missing Slack webhook or missing Checks permission) must
@@ -1170,7 +1175,7 @@ def run_initial_scan_job(installation_id: int, repo_full_name: str) -> None:
             evidence = json.loads(evidence_path.read_text())
             evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
             _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
-        _insert_history(installation_id, repo_full_name, evidence)
+        _insert_history(installation_id, repo_full_name, evidence, head_sha=head_sha)
 
         # A repo added to an already-AIR installation should get its
         # AIRview build right away too, rather than waiting for enough
@@ -1247,7 +1252,7 @@ def run_push_scan_job(
             evidence = json.loads(evidence_path.read_text())
             evidence = _sync_persistent_git_graph(installation_id, repo_full_name, repo_dir, evidence)
             _sync_code_graph(installation_id, repo_full_name, head_sha, evidence)
-        history_id = _insert_history(installation_id, repo_full_name, evidence)
+        history_id = _insert_history(installation_id, repo_full_name, evidence, head_sha=head_sha)
 
         # AIR-exclusive - see the identical note on run_initial_scan_job's
         # full-build trigger above.
@@ -1972,7 +1977,9 @@ def _run_flash_review(
                 len(changed_files),
                 ", ".join(skipped_files[:10]),
             )
-        evidence = _latest_evidence_or_none(settings.database_url, installation_id, repo_full_name)
+        evidence = _evidence_for_review_or_latest(
+            settings.database_url, installation_id, repo_full_name, head_sha
+        )
         code_evidence_context = build_code_evidence_context(evidence, changed_files)
         dependency_impact_context = build_dependency_impact_context(evidence, changed_files)
         if dependency_impact_context:
@@ -1999,6 +2006,12 @@ def _run_flash_review(
         if schema_endpoint_context:
             code_evidence_context = "\n\n".join(
                 part for part in (code_evidence_context, schema_endpoint_context) if part
+            )
+
+        hunk_scope_context = build_hunk_scope_correction_context(file_contents, diff_patches)
+        if hunk_scope_context:
+            code_evidence_context = "\n\n".join(
+                part for part in (code_evidence_context, hunk_scope_context) if part
             )
 
         def _fetch_symbol_source(file_path: str, start_line: int, end_line: int) -> str | None:
@@ -2395,6 +2408,54 @@ def _latest_evidence_or_none(dsn: str, installation_id: int, repo_full_name: str
         return get_latest_evidence(dsn, installation_id, repo_full_name)
     except Exception:  # noqa: BLE001
         return None
+
+
+# How long to wait for the exact-head_sha lookup before giving up on it -
+# deliberately far short of psycopg_pool's own ~30s default retry window
+# (confirmed directly: it retries internally even on an immediate
+# connection-refused). This lookup always has a defined, no-worse-than-
+# before fallback, so it must never turn a brief DB hiccup into 30
+# seconds added to every Flash Review.
+_EVIDENCE_BY_HEAD_SHA_TIMEOUT_SECONDS = 3.0
+
+
+def _evidence_by_head_sha_or_none(
+    dsn: str, installation_id: int, repo_full_name: str, head_sha: str
+) -> dict | None:
+    try:
+        return get_evidence_by_head_sha(
+            dsn, installation_id, repo_full_name, head_sha,
+            timeout=_EVIDENCE_BY_HEAD_SHA_TIMEOUT_SECONDS,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _evidence_for_review_or_latest(
+    dsn: str, installation_id: int, repo_full_name: str, head_sha: str
+) -> dict | None:
+    """The exact scan for this PR's own head_sha when one exists, else
+    today's "whatever is latest for the repo" behavior.
+
+    run_pr_scan_job and run_flash_review_job are enqueued independently on
+    the same webhook event with no ordering between them - a repo with
+    concurrent PR/push activity can have get_latest_evidence pointing at a
+    completely different branch's scan by the time Flash Review reads it,
+    not stale in the sense of "old," just describing different code than
+    the diff actually under review. Real risk, not hypothetical: found via
+    live testing that fed Flash Review evidence scanned long after a real
+    PR's own merge, which fabricated findings from a route naming scheme
+    that PR's diff never saw (see flash_review_schema_context.py's own
+    epistemic caution for the case where no exact match exists here
+    either). Falls back rather than blocking: a brand-new PR whose own
+    scan job hasn't finished yet (or never runs - a plan without full-scan
+    entitlement) must still get a review, just with the same staleness
+    exposure this always had.
+    """
+    exact = _evidence_by_head_sha_or_none(dsn, installation_id, repo_full_name, head_sha)
+    if exact is not None:
+        return exact
+    return _latest_evidence_or_none(dsn, installation_id, repo_full_name)
 
 
 def _latency_flipped(
