@@ -45,7 +45,16 @@ from __future__ import annotations
 
 import re
 
-from aletheore.orm_migrations import _pluralize, _rb_args, _rb_call_name, _rb_kwarg, _rb_parser, _rb_symbol_text, _rb_text
+from aletheore.orm_migrations import (
+    _pluralize,
+    _rb_args,
+    _rb_bool_kwarg,
+    _rb_call_name,
+    _rb_kwarg,
+    _rb_parser,
+    _rb_symbol_text,
+    _rb_text,
+)
 
 _CAMEL_BOUNDARY_RE = re.compile(r"(?<!^)(?=[A-Z])")
 
@@ -148,7 +157,13 @@ def _association_target_class(method: str, call_node, source: bytes) -> str | No
         return None
     if _rb_kwarg(args, "through", source) is not None:
         return None
-    if _rb_kwarg(args, "polymorphic", source) is not None:
+    # Real gap found via Flash Review's own review of this module: a bare
+    # presence check treated `polymorphic: false` - an explicit, valid
+    # non-polymorphic declaration - the same as `polymorphic: true`,
+    # skipping a real, resolvable association. Only a literal true value
+    # means "no single fixed target"; false or a non-boolean value falls
+    # through to normal resolution.
+    if _rb_bool_kwarg(args, "polymorphic", source):
         return None
     if _rb_kwarg(args, "as", source) is not None:
         return None

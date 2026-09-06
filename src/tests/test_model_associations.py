@@ -68,6 +68,20 @@ def test_polymorphic_has_many_with_as_is_skipped():
     assert edges == []
 
 
+def test_belongs_to_with_explicit_polymorphic_false_still_resolves():
+    # Real gap found via Flash Review's own review: polymorphic: false is
+    # an explicit, valid declaration that this association is NOT
+    # polymorphic - a bare presence check on the polymorphic keyword
+    # wrongly skipped it the same as polymorphic: true, dropping a real,
+    # resolvable, fixed-target association.
+    files = _files(
+        post="class Post < ActiveRecord::Base\n  belongs_to :user, polymorphic: false\nend\n",
+        user="class User < ActiveRecord::Base\nend\n",
+    )
+    edges = rails_model_association_edges(files)
+    assert edges == [("app/models/post.rb", "app/models/user.rb")]
+
+
 def test_association_with_no_real_matching_model_produces_no_edge():
     # belongs_to :ghost has no corresponding Ghost model anywhere in this
     # scan - never guessed into an edge pointing at a file that may not
