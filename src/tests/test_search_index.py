@@ -25,10 +25,13 @@ from aletheore.search_index import (
     _embed_in_batches,
     _escape_sql_literal,
     _fts_candidates,
+    _is_loopback_base_url,
     _repo_id,
     _reusable_vectors,
     _rrf_fuse,
+    _try_auto_install_ollama,
     _try_auto_pull_ollama_model,
+    _try_auto_start_ollama_server,
     build_chunks,
     build_index,
     embed_texts,
@@ -217,14 +220,145 @@ def test_embed_texts_raises_actionable_error_when_auto_pull_fails(
     )
 
 
+@patch("aletheore.search_index.shutil.which", return_value=None)
 @patch("aletheore.search_index.has_api_key", return_value=False)
 @patch("aletheore.search_index.OpenAI")
 def test_embed_texts_shows_setup_instructions_when_ollama_unreachable(
-    mock_openai_class, mock_has_api_key
+    mock_openai_class, mock_has_api_key, mock_which
 ):
     # Distinct from the model-not-found case above: Ollama itself isn't
     # running (or isn't installed) at all, so pulling a model would just
-    # fail too - point the user at real setup steps instead.
+    # fail too - point the user at real setup steps instead. shutil.which
+    # mocked to None (no ollama on PATH, and this platform-gated install
+    # attempt below returns False without prompting since sys.platform
+    # isn't overridden here) so the new auto-install/start attempt below
+    # cleanly declines rather than touching this test machine's real,
+    # actually-installed ollama.
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.embeddings.create.side_effect = _ollama_connection_error()
+
+    with pytest.raises(EmbeddingProviderUnavailableError) as exc_info:
+        embed_texts(["chunk one"], ollama_install_confirm_fn=lambda: False)
+
+    message = str(exc_info.value)
+    # Not "ollama.com" - a bare-domain substring check reads to a static
+    # analyzer (CodeQL flagged this exact pre-existing pattern as
+    # py/incomplete-url-substring-sanitization) as an attempted URL-trust
+    # decision, which is genuinely bypassable there ("evil.com/ollama.com"
+    # also contains it) - irrelevant to what this assertion actually
+    # checks (that the setup-instructions hint text was used), but easy
+    # to avoid entirely by asserting on real instructional text instead.
+    assert "Ollama doesn't appear to be running" in message
+    assert f"ollama pull {search_index_module.DEFAULT_EMBEDDING_MODEL}" in message
+    assert "ollama serve" in message
+
+
+@patch("aletheore.search_index._try_auto_start_ollama_server")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_auto_starts_ollama_server_and_retries_when_connection_refused(
+    mock_openai_class, mock_which, mock_auto_start
+):
+    # ollama is already installed (on PATH) but its server isn't running -
+    # a normal first-run or post-reboot state - so this should start it
+    # and retry rather than making the user run 'ollama serve' themselves.
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.embeddings.create.side_effect = [
+        _ollama_connection_error(),
+        MagicMock(data=[MagicMock(embedding=[0.1, 0.2])]),
+    ]
+    mock_auto_start.return_value = True
+
+    result = embed_texts(["chunk one"])
+
+    assert result == [[0.1, 0.2]]
+    mock_auto_start.assert_called_once_with(search_index_module.DEFAULT_EMBEDDING_BASE_URL)
+    assert mock_client.embeddings.create.call_count == 2
+
+
+@patch("aletheore.search_index._try_auto_start_ollama_server")
+@patch("aletheore.search_index._try_auto_install_ollama")
+@patch("aletheore.search_index.shutil.which")
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_installs_then_starts_ollama_when_binary_is_missing(
+    mock_openai_class, mock_which, mock_auto_install, mock_auto_start
+):
+    # Nothing on PATH at all (a genuinely fresh machine) - install must run
+    # BEFORE start is even attempted, and start must only be attempted once
+    # the binary is confirmed present afterward.
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.embeddings.create.side_effect = [
+        _ollama_connection_error(),
+        MagicMock(data=[MagicMock(embedding=[0.1, 0.2])]),
+    ]
+    # First check (before install): not on PATH. Second check (after a
+    # successful install): now on PATH.
+    mock_which.side_effect = [None, "/usr/local/bin/ollama"]
+    mock_auto_install.return_value = True
+    mock_auto_start.return_value = True
+
+    confirm = lambda: True  # noqa: E731
+    result = embed_texts(["chunk one"], ollama_install_confirm_fn=confirm)
+
+    assert result == [[0.1, 0.2]]
+    mock_auto_install.assert_called_once_with(confirm)
+    mock_auto_start.assert_called_once_with(search_index_module.DEFAULT_EMBEDDING_BASE_URL)
+
+
+@patch("aletheore.search_index._try_auto_install_ollama")
+@patch("aletheore.search_index._try_auto_start_ollama_server")
+@patch("aletheore.search_index.has_api_key", return_value=False)
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_never_auto_remediates_a_remote_base_url(
+    mock_openai_class, mock_has_api_key, mock_auto_start, mock_auto_install
+):
+    # Real Flash Review finding: base_url is fully general (accepts any
+    # host, even though nothing currently exposes overriding it to a
+    # remote Ollama) - auto-install/auto-start only ever make sense for a
+    # LOCAL Ollama. A remote host being unreachable must never spawn a
+    # pointless local `ollama serve`, or try installing Ollama locally
+    # either - neither does anything to fix a remote outage.
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.embeddings.create.side_effect = _ollama_connection_error()
+
+    with pytest.raises(EmbeddingProviderUnavailableError):
+        embed_texts(["chunk one"], base_url="http://embeddings.example.com/v1")
+
+    mock_auto_install.assert_not_called()
+    mock_auto_start.assert_not_called()
+
+
+@patch("aletheore.search_index._try_auto_install_ollama", return_value=False)
+@patch("aletheore.search_index.shutil.which", return_value=None)
+@patch("aletheore.search_index.has_api_key", return_value=False)
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_does_not_attempt_start_when_install_fails(
+    mock_openai_class, mock_has_api_key, mock_which, mock_auto_install
+):
+    # If install fails (declined, network error, etc.), 'ollama' is still
+    # not on PATH - there is nothing to start, and attempting to would
+    # just be another guaranteed failure.
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.embeddings.create.side_effect = _ollama_connection_error()
+
+    with patch("aletheore.search_index._try_auto_start_ollama_server") as mock_auto_start:
+        with pytest.raises(EmbeddingProviderUnavailableError):
+            embed_texts(["chunk one"])
+        mock_auto_start.assert_not_called()
+
+
+@patch("aletheore.search_index._try_auto_start_ollama_server", return_value=False)
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+@patch("aletheore.search_index.has_api_key", return_value=False)
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_falls_through_to_setup_instructions_when_auto_start_fails(
+    mock_openai_class, mock_has_api_key, mock_which, mock_auto_start
+):
     mock_client = MagicMock()
     mock_openai_class.return_value = mock_client
     mock_client.embeddings.create.side_effect = _ollama_connection_error()
@@ -232,10 +366,40 @@ def test_embed_texts_shows_setup_instructions_when_ollama_unreachable(
     with pytest.raises(EmbeddingProviderUnavailableError) as exc_info:
         embed_texts(["chunk one"])
 
-    message = str(exc_info.value)
-    assert "ollama.com" in message
-    assert f"ollama pull {search_index_module.DEFAULT_EMBEDDING_MODEL}" in message
-    assert "ollama serve" in message
+    # Not "ollama.com" - see the identical CodeQL note on the sibling
+    # assertion above.
+    assert "Ollama doesn't appear to be running" in str(exc_info.value)
+    # Only the original connection error should ever have been attempted -
+    # a failed start must not retry the embeddings call at all.
+    assert mock_client.embeddings.create.call_count == 1
+
+
+@patch("aletheore.search_index._try_auto_pull_ollama_model", return_value=True)
+@patch("aletheore.search_index._try_auto_start_ollama_server", return_value=True)
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_chains_into_auto_pull_after_a_fresh_server_start(
+    mock_openai_class, mock_which, mock_auto_start, mock_auto_pull
+):
+    # A server that just started (or was just installed) has no model
+    # pulled yet either - the retry after auto-start should itself hit
+    # NotFoundError and fall through into the EXISTING auto-pull-and-retry
+    # path, not a dead end. Three calls total: original failure, retry
+    # after start (still missing the model), retry after pull (succeeds).
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.embeddings.create.side_effect = [
+        _ollama_connection_error(),
+        _ollama_not_found_error(),
+        MagicMock(data=[MagicMock(embedding=[0.1, 0.2])]),
+    ]
+
+    result = embed_texts(["chunk one"])
+
+    assert result == [[0.1, 0.2]]
+    assert mock_client.embeddings.create.call_count == 3
+    mock_auto_start.assert_called_once()
+    mock_auto_pull.assert_called_once()
 
 
 @patch("aletheore.search_index.shutil.which", return_value=None)
@@ -362,6 +526,231 @@ def test_try_auto_pull_returns_false_on_nonzero_exit(mock_which, mock_run):
 @patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
 def test_try_auto_pull_returns_false_when_subprocess_raises(mock_which, mock_run):
     assert _try_auto_pull_ollama_model("nomic-embed-text") is False
+
+
+# ---------------------------------------------------------------------------
+# _is_loopback_base_url
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://localhost:11434/v1",
+        "http://127.0.0.1:11434/v1",
+        "http://127.5.5.5:11434/v1",
+        "http://[::1]:11434/v1",
+    ],
+)
+def test_is_loopback_base_url_recognizes_real_loopback_forms(base_url):
+    assert _is_loopback_base_url(base_url) is True
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://embeddings.example.com/v1",
+        "http://192.168.1.50:11434/v1",
+        "https://10.0.0.5:11434/v1",
+    ],
+)
+def test_is_loopback_base_url_rejects_real_remote_hosts(base_url):
+    assert _is_loopback_base_url(base_url) is False
+
+
+def test_is_loopback_base_url_handles_a_url_with_no_host_gracefully():
+    assert _is_loopback_base_url("not-a-url") is False
+
+
+# ---------------------------------------------------------------------------
+# _try_auto_install_ollama
+# ---------------------------------------------------------------------------
+
+
+@patch("aletheore.search_index.sys.platform", "darwin")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_auto_install_returns_true_immediately_when_already_on_path(mock_which):
+    # Nothing to install - and critically, no confirm prompt should even
+    # be reached, since there is nothing to ask permission for.
+    confirm = MagicMock(return_value=False)
+    assert _try_auto_install_ollama(confirm) is True
+    confirm.assert_not_called()
+
+
+@patch("aletheore.search_index.sys.platform", "win32")
+@patch("aletheore.search_index.shutil.which", return_value=None)
+def test_auto_install_returns_false_on_windows_without_prompting(mock_which):
+    # Ollama documents no equivalent scripted/silent install for Windows -
+    # must not guess at one, and must not even ask, since there's nothing
+    # this code could actually do if the user said yes.
+    confirm = MagicMock(return_value=True)
+    assert _try_auto_install_ollama(confirm) is False
+    confirm.assert_not_called()
+
+
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.sys.platform", "darwin")
+@patch("aletheore.search_index.shutil.which", return_value=None)
+def test_auto_install_does_not_download_anything_when_declined(mock_which, mock_get):
+    assert _try_auto_install_ollama(lambda: False) is False
+    mock_get.assert_not_called()
+
+
+@patch("aletheore.search_index.shutil.which")
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.sys.platform", "darwin")
+def test_auto_install_downloads_and_runs_the_real_installer_script_on_confirm(
+    mock_get, mock_run, mock_which
+):
+    # Not on PATH before, on PATH after a clean install - the exact script
+    # Ollama's own docs publish, run via `sh`, not a guessed alternative.
+    mock_which.side_effect = [None, "/usr/local/bin/ollama"]
+    mock_get.return_value = MagicMock(text="#!/bin/sh\necho installing", status_code=200)
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    assert _try_auto_install_ollama(lambda: True) is True
+
+    mock_get.assert_called_once_with(
+        "https://ollama.com/install.sh", timeout=30.0, follow_redirects=True
+    )
+    run_args, run_kwargs = mock_run.call_args
+    assert run_args[0] == ["sh"]
+    assert run_kwargs["input"] == "#!/bin/sh\necho installing"
+
+
+@patch("aletheore.search_index.shutil.which", return_value=None)
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.httpx.get", side_effect=httpx.ConnectError("no network"))
+@patch("aletheore.search_index.sys.platform", "darwin")
+def test_auto_install_returns_false_when_the_installer_cannot_be_downloaded(
+    mock_get, mock_run, mock_which
+):
+    assert _try_auto_install_ollama(lambda: True) is False
+    mock_run.assert_not_called()
+
+
+@patch("aletheore.search_index.shutil.which", return_value=None)
+@patch("aletheore.search_index.subprocess.run", side_effect=OSError("no such file"))
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.sys.platform", "darwin")
+def test_auto_install_returns_false_when_sh_is_unavailable(
+    mock_get, mock_run, mock_which
+):
+    mock_get.return_value = MagicMock(text="#!/bin/sh", status_code=200)
+    assert _try_auto_install_ollama(lambda: True) is False
+
+
+@patch("aletheore.search_index.shutil.which", return_value=None)
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.sys.platform", "darwin")
+def test_auto_install_returns_false_on_nonzero_install_exit(
+    mock_get, mock_run, mock_which
+):
+    mock_get.return_value = MagicMock(text="#!/bin/sh", status_code=200)
+    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="permission denied")
+
+    assert _try_auto_install_ollama(lambda: True) is False
+
+
+@patch("aletheore.search_index.shutil.which", return_value=None)
+@patch("aletheore.search_index.subprocess.run")
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.sys.platform", "darwin")
+def test_auto_install_returns_false_when_ollama_still_not_on_path_after_clean_exit(
+    mock_get, mock_run, mock_which
+):
+    # A clean exit code alone is never trusted - only a real, re-checked
+    # PATH lookup counts as success.
+    mock_get.return_value = MagicMock(text="#!/bin/sh", status_code=200)
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    assert _try_auto_install_ollama(lambda: True) is False
+
+
+# ---------------------------------------------------------------------------
+# _try_auto_start_ollama_server
+# ---------------------------------------------------------------------------
+
+
+@patch("aletheore.search_index.shutil.which", return_value=None)
+def test_auto_start_returns_false_when_ollama_not_on_path(mock_which):
+    assert _try_auto_start_ollama_server() is False
+
+
+@patch("aletheore.search_index.time.sleep")
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.subprocess.Popen")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_auto_start_spawns_serve_and_returns_true_once_reachable(
+    mock_which, mock_popen, mock_get, mock_sleep
+):
+    mock_get.side_effect = [
+        httpx.ConnectError("not up yet"),
+        MagicMock(status_code=200),
+    ]
+
+    assert _try_auto_start_ollama_server("http://localhost:11434/v1") is True
+
+    popen_args, popen_kwargs = mock_popen.call_args
+    assert popen_args[0] == ["ollama", "serve"]
+    # POSIX detachment: puts the child in its own session so it survives
+    # this process exiting rather than being cleaned up together.
+    assert popen_kwargs.get("start_new_session") is True
+    mock_get.assert_called_with("http://localhost:11434/api/tags", timeout=2.0)
+
+
+@patch("aletheore.search_index.subprocess.CREATE_NO_WINDOW", 0x08000000, create=True)
+@patch("aletheore.search_index.subprocess.CREATE_NEW_PROCESS_GROUP", 0x00000200, create=True)
+@patch("aletheore.search_index.sys.platform", "win32")
+@patch("aletheore.search_index.time.sleep")
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.subprocess.Popen")
+@patch("aletheore.search_index.shutil.which", return_value="C:\\ollama\\ollama.exe")
+def test_auto_start_uses_windows_detachment_flags_not_start_new_session(
+    mock_which, mock_popen, mock_get, mock_sleep
+):
+    # Real gap caught by the user: start_new_session doesn't exist on
+    # Windows - the equivalent is CREATE_NEW_PROCESS_GROUP (so a Ctrl+C to
+    # this process's console doesn't kill the detached server too) plus
+    # CREATE_NO_WINDOW (ollama.exe is a console-subsystem binary and would
+    # otherwise flash a visible window into existence). CREATE_NEW_PROCESS_
+    # GROUP/CREATE_NO_WINDOW don't exist on non-Windows `subprocess`
+    # modules at all (confirmed: hasattr is False on macOS/Linux), so
+    # they're patched in here with create=True rather than assumed present.
+    mock_get.return_value = MagicMock(status_code=200)
+
+    assert _try_auto_start_ollama_server() is True
+
+    popen_args, popen_kwargs = mock_popen.call_args
+    assert popen_args[0] == ["ollama", "serve"]
+    assert "start_new_session" not in popen_kwargs
+    assert popen_kwargs.get("creationflags") == 0x08000000 | 0x00000200
+
+
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+@patch("aletheore.search_index.subprocess.Popen", side_effect=OSError("cannot fork"))
+def test_auto_start_returns_false_when_spawning_fails(mock_popen, mock_which):
+    assert _try_auto_start_ollama_server() is False
+
+
+@patch("aletheore.search_index.time.sleep")
+@patch("aletheore.search_index.time.monotonic")
+@patch("aletheore.search_index.httpx.get", side_effect=httpx.ConnectError("still down"))
+@patch("aletheore.search_index.subprocess.Popen")
+@patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
+def test_auto_start_gives_up_after_the_timeout(
+    mock_which, mock_popen, mock_get, mock_monotonic, mock_sleep
+):
+    # time.monotonic mocked so this test doesn't actually wait out the
+    # real OLLAMA_SERVER_START_TIMEOUT_SECONDS - one call to establish the
+    # deadline, one in-time while-check (attempt fails), one past-deadline
+    # while-check that ends the loop.
+    mock_monotonic.side_effect = [0.0, 5.0, 999.0]
+
+    assert _try_auto_start_ollama_server() is False
+    assert mock_get.call_count == 1
 
 
 @patch("aletheore.search_index.has_api_key", return_value=False)
