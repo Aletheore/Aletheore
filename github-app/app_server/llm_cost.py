@@ -65,8 +65,21 @@ PLAN_MONTHLY_PRICE_USD = {
 # without needing to revisit this constant. See jobs.py's
 # MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH for the real review-count cap
 # (800) this was checked against.
+# air's real spend cap is a deliberately looser fraction of its price than
+# the shared 50% default below, raised from the derived $14.995 to a flat
+# $20 - real production repos vary far more in size than the fixed-cost
+# review workload flash's own override above is tuned against, and
+# MAX_WIKI_FULL_BUILD_CLUSTERS/MAX_DOCS_FULL_BUILD_FILES now scale their
+# per-sweep batch to a repo's real cluster/module count (up to a ceiling),
+# not a flat number - a large real repo (a Discourse-scale monorepo
+# measured directly: 857 real clusters, ~$0.37 per 50-cluster batch, so
+# full first-build coverage capped at the new 200-cluster ceiling costs
+# real single-digit dollars, not fractions of a cent) needs real headroom
+# to make meaningful progress per catch-up cycle instead of the old cap
+# forcing an artificially small per-sweep batch just to stay under it.
 PLAN_CAP_OVERRIDE_USD = {
     "flash": 5.00,
+    "air": 20.00,
 }
 
 # Deliberately generous: this is a worst-case abuse/runaway-cost ceiling, not

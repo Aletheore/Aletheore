@@ -546,16 +546,36 @@ def repo_checkout_lock(dsn: str, installation_id: int, repo_full_name: str):
 
 @contextmanager
 def wiki_write_lock(dsn: str, installation_id: int, repo_full_name: str):
-    """Serializes one repo's Live Wiki writes (scan_worker.jobs.
-    _store_wiki_generation - the upsert/prune/overview-regenerate sequence,
-    not the slower LLM generation that runs before it) across whichever
-    job reaches it: a full build, an incremental push-triggered update, and
-    an incremental PR-triggered update can all be enqueued for the same
-    repo close together, on different scan-worker replicas, and none of
-    that concurrency is bounded by repo_checkout_lock - that lock's scope
-    ends (checkout releases) before the wiki job is even enqueued.
+    """Serializes one repo's Live Wiki writes across whichever job reaches
+    it: a full build, an incremental push-triggered update, and an
+    incremental PR-triggered update can all be enqueued for the same repo
+    close together, on different scan-worker replicas, and none of that
+    concurrency is bounded by repo_checkout_lock - that lock's scope ends
+    (checkout releases) before the wiki job is even enqueued.
 
-    Real bug this closes: _store_wiki_generation prunes wiki_subsystems
+    Guards two separate functions in scan_worker.jobs, not the slower LLM
+    generation that runs before either: _store_wiki_subsystem_records (the
+    upsert/prune step) and _regenerate_wiki_overview (the overview
+    read-and-regenerate step). NEITHER function acquires this lock
+    itself - the caller must hold it across every call in one logical
+    write, and callers get this wrong at their peril: an earlier version
+    of this split gave each function its own separate acquisition, which
+    let a concurrent job's complete write land in the gap between one
+    job's own prune and its own later overview read, corrupting exactly
+    the invariant described below (found via independent audit, not
+    theoretical - confirmed by reading the pre-fix code directly).
+    _store_wiki_generation (the incremental-update path) holds one
+    acquisition across both calls. run_live_wiki_full_build_job holds a
+    separate acquisition per chunk's store call (so a concurrent job for
+    the same repo isn't made to wait out this job's entire multi-chunk
+    run just to get a turn), except the LAST chunk, whose store call
+    shares one continuous acquisition with the following overview call -
+    the only pairing that actually needs to be gapless, since every
+    chunk within one job shares that job's own single evidence snapshot
+    and the race below was never about this job's own writes racing each
+    other, only about two DIFFERENT jobs' evidence snapshots racing.
+
+    Real bug this closes: the upsert/prune step prunes wiki_subsystems
     rows using ITS OWN evidence snapshot's current cluster list
     (delete_wiki_subsystems_not_in) - if an older-evidence job's write
     lands after a newer-evidence job's (e.g. two pushes close together,
