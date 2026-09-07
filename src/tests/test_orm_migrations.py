@@ -183,6 +183,74 @@ class Migration(migrations.Migration):
     assert create["relations"][0]["on_delete"] == "SET_NULL"
 
 
+def test_django_db_column_override_is_used_as_the_real_column_name(tmp_path):
+    # Real bug found via audit: db_column=... is a common real Django idiom
+    # (legacy-database integration, gradual renames) that overrides the
+    # ACTUAL database column name - Django uses it verbatim, ignoring the
+    # field's own Python attribute name entirely. This used to always use
+    # the Python field name regardless, fabricating a column that doesn't
+    # exist in the real database.
+    repo = write_files(
+        tmp_path,
+        {
+            "blog/migrations/0001_initial.py": """
+from django.db import migrations, models
+
+class Migration(migrations.Migration):
+    operations = [
+        migrations.CreateModel(
+            name='Post',
+            fields=[
+                ('id', models.AutoField(primary_key=True)),
+                ('title', models.CharField(max_length=200, db_column='legacy_title')),
+            ],
+        ),
+    ]
+"""
+        },
+    )
+    result = extract_schema(repo, ["blog/migrations"])
+    table = next(t for t in result["tables"] if t["name"] == "blog_post")
+    names = [c["name"] for c in table["columns"]]
+    assert "legacy_title" in names
+    assert "title" not in names
+
+
+def test_django_db_column_override_on_a_foreign_key_replaces_the_id_suffix(tmp_path):
+    # Same gap, foreign-key shape: Django never appends "_id" to an
+    # explicit db_column - it uses it as the literal column name, so the
+    # relation's from_column must match, not the "<field>_id" convention.
+    repo = write_files(
+        tmp_path,
+        {
+            "blog/migrations/0001_initial.py": """
+from django.db import migrations, models
+
+class Migration(migrations.Migration):
+    operations = [
+        migrations.CreateModel(
+            name='Post',
+            fields=[
+                ('id', models.AutoField(primary_key=True)),
+                ('author', models.ForeignKey(
+                    to='accounts.User', on_delete=models.CASCADE, db_column='author_uid',
+                )),
+            ],
+        ),
+    ]
+"""
+        },
+    )
+    result = extract_schema(repo, ["blog/migrations"])
+    table = next(t for t in result["tables"] if t["name"] == "blog_post")
+    names = [c["name"] for c in table["columns"]]
+    assert "author_uid" in names
+    assert "author_id" not in names
+    relation = result["relations"][0]
+    assert relation["from_column"] == "author_uid"
+    assert relation["to_table"] == "accounts_user"
+
+
 def test_django_add_field_and_add_index(tmp_path):
     repo = write_files(
         tmp_path,
