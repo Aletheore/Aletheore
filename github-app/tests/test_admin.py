@@ -19,6 +19,7 @@ from app_server.admin import (
     _build_updated_seat_items,
     _has_real_admin_permission,
     _looks_like_email,
+    _monitored_endpoint_keys,
     _repo_installation_id,
 )
 from app_server.auth import decrypt_access_token, encrypt_access_token, sign_session_id
@@ -919,6 +920,28 @@ async def test_remove_health_check_target(pool, monkeypatch):
     assert page.json()["health_targets"] == []
 
 
+def test_monitored_endpoint_keys_delegates_to_the_shared_ranking_function():
+    # Real drift risk found via self-review: an earlier version of
+    # _monitored_endpoint_keys reimplemented the candidate-then-cap
+    # ranking as its own parallel copy of scan_worker.jobs.
+    # rank_endpoints_by_selection - two independently-written copies of
+    # "what counts as monitored" is exactly the kind of sibling logic
+    # that silently drifts the first time only one of them gets updated.
+    # This confirms admin.py now calls the shared function directly
+    # rather than reimplementing it.
+    from scan_worker.jobs import rank_endpoints_by_selection
+
+    endpoints = [
+        {"method": "GET", "path": "/a"},
+        {"method": "GET", "path": "/b"},
+        {"method": "GET", "path": "/c"},
+    ]
+    selected = {("GET", "/c"), ("GET", "/a")}
+    expected = {(e["method"], e["path"]) for e in rank_endpoints_by_selection(endpoints, selected)}
+
+    assert _monitored_endpoint_keys(endpoints, selected) == expected == {("GET", "/a"), ("GET", "/c")}
+
+
 @pytest.mark.asyncio
 async def test_list_health_check_endpoints_defaults_to_auto_mode(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch, installation_id=506)
@@ -1018,8 +1041,52 @@ async def test_set_health_check_endpoints_switches_to_manual_mode(pool, monkeypa
     body = get_response.json()
     assert body["mode"] == "manual"
     assert body["monitored_endpoint_count"] == 1
+    assert body["candidate_count"] == 1
     monitored = {e["path"]: e["monitored"] for e in body["endpoints"]}
     assert monitored == {"/a": False, "/b": True}
+
+
+@pytest.mark.asyncio
+async def test_candidate_count_reflects_the_selection_not_the_whole_repo(pool, monkeypatch):
+    # Real bug found via self-review: an earlier version of the frontend's
+    # "still capped" caveat compared total_endpoint_count (the whole repo)
+    # against the cap, even in manual mode - a repo with more endpoints
+    # than the cap where a customer explicitly selected FEWER than the cap
+    # would wrongly report as still-capped, even though nothing of their
+    # selection was cut off. candidate_count must reflect the real
+    # candidate set (the selection, once one exists), not the repo total.
+    monkeypatch.setattr("app_server.admin.MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET", 2)
+    client = await _logged_in_client(pool, monkeypatch, installation_id=510)
+    await insert_repo_history(
+        pool,
+        510,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {
+            "aletheore_version": EVIDENCE_VERSION,
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {"method": "GET", "path": "/a"},
+                        {"method": "GET", "path": "/b"},
+                        {"method": "GET", "path": "/c"},
+                    ]
+                }
+            },
+        },
+    )
+    async with client:
+        await client.put(
+            "/admin/octocat/hello-world/health-endpoints",
+            json={"selections": [{"method": "GET", "path": "/a"}]},
+        )
+        get_response = await client.get("/admin/octocat/hello-world/health-endpoints")
+
+    body = get_response.json()
+    assert body["mode"] == "manual"
+    assert body["total_endpoint_count"] == 3  # the whole repo - more than the cap (2)
+    assert body["candidate_count"] == 1  # the real candidate set - the one selected endpoint
+    assert body["monitored_endpoint_count"] == 1
 
 
 @pytest.mark.asyncio

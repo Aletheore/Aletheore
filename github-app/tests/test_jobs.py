@@ -3789,6 +3789,40 @@ def _patch_sweep(
     return sent
 
 
+def test_rank_endpoints_by_selection_uses_scan_order_with_no_selection():
+    from scan_worker.jobs import rank_endpoints_by_selection
+
+    endpoints = [{"method": "GET", "path": "/a"}, {"method": "GET", "path": "/b"}]
+    assert rank_endpoints_by_selection(endpoints, set()) == endpoints
+
+
+def test_rank_endpoints_by_selection_filters_and_sorts():
+    # This is the single, shared source of truth _candidate_endpoints (the
+    # real sweep) and app_server.admin's _monitored_endpoint_keys (the
+    # dashboard's read route) both call directly - real drift risk found
+    # via self-review: an earlier version had admin.py reimplement this
+    # same filter+sort as its own parallel copy.
+    from scan_worker.jobs import rank_endpoints_by_selection
+
+    endpoints = [
+        {"method": "GET", "path": "/z"},
+        {"method": "POST", "path": "/a"},
+        {"method": "GET", "path": "/a"},
+    ]
+    result = rank_endpoints_by_selection(endpoints, {("GET", "/z"), ("GET", "/a")})
+    assert result == [
+        {"method": "GET", "path": "/a"},
+        {"method": "GET", "path": "/z"},
+    ]
+
+
+def test_rank_endpoints_by_selection_drops_a_selected_endpoint_no_longer_present():
+    from scan_worker.jobs import rank_endpoints_by_selection
+
+    endpoints = [{"method": "GET", "path": "/a"}]
+    assert rank_endpoints_by_selection(endpoints, {("GET", "/removed")}) == []
+
+
 def test_candidate_endpoints_uses_scan_order_with_no_selection(monkeypatch):
     from scan_worker.jobs import _candidate_endpoints
 

@@ -1346,7 +1346,13 @@ async function loadEndpoints() {{
     body.innerHTML = '<div class="empty-state">No API endpoints found in this repo yet.</div>';
     return;
   }}
-  const atCap = data.total_endpoint_count > data.cap;
+  // candidate_count is the real "eligible to be monitored" set BEFORE the
+  // cap - every endpoint in auto mode, or exactly the still-real selected
+  // ones in manual mode. Using total_endpoint_count (the whole repo) here
+  // instead would be wrong in manual mode: a repo with 200 endpoints where
+  // a customer selected only 5 would wrongly claim their 5-endpoint
+  // selection was "still capped", even though nothing of theirs was cut off.
+  const atCap = data.candidate_count > data.cap;
   let html = '';
   if (data.mode === 'auto' && atCap) {{
     html += '<div class="settings-block-hint" style="margin-bottom:8px;">This repo has more endpoints (' +
@@ -1354,7 +1360,7 @@ async function loadEndpoints() {{
       data.cap + ' below (in scan order) are monitored by default. Uncheck/check below and Save to choose exactly which ones instead.</div>';
   }} else if (data.mode === 'manual') {{
     html += '<div class="settings-block-hint" style="margin-bottom:8px;">You have chosen exactly which endpoints are monitored below' +
-      (atCap ? ' (still capped at ' + data.cap + ' at a time)' : '') + '.</div>';
+      (atCap ? ' (your selection has more than ' + data.cap + ' - only the first ' + data.cap + ', sorted by path, are checked)' : '') + '.</div>';
   }}
   html += '<details><summary style="cursor:pointer;font-size:12.5px;color:var(--muted);">Choose endpoints (' +
     data.endpoints.length + ')</summary><div style="margin-top:8px;max-height:320px;overflow-y:auto;">' +

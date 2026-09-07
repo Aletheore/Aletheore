@@ -25,7 +25,7 @@ from app_server.http_client import get_github_api_client
 from app_server.email_client import send_transactional_email
 from app_server.email_queue import enqueue_transactional_email
 from app_server.email_templates import deletion_otp_email
-from scan_worker.jobs import MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET
+from scan_worker.jobs import MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET, rank_endpoints_by_selection
 from scan_worker.pushover import send_pushover_alert
 from app_server.db import (
     DEFAULT_HEALTH_CHECK_TARGET_LIMIT,
@@ -1062,19 +1062,18 @@ async def remove_health_check_target_route(org: str, repo: str, target_id: int, 
 def _monitored_endpoint_keys(
     api_endpoints: list[dict], selected_keys: set[tuple[str, str]]
 ) -> set[tuple[str, str]]:
-    """Exactly which (method, path) keys the next real sweep will check -
-    the SAME candidate-then-cap logic as scan_worker.jobs._candidate_
-    endpoints/_endpoint_results, kept here as its own small function
-    rather than inlined so the two can never silently drift apart, since
-    this dashboard's whole point is to show real, not assumed, coverage.
+    """Exactly which (method, path) keys the next real sweep will check.
+
+    Calls scan_worker.jobs.rank_endpoints_by_selection directly rather
+    than reimplementing the ranking here - an earlier version of this
+    function duplicated that logic (candidate-then-cap) as its own
+    parallel copy, real drift risk found via self-review even though the
+    two happened to agree at the time: this dashboard's whole point is to
+    show real, not assumed, coverage, so "the same logic, trust me" is
+    exactly the gap a shared function closes structurally instead of by
+    convention.
     """
-    if selected_keys:
-        candidates = sorted(
-            (e for e in api_endpoints if (e.get("method"), e.get("path")) in selected_keys),
-            key=lambda e: (e.get("path") or "", e.get("method") or ""),
-        )
-    else:
-        candidates = api_endpoints
+    candidates = rank_endpoints_by_selection(api_endpoints, selected_keys)
     return {
         (e.get("method"), e.get("path"))
         for e in candidates[:MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET]
@@ -1100,7 +1099,22 @@ async def list_health_check_endpoints_route(org: str, repo: str, request: Reques
     )
     selection_rows = await get_endpoint_health_selection(pool, installation_id, repo_full_name)
     selected_keys = {(row["endpoint_method"], row["endpoint_path"]) for row in selection_rows}
-    monitored_keys = _monitored_endpoint_keys(api_endpoints, selected_keys)
+    # candidates is the real "eligible to be monitored" set BEFORE the cap -
+    # every endpoint in auto mode, or exactly the still-real selected ones
+    # in manual mode (see rank_endpoints_by_selection). Real bug found via
+    # self-review: the frontend's "still capped" caveat on the manual-mode
+    # message used to compare total_endpoint_count (the whole repo) against
+    # the cap, which is wrong in manual mode - a repo with 200 endpoints
+    # where a customer explicitly selected 5 would misleadingly claim their
+    # 5-endpoint selection was "still capped at 64", even though nothing of
+    # theirs was cut off. candidate_count lets the frontend ask the right
+    # question: was THIS candidate set (not the whole repo) larger than the
+    # cap.
+    candidates = rank_endpoints_by_selection(api_endpoints, selected_keys)
+    monitored_keys = {
+        (e.get("method"), e.get("path"))
+        for e in candidates[:MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET]
+    }
 
     endpoints = [
         {
@@ -1117,6 +1131,7 @@ async def list_health_check_endpoints_route(org: str, repo: str, request: Reques
         "mode": "manual" if selected_keys else "auto",
         "cap": MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET,
         "total_endpoint_count": len(api_endpoints),
+        "candidate_count": len(candidates),
         "monitored_endpoint_count": len(monitored_keys),
     }
 
