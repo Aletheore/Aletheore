@@ -329,7 +329,12 @@ def _django_column_from_field(
     # drop, since it's confidently wrong rather than absent.
     db_column_node = _py_kwarg(args, "db_column", source)
     db_column = _py_string_text(db_column_node, source) if db_column_node is not None else None
-    resolved_name = db_column or field_name
+    # `db_column or ...` would treat an explicit db_column="" as absent via
+    # truthiness - Django distinguishes an empty string from an unset
+    # value and uses it verbatim regardless (found via Flash Review's own
+    # dogfooded review of this PR). `is None` is the real "was db_column
+    # given at all" check both here and in the relation case below.
+    resolved_name = field_name if db_column is None else db_column
 
     column = {
         "name": resolved_name,
@@ -378,8 +383,10 @@ def _django_column_from_field(
             ).upper()
         # db_column (if set) overrides even the relation's own "_id"
         # naming convention - Django never appends "_id" to an explicit
-        # db_column, it uses it as the literal column name.
-        column["name"] = db_column or f"{field_name}_id"
+        # db_column, it uses it as the literal column name. Same `is None`
+        # check as resolved_name above, same reason: an explicit
+        # db_column="" must not be treated as absent via truthiness.
+        column["name"] = f"{field_name}_id" if db_column is None else db_column
         if target_text is not None:
             relation = {
                 "from_column": column["name"],

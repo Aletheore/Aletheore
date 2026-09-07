@@ -251,6 +251,39 @@ class Migration(migrations.Migration):
     assert relation["to_table"] == "accounts_user"
 
 
+def test_django_db_column_empty_string_is_not_treated_as_absent(tmp_path):
+    # Real bug found via Flash Review's own dogfooded review of the PR
+    # that introduced db_column support: `db_column or field_name` uses
+    # truthiness, so an explicit db_column="" was silently treated as if
+    # db_column had never been given at all. Django distinguishes an
+    # empty string from an unset value and uses it verbatim regardless -
+    # a degenerate real column name, but a real one, not a fabricated one.
+    repo = write_files(
+        tmp_path,
+        {
+            "blog/migrations/0001_initial.py": """
+from django.db import migrations, models
+
+class Migration(migrations.Migration):
+    operations = [
+        migrations.CreateModel(
+            name='Post',
+            fields=[
+                ('id', models.AutoField(primary_key=True)),
+                ('title', models.CharField(max_length=200, db_column='')),
+            ],
+        ),
+    ]
+"""
+        },
+    )
+    result = extract_schema(repo, ["blog/migrations"])
+    table = next(t for t in result["tables"] if t["name"] == "blog_post")
+    names = [c["name"] for c in table["columns"]]
+    assert "" in names
+    assert "title" not in names
+
+
 def test_django_add_field_and_add_index(tmp_path):
     repo = write_files(
         tmp_path,
