@@ -38,6 +38,22 @@ def _noop_repo_checkout_lock(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _noop_wiki_write_lock(monkeypatch):
+    # wiki_write_lock (see scan_worker/db.py) opens a real psycopg
+    # connection the same way repo_checkout_lock above does - same reason,
+    # same fix. Newly needed as of the fix restoring wiki_write_lock's
+    # atomicity guarantee (see run_live_wiki_full_build_job/
+    # _store_wiki_generation): the lock is now acquired directly by the
+    # caller rather than only ever inside _store_wiki_subsystem_records/
+    # _regenerate_wiki_overview, which most tests here mock out entirely -
+    # before that fix, mocking those two functions away also silently
+    # skipped the real lock call; now it doesn't. The lock's own
+    # correctness has its own real-Postgres tests in
+    # test_scan_worker_db.py.
+    monkeypatch.setattr("scan_worker.jobs.wiki_write_lock", _noop_spend_lock)
+
+
+@pytest.fixture(autouse=True)
 def _pr_is_open_by_default(monkeypatch):
     # run_pr_scan_job now checks the PR is still open before attempting a
     # checkout that's doomed once its branch is gone (see
@@ -6177,7 +6193,7 @@ def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurre
     # reading a value that can go stale before it's acted on.
     import threading
 
-    from scan_worker.jobs import DEFAULT_LLM_NEXT_CALL_RESERVE_USD, run_live_wiki_full_build_job
+    from scan_worker.jobs import WIKI_FULL_BUILD_LLM_RESERVE_USD, run_live_wiki_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
@@ -6188,11 +6204,11 @@ def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurre
     monkeypatch.setattr("scan_worker.jobs._regenerate_wiki_overview", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._real_line_count_fetcher", lambda *a, **k: (lambda path: None))
 
-    # Only one reservation of DEFAULT_LLM_NEXT_CALL_RESERVE_USD fits under
+    # Only one reservation of WIKI_FULL_BUILD_LLM_RESERVE_USD fits under
     # this cap - the second concurrent repo's build must be rejected.
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+        "scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: WIKI_FULL_BUILD_LLM_RESERVE_USD
     )
 
     # In-memory stand-in for the real atomic llm_spend row, shared across
@@ -6231,7 +6247,7 @@ def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurre
     # delta is exactly 0 (a no-op) - isolates this test to the reservation
     # race itself, same reasoning as the fix-suggestion regression test.
     monkeypatch.setattr(
-        "scan_worker.jobs.cost_for_usage", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+        "scan_worker.jobs.cost_for_usage", lambda *a, **k: WIKI_FULL_BUILD_LLM_RESERVE_USD
     )
 
     build_status_calls = []
@@ -7000,8 +7016,15 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
     )
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
-    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.0012)
-    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.0006)
+    # Cap sized against DOCS_FULL_BUILD_LLM_RESERVE_USD (0.10), not
+    # DEFAULT_LLM_NEXT_CALL_RESERVE_USD - docs full builds reserve the
+    # former (see run_live_docs_full_build_job). Same 1.2x/0.6x ratios to
+    # the reserve as before this was rescaled, just against the new
+    # reserve amount: one reservation fits (0.10 <= 0.12), a real cost
+    # below the reserve (0.06) reduces the running total afterward, then
+    # a second reservation (0.06 + 0.10 = 0.16) no longer fits.
+    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.12)
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.06)
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
     class FakeAdapter:
@@ -7048,7 +7071,7 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
     run_live_docs_full_build_job(1, "octocat/hello-world")
 
     assert stored_for == ["m0.py"]
-    assert recorded_deltas == [pytest.approx(-0.0004)]
+    assert recorded_deltas == [pytest.approx(-0.04)]
     assert status_calls[0][0] == "ready"
     assert "1/3 files processed" in status_calls[0][1]
     assert "spend cap" in status_calls[0][1]

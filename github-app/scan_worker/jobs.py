@@ -274,6 +274,39 @@ MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH = 150
 MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH = 800
 DEFAULT_LLM_NEXT_CALL_RESERVE_USD = 0.001
 
+# Real bug found via independent audit of PR #562: DEFAULT_LLM_NEXT_CALL_
+# RESERVE_USD's $0.001 is a near-zero placeholder next to a real AIRview/
+# Docs full-build call's actual cost (~$0.037 per 5-cluster wiki batch,
+# see MAX_WIKI_FULL_BUILD_CLUSTERS' own comment for the measurement) -
+# reserve_llm_spend's atomic check genuinely prevents two reservations of
+# `reserve_usd` from together exceeding the cap, but a reservation this
+# far below the real cost it's meant to gate means that guarantee barely
+# constrains anything: two-plus concurrent callers against the SAME
+# installation's cap (a full build racing an incremental update, or a
+# retry racing the original) can each pass the trivial reservation check
+# and only have their real cost land afterward via record_usage - real
+# overshoot bounded by however many calls are concurrently "in flight"
+# between their own reserve and their own record_usage, not "one small
+# batch" the way a reservation actually sized to the real cost would
+# bound it to. Same "deliberately generous relative to real cost, small
+# relative to the monthly cap" reasoning FLASH_REVIEW_SPEND_RESERVE_USD
+# below already uses - this just hadn't been applied to these two
+# callers. Narrows, does not eliminate, that window: fully closing it
+# needs a real per-installation execution lock spanning every LLM-
+# spending feature, a much larger change than this PR's scope and not
+# undertaken here (installation_spend_lock exists but is not used by
+# either full-build job, and wrapping a full build - up to 1800s now -
+# in it would newly block every OTHER feature's spend against the same
+# installation for that whole duration, trading one gap for a worse one).
+WIKI_FULL_BUILD_LLM_RESERVE_USD = 0.10
+# No equivalent real per-module measurement exists for Docs the way
+# wiki's batch cost above was directly measured - estimated in the same
+# order of magnitude rather than left at DEFAULT_LLM_NEXT_CALL_RESERVE_USD,
+# for the identical reason: a reservation two orders of magnitude below
+# the real cost it approximates narrows the concurrent-overshoot window
+# in name only.
+DOCS_FULL_BUILD_LLM_RESERVE_USD = 0.10
+
 # Conservative flat reserve for one paid-tier Flash Review, used by
 # reserve_llm_spend to make the dollar-cap check atomic with the reservation
 # (see run_flash_review_job). Deliberately generous relative to a real
@@ -3778,15 +3811,33 @@ class _IncrementalSpendBudget:
     reserve_llm_spend, the same primitive run_flash_review_job's cap check
     uses): each call to can_start_next_call() re-reads and compares against
     the real current total in one atomic statement, so two jobs racing each
-    other can no longer both see room for a call that only one of them can
-    actually afford.
+    other can no longer both reserve more than the cap actually has room
+    for - PROVIDED `next_call_reserve_usd` is itself sized close to the
+    real cost of the call it precedes (see WIKI_FULL_BUILD_LLM_RESERVE_USD/
+    DOCS_FULL_BUILD_LLM_RESERVE_USD's own comments - the constructor's
+    default, DEFAULT_LLM_NEXT_CALL_RESERVE_USD, is a near-zero placeholder
+    that leaves this guarantee real in name only for a caller that doesn't
+    override it, found via independent audit of PR #562: two-plus
+    concurrent callers can each pass a trivial reservation and only have
+    their real, much larger cost land afterward via record_usage, letting
+    overshoot scale with how many calls are concurrently in that window
+    rather than being bounded to one call's worth.
 
-    Known residual gap, not addressed here: if the LLM call itself fails
-    after can_start_next_call() reserves but before record_usage() trues it
-    up, that reservation is never released - the same class of gap
-    model_tiers._reserve_openai_free_tier_budget already has for the OpenAI
-    free-tier daily token cap. Closing it needs a failure hook the adapter
-    chain doesn't expose yet; tracked separately, not part of this fix."""
+    Known residual gaps, not addressed here:
+    - If the LLM call itself fails after can_start_next_call() reserves but
+      before record_usage() trues it up, that reservation is never
+      released - the same class of gap model_tiers._reserve_openai_free_
+      tier_budget already has for the OpenAI free-tier daily token cap.
+      Closing it needs a failure hook the adapter chain doesn't expose
+      yet; tracked separately, not part of this fix.
+    - No mechanism here fully serializes every LLM-spending feature
+      against the same installation's cap (installation_spend_lock exists
+      and is used by Flash Review, but not by either AIRview/Docs
+      full-build job) - a correctly-sized reservation narrows the
+      concurrent-overshoot window per call, it does not close it. Fully
+      closing it needs a real per-installation execution lock spanning
+      every feature, a much larger change than sizing this constant
+      correctly and not undertaken here."""
 
     def __init__(
         self,
@@ -3915,32 +3966,33 @@ def _store_wiki_subsystem_records(
     calls across an entire run and only finding out whether any of it
     reached the database after the last one finishes.
 
-    Wrapped in wiki_write_lock (see its own docstring for the real race
-    this closes): a full build and a push/PR-triggered incremental update
-    for the same repo can land here from two different scan-worker
-    replicas close together, and the prune step trusts ITS OWN evidence
-    snapshot's cluster list - an older-evidence job finishing after a
-    newer one otherwise deletes a subsystem the newer job just correctly
-    wrote. Safe to call once per chunk of a larger run: two calls pruning
-    against the same fixed evidence snapshot are idempotent, and each
-    upsert only ever touches its own row.
+    Does NOT acquire wiki_write_lock itself - the caller must hold it for
+    this call and any _regenerate_wiki_overview call in the same run (see
+    wiki_write_lock's own docstring for why: a lock acquired-and-released
+    per function call, rather than once for the whole critical section,
+    lets a second job's complete write land in the gap between this job's
+    own upsert/prune and its own later overview read, corrupting exactly
+    the invariant this lock exists to protect - found via independent
+    audit of the original split). Safe to call once per chunk of a larger
+    run while still holding the SAME lock acquisition throughout: two
+    calls pruning against the same fixed evidence snapshot are idempotent,
+    and each upsert only ever touches its own row.
     """
-    with wiki_write_lock(dsn, installation_id, repo_full_name):
-        for record in fresh_records:
-            upsert_wiki_subsystem(
-                dsn,
-                installation_id,
-                repo_full_name,
-                record["subsystem_id"],
-                record["name"],
-                record["description"],
-                record["files"],
-                record["diagram_mermaid"],
-                source_commit,
-            )
+    for record in fresh_records:
+        upsert_wiki_subsystem(
+            dsn,
+            installation_id,
+            repo_full_name,
+            record["subsystem_id"],
+            record["name"],
+            record["description"],
+            record["files"],
+            record["diagram_mermaid"],
+            source_commit,
+        )
 
-        current_cluster_ids = [str(c["id"]) for c in evidence.get("architecture", {}).get("clusters", [])]
-        delete_wiki_subsystems_not_in(dsn, installation_id, repo_full_name, current_cluster_ids)
+    current_cluster_ids = [str(c["id"]) for c in evidence.get("architecture", {}).get("clusters", [])]
+    delete_wiki_subsystems_not_in(dsn, installation_id, repo_full_name, current_cluster_ids)
 
 
 def _regenerate_wiki_overview(
@@ -3960,21 +4012,23 @@ def _regenerate_wiki_overview(
     needs the overview refreshed once it reflects all of them, not
     re-generated after every single chunk.
 
-    Wrapped in wiki_write_lock for the same reason _store_wiki_subsystem_
-    records is: the read (list_wiki_subsystems) must not land in a gap
-    where a concurrent writer has pruned but not yet finished upserting,
-    or the overview would describe an inconsistent, half-written set.
+    Does NOT acquire wiki_write_lock itself, for the same reason
+    _store_wiki_subsystem_records doesn't: the caller must already hold it
+    from before its own _store_wiki_subsystem_records call(s), covering
+    this call too, so the read (list_wiki_subsystems) can never land in a
+    gap where a DIFFERENT job's writer has pruned but not yet finished
+    upserting, or the overview would describe an inconsistent,
+    half-written set that mixes two jobs' evidence snapshots.
     """
-    with wiki_write_lock(dsn, installation_id, repo_full_name):
-        all_records = list_wiki_subsystems(dsn, installation_id, repo_full_name)
-        if not all_records:
-            return
-        overview = live_wiki.generate_overview(
-            evidence, all_records, writing_adapter, fetch_line_count=fetch_line_count
-        )
-        upsert_wiki_overview(
-            dsn, installation_id, repo_full_name, overview["description"], overview["diagram_mermaid"], source_commit
-        )
+    all_records = list_wiki_subsystems(dsn, installation_id, repo_full_name)
+    if not all_records:
+        return
+    overview = live_wiki.generate_overview(
+        evidence, all_records, writing_adapter, fetch_line_count=fetch_line_count
+    )
+    upsert_wiki_overview(
+        dsn, installation_id, repo_full_name, overview["description"], overview["diagram_mermaid"], source_commit
+    )
 
 
 def _store_wiki_generation(
@@ -3989,18 +4043,24 @@ def _store_wiki_generation(
 ) -> None:
     """Upserts fresh_records and regenerates the overview from the full
     current set (fresh records merged with whatever was already stored for
-    subsystems untouched by this run) - unchanged behavior for callers that
-    don't need chunked persistence (the incremental-update path below,
-    which only ever processes the small set of clusters one push actually
-    touched). See _store_wiki_subsystem_records and _regenerate_wiki_
-    overview's own docstrings for why the full-build path calls those two
-    separately instead of this combined wrapper.
+    subsystems untouched by this run) - for the incremental-update path
+    below, which only ever processes the small set of clusters one push
+    actually touched, so it has no need for run_live_wiki_full_build_job's
+    own per-chunk persistence.
+
+    Holds ONE wiki_write_lock acquisition across both steps - see
+    _store_wiki_subsystem_records' and _regenerate_wiki_overview's own
+    docstrings for why neither acquires it independently: a lock released
+    between the two steps (as an earlier version of this split briefly
+    did) would let a concurrent job's complete write land in the gap,
+    corrupting the invariant this lock exists to protect.
     """
-    _store_wiki_subsystem_records(dsn, installation_id, repo_full_name, evidence, fresh_records, source_commit)
-    _regenerate_wiki_overview(
-        dsn, installation_id, repo_full_name, evidence, writing_adapter, source_commit,
-        fetch_line_count=fetch_line_count,
-    )
+    with wiki_write_lock(dsn, installation_id, repo_full_name):
+        _store_wiki_subsystem_records(dsn, installation_id, repo_full_name, evidence, fresh_records, source_commit)
+        _regenerate_wiki_overview(
+            dsn, installation_id, repo_full_name, evidence, writing_adapter, source_commit,
+            fetch_line_count=fetch_line_count,
+        )
 
 
 # Every cluster gets an LLM call in a full build (naming + subsystem
@@ -4144,7 +4204,8 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
         return
 
     spend_budget = _IncrementalSpendBudget(
-        dsn, installation_id, model_used, monthly_cap, feature="airview_full_build"
+        dsn, installation_id, model_used, monthly_cap,
+        next_call_reserve_usd=WIKI_FULL_BUILD_LLM_RESERVE_USD, feature="airview_full_build",
     )
 
     covered_count = 0
@@ -4168,7 +4229,22 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
         # instead of once per chunk, since it's a real LLM call every time
         # and only needs to reflect all chunks once, not each one as it
         # lands.
-        for chunk in _chunked(sorted(cluster_ids), WIKI_FULL_BUILD_CHUNK_SIZE):
+        #
+        # Each chunk's own store call gets its own wiki_write_lock
+        # acquisition (released before the next chunk's, often slow, LLM
+        # generation runs - a concurrent job for the same repo should not
+        # have to wait out this entire multi-chunk build to get a turn).
+        # The LAST chunk is the one exception: its store call and the
+        # following overview regeneration share ONE lock acquisition, with
+        # no release in between - closing the exact gap wiki_write_lock's
+        # own docstring warns about (a concurrent writer landing between
+        # this job's own last write and its own overview read would make
+        # the overview describe a mix of two jobs' evidence). Found via
+        # independent audit of the original split, which gave
+        # _store_wiki_subsystem_records and _regenerate_wiki_overview each
+        # their own separate lock acquisition with no such pairing.
+        chunks = list(_chunked(sorted(cluster_ids), WIKI_FULL_BUILD_CHUNK_SIZE))
+        for index, chunk in enumerate(chunks):
             records = live_wiki.generate_subsystems(
                 evidence,
                 naming_adapter,
@@ -4182,12 +4258,14 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
                 fetch_line_count=fetch_line_count,
             )
             _attach_wiki_file_pages(evidence, records, writing_adapter, fetch_line_count)
-            _store_wiki_subsystem_records(dsn, installation_id, repo_full_name, evidence, records, None)
-            covered_count += len(records)
-        _regenerate_wiki_overview(
-            dsn, installation_id, repo_full_name, evidence, writing_adapter, None,
-            fetch_line_count=fetch_line_count,
-        )
+            with wiki_write_lock(dsn, installation_id, repo_full_name):
+                _store_wiki_subsystem_records(dsn, installation_id, repo_full_name, evidence, records, None)
+                covered_count += len(records)
+                if index == len(chunks) - 1:
+                    _regenerate_wiki_overview(
+                        dsn, installation_id, repo_full_name, evidence, writing_adapter, None,
+                        fetch_line_count=fetch_line_count,
+                    )
     except Exception as exc:  # noqa: BLE001
         # Without this, a failed build (LLM error, DB error) just leaves the
         # AIRview page permanently blank with no way for the customer to tell
@@ -4640,7 +4718,7 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
     full_build_model = model_for_plan(plan)
     spend_budget = _IncrementalSpendBudget(
         dsn, installation_id, full_build_model, monthly_cap,
-        feature="docs_full_build",
+        next_call_reserve_usd=DOCS_FULL_BUILD_LLM_RESERVE_USD, feature="docs_full_build",
     )
 
     def _on_usage(prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> None:
