@@ -21,6 +21,11 @@
   <a href="https://pepy.tech/projects/aletheore"><img src="https://static.pepy.tech/personalized-badge/aletheore?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads" alt="PyPI Downloads"></a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/apps/aletheore/installations/new"><strong>Install the Aletheore GitHub App</strong></a> — hosted PR review, dashboard, and AIRview docs on top of the same evidence engine.<br>
+  Prefer the free local CLI? Keep reading below.
+</p>
+
 ```bash
 $ pipx install aletheore
 $ aletheore scan .

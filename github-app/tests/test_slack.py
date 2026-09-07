@@ -304,6 +304,18 @@ def test_detect_platform_defaults_to_slack_for_unknown_url():
     assert _detect_platform("https://example.com/my-webhook") == "slack"
 
 
+def test_detect_platform_does_not_match_lookalike_hostname():
+    # notoffice.com.evil.example contains the substring "office.com" but
+    # is not office.com or a subdomain of it - regression test for the
+    # substring-match bug this hostname-based check replaced.
+    assert _detect_platform("https://notoffice.com.evil.example/webhook") == "slack"
+
+
+def test_detect_platform_does_not_match_path_containing_teams_hostname():
+    # The suspicious text is in the path/query, not the actual hostname.
+    assert _detect_platform("https://example.com/office.com/webhook?x=teams.microsoft.com") == "slack"
+
+
 def test_slack_markdown_to_adaptive_card_markdown_converts_bold():
     assert _slack_markdown_to_adaptive_card_markdown("*Aletheore*: new findings") == "**Aletheore**: new findings"
 
