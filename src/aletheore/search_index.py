@@ -1,4 +1,5 @@
 import hashlib
+import ipaddress
 import os
 import re
 import shutil
@@ -926,6 +927,35 @@ def _ollama_setup_instructions(model: str, base_url: str) -> str:
     )
 
 
+def _is_loopback_base_url(base_url: str) -> bool:
+    """Whether `base_url` points at this machine itself, not some other
+    host on the network.
+
+    Real Flash Review finding on this PR: embed_texts' base_url is a
+    fully general parameter (nothing currently exposes overriding it to
+    point at a remote Ollama, but the function accepts one, and library
+    callers could) - the auto-install/auto-start recovery below only
+    ever makes sense for a LOCAL Ollama. Spawning `ollama serve` on this
+    machine does nothing to fix a remote host being unreachable; it just
+    leaves a pointless, permanently-running local server behind while
+    the real problem (a remote outage, a firewall, a typo'd URL) goes
+    completely unaddressed.
+
+    "localhost" is checked by name first since it is not a valid input to
+    ipaddress.ip_address (it is a hostname, not a literal IP) despite
+    universally resolving to a loopback address.
+    """
+    host = httpx.URL(base_url).host
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 # Real download+install time over an ordinary connection - see
 # OLLAMA_PULL_TIMEOUT_SECONDS' identical reasoning above: generous rather
 # than tight, since failing this just falls back to the same manual
@@ -1119,7 +1149,7 @@ def embed_texts(
         response = client.embeddings.create(model=model, input=texts)
         return [item.embedding for item in response.data]
     except Exception as ollama_exc:
-        if isinstance(ollama_exc, APIConnectionError):
+        if isinstance(ollama_exc, APIConnectionError) and _is_loopback_base_url(base_url):
             if shutil.which("ollama") is None:
                 _try_auto_install_ollama(ollama_install_confirm_fn)
             if shutil.which("ollama") is not None and _try_auto_start_ollama_server(base_url):

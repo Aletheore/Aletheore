@@ -25,6 +25,7 @@ from aletheore.search_index import (
     _embed_in_batches,
     _escape_sql_literal,
     _fts_candidates,
+    _is_loopback_base_url,
     _repo_id,
     _reusable_vectors,
     _rrf_fuse,
@@ -307,6 +308,30 @@ def test_embed_texts_installs_then_starts_ollama_when_binary_is_missing(
     mock_auto_start.assert_called_once_with(search_index_module.DEFAULT_EMBEDDING_BASE_URL)
 
 
+@patch("aletheore.search_index._try_auto_install_ollama")
+@patch("aletheore.search_index._try_auto_start_ollama_server")
+@patch("aletheore.search_index.has_api_key", return_value=False)
+@patch("aletheore.search_index.OpenAI")
+def test_embed_texts_never_auto_remediates_a_remote_base_url(
+    mock_openai_class, mock_has_api_key, mock_auto_start, mock_auto_install
+):
+    # Real Flash Review finding: base_url is fully general (accepts any
+    # host, even though nothing currently exposes overriding it to a
+    # remote Ollama) - auto-install/auto-start only ever make sense for a
+    # LOCAL Ollama. A remote host being unreachable must never spawn a
+    # pointless local `ollama serve`, or try installing Ollama locally
+    # either - neither does anything to fix a remote outage.
+    mock_client = MagicMock()
+    mock_openai_class.return_value = mock_client
+    mock_client.embeddings.create.side_effect = _ollama_connection_error()
+
+    with pytest.raises(EmbeddingProviderUnavailableError):
+        embed_texts(["chunk one"], base_url="http://embeddings.example.com/v1")
+
+    mock_auto_install.assert_not_called()
+    mock_auto_start.assert_not_called()
+
+
 @patch("aletheore.search_index._try_auto_install_ollama", return_value=False)
 @patch("aletheore.search_index.shutil.which", return_value=None)
 @patch("aletheore.search_index.has_api_key", return_value=False)
@@ -501,6 +526,40 @@ def test_try_auto_pull_returns_false_on_nonzero_exit(mock_which, mock_run):
 @patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
 def test_try_auto_pull_returns_false_when_subprocess_raises(mock_which, mock_run):
     assert _try_auto_pull_ollama_model("nomic-embed-text") is False
+
+
+# ---------------------------------------------------------------------------
+# _is_loopback_base_url
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://localhost:11434/v1",
+        "http://127.0.0.1:11434/v1",
+        "http://127.5.5.5:11434/v1",
+        "http://[::1]:11434/v1",
+    ],
+)
+def test_is_loopback_base_url_recognizes_real_loopback_forms(base_url):
+    assert _is_loopback_base_url(base_url) is True
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://embeddings.example.com/v1",
+        "http://192.168.1.50:11434/v1",
+        "https://10.0.0.5:11434/v1",
+    ],
+)
+def test_is_loopback_base_url_rejects_real_remote_hosts(base_url):
+    assert _is_loopback_base_url(base_url) is False
+
+
+def test_is_loopback_base_url_handles_a_url_with_no_host_gracefully():
+    assert _is_loopback_base_url("not-a-url") is False
 
 
 # ---------------------------------------------------------------------------
