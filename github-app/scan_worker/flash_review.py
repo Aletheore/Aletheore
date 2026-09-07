@@ -145,13 +145,19 @@ def files_missing_from_review_context(
 
     fetch_review_file_context stops at MAX_CONTEXT_FILES and skips anything
     over MAX_CONTEXT_FILE_BYTES, so on
-    a PR touching more than 15 files - or any file over 40KB - the excess
+    a PR touching more than 30 files - or any file over 100KB - the excess
     is invisible to the model *and* to the citation check, which passes any
     finding whose file content it doesn't have (see
     _line_citation_content_matches). Without this, "No issues found in this
     diff" was reported identically whether the whole PR was reviewed or
-    only the first 15 files of it, which is the more damaging half of the
+    only the first 30 files of it, which is the more damaging half of the
     problem: silence read as an all-clear.
+
+    (These two thresholds have moved before without this docstring being
+    updated - found stale here at 15 files/40KB, one raise behind the real
+    30 files/80KB it should have said; keep this in sync with github_api.
+    MAX_CONTEXT_FILES/MAX_CONTEXT_FILE_BYTES rather than restating the
+    literal numbers if either changes again.)
     """
     return [path for path in changed_files if path not in file_contents]
 

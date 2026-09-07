@@ -8,7 +8,27 @@ from aletheore.pr_comment import COMMENT_MARKER
 from aletheore.repo_config import is_ignored
 
 MAX_CONTEXT_FILES = 30
-MAX_CONTEXT_FILE_BYTES = 80_000
+# Raised from 80_000 to 100_000 (1.25x, deliberately not the full 2x the
+# 40_000->80_000 raise below used - this cap has been hit often enough in
+# practice to want headroom, but a full doubling was judged too much real
+# spend for the margin it would eat). Real cost impact extrapolated from
+# the 40KB->80KB raise's own measured ratio (that raise doubled worst-case
+# per-review input cost, ~$0.011->$0.022 at Luna's rate - see MAX_CONTEXT_
+# TOTAL_BYTES's own history) rather than a fresh re-benchmark: scaling the
+# real $3.47/month figure PLAN_CAP_OVERRIDE_USD's own comment measures
+# (800 reviews/month, current 80KB caps) by the same 1.25x ratio gives an
+# estimated ~$4.34/month under the new cap - ~38% headroom under the new
+# $6 Flash cap ((6.00-4.34)/4.34, PLAN_CAP_OVERRIDE_USD["flash"]), close to
+# the original 44% design margin the $5 cap was sized against, not the
+# thin ~15% a full 2x raise to 120KB would have left (its own estimate:
+# $3.47 x 1.5 = ~$5.21/month, (6.00-5.21)/5.21 = ~15% - same (cap-cost)/cost
+# formula the 44% figure uses throughout, not (cap-cost)/cap; an earlier
+# version of this comment mixed the two, understating both figures as
+# ~28%/~13% - found via independent audit). MAX_CONTEXT_TOTAL_BYTES intentionally
+# left unchanged: it's the real aggregate budget per review, and this
+# change is about not dropping one oversized file, not raising how much
+# total content one review can carry.
+MAX_CONTEXT_FILE_BYTES = 100_000
 MAX_CONTEXT_TOTAL_BYTES = 400_000
 
 # Real, measured (not assumed) on Flash Review's own benchmark corpus (25
