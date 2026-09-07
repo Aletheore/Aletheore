@@ -64,11 +64,16 @@ PLAN_MONTHLY_PRICE_USD = {
 # 80KB->100KB raise applies to context size (1.25x, not a full 2x -
 # extrapolated from the 40KB->80KB raise's own measured ~2x cost impact,
 # not a fresh re-benchmark) gives an estimated ~$4.34/month under the new
-# 100KB cap. $6 leaves ~28% headroom over that estimate - closer to the
-# original 44% design margin the $5 cap had at 80KB than the ~13% a full
-# 2x raise to 120KB would have left, deliberately: the context-cap raise
-# was picked at 1.25x specifically to keep this margin close to its
-# original size rather than eroding it for a bigger win. See jobs.py's
+# 100KB cap. $6 leaves ~38% headroom over that estimate ((6.00-4.34)/4.34) -
+# close to the original 44% design margin the $5 cap had at 80KB, not the
+# thin ~15% a full 2x raise to 120KB would have left (120KB's own estimate:
+# $3.47 x 1.5 = ~$5.21/month, (6.00-5.21)/5.21 = ~15%) - both figures use
+# the same (cap-cost)/cost formula the original 44% used, not (cap-cost)/cap
+# (an earlier version of this comment mixed the two, understating this
+# margin as ~28% and the rejected alternative's as ~13% - found via
+# independent audit). Deliberate: the context-cap raise was picked at
+# 1.25x specifically to keep this margin close to its original size rather
+# than eroding it for a bigger win. See jobs.py's
 # MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH for the real review-count cap
 # (800) this was checked against.
 # air's real spend cap is a deliberately looser fraction of its price than

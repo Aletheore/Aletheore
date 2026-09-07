@@ -17,10 +17,14 @@ MAX_CONTEXT_FILES = 30
 # TOTAL_BYTES's own history) rather than a fresh re-benchmark: scaling the
 # real $3.47/month figure PLAN_CAP_OVERRIDE_USD's own comment measures
 # (800 reviews/month, current 80KB caps) by the same 1.25x ratio gives an
-# estimated ~$4.34/month under the new cap - ~28% headroom under the new
-# $6 Flash cap (PLAN_CAP_OVERRIDE_USD["flash"]), close to the original 44%
-# design margin the $5 cap was sized against, not the thin ~13% a full 2x
-# raise to 120KB would have left. MAX_CONTEXT_TOTAL_BYTES intentionally
+# estimated ~$4.34/month under the new cap - ~38% headroom under the new
+# $6 Flash cap ((6.00-4.34)/4.34, PLAN_CAP_OVERRIDE_USD["flash"]), close to
+# the original 44% design margin the $5 cap was sized against, not the
+# thin ~15% a full 2x raise to 120KB would have left (its own estimate:
+# $3.47 x 1.5 = ~$5.21/month, (6.00-5.21)/5.21 = ~15% - same (cap-cost)/cost
+# formula the 44% figure uses throughout, not (cap-cost)/cap; an earlier
+# version of this comment mixed the two, understating both figures as
+# ~28%/~13% - found via independent audit). MAX_CONTEXT_TOTAL_BYTES intentionally
 # left unchanged: it's the real aggregate budget per review, and this
 # change is about not dropping one oversized file, not raising how much
 # total content one review can carry.

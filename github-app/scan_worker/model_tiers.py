@@ -326,6 +326,17 @@ def writing_adapter_chain_for_free_tier(
     logger = logging.getLogger(__name__)
     chain: list[OpenAICompatibleAdapter] = []
 
+    # Groq's real published rate limit for openai/gpt-oss-120b is a tight
+    # 8,000 tokens/minute - Flash Review's own per-file/aggregate context
+    # caps (see github_api.MAX_CONTEXT_FILE_BYTES/MAX_CONTEXT_TOTAL_BYTES,
+    # unconditional here too since fetch_review_file_context isn't
+    # plan-gated) can already exceed that in a single real call regardless
+    # of either cap's exact value - checked when MAX_CONTEXT_FILE_BYTES was
+    # raised 80KB->100KB and confirmed not materially changed by that
+    # raise, since Gemini (next in this chain) has enough headroom to
+    # absorb what Groq rejects. Recorded here, not only in that PR's
+    # description, so a future reader debugging a real Groq rejection
+    # doesn't have to go dig up which PR mentioned it.
     if has_api_key("GROQ_API_KEY", "Groq"):
         chain.append(OpenAICompatibleAdapter(
             name="Groq",
