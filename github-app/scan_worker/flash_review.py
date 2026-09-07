@@ -1303,10 +1303,24 @@ def review_diff(
             # flash_review_model's rate (Luna, when that's what generated
             # the original finding) would misprice real DeepSeek tokens at
             # a different model's cost.
+            #
+            # Gated on verify_with_second_model, same as the fresh-
+            # generation path below (`if verify_with_second_model:`) - real
+            # bug found via audit: an earlier version of this recheck ran
+            # unconditionally on every cache hit regardless of the flag,
+            # silently giving Flash/free-tier installations the AIR-only
+            # DeepSeek verification call jobs.py deliberately gates
+            # (`verify_with_second_model=(installation["plan"] == "air")`,
+            # its own _on_verification_usage comment: "Never called for
+            # free tier... gated to paid plans"). That both broke the tier
+            # boundary and spent real DeepSeek tokens the Flash spend cap's
+            # own sizing (llm_cost.py's PLAN_CAP_OVERRIDE_USD comment)
+            # explicitly assumes never happens ("no dual-agent
+            # verification").
             needs_recheck = [
                 f for f in kept
                 if f.get("source") == "llm" and not _has_verifiable_content_citation(f, file_contents)
-            ]
+            ] if verify_with_second_model else []
             if needs_recheck:
                 recheck_ids = {id(f) for f in needs_recheck}
                 rechecked = _verify_findings_with_second_model(
