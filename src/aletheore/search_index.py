@@ -1027,15 +1027,27 @@ def _try_auto_start_ollama_server(base_url: str = DEFAULT_EMBEDDING_BASE_URL) ->
     start it in the background instead of telling the user to run a
     separate command.
 
-    Started detached (`start_new_session=True` on POSIX puts it in its own
-    process group and session, so it is not a child of this process in any
-    way the OS would clean up together) so it outlives this specific
-    command rather than dying when Aletheore exits. This is deliberate:
-    Aletheore never stops a server it starts, here or anywhere else -
-    restarting it for every single command would cost real startup latency
-    on any repo the user indexes/scans more than once, and there's no way
-    to tell "Aletheore started this" apart from "the user was already
-    running it for something else" well enough to ever safely kill it.
+    Started detached so it outlives this specific command rather than
+    dying when Aletheore exits. This is deliberate: Aletheore never stops
+    a server it starts, here or anywhere else - restarting it for every
+    single command would cost real startup latency on any repo the user
+    indexes/scans more than once, and there's no way to tell "Aletheore
+    started this" apart from "the user was already running it for
+    something else" well enough to ever safely kill it.
+
+    "Detached" means something different per platform, both applied here:
+    on POSIX, `start_new_session=True` puts the child in its own process
+    group and session, so it is not a child of this process in any way
+    the OS would clean up together. On Windows, `start_new_session` does
+    not exist - the equivalent is `CREATE_NEW_PROCESS_GROUP` (so the
+    child does not receive a Ctrl+C/console-close event sent to this
+    process's console, which would otherwise kill it right along with
+    Aletheore) combined with `CREATE_NO_WINDOW` (ollama.exe is a console-
+    subsystem binary; without this it would flash a new console window
+    into existence for a server the user never asked to see). These
+    Windows flags are the documented `subprocess` constants for exactly
+    this "launch a detached background process" case - not independently
+    verified on a real Windows machine, unlike the POSIX path, which was.
 
     Returns True once the server is confirmed actually responding, False
     if `ollama` isn't on PATH, spawning failed, or it never came up within
@@ -1051,7 +1063,11 @@ def _try_auto_start_ollama_server(base_url: str = DEFAULT_EMBEDDING_BASE_URL) ->
     )
     try:
         popen_kwargs: dict = {}
-        if sys.platform != "win32":
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = (
+                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            )
+        else:
             popen_kwargs["start_new_session"] = True
         subprocess.Popen(
             ["ollama", "serve"],

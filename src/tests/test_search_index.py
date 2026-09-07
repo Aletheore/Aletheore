@@ -627,7 +627,38 @@ def test_auto_start_spawns_serve_and_returns_true_once_reachable(
 
     popen_args, popen_kwargs = mock_popen.call_args
     assert popen_args[0] == ["ollama", "serve"]
+    # POSIX detachment: puts the child in its own session so it survives
+    # this process exiting rather than being cleaned up together.
+    assert popen_kwargs.get("start_new_session") is True
     mock_get.assert_called_with("http://localhost:11434/api/tags", timeout=2.0)
+
+
+@patch("aletheore.search_index.subprocess.CREATE_NO_WINDOW", 0x08000000, create=True)
+@patch("aletheore.search_index.subprocess.CREATE_NEW_PROCESS_GROUP", 0x00000200, create=True)
+@patch("aletheore.search_index.sys.platform", "win32")
+@patch("aletheore.search_index.time.sleep")
+@patch("aletheore.search_index.httpx.get")
+@patch("aletheore.search_index.subprocess.Popen")
+@patch("aletheore.search_index.shutil.which", return_value="C:\\ollama\\ollama.exe")
+def test_auto_start_uses_windows_detachment_flags_not_start_new_session(
+    mock_which, mock_popen, mock_get, mock_sleep
+):
+    # Real gap caught by the user: start_new_session doesn't exist on
+    # Windows - the equivalent is CREATE_NEW_PROCESS_GROUP (so a Ctrl+C to
+    # this process's console doesn't kill the detached server too) plus
+    # CREATE_NO_WINDOW (ollama.exe is a console-subsystem binary and would
+    # otherwise flash a visible window into existence). CREATE_NEW_PROCESS_
+    # GROUP/CREATE_NO_WINDOW don't exist on non-Windows `subprocess`
+    # modules at all (confirmed: hasattr is False on macOS/Linux), so
+    # they're patched in here with create=True rather than assumed present.
+    mock_get.return_value = MagicMock(status_code=200)
+
+    assert _try_auto_start_ollama_server() is True
+
+    popen_args, popen_kwargs = mock_popen.call_args
+    assert popen_args[0] == ["ollama", "serve"]
+    assert "start_new_session" not in popen_kwargs
+    assert popen_kwargs.get("creationflags") == 0x08000000 | 0x00000200
 
 
 @patch("aletheore.search_index.shutil.which", return_value="/usr/local/bin/ollama")
