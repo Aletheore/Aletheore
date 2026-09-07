@@ -599,6 +599,10 @@ def _django_model_operations(
                 positional = _py_positional(args)
                 sql_node = positional[0] if positional else None
             if sql_node is None:
+                events.append(
+                    {"kind": "unsupported", "file": rel_path, "line": line,
+                     "statement": "migrations.RunSQL(...) called with no resolvable sql argument"}
+                )
                 continue
             # `sql=` is a single string or a list of (query,) / (query, params)
             # entries - RunSQL replays them in order, same as separate
@@ -617,6 +621,21 @@ def _django_model_operations(
             if statements:
                 events.append(
                     {"kind": "raw_sql", "sql": "\n".join(statements), "file": rel_path, "line": line}
+                )
+            else:
+                # Real gap found via audit: a non-literal sql argument (a
+                # module-level constant, a variable, an f-string, a
+                # function call) - a common real style for keeping
+                # migration files readable - previously fell through this
+                # `continue` with nothing recorded at all, even though
+                # RunSQL is a "modeled" op whose whole point is that it
+                # must never silently vanish (see this module's own
+                # docstring). Flagged as unsupported instead, with the
+                # real unresolved expression text, same as every other
+                # can't-statically-resolve case in this file.
+                events.append(
+                    {"kind": "unsupported", "file": rel_path, "line": line,
+                     "statement": f"migrations.RunSQL(...) with an unresolved sql argument: {_py_text(sql_node, source)}"}
                 )
             continue
 
@@ -1163,6 +1182,17 @@ def _alembic_upgrade_events(upgrade_body: Node, source: bytes, rel_path: str) ->
             text = _py_string_text(positional[0], source)
             if text:
                 events.append({"kind": "raw_sql", "sql": text, "file": rel_path, "line": line})
+            else:
+                # Real gap found via audit (same shape as Django's RunSQL
+                # and Rails' execute, both fixed alongside this): op.execute
+                # is one of the three explicitly "modeled" raw-SQL escape
+                # hatches this module's own docstring names - a non-literal
+                # argument (a variable, an f-string, a function call) must
+                # not make the whole call vanish with nothing recorded.
+                events.append(
+                    {"kind": "unsupported", "file": rel_path, "line": line,
+                     "statement": f"op.execute(...) with an unresolved argument: {_py_text(positional[0], source)}"}
+                )
             continue
 
         if op_name is None:
@@ -1683,7 +1713,19 @@ def _rails_top_level_events(call: Node, source: bytes, rel_path: str) -> list[di
         if not positional:
             return []
         text = _rb_symbol_text(positional[0], source)
-        return [{"kind": "raw_sql", "sql": text, "file": rel_path, "line": line}] if text else []
+        if text:
+            return [{"kind": "raw_sql", "sql": text, "file": rel_path, "line": line}]
+        # Real gap found via audit (same shape as Django's RunSQL and
+        # Alembic's op.execute, both fixed alongside this): execute is one
+        # of the three explicitly "modeled" raw-SQL escape hatches this
+        # module's own docstring names - a non-literal argument (a
+        # variable, a heredoc, string interpolation) must not make the
+        # whole call vanish with nothing recorded, unlike a genuinely
+        # unrecognized Ruby method, which this module deliberately does
+        # ignore without flagging (see _RAILS_KNOWN_METHODS' own
+        # reasoning) to avoid noise from non-DSL calls.
+        return [{"kind": "unsupported", "file": rel_path, "line": line,
+                 "statement": f"execute({_rb_text(positional[0], source)}) with an unresolved argument"}]
 
     if method not in _RAILS_KNOWN_METHODS:
         return []
