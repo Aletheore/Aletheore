@@ -631,9 +631,16 @@ def _django_model_operations(
         # RemoveConstraint, AlterIndexTogether, AlterOrderWithRespectTo,
         # SeparateDatabaseAndState) - a silent drop here would make a
         # migration with real DB-shape effects look identical to a no-op.
+        # The receiver is read from the real call, not assumed to be
+        # `migrations` - a custom Operation subclass imported under its own
+        # module alias (e.g. `custom.AddIndexConcurrently(...)`, common for
+        # django.contrib.postgres.operations and hand-rolled Operation
+        # subclasses) would otherwise get an invented `migrations.` prefix
+        # in a statement that's supposed to be a real, grounded citation.
+        receiver = _py_call_receiver(op_call, source) or "migrations"
         events.append(
             {"kind": "unsupported", "file": rel_path, "line": line,
-             "statement": f"migrations.{op_name}(...) not modeled"}
+             "statement": f"{receiver}.{op_name}(...) not modeled"}
         )
 
     return events
