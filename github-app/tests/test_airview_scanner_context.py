@@ -209,6 +209,30 @@ def test_schema_context_caps_tables_and_relations_deterministically():
     assert schema["relations_total_count"] == MAX_SCHEMA_RELATIONS + 5
 
 
+def test_schema_context_tables_with_the_same_name_stay_deterministically_ordered():
+    # Real gap found via Flash Review on this same PR: sorting by name
+    # alone leaves same-named tables (a real shape for a monorepo
+    # aggregating multiple schemas) in Python's stable-sort input order,
+    # which is not itself guaranteed to be the same across two runs over
+    # logically-equivalent evidence. file/line/columns break the tie.
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [
+            {"name": "users", "columns": [{"name": "id"}], "file": "b/schema.sql", "line": 5},
+            {"name": "users", "columns": [{"name": "id"}], "file": "a/schema.sql", "line": 1},
+        ],
+        "relations": [
+            {"from_table": "users", "from_column": "id", "to_table": "posts", "to_column": "user_id",
+             "file": "b/schema.sql", "line": 9},
+            {"from_table": "users", "from_column": "id", "to_table": "posts", "to_column": "user_id",
+             "file": "a/schema.sql", "line": 2},
+        ],
+    }}}}
+    schema = build_repo_context(evidence)["database_schema"]
+    assert [t["file"] for t in schema["tables"]] == ["a/schema.sql", "b/schema.sql"]
+    assert [r["file"] for r in schema["relations"]] == ["a/schema.sql", "b/schema.sql"]
+
+
 def test_schema_context_omits_total_count_when_under_the_cap():
     evidence = {"repository": {"database": {"schema": {
         "checked": True,
@@ -233,6 +257,21 @@ def test_endpoints_context_caps_deterministically():
     assert endpoints[0]["path"] == "/x000"
 
 
+def test_endpoints_context_with_the_same_path_and_method_stay_deterministically_ordered():
+    # Real gap found via Flash Review: two endpoints sharing a path+method
+    # (a real shape for versioned or duplicate routes) otherwise kept
+    # their original, not-guaranteed-stable input order.
+    evidence = {"repository": {"api_endpoints": {
+        "checked": True,
+        "endpoints": [
+            {"method": "GET", "path": "/x", "file": "b.py", "line": 5, "handler": "h2"},
+            {"method": "GET", "path": "/x", "file": "a.py", "line": 1, "handler": "h1"},
+        ],
+    }}}
+    endpoints = build_repo_context(evidence)["api_endpoints"]
+    assert [e["file"] for e in endpoints] == ["a.py", "b.py"]
+
+
 def test_vulnerabilities_context_caps_deterministically():
     evidence = {"security": {"dependency_vulnerabilities": {
         "checked": True,
@@ -244,6 +283,35 @@ def test_vulnerabilities_context_caps_deterministically():
     findings = build_repo_context(evidence)["dependency_vulnerabilities"]
     assert len(findings) == MAX_VULNERABILITY_FINDINGS
     assert findings[0]["package"] == "pkg000"
+
+
+def test_vulnerabilities_context_with_the_same_package_and_ecosystem_stay_deterministically_ordered():
+    # Real gap found via Flash Review: two findings for the same
+    # package+ecosystem (a real shape - multiple advisories against one
+    # installed version) otherwise kept their original, not-guaranteed-
+    # stable input order.
+    evidence = {"security": {"dependency_vulnerabilities": {
+        "checked": True,
+        "findings": [
+            {"package": "lodash", "ecosystem": "npm", "advisory_id": "GHSA-2", "summary": "b"},
+            {"package": "lodash", "ecosystem": "npm", "advisory_id": "GHSA-1", "summary": "a"},
+        ],
+    }}}
+    findings = build_repo_context(evidence)["dependency_vulnerabilities"]
+    assert [f["advisory_id"] for f in findings] == ["GHSA-1", "GHSA-2"]
+
+
+def test_dead_code_context_normalizes_a_pathless_dict_entry_instead_of_crashing():
+    # Real crash risk found via Flash Review: a dict entry lacking a
+    # "path" key previously stayed a raw dict, and sorting a list that
+    # mixes dicts and strings raises TypeError in Python.
+    evidence = {"repository": {"dead_code": {
+        "unreachable_modules": [{"other_field": "x"}, "legacy/m.py"],
+        "unused_dependencies": [],
+    }}}
+    dead_code = build_repo_context(evidence)["dead_code"]
+    assert all(isinstance(entry, str) for entry in dead_code["unreachable_modules"])
+    assert "legacy/m.py" in dead_code["unreachable_modules"]
 
 
 def test_dead_code_context_caps_deterministically_with_total_counts():

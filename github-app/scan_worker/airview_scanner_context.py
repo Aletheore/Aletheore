@@ -88,7 +88,12 @@ def _schema_context(schema: dict) -> dict | None:
             }
             for t in schema.get("tables", [])
         ),
-        key=lambda t: t["name"],
+        # Real gap found via Flash Review: sorting by name alone leaves
+        # same-named tables (a real shape for a monorepo aggregating
+        # multiple schemas) in their original, not-guaranteed-stable
+        # input order - the full key makes the truncated prefix
+        # deterministic for identical evidence regardless of input order.
+        key=lambda t: (t["name"], t["file"] or "", t["line"] or 0, tuple(t["columns"])),
     )
     relations = sorted(
         (
@@ -99,7 +104,10 @@ def _schema_context(schema: dict) -> dict | None:
             }
             for r in schema.get("relations", [])
         ),
-        key=lambda r: (r["from_table"], r["from_column"], r["to_table"], r["to_column"]),
+        key=lambda r: (
+            r["from_table"], r["from_column"], r["to_table"], r["to_column"],
+            r["file"] or "", r["line"] or 0,
+        ),
     )
     if not tables:
         return None
@@ -123,7 +131,10 @@ def _endpoints_context(api_endpoints: dict) -> list[dict] | None:
             for e in api_endpoints.get("endpoints", [])
             if not e.get("unresolved")
         ),
-        key=lambda e: (e["path"] or "", e["method"] or ""),
+        # file/line/handler added per Flash Review: two endpoints sharing
+        # a path+method (a real shape for versioned or duplicate routes)
+        # otherwise kept their original, not-guaranteed-stable input order.
+        key=lambda e: (e["path"] or "", e["method"] or "", e["file"] or "", e["line"] or 0, e["handler"] or ""),
     )
     return endpoints[:MAX_ENDPOINTS] or None
 
@@ -137,7 +148,11 @@ def _vulnerabilities_context(vulns: dict) -> list[dict] | None:
              "summary": f.get("summary")}
             for f in vulns.get("findings", [])
         ),
-        key=lambda f: (f["package"], f["ecosystem"]),
+        # advisory_id/summary added per Flash Review: two findings for the
+        # same package+ecosystem (a real shape - multiple advisories
+        # against one installed version) otherwise kept their original,
+        # not-guaranteed-stable input order.
+        key=lambda f: (f["package"], f["ecosystem"], f["advisory_id"] or "", f["summary"] or ""),
     )
     return findings[:MAX_VULNERABILITY_FINDINGS] or None
 
@@ -163,7 +178,14 @@ def _licenses_context(licenses: dict) -> dict | None:
 
 def _dead_code_context(dead_code: dict) -> dict | None:
     unreachable = sorted(
-        (m.get("path", m) if isinstance(m, dict) else m for m in dead_code.get("unreachable_modules", [])),
+        # Real crash risk found via Flash Review: a dict entry lacking a
+        # "path" key previously fell through to str(dict) here rather than
+        # the bare dict itself - sorting a list that mixes dicts and
+        # strings raises TypeError in Python (no '<' between the two).
+        # Always normalizing to a string keeps the list homogeneous and
+        # therefore always sortable, regardless of what shape any one
+        # entry happens to be.
+        (m.get("path", str(m)) if isinstance(m, dict) else m for m in dead_code.get("unreachable_modules", [])),
     )
     unused_deps = sorted(dead_code.get("unused_dependencies", []))
     if not unreachable and not unused_deps:
