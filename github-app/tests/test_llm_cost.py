@@ -36,8 +36,12 @@ def test_cost_for_usage_small_real_call():
     assert cost_for_usage("deepseek-v4-flash", 2_000, 300) == pytest.approx(expected)
 
 
-def test_base_cap_for_plan_is_half_of_tier_price():
-    assert base_cap_for_plan("air") == pytest.approx(14.995)
+def test_base_cap_for_plan_air_uses_its_own_explicit_override_not_the_shared_fraction():
+    # Real, deliberate: $20, not $29.99 * CAP_FRACTION_OF_PRICE (0.5) = $14.995 -
+    # raised to give large real repos (AIRview/Docs full-build coverage
+    # scaling to repo size) enough real headroom to reach full coverage
+    # without needing many more 48h catch-up cycles than a small repo would.
+    assert base_cap_for_plan("air") == 20.00
 
 
 def test_base_cap_for_plan_free_or_unknown_plan_has_no_budget():
@@ -46,10 +50,12 @@ def test_base_cap_for_plan_free_or_unknown_plan_has_no_budget():
 
 
 def test_base_cap_for_plan_flash_uses_its_own_explicit_override_not_the_shared_fraction():
-    # Real, deliberate: $5, not $8 * CAP_FRACTION_OF_PRICE (0.5) = $4 -
+    # Real, deliberate: $6, not $8 * CAP_FRACTION_OF_PRICE (0.5) = $4 -
     # flash's real worst-case cost data justified a looser fraction than
     # the shared default, so it's a real override, not derived from price.
-    assert base_cap_for_plan("flash") == 5.00
+    # Raised from $5 alongside MAX_CONTEXT_FILE_BYTES's 80KB->100KB raise -
+    # see PLAN_CAP_OVERRIDE_USD's own comment for the real cost math.
+    assert base_cap_for_plan("flash") == 6.00
 
 
 def test_monthly_cap_for_installation_base_only():

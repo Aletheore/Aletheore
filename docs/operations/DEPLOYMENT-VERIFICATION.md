@@ -4,8 +4,8 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-04
-**Snapshot Freshness:** CURRENT as of 2026-09-04 - production was redeployed to `master` (commit `8bf52ef`, tagged `github-app-deploy-2026-09-04`) and re-verified live via SSH the same day. This batch is entirely overnight-benchmark output: a second Claude session (`veridion-ca`) ran real-repo stress tests against the deterministic scanners that had only ever had reactive bug fixes, never a systematic accuracy measurement - secrets (#527, six real gaps in `_is_likely_placeholder`), vulnerabilities corpus completion for all 10 ecosystems (#532, clean pass), dead-code detection (#529), license detection (#531), and an ast_pattern documentation correction (#530). Most significant: #529 found `unused_dependencies` had been reporting **every real dependency as unused** - `module["imports"]` (the field the check reads) structurally can only ever contain repo-internal resolved file paths, never external package names, so the check was comparing against a field that could never match; confirmed at real scale (Flask's own 6 actual runtime dependencies all came back "unused"), root-caused independently by this session before merging. Two known-open items intentionally NOT fixed tonight, left for Arihant's own call rather than a unilateral 2am decision: the `ast_pattern`/tree-sitter segfault (#530 corrects a false "3.14-only" claim - reproduced at real scale on 3.12 too, against Django's ~2,930-file tree) and a missing `accepted_vulnerabilities`-equivalent suppression mechanism (vulnerabilities.py has no `ignored_paths` support the way secrets.py does, discovered when #532's own deliberately-vulnerable test fixture permanently trips the "Aletheore dependency vulnerability check" CI gate with no way to allowlist it). Also worth noting: merging #527 with `--delete-branch` accidentally auto-closed #528 (stacked on #527's branch, not master) - recovered cleanly via cherry-pick onto a fresh branch (merged as #532), no content lost, but `--delete-branch` was dropped for the rest of this session's merges as a result. (This doc's snapshot history has gaps at the 2026-08-28 and 2026-08-30 deploys, tagged `github-app-deploy-2026-08-28`/`-08-30` but not separately logged here - see `github-app/CHANGELOG.md` for those.)
+**Last Updated:** 2026-09-06
+**Snapshot Freshness:** CURRENT as of 2026-09-06 - production was redeployed to `master` (commit `cf8d40f`, tagged `github-app-deploy-2026-09-06`) and re-verified live via SSH the same day. Largest single batch since the 2026-08-27 (second deploy) run - 19 commits, two independent workstreams landing together: a full SQL schema-extraction rewrite (`schema_map.py`, sqlglot-based, multi-dialect) plus a new `orm_migrations.py` module (Django/Rails/Alembic-native migration modeling, #539/#540) feeding schema/endpoint-aware context into both Flash Review (`flash_review_schema_context.py`, `flash_review_hunk_scope.py`) and AIRview/Docs export (`airview_scanner_context.py`, #545-#548); and this session's own real-Discourse-driven finding that Rails ActiveRecord associations produce zero import-graph edges, fixed via a new `model_associations.py` module wired into `architecture.build_clusters` (#556). Also in this batch: the ast_pattern batch-isolation gap from the 2026-09-04 audit closed properly (any worker exception now preserves earlier batches' results, plus a real timeout, #552), a real npm scoped-package/dotted-name unused-dependency bug on the same severity class as #529 (#553), a Flash Review `ignored_paths` leak via a second, unfiltered file-listing call (#554), a stale embedding-truncation cap left over from switching the local default to jina (#555), and a Markdown table-rendering bug in Docs export where a literal backtick in a column name broke out of its code span - found by Flash Review's own review of the PR that introduced it (#551). No DB migrations in this range (confirmed via diff against `github-app/migrations/` before deploying, not assumed) - a code-only deploy despite the size. (This doc's snapshot history has gaps at the 2026-08-28 and 2026-08-30 deploys, tagged `github-app-deploy-2026-08-28`/`-08-30` but not separately logged here - see `github-app/CHANGELOG.md` for those.)
 
 ## Purpose
 
@@ -29,6 +29,43 @@ Before claiming a hardening change is live, verify:
 - Restore drill target database availability.
 
 ## Current Server Snapshot
+
+As of 2026-09-06, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - same five as every prior deploy; this batch touched both `github-app/app_server`/`github-app/scan_worker` directly and `src/aletheore/*`, which all five images `pip install` as a package), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `cf8d40f`.
+- Working tree: clean aside from the expected untracked `github-app/backups/` directory.
+- 19 commits since the previous deploy tag (`github-app-deploy-2026-09-04`) - see Snapshot
+  Freshness above for the two headline workstreams (schema/ORM-migration pipeline feeding Flash
+  Review and AIRview/Docs; Rails model-association clustering fix) and the smaller fixes bundled
+  alongside them. Full per-PR writeups in `github-app/CHANGELOG.md`.
+- Confirmed before deploying, not assumed: `git diff --stat` against the previous deploy tag showed
+  no files under `github-app/migrations/` - a code-only deploy despite 149 files and ~8,900
+  insertions changed overall.
+- All five app-relevant services rebuilt (`app-server`, `scan-worker`, `scan-worker-2`,
+  `health-worker`, `scheduler`) - `jina-embed` left untouched (its Dockerfile never copies
+  `src/aletheore`), `demo-scan-worker`/`demo-sandbox-runner` also untouched.
+- Services running: all five `Up`, all five reporting Docker-healthcheck `healthy` within ~20
+  seconds of recreation (no in-flight job held up the recreate).
+- No pending migrations - `app-server`'s startup log shows `no pending migrations`.
+- Post-deploy, verified live by executing directly inside the running containers, not by re-reading
+  the repo: inside `scan-worker` - `aletheore.model_associations.rails_model_association_edges`
+  imports cleanly; `aletheore.architecture.build_clusters`'s live signature includes the new
+  `extra_edges` parameter; `aletheore.orm_migrations._pluralize` imports cleanly;
+  `aletheore.docs_reference._code_span` produces a correctly-widened fence for a value containing a
+  literal backtick (the #551 fix); `scan_worker.flash_review_hunk_scope`,
+  `scan_worker.flash_review_schema_context`, and `scan_worker.airview_scanner_context` all import
+  cleanly. Inside `app-server` - `app_server.dashboard`, `scan_worker.github_api`,
+  `aletheore.schema_map.extract_schema`, and `aletheore.scope_lookup` all import cleanly.
+- Health checks: internal `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
+- No errors, tracebacks, or exceptions in `app-server`, `scan-worker`, `scan-worker-2`,
+  `health-worker`, or `scheduler` logs in the 60 seconds after restart.
+- Not re-verified this pass (no relevant Dockerfile/host changes): Docker socket mount absence,
+  non-root users, CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill
+  target availability, disk space - each last directly verified 2026-08-10 (restore drill itself
+  upgraded 2026-08-24, see below).
+
+## 2026-09-04 Snapshot
 
 As of 2026-09-04, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - same five as every prior deploy, since none of this batch touched `github-app/app_server`/`github-app/scan_worker` directly, only `src/aletheore/*`, which all five images `pip install` as a package), live inspection found:
 

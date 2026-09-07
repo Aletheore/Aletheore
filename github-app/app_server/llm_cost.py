@@ -54,19 +54,43 @@ PLAN_MONTHLY_PRICE_USD = {
 }
 
 # flash's real spend cap is a deliberately looser fraction of its price
-# than the shared 50% default below (62.5%, $5 of $8 - raised from $6 on
-# 2026-09-01, see paddle_pricing.py's price-swap comment) - real
-# worst-case cost for 1000 reviews of solo Luna generation (no
-# dual-agent verification, compact + trimmed diff) measured at ~$4.34,
-# i.e. ~$3.47 for the 800-review/month cap this tier actually enforces.
-# $5 leaves ~44% headroom over that measured figure (vs. the old $4
-# cap's ~15% over the same $3.47), enough margin for provider price
-# drift or a DeepSeek-fallback call (pricier per input token than Luna)
-# without needing to revisit this constant. See jobs.py's
+# than the shared 50% default below (75%, $6 of $8 - raised from $5 on
+# 2026-09-07 alongside github_api.MAX_CONTEXT_FILE_BYTES's 80KB->100KB
+# raise, which this headroom is specifically sized against). $5's own real
+# worst-case figure: ~$4.34 for 1000 reviews of solo Luna generation (no
+# dual-agent verification, compact + trimmed diff), i.e. ~$3.47 for the
+# 800-review/month cap this tier actually enforces, under the OLD 80KB
+# per-file context cap. Scaling that real figure by the same ratio the
+# 80KB->100KB raise applies to context size (1.25x, not a full 2x -
+# extrapolated from the 40KB->80KB raise's own measured ~2x cost impact,
+# not a fresh re-benchmark) gives an estimated ~$4.34/month under the new
+# 100KB cap. $6 leaves ~38% headroom over that estimate ((6.00-4.34)/4.34) -
+# close to the original 44% design margin the $5 cap had at 80KB, not the
+# thin ~15% a full 2x raise to 120KB would have left (120KB's own estimate:
+# $3.47 x 1.5 = ~$5.21/month, (6.00-5.21)/5.21 = ~15%) - both figures use
+# the same (cap-cost)/cost formula the original 44% used, not (cap-cost)/cap
+# (an earlier version of this comment mixed the two, understating this
+# margin as ~28% and the rejected alternative's as ~13% - found via
+# independent audit). Deliberate: the context-cap raise was picked at
+# 1.25x specifically to keep this margin close to its original size rather
+# than eroding it for a bigger win. See jobs.py's
 # MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH for the real review-count cap
 # (800) this was checked against.
+# air's real spend cap is a deliberately looser fraction of its price than
+# the shared 50% default below, raised from the derived $14.995 to a flat
+# $20 - real production repos vary far more in size than the fixed-cost
+# review workload flash's own override above is tuned against, and
+# MAX_WIKI_FULL_BUILD_CLUSTERS/MAX_DOCS_FULL_BUILD_FILES now scale their
+# per-sweep batch to a repo's real cluster/module count (up to a ceiling),
+# not a flat number - a large real repo (a Discourse-scale monorepo
+# measured directly: 857 real clusters, ~$0.37 per 50-cluster batch, so
+# full first-build coverage capped at the new 200-cluster ceiling costs
+# real single-digit dollars, not fractions of a cent) needs real headroom
+# to make meaningful progress per catch-up cycle instead of the old cap
+# forcing an artificially small per-sweep batch just to stay under it.
 PLAN_CAP_OVERRIDE_USD = {
-    "flash": 5.00,
+    "flash": 6.00,
+    "air": 20.00,
 }
 
 # Deliberately generous: this is a worst-case abuse/runaway-cost ceiling, not

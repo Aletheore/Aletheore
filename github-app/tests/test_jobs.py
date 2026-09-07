@@ -38,6 +38,22 @@ def _noop_repo_checkout_lock(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _noop_wiki_write_lock(monkeypatch):
+    # wiki_write_lock (see scan_worker/db.py) opens a real psycopg
+    # connection the same way repo_checkout_lock above does - same reason,
+    # same fix. Newly needed as of the fix restoring wiki_write_lock's
+    # atomicity guarantee (see run_live_wiki_full_build_job/
+    # _store_wiki_generation): the lock is now acquired directly by the
+    # caller rather than only ever inside _store_wiki_subsystem_records/
+    # _regenerate_wiki_overview, which most tests here mock out entirely -
+    # before that fix, mocking those two functions away also silently
+    # skipped the real lock call; now it doesn't. The lock's own
+    # correctness has its own real-Postgres tests in
+    # test_scan_worker_db.py.
+    monkeypatch.setattr("scan_worker.jobs.wiki_write_lock", _noop_spend_lock)
+
+
+@pytest.fixture(autouse=True)
 def _pr_is_open_by_default(monkeypatch):
     # run_pr_scan_job now checks the PR is still open before attempting a
     # checkout that's doomed once its branch is gone (see
@@ -2436,13 +2452,18 @@ def test_flash_review_job_excludes_aletheore_json_ignored_paths_from_the_diff(mo
         ),
     )
     diff_calls = []
+    changed_files_calls = []
 
     def fake_fetch_pr_diff(client, token, repo, base, head, ignored_paths=()):
         diff_calls.append(list(ignored_paths))
         return "--- app.py ---\n+bug"
 
+    def fake_fetch_pr_changed_files(client, token, repo, base, head, ignored_paths=()):
+        changed_files_calls.append(list(ignored_paths))
+        return ["app.py"]
+
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", fake_fetch_pr_diff)
-    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", fake_fetch_pr_changed_files)
     monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
     monkeypatch.setattr("scan_worker.jobs.review_diff", lambda diff_text, file_context="", **kwargs: [])
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
@@ -2467,6 +2488,13 @@ def test_flash_review_job_excludes_aletheore_json_ignored_paths_from_the_diff(mo
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
     assert diff_calls == [["vendor/**"]]
+    # Real bug found via audit: an earlier version of this fix only
+    # threaded ignored_paths into fetch_pr_diff, not fetch_pr_changed_files -
+    # an ignored file's raw diff text was scrubbed from the prompt, but
+    # its full content was still fetched and its schema/endpoint facts
+    # (which build_schema_endpoint_context reads from changed_files, not
+    # diff_text) could still leak into the review.
+    assert changed_files_calls == [["vendor/**"]]
 
 
 def test_flash_review_comment_body_prefixes_the_symbol_when_present():
@@ -3679,7 +3707,8 @@ def test_run_live_wiki_full_build_job_skips_model_call_on_cache_hit(monkeypatch)
         "scan_worker.jobs._live_wiki_naming_adapter",
         lambda on_usage=None, before_llm_call=None: _NamingAdapter(),
     )
-    monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._store_wiki_subsystem_records", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._regenerate_wiki_overview", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
 
     run_live_wiki_full_build_job(1, "octocat/hello-world")
@@ -6069,11 +6098,12 @@ def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
 
     stored = {}
     monkeypatch.setattr(
-        "scan_worker.jobs._store_wiki_generation",
-        lambda dsn, iid, repo, evidence, records, adapter, commit, **k: stored.update(
+        "scan_worker.jobs._store_wiki_subsystem_records",
+        lambda dsn, iid, repo, evidence, records, commit: stored.update(
             records=records, commit=commit
         ),
     )
+    monkeypatch.setattr("scan_worker.jobs._regenerate_wiki_overview", lambda *a, **k: None)
     build_status_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs.set_wiki_build_status",
@@ -6108,7 +6138,12 @@ def test_run_live_wiki_full_build_job_records_failed_status_on_error(monkeypatch
 
     run_live_wiki_full_build_job(1, "octocat/hello-world")
 
-    assert build_status_calls == [("failed", "model provider unavailable")]
+    # 0/1: the single cluster _wiki_evidence() has never started (generate_
+    # subsystems raised on the first chunk) - covered_count in the message
+    # is real, persisted progress, not just an echo of the exception.
+    assert build_status_calls == [
+        ("failed", "0/1 cluster(s) covered this run before failing: model provider unavailable")
+    ]
 
 
 def test_run_live_wiki_full_build_job_skips_llm_call_when_spend_cap_reached(monkeypatch):
@@ -6158,21 +6193,22 @@ def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurre
     # reading a value that can go stale before it's acted on.
     import threading
 
-    from scan_worker.jobs import DEFAULT_LLM_NEXT_CALL_RESERVE_USD, run_live_wiki_full_build_job
+    from scan_worker.jobs import WIKI_FULL_BUILD_LLM_RESERVE_USD, run_live_wiki_full_build_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
     monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
-    monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._store_wiki_subsystem_records", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._regenerate_wiki_overview", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._real_line_count_fetcher", lambda *a, **k: (lambda path: None))
 
-    # Only one reservation of DEFAULT_LLM_NEXT_CALL_RESERVE_USD fits under
+    # Only one reservation of WIKI_FULL_BUILD_LLM_RESERVE_USD fits under
     # this cap - the second concurrent repo's build must be rejected.
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+        "scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: WIKI_FULL_BUILD_LLM_RESERVE_USD
     )
 
     # In-memory stand-in for the real atomic llm_spend row, shared across
@@ -6211,7 +6247,7 @@ def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurre
     # delta is exactly 0 (a no-op) - isolates this test to the reservation
     # race itself, same reasoning as the fix-suggestion regression test.
     monkeypatch.setattr(
-        "scan_worker.jobs.cost_for_usage", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+        "scan_worker.jobs.cost_for_usage", lambda *a, **k: WIKI_FULL_BUILD_LLM_RESERVE_USD
     )
 
     build_status_calls = []
@@ -6305,17 +6341,18 @@ def test_run_live_wiki_full_build_job_passes_fetch_line_count_through(monkeypatc
         "scan_worker.jobs.live_wiki.generate_subsystems",
         lambda *a, **k: captured_subsystems.update(k) or [],
     )
-    captured_store = {}
+    monkeypatch.setattr("scan_worker.jobs._store_wiki_subsystem_records", lambda *a, **k: None)
+    captured_overview = {}
     monkeypatch.setattr(
-        "scan_worker.jobs._store_wiki_generation",
-        lambda *a, **k: captured_store.update(k),
+        "scan_worker.jobs._regenerate_wiki_overview",
+        lambda *a, **k: captured_overview.update(k),
     )
     monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
 
     run_live_wiki_full_build_job(1, "octocat/hello-world")
 
     assert captured_subsystems["fetch_line_count"] is sentinel
-    assert captured_store["fetch_line_count"] is sentinel
+    assert captured_overview["fetch_line_count"] is sentinel
 
 
 def _multi_cluster_wiki_evidence(cluster_ids: list[int]) -> dict:
@@ -6388,12 +6425,136 @@ def test_run_live_wiki_full_build_job_only_requests_uncovered_clusters(monkeypat
         "scan_worker.jobs.live_wiki.generate_subsystems",
         lambda *a, **k: captured.update(k) or [],
     )
-    monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._store_wiki_subsystem_records", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._regenerate_wiki_overview", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
 
     run_live_wiki_full_build_job(1, "octocat/hello-world")
 
     assert captured["cluster_ids"] == {1, 2}
+
+
+def test_chunked_splits_into_fixed_size_groups_with_a_short_final_group():
+    from scan_worker.jobs import _chunked
+
+    assert _chunked([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]
+
+
+def test_chunked_empty_input_yields_no_chunks():
+    from scan_worker.jobs import _chunked
+
+    assert _chunked([], 5) == []
+
+
+def test_run_live_wiki_full_build_job_persists_each_chunk_before_the_next_one_starts(monkeypatch):
+    # Real gap this closes: MAX_WIKI_FULL_BUILD_CLUSTERS can now be large
+    # enough that a real run over a large repo takes longer than one job's
+    # timeout - before chunked persistence, nothing reached the database
+    # until every requested cluster's LLM call had already finished, so a
+    # killed job meant every already-paid-for call in that run was wasted.
+    # This proves persistence actually happens per chunk, not once at the
+    # end: 120 clusters at WIKI_FULL_BUILD_CHUNK_SIZE (50) means 3 separate
+    # _store_wiki_subsystem_records calls, not 1.
+    _patch_no_spend_cap(monkeypatch)
+    from scan_worker.jobs import WIKI_FULL_BUILD_CHUNK_SIZE, run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    cluster_ids = list(range(120))
+    evidence = _multi_cluster_wiki_evidence(cluster_ids)
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: evidence)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems",
+        lambda evidence, naming, writing, cluster_ids, **k: [
+            {
+                "subsystem_id": str(cid),
+                "name": f"sys{cid}",
+                "description": "d",
+                "files": [],
+                "diagram_mermaid": "flowchart TD",
+            }
+            for cid in cluster_ids
+        ],
+    )
+    monkeypatch.setattr("scan_worker.jobs._attach_wiki_file_pages", lambda *a, **k: None)
+    store_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._store_wiki_subsystem_records",
+        lambda dsn, iid, repo, evidence, records, commit: store_calls.append(len(records)),
+    )
+    overview_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._regenerate_wiki_overview",
+        lambda *a, **k: overview_calls.append(1),
+    )
+    monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert WIKI_FULL_BUILD_CHUNK_SIZE == 50
+    assert store_calls == [50, 50, 20]
+    # The overview is a real LLM call every time - regenerated once after
+    # all chunks, never once per chunk.
+    assert overview_calls == [1]
+
+
+def test_run_live_wiki_full_build_job_keeps_earlier_chunks_persisted_when_a_later_chunk_fails(
+    monkeypatch,
+):
+    # The other half of the same real gap: a failure partway through a
+    # multi-chunk run must not discard chunks that already succeeded and
+    # were already paid for.
+    _patch_no_spend_cap(monkeypatch)
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    cluster_ids = list(range(120))
+    evidence = _multi_cluster_wiki_evidence(cluster_ids)
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: evidence)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
+
+    call_count = {"n": 0}
+
+    def _generate_subsystems(evidence, naming, writing, cluster_ids, **k):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("model provider unavailable")
+        return [
+            {
+                "subsystem_id": str(cid),
+                "name": f"sys{cid}",
+                "description": "d",
+                "files": [],
+                "diagram_mermaid": "flowchart TD",
+            }
+            for cid in cluster_ids
+        ]
+
+    monkeypatch.setattr("scan_worker.jobs.live_wiki.generate_subsystems", _generate_subsystems)
+    monkeypatch.setattr("scan_worker.jobs._attach_wiki_file_pages", lambda *a, **k: None)
+    store_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._store_wiki_subsystem_records",
+        lambda dsn, iid, repo, evidence, records, commit: store_calls.append(len(records)),
+    )
+    monkeypatch.setattr("scan_worker.jobs._regenerate_wiki_overview", lambda *a, **k: None)
+    build_status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error=None: build_status_calls.append((status, error)),
+    )
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    # The first chunk's 50 records reached _store_wiki_subsystem_records
+    # before the second chunk raised - real, already-persisted progress,
+    # not lost just because a later chunk in the same run failed.
+    assert store_calls == [50]
+    assert build_status_calls == [
+        ("failed", "50/120 cluster(s) covered this run before failing: model provider unavailable")
+    ]
 
 
 def test_run_live_wiki_full_build_job_is_noop_when_every_cluster_already_covered(monkeypatch):
@@ -6855,8 +7016,15 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
     )
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
-    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.0012)
-    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.0006)
+    # Cap sized against DOCS_FULL_BUILD_LLM_RESERVE_USD (0.10), not
+    # DEFAULT_LLM_NEXT_CALL_RESERVE_USD - docs full builds reserve the
+    # former (see run_live_docs_full_build_job). Same 1.2x/0.6x ratios to
+    # the reserve as before this was rescaled, just against the new
+    # reserve amount: one reservation fits (0.10 <= 0.12), a real cost
+    # below the reserve (0.06) reduces the running total afterward, then
+    # a second reservation (0.06 + 0.10 = 0.16) no longer fits.
+    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.12)
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.06)
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
     class FakeAdapter:
@@ -6903,7 +7071,7 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
     run_live_docs_full_build_job(1, "octocat/hello-world")
 
     assert stored_for == ["m0.py"]
-    assert recorded_deltas == [pytest.approx(-0.0004)]
+    assert recorded_deltas == [pytest.approx(-0.04)]
     assert status_calls[0][0] == "ready"
     assert "1/3 files processed" in status_calls[0][1]
     assert "spend cap" in status_calls[0][1]

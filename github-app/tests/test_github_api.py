@@ -615,6 +615,38 @@ def test_fetch_pr_changed_files_returns_filenames():
     assert result == ["app.py", "lib.py"]
 
 
+def test_fetch_pr_changed_files_excludes_files_matching_ignored_paths():
+    # Real gap found via audit: fetch_pr_diff's ignored_paths exclusion
+    # (test_fetch_pr_diff_excludes_files_matching_ignored_paths above) was
+    # never mirrored here. _run_flash_review's schema/endpoint context and
+    # full-file-content fetch are both built from THIS list, not diff
+    # text - an ignored file's raw diff text was scrubbed from the prompt,
+    # but its full content was still fetched and its schema/endpoint
+    # facts could still surface in commentary about a different file.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"files": [{"filename": "vendor/lib.js"}, {"filename": "src/app.py"}]},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    result = fetch_pr_changed_files(
+        client, "tok", "octocat/hello-world", "aaa", "bbb", ignored_paths=["vendor/**"]
+    )
+
+    assert result == ["src/app.py"]
+
+
+def test_fetch_pr_changed_files_with_no_ignored_paths_includes_every_file():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"files": [{"filename": "vendor/lib.js"}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    result = fetch_pr_changed_files(client, "tok", "octocat/hello-world", "aaa", "bbb")
+
+    assert result == ["vendor/lib.js"]
+
+
 def test_fetch_file_content_decodes_base64():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/repos/octocat/hello-world/contents/app.py"

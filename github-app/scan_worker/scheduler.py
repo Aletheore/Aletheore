@@ -36,11 +36,20 @@ FLASH_REVIEW_CACHE_CLEANUP_JOB_TIMEOUT_SECONDS = 60
 # enqueues, checks the due list, and finds nothing to do. Bounded well
 # above normal runtime for the rare tick where several repos are due at
 # once, same reasoning as HEALTH_SWEEP_JOB_TIMEOUT_SECONDS.
-DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS = 600
+#
+# Raised from 600 to match LIVE_WIKI_FULL_BUILD_JOB_TIMEOUT_SECONDS's own
+# 1800: MAX_DOCS_FULL_BUILD_FILES/MAX_WIKI_FULL_BUILD_CLUSTERS now scale a
+# single full-build call up to a real repo's own size (capped at 200, up
+# from the old flat 50) rather than a small fixed batch - measured
+# directly against a real 857-cluster repo, a single 50-cluster batch
+# alone already took over 600s wall-clock, so the old ceiling was already
+# tight before this change and would silently truncate a due repo's
+# progress for a whole 48h cycle if left as-is.
+DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS = 1800
 # Same reasoning as DOCS_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS - run_live_wiki_
 # catchup_sweep_job only calls run_live_wiki_full_build_job for repos
 # list_paid_repos_due_for_wiki_catchup already filtered to genuinely due.
-WIKI_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS = 600
+WIKI_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS = 1800
 # Reads the due list (a cheap join over installations/digest_sends), then
 # enqueues one send per recipient onto "email" rather than sending inline -
 # the actual Resend calls happen there, not in this job, so this stays
