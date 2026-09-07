@@ -1353,6 +1353,49 @@ async def test_dashboard_health_includes_stale_endpoints(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_dashboard_health_reports_real_endpoint_coverage_against_the_monitoring_cap(
+    pool, monkeypatch
+):
+    # Real gap found via audit: run_health_check_sweep_job only ever checks
+    # the first MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET endpoints found in a
+    # repo - a repo with more real endpoints than that has some that are
+    # NEVER checked, with no signal anywhere in this dashboard before this
+    # fix. total_endpoint_count/monitored_endpoint_count let the frontend
+    # show real coverage instead of implying every endpoint is watched.
+    import app_server.dashboard as dashboard_module
+
+    monkeypatch.setattr(dashboard_module, "MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET", 2)
+    await upsert_installation(pool, 506, "octocat")
+    await set_installation_plan(pool, 506, "air")
+    await insert_repo_history(
+        pool,
+        506,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {
+            "aletheore_version": EVIDENCE_VERSION,
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {"method": "GET", "path": "/a", "file": "a.py", "line": 1},
+                        {"method": "GET", "path": "/b", "file": "b.py", "line": 1},
+                        {"method": "GET", "path": "/c", "file": "c.py", "line": 1},
+                    ]
+                }
+            },
+        },
+    )
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[506])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_endpoint_count"] == 3
+    assert body["monitored_endpoint_count"] == 2
+
+
+@pytest.mark.asyncio
 async def test_dashboard_health_omits_stale_endpoints_with_recent_success(pool, monkeypatch):
     await upsert_installation(pool, 505, "octocat")
     await set_installation_plan(pool, 505, "air")

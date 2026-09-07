@@ -1237,6 +1237,11 @@ async function loadResults() {{
     (groups[key] = groups[key] || []).push(e);
   }});
   let html = '';
+  if (data.monitored_endpoint_count < data.total_endpoint_count) {{
+    html += '<div class="settings-block-hint" style="margin-bottom:10px;">Monitoring the first ' +
+      data.monitored_endpoint_count + ' of ' + data.total_endpoint_count +
+      ' API endpoints found in this repo - the rest are not checked.</div>';
+  }}
   let rowIndex = 0;
   const rowMeta = {{}};
   Object.keys(groups).sort().forEach(function (label) {{
