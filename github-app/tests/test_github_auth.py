@@ -1,5 +1,6 @@
 import httpx
 import jwt
+import pytest
 import time
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -46,3 +47,48 @@ def test_get_installation_token_returns_token_from_response():
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
     token = get_installation_token(999, "fake-jwt", http_client=client)
     assert token == "ghs_faketoken123"
+
+
+def test_get_installation_token_retries_once_after_a_transport_error(monkeypatch):
+    # Regression test for a real production failure (2026-09-07,
+    # run_push_scan_job, job_id 5931fc3d): the first attempt hit
+    # RemoteProtocolError, the identical call succeeded moments later.
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) == 1:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        return httpx.Response(201, json={"token": "ghs_recovered", "expires_at": "2026-01-01T00:00:00Z"})
+
+    slept = []
+    monkeypatch.setattr("app_server.github_auth.time.sleep", lambda seconds: slept.append(seconds))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    token = get_installation_token(999, "fake-jwt", http_client=client)
+
+    assert token == "ghs_recovered"
+    assert len(calls) == 2
+    assert slept == [1.0]
+
+
+def test_get_installation_token_raises_when_the_retry_also_fails():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    with pytest.raises(httpx.RemoteProtocolError):
+        get_installation_token(999, "fake-jwt", http_client=client)
+
+
+def test_get_installation_token_does_not_retry_a_real_http_error():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(401, json={"message": "Bad credentials"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.github.com")
+    with pytest.raises(httpx.HTTPStatusError):
+        get_installation_token(999, "fake-jwt", http_client=client)
+    assert len(calls) == 1
