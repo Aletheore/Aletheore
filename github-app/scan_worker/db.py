@@ -928,6 +928,27 @@ def get_last_endpoint_health(
             return result
 
 
+def get_endpoint_health_selection(dsn: str, installation_id: int, repo_full_name: str) -> set[tuple[str, str]]:
+    """Sync (psycopg) counterpart to app_server.db.get_endpoint_health_selection,
+    for the sweep job (run_health_check_sweep_job) rather than an async
+    admin route. Returns a set of (method, path) for cheap membership
+    checks against the scanner's own endpoint list - see
+    jobs._candidate_endpoints, which treats an empty set as "no explicit
+    preference, use the default first-N" the same way the admin side does.
+    """
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT endpoint_method, endpoint_path
+                FROM endpoint_health_selection
+                WHERE installation_id = %s AND repo_full_name = %s
+                """,
+                (installation_id, repo_full_name),
+            )
+            return {(row[0], row[1]) for row in cur.fetchall()}
+
+
 def list_recent_endpoint_incidents(
     dsn: str,
     installation_id: int,

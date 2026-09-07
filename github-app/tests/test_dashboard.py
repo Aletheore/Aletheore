@@ -1362,9 +1362,13 @@ async def test_dashboard_health_reports_real_endpoint_coverage_against_the_monit
     # NEVER checked, with no signal anywhere in this dashboard before this
     # fix. total_endpoint_count/monitored_endpoint_count let the frontend
     # show real coverage instead of implying every endpoint is watched.
-    import app_server.dashboard as dashboard_module
+    #
+    # monitored_endpoint_count is computed via app_server.admin's
+    # _monitored_endpoint_keys (see get_dashboard_health), so the cap this
+    # test overrides lives on the admin module now, not dashboard's own.
+    import app_server.admin as admin_module
 
-    monkeypatch.setattr(dashboard_module, "MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET", 2)
+    monkeypatch.setattr(admin_module, "MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET", 2)
     await upsert_installation(pool, 506, "octocat")
     await set_installation_plan(pool, 506, "air")
     await insert_repo_history(

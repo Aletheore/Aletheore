@@ -70,6 +70,7 @@ from scan_worker.db import (
     get_flash_review_finding_comments,
     managed_audit_definitely_still_cooling_down,
     get_docs_repo_commit_settings,
+    get_endpoint_health_selection,
     get_endpoint_health_summary,
     get_extra_seats,
     get_flash_review_count_this_month,
@@ -216,6 +217,18 @@ HEALTH_CHECK_DOWN_RETRY_DELAY_SECONDS = 2.0
 # reachability notification itself) still fire every time, only the LLM
 # call is throttled.
 HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS = 1800
+# Bounds one target's real HTTP-checking time within a single
+# HEALTH_SWEEP_SOFT_DEADLINE_SECONDS tick, and - since run_health_check_
+# sweep_job iterates every paying installation's every target serially in
+# one process - bounds how much of that shared budget one repo with an
+# unusually large API surface can consume at every OTHER customer's
+# expense. Originally applied blindly to whichever endpoints happened to
+# be first in the scan's own (arbitrary) evidence order, with no way for
+# a customer to choose otherwise and no visibility that some endpoints
+# were never checked at all - see _candidate_endpoints and migration 060
+# (endpoint_health_selection): a customer can now explicitly choose which
+# endpoints matter to them once a repo has more than this many, instead
+# of Aletheore silently picking for them.
 MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET = 64
 HEALTH_SWEEP_SOFT_DEADLINE_SECONDS = 540
 HEALTH_SWEEP_ROTATION_KEY = "health_sweep:target_rotation"
@@ -2421,15 +2434,44 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
             )
 
 
-def _endpoint_results(evidence: dict, base_url: str, pinned_ip: str) -> list[dict]:
+def _candidate_endpoints(dsn: str, installation_id: int, repo_full_name: str, endpoints: list[dict]) -> list[dict]:
+    """Which endpoints from this scan's real, full list are actually
+    eligible to be health-checked, before the MAX_HEALTH_CHECK_ENDPOINTS_
+    PER_TARGET cap below narrows that further.
+
+    No selection rows for this repo (the default, unchanged from before
+    this existed): every endpoint is a candidate, in scan order - the cap
+    below picks the first N. Any selection rows at all: ONLY the selected
+    endpoints are candidates, sorted by (path, method) for a stable,
+    predictable order when a customer selects more than the cap allows -
+    "which ones win" must never depend on evidence's own arbitrary scan
+    order once a customer has made an explicit choice. A selected
+    (method, path) that no longer exists in this scan's evidence (the
+    route was renamed or removed in code) is silently absent from the
+    candidates - selection rows are additive intent, not a promise that a
+    now-stale selection survives forever; the dashboard's own coverage
+    count reads directly off what actually gets checked, not off the
+    stored selection size.
+    """
+    selection = get_endpoint_health_selection(dsn, installation_id, repo_full_name)
+    if not selection:
+        return endpoints
+    candidates = [e for e in endpoints if (e.get("method"), e.get("path")) in selection]
+    return sorted(candidates, key=lambda e: (e.get("path") or "", e.get("method") or ""))
+
+
+def _endpoint_results(
+    dsn: str, installation_id: int, repo_full_name: str, evidence: dict, base_url: str, pinned_ip: str
+) -> list[dict]:
     endpoints = evidence.get("repository", {}).get("api_endpoints", {}).get("endpoints", [])
     if not endpoints:
         return []
-    checked_endpoints = endpoints[:MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET]
-    if len(endpoints) > len(checked_endpoints):
+    candidates = _candidate_endpoints(dsn, installation_id, repo_full_name, endpoints)
+    checked_endpoints = candidates[:MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET]
+    if len(candidates) > len(checked_endpoints):
         logging.getLogger("scan_worker.jobs").warning(
-            "health check target has %s endpoints; checking first %s this sweep",
-            len(endpoints),
+            "health check target has %s monitorable endpoints; checking first %s this sweep",
+            len(candidates),
             len(checked_endpoints),
         )
     results = run_healthcheck(checked_endpoints, base_url, pinned_ip=pinned_ip).get("results", [])
@@ -2984,7 +3026,7 @@ def _run_health_check_sweep_for_target(
     if evidence is None:
         return
 
-    for entry in _endpoint_results(evidence, base_url, pinned_ip):
+    for entry in _endpoint_results(dsn, installation_id, repo_full_name, evidence, base_url, pinned_ip):
         if entry.get("skipped"):
             continue
         method = entry["method"]

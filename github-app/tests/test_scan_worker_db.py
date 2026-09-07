@@ -24,6 +24,7 @@ from scan_worker.db import (
     delete_wiki_subsystems_not_in,
     email_already_sent,
     get_dismissed_identity_keys,
+    get_endpoint_health_selection,
     get_endpoint_health_summary,
     get_flash_review_finding_comments,
     insert_flash_review_finding_comment,
@@ -106,6 +107,44 @@ async def test_list_health_check_targets_all_filters_by_plan(pool):
     targets = list_health_check_targets_all(TEST_DATABASE_URL)
     installation_ids = {t["installation_id"] for t in targets}
     assert installation_ids == {301}
+
+
+@pytest.mark.asyncio
+async def test_get_endpoint_health_selection_empty_by_default(pool):
+    await _insert_installation(pool, 350, "sel-default", plan="air")
+
+    selection = get_endpoint_health_selection(TEST_DATABASE_URL, 350, "sel-default/repo")
+    assert selection == set()
+
+
+@pytest.mark.asyncio
+async def test_get_endpoint_health_selection_returns_selected_pairs(pool):
+    await _insert_installation(pool, 351, "sel-set", plan="air")
+    await pool.execute(
+        """
+        INSERT INTO endpoint_health_selection (installation_id, repo_full_name, endpoint_method, endpoint_path)
+        VALUES ($1, $2, $3, $4), ($1, $2, $5, $6)
+        """,
+        351, "sel-set/repo", "GET", "/a", "POST", "/b",
+    )
+
+    selection = get_endpoint_health_selection(TEST_DATABASE_URL, 351, "sel-set/repo")
+    assert selection == {("GET", "/a"), ("POST", "/b")}
+
+
+@pytest.mark.asyncio
+async def test_get_endpoint_health_selection_scoped_per_repo(pool):
+    await _insert_installation(pool, 352, "sel-scope", plan="air")
+    await pool.execute(
+        """
+        INSERT INTO endpoint_health_selection (installation_id, repo_full_name, endpoint_method, endpoint_path)
+        VALUES ($1, $2, $3, $4)
+        """,
+        352, "sel-scope/other-repo", "GET", "/a",
+    )
+
+    selection = get_endpoint_health_selection(TEST_DATABASE_URL, 352, "sel-scope/repo")
+    assert selection == set()
 
 
 @pytest.mark.asyncio

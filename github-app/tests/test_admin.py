@@ -920,6 +920,149 @@ async def test_remove_health_check_target(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_health_check_endpoints_defaults_to_auto_mode(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch, installation_id=506)
+    await insert_repo_history(
+        pool,
+        506,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {
+            "aletheore_version": EVIDENCE_VERSION,
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {"method": "GET", "path": "/a", "file": "a.py", "line": 1},
+                        {"method": "GET", "path": "/b", "file": "b.py", "line": 1},
+                    ]
+                }
+            },
+        },
+    )
+    async with client:
+        response = await client.get("/admin/octocat/hello-world/health-endpoints")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "auto"
+    assert body["total_endpoint_count"] == 2
+    assert body["monitored_endpoint_count"] == 2
+    assert all(e["monitored"] for e in body["endpoints"])
+
+
+@pytest.mark.asyncio
+async def test_list_health_check_endpoints_respects_the_cap_in_auto_mode(pool, monkeypatch):
+    monkeypatch.setattr("app_server.admin.MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET", 1)
+    client = await _logged_in_client(pool, monkeypatch, installation_id=507)
+    await insert_repo_history(
+        pool,
+        507,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {
+            "aletheore_version": EVIDENCE_VERSION,
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {"method": "GET", "path": "/a", "file": "a.py", "line": 1},
+                        {"method": "GET", "path": "/b", "file": "b.py", "line": 1},
+                    ]
+                }
+            },
+        },
+    )
+    async with client:
+        response = await client.get("/admin/octocat/hello-world/health-endpoints")
+
+    body = response.json()
+    assert body["mode"] == "auto"
+    assert body["monitored_endpoint_count"] == 1
+    monitored = [e["path"] for e in body["endpoints"] if e["monitored"]]
+    assert monitored == ["/a"]
+
+
+@pytest.mark.asyncio
+async def test_set_health_check_endpoints_switches_to_manual_mode(pool, monkeypatch):
+    # Real feature this closes: a repo with more real endpoints than the
+    # cap previously had no way for the customer to choose which ones get
+    # checked - Aletheore always silently picked the first N in whatever
+    # arbitrary order the scan happened to produce them in.
+    monkeypatch.setattr("app_server.admin.MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET", 1)
+    client = await _logged_in_client(pool, monkeypatch, installation_id=508)
+    await insert_repo_history(
+        pool,
+        508,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {
+            "aletheore_version": EVIDENCE_VERSION,
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {"method": "GET", "path": "/a", "file": "a.py", "line": 1},
+                        {"method": "GET", "path": "/b", "file": "b.py", "line": 1},
+                    ]
+                }
+            },
+        },
+    )
+    async with client:
+        set_response = await client.put(
+            "/admin/octocat/hello-world/health-endpoints",
+            json={"selections": [{"method": "GET", "path": "/b"}]},
+        )
+        get_response = await client.get("/admin/octocat/hello-world/health-endpoints")
+
+    assert set_response.status_code == 200
+    assert set_response.json()["selected_count"] == 1
+    body = get_response.json()
+    assert body["mode"] == "manual"
+    assert body["monitored_endpoint_count"] == 1
+    monitored = {e["path"]: e["monitored"] for e in body["endpoints"]}
+    assert monitored == {"/a": False, "/b": True}
+
+
+@pytest.mark.asyncio
+async def test_set_health_check_endpoints_empty_selection_resets_to_auto_mode(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch, installation_id=509)
+    await insert_repo_history(
+        pool,
+        509,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {
+            "aletheore_version": EVIDENCE_VERSION,
+            "repository": {"api_endpoints": {"endpoints": [{"method": "GET", "path": "/a"}]}},
+        },
+    )
+    async with client:
+        await client.put(
+            "/admin/octocat/hello-world/health-endpoints",
+            json={"selections": [{"method": "GET", "path": "/a"}]},
+        )
+        reset_response = await client.put(
+            "/admin/octocat/hello-world/health-endpoints", json={"selections": []}
+        )
+        get_response = await client.get("/admin/octocat/hello-world/health-endpoints")
+
+    assert reset_response.status_code == 200
+    assert get_response.json()["mode"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_health_check_endpoints_requires_login(pool):
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        get_response = await client.get("/admin/octocat/hello-world/health-endpoints")
+        put_response = await client.put(
+            "/admin/octocat/hello-world/health-endpoints", json={"selections": []}
+        )
+    assert get_response.status_code == 401
+    assert put_response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_set_webhook_url_rejects_internal_address(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch)
     monkeypatch.setattr(

@@ -7,11 +7,11 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from aletheore.evidence_resolution import resolve_code_evidence
 from scan_worker.github_api import fetch_file_content
-from scan_worker.jobs import MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET
 from scan_worker.live_wiki import build_file_fallback_detail
 from app_server.admin import (
     _administered_installation_ids_for_session_or_401,
     _github_http_client,
+    _monitored_endpoint_keys,
     _repo_installation_id,
     _require_admin_installation,
     _require_seat_if_paid,
@@ -24,6 +24,7 @@ from app_server.db import (
     count_monthly_scanned_repos,
     get_docs_build_status,
     get_endpoint_health_history,
+    get_endpoint_health_selection,
     get_endpoint_health_summary_since,
     get_endpoint_uptime_pct_since,
     get_installation,
@@ -327,14 +328,23 @@ async def get_dashboard_health(org: str, repo: str, request: Request):
     # endpoints up" as full coverage; it only ever meant "12 of the first
     # 64 found". total_endpoint_count/monitored_endpoint_count let the
     # frontend show the real coverage instead of implying completeness.
-    total_endpoint_count = len(api_endpoints)
-    monitored_endpoint_count = min(total_endpoint_count, MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET)
+    #
+    # _monitored_endpoint_keys is the SAME candidate-then-cap logic
+    # scan_worker.jobs._candidate_endpoints/_endpoint_results uses to
+    # decide what actually gets checked - once a customer has made an
+    # explicit endpoint selection (see admin.py's health-endpoints routes,
+    # migration 060), monitored_endpoint_count must reflect THEIR choice,
+    # not just "the first N found", or this count would silently drift
+    # from what the next real sweep does.
+    selection_rows = await get_endpoint_health_selection(pool, installation_id, repo_full_name)
+    selected_keys = {(row["endpoint_method"], row["endpoint_path"]) for row in selection_rows}
+    monitored_endpoint_count = len(_monitored_endpoint_keys(api_endpoints, selected_keys))
 
     return {
         "repo_full_name": repo_full_name,
         "endpoints": endpoints,
         "stale_endpoints": stale_endpoints,
-        "total_endpoint_count": total_endpoint_count,
+        "total_endpoint_count": len(api_endpoints),
         "monitored_endpoint_count": monitored_endpoint_count,
     }
 

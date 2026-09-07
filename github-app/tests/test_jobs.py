@@ -3753,6 +3753,13 @@ def _patch_sweep(
         lambda dsn, iid, repo: evidence
         or {"repository": {"api_endpoints": {"endpoints": [{"method": "GET", "path": "/x"}]}}},
     )
+    # Empty by default (no explicit selection - the pre-existing "check
+    # everything the scan found, in scan order" behavior every test below
+    # already assumes) - see test_jobs.py's own dedicated selection tests
+    # for the non-empty case.
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_endpoint_health_selection", lambda dsn, iid, repo: set()
+    )
     default_first = result_entry or {
         "method": "GET",
         "path": "/x",
@@ -3780,6 +3787,119 @@ def _patch_sweep(
     sent = []
     monkeypatch.setattr("scan_worker.jobs.send_health_alert", lambda url, msg, **k: sent.append(msg))
     return sent
+
+
+def test_candidate_endpoints_uses_scan_order_with_no_selection(monkeypatch):
+    from scan_worker.jobs import _candidate_endpoints
+
+    monkeypatch.setattr("scan_worker.jobs.get_endpoint_health_selection", lambda dsn, iid, repo: set())
+    endpoints = [{"method": "GET", "path": "/a"}, {"method": "GET", "path": "/b"}]
+
+    assert _candidate_endpoints("dsn", 1, "o/r", endpoints) == endpoints
+
+
+def test_candidate_endpoints_uses_only_selected_ones_when_present(monkeypatch):
+    # Real feature this covers: once a customer has selected ANY endpoints
+    # (see migration 060/admin.py's health-endpoints routes), only those
+    # are candidates - an unselected endpoint is never checked even if
+    # there's room under the cap, so a customer's explicit choice is
+    # respected exactly, not just used as a tiebreaker.
+    from scan_worker.jobs import _candidate_endpoints
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_endpoint_health_selection", lambda dsn, iid, repo: {("GET", "/b")}
+    )
+    endpoints = [
+        {"method": "GET", "path": "/a"},
+        {"method": "GET", "path": "/b"},
+        {"method": "GET", "path": "/c"},
+    ]
+
+    assert _candidate_endpoints("dsn", 1, "o/r", endpoints) == [{"method": "GET", "path": "/b"}]
+
+
+def test_candidate_endpoints_sorts_selected_ones_for_a_stable_order(monkeypatch):
+    # A selection larger than MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET still
+    # needs a deterministic "which ones win" order - sorted by (path,
+    # method), not evidence's own arbitrary scan order, so the answer
+    # never depends on scan-to-scan reordering once a customer has chosen.
+    from scan_worker.jobs import _candidate_endpoints
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_endpoint_health_selection",
+        lambda dsn, iid, repo: {("GET", "/z"), ("GET", "/a"), ("POST", "/a")},
+    )
+    endpoints = [
+        {"method": "GET", "path": "/z"},
+        {"method": "POST", "path": "/a"},
+        {"method": "GET", "path": "/a"},
+    ]
+
+    assert _candidate_endpoints("dsn", 1, "o/r", endpoints) == [
+        {"method": "GET", "path": "/a"},
+        {"method": "POST", "path": "/a"},
+        {"method": "GET", "path": "/z"},
+    ]
+
+
+def test_candidate_endpoints_drops_a_selected_endpoint_no_longer_in_evidence(monkeypatch):
+    # A selected (method, path) that no longer exists in the current scan
+    # (the route was renamed or removed in code) is silently absent from
+    # the candidates - a stale selection row is not a promise the route
+    # still exists.
+    from scan_worker.jobs import _candidate_endpoints
+
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_endpoint_health_selection",
+        lambda dsn, iid, repo: {("GET", "/removed")},
+    )
+    endpoints = [{"method": "GET", "path": "/a"}]
+
+    assert _candidate_endpoints("dsn", 1, "o/r", endpoints) == []
+
+
+def test_sweep_only_checks_selected_endpoints_when_a_selection_exists(monkeypatch):
+    sent = _patch_sweep(
+        monkeypatch,
+        prior=None,
+        evidence={
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {"method": "GET", "path": "/a"},
+                        {"method": "GET", "path": "/x"},
+                    ]
+                }
+            }
+        },
+        result_entry={
+            "method": "GET",
+            "path": "/x",
+            "reachable": True,
+            "status_code": 200,
+            "latency_ms": 90.0,
+            "response_shape": None,
+        },
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_endpoint_health_selection", lambda dsn, iid, repo: {("GET", "/x")}
+    )
+    checked = []
+
+    def spying_healthcheck(endpoints, base_url, pinned_ip=None):
+        checked.extend(e["path"] for e in endpoints)
+        return {"results": [
+            {"method": "GET", "path": "/x", "reachable": True, "status_code": 200,
+             "latency_ms": 90.0, "response_shape": None}
+        ]}
+
+    monkeypatch.setattr("scan_worker.jobs.run_healthcheck", spying_healthcheck)
+
+    from scan_worker.jobs import run_health_check_sweep_job
+
+    run_health_check_sweep_job()
+
+    assert checked == ["/x"]
 
 
 def test_send_alerts_if_configured_sends_email_when_alert_email_set(monkeypatch):
@@ -4496,6 +4616,9 @@ def test_sweep_isolates_one_targets_failure_from_others(monkeypatch):
 
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", fake_get_latest_evidence)
     monkeypatch.setattr(
+        "scan_worker.jobs.get_endpoint_health_selection", lambda dsn, iid, repo: set()
+    )
+    monkeypatch.setattr(
         "scan_worker.jobs.run_healthcheck",
         lambda endpoints, base_url, pinned_ip=None: {
             "results": [{"method": "GET", "path": "/x", "reachable": True, "status_code": 200, "latency_ms": 90.0}]
@@ -4595,6 +4718,9 @@ def test_sweep_proceeds_when_target_url_still_passes_validation(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs.get_latest_evidence",
         lambda dsn, iid, repo: {"repository": {"api_endpoints": {"endpoints": [{"method": "GET", "path": "/x"}]}}},
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_endpoint_health_selection", lambda dsn, iid, repo: set()
     )
     monkeypatch.setattr(
         "scan_worker.jobs.run_healthcheck",
@@ -4719,6 +4845,9 @@ def test_sweep_checks_every_target_independently(monkeypatch):
         "scan_worker.jobs.get_latest_evidence",
         lambda dsn, iid, repo: {"repository": {"api_endpoints": {"endpoints": [{"method": "GET", "path": "/x"}]}}},
     )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_endpoint_health_selection", lambda dsn, iid, repo: set()
+    )
 
     def fake_healthcheck(endpoints, base_url, pinned_ip=None):
         reachable = base_url == "https://staging.example.com"
@@ -4809,6 +4938,9 @@ def test_sweep_schedules_down_retries_without_blocking_later_targets(monkeypatch
         }
 
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", fake_evidence)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_endpoint_health_selection", lambda dsn, iid, repo: set()
+    )
 
     def fake_healthcheck(endpoints, base_url, pinned_ip=None):
         if base_url == "https://slow.example.com":

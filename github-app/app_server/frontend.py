@@ -1099,6 +1099,13 @@ HEALTH_HTML = _page_head("Endpoint health — {repo} — Aletheore") + _shell(
     </section>
     <section class="section">
       <div class="section-head">
+        <div class="section-title"><i class="ti ti-list-check" aria-hidden="true"></i>Monitored endpoints</div>
+        <span class="section-sub" id="endpoints-usage"></span>
+      </div>
+      <div class="section-body" id="endpoints-body"><div class="empty-state">Loading&hellip;</div></div>
+    </section>
+    <section class="section">
+      <div class="section-head">
         <div class="section-title"><i class="ti ti-activity" aria-hidden="true"></i>Results</div>
         <span class="section-sub">Most recent check per endpoint, per target</span>
       </div>
@@ -1238,9 +1245,9 @@ async function loadResults() {{
   }});
   let html = '';
   if (data.monitored_endpoint_count < data.total_endpoint_count) {{
-    html += '<div class="settings-block-hint" style="margin-bottom:10px;">Monitoring the first ' +
+    html += '<div class="settings-block-hint" style="margin-bottom:10px;">Monitoring ' +
       data.monitored_endpoint_count + ' of ' + data.total_endpoint_count +
-      ' API endpoints found in this repo - the rest are not checked.</div>';
+      ' API endpoints found in this repo - see "Monitored endpoints" above to choose which.</div>';
   }}
   let rowIndex = 0;
   const rowMeta = {{}};
@@ -1315,8 +1322,82 @@ async function toggleEndpointHistory(rowId) {{
   panel.innerHTML = html;
 }}
 
+function renderEndpointRows(endpoints) {{
+  return endpoints.map(function (e, i) {{
+    return '<label class="health-endpoint-row" style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12.5px;">' +
+      '<input type="checkbox" class="endpoint-select-checkbox" data-index="' + i + '"' +
+      (e.monitored ? ' checked' : '') + '>' +
+      '<span class="chip" style="min-width:44px;text-align:center;">' + escapeHtml(e.method || '') + '</span>' +
+      '<span>' + escapeHtml(e.path || '') + '</span></label>';
+  }}).join('');
+}}
+
+async function loadEndpoints() {{
+  const res = await apiGet(adminBase + '/health-endpoints');
+  const body = document.getElementById('endpoints-body');
+  const usage = document.getElementById('endpoints-usage');
+  if (!res) return;
+  if (res.status === 402) {{ body.innerHTML = '<div class="empty-state">Available on paid plans.</div>'; usage.textContent = ''; return; }}
+  if (!res.ok) {{ body.innerHTML = '<div class="empty-state">Unavailable.</div>'; return; }}
+  const data = await res.json();
+  window._healthEndpoints = data.endpoints || [];
+  usage.textContent = data.monitored_endpoint_count + ' of ' + data.total_endpoint_count + ' monitored';
+  if (data.endpoints.length === 0) {{
+    body.innerHTML = '<div class="empty-state">No API endpoints found in this repo yet.</div>';
+    return;
+  }}
+  const atCap = data.total_endpoint_count > data.cap;
+  let html = '';
+  if (data.mode === 'auto' && atCap) {{
+    html += '<div class="settings-block-hint" style="margin-bottom:8px;">This repo has more endpoints (' +
+      data.total_endpoint_count + ') than Aletheore checks at once (' + data.cap + ') - the first ' +
+      data.cap + ' below (in scan order) are monitored by default. Uncheck/check below and Save to choose exactly which ones instead.</div>';
+  }} else if (data.mode === 'manual') {{
+    html += '<div class="settings-block-hint" style="margin-bottom:8px;">You have chosen exactly which endpoints are monitored below' +
+      (atCap ? ' (still capped at ' + data.cap + ' at a time)' : '') + '.</div>';
+  }}
+  html += '<details><summary style="cursor:pointer;font-size:12.5px;color:var(--muted);">Choose endpoints (' +
+    data.endpoints.length + ')</summary><div style="margin-top:8px;max-height:320px;overflow-y:auto;">' +
+    renderEndpointRows(data.endpoints) + '</div>' +
+    '<div class="form-row" style="margin-top:8px;">' +
+    '<button class="btn" onclick="saveEndpointSelection()">Save selection</button>' +
+    (data.mode === 'manual' ? '<button class="btn" onclick="resetEndpointSelection()">Reset to automatic</button>' : '') +
+    '</div><div id="endpoints-status" class="settings-block-hint"></div></details>';
+  body.innerHTML = html;
+}}
+
+async function saveEndpointSelection() {{
+  const status = document.getElementById('endpoints-status');
+  const checked = Array.from(document.querySelectorAll('.endpoint-select-checkbox:checked'));
+  const selections = checked.map(function (el) {{
+    const e = window._healthEndpoints[parseInt(el.dataset.index, 10)];
+    return {{ method: e.method, path: e.path }};
+  }});
+  status.textContent = 'Saving...';
+  const res = await fetch(adminBase + '/health-endpoints', {{
+    method: 'PUT', headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ selections: selections }}),
+  }});
+  if (!res.ok) {{ status.textContent = 'Could not save.'; return; }}
+  loadEndpoints();
+  loadResults();
+}}
+
+async function resetEndpointSelection() {{
+  const status = document.getElementById('endpoints-status');
+  status.textContent = 'Resetting...';
+  const res = await fetch(adminBase + '/health-endpoints', {{
+    method: 'PUT', headers: {{ 'Content-Type': 'application/json' }},
+    body: JSON.stringify({{ selections: [] }}),
+  }});
+  if (!res.ok) {{ status.textContent = 'Could not reset.'; return; }}
+  loadEndpoints();
+  loadResults();
+}}
+
 loadTargets();
 loadResults();
+loadEndpoints();
 loadPlanBadge();
 </script>
 """
