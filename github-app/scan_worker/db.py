@@ -546,16 +546,29 @@ def repo_checkout_lock(dsn: str, installation_id: int, repo_full_name: str):
 
 @contextmanager
 def wiki_write_lock(dsn: str, installation_id: int, repo_full_name: str):
-    """Serializes one repo's Live Wiki writes (scan_worker.jobs.
-    _store_wiki_generation - the upsert/prune/overview-regenerate sequence,
-    not the slower LLM generation that runs before it) across whichever
-    job reaches it: a full build, an incremental push-triggered update, and
-    an incremental PR-triggered update can all be enqueued for the same
-    repo close together, on different scan-worker replicas, and none of
-    that concurrency is bounded by repo_checkout_lock - that lock's scope
-    ends (checkout releases) before the wiki job is even enqueued.
+    """Serializes one repo's Live Wiki writes across whichever job reaches
+    it: a full build, an incremental push-triggered update, and an
+    incremental PR-triggered update can all be enqueued for the same repo
+    close together, on different scan-worker replicas, and none of that
+    concurrency is bounded by repo_checkout_lock - that lock's scope ends
+    (checkout releases) before the wiki job is even enqueued.
 
-    Real bug this closes: _store_wiki_generation prunes wiki_subsystems
+    Guards two separate write sequences in scan_worker.jobs, not the
+    slower LLM generation that runs before either: _store_wiki_subsystem_
+    records (the upsert/prune step) and _regenerate_wiki_overview (the
+    overview read-and-regenerate step). The incremental-update path still
+    calls both back-to-back under _store_wiki_generation's combined
+    wrapper, same as one lock acquisition always covered before; a full
+    build now acquires this lock once per chunk for the upsert/prune step
+    (see run_live_wiki_full_build_job's chunking) plus once more for the
+    overview step at the end, rather than once for the whole run - each
+    acquisition is still atomic on its own, and every chunk within one
+    job shares that job's single evidence snapshot, so the race below is
+    unaffected by chunking: it was never about multiple writes racing
+    within the same job, only about two different jobs' evidence
+    snapshots racing each other.
+
+    Real bug this closes: the upsert/prune step prunes wiki_subsystems
     rows using ITS OWN evidence snapshot's current cluster list
     (delete_wiki_subsystems_not_in) - if an older-evidence job's write
     lands after a newer-evidence job's (e.g. two pushes close together,
