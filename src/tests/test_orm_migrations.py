@@ -289,6 +289,35 @@ class Migration(migrations.Migration):
     assert [c["name"] for c in result["tables"][0]["columns"]] == ["id", "note"]
 
 
+def test_django_run_sql_with_a_non_literal_argument_stays_unsupported(tmp_path):
+    # Real gap found via audit: RunSQL called with a module-level constant
+    # (a common real style for keeping migration files readable) instead
+    # of an inline string literal previously produced NO event at all -
+    # not even flagged as unsupported - even though RunSQL is one of this
+    # module's explicitly "modeled" operations. A migration with real
+    # DB-shape effects must never look identical to a no-op.
+    repo = write_files(
+        tmp_path,
+        {
+            "blog/migrations/0001_initial.py": """
+from django.db import migrations
+
+SQL_TEXT = "ALTER TABLE legacy ADD COLUMN note TEXT;"
+
+class Migration(migrations.Migration):
+    operations = [
+        migrations.RunSQL(SQL_TEXT),
+    ]
+"""
+        },
+    )
+    result = extract_schema(repo, ["blog/migrations"])
+    assert result["tables"] == []
+    assert len(result["unsupported"]) == 1
+    assert "RunSQL" in result["unsupported"][0]["statement"]
+    assert "SQL_TEXT" in result["unsupported"][0]["statement"]
+
+
 def test_django_run_python_and_alter_model_options_stay_unsupported(tmp_path):
     repo = write_files(
         tmp_path,
@@ -341,6 +370,34 @@ class Migration(migrations.Migration):
     assert len(events) == 1
     assert events[0]["kind"] == "unsupported"
     assert "AddConstraint" in events[0]["statement"]
+
+
+def test_django_catch_all_uses_the_real_receiver_not_a_hardcoded_migrations_prefix(tmp_path):
+    # Real bug found via audit: the catch-all's statement text hardcoded
+    # `migrations.{op_name}(...)` regardless of the call's actual receiver.
+    # A custom Operation subclass imported under its own module alias -
+    # common for django.contrib.postgres.operations (AddIndexConcurrently
+    # etc.) and hand-rolled Operation subclasses - got an invented
+    # `migrations.` prefix in a statement that's supposed to be a real,
+    # grounded citation of what the migration file actually says.
+    repo = write_files(
+        tmp_path,
+        {
+            "blog/migrations/0003_concurrent_index.py": """
+from django.db import migrations
+import myapp.custom_ops as custom
+
+class Migration(migrations.Migration):
+    operations = [
+        custom.AddIndexConcurrently(model_name='post', index=None),
+    ]
+"""
+        },
+    )
+    events, _ = extract_django_migrations(repo, ["blog/migrations"])
+    assert len(events) == 1
+    assert events[0]["kind"] == "unsupported"
+    assert events[0]["statement"] == "custom.AddIndexConcurrently(...) not modeled"
 
 
 def test_non_django_migrations_directory_is_ignored(tmp_path):
@@ -725,6 +782,33 @@ end
     assert [t["name"] for t in result["tables"]] == ["legacy"]
 
 
+def test_rails_execute_with_a_non_literal_argument_stays_unsupported(tmp_path):
+    # Same real gap as Django's RunSQL and Alembic's op.execute, fixed
+    # alongside them: execute called with a local variable/heredoc instead
+    # of an inline string literal previously produced NO event at all,
+    # even though execute is one of this module's explicitly "modeled"
+    # operations - unlike a genuinely unrecognized Ruby method call, which
+    # this module deliberately does ignore without flagging.
+    repo = write_files(
+        tmp_path,
+        {
+            "db/migrate/20230101000000_raw.rb": """
+class Raw < ActiveRecord::Migration[7.0]
+  def change
+    sql = "ALTER TABLE legacy ADD COLUMN note TEXT;"
+    execute sql
+  end
+end
+"""
+        },
+    )
+    result = extract_schema(repo, ["db/migrate"])
+    assert result["tables"] == []
+    assert len(result["unsupported"]) == 1
+    assert "execute" in result["unsupported"][0]["statement"]
+    assert "sql" in result["unsupported"][0]["statement"]
+
+
 def test_rails_create_join_table_and_remove_foreign_key_stay_unsupported(tmp_path):
     repo = write_files(
         tmp_path,
@@ -845,6 +929,33 @@ def upgrade():
     table_names = [t["name"] for t in result["tables"]]
     assert "legacy" not in table_names
     assert "audit" in table_names
+
+
+def test_alembic_execute_with_a_non_literal_argument_stays_unsupported(tmp_path):
+    # Same real gap as Django's RunSQL, fixed alongside it: op.execute
+    # called with a variable/expression instead of an inline string
+    # literal previously produced NO event at all, even though op.execute
+    # is one of this module's explicitly "modeled" operations.
+    repo = write_files(
+        tmp_path,
+        {
+            "alembic/versions/abc123_init.py": """
+from alembic import op
+
+revision = "abc123"
+down_revision = None
+
+def upgrade():
+    sql_text = "ALTER TABLE legacy ADD COLUMN note TEXT;"
+    op.execute(sql_text)
+"""
+        },
+    )
+    result = extract_schema(repo, ["alembic/versions"])
+    assert result["tables"] == []
+    assert len(result["unsupported"]) == 1
+    assert "op.execute" in result["unsupported"][0]["statement"]
+    assert "sql_text" in result["unsupported"][0]["statement"]
 
 
 def test_alembic_drop_column_alter_column_drop_index_rename_table(tmp_path):
