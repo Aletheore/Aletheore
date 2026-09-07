@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from aletheore.evidence_resolution import resolve_code_evidence
 from scan_worker.github_api import fetch_file_content
+from scan_worker.jobs import MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET
 from scan_worker.live_wiki import build_file_fallback_detail
 from app_server.admin import (
     _administered_installation_ids_for_session_or_401,
@@ -317,10 +318,24 @@ async def get_dashboard_health(org: str, repo: str, request: Request):
     )
     stale_endpoints = find_stale_endpoints(api_endpoints, health_summary)
 
+    # Real gap found via audit: run_health_check_sweep_job (see
+    # scan_worker.jobs._endpoint_results) silently checks only the first
+    # MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET endpoints found in the repo -
+    # a repo with more real API endpoints than that has some that are
+    # NEVER checked, on any target, ever, with no signal anywhere in this
+    # dashboard before this fix. A customer reasonably reads "12 of 12
+    # endpoints up" as full coverage; it only ever meant "12 of the first
+    # 64 found". total_endpoint_count/monitored_endpoint_count let the
+    # frontend show the real coverage instead of implying completeness.
+    total_endpoint_count = len(api_endpoints)
+    monitored_endpoint_count = min(total_endpoint_count, MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET)
+
     return {
         "repo_full_name": repo_full_name,
         "endpoints": endpoints,
         "stale_endpoints": stale_endpoints,
+        "total_endpoint_count": total_endpoint_count,
+        "monitored_endpoint_count": monitored_endpoint_count,
     }
 
 
