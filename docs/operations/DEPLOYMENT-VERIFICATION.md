@@ -4,8 +4,8 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-07
-**Snapshot Freshness:** CURRENT as of 2026-09-07 - production was redeployed to `master` (commit `ce5ab60`, tagged `github-app-deploy-2026-09-07`) and re-verified live via SSH the same day. 18 commits since the previous deploy tag (`github-app-deploy-2026-09-06`). Two real production/security fixes: `get_installation_token` now retries once on a transient `httpx.TransportError` (#574) - a real production failure the same day (`run_push_scan_job`, job_id `5931fc3d`, diagnosed live via SSH: GitHub's own API dropped the connection with no response, confirmed transient since the identical call from a different job succeeded under 2.5 minutes later with no special handling); and `scan_worker.slack._detect_platform` now matches the webhook URL's real hostname instead of substring-searching the whole URL (#564) - closes a GitHub CodeQL-flagged `py/incomplete-url-substring-sanitization` finding where a lookalike host (`notoffice.com.evil.example`) would misroute the Teams/Slack payload shape. Also in this batch: AIRview/Docs full-build coverage now scales to real repo size (`MAX_WIKI_FULL_BUILD_CLUSTERS`/`MAX_DOCS_FULL_BUILD_FILES` 50->200, chunked per-cluster persistence, AIR plan cap raised to $20, #562); Flash Review's per-file context cap raised 80KB->100KB and its plan cap raised $5->$6 (#563); a full GitHub code-scanning triage (11 confirmed false positives dismissed with documented reasoning, 1 real finding fixed - see #564 above); and six dependency bumps regrouped/fixed after dependabot split two lockstep pairs (`psycopg`/`psycopg-binary`, `pydantic`/`pydantic-core`) across separate, individually-uninstallable PRs (#575 combines them). No DB migrations in this range (confirmed via diff against `github-app/migrations/` before deploying, not assumed) - a code-only deploy. Unlike every prior deploy, this one also rebuilt `jina-embed` and `demo-scan-worker` alongside the usual five - both pin `anyio` directly in their own lockfiles (`requirements-jina-embed.lock.txt`, `requirements-demo-scan-worker.lock.txt`), and #577's bump touched both.
+**Last Updated:** 2026-09-08
+**Snapshot Freshness:** CURRENT as of 2026-09-08 - production was redeployed to `master` (commit `fd7c2c3`, tagged `github-app-deploy-2026-09-08`) and re-verified live via SSH the same day. 12 commits since the previous deploy tag (`github-app-deploy-2026-09-07`): a 10-PR hardening pass (backward-audit findings against recently merged PRs, several caught by Flash Review's own dogfooded review of the fix PRs themselves) plus one new feature. Two real regressions were caught and fixed before merge, not shipped: `_class_name_and_superclass` (Rails model-association clustering, #580) gave up on an entire file if its first class definition lacked a superclass, instead of trying the next sibling class - Flash Review's own review of that fix PR caught it. `airview_scanner_context.py`'s new truncation caps (#586) had 5 real issues Flash Review caught in the same PR - 4 non-fully-deterministic sort keys and one genuine `TypeError` crash risk (sorting a list that could mix dicts and strings). Also fixed before merge: a `db_column=""` truthiness bug (#587, `db_column or field_name` treats an explicit empty string as absent). Other real fixes in this batch: `require.resolve('pkg')` never recognized as an import (#581); a Django unsupported-op catch-all fabricated a `migrations.` prefix regardless of the call's real receiver (#582); a cache-hit Flash Review recheck bypassed the AIR-tier verification gate entirely, silently giving free-tier installations a paid-only DeepSeek verification call (#583 - a real, live spend-leak, now closed); `RunSQL`/`op.execute`/`execute` with a non-literal SQL argument silently vanished instead of being flagged unsupported (#585); the endpoint-health dashboard never disclosed its 64-endpoint monitoring cap (#588). **New feature, with a real migration**: customers can now explicitly choose which endpoints get health-checked once a repo has more than the 64-endpoint cap, instead of Aletheore silently picking the first 64 in scan order (#590, migration `060_endpoint_health_selection.sql` - a new table, `CREATE TABLE`/`INDEX IF NOT EXISTS`, confirmed idempotent before deploying). Note: #590 was originally PR #589, stacked on #588's branch - GitHub auto-closed it when #588's branch was deleted post-squash-merge (a squash-merged branch can't be cleanly re-parented), so it was recreated as #590 targeting master directly, requiring a 3-file manual conflict resolution (`dashboard.py`, `frontend.py`, `test_dashboard.py`) verified with 539 passing local tests before pushing.
 
 ## Purpose
 
@@ -29,6 +29,45 @@ Before claiming a hardening change is live, verify:
 - Restore drill target database availability.
 
 ## Current Server Snapshot
+
+As of 2026-09-08, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - back to the usual five, no lockfile changes in this batch so `jina-embed`/`demo-scan-worker` didn't need rebuilding), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `fd7c2c3`.
+- Working tree: clean aside from the expected untracked `github-app/backups/` directory.
+- 12 commits since the previous deploy tag (`github-app-deploy-2026-09-07`) - see Snapshot
+  Freshness above for the two regressions caught and fixed before merge, the real spend-leak
+  fix (#583), and the rest of the batch. Full per-PR writeups in `github-app/CHANGELOG.md`.
+- **Real migration this deploy** (unlike every deploy since 2026-09-06): `git diff --stat`
+  against the previous deploy tag showed one new file under `github-app/migrations/`
+  (`060_endpoint_health_selection.sql`, a new table) - confirmed idempotent
+  (`CREATE TABLE`/`CREATE INDEX IF NOT EXISTS`) before deploying, not assumed.
+- All five app-relevant services rebuilt (`app-server`, `scan-worker`, `scan-worker-2`,
+  `health-worker`, `scheduler`) - `jina-embed`/`demo-scan-worker`/`demo-sandbox-runner` left
+  untouched (no lockfile changes in this batch).
+- Services running: all five `Up`, all five reporting Docker-healthcheck `healthy` within ~25
+  seconds of recreation.
+- Migration applied, not just "no pending" - `app-server`'s startup log shows
+  `applied 1 migration(s)`. Confirmed live in Postgres, not just the log line: `\d
+  endpoint_health_selection` shows the real schema (FK to `installations` with `ON DELETE
+  CASCADE`, the unique constraint, the lookup index) exactly matching the migration file.
+- Post-deploy, verified live by executing directly inside the running `scan-worker` container,
+  not by re-reading the repo: `scan_worker.jobs.rank_endpoints_by_selection` returns scan order
+  with no selection and the filtered/sorted set with one - the real ranking logic both the sweep
+  and the admin dashboard route share; `MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET` reads `64`;
+  `scan_worker.airview_scanner_context.MAX_SCHEMA_TABLES`/`MAX_ENDPOINTS` both read `50`;
+  `aletheore.model_associations._class_nodes` and `app_server.admin._monitored_endpoint_keys`
+  both import and call cleanly.
+- Health checks: internal `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
+- No errors, tracebacks, or exceptions in any of the five rebuilt services' logs in the 60 seconds
+  after restart.
+- Not re-verified this pass (out of scope, no relevant Dockerfile/host changes in the diff): Docker
+  socket mount absence, non-root users, CPU/mem limits, backup cron execution, base-image digest
+  pinning, restore-drill target availability, disk space. Each was last directly verified in the
+  2026-08-10 deploy (restore drill itself upgraded 2026-08-24) - re-check if any host-level or
+  Dockerfile change touches them.
+
+## 2026-09-07 Snapshot
 
 As of 2026-09-07, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler jina-embed demo-scan-worker` + `docker compose up -d --no-deps --force-recreate` for those seven - two more than every prior deploy's usual five, since `jina-embed` and `demo-scan-worker` each pin `anyio` directly in their own lockfiles and #577's bump touched both), live inspection found:
 
