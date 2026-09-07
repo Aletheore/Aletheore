@@ -22,6 +22,12 @@ Scope, deliberately narrow, matching orm_migrations.py's own restraint:
   walked with a cycle guard, and a superclass that isn't itself one of
   these files' own classes stops the walk rather than guessing whether it
   ultimately reaches ActiveRecord::Base.
+- The class definition itself may be wrapped in one or more `module`
+  blocks (namespaced models, e.g. `module Admin; class User < AR::Base;
+  end; end` - a real, common Rails pattern) - resolution still keys on
+  the class's own short name, same as an unwrapped class, so two
+  namespaced models sharing a short name (`Admin::User` vs `Api::User`)
+  are as best-effort-resolved as two unnamespaced files already were.
 - Only belongs_to/has_one/has_many/has_and_belongs_to_many are read; any
   other method call is ignored.
 - An explicit class_name: option always wins over the naming convention.
@@ -71,22 +77,43 @@ _PLURAL_METHODS = {"has_many", "has_and_belongs_to_many"}
 _MODEL_SUPERCLASSES = {"ActiveRecord::Base", "ApplicationRecord"}
 
 
+def _class_nodes(node):
+    """Every class definition reachable from `node` without crossing into
+    a class/method body, in document order - so a model wrapped in one or
+    more `module` blocks (a common real Rails namespacing pattern, e.g.
+    `module Admin; class User < ApplicationRecord; end; end`) is found
+    alongside top-level ones, a class nested inside another class/method's
+    body is not mistaken for a top-level definition, and an eligible
+    sibling class stays reachable even when an earlier one in the file
+    turns out to lack a name/superclass (see _class_name_and_superclass)."""
+    for child in node.children:
+        if child.type == "class":
+            yield child
+        elif child.type == "module":
+            body = child.child_by_field_name("body")
+            if body is not None:
+                yield from _class_nodes(body)
+
+
 def _class_name_and_superclass(source: bytes) -> tuple[str, str] | None:
-    """(class name, superclass text) for this file's first top-level class,
-    or None if the file has no top-level class definition at all."""
+    """(class name, superclass text) for this file's first class
+    definition that has both - at the top level or nested in one or more
+    `module` blocks - or None if the file has no such class definition at
+    all. An earlier class lacking a name or superclass (e.g. a plain
+    `class Foo; end` before the real model) is skipped in favor of a later
+    sibling, not treated as disqualifying the whole file."""
     try:
         tree = _rb_parser().parse(source)
     except Exception:  # noqa: BLE001 - malformed/truncated source, never a guess
         return None
-    for node in tree.root_node.children:
-        if node.type == "class":
-            name_node = node.child_by_field_name("name")
-            super_node = node.child_by_field_name("superclass")
-            if name_node is None or super_node is None:
-                continue
-            name = _rb_text(name_node, source)
-            superclass = _rb_text(super_node, source).lstrip("<").strip()
-            return name, superclass
+    for node in _class_nodes(tree.root_node):
+        name_node = node.child_by_field_name("name")
+        super_node = node.child_by_field_name("superclass")
+        if name_node is None or super_node is None:
+            continue
+        name = _rb_text(name_node, source)
+        superclass = _rb_text(super_node, source).lstrip("<").strip()
+        return name, superclass
     return None
 
 
