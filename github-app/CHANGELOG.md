@@ -18,6 +18,55 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-07
+
+18 commits since the previous deploy, tagged `github-app-deploy-2026-09-07` (commit `ce5ab60`):
+
+- **`get_installation_token` retries once on a transient transport error** (#574): a real
+  production failure the same day - `run_push_scan_job` (job_id `5931fc3d`, 6 seconds after PR #563
+  merged) hit `httpx.RemoteProtocolError` ("server disconnected without sending a response") against
+  GitHub's own API. Diagnosed live via production logs: the identical call from a different job
+  succeeded under 2.5 minutes later with no special handling, confirming a one-off transient blip,
+  not a code regression. Every caller mints tokens through this one function (queued jobs, webhook
+  handlers, dashboard, admin) - a webhook handler has an implicit safety net (GitHub redelivers on a
+  non-2xx response), a queued job did not, so the blip permanently dropped that job's scan instead of
+  recovering. Now retries once after a 1s delay, scoped to `httpx.TransportError` only.
+- **Slack/Teams webhook platform detection now matches the real hostname, not a substring** (#564):
+  `_detect_platform` matched `"office.com"` (etc.) anywhere in the full webhook URL - a lookalike
+  host (`notoffice.com.evil.example`) or the text appearing in a path/query segment could misroute
+  the payload shape. Flagged by GitHub CodeQL as `py/incomplete-url-substring-sanitization`. Delivery
+  itself was never at risk (`_post_to_webhook` only ever sends to the exact address
+  `validate_and_pin_https_url` resolved and pinned) - this only affected which JSON shape got sent.
+- **AIRview/Docs full-build coverage scales to real repo size** (#562): `MAX_WIKI_FULL_BUILD_CLUSTERS`
+  and `MAX_DOCS_FULL_BUILD_FILES` raised 50->200 with chunked per-cluster persistence (a killed/
+  timed-out job no longer loses already-paid-for LLM work), AIR plan's LLM spend cap raised to $20 to
+  give large real repos room to reach full coverage without excessive 48h catch-up cycles. Designed
+  against real griefing/leakage analysis; an atomicity regression in `wiki_write_lock` introduced
+  during implementation was caught by independent review and fixed before merge.
+- **Flash Review context and spend caps raised** (#563): per-file context cap 80KB->100KB (the old
+  cap had caused repeated real file-skips), Flash plan's spend cap $5->$6, sized together with real
+  cost math and free-tier provider rate limits, not guessed.
+- **GitHub code-scanning triage**: of 29 open alerts, 11 confirmed false positives dismissed with
+  documented reasoning (command-injection, clear-text-logging/storage, cookie-injection,
+  url-redirection, stack-trace-exposure - each verified against source, not assumed), 1 real finding
+  fixed (the Slack/Teams hostname bug above), 15 OpenSSF Scorecard hygiene items left as a lower-
+  priority backlog.
+- **Dependency bumps regrouped after dependabot split two lockstep pairs across separate PRs**
+  (#575): `psycopg`/`psycopg-binary` and `pydantic`/`pydantic-core` each need to move together -
+  dependabot's individual PRs for each half were each uninstallable alone. Regenerated both
+  lockfiles with `pip-compile --upgrade-package` scoped to exactly those four packages. Also merged
+  as separate, real bumps: `rq` 2.11.0->2.12.0, `anyio` 4.14.2->4.15.0, `click` requirement
+  <8.5.0-><8.6.0, `coverage` 7.15.4->7.16.0, `cspell` 10.1.1->10.2.2, `cspell-action` 9.0.1->9.1.0.
+- **README**: direct GitHub App install link added to the top, above the CLI quickstart (#565) -
+  previously only linked to the marketing site, which then linked to the real install URL.
+- **Dependabot**: `lodash`/`flask`/`requests` added to the ignore list (#544) - both had already
+  bumped a deliberately-pinned-vulnerable benchmark-fixture package past the CVE its ground truth
+  exists to test.
+
+No DB migrations in this range. Unlike every prior deploy, this one also rebuilt `jina-embed` and
+`demo-scan-worker` alongside the usual five services - both pin `anyio` directly in their own
+lockfiles, and the `anyio` bump above touched both.
+
 ## 2026-09-06
 
 Largest single deploy batch since 2026-08-27 (second deploy) - 19 commits, tagged

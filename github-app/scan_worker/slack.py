@@ -1,6 +1,7 @@
 import json
 import re
 import urllib.request
+from urllib.parse import urlparse
 
 from aletheore.healthcheck import opener_for
 from app_server.url_validation import validate_and_pin_https_url
@@ -39,6 +40,9 @@ def _post_to_webhook(webhook_url: str, payload: dict) -> None:
         pass
 
 
+_TEAMS_HOSTNAME_SUFFIXES = ("logic.azure.com", "office.com", "teams.microsoft.com")
+
+
 def _detect_platform(webhook_url: str) -> str:
     # Slack incoming webhooks are always hooks.slack.com. Modern Teams
     # webhooks are Power Automate "Workflows" (logic.azure.com); the
@@ -47,8 +51,19 @@ def _detect_platform(webhook_url: str) -> str:
     # still has one working. Anything unrecognized defaults to Slack's
     # plain {"text": ...} shape, since that's the only format this
     # webhook field has ever actually sent.
-    url_lower = webhook_url.lower()
-    if "logic.azure.com" in url_lower or "office.com" in url_lower or "teams.microsoft.com" in url_lower:
+    #
+    # Matched against the URL's actual hostname (and only as an exact
+    # match or a real subdomain, via a "." boundary), not a substring
+    # search over the whole URL - a plain `"office.com" in url_lower`
+    # also matches a lookalike host like "notoffice.com.evil.example" or
+    # a path/query segment that happens to contain the text, misrouting
+    # the payload shape for a webhook that isn't actually Teams (flagged
+    # by CodeQL as py/incomplete-url-substring-sanitization). Delivery
+    # itself was never at risk here - _post_to_webhook only ever sends to
+    # the exact address validate_and_pin_https_url resolved and pinned -
+    # this only picks which JSON shape gets sent.
+    hostname = (urlparse(webhook_url).hostname or "").lower()
+    if any(hostname == suffix or hostname.endswith(f".{suffix}") for suffix in _TEAMS_HOSTNAME_SUFFIXES):
         return "teams"
     return "slack"
 

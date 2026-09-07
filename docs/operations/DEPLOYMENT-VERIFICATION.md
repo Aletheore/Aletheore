@@ -4,8 +4,8 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-06
-**Snapshot Freshness:** CURRENT as of 2026-09-06 - production was redeployed to `master` (commit `cf8d40f`, tagged `github-app-deploy-2026-09-06`) and re-verified live via SSH the same day. Largest single batch since the 2026-08-27 (second deploy) run - 19 commits, two independent workstreams landing together: a full SQL schema-extraction rewrite (`schema_map.py`, sqlglot-based, multi-dialect) plus a new `orm_migrations.py` module (Django/Rails/Alembic-native migration modeling, #539/#540) feeding schema/endpoint-aware context into both Flash Review (`flash_review_schema_context.py`, `flash_review_hunk_scope.py`) and AIRview/Docs export (`airview_scanner_context.py`, #545-#548); and this session's own real-Discourse-driven finding that Rails ActiveRecord associations produce zero import-graph edges, fixed via a new `model_associations.py` module wired into `architecture.build_clusters` (#556). Also in this batch: the ast_pattern batch-isolation gap from the 2026-09-04 audit closed properly (any worker exception now preserves earlier batches' results, plus a real timeout, #552), a real npm scoped-package/dotted-name unused-dependency bug on the same severity class as #529 (#553), a Flash Review `ignored_paths` leak via a second, unfiltered file-listing call (#554), a stale embedding-truncation cap left over from switching the local default to jina (#555), and a Markdown table-rendering bug in Docs export where a literal backtick in a column name broke out of its code span - found by Flash Review's own review of the PR that introduced it (#551). No DB migrations in this range (confirmed via diff against `github-app/migrations/` before deploying, not assumed) - a code-only deploy despite the size. (This doc's snapshot history has gaps at the 2026-08-28 and 2026-08-30 deploys, tagged `github-app-deploy-2026-08-28`/`-08-30` but not separately logged here - see `github-app/CHANGELOG.md` for those.)
+**Last Updated:** 2026-09-07
+**Snapshot Freshness:** CURRENT as of 2026-09-07 - production was redeployed to `master` (commit `ce5ab60`, tagged `github-app-deploy-2026-09-07`) and re-verified live via SSH the same day. 18 commits since the previous deploy tag (`github-app-deploy-2026-09-06`). Two real production/security fixes: `get_installation_token` now retries once on a transient `httpx.TransportError` (#574) - a real production failure the same day (`run_push_scan_job`, job_id `5931fc3d`, diagnosed live via SSH: GitHub's own API dropped the connection with no response, confirmed transient since the identical call from a different job succeeded under 2.5 minutes later with no special handling); and `scan_worker.slack._detect_platform` now matches the webhook URL's real hostname instead of substring-searching the whole URL (#564) - closes a GitHub CodeQL-flagged `py/incomplete-url-substring-sanitization` finding where a lookalike host (`notoffice.com.evil.example`) would misroute the Teams/Slack payload shape. Also in this batch: AIRview/Docs full-build coverage now scales to real repo size (`MAX_WIKI_FULL_BUILD_CLUSTERS`/`MAX_DOCS_FULL_BUILD_FILES` 50->200, chunked per-cluster persistence, AIR plan cap raised to $20, #562); Flash Review's per-file context cap raised 80KB->100KB and its plan cap raised $5->$6 (#563); a full GitHub code-scanning triage (11 confirmed false positives dismissed with documented reasoning, 1 real finding fixed - see #564 above); and six dependency bumps regrouped/fixed after dependabot split two lockstep pairs (`psycopg`/`psycopg-binary`, `pydantic`/`pydantic-core`) across separate, individually-uninstallable PRs (#575 combines them). No DB migrations in this range (confirmed via diff against `github-app/migrations/` before deploying, not assumed) - a code-only deploy. Unlike every prior deploy, this one also rebuilt `jina-embed` and `demo-scan-worker` alongside the usual five - both pin `anyio` directly in their own lockfiles (`requirements-jina-embed.lock.txt`, `requirements-demo-scan-worker.lock.txt`), and #577's bump touched both.
 
 ## Purpose
 
@@ -29,6 +29,42 @@ Before claiming a hardening change is live, verify:
 - Restore drill target database availability.
 
 ## Current Server Snapshot
+
+As of 2026-09-07, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler jina-embed demo-scan-worker` + `docker compose up -d --no-deps --force-recreate` for those seven - two more than every prior deploy's usual five, since `jina-embed` and `demo-scan-worker` each pin `anyio` directly in their own lockfiles and #577's bump touched both), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `ce5ab60`.
+- Working tree: clean aside from the expected untracked `github-app/backups/` directory.
+- 18 commits since the previous deploy tag (`github-app-deploy-2026-09-06`) - see Snapshot
+  Freshness above for the two real fixes (installation-token retry, Slack/Teams hostname
+  detection) and the rest of the batch. Full per-PR writeups in `github-app/CHANGELOG.md`.
+- Confirmed before deploying, not assumed: `git diff --stat` against the previous deploy tag showed
+  no files under `github-app/migrations/` - a code-only deploy.
+- All seven affected services rebuilt (`app-server`, `scan-worker`, `scan-worker-2`,
+  `health-worker`, `scheduler`, `jina-embed`, `demo-scan-worker`) - `demo-sandbox-runner` left
+  untouched (its Dockerfile doesn't install from any of the changed lockfiles).
+- Services running: all seven `Up`, six reporting Docker-healthcheck `healthy` within ~46 seconds of
+  recreation (`demo-scan-worker` has no healthcheck defined, consistent with every prior deploy).
+- No pending migrations - `app-server`'s startup log shows `no pending migrations`.
+- Post-deploy, verified live by executing directly inside the running containers, not by re-reading
+  the repo: inside `scan-worker` - `app_server.github_auth.INSTALLATION_TOKEN_RETRY_DELAY_SECONDS`
+  reads `1.0`; `scan_worker.slack._detect_platform("https://notoffice.com.evil.example/webhook")`
+  correctly returns `"slack"` (the lookalike-domain fix); `app_server.llm_cost.PLAN_CAP_OVERRIDE_USD`
+  reads `{'flash': 6.0, 'air': 20.0}`; `scan_worker.github_api.MAX_CONTEXT_FILE_BYTES` reads
+  `100000`; `scan_worker.jobs.MAX_WIKI_FULL_BUILD_CLUSTERS`/`MAX_DOCS_FULL_BUILD_FILES` both read
+  `200`; `scan_worker.jobs.WIKI_FULL_BUILD_LLM_RESERVE_USD` reads `0.1`. Package versions confirmed
+  via `pip show` inside `app-server`: `psycopg` 3.3.5, `pydantic` 2.13.5, `pydantic-core` 2.46.5,
+  `rq` 2.12.0, `anyio` 4.15.0 - and inside `jina-embed`: `anyio` 4.15.0.
+- Health checks: internal `/healthz` returns `200 {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
+- No errors, tracebacks, or exceptions in any of the seven rebuilt services' logs in the 60 seconds
+  after restart.
+- Not re-verified this pass (out of scope, no relevant Dockerfile/host changes in the diff beyond
+  the lockfile bumps already covered above): Docker socket mount absence, non-root users, CPU/mem
+  limits, backup cron execution, base-image digest pinning, restore-drill target availability, disk
+  space. Each was last directly verified in the 2026-08-10 deploy (restore drill itself upgraded
+  2026-08-24) - re-check if any host-level or Dockerfile change touches them.
+
+## 2026-09-06 Snapshot
 
 As of 2026-09-06, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - same five as every prior deploy; this batch touched both `github-app/app_server`/`github-app/scan_worker` directly and `src/aletheore/*`, which all five images `pip install` as a package), live inspection found:
 
