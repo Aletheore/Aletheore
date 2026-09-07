@@ -241,7 +241,14 @@ def test_embed_texts_shows_setup_instructions_when_ollama_unreachable(
         embed_texts(["chunk one"], ollama_install_confirm_fn=lambda: False)
 
     message = str(exc_info.value)
-    assert "ollama.com" in message
+    # Not "ollama.com" - a bare-domain substring check reads to a static
+    # analyzer (CodeQL flagged this exact pre-existing pattern as
+    # py/incomplete-url-substring-sanitization) as an attempted URL-trust
+    # decision, which is genuinely bypassable there ("evil.com/ollama.com"
+    # also contains it) - irrelevant to what this assertion actually
+    # checks (that the setup-instructions hint text was used), but easy
+    # to avoid entirely by asserting on real instructional text instead.
+    assert "Ollama doesn't appear to be running" in message
     assert f"ollama pull {search_index_module.DEFAULT_EMBEDDING_MODEL}" in message
     assert "ollama serve" in message
 
@@ -334,7 +341,9 @@ def test_embed_texts_falls_through_to_setup_instructions_when_auto_start_fails(
     with pytest.raises(EmbeddingProviderUnavailableError) as exc_info:
         embed_texts(["chunk one"])
 
-    assert "ollama.com" in str(exc_info.value)
+    # Not "ollama.com" - see the identical CodeQL note on the sibling
+    # assertion above.
+    assert "Ollama doesn't appear to be running" in str(exc_info.value)
     # Only the original connection error should ever have been attempted -
     # a failed start must not retry the embeddings call at all.
     assert mock_client.embeddings.create.call_count == 1
