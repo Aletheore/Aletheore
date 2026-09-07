@@ -77,43 +77,44 @@ _PLURAL_METHODS = {"has_many", "has_and_belongs_to_many"}
 _MODEL_SUPERCLASSES = {"ActiveRecord::Base", "ApplicationRecord"}
 
 
-def _first_class_node(node):
-    """The first class definition reachable from `node` without crossing
-    into a class/method body - so a model wrapped in one or more `module`
-    blocks (a common real Rails namespacing pattern, e.g. `module Admin;
-    class User < ApplicationRecord; end; end`) is still found, while a
-    class nested inside another class/method's body is not mistaken for a
-    top-level definition."""
+def _class_nodes(node):
+    """Every class definition reachable from `node` without crossing into
+    a class/method body, in document order - so a model wrapped in one or
+    more `module` blocks (a common real Rails namespacing pattern, e.g.
+    `module Admin; class User < ApplicationRecord; end; end`) is found
+    alongside top-level ones, a class nested inside another class/method's
+    body is not mistaken for a top-level definition, and an eligible
+    sibling class stays reachable even when an earlier one in the file
+    turns out to lack a name/superclass (see _class_name_and_superclass)."""
     for child in node.children:
         if child.type == "class":
-            return child
-        if child.type == "module":
+            yield child
+        elif child.type == "module":
             body = child.child_by_field_name("body")
             if body is not None:
-                found = _first_class_node(body)
-                if found is not None:
-                    return found
-    return None
+                yield from _class_nodes(body)
 
 
 def _class_name_and_superclass(source: bytes) -> tuple[str, str] | None:
     """(class name, superclass text) for this file's first class
-    definition - at the top level or nested in one or more `module`
-    blocks - or None if the file has no such class definition at all."""
+    definition that has both - at the top level or nested in one or more
+    `module` blocks - or None if the file has no such class definition at
+    all. An earlier class lacking a name or superclass (e.g. a plain
+    `class Foo; end` before the real model) is skipped in favor of a later
+    sibling, not treated as disqualifying the whole file."""
     try:
         tree = _rb_parser().parse(source)
     except Exception:  # noqa: BLE001 - malformed/truncated source, never a guess
         return None
-    node = _first_class_node(tree.root_node)
-    if node is None:
-        return None
-    name_node = node.child_by_field_name("name")
-    super_node = node.child_by_field_name("superclass")
-    if name_node is None or super_node is None:
-        return None
-    name = _rb_text(name_node, source)
-    superclass = _rb_text(super_node, source).lstrip("<").strip()
-    return name, superclass
+    for node in _class_nodes(tree.root_node):
+        name_node = node.child_by_field_name("name")
+        super_node = node.child_by_field_name("superclass")
+        if name_node is None or super_node is None:
+            continue
+        name = _rb_text(name_node, source)
+        superclass = _rb_text(super_node, source).lstrip("<").strip()
+        return name, superclass
+    return None
 
 
 def _resolve_model_class_names(model_files: dict[str, bytes]) -> dict[str, str]:

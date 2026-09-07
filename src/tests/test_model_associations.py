@@ -72,6 +72,22 @@ def test_doubly_nested_namespaced_model_is_still_resolved():
     assert edges == [("app/models/post.rb", "app/models/user.rb")]
 
 
+def test_auxiliary_class_before_the_real_model_does_not_hide_it():
+    # A file with a plain class (no superclass) preceding the actual
+    # model class - _class_nodes must keep searching past the first
+    # ineligible class instead of the whole file being treated as "not a
+    # model", the same way the old top-level-only loop already handled a
+    # missing-superclass first class before this module supported module
+    # nesting.
+    files = _files(
+        post="class PostValidator\nend\n\nclass Post < ActiveRecord::Base\n"
+        "  belongs_to :user\nend\n",
+        user="class User < ActiveRecord::Base\nend\n",
+    )
+    edges = rails_model_association_edges(files)
+    assert edges == [("app/models/post.rb", "app/models/user.rb")]
+
+
 def test_polymorphic_belongs_to_is_skipped():
     files = _files(
         bookmark="class Bookmark < ActiveRecord::Base\n"
