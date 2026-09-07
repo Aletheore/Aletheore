@@ -926,18 +926,198 @@ def _ollama_setup_instructions(model: str, base_url: str) -> str:
     )
 
 
+# Real download+install time over an ordinary connection - see
+# OLLAMA_PULL_TIMEOUT_SECONDS' identical reasoning above: generous rather
+# than tight, since failing this just falls back to the same manual
+# instructions as before either feature existed.
+OLLAMA_INSTALL_TIMEOUT_SECONDS = 300
+
+# How long to wait for a freshly-spawned `ollama serve` to actually bind its
+# port and start answering - real-world local startup is sub-second, this is
+# headroom for a slow/loaded machine, not an expected wait.
+OLLAMA_SERVER_START_TIMEOUT_SECONDS = 30
+
+
+def _default_confirm_ollama_install() -> bool:
+    print(
+        "Ollama isn't installed. Aletheore can install it now (via the official "
+        "installer at https://ollama.com/install.sh) to run local, private "
+        "embeddings - nothing leaves this machine."
+    )
+    return input("Install Ollama now? [y/N]: ").strip().lower() == "y"
+
+
+def _try_auto_install_ollama(confirm_fn: Callable[[], bool] | None = None) -> bool:
+    """Ollama isn't on PATH at all - offers to run the real, official
+    installer Ollama's own docs publish for macOS and Linux
+    (https://ollama.com/install.sh), not a guessed command.
+
+    Windows has no equivalent scripted/silent install Ollama documents -
+    confirmed by checking their docs, same "verify, don't guess" discipline
+    already applied to the digest check above - so this returns False there
+    unconditionally, falling through to the existing manual-instructions
+    message instead.
+
+    Requires explicit confirmation before running anything: installing
+    software on someone's machine is not something this does silently, a
+    meaningfully bigger step than the automatic model pull above (which
+    only downloads model weights into Ollama's own existing data
+    directory, not a system-level install). Returns True only if the
+    installer ran successfully AND `ollama` is actually on PATH
+    afterward - never assumed from a clean exit code alone.
+    """
+    if sys.platform not in ("darwin", "linux"):
+        return False
+    if shutil.which("ollama") is not None:
+        return True
+    confirm = confirm_fn if confirm_fn is not None else _default_confirm_ollama_install
+    if not confirm():
+        return False
+
+    print(
+        "aletheore: installing Ollama via the official installer "
+        "(https://ollama.com/install.sh, this only happens once)...",
+        file=sys.stderr,
+    )
+    try:
+        script = httpx.get(
+            "https://ollama.com/install.sh", timeout=30.0, follow_redirects=True
+        )
+        script.raise_for_status()
+    except httpx.HTTPError as exc:
+        print(
+            f"aletheore: could not download Ollama's installer ({type(exc).__name__}); "
+            "continuing without it",
+            file=sys.stderr,
+        )
+        return False
+
+    try:
+        result = subprocess.run(
+            ["sh"],
+            input=script.text,
+            capture_output=True,
+            text=True,
+            timeout=OLLAMA_INSTALL_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(
+            f"aletheore: Ollama install failed ({type(exc).__name__}); continuing without it",
+            file=sys.stderr,
+        )
+        return False
+    if result.returncode != 0:
+        print(f"aletheore: Ollama install failed: {result.stderr.strip()}", file=sys.stderr)
+        return False
+    if shutil.which("ollama") is None:
+        print(
+            "aletheore: Ollama's installer exited cleanly but 'ollama' still isn't on "
+            "PATH - continuing without it",
+            file=sys.stderr,
+        )
+        return False
+    print("aletheore: Ollama installed", file=sys.stderr)
+    return True
+
+
+def _try_auto_start_ollama_server(base_url: str = DEFAULT_EMBEDDING_BASE_URL) -> bool:
+    """Ollama is installed but its server isn't reachable at `base_url` - a
+    normal state (installed but never launched, or a reboot that didn't
+    bring back a manually-started `ollama serve`), not a real failure - so
+    start it in the background instead of telling the user to run a
+    separate command.
+
+    Started detached (`start_new_session=True` on POSIX puts it in its own
+    process group and session, so it is not a child of this process in any
+    way the OS would clean up together) so it outlives this specific
+    command rather than dying when Aletheore exits. This is deliberate:
+    Aletheore never stops a server it starts, here or anywhere else -
+    restarting it for every single command would cost real startup latency
+    on any repo the user indexes/scans more than once, and there's no way
+    to tell "Aletheore started this" apart from "the user was already
+    running it for something else" well enough to ever safely kill it.
+
+    Returns True once the server is confirmed actually responding, False
+    if `ollama` isn't on PATH, spawning failed, or it never came up within
+    OLLAMA_SERVER_START_TIMEOUT_SECONDS - the caller falls back to the
+    same unavailable-provider handling as any other failure.
+    """
+    if shutil.which("ollama") is None:
+        return False
+    print(
+        "aletheore: Ollama is installed but its server isn't running - starting "
+        "'ollama serve' now...",
+        file=sys.stderr,
+    )
+    try:
+        popen_kwargs: dict = {}
+        if sys.platform != "win32":
+            popen_kwargs["start_new_session"] = True
+        subprocess.Popen(
+            ["ollama", "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            **popen_kwargs,
+        )
+    except OSError as exc:
+        print(
+            f"aletheore: could not start 'ollama serve' ({type(exc).__name__}); "
+            "continuing without it",
+            file=sys.stderr,
+        )
+        return False
+
+    # base_url is the OpenAI-compatible path (".../v1"); polled against
+    # Ollama's own native API root instead, matching
+    # _verify_ollama_model_digest's identical reasoning above.
+    native_root = base_url.rstrip("/").removesuffix("/v1")
+    deadline = time.monotonic() + OLLAMA_SERVER_START_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            response = httpx.get(f"{native_root}/api/tags", timeout=2.0)
+            if response.status_code == 200:
+                print("aletheore: Ollama server is up", file=sys.stderr)
+                return True
+        except httpx.HTTPError:
+            pass
+        time.sleep(0.5)
+    print(
+        f"aletheore: 'ollama serve' didn't respond within "
+        f"{OLLAMA_SERVER_START_TIMEOUT_SECONDS}s - continuing without it",
+        file=sys.stderr,
+    )
+    return False
+
+
 def embed_texts(
     texts: list[str],
     base_url: str = DEFAULT_EMBEDDING_BASE_URL,
     model: str = DEFAULT_EMBEDDING_MODEL,
     credentials_path: Path = DEFAULT_CREDENTIALS_PATH,
     confirm_fn: Callable[[], bool] | None = None,
+    ollama_install_confirm_fn: Callable[[], bool] | None = None,
 ) -> list[list[float]]:
     client = OpenAI(base_url=base_url, api_key="not-needed")
     try:
         response = client.embeddings.create(model=model, input=texts)
         return [item.embedding for item in response.data]
     except Exception as ollama_exc:
+        if isinstance(ollama_exc, APIConnectionError):
+            if shutil.which("ollama") is None:
+                _try_auto_install_ollama(ollama_install_confirm_fn)
+            if shutil.which("ollama") is not None and _try_auto_start_ollama_server(base_url):
+                try:
+                    response = client.embeddings.create(model=model, input=texts)
+                    return [item.embedding for item in response.data]
+                except Exception as retry_exc:  # noqa: BLE001
+                    # Replaces the original for every message/chain below,
+                    # same reasoning as the auto-pull retry further down -
+                    # this could now be NotFoundError (server just started
+                    # or installed fresh, model not pulled yet), which
+                    # falls through to that exact handling next.
+                    ollama_exc = retry_exc
+
         if isinstance(ollama_exc, NotFoundError) and _try_auto_pull_ollama_model(model, base_url):
             try:
                 response = client.embeddings.create(model=model, input=texts)
