@@ -77,7 +77,7 @@ dependencies = [
     # correctly, only 8.5.0 doesn't. Real user-facing regression, not just
     # a test artifact: anyone running `aletheore query --help` with an
     # unpinned install got argument descriptions silently dropped.
-    "click<8.5.0",
+    "click<8.6.0",
     # `aletheore watch` only. OS-level file events (FSEvents on macOS,
     # inotify on Linux) rather than polling: measured on this repository,
     # walking and stat-ing the tree costs 841 ms for 644 files, so a
