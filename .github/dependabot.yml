@@ -10,13 +10,32 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # lodash only appears inside benchmarks/*/cases/*/repo/ fixtures -
+      # some pinned to a specific old version on purpose (e.g. a real CVE
+      # ground-truth case), some just testing used/unused-dependency
+      # detection where the version is irrelevant. Neither needs a real
+      # security bump; a bump silently breaks the CVE one.
+      - dependency-name: "lodash"
   - package-ecosystem: "pip"
     directory: "/src"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # Same reasoning as npm's lodash ignore above - flask and requests
+      # only appear inside benchmarks/*/cases/*/repo/ fixtures, some
+      # deliberately pinned to a version with a real, documented CVE.
+      # Harmless here even if neither package is a real /src dependency -
+      # the point is to stop whatever pip scan is reaching into
+      # benchmarks/ from touching them.
+      - dependency-name: "flask"
+      - dependency-name: "requests"
   - package-ecosystem: "pip"
     directory: "/github-app"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "flask"
+      - dependency-name: "requests"
