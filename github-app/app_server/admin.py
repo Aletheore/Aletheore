@@ -25,6 +25,7 @@ from app_server.http_client import get_github_api_client
 from app_server.email_client import send_transactional_email
 from app_server.email_queue import enqueue_transactional_email
 from app_server.email_templates import deletion_otp_email
+from scan_worker.jobs import MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET, rank_endpoints_by_selection
 from scan_worker.pushover import send_pushover_alert
 from app_server.db import (
     DEFAULT_HEALTH_CHECK_TARGET_LIMIT,
@@ -40,6 +41,7 @@ from app_server.db import (
     create_deletion_otp_code,
     delete_session,
     get_docs_repo_commit_settings,
+    get_endpoint_health_selection,
     get_extra_seats,
     get_flash_review_count_this_month,
     get_github_user_email,
@@ -59,6 +61,7 @@ from app_server.db import (
     record_installation_access,
     remove_health_check_target,
     remove_installation_member,
+    replace_endpoint_health_selection,
     revoke_api_token,
     set_docs_repo_commit_enabled,
     set_llm_suggestions_enabled,
@@ -148,6 +151,19 @@ class AddHealthCheckTargetRequest(BaseModel):
     label: str = Field(min_length=1, max_length=100, pattern=_LABEL_PATTERN)
     base_url: str
     latency_threshold_ms: int | None = None
+
+
+class EndpointSelectionEntry(BaseModel):
+    method: str = Field(min_length=1, max_length=16)
+    path: str = Field(min_length=1, max_length=2048)
+
+
+class SetEndpointHealthSelectionRequest(BaseModel):
+    # Bounded well above MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET (only the
+    # first that many, in stable (path, method) order, are ever actually
+    # checked - see jobs._candidate_endpoints) - this just bounds one
+    # request's real size, not how many a customer is allowed to select.
+    selections: list[EndpointSelectionEntry] = Field(max_length=2000)
 
 
 class CreateCliTokenRequest(BaseModel):
@@ -1041,6 +1057,106 @@ async def remove_health_check_target_route(org: str, repo: str, target_id: int, 
         {"repo_full_name": f"{org}/{repo}", "target_id": target_id},
     )
     return {"ok": True}
+
+
+def _monitored_endpoint_keys(
+    api_endpoints: list[dict], selected_keys: set[tuple[str, str]]
+) -> set[tuple[str, str]]:
+    """Exactly which (method, path) keys the next real sweep will check.
+
+    Calls scan_worker.jobs.rank_endpoints_by_selection directly rather
+    than reimplementing the ranking here - an earlier version of this
+    function duplicated that logic (candidate-then-cap) as its own
+    parallel copy, real drift risk found via self-review even though the
+    two happened to agree at the time: this dashboard's whole point is to
+    show real, not assumed, coverage, so "the same logic, trust me" is
+    exactly the gap a shared function closes structurally instead of by
+    convention.
+    """
+    candidates = rank_endpoints_by_selection(api_endpoints, selected_keys)
+    return {
+        (e.get("method"), e.get("path"))
+        for e in candidates[:MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET]
+    }
+
+
+@admin_router.get("/admin/{org}/{repo}/health-endpoints")
+async def list_health_check_endpoints_route(org: str, repo: str, request: Request):
+    """Every API endpoint this repo's last scan found, with which ones are
+    actually being health-checked right now and why - lets a customer see
+    real coverage and, once a repo has more endpoints than
+    MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET, choose exactly which ones
+    matter to them instead of Aletheore silently picking for them (see
+    migration 060's own comment)."""
+    installation = await _require_admin_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    installation_id = installation["installation_id"]
+    repo_full_name = f"{org}/{repo}"
+
+    evidence = await get_latest_evidence(pool, installation_id, repo_full_name)
+    api_endpoints = (
+        (evidence or {}).get("repository", {}).get("api_endpoints", {}).get("endpoints", [])
+    )
+    selection_rows = await get_endpoint_health_selection(pool, installation_id, repo_full_name)
+    selected_keys = {(row["endpoint_method"], row["endpoint_path"]) for row in selection_rows}
+    # candidates is the real "eligible to be monitored" set BEFORE the cap -
+    # every endpoint in auto mode, or exactly the still-real selected ones
+    # in manual mode (see rank_endpoints_by_selection). Real bug found via
+    # self-review: the frontend's "still capped" caveat on the manual-mode
+    # message used to compare total_endpoint_count (the whole repo) against
+    # the cap, which is wrong in manual mode - a repo with 200 endpoints
+    # where a customer explicitly selected 5 would misleadingly claim their
+    # 5-endpoint selection was "still capped at 64", even though nothing of
+    # theirs was cut off. candidate_count lets the frontend ask the right
+    # question: was THIS candidate set (not the whole repo) larger than the
+    # cap.
+    candidates = rank_endpoints_by_selection(api_endpoints, selected_keys)
+    monitored_keys = {
+        (e.get("method"), e.get("path"))
+        for e in candidates[:MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET]
+    }
+
+    endpoints = [
+        {
+            "method": e.get("method"),
+            "path": e.get("path"),
+            "file": e.get("file"),
+            "line": e.get("line"),
+            "monitored": (e.get("method"), e.get("path")) in monitored_keys,
+        }
+        for e in api_endpoints
+    ]
+    return {
+        "endpoints": endpoints,
+        "mode": "manual" if selected_keys else "auto",
+        "cap": MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET,
+        "total_endpoint_count": len(api_endpoints),
+        "candidate_count": len(candidates),
+        "monitored_endpoint_count": len(monitored_keys),
+    }
+
+
+@admin_router.put("/admin/{org}/{repo}/health-endpoints")
+async def set_health_check_endpoints_route(
+    org: str, repo: str, request: Request, body: SetEndpointHealthSelectionRequest
+):
+    """Replaces this repo's entire endpoint selection in one call - see
+    replace_endpoint_health_selection's own docstring for why a bulk
+    replace, not per-endpoint toggle calls. An empty `selections` list
+    resets the repo back to the default first-N-in-scan-order behavior."""
+    installation = await _require_admin_installation(request, org, repo)
+    pool = request.app.state.db_pool
+    installation_id = installation["installation_id"]
+    repo_full_name = f"{org}/{repo}"
+
+    selections = [(entry.method, entry.path) for entry in body.selections]
+    await replace_endpoint_health_selection(pool, installation_id, repo_full_name, selections)
+    session = await get_current_session(request)
+    await record_admin_action(
+        pool, installation_id, session["github_login"], "endpoint_health_selection_changed",
+        {"repo_full_name": repo_full_name, "selected_count": len(selections)},
+    )
+    return {"ok": True, "selected_count": len(selections)}
 
 
 @admin_router.put("/admin/{org}/{repo}/llm-suggestions")

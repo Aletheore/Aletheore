@@ -1077,6 +1077,59 @@ async def count_health_check_targets(pool: asyncpg.Pool, installation_id: int, r
     return row["n"]
 
 
+# A repo with more real API endpoints than jobs.MAX_HEALTH_CHECK_ENDPOINTS_
+# PER_TARGET has some that are never health-checked by default (whichever
+# happen to be first in scan order) - this table is how a customer chooses
+# WHICH ones instead. Presence of a row is the whole signal (see migration
+# 060's own comment): no rows for a repo means "no explicit preference yet,
+# use the default first-N", any rows at all means "monitor exactly these".
+async def get_endpoint_health_selection(
+    pool: asyncpg.Pool, installation_id: int, repo_full_name: str
+) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT endpoint_method, endpoint_path
+        FROM endpoint_health_selection
+        WHERE installation_id = $1 AND repo_full_name = $2
+        """,
+        installation_id,
+        repo_full_name,
+    )
+    return [dict(row) for row in rows]
+
+
+async def replace_endpoint_health_selection(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    repo_full_name: str,
+    selections: list[tuple[str, str]],
+) -> None:
+    """Atomically replaces the entire selection set for one repo - the
+    natural shape for a "check the boxes you want, hit Save" UI, not N
+    separate toggle calls that could interleave with a concurrent save.
+    An empty `selections` list is how a customer resets a repo back to the
+    default first-N behavior (deletes every row, same as never having
+    selected anything).
+    """
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "DELETE FROM endpoint_health_selection WHERE installation_id = $1 AND repo_full_name = $2",
+                installation_id,
+                repo_full_name,
+            )
+            if selections:
+                await conn.executemany(
+                    """
+                    INSERT INTO endpoint_health_selection
+                        (installation_id, repo_full_name, endpoint_method, endpoint_path)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (installation_id, repo_full_name, endpoint_method, endpoint_path) DO NOTHING
+                    """,
+                    [(installation_id, repo_full_name, method, path) for method, path in selections],
+                )
+
+
 def _version_gated_evidence(
     installation_id: int, repo_full_name: str, raw: object
 ) -> dict | None:

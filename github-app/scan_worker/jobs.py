@@ -70,6 +70,7 @@ from scan_worker.db import (
     get_flash_review_finding_comments,
     managed_audit_definitely_still_cooling_down,
     get_docs_repo_commit_settings,
+    get_endpoint_health_selection,
     get_endpoint_health_summary,
     get_extra_seats,
     get_flash_review_count_this_month,
@@ -216,6 +217,18 @@ HEALTH_CHECK_DOWN_RETRY_DELAY_SECONDS = 2.0
 # reachability notification itself) still fire every time, only the LLM
 # call is throttled.
 HEALTH_FIX_SUGGESTION_COOLDOWN_SECONDS = 1800
+# Bounds one target's real HTTP-checking time within a single
+# HEALTH_SWEEP_SOFT_DEADLINE_SECONDS tick, and - since run_health_check_
+# sweep_job iterates every paying installation's every target serially in
+# one process - bounds how much of that shared budget one repo with an
+# unusually large API surface can consume at every OTHER customer's
+# expense. Originally applied blindly to whichever endpoints happened to
+# be first in the scan's own (arbitrary) evidence order, with no way for
+# a customer to choose otherwise and no visibility that some endpoints
+# were never checked at all - see _candidate_endpoints and migration 060
+# (endpoint_health_selection): a customer can now explicitly choose which
+# endpoints matter to them once a repo has more than this many, instead
+# of Aletheore silently picking for them.
 MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET = 64
 HEALTH_SWEEP_SOFT_DEADLINE_SECONDS = 540
 HEALTH_SWEEP_ROTATION_KEY = "health_sweep:target_rotation"
@@ -2421,15 +2434,65 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
             )
 
 
-def _endpoint_results(evidence: dict, base_url: str, pinned_ip: str) -> list[dict]:
+def rank_endpoints_by_selection(
+    endpoints: list[dict], selected_keys: set[tuple[str, str]]
+) -> list[dict]:
+    """Which endpoints from a scan's real, full list are candidates for
+    health-checking, and in what order - pure ranking, no I/O and no
+    MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET cap (each caller applies that
+    slice itself, since _endpoint_results also needs the pre-cap count for
+    its own "more than N found" log line).
+
+    Not private (no leading underscore), and deliberately the ONLY place
+    this ranking is computed: app_server.admin's health-endpoints route
+    needs the identical answer to show a customer real, not assumed,
+    monitoring coverage - two independently-written copies of this logic
+    (one here, one in admin.py) would be exactly the kind of sibling
+    implementation that silently drifts apart the first time only one of
+    them gets updated. _candidate_endpoints below is this function's only
+    caller in this file; admin.py imports and calls this one directly.
+
+    No selected_keys: every endpoint is a candidate, in scan order. Any
+    selected_keys at all: ONLY the selected endpoints are candidates,
+    sorted by (path, method) for a stable, predictable order when a
+    customer selects more than the cap allows - "which ones win" must
+    never depend on evidence's own arbitrary scan order once a customer
+    has made an explicit choice. A selected (method, path) that no longer
+    exists in this scan's evidence (the route was renamed or removed in
+    code) is silently absent from the candidates - selection rows are
+    additive intent, not a promise that a now-stale selection survives
+    forever; a coverage count built from this function's real output
+    already reflects that, not the raw stored selection size.
+    """
+    if not selected_keys:
+        return endpoints
+    candidates = [e for e in endpoints if (e.get("method"), e.get("path")) in selected_keys]
+    return sorted(candidates, key=lambda e: (e.get("path") or "", e.get("method") or ""))
+
+
+def _candidate_endpoints(dsn: str, installation_id: int, repo_full_name: str, endpoints: list[dict]) -> list[dict]:
+    """This scan's real endpoints, ranked by rank_endpoints_by_selection
+    against whatever this repo's stored selection (if any) says - see that
+    function's own docstring for the full reasoning. This wrapper is only
+    what differs between the real sweep and admin.py's read route: fetching
+    the selection itself, which the sweep does synchronously against dsn
+    and admin.py does asynchronously against its own pool beforehand."""
+    selection = get_endpoint_health_selection(dsn, installation_id, repo_full_name)
+    return rank_endpoints_by_selection(endpoints, selection)
+
+
+def _endpoint_results(
+    dsn: str, installation_id: int, repo_full_name: str, evidence: dict, base_url: str, pinned_ip: str
+) -> list[dict]:
     endpoints = evidence.get("repository", {}).get("api_endpoints", {}).get("endpoints", [])
     if not endpoints:
         return []
-    checked_endpoints = endpoints[:MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET]
-    if len(endpoints) > len(checked_endpoints):
+    candidates = _candidate_endpoints(dsn, installation_id, repo_full_name, endpoints)
+    checked_endpoints = candidates[:MAX_HEALTH_CHECK_ENDPOINTS_PER_TARGET]
+    if len(candidates) > len(checked_endpoints):
         logging.getLogger("scan_worker.jobs").warning(
-            "health check target has %s endpoints; checking first %s this sweep",
-            len(endpoints),
+            "health check target has %s monitorable endpoints; checking first %s this sweep",
+            len(candidates),
             len(checked_endpoints),
         )
     results = run_healthcheck(checked_endpoints, base_url, pinned_ip=pinned_ip).get("results", [])
@@ -2984,7 +3047,7 @@ def _run_health_check_sweep_for_target(
     if evidence is None:
         return
 
-    for entry in _endpoint_results(evidence, base_url, pinned_ip):
+    for entry in _endpoint_results(dsn, installation_id, repo_full_name, evidence, base_url, pinned_ip):
         if entry.get("skipped"):
             continue
         method = entry["method"]
