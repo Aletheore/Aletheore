@@ -510,7 +510,15 @@ _PY_FROM_IMPORT_RE = re.compile(r"^\s*from\s+([A-Za-z_][\w.]*)\s+import\b", re.M
 # (`import('chart.js')` / `lazy(() => import('some-pkg'))` - common for
 # code-splitting/lazy-loaded libraries). A package imported only one of
 # these two ways was reported as an unused dependency every time.
-_JS_IMPORT_RE = re.compile(r"""(?:from|require\(|import\s*\()\s*['"]([^'"]+)['"]""")
+# `require.resolve('pkg')` (real, common for webpack aliasing and worker
+# entry points, e.g. `new Worker(require.resolve('./worker'))`) has the
+# same gap: `require\(` only matches the literal substring "require(",
+# which never appears in "require.resolve(" - confirmed via a real
+# false-positive repro (a package imported only this way was always
+# flagged unused). require\(?:\.resolve)?\( covers both.
+_JS_IMPORT_RE = re.compile(
+    r"""(?:from|require(?:\.resolve)?\(|import\s*\()\s*['"]([^'"]+)['"]"""
+)
 _JS_SIDE_EFFECT_IMPORT_RE = re.compile(r"""^\s*import\s*['"]([^'"]+)['"]""", re.MULTILINE)
 
 
