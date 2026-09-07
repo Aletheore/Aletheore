@@ -31,6 +31,30 @@ from collections import Counter
 MAX_NAMED_LICENSE_FINDINGS = 12
 NON_PERMISSIVE_LICENSE_CATEGORIES = {"copyleft", "proprietary", "unknown"}
 
+# Real gap found via audit: every OTHER section below was building an
+# unbounded list (all tables, all relations, all endpoints, all
+# vulnerability findings, all dead-code entries, all env var names) despite
+# this module's own docstring above promising "compact... since this rides
+# on every single generation call in a build, not just one" - only the
+# license section actually enforced that. A real large repo (500 tables,
+# 300 endpoints, 200 env vars - not an extreme case for a big monorepo)
+# measured directly at ~155KB of JSON attached to EVERY generation call in
+# a full build, not once. Capped the same way licenses already are, on a
+# deterministic (sorted, not dict-iteration-order-dependent) prefix so the
+# same evidence always produces the same truncated set rather than an
+# arbitrary one. `database_schema` and `dead_code` are dicts already, so
+# their real total counts are kept alongside the capped list (a truncated
+# section should read as "50 of 500", not as if the repo only had 50
+# tables); `api_endpoints`/`dependency_vulnerabilities`/
+# `environment_variables` stay bare lists at the top level to preserve
+# their existing shape for callers, capped without an accompanying count.
+MAX_SCHEMA_TABLES = 50
+MAX_SCHEMA_RELATIONS = 50
+MAX_ENDPOINTS = 50
+MAX_VULNERABILITY_FINDINGS = 30
+MAX_DEAD_CODE_ENTRIES = 30
+MAX_ENV_VARS = 50
+
 
 def build_repo_context(evidence: dict) -> dict:
     repository = evidence.get("repository", {})
@@ -56,49 +80,66 @@ def build_repo_context(evidence: dict) -> dict:
 def _schema_context(schema: dict) -> dict | None:
     if not schema.get("checked"):
         return None
-    tables = [
-        {
-            "name": t["name"], "columns": [c["name"] for c in t.get("columns", [])],
-            "file": t.get("file"), "line": t.get("line"),
-        }
-        for t in schema.get("tables", [])
-    ]
-    relations = [
-        {
-            "from_table": r["from_table"], "from_column": r["from_column"],
-            "to_table": r["to_table"], "to_column": r["to_column"],
-            "file": r.get("file"), "line": r.get("line"),
-        }
-        for r in schema.get("relations", [])
-    ]
+    tables = sorted(
+        (
+            {
+                "name": t["name"], "columns": [c["name"] for c in t.get("columns", [])],
+                "file": t.get("file"), "line": t.get("line"),
+            }
+            for t in schema.get("tables", [])
+        ),
+        key=lambda t: t["name"],
+    )
+    relations = sorted(
+        (
+            {
+                "from_table": r["from_table"], "from_column": r["from_column"],
+                "to_table": r["to_table"], "to_column": r["to_column"],
+                "file": r.get("file"), "line": r.get("line"),
+            }
+            for r in schema.get("relations", [])
+        ),
+        key=lambda r: (r["from_table"], r["from_column"], r["to_table"], r["to_column"]),
+    )
     if not tables:
         return None
-    return {"tables": tables, "relations": relations}
+    result = {"tables": tables[:MAX_SCHEMA_TABLES], "relations": relations[:MAX_SCHEMA_RELATIONS]}
+    if len(tables) > MAX_SCHEMA_TABLES:
+        result["tables_total_count"] = len(tables)
+    if len(relations) > MAX_SCHEMA_RELATIONS:
+        result["relations_total_count"] = len(relations)
+    return result
 
 
 def _endpoints_context(api_endpoints: dict) -> list[dict] | None:
     if not api_endpoints.get("checked"):
         return None
-    endpoints = [
-        {
-            "method": e["method"], "path": e["path"],
-            "file": e.get("file"), "line": e.get("line"), "handler": e.get("handler"),
-        }
-        for e in api_endpoints.get("endpoints", [])
-        if not e.get("unresolved")
-    ]
-    return endpoints or None
+    endpoints = sorted(
+        (
+            {
+                "method": e["method"], "path": e["path"],
+                "file": e.get("file"), "line": e.get("line"), "handler": e.get("handler"),
+            }
+            for e in api_endpoints.get("endpoints", [])
+            if not e.get("unresolved")
+        ),
+        key=lambda e: (e["path"] or "", e["method"] or ""),
+    )
+    return endpoints[:MAX_ENDPOINTS] or None
 
 
 def _vulnerabilities_context(vulns: dict) -> list[dict] | None:
     if not vulns.get("checked"):
         return None
-    findings = [
-        {"package": f["package"], "ecosystem": f["ecosystem"], "advisory_id": f.get("advisory_id"),
-         "summary": f.get("summary")}
-        for f in vulns.get("findings", [])
-    ]
-    return findings or None
+    findings = sorted(
+        (
+            {"package": f["package"], "ecosystem": f["ecosystem"], "advisory_id": f.get("advisory_id"),
+             "summary": f.get("summary")}
+            for f in vulns.get("findings", [])
+        ),
+        key=lambda f: (f["package"], f["ecosystem"]),
+    )
+    return findings[:MAX_VULNERABILITY_FINDINGS] or None
 
 
 def _licenses_context(licenses: dict) -> dict | None:
@@ -121,14 +162,21 @@ def _licenses_context(licenses: dict) -> dict | None:
 
 
 def _dead_code_context(dead_code: dict) -> dict | None:
-    unreachable = dead_code.get("unreachable_modules", [])
-    unused_deps = dead_code.get("unused_dependencies", [])
+    unreachable = sorted(
+        (m.get("path", m) if isinstance(m, dict) else m for m in dead_code.get("unreachable_modules", [])),
+    )
+    unused_deps = sorted(dead_code.get("unused_dependencies", []))
     if not unreachable and not unused_deps:
         return None
-    return {
-        "unreachable_modules": [m.get("path", m) if isinstance(m, dict) else m for m in unreachable],
-        "unused_dependencies": unused_deps,
+    result = {
+        "unreachable_modules": unreachable[:MAX_DEAD_CODE_ENTRIES],
+        "unused_dependencies": unused_deps[:MAX_DEAD_CODE_ENTRIES],
     }
+    if len(unreachable) > MAX_DEAD_CODE_ENTRIES:
+        result["unreachable_modules_total_count"] = len(unreachable)
+    if len(unused_deps) > MAX_DEAD_CODE_ENTRIES:
+        result["unused_dependencies_total_count"] = len(unused_deps)
+    return result
 
 
 def _infrastructure_context(infrastructure: dict) -> dict | None:
@@ -152,4 +200,4 @@ def _infrastructure_context(infrastructure: dict) -> dict | None:
 
 def _env_vars_context(env_vars: dict) -> list[str] | None:
     names = sorted({e["name"] for e in env_vars.get("declared", []) if e.get("name")})
-    return names or None
+    return names[:MAX_ENV_VARS] or None
