@@ -513,6 +513,32 @@ def test_raw_external_import_roots_finds_side_effect_and_dynamic_js_imports(tmp_
     assert "chart.js" in roots
 
 
+def test_raw_external_import_roots_finds_require_resolve(tmp_path):
+    # Real bug found via audit: `require\(` only matches the literal
+    # substring "require(", which never appears in "require.resolve(" -
+    # a real, common shape for webpack aliasing and worker entry points
+    # (e.g. `new Worker(require.resolve('./worker'))`). A package imported
+    # only this way was always reported as unused.
+    (tmp_path / "index.js").write_text(
+        "const p = require.resolve('lodash');\n"
+        "const w = require.resolve( 'worker-farm' );\n"
+    )
+    modules = [{"path": "index.js", "imports": [], "imported_by": []}]
+    roots = _raw_external_import_roots(tmp_path, modules)
+    assert "lodash" in roots
+    assert "worker_farm" in roots
+
+
+def test_unused_dependency_check_recognizes_a_package_used_only_via_require_resolve(tmp_path):
+    # End-to-end through find_dead_code, the actual entry point customers
+    # see findings from - not just the regex-level check above.
+    (tmp_path / "package.json").write_text('{"dependencies": {"lodash": "^4.17.21"}}')
+    (tmp_path / "index.js").write_text("const p = require.resolve('lodash');\n")
+    modules = [{"path": "index.js", "imports": [], "imported_by": []}]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unused_dependencies"] == []
+
+
 def test_raw_external_import_roots_resolves_scoped_npm_packages_to_scope_and_name(tmp_path):
     # Real bug found via audit: _import_root split on the first "/" for
     # every import, truncating a scoped npm package (`@scope/name`) down
