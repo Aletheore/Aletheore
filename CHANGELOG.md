@@ -3,6 +3,23 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.13 — 2026-09-07
+
+- **`aletheore index` no longer requires Ollama to be pre-installed and running for local
+  embeddings.** Previously, local embedding setup meant manually installing Ollama, starting its
+  server, and pulling the model before indexing would work at all - only the "server reachable but
+  model not pulled" case was already automatic. Two new gaps closed in `search_index.py`'s existing
+  exception-recovery chain: if the `ollama` binary isn't on `PATH`, an explicit y/N prompt offers to
+  run Ollama's own official installer (nothing is installed silently); if the binary is present but
+  the server isn't reachable, it's started detached so it outlives the current command (never
+  auto-stopped - restarting it on every command would cost real latency on a repeatedly-indexed
+  repo). Both chain straight into the existing auto-pull-model path if that's also needed. Windows
+  uses the correct process-detachment flags (`CREATE_NEW_PROCESS_GROUP`/`CREATE_NO_WINDOW`) rather
+  than the POSIX-only mechanism the initial pass used. Never runs against a remote `base_url` - a
+  new loopback check gates the whole recovery path, so an unreachable remote Ollama falls straight
+  through to the existing setup instructions instead of spawning a useless local server.
+- Loosened the `click` dependency requirement from `<8.5.0` to `<8.6.0`.
+
 ## 0.9.12 — 2026-09-06
 
 - **Real database schema extraction, on every plan.** `schema_map.py` was rewritten on top of
