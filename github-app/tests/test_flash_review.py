@@ -3268,7 +3268,9 @@ def test_review_diff_rechecks_a_cache_hit_finding_with_no_quotable_content(mock_
     # re-validation against the *current* diff, even though a cache hit
     # means this diff is merely similar to, not identical to, whatever was
     # originally reviewed. This must get a real recheck instead of being
-    # trusted forever.
+    # trusted forever. verify_with_second_model=True: this recheck is
+    # AIR-tier only (see the gating test below) - jobs.py only ever passes
+    # True here for installations on the "air" plan.
     mock_verifier = MagicMock()
     mock_verifier.is_available.return_value = True
     mock_verifier.simple_completion.return_value = '{"verdict": "ACCEPT", "reason": "still there"}'
@@ -3277,10 +3279,40 @@ def test_review_diff_rechecks_a_cache_hit_finding_with_no_quotable_content(mock_
     diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
     cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding, no quoted literal"}]
 
-    findings = review_diff(diff_text, cache_lookup=lambda diff: cached_findings)
+    findings = review_diff(
+        diff_text, cache_lookup=lambda diff: cached_findings, verify_with_second_model=True
+    )
 
     assert findings == [{**cached_findings[0], "source": "llm"}]
     mock_verifier.simple_completion.assert_called_once()
+
+
+@patch("scan_worker.model_tiers.verification_adapter")
+def test_review_diff_does_not_recheck_a_cache_hit_finding_on_a_non_air_plan(mock_verification_adapter):
+    # Real bug found via audit: an earlier version of this recheck ran
+    # unconditionally on every cache hit, regardless of verify_with_second_
+    # model - silently giving Flash/free-tier installations the AIR-only
+    # DeepSeek verification call jobs.py deliberately gates
+    # (verify_with_second_model=(installation["plan"] == "air"), whose own
+    # _on_verification_usage comment says "Never called for free tier...
+    # gated to paid plans"). That both broke the tier boundary and spent
+    # real DeepSeek tokens the Flash spend cap's own sizing explicitly
+    # assumes never happens ("no dual-agent verification" - see
+    # llm_cost.py's PLAN_CAP_OVERRIDE_USD comment).
+    mock_verifier = MagicMock()
+    mock_verifier.is_available.return_value = True
+    mock_verifier.simple_completion.return_value = '{"verdict": "REJECT", "reason": "already fixed"}'
+    mock_verification_adapter.return_value = mock_verifier
+
+    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
+    cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding, no quoted literal"}]
+
+    findings = review_diff(
+        diff_text, cache_lookup=lambda diff: cached_findings, verify_with_second_model=False
+    )
+
+    assert findings == [{**cached_findings[0], "source": "llm"}]
+    mock_verifier.simple_completion.assert_not_called()
 
 
 @patch("scan_worker.model_tiers.verification_adapter")
@@ -3299,7 +3331,9 @@ def test_review_diff_drops_a_cache_hit_finding_the_recheck_rejects(mock_verifica
     diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+f = open('x')"
     cached_findings = [{"file": "app.py", "line": 42, "issue": "cached finding, no quoted literal"}]
 
-    findings = review_diff(diff_text, cache_lookup=lambda diff: cached_findings)
+    findings = review_diff(
+        diff_text, cache_lookup=lambda diff: cached_findings, verify_with_second_model=True
+    )
 
     assert findings == []
 
@@ -3326,6 +3360,7 @@ def test_review_diff_cache_hit_recheck_prices_as_verification_not_generation(moc
         cache_lookup=lambda diff: cached_findings,
         on_usage=generation_usage,
         on_verification_usage=verification_usage,
+        verify_with_second_model=True,
     )
 
     mock_verification_adapter.assert_called_once_with(on_usage=verification_usage)
