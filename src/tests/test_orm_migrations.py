@@ -343,6 +343,34 @@ class Migration(migrations.Migration):
     assert "AddConstraint" in events[0]["statement"]
 
 
+def test_django_catch_all_uses_the_real_receiver_not_a_hardcoded_migrations_prefix(tmp_path):
+    # Real bug found via audit: the catch-all's statement text hardcoded
+    # `migrations.{op_name}(...)` regardless of the call's actual receiver.
+    # A custom Operation subclass imported under its own module alias -
+    # common for django.contrib.postgres.operations (AddIndexConcurrently
+    # etc.) and hand-rolled Operation subclasses - got an invented
+    # `migrations.` prefix in a statement that's supposed to be a real,
+    # grounded citation of what the migration file actually says.
+    repo = write_files(
+        tmp_path,
+        {
+            "blog/migrations/0003_concurrent_index.py": """
+from django.db import migrations
+import myapp.custom_ops as custom
+
+class Migration(migrations.Migration):
+    operations = [
+        custom.AddIndexConcurrently(model_name='post', index=None),
+    ]
+"""
+        },
+    )
+    events, _ = extract_django_migrations(repo, ["blog/migrations"])
+    assert len(events) == 1
+    assert events[0]["kind"] == "unsupported"
+    assert events[0]["statement"] == "custom.AddIndexConcurrently(...) not modeled"
+
+
 def test_non_django_migrations_directory_is_ignored(tmp_path):
     """A `migrations/` directory that isn't Django (no django import, no
     Migration class) must not be mis-parsed."""
