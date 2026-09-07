@@ -48,6 +48,46 @@ def test_through_association_is_skipped():
     assert edges == []
 
 
+def test_namespaced_model_wrapped_in_module_is_still_resolved():
+    # Real, common Rails pattern this module previously missed entirely:
+    # _class_name_and_superclass only checked tree.root_node.children, so
+    # a class nested inside `module Admin; ...; end` was invisible - the
+    # file was silently treated as not a model at all, producing zero
+    # edges in either direction (as source or as target).
+    files = _files(
+        post="module Admin\n  class Post < ActiveRecord::Base\n    belongs_to :user\n  end\nend\n",
+        user="module Admin\n  class User < ActiveRecord::Base\n  end\nend\n",
+    )
+    edges = rails_model_association_edges(files)
+    assert edges == [("app/models/post.rb", "app/models/user.rb")]
+
+
+def test_doubly_nested_namespaced_model_is_still_resolved():
+    files = _files(
+        post="module Api\n  module V1\n    class Post < ApplicationRecord\n"
+        "      belongs_to :user\n    end\n  end\nend\n",
+        user="class User < ApplicationRecord\nend\n",
+    )
+    edges = rails_model_association_edges(files)
+    assert edges == [("app/models/post.rb", "app/models/user.rb")]
+
+
+def test_auxiliary_class_before_the_real_model_does_not_hide_it():
+    # A file with a plain class (no superclass) preceding the actual
+    # model class - _class_nodes must keep searching past the first
+    # ineligible class instead of the whole file being treated as "not a
+    # model", the same way the old top-level-only loop already handled a
+    # missing-superclass first class before this module supported module
+    # nesting.
+    files = _files(
+        post="class PostValidator\nend\n\nclass Post < ActiveRecord::Base\n"
+        "  belongs_to :user\nend\n",
+        user="class User < ActiveRecord::Base\nend\n",
+    )
+    edges = rails_model_association_edges(files)
+    assert edges == [("app/models/post.rb", "app/models/user.rb")]
+
+
 def test_polymorphic_belongs_to_is_skipped():
     files = _files(
         bookmark="class Bookmark < ActiveRecord::Base\n"
