@@ -402,6 +402,52 @@ def test_find_secrets_detects_dotted_attribute_credential_assignment(tmp_path):
     assert sum(f["pattern"] == "generic_credential_assignment" for f in findings) == 2
 
 
+def test_find_secrets_detects_token_and_secret_key_keywords(tmp_path):
+    # Real bug found via audit: TOKEN wasn't in the keyword alternation at
+    # all, so AUTH_TOKEN=/ACCESS_TOKEN=/API_TOKEN=/bare TOKEN= were all
+    # silently invisible unless the value itself happened to match a
+    # format-specific pattern (gh*_/xox*-), which an arbitrary opaque
+    # token never will. SECRET_KEY= was invisible too, for a subtler
+    # reason: "SECRET" is in the keyword list, but SECRET_KEY= has "_KEY="
+    # right after "SECRET", not the separator, so the existing "SECRET"
+    # alternative never matched at that position - SECRET_KEY is Django's
+    # and Flask's own settings variable name, not a hypothetical shape.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "settings.py").write_text(
+        "SECRET_KEY = 'django-insecure-abc123def456ghi789jkl012mno345pqr'\n"
+        "AUTH_TOKEN = 'abc123def456ghi789jkl012mno345pqrstuvwx'\n"
+        "ACCESS_TOKEN = 'abc123def456ghi789jkl012mno345pqrstuvwx'\n"
+        "TOKEN = 'abc123def456ghi789jkl012mno345pqrstuvwx'\n"
+    )
+
+    findings = find_secrets(repo)["findings"]
+
+    assert sum(f["pattern"] == "generic_credential_assignment" for f in findings) == 4
+
+
+def test_find_secrets_does_not_flag_a_bare_key_or_token_as_a_field_name(tmp_path):
+    # A bare "KEY" keyword was deliberately not added alongside TOKEN/
+    # SECRET_KEY above: PUBLIC_KEY="ssh-rsa ..." is a real, common shape
+    # that is genuinely NOT a secret (public keys are meant to be public),
+    # and would false-positive under a bare KEY keyword. Separately,
+    # "TOKEN" only matches when it's immediately followed by the
+    # keyword/separator boundary - a field NAME like
+    # CSRF_TOKEN_FIELD_NAME= (TOKEN followed by "_FIELD_NAME", not "=")
+    # must not match either.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "settings.py").write_text(
+        "PUBLIC_KEY = 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC'\n"
+        "CSRF_TOKEN_FIELD_NAME = 'csrfmiddlewaretoken1234567890'\n"
+        "MAX_TOKEN_LENGTH = 4096\n"
+    )
+
+    findings = find_secrets(repo)["findings"]
+
+    assert findings == []
+
+
 def test_find_secrets_detects_quoted_key_credential_assignment(tmp_path):
     # Regression: neither the left-boundary class nor the post-keyword gap
     # before ':'/'=' accounted for the keyword's own closing quote, and the
