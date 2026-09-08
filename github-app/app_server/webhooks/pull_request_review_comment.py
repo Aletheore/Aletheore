@@ -10,6 +10,27 @@ logger = logging.getLogger(__name__)
 
 DISMISS_COMMAND = "/dismiss"
 
+
+def _matches_command(line: str, command: str) -> bool:
+    """True if `line` (already stripped) IS `command`, or starts with
+    `command` followed by whitespace - not a bare string-prefix check.
+
+    Real bug this closes: `line.startswith(command)` also matches an
+    ordinary English word sharing the same stem - "/dismissed this
+    already" or "/dismissing for now" both satisfied the old check, on a
+    thread whose entire subject is dismissing/discussing findings,
+    exactly the conversational context where this is a real risk.
+    Confirmed directly: both silently dismissed a real finding with no
+    intent to trigger it, and (via the identical bug in _dismiss_reason
+    below) recorded a garbled reason - "/dismissed this already"[8:]
+    slices into the middle of the word itself, producing "ed this
+    already" as the stored dismissal reason.
+    """
+    if line == command:
+        return True
+    return line.startswith(command) and line[len(command) : len(command) + 1].isspace()
+
+
 # Same reasoning as issue_comment.py's AUDIT_COMMAND gate: anyone who can
 # push to the repo can already suppress a finding by editing the code
 # around it or disabling the check entirely - write/admin is the same bar
@@ -30,7 +51,7 @@ def _dismiss_reason(body: str) -> str | None:
     used; a reply is one short comment, not a document."""
     for line in body.splitlines():
         stripped = line.strip()
-        if stripped.startswith(DISMISS_COMMAND):
+        if _matches_command(stripped, DISMISS_COMMAND):
             reason = stripped[len(DISMISS_COMMAND):].strip()
             return reason or None
     return None
@@ -61,7 +82,7 @@ async def handle_pull_request_review_comment_event(payload: dict, pool, redis_ur
     if comment.get("user", {}).get("type") == "Bot":
         return  # never act on our own resolution-edit comments or any other bot's reply
     body = comment.get("body", "")
-    if not any(line.strip().startswith(DISMISS_COMMAND) for line in body.splitlines()):
+    if not any(_matches_command(line.strip(), DISMISS_COMMAND) for line in body.splitlines()):
         return
 
     installation_id = payload["installation"]["id"]
