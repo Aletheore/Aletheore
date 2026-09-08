@@ -108,3 +108,92 @@ def test_failed_job_raises_managed_audit_error():
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://aletheore.com")
     with pytest.raises(ManagedAuditError, match="failed"):
         run_managed_audit_request({"scanned_at": "x"}, "real-token", http_client=client, poll_interval=0)
+
+
+def test_no_http_client_passed_closes_the_client_it_creates_on_success(monkeypatch):
+    # Real bug found via audit: run_managed_audit_request created its own
+    # httpx.Client whenever a caller didn't pass one in, but never closed
+    # it on any path - both real production callers (mcp_server.py's
+    # aletheore_managed_audit tool, cli.py's `aletheore audit` command)
+    # hit this path, since neither passes http_client. In the long-running
+    # MCP server this leaked one connection pool per call.
+    created = []
+
+    class TrackingClient(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, transport=httpx.MockTransport(_handler), **kwargs)
+            created.append(self)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(202, json={"job_id": "job-1"})
+        return httpx.Response(200, json={"status": "finished", "result": "# Report"})
+
+    monkeypatch.setattr("aletheore.managed_audit_client.httpx.Client", TrackingClient)
+
+    report = run_managed_audit_request({"scanned_at": "x"}, "real-token", poll_interval=0)
+
+    assert report == "# Report"
+    assert len(created) == 1
+    assert created[0].is_closed is True
+
+
+def test_no_http_client_passed_closes_the_client_it_creates_on_error(monkeypatch):
+    created = []
+
+    class TrackingClient(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, transport=httpx.MockTransport(_handler), **kwargs)
+            created.append(self)
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"detail": "invalid or revoked token"})
+
+    monkeypatch.setattr("aletheore.managed_audit_client.httpx.Client", TrackingClient)
+
+    with pytest.raises(ManagedAuditError):
+        run_managed_audit_request({"scanned_at": "x"}, "bad-token")
+
+    assert len(created) == 1
+    assert created[0].is_closed is True
+
+
+def test_a_falsy_caller_supplied_http_client_is_still_used_and_never_closed():
+    # Flash Review finding: client selection used to be `http_client or
+    # httpx.Client(...)` (truthiness) while ownership was tracked via
+    # `http_client is None` (identity) - a caller-supplied client that's
+    # falsy (unusual, but real: any object can define __bool__) would be
+    # silently discarded in favor of a freshly created one, while
+    # ownership still said "not owned", so that new client leaked -
+    # never closed, and the caller's own client silently never used.
+    class FalsyClient(httpx.Client):
+        def __bool__(self) -> bool:
+            return False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(202, json={"job_id": "job-1"})
+        return httpx.Response(200, json={"status": "finished", "result": "# Report"})
+
+    client = FalsyClient(transport=httpx.MockTransport(handler), base_url="https://aletheore.com")
+    report = run_managed_audit_request({"scanned_at": "x"}, "real-token", http_client=client, poll_interval=0)
+
+    assert report == "# Report"  # proves the caller's own falsy client was really used
+    assert client.is_closed is False
+    client.close()
+
+
+def test_a_caller_supplied_http_client_is_never_closed():
+    # The caller owns the lifecycle of a client it passed in explicitly
+    # (e.g. one reused across several managed-audit calls) - this function
+    # must not close it out from under the caller.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(202, json={"job_id": "job-1"})
+        return httpx.Response(200, json={"status": "finished", "result": "# Report"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://aletheore.com")
+    run_managed_audit_request({"scanned_at": "x"}, "real-token", http_client=client, poll_interval=0)
+
+    assert client.is_closed is False
+    client.close()

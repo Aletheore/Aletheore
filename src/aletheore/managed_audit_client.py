@@ -25,34 +25,50 @@ def run_managed_audit_request(
     poll_interval: float = 2.0,
     timeout: float = 300.0,
 ) -> str:
-    client = http_client or httpx.Client(base_url=api_base_url)
+    owns_client = http_client is None
+    # Flash Review finding: `http_client or httpx.Client(...)` chooses by
+    # truthiness while owns_client above checks identity against None - a
+    # caller-supplied client-like object that's falsy (unusual, but not
+    # impossible - a test double with a custom __bool__, an httpx.Client
+    # subclass overriding it) would be silently discarded here in favor
+    # of a freshly created one, while owns_client still says "not owned",
+    # so that new client is never closed. Both checks now use the same
+    # None comparison.
+    client = http_client if http_client is not None else httpx.Client(base_url=api_base_url)
     headers = {"Authorization": f"Bearer {token}"}
 
     try:
-        encoded_evidence = to_toon(evidence)
-    except ToonEncodingError as exc:
-        raise ManagedAuditError(f"could not encode evidence for managed audit: {exc}") from exc
+        try:
+            encoded_evidence = to_toon(evidence)
+        except ToonEncodingError as exc:
+            raise ManagedAuditError(f"could not encode evidence for managed audit: {exc}") from exc
 
-    response = client.post(
-        "/v1/managed-audit",
-        json={"evidence": encoded_evidence, "repo_full_name": repo_full_name},
-        headers=headers,
-    )
-    if response.status_code in (401, 402, 429):
-        raise ManagedAuditError(_error_detail(response))
-    response.raise_for_status()
-    job_id = response.json()["job_id"]
+        response = client.post(
+            "/v1/managed-audit",
+            json={"evidence": encoded_evidence, "repo_full_name": repo_full_name},
+            headers=headers,
+        )
+        if response.status_code in (401, 402, 429):
+            raise ManagedAuditError(_error_detail(response))
+        response.raise_for_status()
+        job_id = response.json()["job_id"]
 
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        status_response = client.get(f"/v1/managed-audit/{job_id}", headers=headers)
-        status_response.raise_for_status()
-        body = status_response.json()
-        if body["status"] == "finished":
-            return body["result"]
-        if body["status"] == "failed":
-            raise ManagedAuditError("managed audit job failed on the server")
-        if poll_interval:
-            time.sleep(poll_interval)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            status_response = client.get(f"/v1/managed-audit/{job_id}", headers=headers)
+            status_response.raise_for_status()
+            body = status_response.json()
+            if body["status"] == "finished":
+                return body["result"]
+            if body["status"] == "failed":
+                raise ManagedAuditError("managed audit job failed on the server")
+            if poll_interval:
+                time.sleep(poll_interval)
 
-    raise ManagedAuditError(f"managed audit timed out after {timeout}s waiting for job {job_id}")
+        raise ManagedAuditError(f"managed audit timed out after {timeout}s waiting for job {job_id}")
+    finally:
+        # Only close a client we created ourselves - a caller-supplied
+        # http_client is owned by the caller (e.g. reused across requests)
+        # and must outlive this call.
+        if owns_client:
+            client.close()
