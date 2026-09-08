@@ -255,6 +255,9 @@ def _maven_child(element: ElementTree.Element, tag: str) -> ElementTree.Element 
     return element.find(tag)
 
 
+_MAVEN_POM_NAMESPACE_PREFIX = "{http://maven.apache.org/POM/4.0.0}"
+
+
 def _strip_xml_namespace_prefixes(root: ElementTree.Element) -> ElementTree.Element:
     """Removes the `{uri}` prefix ElementTree attaches to every element's
     tag when a document declares a default xmlns, so a plain, unprefixed
@@ -271,10 +274,19 @@ def _strip_xml_namespace_prefixes(root: ElementTree.Element) -> ElementTree.Elem
     from "no dependencies" - for a repo whose real pom.xml declares
     dependencies with real, potentially vulnerable versions, not a
     partial result or an error.
+
+    Scoped to exactly the Maven POM namespace, not every `{uri}` prefix in
+    the document - a pom.xml can embed foreign-namespaced elements (e.g. a
+    build plugin's own `<vendor:dependencies>` config block), and
+    stripping those too would make them indistinguishable from real Maven
+    <dependencies>/<properties> elements, producing dependency or
+    vulnerability results from content Maven itself never treats as POM
+    metadata.
     """
+    prefix_len = len(_MAVEN_POM_NAMESPACE_PREFIX)
     for element in root.iter():
-        if isinstance(element.tag, str) and element.tag.startswith("{"):
-            element.tag = element.tag.split("}", 1)[1]
+        if isinstance(element.tag, str) and element.tag.startswith(_MAVEN_POM_NAMESPACE_PREFIX):
+            element.tag = element.tag[prefix_len:]
     return root
 
 
