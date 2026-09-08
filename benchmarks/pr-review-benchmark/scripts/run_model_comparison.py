@@ -10,10 +10,15 @@ tool comparison machinery live in the other scripts/ modules; this one
 only swaps the model and replays review_diff() with real inputs.
 
 Known, documented deviations from the original saved run:
-- file_context is always "" (compact mode) - this matches the CURRENT
+- file_context is "" (compact mode) by default - matches the CURRENT
   production default (github-app/scan_worker/jobs.py), confirmed by a
   real 3-run benchmark that found compact matches or beats full-context
-  inclusion. Not a shortcut for this script specifically.
+  inclusion for gpt-5.6-luna specifically. --full-context opts into the
+  real production "full content" format instead (fetch_review_file_context's
+  own "--- full/test file content: {path} ---\n{content}" shape, capped
+  the same way: MAX_CONTEXT_FILES files, MAX_CONTEXT_TOTAL_BYTES total) -
+  added to test whether a cheaper/weaker model benefits from more context
+  where Luna didn't.
 - pr_context is always "" - the corpus's reconstructed diffs have no live
   PR for fetch_pr_context() to call. The original saved Luna run's own
   methodology for this isn't preserved (its runner script wasn't kept),
@@ -22,10 +27,16 @@ Known, documented deviations from the original saved run:
   rather than GitHub's PR-files API response - close enough for
   build_hunk_scope_correction_context's own hunk-boundary logic, which
   only needs (file_path, patch_text) pairs.
+- --seed passes an OpenAI `seed` value via extra_body for best-effort
+  determinism (OpenAI's own documented caveat: "best effort," not
+  guaranteed - a system/model update can still change output even with
+  the same seed). Not a production code path - OpenAICompatibleAdapter's
+  shared simple_completion() doesn't expose seed as a first-class param,
+  so this goes through extra_body instead of touching that shared adapter.
 
 Usage (from github-app/, so scan_worker/aletheore are both importable):
     cd github-app
-    OPENAI_API_KEY=... python3 ../benchmarks/pr-review-benchmark/scripts/run_model_comparison.py --model gpt-5-nano
+    OPENAI_API_KEY=... python3 ../benchmarks/pr-review-benchmark/scripts/run_model_comparison.py --model gpt-5-nano --seed 42
 """
 import argparse
 import json
@@ -46,6 +57,7 @@ REPO_ROOT = BENCHMARK_ROOT.parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "github-app"))
 
+from aletheore.dead_code import is_test_file  # noqa: E402
 from aletheore.evidence import scan_repository  # noqa: E402
 from scan_worker.flash_review import (  # noqa: E402
     FLASH_REVIEW_FALLBACK_MODEL,
@@ -56,6 +68,8 @@ from scan_worker.flash_review import (  # noqa: E402
 )
 from scan_worker.flash_review_hunk_scope import build_hunk_scope_correction_context  # noqa: E402
 from scan_worker.flash_review_schema_context import build_schema_endpoint_context  # noqa: E402
+from scan_worker.github_api import MAX_CONTEXT_FILES, MAX_CONTEXT_TOTAL_BYTES  # noqa: E402
+from scan_worker.model_tiers import VERIFICATION_MODEL  # noqa: E402
 from aletheore.adapters.openai_compatible import OpenAICompatibleAdapter  # noqa: E402
 
 MAX_CONTEXT_FILE_BYTES = 100_000
@@ -119,7 +133,31 @@ def _file_contents_for(checkout_dir: Path, changed_files: list[str]) -> dict[str
     return contents
 
 
-def run_case(case_id: str, model: str, workdir: Path) -> dict:
+def _build_full_file_context(changed_files: list[str], file_contents: dict[str, str]) -> str:
+    # Mirrors fetch_review_file_context's real prompt-blob format
+    # (github-app/scan_worker/flash_review.py) - same file order, same
+    # per-file label, same MAX_CONTEXT_FILES/MAX_CONTEXT_TOTAL_BYTES caps -
+    # so switching this on tests only the compact-vs-full question, not a
+    # different context shape too.
+    parts = []
+    total_bytes = 0
+    for path in changed_files[:MAX_CONTEXT_FILES]:
+        content = file_contents.get(path)
+        if content is None:
+            continue
+        encoded_len = len(content.encode("utf-8"))
+        if total_bytes + encoded_len > MAX_CONTEXT_TOTAL_BYTES:
+            break
+        label = "test file content" if is_test_file(path) else "full content"
+        parts.append(f"--- {label}: {path} ---\n{content}")
+        total_bytes += encoded_len
+    return "\n\n".join(parts)
+
+
+def run_case(
+    case_id: str, model: str, workdir: Path, *,
+    seed: int | None = None, full_context: bool = False, verify: bool = False,
+) -> dict:
     case_dir = CASES_DIR / case_id
     diff_path = case_dir / "pr.diff"
     diff_text = diff_path.read_text()
@@ -176,9 +214,17 @@ def run_case(case_id: str, model: str, workdir: Path) -> dict:
     )
 
     usage_records: list[dict] = []
+    verification_usage_records: list[dict] = []
 
     def _on_usage(prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> None:
         usage_records.append({
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "cached_tokens": cached_tokens,
+        })
+
+    def _on_verification_usage(prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> None:
+        verification_usage_records.append({
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "cached_tokens": cached_tokens,
@@ -190,12 +236,19 @@ def run_case(case_id: str, model: str, workdir: Path) -> dict:
         api_key_env_var="OPENAI_API_KEY",
         model=model,
         on_usage=_on_usage,
+        extra_body={"seed": seed} if seed is not None else None,
     )
 
-    print(f"  calling {model} ...", file=sys.stderr)
+    file_context = _build_full_file_context(changed_files, file_contents) if full_context else ""
+
+    print(
+        f"  calling {model} (seed={seed}, full_context={full_context}, "
+        f"verify={verify} [{VERIFICATION_MODEL if verify else '-'}]) ...",
+        file=sys.stderr,
+    )
     findings = review_diff(
         diff_text,
-        file_context="",
+        file_context=file_context,
         code_evidence_context=code_evidence_context,
         referenced_symbol_context=referenced_symbol_context,
         pr_context="",
@@ -203,14 +256,26 @@ def run_case(case_id: str, model: str, workdir: Path) -> dict:
         file_contents=file_contents,
         diff_patches=diff_patches,
         adapter=adapter,
-        verify_with_second_model=False,
+        # AIR tier's real structure: second-model verification only ever
+        # re-checks an LLM finding that lacks a verifiable content citation
+        # (review_diff's own needs_recheck gate) - this is the exact
+        # production path (_verify_findings_with_second_model), always
+        # against VERIFICATION_MODEL (deepseek-v4-flash), not a
+        # benchmark-only substitute.
+        verify_with_second_model=verify,
+        on_verification_usage=_on_verification_usage,
     )
 
     shutil.rmtree(checkout_dir, ignore_errors=True)
 
+    usage = {"model": model, "generation_usage": usage_records}
+    if verify:
+        usage["verification_model"] = VERIFICATION_MODEL
+        usage["verification_usage"] = verification_usage_records
+
     return {
         "findings": findings,
-        "usage": {"model": model, "generation_usage": usage_records},
+        "usage": usage,
     }
 
 
@@ -218,26 +283,53 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, help="model name to pass to the OpenAI-compatible adapter")
     parser.add_argument("--cases", nargs="*", default=None, help="specific case ids to run (default: all)")
+    parser.add_argument(
+        "--seed", type=int, default=None,
+        help="OpenAI seed for best-effort determinism (passed via extra_body)",
+    )
+    parser.add_argument(
+        "--full-context", action="store_true",
+        help="use production's real full-file-content prompt shape instead of compact/empty",
+    )
+    parser.add_argument(
+        "--verify", action="store_true",
+        help="AIR tier's real structure: second-model verification via deepseek-v4-flash "
+        "(review_diff's verify_with_second_model=True) over findings lacking a verifiable citation",
+    )
+    parser.add_argument(
+        "--tag", default="",
+        help="suffix for the output directory name, so repeat/variant runs don't overwrite each other "
+        "(e.g. --tag run1, --tag fullctx)",
+    )
     args = parser.parse_args()
 
-    model_slug = args.model.replace(".", "").replace("-", "")
+    model_slug = args.model.replace(".", "").replace("-", "") + (f"_{args.tag}" if args.tag else "")
     raw_dir = RESULTS_DIR / f"raw_{model_slug}"
     token_dir = RESULTS_DIR / "token_usage"
     raw_dir.mkdir(parents=True, exist_ok=True)
     token_dir.mkdir(parents=True, exist_ok=True)
 
     case_ids = args.cases or CASE_IDS
-    print(f"Running {len(case_ids)} cases with model={args.model}", file=sys.stderr)
+    print(
+        f"Running {len(case_ids)} cases with model={args.model} seed={args.seed} "
+        f"full_context={args.full_context} verify={args.verify} tag={args.tag!r}",
+        file=sys.stderr,
+    )
 
     total_prompt = 0
     total_completion = 0
+    total_verify_prompt = 0
+    total_verify_completion = 0
 
     with tempfile.TemporaryDirectory(prefix="model-comparison-") as tmp:
         workdir = Path(tmp)
         for case_id in case_ids:
             print(f"=== {case_id} ===", file=sys.stderr)
             try:
-                result = run_case(case_id, args.model, workdir)
+                result = run_case(
+                    case_id, args.model, workdir,
+                    seed=args.seed, full_context=args.full_context, verify=args.verify,
+                )
             except Exception as exc:  # noqa: BLE001
                 print(f"  FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
                 continue
@@ -254,15 +346,26 @@ def main() -> None:
             for u in result["usage"]["generation_usage"]:
                 total_prompt += u["prompt_tokens"]
                 total_completion += u["completion_tokens"]
+            for u in result["usage"].get("verification_usage", []):
+                total_verify_prompt += u["prompt_tokens"]
+                total_verify_completion += u["completion_tokens"]
 
             print(
                 f"  {len(result['findings'])} finding(s), "
                 f"{sum(u['prompt_tokens'] for u in result['usage']['generation_usage'])} prompt / "
-                f"{sum(u['completion_tokens'] for u in result['usage']['generation_usage'])} completion tokens",
+                f"{sum(u['completion_tokens'] for u in result['usage']['generation_usage'])} completion "
+                f"gen tokens, "
+                f"{sum(u['prompt_tokens'] for u in result['usage'].get('verification_usage', []))} prompt / "
+                f"{sum(u['completion_tokens'] for u in result['usage'].get('verification_usage', []))} "
+                f"completion verify tokens",
                 file=sys.stderr,
             )
 
-    print(f"\nTotal: {total_prompt} prompt tokens, {total_completion} completion tokens", file=sys.stderr)
+    print(
+        f"\nTotal generation: {total_prompt} prompt / {total_completion} completion tokens\n"
+        f"Total verification: {total_verify_prompt} prompt / {total_verify_completion} completion tokens",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":
