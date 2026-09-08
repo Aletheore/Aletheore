@@ -712,8 +712,61 @@ def _extract_go_net_http_routes(root: Node, source: bytes, rel_path: str) -> lis
     return entries
 
 
+def _gin_group_prefix_bindings(root: Node, source: bytes) -> dict[str, str]:
+    """var name -> composed URL prefix for every `x := y.Group("/prefix")`
+    short variable declaration in this file, including nested groups
+    (`v2 := v1.Group("/v2")`).
+
+    A single forward pass is sufficient: Go requires a variable declared
+    before use, and _walk_tree visits nodes in source order, so a group's
+    own receiver binding (if it has one) is already recorded by the time a
+    later declaration composes on top of it. A receiver not found here
+    (e.g. the base `*gin.Engine` returned by gin.Default()/gin.New(), which
+    is never itself the result of a .Group() call) resolves to "" - the
+    same unprefixed behavior every route already had before this existed,
+    so this is purely additive, never a regression for the ungrouped case.
+    """
+    bindings: dict[str, str] = {}
+    for n in _walk_tree(root):
+        if n.type != "short_var_declaration":
+            continue
+        left = n.child_by_field_name("left")
+        right = n.child_by_field_name("right")
+        if left is None or right is None:
+            continue
+        left_names = left.named_children
+        right_exprs = right.named_children
+        if len(left_names) != 1 or left_names[0].type != "identifier":
+            continue
+        if len(right_exprs) != 1 or right_exprs[0].type != "call_expression":
+            continue
+        call = right_exprs[0]
+        func = call.child_by_field_name("function")
+        if func is None or func.type != "selector_expression":
+            continue
+        field = func.child_by_field_name("field")
+        operand = func.child_by_field_name("operand")
+        if field is None or operand is None or operand.type != "identifier":
+            continue
+        if source[field.start_byte : field.end_byte].decode() != "Group":
+            continue
+        args = call.child_by_field_name("arguments")
+        if args is None:
+            continue
+        arg_named = args.named_children
+        if not arg_named or arg_named[0].type != "interpreted_string_literal":
+            continue
+        prefix_literal = _go_string_literal_text(arg_named[0], source)
+        receiver_name = source[operand.start_byte : operand.end_byte].decode()
+        base_prefix = bindings.get(receiver_name, "")
+        var_name = source[left_names[0].start_byte : left_names[0].end_byte].decode()
+        bindings[var_name] = f"{base_prefix.rstrip('/')}/{prefix_literal.strip('/')}"
+    return bindings
+
+
 def _extract_gin_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
+    group_prefixes = _gin_group_prefix_bindings(root, source)
 
     for n in _walk_tree(root):
         if n.type == "call_expression":
@@ -730,10 +783,18 @@ def _extract_gin_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
                                 path = _go_string_literal_text(named[0], source)
                                 handler = _go_handler_name(named, source)
                                 method = "ANY" if field_name == "Any" else field_name
+                                operand = func.child_by_field_name("operand")
+                                receiver_name = (
+                                    source[operand.start_byte : operand.end_byte].decode()
+                                    if operand is not None and operand.type == "identifier"
+                                    else None
+                                )
+                                prefix = group_prefixes.get(receiver_name, "") if receiver_name else ""
+                                full_path = f"{prefix.rstrip('/')}/{path.lstrip('/')}" if prefix else path
                                 entries.append(
                                     {
                                         "method": method,
-                                        "path": path,
+                                        "path": full_path,
                                         "framework": "gin",
                                         "file": rel_path,
                                         "line": n.start_point[0] + 1,

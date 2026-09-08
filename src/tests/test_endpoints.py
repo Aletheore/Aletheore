@@ -821,6 +821,70 @@ def test_extract_gin_ignores_unrelated_selector_calls():
     assert entries == []
 
 
+def test_extract_gin_composes_a_route_group_prefix():
+    # Real bug found via audit: router.Group("/prefix") was completely
+    # untracked - a route registered on the group's returned variable
+    # silently emitted its bare, unprefixed path instead of the real one,
+    # the same failure class already fixed 4 times for FastAPI (router-
+    # mount-prefix loss/contamination) - Gin route groups are the
+    # standard, near-universal way real Gin APIs are organized.
+    root, source = parse_go(
+        'func main() {\n'
+        '\trouter := gin.Default()\n'
+        '\tv1 := router.Group("/api/v1")\n'
+        '\tv1.GET("/users", getUsers)\n'
+        '\tv1.POST("/users", createUser)\n'
+        '}\n'
+    )
+
+    entries = _extract_gin_routes(root, source, "main.go")
+
+    paths = [(e["method"], e["path"]) for e in entries]
+    assert paths == [("GET", "/api/v1/users"), ("POST", "/api/v1/users")]
+
+
+def test_extract_gin_composes_a_nested_route_group_prefix():
+    root, source = parse_go(
+        'func main() {\n'
+        '\trouter := gin.Default()\n'
+        '\tv1 := router.Group("/api/v1")\n'
+        '\tadmin := v1.Group("/admin")\n'
+        '\tadmin.DELETE("/users/:id", deleteUser)\n'
+        '}\n'
+    )
+
+    entries = _extract_gin_routes(root, source, "main.go")
+
+    assert entries == [
+        {
+            "method": "DELETE",
+            "path": "/api/v1/admin/users/:id",
+            "framework": "gin",
+            "file": "main.go",
+            "line": 5,
+            "handler": "deleteUser",
+            "unresolved": False,
+            "note": None,
+        }
+    ]
+
+
+def test_extract_gin_ungrouped_route_on_the_base_router_is_unaffected():
+    # The group-prefix fix must be purely additive: a route on a variable
+    # that was never the result of a .Group() call resolves to "" (its
+    # prior, unprefixed behavior), not a crash or a spurious prefix.
+    root, source = parse_go(
+        'func main() {\n'
+        '\trouter := gin.Default()\n'
+        '\trouter.GET("/health", healthCheck)\n'
+        '}\n'
+    )
+
+    entries = _extract_gin_routes(root, source, "main.go")
+
+    assert entries[0]["path"] == "/health"
+
+
 def test_extract_axum_single_route():
     root, source = parse_rust(
         'fn main() { let app = Router::new().route("/health", get(health_handler)); }\n'
