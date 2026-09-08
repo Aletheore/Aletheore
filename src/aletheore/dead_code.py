@@ -103,6 +103,30 @@ _DAGGER_INSTALL_IN_PATTERN = re.compile(r"^\s*@(?:InstallIn|TestInstallIn)\b", r
 # reason to hand this module just for one line of source.
 _KOTLIN_PACKAGE_PATTERN = re.compile(r"^\s*package\s+([\w.]+)", re.MULTILINE)
 
+# Compiled-language entry points, same category as the Python __main__ guard
+# and Swift @main above: each language's real, unambiguous "the runtime
+# invokes this, no import ever will" convention. Confirmed empirically on
+# each language's own module-graph resolution (build_module_graph correctly
+# resolves ordinary intra-repo imports for all four; a file matching one of
+# these is specifically the one every real deploy invokes directly, which by
+# definition nothing else in the repo imports): a Go package main's func
+# main(), Rust's src/main.rs or any file with a top-level fn main(), a Java
+# class's public static void main(String[] args), and a C# Main method - all
+# looked completely unreachable without this, on every real single-binary
+# repo in these four languages, not a hypothetical shape.
+_GO_PACKAGE_MAIN_PATTERN = re.compile(r"^\s*package\s+main\b", re.MULTILINE)
+_GO_FUNC_MAIN_PATTERN = re.compile(r"^\s*func\s+main\s*\(", re.MULTILINE)
+_RUST_FN_MAIN_PATTERN = re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+main\s*\(", re.MULTILINE)
+_JAVA_MAIN_METHOD_PATTERN = re.compile(
+    r"^\s*(?:public\s+static|static\s+public)\s+void\s+main\s*\(", re.MULTILINE
+)
+# C#'s Main can carry any modifier order/return type (void/int/Task/Task<int>)
+# and an optional access modifier - two independent signals both required
+# (the same bounded-heuristic shape as the Hilt/Dagger check below) rather
+# than one combined regex trying to enumerate every legal signature.
+_CSHARP_STATIC_KEYWORD_PATTERN = re.compile(r"\bstatic\b")
+_CSHARP_MAIN_METHOD_PATTERN = re.compile(r"\bMain\s*\(")
+
 _HTML_SCRIPT_SRC_PATTERN = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
 
 # A module dispatched by dotted-string name (RQ's queue.enqueue("pkg.mod.func", ...),
@@ -215,6 +239,48 @@ def _has_swift_main_attribute(repo_path: Path, path: str) -> bool:
     return bool(_SWIFT_MAIN_ATTRIBUTE_PATTERN.search(content))
 
 
+def _has_go_main_function(repo_path: Path, path: str) -> bool:
+    if not path.endswith(".go"):
+        return False
+    try:
+        content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return bool(_GO_PACKAGE_MAIN_PATTERN.search(content) and _GO_FUNC_MAIN_PATTERN.search(content))
+
+
+def _has_rust_main_function(repo_path: Path, path: str) -> bool:
+    if not path.endswith(".rs"):
+        return False
+    try:
+        content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return bool(_RUST_FN_MAIN_PATTERN.search(content))
+
+
+def _has_java_main_method(repo_path: Path, path: str) -> bool:
+    if not path.endswith(".java"):
+        return False
+    try:
+        content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return bool(_JAVA_MAIN_METHOD_PATTERN.search(content))
+
+
+def _has_csharp_main_method(repo_path: Path, path: str) -> bool:
+    if not path.endswith(".cs"):
+        return False
+    try:
+        content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    return bool(
+        _CSHARP_STATIC_KEYWORD_PATTERN.search(content) and _CSHARP_MAIN_METHOD_PATTERN.search(content)
+    )
+
+
 def _has_hilt_dagger_annotation(repo_path: Path, path: str) -> bool:
     if not path.endswith((".kt", ".kts", ".java")):
         return False
@@ -290,8 +356,8 @@ def _android_manifest_entry_points(repo_path: Path, ignored_paths: list[str] | N
     return entry_points
 
 
-def _kotlin_package_of(repo_path: Path, path: str) -> str | None:
-    if not path.endswith((".kt", ".kts")):
+def _jvm_package_of(repo_path: Path, path: str) -> str | None:
+    if not path.endswith((".kt", ".kts", ".java")):
         return None
     try:
         content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
@@ -301,13 +367,13 @@ def _kotlin_package_of(repo_path: Path, path: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _kotlin_package_reachable_files(
+def _jvm_package_reachable_files(
     repo_path: Path,
     modules: list[dict],
     android_manifest_entry_points: set[str],
 ) -> set[str]:
-    """Every Kotlin file sharing a package with a file that's reachable
-    some other way - the same blind spot _swift_target_reachable_files
+    """Every Kotlin or Java file sharing a package with a file that's
+    reachable some other way - the same blind spot _swift_target_reachable_files
     above already handles for Swift's whole-target visibility, just at
     package instead of target granularity.
 
@@ -323,11 +389,26 @@ def _kotlin_package_reachable_files(
     over: unreachable itself, but sharing a package with the
     @HiltViewModel-annotated StatisticsViewModel.kt.
 
+    Plain Java has the identical rule (JLS 7.5.1: no import needed for a
+    same-package type) - confirmed directly: two ordinary .java files
+    declaring the same package, one calling the other's static method with
+    zero import, produced zero edge between them in build_module_graph.
+    Originally this function only grouped .kt/.kts files, so every
+    same-package-only-referenced .java file (the ordinary shape for any
+    small-to-medium Java package, not an edge case) still looked
+    unreachable - the exact same blind spot already fixed for Kotlin,
+    silently never extended to the other JVM language this scanner
+    supports. Grouping Kotlin and Java files under the same package name
+    together (rather than keeping two separate maps) is deliberate, not
+    incidental: a real mixed-language Android/JVM project has both
+    languages sharing one package's visibility, by the JVM's own rules.
+
     A package's own reachability is judged by the same signals
     find_dead_code already treats as reachable on their own (imported_by,
-    a manifest entry point, or a Hilt/Dagger annotation) - propagating
-    from an already-independently-reachable sibling is the whole point,
-    so requiring anything more here would just miss the real cases above.
+    a manifest entry point, a Hilt/Dagger annotation, or - Java only - its
+    own public static void main) - propagating from an already-
+    independently-reachable sibling is the whole point, so requiring
+    anything more here would just miss the real cases above.
     Test files are excluded from the grouping entirely (not just left to
     fall through) so a test file's own package-mate status can never leak
     reachability into a production sibling that happens to share its
@@ -339,7 +420,7 @@ def _kotlin_package_reachable_files(
         path = module["path"]
         if is_test_file(path):
             continue
-        package = _kotlin_package_of(repo_path, path)
+        package = _jvm_package_of(repo_path, path)
         if package is not None:
             packages.setdefault(package, []).append(path)
 
@@ -352,6 +433,7 @@ def _kotlin_package_reachable_files(
             modules_by_path.get(path, {}).get("imported_by")
             or path in android_manifest_entry_points
             or _has_hilt_dagger_annotation(repo_path, path)
+            or _has_java_main_method(repo_path, path)
             for path in paths
         )
         if package_is_reachable:
@@ -567,7 +649,7 @@ def find_dead_code(
 
     html_script_entry_points = _html_script_entry_points(repo_path, ignored_paths)
     android_manifest_entry_points = _android_manifest_entry_points(repo_path, ignored_paths)
-    kotlin_package_reachable_files = _kotlin_package_reachable_files(
+    jvm_package_reachable_files = _jvm_package_reachable_files(
         repo_path, modules, android_manifest_entry_points
     )
     swift_reachable_files = _swift_target_reachable_files(repo_path, modules, ignored_paths)
@@ -581,7 +663,7 @@ def find_dead_code(
             continue
         if is_test_file(path):
             continue
-        if path in swift_reachable_files or path in kotlin_package_reachable_files:
+        if path in swift_reachable_files or path in jvm_package_reachable_files:
             continue
         if not module.get("imported_by", []):
             if (
@@ -589,6 +671,10 @@ def find_dead_code(
                 or path in android_manifest_entry_points
                 or _has_main_guard(repo_path, path)
                 or _has_hilt_dagger_annotation(repo_path, path)
+                or _has_go_main_function(repo_path, path)
+                or _has_rust_main_function(repo_path, path)
+                or _has_java_main_method(repo_path, path)
+                or _has_csharp_main_method(repo_path, path)
             ):
                 entry_points_detected.append(path)
                 continue
