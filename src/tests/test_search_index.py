@@ -2606,6 +2606,27 @@ def test_is_test_path_does_not_exclude_ordinary_words_ending_in_tests():
     assert _is_test_path("src/IntegrationTests/Foo.java")
 
 
+def test_is_test_path_excludes_jvm_colocated_test_suffix():
+    # Real bug found via audit: dead_code.py already excludes this exact
+    # shape (its own TEST_PATH_PATTERNS, citing android/architecture-
+    # samples) but the fix was never carried over to this module's own,
+    # independently-implemented test-path check. _has_dotnet_test_suffix
+    # can't catch it: it requires "Tests?" at the literal end of the path
+    # segment, but a real filename ends in ".kt"/".java", not "Test" - so
+    # a co-located test file (FooTest.kt beside Foo.kt, the ordinary
+    # layout for a JVM package with no dedicated test source set) was
+    # never excluded, polluting search results with test code.
+    assert _is_test_path("app/src/main/java/com/example/todoapp/data/DefaultTaskRepositoryTest.kt")
+    assert _is_test_path("src/main/java/com/example/FooTest.kt")
+    assert _is_test_path("app/src/test/java/com/example/BarTest.java")
+    # An ordinary word that merely ends in "test" ("Contest", "Attestation")
+    # must not be swallowed - same false-positive class the .NET fix above
+    # already guards against, for the JVM shape.
+    assert not _is_test_path("src/main/java/com/example/Contest.kt")
+    assert not _is_test_path("src/main/java/com/example/Attestation.java")
+    assert not _is_test_path("app/src/main/java/com/example/todoapp/data/DefaultTaskRepository.kt")
+
+
 def test_detect_query_language_reads_an_explicit_language_mention():
     """apache/thrift implements TBinaryProtocol in seven languages, so a question
     naming one has a single correct answer and six near-identical wrong ones."""
