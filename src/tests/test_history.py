@@ -49,6 +49,28 @@ def test_list_snapshots_returns_chronological_order(tmp_path):
     ]
 
 
+def test_list_snapshots_tolerates_a_non_utf8_file_in_the_history_dir(tmp_path):
+    # Flash Review finding: read_text() can raise UnicodeDecodeError for a
+    # non-UTF-8 *.json file, but the sort key only caught OSError and
+    # json.JSONDecodeError - one corrupt or unrelated non-UTF-8 file in
+    # the history directory made snapshot listing (and rotation, which
+    # calls the same sort) fail entirely for every real snapshot, a
+    # regression from the previous filename-only sort, which never
+    # inspected file contents at all.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    save_snapshot(make_evidence("2026-07-15T10:00:00.000000+00:00"), repo)
+    history_dir = repo / ".aletheore" / "history"
+    (history_dir / "not-real-utf8.json").write_bytes(b"\xff\xfe\x00\x01garbage")
+
+    snapshots = list_snapshots(repo)
+
+    assert len(snapshots) == 2
+    real_snapshot = next(p for p in snapshots if p.name != "not-real-utf8.json")
+    assert json.loads(real_snapshot.read_text())["scanned_at"] == "2026-07-15T10:00:00.000000+00:00"
+
+
 def test_save_snapshot_rotates_at_21st_save_keeping_the_20_newest(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -72,6 +94,33 @@ def test_save_snapshot_handles_same_timestamp_collision_without_losing_data(tmp_
 
     snapshots = list_snapshots(repo)
     assert len(snapshots) == 2
+
+
+def test_rotation_keeps_the_chronologically_newest_snapshot_across_a_same_second_collision(tmp_path):
+    # Real bug found via audit: two snapshots saved within the same
+    # wall-clock second get a disambiguating "-N" suffix inserted before
+    # the .json extension - a plain filename-string sort put that
+    # suffixed (chronologically LATER) file BEFORE the unsuffixed one
+    # ('-' sorts before '.' in ASCII), so rotation deleted the wrong
+    # (older-looking but actually newer) snapshot, discarding a newer
+    # scan's real evidence while keeping an older one.
+    import time
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    same_second = "2026-07-15T10:00:00.000000+00:00"
+    first = save_snapshot({**make_evidence(same_second), "marker": "first"}, repo, keep=20)
+    time.sleep(0.01)
+    second = save_snapshot({**make_evidence(same_second), "marker": "second"}, repo, keep=20)
+    time.sleep(0.01)
+    save_snapshot({**make_evidence("2026-07-15T11:00:00.000000+00:00"), "marker": "third"}, repo, keep=2)
+
+    remaining = list_snapshots(repo)
+    markers = [json.loads(p.read_text())["marker"] for p in remaining]
+    assert markers == ["second", "third"]
+    assert first.name not in {p.name for p in remaining}
+    assert second.name in {p.name for p in remaining}
 
 
 def base_evidence() -> dict:
@@ -147,6 +196,27 @@ def test_compute_diff_reports_no_new_or_resolved_when_identical():
         "total_commits": 0,
     }
     assert "caveats" not in diff
+
+
+def test_compute_diff_does_not_crash_diffing_an_older_schema_snapshot():
+    # Real bug found via audit: history_scanned_commits and
+    # history_findings were added to the secrets section after this
+    # module's original schema, so a genuinely older on-disk snapshot (a
+    # real, plausible .aletheore/history/*.json file predating either
+    # field, diffed after a CLI upgrade) crashed with KeyError instead of
+    # degrading the same way _endpoint_block already does for
+    # api_endpoints - this module's own established pattern for exactly
+    # this case, applied inconsistently.
+    new = base_evidence()
+    old = base_evidence()
+    del old["security"]["secrets"]["history_scanned_commits"]
+    del old["security"]["secrets"]["history_findings"]
+
+    diff = compute_diff(old, new)
+
+    assert diff["history_secrets"] == {"new": [], "resolved": []}
+    assert "caveats" in diff
+    assert any("history" in caveat for caveat in diff["caveats"])
 
 
 def test_compute_diff_detects_a_new_secret_finding():
