@@ -91,6 +91,45 @@ def test_parse_sentry_event_uses_the_last_exception_when_chained():
     assert result["file"] == "outer.py"
 
 
+def test_parse_sentry_event_pairs_the_exception_message_with_its_own_frame_not_a_causes_frame():
+    # Real bug found via audit: the outermost exception in a chain can
+    # legitimately have no stacktrace frames of its own (a wrapped/
+    # re-raised exception with no captured traceback) while an earlier
+    # cause does. The frame walk correctly falls back to that earlier
+    # exception's frame, but exception_type/exception_value used to be
+    # taken from exception_values[-1] unconditionally - pairing the OUTER
+    # exception's message with the EARLIER exception's file:line, a
+    # location that has nothing to do with the message being described.
+    event = _event(
+        exception={
+            "values": [
+                {
+                    "type": "ValueError",
+                    "value": "original failure in db layer",
+                    "stacktrace": {
+                        "frames": [{"filename": "db.py", "function": "query", "lineno": 42, "in_app": True}]
+                    },
+                },
+                {
+                    "type": "RuntimeError",
+                    "value": "wrapped: something went wrong",
+                    "stacktrace": {"frames": []},
+                },
+            ]
+        }
+    )
+
+    result = parse_sentry_event(event)
+
+    # The frame is still correctly the earlier exception's - but its
+    # message must come from that SAME exception, not the frameless outer
+    # one.
+    assert result["file"] == "db.py"
+    assert result["line"] == 42
+    assert result["exception_type"] == "ValueError"
+    assert result["exception_value"] == "original failure in db layer"
+
+
 def test_parse_sentry_event_returns_none_without_a_usable_frame():
     assert parse_sentry_event({"exception": {"values": []}}) is None
     assert parse_sentry_event({}) is None
