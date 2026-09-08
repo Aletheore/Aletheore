@@ -23,6 +23,7 @@ price entry from the start.)
 
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -59,7 +60,7 @@ def openai_free_tier_tokens_today(redis_conn) -> int:
     return int(value) if value is not None else 0
 
 
-def _reserve_openai_free_tier_budget(redis_conn) -> bool:
+def _reserve_openai_free_tier_budget(redis_conn, key: str | None = None) -> bool:
     """Atomically reserve OPENAI_FREE_TIER_RESERVATION_TOKENS against
     today's counter, right before a real OpenAI call is about to happen
     (wired as an adapter's before_llm_call - invoked fresh per real
@@ -78,8 +79,18 @@ def _reserve_openai_free_tier_budget(redis_conn) -> bool:
     is bounded by one reservation each, not unbounded; (2) an adapter that
     was merely *included* in the chain but never actually reached (an
     earlier provider succeeded first) never reserves anything, since this
-    only fires at the moment a real call is about to be attempted."""
-    key = _openai_free_tier_token_key()
+    only fires at the moment a real call is about to be attempted.
+
+    `key`: the caller may pass the exact key to reserve against (see
+    run_with_free_tier_fallback's chain-building, which captures this
+    same key for the later true-up/release call) - defaults to computing
+    a fresh one, preserving this function's own standalone behavior for
+    any other caller. Checked against None, not truthiness - Flash
+    Review finding: `key or ...` would silently discard a caller-supplied
+    empty string and reserve against a freshly computed key instead,
+    contradicting this docstring's own "the exact key to use" contract.
+    """
+    key = key if key is not None else _openai_free_tier_token_key()
     new_total = redis_conn.incrby(key, OPENAI_FREE_TIER_RESERVATION_TOKENS)
     if hasattr(redis_conn, "expire"):
         # 2 days: comfortably outlives the single calendar day this key is
@@ -92,13 +103,28 @@ def _reserve_openai_free_tier_budget(redis_conn) -> bool:
     return True
 
 
-def _true_up_openai_free_tier_reservation(redis_conn, real_total_tokens: int) -> None:
+def _true_up_openai_free_tier_reservation(
+    redis_conn, real_total_tokens: int, key: str | None = None
+) -> None:
     """Correct the reservation placeholder with the real prompt+completion
     total once a reserved call has actually completed - the reservation
-    was a conservative estimate, not the real usage."""
+    was a conservative estimate, not the real usage.
+
+    `key`: the exact key the matching reservation was placed against (see
+    _reserve_openai_free_tier_budget's own `key` parameter) - real bug
+    this closes: computing a fresh key here independently, rather than
+    reusing the one the reservation actually used, meant a call that
+    straddled the UTC midnight boundary between reservation and true-up
+    corrected the WRONG day's counter - permanently over-reserving the
+    day it actually ran on (bounded by the key's own 2-day TTL) and
+    leaking negative headroom into the next day's real allowance.
+    Defaults to computing a fresh key, preserving this function's own
+    standalone behavior for any other caller. Checked against None, not
+    truthiness, for the same reason _reserve_openai_free_tier_budget's
+    own `key` parameter is - see its docstring."""
     delta = real_total_tokens - OPENAI_FREE_TIER_RESERVATION_TOKENS
     if delta != 0:
-        redis_conn.incrby(_openai_free_tier_token_key(), delta)
+        redis_conn.incrby(key if key is not None else _openai_free_tier_token_key(), delta)
 
 LUNA_MODEL = "gpt-5.6-luna"
 PRO_MODEL = "deepseek-v4-pro"
@@ -360,10 +386,38 @@ def writing_adapter_chain_for_free_tier(
         logger.info("free-tier: GEMINI_API_KEY not configured, skipping Gemini")
 
     if has_api_key("OPENAI_FREE_TIER_API_KEY", "OpenAI-FreeTier"):
+        # Captures the exact key before_llm_call reserved against, so
+        # on_usage/on_call_failed correct that SAME day's counter even if
+        # the real call straddles the UTC midnight boundary between
+        # reservation and true-up - see both functions' own docstrings
+        # for the real corruption this closes. threading.local(), not a
+        # plain dict, so a concurrent second call through this same
+        # adapter (this chain is built fresh per job today, but the
+        # adapter object itself carries no such guarantee) gets its own
+        # isolated slot instead of racing the first call's key through
+        # one shared mutable cell - Flash Review finding: a plain dict
+        # here means an overlapping second reservation overwrites the
+        # first call's key, so a usage/failure callback can true-up or
+        # release the WRONG call's Redis reservation.
+        _reserved_key_local = threading.local()
+
+        def _reserve_and_capture_key() -> bool:
+            key = _openai_free_tier_token_key()
+            ok = _reserve_openai_free_tier_budget(redis_conn, key=key)
+            if ok:
+                _reserved_key_local.key = key
+            return ok
+
+        def _true_up_reserved_key(real_total_tokens: int) -> None:
+            key = getattr(_reserved_key_local, "key", None)
+            if key is not None:
+                del _reserved_key_local.key
+            _true_up_openai_free_tier_reservation(redis_conn, real_total_tokens, key=key)
+
         def _on_openai_free_tier_usage(
             prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
         ) -> None:
-            _true_up_openai_free_tier_reservation(redis_conn, prompt_tokens + completion_tokens)
+            _true_up_reserved_key(prompt_tokens + completion_tokens)
             if on_usage is not None:
                 on_usage(prompt_tokens, completion_tokens, cached_tokens)
 
@@ -380,7 +434,7 @@ def writing_adapter_chain_for_free_tier(
             model="gpt-5-nano",
             extra_body={"reasoning_effort": "minimal"},
             on_usage=_on_openai_free_tier_usage,
-            before_llm_call=lambda: _reserve_openai_free_tier_budget(redis_conn),
+            before_llm_call=_reserve_and_capture_key,
             # Releases the reservation before_llm_call just made when the
             # real call then fails (rate limit, auth error, timeout) -
             # on_usage never fires on a failed call, so without this the
@@ -389,7 +443,7 @@ def writing_adapter_chain_for_free_tier(
             # on_call_failed for why this can't just reuse on_usage(0, 0):
             # that would misrepresent a failed call as a completed one to
             # any other on_usage consumer.
-            on_call_failed=lambda: _true_up_openai_free_tier_reservation(redis_conn, 0),
+            on_call_failed=lambda: _true_up_reserved_key(0),
             # OpenAICompatibleAdapter's default budget_exceeded_message
             # names the monthly LLM spend cap - correct for every other
             # before_llm_call wiring (e.g. jobs.py's spend_budget.
