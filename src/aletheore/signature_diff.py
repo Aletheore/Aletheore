@@ -29,7 +29,15 @@ def _split_params(params: str) -> list[str]:
 
     Splits only at depth zero so a default value or generic type
     containing commas - `Callable[[str], int | None] | None = None`,
-    `dict[str, int]`, `foo=(1, 2)` - stays a single parameter.
+    `dict[str, int]`, `foo=(1, 2)` - stays a single parameter. Also
+    tracks whether we're inside a quoted string literal: a bracket
+    character or comma inside one (`sep: str = ", "`) is text, not
+    structure, and must not affect depth or trigger a split. Real bug
+    found via audit: without this, a purely additive parameter whose
+    default is a string containing a comma got torn into two bogus
+    "parameters", which made is_backward_compatible_change reject it -
+    exactly the false-positive-noise-on-a-merge-blocking-check failure
+    this module exists to prevent (see its own module docstring).
     """
     inner = params.strip()
     if inner.startswith("(") and inner.endswith(")"):
@@ -37,7 +45,22 @@ def _split_params(params: str) -> list[str]:
     parts: list[str] = []
     depth = 0
     current: list[str] = []
+    quote_char: str | None = None
+    escaped = False
     for char in inner:
+        if quote_char is not None:
+            current.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote_char:
+                quote_char = None
+            continue
+        if char in "\"'":
+            quote_char = char
+            current.append(char)
+            continue
         if char in "([{<":
             depth += 1
         elif char in ")]}>":
