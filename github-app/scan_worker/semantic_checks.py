@@ -509,14 +509,88 @@ _LOG_OR_RERAISE_RE = re.compile(
 )
 
 
+def _unchanged_except_body_weakened(file: str, source: str, hunk: _Hunk) -> dict | None:
+    """A sibling gap to the main loop below: this check only ever looked
+    for the `except` line itself inside hunk.added - a PR that replaces
+    an EXISTING except block's body with a bare `pass`, without touching
+    the except line's own text, is invisible to that path entirely.
+    _diff_hunks_by_file never records unchanged context lines into
+    hunk.added/removed (only +/- lines), so an unchanged except header
+    sitting just above the hunk's real change has nowhere to be matched.
+
+    Real, previously-identified-but-deferred gap: commit bad16b7's own
+    message documented this as a second, real (not theoretical) finding
+    from the same review that fixed the comment-scoping bug, and said it
+    "needs new detection logic... tracked separately" - that follow-up
+    was never implemented until now.
+
+    Cheap hunk-level gating first (no source scan needed): the hunk's
+    own real added content must be exactly a bare `pass` and its real
+    removed content must be more than just `pass`/comments - otherwise
+    this isn't "real handling reduced to pass" at all, whether or not an
+    except header happens to sit nearby. Only once both hold is `source`
+    searched for the except header itself, within this hunk's own
+    new-file line range (context lines are real content in `source`,
+    just never captured by the diff parser) - confirming the body
+    physically following it collapses to bare `pass` ties the finding to
+    an actual except block rather than an unrelated pass line.
+    """
+    added_non_comment = [a.strip() for a in hunk.added if a.strip() and not a.strip().startswith("#")]
+    if added_non_comment != ["pass"]:
+        return None
+    removed_non_comment = [r.strip() for r in hunk.removed if r.strip() and not r.strip().startswith("#")]
+    if not removed_non_comment or removed_non_comment == ["pass"]:
+        return None
+
+    source_lines = source.splitlines()
+    for idx in range(max(0, hunk.new_start - 1), min(len(source_lines), hunk.new_end)):
+        match = _BROAD_EXCEPT_RE.match(source_lines[idx])
+        if match is None:
+            continue
+        except_indent = len(match.group("indent"))
+        inline_rest = re.sub(r"#.*$", "", match.group("rest")).strip()
+        current_body = [inline_rest] if inline_rest else _collect_except_body(source_lines, idx + 1, except_indent)
+        non_comment_current = [b for b in current_body if not b.startswith("#")]
+        if non_comment_current != ["pass"]:
+            continue
+        return _finding(
+            file,
+            idx + 1,
+            "This except block's body was replaced with a bare `pass`, discarding real error "
+            "handling that used to run here - no logging, no re-raise. If the wrapped call ever "
+            "fails, the failure is now silently swallowed and there's no way to diagnose what went "
+            "wrong.",
+            "Restore logging (e.g. `logger.warning(...)`) or re-raising instead of silently passing.",
+        )
+    return None
+
+
+def _collect_except_body(lines: list[str], start_idx: int, except_indent: int) -> list[str]:
+    """Contiguous lines from start_idx indented deeper than except_indent -
+    the except block's body, stopping at the first line back at or above
+    that indentation, or the end of the list."""
+    body = []
+    for later in lines[start_idx:]:
+        stripped = later.strip()
+        if not stripped:
+            continue
+        indent = len(later) - len(later.lstrip())
+        if indent <= except_indent:
+            break
+        body.append(stripped)
+    return body
+
+
 def _swallowed_exception_findings(file: str, source: str, hunks: list[_Hunk]) -> list[dict]:
     findings: list[dict] = []
     for hunk in hunks:
         added = hunk.added
+        found_except_in_added = False
         for idx, line in enumerate(added):
             match = _BROAD_EXCEPT_RE.match(line)
             if not match:
                 continue
+            found_except_in_added = True
             except_indent = len(match.group("indent"))
 
             # A common idiom the old regex's "colon, then only whitespace or
@@ -574,6 +648,10 @@ def _swallowed_exception_findings(file: str, source: str, hunks: list[_Hunk]) ->
                     "silently passing.",
                 )
             )
+        if not found_except_in_added:
+            finding = _unchanged_except_body_weakened(file, source, hunk)
+            if finding is not None:
+                findings.append(finding)
     return findings
 
 
