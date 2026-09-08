@@ -11,7 +11,22 @@ testable and usable before naming happens.
 
 
 def _mermaid_safe_label(text: str) -> str:
-    return text.replace('"', "'")
+    # Real bug found via audit: quote-neutralization alone stops a label
+    # from breaking out of its enclosing "..." via an embedded quote, but
+    # Mermaid flowchart syntax is line-oriented - a node is
+    # `C{id}["{label}"]` on one line - and an embedded newline was never
+    # touched. Cluster names reach this function straight from an LLM call
+    # (live_wiki.py's propose_cluster_names) with no server-side
+    # sanitization beyond a truthy .strip() check on the unstripped
+    # original string, so a multi-line model response (or a deliberately
+    # crafted one) could land a second line as its own new Mermaid
+    # statement - confirmed this could inject an entirely unrelated extra
+    # node into the rendered diagram, undermining this module's own
+    # guarantee that "a diagram can never show a relationship that doesn't
+    # actually exist in the code." Collapsing newlines/carriage returns to
+    # a space keeps a multi-line model response on the label's own single
+    # line instead of letting it spill onto new Mermaid statements.
+    return text.replace('"', "'").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
 
 
 def _file_to_cluster_map(clusters: list[dict]) -> dict[str, int]:
