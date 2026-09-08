@@ -130,6 +130,36 @@ def test_select_adapter_honors_forced_name():
     assert result is b
 
 
+def test_select_adapter_reprompts_on_non_numeric_input():
+    # Real bug found via audit: a non-numeric answer raised a raw
+    # ValueError from int(choice), uncaught by this function's only
+    # caller (cli.py only catches NoAdapterAvailableError/
+    # AmbiguousAdapterError) - a mistyped answer crashed the whole
+    # command with an unhandled traceback instead of a clean re-prompt.
+    a = make_adapter("claude", True)
+    b = make_adapter("cursor", True)
+    with patch("builtins.input", side_effect=["not a number", "2"]):
+        result = select_adapter([a, b], forced_name=None, interactive=True)
+    assert result is b
+
+
+def test_select_adapter_reprompts_on_out_of_range_choice():
+    # Same bug, the out-of-range half: an IndexError from the list access,
+    # equally uncaught by the only caller.
+    a = make_adapter("claude", True)
+    b = make_adapter("cursor", True)
+    with patch("builtins.input", side_effect=["99", "0", "1"]):
+        result = select_adapter([a, b], forced_name=None, interactive=True)
+    assert result is a
+
+
+def test_select_adapter_raises_after_repeated_invalid_input():
+    a = make_adapter("claude", True)
+    with patch("builtins.input", return_value="not a number"):
+        with pytest.raises(NoAdapterAvailableError):
+            select_adapter([a], forced_name=None, interactive=True)
+
+
 def test_build_instruction_references_manual_and_evidence():
     instruction = build_instruction(manual_dir="manual")
     assert "manual" in instruction
