@@ -116,16 +116,31 @@ _KOTLIN_PACKAGE_PATTERN = re.compile(r"^\s*package\s+([\w.]+)", re.MULTILINE)
 # repo in these four languages, not a hypothetical shape.
 _GO_PACKAGE_MAIN_PATTERN = re.compile(r"^\s*package\s+main\b", re.MULTILINE)
 _GO_FUNC_MAIN_PATTERN = re.compile(r"^\s*func\s+main\s*\(", re.MULTILINE)
-_RUST_FN_MAIN_PATTERN = re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+main\s*\(", re.MULTILINE)
+# Anchored to column 0 (no leading whitespace), not `^\s*` - a real
+# crate-root fn main() is always unindented; requiring that excludes a
+# nested `mod tests { fn main() {} }`, which rustfmt always indents, from
+# matching as if it were the crate's real entry point.
+_RUST_FN_MAIN_PATTERN = re.compile(r"^(?:pub\s+)?(?:async\s+)?fn\s+main\s*\(", re.MULTILINE)
+# Modifiers can appear in any order and any legal Java main method can carry
+# extras beyond public/static (final, synchronized, strictfp) - e.g. `public
+# final static void main(...)` or `public static synchronized void main(...)`.
+# Two same-line lookaheads (public and static each appear somewhere before
+# void main() on this line) rather than one fixed-order sequence, so real
+# modifier combinations aren't missed - but still scoped to one line/
+# statement, not "anywhere in the file", for the same reason the C# check
+# below requires static and Main to co-occur on one declaration.
 _JAVA_MAIN_METHOD_PATTERN = re.compile(
-    r"^\s*(?:public\s+static|static\s+public)\s+void\s+main\s*\(", re.MULTILINE
+    r"^\s*(?=[^;{}\n]*\bpublic\b)(?=[^;{}\n]*\bstatic\b)[\w\s]*\bvoid\s+main\s*\(",
+    re.MULTILINE,
 )
-# C#'s Main can carry any modifier order/return type (void/int/Task/Task<int>)
-# and an optional access modifier - two independent signals both required
-# (the same bounded-heuristic shape as the Hilt/Dagger check below) rather
-# than one combined regex trying to enumerate every legal signature.
-_CSHARP_STATIC_KEYWORD_PATTERN = re.compile(r"\bstatic\b")
-_CSHARP_MAIN_METHOD_PATTERN = re.compile(r"\bMain\s*\(")
+# C#'s Main can carry any modifier order/return type (void/int/Task/Task<int>).
+# Scoped to one line via a lookahead requiring `static` before `Main(` on the
+# same statement - not two independent whole-file searches, which would also
+# match a file containing an unrelated static helper elsewhere plus a
+# separate instance `void Main()`.
+_CSHARP_MAIN_METHOD_PATTERN = re.compile(
+    r"^\s*(?=[^;{}\n]*\bstatic\b)[\w\s<>]*\bMain\s*\(", re.MULTILINE
+)
 
 _HTML_SCRIPT_SRC_PATTERN = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
 
@@ -276,9 +291,7 @@ def _has_csharp_main_method(repo_path: Path, path: str) -> bool:
         content = (repo_path / path).read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return False
-    return bool(
-        _CSHARP_STATIC_KEYWORD_PATTERN.search(content) and _CSHARP_MAIN_METHOD_PATTERN.search(content)
-    )
+    return bool(_CSHARP_MAIN_METHOD_PATTERN.search(content))
 
 
 def _has_hilt_dagger_annotation(repo_path: Path, path: str) -> bool:
