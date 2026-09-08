@@ -37,6 +37,47 @@ def test_agreeing_header_and_real_scope_produce_no_fact():
     assert context == ""
 
 
+def test_python_class_header_trailing_colon_agrees_with_real_scope_produces_no_fact():
+    # Real bug found via audit: git's own funcname heuristic includes
+    # Python's class-header trailing colon verbatim in the hunk header
+    # ("class Foo:"), but scope_lookup's real AST-derived name is always
+    # "Foo" (no colon) - the two could never match for any Python
+    # class-header hunk before this fix, firing a self-contradictory
+    # "claims 'Foo:', but this is actually inside 'Foo'" correction on
+    # code that was correctly still inside the class the header named.
+    content = "class Foo:\n    def a(self):\n        pass\n\n    def b(self):\n        pass\n"
+    patch = (
+        "@@ -1,4 +1,5 @@ class Foo:\n"
+        "     def a(self):\n"
+        "         pass\n"
+        " \n"
+        "+    # added comment\n"
+        "     def b(self):\n"
+    )
+    diff_patches = (("x.py", patch),)
+    context = build_hunk_scope_correction_context({"x.py": content}, diff_patches)
+    assert context == ""
+
+
+def test_python_class_header_trailing_colon_genuine_mismatch_still_fires():
+    # The colon-stripping fix above must not swallow a genuine mismatch -
+    # here the header's nearest-preceding-class heuristic still claims
+    # "Foo:", but the real changed line is inside a later class "Bar".
+    content = "class Foo:\n    def a(self):\n        pass\n\nclass Bar:\n    def b(self):\n        pass\n"
+    patch = (
+        "@@ -5,3 +5,4 @@ class Foo:\n"
+        " class Bar:\n"
+        "     def b(self):\n"
+        "         pass\n"
+        "+        # added\n"
+    )
+    diff_patches = (("x.py", patch),)
+    context = build_hunk_scope_correction_context({"x.py": content}, diff_patches)
+    assert "x.py:5" in context
+    assert "lists `Foo` as" in context
+    assert "actually inside `Bar`" in context
+
+
 def test_header_naming_a_def_not_a_class_produces_no_fact():
     # This module only has a real scope_lookup to check a class/module claim
     # against - a def/method header claim isn't something it can verify, so

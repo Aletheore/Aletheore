@@ -32,7 +32,23 @@ MAX_HUNK_SCOPE_BYTES = 4_000
 
 def _claimed_scope_name(header_context: str) -> str | None:
     match = _HEADER_SCOPE_NAME_RE.match(header_context.strip())
-    return match.group(1) if match else None
+    if match is None:
+        return None
+    name = match.group(1)
+    # git's own funcname heuristic includes Python's class-header trailing
+    # colon verbatim ("class Foo:" -> claimed name "Foo:"), but
+    # scope_lookup's real AST-derived name is always "Foo" - the colon
+    # alone made this module's own "silent when the header agrees with the
+    # real scope" contract false for every Python class-header hunk: it
+    # fired a self-contradictory correction ("claims 'Foo:', but this is
+    # actually inside 'Foo'") on code that was correctly still inside the
+    # class the header named. The ":" is kept in the character class above
+    # for Ruby's "class Foo::Bar" namespace separator - that shape never
+    # ends in a single trailing colon, only "::" would, so this only ever
+    # strips the real Python case.
+    if name.endswith(":") and not name.endswith("::"):
+        name = name[:-1]
+    return name
 
 
 def _hunk_claims_with_changed_lines(patch: str) -> list[tuple[str, list[int]]]:
