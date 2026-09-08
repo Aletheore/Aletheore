@@ -122,7 +122,7 @@ The GitHub App and dashboard code lives in `github-app/`; see its own
 - `src/` — the actual, working CLI code (see its README for everything above in detail).
 - `github-app/` — the hosted GitHub App: FastAPI server, RQ workers, migrations. See
   [Aletheore AIR](#aletheore-air-hosted-github-app) above for what it does.
-- `website/` — the marketing site and live demo.
+- `website/` — the marketing site.
 - `docs/superpowers/` — design specs and implementation plans written during development.
 - `docs/operations/` — current operational baselines: incident response, data handling, SLOs,
   deployment verification, branch protection, support process.
