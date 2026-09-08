@@ -1,5 +1,6 @@
 import logging
 import threading
+from datetime import datetime, timezone
 
 import pytest
 
@@ -456,6 +457,67 @@ def test_openai_free_tier_usage_trues_up_the_reservation_to_the_real_total(monke
 
     assert redis_conn.data[_openai_free_tier_token_key()] == 1500
     assert redis_conn.expiries[_openai_free_tier_token_key()] == 2 * 24 * 3600
+
+
+def test_openai_free_tier_true_up_corrects_the_same_day_the_reservation_used(monkeypatch):
+    # Real bug found via audit: before_llm_call and on_usage/on_call_failed
+    # each independently computed _openai_free_tier_token_key() from
+    # datetime.now(timezone.utc) at the moment they were called - not a
+    # value captured once per call. A call reserved at 23:59:59 UTC that
+    # completes at 00:00:01 UTC the next day reserved against yesterday's
+    # key but trued up against today's key, permanently over-reserving
+    # the first day and leaking negative headroom into the second day's
+    # real allowance (a brand-new day's counter starting negative means
+    # more real tokens than the cap intends can be spent before
+    # _reserve_openai_free_tier_budget starts rejecting new reservations).
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    import scan_worker.model_tiers as model_tiers_module
+
+    class _FakeDatetime(datetime):
+        _now = datetime(2026, 1, 1, 23, 59, 59, tzinfo=timezone.utc)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls._now
+
+    monkeypatch.setattr(model_tiers_module, "datetime", _FakeDatetime)
+    redis_conn = _FakeRedis()
+    chain = writing_adapter_chain_for_free_tier(redis_conn)
+    openai_adapter = next(a for a in chain if a.name == "OpenAI-FreeTier")
+
+    assert openai_adapter._before_llm_call() is True  # reserves against 2026-01-01's key
+
+    _FakeDatetime._now = datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc)
+    openai_adapter._on_usage(30_000, 20_000)  # completes just after midnight UTC
+
+    assert redis_conn.data["free_tier:openai_tokens:2026-01-01"] == 50_000
+    assert redis_conn.data.get("free_tier:openai_tokens:2026-01-02") is None
+
+
+def test_openai_free_tier_on_call_failed_releases_against_the_same_day_the_reservation_used(monkeypatch):
+    # Same real bug as the true-up test above, for the failure-release path.
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    import scan_worker.model_tiers as model_tiers_module
+
+    class _FakeDatetime(datetime):
+        _now = datetime(2026, 1, 1, 23, 59, 59, tzinfo=timezone.utc)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls._now
+
+    monkeypatch.setattr(model_tiers_module, "datetime", _FakeDatetime)
+    redis_conn = _FakeRedis()
+    chain = writing_adapter_chain_for_free_tier(redis_conn)
+    openai_adapter = next(a for a in chain if a.name == "OpenAI-FreeTier")
+
+    assert openai_adapter._before_llm_call() is True
+
+    _FakeDatetime._now = datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc)
+    openai_adapter._on_call_failed()
+
+    assert redis_conn.data["free_tier:openai_tokens:2026-01-01"] == 0
+    assert redis_conn.data.get("free_tier:openai_tokens:2026-01-02") is None
 
 
 def test_openai_free_tier_usage_still_forwards_to_the_shared_on_usage(monkeypatch):
