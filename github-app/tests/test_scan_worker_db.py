@@ -1879,6 +1879,33 @@ async def test_get_endpoint_health_summary_excludes_stale_rows(pool):
 
 
 @pytest.mark.asyncio
+async def test_get_endpoint_health_summary_does_not_collapse_the_same_path_across_two_repos(pool):
+    # Real bug found via audit: DISTINCT ON partitioned by
+    # (endpoint_method, endpoint_path) alone, with no repo_full_name -
+    # every other query in this file scopes endpoint_health by
+    # (installation_id, repo_full_name, endpoint_method, endpoint_path),
+    # but an installation can cover multiple repos, and two repos sharing
+    # a conventional health-check path (GET /health here) collapsed into
+    # a single row, silently dropping one repo's endpoint from the count
+    # and potentially reporting the wrong repo's reachability.
+    await _insert_installation(pool, 90601, "co-multi")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable, status_code, latency_ms)
+            VALUES
+                (90601, 'co-multi/repo-a', 'GET', '/health', true, 200, 5.0),
+                (90601, 'co-multi/repo-b', 'GET', '/health', false, NULL, NULL)
+            """
+        )
+
+    summary = get_endpoint_health_summary(TEST_DATABASE_URL, 90601)
+
+    assert summary == {"total": 2, "reachable": 1}
+
+
+@pytest.mark.asyncio
 async def test_list_installation_member_emails_sync_matches_async_semantics(pool):
     await _insert_installation(pool, 808, "co")
     async with pool.acquire() as conn:
