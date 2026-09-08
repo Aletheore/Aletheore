@@ -1,4 +1,5 @@
 import logging
+import math
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
@@ -84,6 +85,40 @@ _AFFILIATE_COMMISSION_RATE = Decimal("0.15")
 class PaddleWebhookAttributionError(RuntimeError):
     """A real, signature-verified Paddle webhook that can't be attributed
     to any installation - see the installation_id is None branch below."""
+
+
+def _seat_item_quantity(item: dict) -> int:
+    """A line item's quantity, coerced to a real int - never trusts Paddle's
+    own JSON shape to guarantee an int the way `item.get("quantity", 0)`
+    implicitly did. That default only ever applies when the key is
+    MISSING, not when Paddle sends it present with an explicit null or a
+    numeric string - confirmed directly: quantity=None or quantity="3"
+    both crashed the whole webhook handler with an unhandled TypeError
+    on the sum() below, permanently stuck (Paddle keeps retrying the
+    same payload) rather than a legitimate plan/seat change ever
+    applying for that customer.
+    """
+    quantity = item.get("quantity")
+    if isinstance(quantity, bool):
+        return 0
+    if isinstance(quantity, int):
+        return quantity
+    if isinstance(quantity, float):
+        # Flash Review finding: JSON's own grammar has no literal for
+        # inf/-inf/nan, but Python's json module accepts them anyway
+        # (a real, if nonstandard, shape a sender can transmit) - int()
+        # on either raises OverflowError (inf) or ValueError (nan), the
+        # exact same "crash the whole webhook handler" failure mode this
+        # function exists to close for None/string quantity.
+        if not math.isfinite(quantity):
+            return 0
+        return int(quantity)
+    if isinstance(quantity, str):
+        try:
+            return int(quantity)
+        except ValueError:
+            return 0
+    return 0
 
 
 async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue=None) -> None:
@@ -181,7 +216,7 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     # reads `items`/`plan`, already available.
     extra_seats = (
         sum(
-            item.get("quantity", 0)
+            _seat_item_quantity(item)
             for item in items
             if (item.get("price") or {}).get("id") == EXTRA_SEAT_PRICE_ID
         )
