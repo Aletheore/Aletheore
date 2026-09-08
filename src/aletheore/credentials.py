@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import sys
@@ -73,51 +74,81 @@ def _load_saved_key(provider_name: str, credentials_path: Path) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _save_key(provider_name: str, key: str, credentials_path: Path) -> None:
+@contextlib.contextmanager
+def _locked_rw_credentials_file(credentials_path: Path):
+    """Opens credentials_path for read+write under an exclusive advisory
+    lock held for the whole read-modify-write, yielding the parsed dict -
+    whatever the caller mutates it to is what gets written back on exit.
+
+    Real bug this closes: _save_key/clear_api_key used to read the whole
+    file, modify a plain in-memory dict, then write the whole file back
+    as three independent, UNLOCKED steps. Two CLI invocations started
+    close together (a real, plausible scenario - a user with two
+    terminal tabs, or an interactive run overlapping a CI job) could both
+    read the file's original state before either wrote, so whichever
+    wrote last silently discarded the other's saved key - with no error
+    surfaced to the process whose own save call returned normally.
+    Confirmed directly: process A saves "anthropic", process B (reading
+    that same pre-A state) saves "gemini" - the file ends up holding only
+    "gemini"; "anthropic" is gone with no indication it never landed.
+
+    Platform-conditional locking (fcntl on POSIX, msvcrt on Windows)
+    matches this module's own established pattern for exactly this kind
+    of platform difference - see cli.py's O_NOFOLLOW handling, this CLI
+    ships for Windows too (claude-desktop mcp-install is a documented
+    Windows target).
+    """
     credentials_path.parent.mkdir(parents=True, exist_ok=True)
-    data = {}
-    if credentials_path.exists():
-        try:
-            loaded = json.loads(credentials_path.read_text())
-            if isinstance(loaded, dict):
-                data = loaded
-        except json.JSONDecodeError:
-            data = {}
-    data[provider_name] = key
-    _write_credentials(data, credentials_path)
-
-
-def _write_credentials(data: dict, credentials_path: Path) -> None:
-    content = json.dumps(data, indent=2)
-    # os.open's mode only applies when it creates the file - an existing
-    # file (e.g. one that pre-dates this restrictive-permissions fix, or
-    # was seeded some other way) keeps whatever permissions it already had.
-    # fchmod before writing closes that gap too: permissions are locked
-    # down before any new key content is written, whether the file is new
-    # or pre-existing, instead of write_text() then chmod() after, which
-    # left the file (and the key) briefly world/group-readable in between.
-    fd = os.open(credentials_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # O_CREAT + fchmod before any read locks permissions down for the
+    # whole locked section, whether the file is new or pre-existing -
+    # same reasoning _write_credentials previously used to avoid ever
+    # leaving the file briefly world/group-readable.
+    fd = os.open(str(credentials_path), os.O_RDWR | os.O_CREAT, 0o600)
     try:
         os.fchmod(fd, 0o600)
-    except BaseException:
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            raw = os.read(fd, os.fstat(fd).st_size)
+            try:
+                loaded = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                loaded = {}
+            data = loaded if isinstance(loaded, dict) else {}
+            yield data
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.ftruncate(fd, 0)
+            os.write(fd, json.dumps(data, indent=2).encode())
+        finally:
+            if sys.platform == "win32":
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
         os.close(fd)
-        raise
-    with os.fdopen(fd, "w") as f:
-        f.write(content)
+
+
+def _save_key(provider_name: str, key: str, credentials_path: Path) -> None:
+    with _locked_rw_credentials_file(credentials_path) as data:
+        data[provider_name] = key
 
 
 def clear_api_key(provider_name: str, credentials_path: Path = DEFAULT_CREDENTIALS_PATH) -> bool:
     if not credentials_path.exists():
         return False
-    try:
-        data = json.loads(credentials_path.read_text())
-    except json.JSONDecodeError:
-        return False
-    if not isinstance(data, dict) or provider_name not in data:
-        return False
-    del data[provider_name]
-    _write_credentials(data, credentials_path)
-    return True
+    removed = False
+    with _locked_rw_credentials_file(credentials_path) as data:
+        if provider_name in data:
+            del data[provider_name]
+            removed = True
+    return removed
 
 
 def save_api_token(

@@ -148,6 +148,47 @@ def test_save_key_preserves_other_providers_existing_keys(monkeypatch, tmp_path)
     assert saved == {"provider_a": "sk-a", "provider_b": "sk-b"}
 
 
+def test_concurrent_saves_do_not_silently_lose_each_others_keys(tmp_path):
+    # Real bug found via audit: _save_key used to read the whole file,
+    # modify a plain in-memory dict, then write the whole file back as
+    # three independent, UNLOCKED steps. Two CLI invocations started
+    # close together (a real, plausible scenario - two terminal tabs)
+    # could both read the file's original state before either wrote, so
+    # whichever wrote last silently discarded the other's saved key -
+    # with no error surfaced to the process whose own save call returned
+    # normally.
+    import threading
+
+    from aletheore.credentials import _save_key
+
+    creds_path = tmp_path / "creds.json"
+    creds_path.write_text(json.dumps({"openai": "sk-openai-existing"}))
+
+    barrier = threading.Barrier(2)
+
+    def save_anthropic():
+        barrier.wait()
+        _save_key("anthropic", "sk-anthropic-new", creds_path)
+
+    def save_gemini():
+        barrier.wait()
+        _save_key("gemini", "sk-gemini-new", creds_path)
+
+    t1 = threading.Thread(target=save_anthropic)
+    t2 = threading.Thread(target=save_gemini)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    saved = json.loads(creds_path.read_text())
+    assert saved == {
+        "openai": "sk-openai-existing",
+        "anthropic": "sk-anthropic-new",
+        "gemini": "sk-gemini-new",
+    }
+
+
 def test_save_api_token_is_readable_via_get_api_key(monkeypatch, tmp_path):
     monkeypatch.delenv("TESTPROVIDER_API_KEY", raising=False)
     creds_path = tmp_path / "creds.json"
