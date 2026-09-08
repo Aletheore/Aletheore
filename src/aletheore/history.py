@@ -9,8 +9,43 @@ def _history_dir(repo_path: Path) -> Path:
     return repo_path / ".aletheore" / "history"
 
 
+def _snapshot_sort_key(path: Path) -> tuple[str, int]:
+    # Primary key is the snapshot's own real scanned_at (read from its
+    # content, not guessed from the filename) - callers are free to save
+    # snapshots out of physical order with an explicit scanned_at
+    # (test_list_snapshots_returns_chronological_order does exactly this
+    # on purpose), and that logical timestamp, not save order, is what
+    # "chronological" means here in the normal case.
+    #
+    # mtime (real filesystem write time, nanosecond resolution) is only
+    # the TIEBREAKER, for the one case scanned_at alone can't order: two
+    # snapshots saved within the same wall-clock second get a
+    # disambiguating "-N" suffix inserted before the .json extension
+    # (_save_json_with_rotation's collision loop) - real bug this closes:
+    # a plain filename-string sort put that suffixed (chronologically
+    # LATER) file BEFORE the unsuffixed one, since '-' (0x2D) sorts
+    # before '.' (0x2E) in ASCII, so "...-1.json" < "....json" lexically
+    # even though the "-1" file was saved second. _rotate then deleted
+    # the wrong (older-looking but actually newer) snapshot when rotating
+    # past the keep limit - a real, reachable scenario (two `aletheore
+    # scan` runs seconds apart, common in CI or a fast local loop), not
+    # cosmetic display-order noise: it discarded a newer scan's real
+    # evidence while keeping an older one.
+    try:
+        scanned_at = json.loads(path.read_text()).get("scanned_at", "")
+    except (OSError, json.JSONDecodeError):
+        scanned_at = ""
+    if not isinstance(scanned_at, str):
+        scanned_at = ""
+    return (scanned_at, path.stat().st_mtime_ns)
+
+
+def _sorted_snapshots(history_dir: Path) -> list[Path]:
+    return sorted(history_dir.glob("*.json"), key=_snapshot_sort_key)
+
+
 def _rotate(history_dir: Path, keep: int) -> None:
-    snapshots = sorted(history_dir.glob("*.json"))
+    snapshots = _sorted_snapshots(history_dir)
     excess = len(snapshots) - keep
     if excess <= 0:
         return
@@ -41,7 +76,7 @@ def list_snapshots(repo_path: Path) -> list[Path]:
     history_dir = _history_dir(repo_path)
     if not history_dir.exists():
         return []
-    return sorted(history_dir.glob("*.json"))
+    return _sorted_snapshots(history_dir)
 
 
 def _identity_key(finding: dict, fields: tuple[str, ...]) -> tuple:
@@ -78,8 +113,18 @@ def _compute_curated_diff(old: dict, new: dict) -> dict:
             "toggled on/off, not necessarily real changes"
         )
 
-    old_history_scanned = old["security"]["secrets"]["history_scanned_commits"] > 0
-    new_history_scanned = new["security"]["secrets"]["history_scanned_commits"] > 0
+    # .get(..., 0) rather than a direct index - real bug found via audit:
+    # history_scanned_commits was added to the secrets section after this
+    # module's original schema, so a genuinely older on-disk snapshot (a
+    # real, plausible .aletheore/history/*.json file predating this
+    # field, diffed after a CLI upgrade) crashed with KeyError instead of
+    # degrading the same way _endpoint_block already does for
+    # api_endpoints just above - this module's own established pattern
+    # for exactly this case, applied inconsistently. 0 is the correct
+    # default: "not present" and "0 commits scanned" both mean
+    # old_history_scanned/new_history_scanned should read False.
+    old_history_scanned = old["security"]["secrets"].get("history_scanned_commits", 0) > 0
+    new_history_scanned = new["security"]["secrets"].get("history_scanned_commits", 0) > 0
     if old_history_scanned != new_history_scanned:
         caveats.append(
             "git-history secret scanning state changed between scans "
@@ -112,9 +157,12 @@ def _compute_curated_diff(old: dict, new: dict) -> dict:
     )
     result["secrets"] = {"new": new_secrets, "resolved": resolved_secrets}
 
+    # Same older-schema gap as history_scanned_commits above - history_findings
+    # is absent, not just empty, in evidence that predates git-history secret
+    # scanning.
     new_history_secrets, resolved_history_secrets = _new_and_resolved(
-        old["security"]["secrets"]["history_findings"],
-        new["security"]["secrets"]["history_findings"],
+        old["security"]["secrets"].get("history_findings", []),
+        new["security"]["secrets"].get("history_findings", []),
         ("commit", "path", "pattern"),
     )
     result["history_secrets"] = {"new": new_history_secrets, "resolved": resolved_history_secrets}
