@@ -95,7 +95,11 @@ def verify_findings_against_checkout(findings: list[dict], checkout_dir: Path) -
             continue
         line = finding.get("line")
         if line is not None:
-            line_count = sum(1 for _ in full_path.open())
+            # errors="replace", matching _content_matches_cited_line below -
+            # a real checkout can contain files with a stray non-UTF-8 byte
+            # (a Latin-1 comment, etc.), and a strict decode here used to
+            # raise UnicodeDecodeError and abort the whole benchmark run.
+            line_count = sum(1 for _ in full_path.open(errors="replace"))
             if line < 1 or line > line_count:
                 unverified.append(finding)
                 continue
