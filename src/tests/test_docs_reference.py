@@ -452,3 +452,55 @@ def test_build_combined_reference_renders_overview_sections_even_with_no_modules
     md = build_combined_reference({}, "octocat/hello-world", evidence)
     assert "Database Schema" in md
     assert "No public functions or classes found yet." not in md
+
+
+def test_build_schema_reference_renders_a_relation_whose_from_table_was_never_scanned():
+    # Real bug found via audit: build_schema_reference only visited a
+    # relation via relations_by_table.get(table["name"], []) inside the
+    # per-table loop - a relation whose from_table has no matching entry
+    # in schema["tables"] was never visited at all and vanished from the
+    # document with no trace. Realistically reachable: schema_map.py's
+    # ALTER TABLE handling emits an add_relation event keyed on the ALTER
+    # TABLE's own target table with no requirement that a CREATE TABLE for
+    # that same table was ever parsed in this scan (e.g. the table
+    # predates the tracked migration directory).
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("users", [_column("id", "INT", primary_key=True)])],
+        "relations": [_relation("user_roles", "user_id", "users", "id")],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert "### `user_roles`" in md
+    assert "`user_id` → `users.id`" in md
+
+
+def test_build_schema_reference_orphan_table_relations_still_sorted_by_column():
+    evidence = {"repository": {"database": {"schema": {
+        "checked": True,
+        "tables": [_table("users", [_column("id", "INT", primary_key=True)])],
+        "relations": [
+            _relation("audit_log", "target_id", "widgets", "id"),
+            _relation("audit_log", "actor_id", "users", "id"),
+        ],
+    }}}}
+    md = build_schema_reference(evidence)
+    assert md.index("actor_id") < md.index("target_id")
+
+
+def test_build_combined_reference_deduplicates_colliding_anchors():
+    # Real bug found via audit: _github_heading_anchor strips punctuation
+    # before collapsing whitespace, so two distinct module paths that
+    # differ only in stripped characters slugify to the identical anchor
+    # ("src/a.b.py" and "src/ab.py" both become "srcabpy") - the TOC
+    # produced two links pointing at the same anchor, so one always jumped
+    # to the wrong heading. GitHub's own renderer instead assigns the bare
+    # anchor to the first heading and appends -1, -2, ... to each later
+    # colliding one; this must match that so a generated TOC link always
+    # lands on the same heading GitHub itself would land on.
+    modules = {
+        "src/a.b.py": "# src/a.b.py\n\nA-dot-b content.\n",
+        "src/ab.py": "# src/ab.py\n\nAb content.\n",
+    }
+    md = build_combined_reference(modules, "octocat/hello-world")
+    assert "[src/a.b.py](#srcabpy)" in md
+    assert "[src/ab.py](#srcabpy-1)" in md

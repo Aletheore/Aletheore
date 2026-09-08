@@ -137,6 +137,28 @@ def _github_heading_anchor(heading: str) -> str:
     return re.sub(r"\s+", "-", slug.strip())
 
 
+def _unique_github_heading_anchor(heading: str, seen_counts: dict[str, int]) -> str:
+    """Like _github_heading_anchor, but deduplicated the same way GitHub
+    itself deduplicates same-page anchors: the first heading that slugifies
+    to a given anchor keeps the bare anchor, each later one gets -1, -2, ...
+    appended.
+
+    Real bug this closes: two distinct headings that differ only in
+    characters the slugifier strips (e.g. module paths "src/a.b.py" and
+    "src/ab.py" both becoming "srcabpy") produced identical TOC links -
+    clicking either jumped to whichever heading GitHub happened to assign
+    the bare anchor to, silently sending the other link to the wrong
+    section. Callers must build one `seen_counts` dict and thread it
+    through every anchor call for one document, in the same order the
+    headings themselves will appear, so the numbering matches what GitHub
+    will actually assign on render.
+    """
+    anchor = _github_heading_anchor(heading)
+    count = seen_counts.get(anchor, 0)
+    seen_counts[anchor] = count + 1
+    return anchor if count == 0 else f"{anchor}-{count}"
+
+
 def _escape_table_cell(value: str) -> str:
     # A literal `|` inside a table cell breaks the row into extra columns;
     # a real path/handler/type string is never expected to contain one, but
@@ -222,7 +244,27 @@ def build_schema_reference(evidence: dict) -> str:
     for relation in schema.get("relations", []):
         relations_by_table.setdefault(relation["from_table"], []).append(relation)
 
+    def _render_relations(table_relations: list[dict]) -> None:
+        sections.append("Foreign keys:")
+        sections.append("")
+        for relation in sorted(table_relations, key=lambda r: r["from_column"]):
+            on_delete = ""
+            if relation.get("on_delete"):
+                on_delete_text = f"ON DELETE {relation['on_delete']}"
+                on_delete = f" ({_code_span(on_delete_text)})"
+            location = ""
+            if relation.get("file") and relation.get("line"):
+                location_text = f"{relation['file']}:{relation['line']}"
+                location = f" \u2014 {_code_span(location_text)}"
+            target_text = f"{relation['to_table']}.{relation['to_column']}"
+            sections.append(
+                f"- {_code_span(relation['from_column'])} \u2192 "
+                f"{_code_span(target_text)}{on_delete}{location}"
+            )
+        sections.append("")
+
     sections = ["## Database Schema", ""]
+    known_table_names = {table["name"] for table in schema["tables"]}
     for table in sorted(schema["tables"], key=lambda t: t["name"]):
         table_location = ""
         if table.get("file") and table.get("line"):
@@ -236,27 +278,21 @@ def build_schema_reference(evidence: dict) -> str:
             sections.append("|---|---|---|")
             sections.extend(_render_column(column) for column in columns)
             sections.append("")
-        table_relations = sorted(
-            relations_by_table.get(table["name"], []), key=lambda r: r["from_column"]
-        )
+        table_relations = relations_by_table.get(table["name"], [])
         if table_relations:
-            sections.append("Foreign keys:")
-            sections.append("")
-            for relation in table_relations:
-                on_delete = ""
-                if relation.get("on_delete"):
-                    on_delete_text = f"ON DELETE {relation['on_delete']}"
-                    on_delete = f" ({_code_span(on_delete_text)})"
-                location = ""
-                if relation.get("file") and relation.get("line"):
-                    location_text = f"{relation['file']}:{relation['line']}"
-                    location = f" \u2014 {_code_span(location_text)}"
-                target_text = f"{relation['to_table']}.{relation['to_column']}"
-                sections.append(
-                    f"- {_code_span(relation['from_column'])} \u2192 "
-                    f"{_code_span(target_text)}{on_delete}{location}"
-                )
-            sections.append("")
+            _render_relations(table_relations)
+
+    # A relation's from_table isn't guaranteed to have a matching
+    # CREATE TABLE this scan detected - e.g. an ALTER TABLE ADD
+    # CONSTRAINT on a table that predates the tracked migration
+    # directory, or was created by a path this scanner doesn't parse.
+    # Render those under their own heading instead of silently dropping
+    # them, so every relation this scan found is accounted for somewhere.
+    orphan_table_names = sorted(set(relations_by_table) - known_table_names)
+    for table_name in orphan_table_names:
+        sections.append(f"### {_code_span(table_name)}")
+        sections.append("")
+        _render_relations(relations_by_table[table_name])
 
     return "\n".join(sections).rstrip() + "\n"
 
@@ -325,10 +361,15 @@ def build_combined_reference(
     if not modules and not overview_sections:
         return title + "\nNo public functions or classes found yet.\n"
 
+    seen_anchors: dict[str, int] = {}
     toc_entries = [
-        f"- [{heading}](#{_github_heading_anchor(heading)})" for heading, _ in overview_sections
+        f"- [{heading}](#{_unique_github_heading_anchor(heading, seen_anchors)})"
+        for heading, _ in overview_sections
     ]
-    toc_entries += [f"- [{path}](#{_github_heading_anchor(path)})" for path in sorted(modules)]
+    toc_entries += [
+        f"- [{path}](#{_unique_github_heading_anchor(path, seen_anchors)})"
+        for path in sorted(modules)
+    ]
     toc = "\n".join(toc_entries)
 
     body_sections = [markdown.rstrip() for _, markdown in overview_sections]
