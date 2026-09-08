@@ -173,3 +173,23 @@ def test_content_grounding_is_not_scored_for_a_finding_that_failed_location(tmp_
     assert result["content_verified"] == []
     assert result["content_unverified"] == []
     assert result["content_grounding_rate"] is None
+
+
+def test_verify_findings_does_not_crash_on_a_file_with_invalid_utf8_bytes(tmp_path):
+    # Real bug found via audit: line-count verification opened the cited
+    # file with a strict UTF-8 decode while the content-grounding check
+    # right after it (_content_matches_cited_line) tolerantly decodes with
+    # errors="replace". A real checkout can contain a file with a stray
+    # non-UTF-8 byte (a Latin-1 comment, a copy-pasted smart quote, etc.),
+    # and the strict decode raised UnicodeDecodeError and aborted the
+    # whole benchmark run instead of scoring that one finding.
+    checkout = tmp_path
+    (checkout / "weird.py").write_bytes(
+        b"def foo():\n    x = 1\n    y = b'\xff\xfe bad bytes'\n    return x + y\n"
+    )
+    findings = [{"file": "weird.py", "line": 3, "message": "looks fine", "severity": None}]
+
+    result = verify_findings_against_checkout(findings, checkout)
+
+    assert result["verified"] == findings
+    assert result["unverified"] == []
