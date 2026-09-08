@@ -885,6 +885,33 @@ def test_extract_gin_ungrouped_route_on_the_base_router_is_unaffected():
     assert entries[0]["path"] == "/health"
 
 
+def test_extract_gin_group_var_reused_in_another_function_does_not_bleed_across():
+    # Flash Review finding on PR #597: the original binding table was keyed
+    # only by identifier text, file-wide - a later, unrelated
+    # `v1 := other.Group("/admin")` in a second function overwrote the map
+    # entry for the first function's own "v1", so routes registered under
+    # the FIRST v1 (never actually grouped under /admin) were reported with
+    # the SECOND function's /admin prefix. Each function reusing the
+    # idiomatic "v1" group-variable name is real, common Gin code, not a
+    # contrived shape.
+    root, source = parse_go(
+        'func registerPublicRoutes(router *gin.Engine) {\n'
+        '\tv1 := router.Group("/api/v1")\n'
+        '\tv1.GET("/users", getUsers)\n'
+        '}\n'
+        '\n'
+        'func registerAdminRoutes(router *gin.Engine) {\n'
+        '\tv1 := router.Group("/admin")\n'
+        '\tv1.DELETE("/users/:id", deleteUser)\n'
+        '}\n'
+    )
+
+    entries = _extract_gin_routes(root, source, "main.go")
+
+    paths = [(e["method"], e["path"]) for e in entries]
+    assert paths == [("GET", "/api/v1/users"), ("DELETE", "/admin/users/:id")]
+
+
 def test_extract_axum_single_route():
     root, source = parse_rust(
         'fn main() { let app = Router::new().route("/health", get(health_handler)); }\n'
