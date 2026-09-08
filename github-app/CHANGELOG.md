@@ -52,6 +52,61 @@ a 10-PR hardening pass (backward-audit findings against recently merged PRs) plu
 
 No other DB migrations in this range beyond #590's.
 
+## 2026-09-08 (second deploy)
+
+14 commits since the previous deploy, tagged `github-app-deploy-2026-09-08-2` (commit `a6e2457`) -
+a second, independent 10-PR hardening pass (a fresh adversarial audit round) plus one product
+removal:
+
+- **Real fixes from the audit batch**: a Rails `reversible do |dir|` block's `dir.down` was read
+  as forward-migration code (#593); Go/Rust/Java/C# compiled-language entry points always looked
+  unreachable to dead-code detection (#594); the secret scanner missed `SECRET_KEY`/`*_TOKEN`
+  assignments entirely (#595); a Flash Review hunk-scope correction fired a self-contradictory
+  false positive on every Python class-header hunk (#596); Gin route groups silently dropped their
+  `.Group()` prefix (#597); the repo's own license went undetected for Rust/PHP/Ruby/C#/Java
+  (#598); a Maven `pom.xml` with no declared `xmlns` was invisible to vulnerability scanning
+  (#599); JVM co-located test files (`FooTest.kt` beside `Foo.kt`) were invisible to test-path
+  detection (#600); evidence resolution misattributed commits by whole-file recency and dropped
+  risk findings on a package-name mismatch (#601); `aletheore_ast_pattern` ignored
+  `.aletheore.json` exclusions and `mcp-install` could follow a symlink out of the repo (#603); a
+  nested/nonstandard build-tool Dockerfile and Symfony's `.env.dist` convention were both invisible
+  to detection (#602).
+- **5 real regressions caught and fixed before merge, not shipped** - each PR's own Flash Review
+  inline findings were checked against the real diff rather than trusted or ignored: the
+  `dir.down` exclusion matched any receiver's `.down()` call, not just a real `reversible` block's
+  (#593); three compiled-language entry-point regexes were simultaneously too loose (Rust matched
+  a nested `fn main` inside `mod tests`) and too strict (Java's modifier order, C#'s cross-line
+  static+Main) (#594); a gemspec license regex matched commented-out assignments (#598); Maven
+  namespace-stripping removed every `{uri}` prefix, not just Maven's own, so a foreign-namespaced
+  plugin config block could be parsed as real dependency metadata (#599); the Gin group-prefix
+  binding table was keyed file-wide instead of per function scope, so two functions reusing the
+  idiomatic "v1" group-variable name bled into each other's routes (#597).
+- **One Flash Review finding checked and dismissed, not fixed blind** (#601): a claimed git-blame
+  `^` boundary-commit marker in `--porcelain` output was tested against real git 2.52.0 across both
+  documented trigger cases (a root commit, a shallow clone) and did not reproduce - porcelain mode
+  never emits the marker, only the plain default format does.
+- **Product removal, with a real migration** (#605): the public, unauthenticated "paste a repo"
+  website demo was removed entirely - its own RQ worker, Docker-socket-holding sidecar, three
+  Dockerfiles, docker-compose services, and website form. The free CLI already covers what it
+  offered, and it was the only unauthenticated internet-facing attack surface in the system (this
+  same session's own audit had just found a real crash bug in it, #604, closed as superseded by
+  the removal). Migration `061_drop_demo_scan_rate_limits.sql` drops the now-orphaned table (no FK
+  referenced it, IP+timestamp rate-limit state only). Independently re-verified before merging:
+  repo-wide grep for zero remaining references, the migration's safety, the CORS-narrowing change
+  against `website/status.js`'s real cross-origin call, and both test suites run locally
+  (1779/1779 `src`, 1742 passed + 8 skipped `github-app`, matching the PR's own claims exactly) -
+  one real gap found and fixed before merge: the root `README.md` still described `website/` as
+  carrying "the marketing site and live demo", missed by a literal demo-scan/demo-sandbox string
+  search since it names neither.
+- **Deploy sequencing note**: the demo-scan-worker/demo-sandbox/demo-sandbox-runner containers
+  were manually removed from production *before* this redeploy (closing the Docker-socket attack
+  surface immediately), leaving a short window where the still-running old app-server accepted
+  `POST /v1/demo-scan` (returning `202`, silently orphaned - no worker left to process it) until
+  this redeploy replaced it with code that returns `404` for the same request. Confirmed live with
+  real requests against the endpoint on both sides of the redeploy, not assumed.
+
+Migrations applied this deploy: `061_drop_demo_scan_rate_limits.sql` only.
+
 ## 2026-09-07
 
 18 commits since the previous deploy, tagged `github-app-deploy-2026-09-07` (commit `ce5ab60`):
