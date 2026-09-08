@@ -18,6 +18,40 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-08
+
+12 commits since the previous deploy, tagged `github-app-deploy-2026-09-08` (commit `fd7c2c3`) -
+a 10-PR hardening pass (backward-audit findings against recently merged PRs) plus one new feature:
+
+- **Two real regressions caught and fixed before merge, not shipped** - both by Flash Review's own
+  dogfooded review of the fix PRs themselves: `_class_name_and_superclass` (#580, Rails
+  model-association clustering) gave up on an entire file if its first class definition lacked a
+  superclass, instead of trying the next sibling class. `airview_scanner_context.py`'s new
+  truncation caps (#586) had 5 real issues - 4 sort keys that weren't fully deterministic on ties,
+  and one genuine `TypeError` crash risk from sorting a list that could mix dicts and strings.
+- **A real, live spend-leak closed** (#583): a cache-hit Flash Review recheck bypassed the
+  AIR-tier verification gate entirely, silently giving free-tier installations a paid-only
+  DeepSeek verification call on any cache hit with an unquotable finding.
+- **`db_column=""` truthiness bug** (#587): `db_column or field_name` treated an explicit empty
+  string as if `db_column` had never been given at all - found via Flash Review's own review.
+- **Other real fixes**: `require.resolve('pkg')` never recognized as an import (#581); a Django
+  unsupported-op catch-all fabricated a `migrations.` prefix regardless of the call's real receiver
+  (#582); `RunSQL`/`op.execute`/`execute` with a non-literal SQL argument silently vanished instead
+  of being flagged unsupported (#585); the endpoint-health dashboard never disclosed its
+  64-endpoint monitoring cap (#588); inconsistent headroom-percentage math in a comment, and
+  Groq's real TPM limit recorded inline (#579).
+- **New feature, with a real migration** (#590): customers can now explicitly choose which
+  endpoints get health-checked once a repo has more than the 64-endpoint cap, instead of Aletheore
+  silently picking the first 64 in scan order. `scan_worker.jobs.rank_endpoints_by_selection` is
+  the single shared ranking function both the real sweep and the admin dashboard route call, so
+  the two can never silently drift apart. Migration `060_endpoint_health_selection.sql` adds the
+  new table. Includes a self-review follow-up fix (a `candidate_count` vs `total_endpoint_count`
+  bug in the "still capped" dashboard message). Originally PR #589 stacked on #588's branch -
+  GitHub auto-closed it when that branch was deleted post-squash-merge, so it was recreated as
+  #590 targeting master directly.
+
+No other DB migrations in this range beyond #590's.
+
 ## 2026-09-07
 
 18 commits since the previous deploy, tagged `github-app-deploy-2026-09-07` (commit `ce5ab60`):
