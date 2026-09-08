@@ -128,6 +128,32 @@ def test_build_history_summary_empty_when_no_history(tmp_path):
     assert build_history_summary(repo) == []
 
 
+def test_build_history_summary_skips_an_older_schema_snapshot_instead_of_crashing(tmp_path):
+    # Real bug found via audit: this indexed straight into
+    # evidence["security"]["dependency_vulnerabilities"]["findings"] with
+    # no schema check, unlike load_evidence_file (imported into this same
+    # file specifically to guard against this class of gap). An
+    # older-schema snapshot - missing a section a newer scan always
+    # writes - raised an uncaught KeyError, and with no per-snapshot
+    # isolation, one bad snapshot anywhere in history killed the whole
+    # summary (this function's only caller, api_history, has no
+    # try/except of its own, so it propagated as an unhandled 500).
+    repo = tmp_path / "repo"
+    history_dir = repo / ".aletheore" / "history"
+    history_dir.mkdir(parents=True)
+    older_schema_snapshot = make_evidence("2026-07-15T10:00:00+00:00")
+    del older_schema_snapshot["security"]["dependency_vulnerabilities"]
+    (history_dir / "2026-07-15T10-00-00.json").write_text(json.dumps(older_schema_snapshot))
+    (history_dir / "2026-07-15T11-00-00.json").write_text(
+        json.dumps(make_evidence("2026-07-15T11:00:00+00:00"))
+    )
+
+    result = build_history_summary(repo)
+
+    assert len(result) == 1
+    assert result[0]["scanned_at"] == "2026-07-15T11:00:00+00:00"
+
+
 def test_build_graph_summary_annotates_nodes_with_cluster_id():
     evidence = {
         "repository": {
