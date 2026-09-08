@@ -1027,7 +1027,28 @@ def generate_subsystems(
         prior_record = prior_records.get(str(brief["cluster_id"]))
         if prior_record is None:
             return None, None
-        skip = [f["path"] for f in brief.get("files", []) if f["path"] not in changed_set]
+        # Real bug found via audit: skip used to include every unchanged
+        # path, with no check that prior_record actually has an entry to
+        # splice back in for it. Cluster membership is recomputed from
+        # community detection each scan, so a file can join this
+        # subsystem's brief for the first time on a run where the file's
+        # own bytes didn't change (e.g. an unrelated file's edit shifted
+        # the import graph) - a real, reachable condition, not contrived.
+        # Marking that file skip told the model to omit it entirely, and
+        # _splice_prior_files has nothing to fill the resulting blank
+        # entry with (prior_record has no path for it), leaving a
+        # permanently blank role/key_symbols entry with no recovery path:
+        # the file stays skip on every future incremental run for as long
+        # as its own content stays unchanged. Only skip a path prior_record
+        # can actually splice back in.
+        prior_paths = {
+            f["path"] for f in (prior_record.get("files") or []) if isinstance(f, dict) and f.get("path")
+        }
+        skip = [
+            f["path"]
+            for f in brief.get("files", [])
+            if f["path"] not in changed_set and f["path"] in prior_paths
+        ]
         if not skip:
             return None, None
         return skip, prior_record

@@ -781,6 +781,63 @@ def test_generate_subsystems_incremental_only_writes_changed_files_within_a_clus
     assert by_path["auth/tokens.py"]["role"] == "Issues tokens."
 
 
+def test_generate_subsystems_does_not_skip_a_file_new_to_the_cluster_with_no_prior_entry():
+    # Real bug found via audit: skip_files used to include every unchanged
+    # path in a cluster's brief, with no check that prior_record actually
+    # has an entry to splice back in for it. Cluster membership is
+    # recomputed from community detection each scan, so a file can join a
+    # subsystem's brief for the first time on a run where the file's own
+    # bytes didn't change (e.g. an unrelated file's edit shifted the
+    # import graph) - a real, reachable condition. Marking that file skip
+    # told the model to omit it entirely, and _splice_prior_files has
+    # nothing to fill the resulting blank entry with, leaving it
+    # permanently blank on every future incremental run.
+    evidence = make_evidence()
+    evidence["repository"]["modules"].append(
+        {
+            "path": "auth/session.py",
+            "language": "python",
+            "imports": [],
+            "symbols": {"functions": [], "classes": []},
+        }
+    )
+    evidence["architecture"]["clusters"][0]["modules"].append("auth/session.py")
+    naming_adapter = _adapter(json.dumps({"0": "Authentication"}))
+    captured_payload = {}
+
+    def _respond(_system_prompt, user_prompt, cwd):
+        captured_payload.update(json.loads(user_prompt))
+        return json.dumps(
+            {
+                "description": "Handles login.",
+                "files": [
+                    {"path": "auth/login.py", "role": "New login logic.", "key_symbols": []},
+                    {"path": "auth/session.py", "role": "New session handling.", "key_symbols": []},
+                ],
+            }
+        )
+
+    writing_adapter = MagicMock()
+    writing_adapter.simple_completion.side_effect = _respond
+    # prior_records only knows about auth/tokens.py - auth/session.py is
+    # new to this cluster and has no prior entry to splice from.
+    prior_records = {
+        "0": {
+            "subsystem_id": "0",
+            "files": [{"path": "auth/tokens.py", "role": "Issues tokens.", "key_symbols": []}],
+        }
+    }
+
+    records = generate_subsystems(
+        evidence, naming_adapter, writing_adapter,
+        changed_files=["auth/login.py"], prior_records=prior_records,
+    )
+
+    assert captured_payload["skip_files"] == ["auth/tokens.py"]
+    by_path = {f["path"]: f for f in records[0]["files"]}
+    assert by_path["auth/session.py"]["role"] == "New session handling."
+
+
 def test_generate_subsystems_full_build_sends_no_skip_files_even_with_a_prior_record():
     # changed_files=None (the full-build default) must ignore prior_records
     # entirely and write every file fresh, matching today's behavior - this
