@@ -559,8 +559,9 @@ def _register_ast_pattern_tool(mcp_instance: MCPServer, repo_path: Path) -> None
         returned, so narrow the query rather than assume it's exhaustive."""
         from aletheore.ast_pattern import InvalidPatternError, UnknownLanguageError, search_ast_pattern
 
+        ignored_paths = load_repo_config(repo_path)["ignored_paths"]
         try:
-            return _toon_result(search_ast_pattern(repo_path, language, query))
+            return _toon_result(search_ast_pattern(repo_path, language, query, ignored_paths))
         except UnknownLanguageError as exc:
             return _toon_result({"error": str(exc)})
         except InvalidPatternError as exc:

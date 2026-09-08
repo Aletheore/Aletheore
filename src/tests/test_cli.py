@@ -25,6 +25,7 @@ from aletheore.cli import (
     _opencode_entry,
     _print_query_result,
     _stdio_entry,
+    _write_config_file_no_symlink_follow,
     _write_json_mcp_client_config,
     _write_toml_mcp_client_config,
     app,
@@ -306,6 +307,120 @@ def test_opencode_entry_uses_single_command_array_not_command_plus_args(monkeypa
     entry = _opencode_entry(Path("/repo"))
 
     assert entry == {"type": "local", "command": ["aletheore", "mcp", "/repo"], "enabled": True}
+
+
+def test_write_json_mcp_client_config_refuses_a_symlinked_config_file(tmp_path):
+    # Real bug found via audit: mcp-install is commonly run against a
+    # freshly cloned or downloaded repository, which is attacker-
+    # controlled input the same way a scanned repo's source is elsewhere
+    # in this codebase - config_path.exists()/.write_text() followed a
+    # symlink transparently, so a malicious repo shipping .mcp.json as a
+    # symlink to an arbitrary path outside the repo had that target
+    # silently overwritten (a shell rc file, another project's real
+    # config, anything the OS user can write to) - not merely something
+    # inside the scanned repo.
+    repo = tmp_path / "malicious-repo"
+    repo.mkdir()
+    outside_target = tmp_path / "outside_secret.json"
+    outside_target.write_text(json.dumps({"do_not_touch": True}))
+    (repo / ".mcp.json").symlink_to(outside_target)
+    entry = {"command": "aletheore", "args": ["mcp", str(repo)]}
+
+    message = _write_json_mcp_client_config(
+        repo / ".mcp.json", "mcpServers", entry, repo_path=repo
+    )
+
+    assert "skipped" in message
+    assert "escapes the repo" in message
+    assert json.loads(outside_target.read_text()) == {"do_not_touch": True}
+
+
+def test_write_json_mcp_client_config_refuses_a_symlinked_parent_directory(tmp_path):
+    # Same risk, one level up: a symlinked intermediate directory
+    # (.cursor/.vscode/.kiro) resolves outside the repo even though the
+    # config file itself doesn't exist yet - Path.resolve() on a
+    # nonexistent final segment still resolves every existing parent.
+    repo = tmp_path / "malicious-repo"
+    repo.mkdir()
+    outside_dir = tmp_path / "outside_dir"
+    outside_dir.mkdir()
+    (repo / ".cursor").symlink_to(outside_dir)
+    entry = {"command": "aletheore", "args": ["mcp", str(repo)]}
+
+    message = _write_json_mcp_client_config(
+        repo / ".cursor" / "mcp.json", "mcpServers", entry, repo_path=repo
+    )
+
+    assert "skipped" in message
+    assert "escapes the repo" in message
+    assert list(outside_dir.iterdir()) == []
+
+
+def test_write_json_mcp_client_config_without_repo_path_keeps_the_prior_global_behavior(tmp_path):
+    # claude-desktop's config file is deliberately global (shared across
+    # every project on this machine), not under any one repo - passing no
+    # repo_path (its actual call site) must skip the boundary check
+    # entirely, preserving today's behavior for that legitimate case.
+    config_path = tmp_path / "claude_desktop_config.json"
+    entry = {"command": "aletheore", "args": ["mcp", "/some/repo"]}
+
+    message = _write_json_mcp_client_config(config_path, "mcpServers", entry)
+
+    assert "wrote" in message
+    assert json.loads(config_path.read_text()) == {"mcpServers": {"aletheore": entry}}
+
+
+def test_write_config_file_no_symlink_follow_refuses_a_symlinked_leaf(tmp_path):
+    # Flash Review finding on PR #603: _config_path_escapes_repo's
+    # resolve()-then-check happens as a separate step from the later
+    # write, leaving a TOCTOU window where a symlink put in place (or
+    # swapped in) between the two would still be followed by a plain
+    # write_text() call. This exercises the O_NOFOLLOW write directly -
+    # even with no prior "does this escape the repo" check at all, the
+    # open() call itself must refuse a symlinked leaf, atomically.
+    outside_target = tmp_path / "outside_secret.json"
+    outside_target.write_text("do not touch")
+    leaf = tmp_path / "repo" / ".mcp.json"
+    leaf.parent.mkdir()
+    leaf.symlink_to(outside_target)
+
+    with pytest.raises(OSError):
+        _write_config_file_no_symlink_follow(leaf, "clobbered")
+
+    assert outside_target.read_text() == "do not touch"
+
+
+def test_write_json_mcp_client_config_without_repo_path_still_follows_a_symlink(tmp_path):
+    # The O_NOFOLLOW hardening is deliberately scoped to repo-relative
+    # writes only - claude-desktop's global config (repo_path=None) has
+    # no attacker-controlled repo boundary to defend, and a symlink there
+    # is the user's own legitimate choice (e.g. dotfiles synced through a
+    # symlinked config directory), so that case must keep following it
+    # exactly like before this fix.
+    real_target = tmp_path / "real_claude_desktop_config.json"
+    real_target.write_text("{}")
+    config_path = tmp_path / "claude_desktop_config.json"
+    config_path.symlink_to(real_target)
+    entry = {"command": "aletheore", "args": ["mcp", "/some/repo"]}
+
+    message = _write_json_mcp_client_config(config_path, "mcpServers", entry)
+
+    assert "wrote" in message
+    assert json.loads(real_target.read_text()) == {"mcpServers": {"aletheore": entry}}
+
+
+def test_mcp_install_skips_a_symlinked_config_path_end_to_end(tmp_path):
+    repo = tmp_path / "malicious-repo"
+    repo.mkdir()
+    outside_target = tmp_path / "outside_secret.json"
+    outside_target.write_text(json.dumps({"do_not_touch": True}))
+    (repo / ".mcp.json").symlink_to(outside_target)
+
+    result = runner.invoke(app, ["mcp-install", str(repo), "--target", "claude-code"])
+
+    assert result.exit_code == 0
+    assert "escapes the repo" in result.stdout
+    assert json.loads(outside_target.read_text()) == {"do_not_touch": True}
 
 
 def test_write_json_mcp_client_config_creates_new_file(tmp_path):
