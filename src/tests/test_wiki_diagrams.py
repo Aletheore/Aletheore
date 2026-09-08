@@ -64,6 +64,40 @@ def test_build_overview_diagram_escapes_quotes_in_names():
     assert "The 'Auth' layer" in diagram
 
 
+def test_build_overview_diagram_neutralizes_embedded_newlines_in_names():
+    # Real bug found via audit: _mermaid_safe_label only neutralized
+    # quotes, never touching an embedded newline. Mermaid flowchart syntax
+    # is line-oriented - a node is C{id}["{label}"] on one line - so a
+    # multi-line cluster name (cluster names come straight from an LLM
+    # call with no server-side sanitization beyond a truthy .strip()
+    # check on the unstripped original string) could land a second line
+    # as its own new Mermaid statement, injecting an entirely unrelated
+    # extra node into the rendered diagram - confirmed directly: a name of
+    # 'Auth"]\n    C99["INJECTED' produced a real extra C99 node that
+    # doesn't correspond to anything in the dependency graph, undermining
+    # this module's own guarantee that "a diagram can never show a
+    # relationship that doesn't actually exist in the code."
+    diagram = build_overview_diagram(
+        make_evidence(), cluster_names={0: 'Auth"]\n    C99["INJECTED', 1: "Database"}
+    )
+    # C99 may still appear as harmless label TEXT on C0's own line - what
+    # matters is it's not a separate node statement of its own, on its own
+    # line, the way a real injected node would be.
+    stripped_lines = [line.strip() for line in diagram.splitlines() if line.strip()]
+    assert len(stripped_lines) == 4  # header + C0 + C1 + one edge, not 5
+    assert not any(line.startswith("C99[") for line in stripped_lines)
+    node0_lines = [line for line in stripped_lines if line.startswith("C0[")]
+    assert len(node0_lines) == 1
+    assert "C99" in node0_lines[0]  # survives as harmless text, not a new statement
+
+
+def test_build_overview_diagram_neutralizes_a_bare_carriage_return_in_names():
+    diagram = build_overview_diagram(make_evidence(), cluster_names={0: "Auth\rC99[\"INJECTED", 1: "Database"})
+    stripped_lines = [line.strip() for line in diagram.splitlines() if line.strip()]
+    assert len(stripped_lines) == 4
+    assert not any(line.startswith("C99[") for line in stripped_lines)
+
+
 def test_build_subsystem_diagram_has_one_node_per_member_file():
     evidence = make_evidence()
     cluster = evidence["architecture"]["clusters"][0]
