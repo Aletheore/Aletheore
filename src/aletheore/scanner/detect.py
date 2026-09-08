@@ -147,7 +147,12 @@ K8S_KIND_MARKERS = {
 
 YAML_EXTENSIONS = (".yaml", ".yml")
 
-ENV_FILE_MARKERS = (".env.example", ".env.sample", ".env.template", "env.example")
+# .env.dist is Symfony's own canonical convention (PHP is one of the 12
+# languages this scanner otherwise fully supports) - real, common enough
+# that its absence here was a silent, whole-ecosystem blind spot, the
+# same "one ecosystem quietly unhandled while its siblings work" shape
+# already found for Gin route groups and repo license detection.
+ENV_FILE_MARKERS = (".env.example", ".env.sample", ".env.template", "env.example", ".env.dist")
 
 BUILD_TOOL_MARKERS = {
     "Dockerfile": "docker",
@@ -389,13 +394,32 @@ def detect_ai_usage(repo_path: Path) -> dict:
     }
 
 
-def detect_build_tools(repo_path: Path) -> list[dict]:
-    tools = []
-    for filename, tool_name in BUILD_TOOL_MARKERS.items():
-        marker = repo_path / filename
-        if marker.exists():
-            tools.append({"name": tool_name, "evidence": filename})
-    return tools
+def detect_build_tools(repo_path: Path, pruned_tree=None) -> list[dict]:
+    """Real bug this closes: every marker was checked only at repo_path
+    itself (repo_path / filename), never recursively - a Dockerfile living
+    in a subdirectory (services/api/Dockerfile, the ordinary layout for
+    any microservices/monorepo project rather than a fringe case) was
+    completely invisible, an internal inconsistency with
+    _detect_docker_compose_services above, which already correctly
+    searches the whole pruned tree for docker-compose.yml. Same root-only
+    gap applied identically to Makefile/webpack/vite markers.
+
+    One entry per tool name (first match in tree-walk order wins) rather
+    than one per file found - preserves the prior "existence, not a full
+    inventory" shape for repos with more than one Dockerfile.
+    """
+    if pruned_tree is None:
+        pruned_tree = _iter_pruned_tree(repo_path)
+    found: dict[str, str] = {}
+    for path, is_dir in pruned_tree:
+        if is_dir:
+            continue
+        tool_name = BUILD_TOOL_MARKERS.get(path.name)
+        if tool_name is None or tool_name in found:
+            continue
+        found[tool_name] = path.relative_to(repo_path).as_posix()
+    # See _detect_migration_directories for why this is sorted.
+    return [{"name": name, "evidence": found[name]} for name in sorted(found)]
 
 
 def detect_policy_docs(repo_path: Path) -> list[dict]:
