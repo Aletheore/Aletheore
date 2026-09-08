@@ -812,6 +812,105 @@ async def test_public_health_uptime_pct_excludes_checks_older_than_7_days(pool):
 
 
 @pytest.mark.asyncio
+async def test_public_health_surfaces_a_down_target_even_when_a_sibling_target_is_up(pool):
+    # Real bug found via audit: get_public_health's raw query used to
+    # DISTINCT ON (endpoint_method, endpoint_path) alone. Two targets
+    # checking the exact same endpoint (e.g. staging and production)
+    # collapsed into whichever target had the more recently checked_at
+    # row - a genuinely down production target could be silently reported
+    # as "up" whenever a healthy staging target's row happened to land
+    # later. A real outage on any one target must never be hidden behind
+    # a healthy sibling target on this public status page.
+    await upsert_installation(pool, 509, "octocat")
+    await set_public_status_enabled(pool, 509, "octocat/hello-world", True)
+    async with pool.acquire() as conn:
+        staging_id = await conn.fetchval(
+            """
+            INSERT INTO health_check_targets (installation_id, repo_full_name, label, base_url)
+            VALUES (509, 'octocat/hello-world', 'Staging', 'https://staging.example.com') RETURNING id
+            """
+        )
+        prod_id = await conn.fetchval(
+            """
+            INSERT INTO health_check_targets (installation_id, repo_full_name, label, base_url)
+            VALUES (509, 'octocat/hello-world', 'Production', 'https://prod.example.com') RETURNING id
+            """
+        )
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path,
+                 reachable, status_code, target_id, checked_at)
+            VALUES
+                (509, 'octocat/hello-world', 'GET', '/api/users', false, 500, $1, now() - interval '1 minute'),
+                (509, 'octocat/hello-world', 'GET', '/api/users', true, 200, $2, now())
+            """,
+            prod_id,
+            staging_id,
+        )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/health/octocat/hello-world")
+
+    assert response.status_code == 200
+    endpoints = {(e["method"], e["path"]): e for e in response.json()["endpoints"]}
+    assert len(endpoints) == 1
+    # Even though staging's row is the more recently checked one, the down
+    # production target must be what's surfaced publicly.
+    assert endpoints[("GET", "/api/users")]["reachable"] is False
+
+
+@pytest.mark.asyncio
+async def test_public_health_uptime_pct_is_the_worst_case_across_targets(pool):
+    # Sibling of the reachability bug above: uptime_pct_7d used to GROUP BY
+    # endpoint_method, endpoint_path alone, averaging a permanently-down
+    # production target's 0% together with a healthy staging target's
+    # 100% into a misleading 50%, instead of the real, customer-relevant
+    # fact that production has been down the whole window.
+    await upsert_installation(pool, 510, "octocat")
+    await set_public_status_enabled(pool, 510, "octocat/hello-world", True)
+    async with pool.acquire() as conn:
+        staging_id = await conn.fetchval(
+            """
+            INSERT INTO health_check_targets (installation_id, repo_full_name, label, base_url)
+            VALUES (510, 'octocat/hello-world', 'Staging', 'https://staging.example.com') RETURNING id
+            """
+        )
+        prod_id = await conn.fetchval(
+            """
+            INSERT INTO health_check_targets (installation_id, repo_full_name, label, base_url)
+            VALUES (510, 'octocat/hello-world', 'Production', 'https://prod.example.com') RETURNING id
+            """
+        )
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path,
+                 reachable, status_code, target_id, checked_at)
+            VALUES
+                (510, 'octocat/hello-world', 'GET', '/api/users', false, 500, $1, now() - interval '1 minute'),
+                (510, 'octocat/hello-world', 'GET', '/api/users', false, 500, $1, now() - interval '2 minute'),
+                (510, 'octocat/hello-world', 'GET', '/api/users', true, 200, $2, now())
+            """,
+            prod_id,
+            staging_id,
+        )
+
+    app.state.db_pool = pool
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/health/octocat/hello-world")
+
+    assert response.status_code == 200
+    endpoints = {(e["method"], e["path"]): e for e in response.json()["endpoints"]}
+    # Production: 0 of 2 reachable (0.0). Staging: 1 of 1 (1.0). The
+    # reported uptime must be the worst case (0.0), never an average.
+    assert endpoints[("GET", "/api/users")]["uptime_pct_7d"] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_public_health_excludes_endpoints_not_checked_recently(pool):
     # An endpoint whose most recent check is older than the staleness
     # window has either been removed from the route set or was never a
@@ -1348,6 +1447,92 @@ async def test_dashboard_health_includes_stale_endpoints(pool, monkeypatch):
             "file": "routes.py",
             "line": 5,
             "check_count": 5,
+            "target_id": None,
+            "target_label": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_health_stale_endpoints_flags_a_broken_target_even_with_a_healthy_sibling(
+    pool, monkeypatch
+):
+    # Real bug found via audit: get_endpoint_health_summary_since used to
+    # GROUP BY endpoint_method, endpoint_path alone, so bool_or(reachable)
+    # blended a permanently-broken production target together with a
+    # healthy staging target checking the same endpoint - the dead
+    # production target's "ever_reachable" came back True (from staging)
+    # and it never showed up in stale_endpoints at all.
+    await upsert_installation(pool, 511, "octocat")
+    await set_installation_plan(pool, 511, "air")
+    await insert_repo_history(
+        pool,
+        511,
+        "octocat/hello-world",
+        datetime.now(timezone.utc),
+        {
+            "aletheore_version": EVIDENCE_VERSION,
+            "repository": {
+                "api_endpoints": {
+                    "endpoints": [
+                        {
+                            "method": "GET",
+                            "path": "/api/legacy",
+                            "file": "routes.py",
+                            "line": 5,
+                            "handler": "legacy",
+                        }
+                    ]
+                }
+            },
+        },
+    )
+    async with pool.acquire() as conn:
+        staging_id = await conn.fetchval(
+            """
+            INSERT INTO health_check_targets (installation_id, repo_full_name, label, base_url)
+            VALUES (511, 'octocat/hello-world', 'Staging', 'https://staging.example.com') RETURNING id
+            """
+        )
+        prod_id = await conn.fetchval(
+            """
+            INSERT INTO health_check_targets (installation_id, repo_full_name, label, base_url)
+            VALUES (511, 'octocat/hello-world', 'Production', 'https://prod.example.com') RETURNING id
+            """
+        )
+        for _ in range(5):
+            await conn.execute(
+                """
+                INSERT INTO endpoint_health
+                    (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable, target_id)
+                VALUES (511, 'octocat/hello-world', 'GET', '/api/legacy', false, $1)
+                """,
+                prod_id,
+            )
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable, target_id)
+            VALUES (511, 'octocat/hello-world', 'GET', '/api/legacy', true, $1)
+            """,
+            staging_id,
+        )
+
+    client = await _logged_in_client(pool, monkeypatch, administered_ids=[511])
+    async with client:
+        response = await client.get("/app/octocat/hello-world/health")
+
+    assert response.status_code == 200
+    stale = response.json()["stale_endpoints"]
+    assert stale == [
+        {
+            "method": "GET",
+            "path": "/api/legacy",
+            "file": "routes.py",
+            "line": 5,
+            "check_count": 5,
+            "target_id": prod_id,
+            "target_label": "Production",
         }
     ]
 
