@@ -1837,19 +1837,31 @@ def count_repo_scans_since(dsn: str, installation_id: int, since: datetime) -> i
 
 
 def get_endpoint_health_summary(dsn: str, installation_id: int, stale_after_seconds: int = 900) -> dict:
-    """Current live status - most-recent row per (method, path) within the
-    same 15-minute staleness window as the public status API
+    """Current live status - most-recent row per (repo, method, path) within
+    the same 15-minute staleness window as the public status API
     (dashboard.py's PUBLIC_HEALTH_STALE_AFTER), so the digest and the
     status page never disagree about what's currently "up".
+
+    Real bug found via audit: DISTINCT ON previously partitioned by
+    (endpoint_method, endpoint_path) alone, with no repo_full_name - every
+    other query in this file scopes endpoint_health by
+    (installation_id, repo_full_name, endpoint_method, endpoint_path), but
+    an installation can cover multiple repos, and two different repos
+    sharing a conventional health-check path (GET /health, say) collapsed
+    into a single row here. Whichever repo happened to have the more
+    recently checked_at row silently absorbed the other repo's endpoint
+    into the count, and the reported reachability could reflect the wrong
+    repo's status entirely - masking a real outage in one repo behind the
+    other's healthy result in the weekly digest email.
     """
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT DISTINCT ON (endpoint_method, endpoint_path) reachable
+                SELECT DISTINCT ON (repo_full_name, endpoint_method, endpoint_path) reachable
                 FROM endpoint_health
                 WHERE installation_id = %s AND checked_at >= now() - make_interval(secs => %s)
-                ORDER BY endpoint_method, endpoint_path, checked_at DESC, id DESC
+                ORDER BY repo_full_name, endpoint_method, endpoint_path, checked_at DESC, id DESC
                 """,
                 (installation_id, stale_after_seconds),
             )
