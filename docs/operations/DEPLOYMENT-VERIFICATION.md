@@ -5,7 +5,7 @@
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
 **Last Updated:** 2026-09-08
-**Snapshot Freshness:** CURRENT as of 2026-09-08 - production was redeployed to `master` (commit `fd7c2c3`, tagged `github-app-deploy-2026-09-08`) and re-verified live via SSH the same day. 12 commits since the previous deploy tag (`github-app-deploy-2026-09-07`): a 10-PR hardening pass (backward-audit findings against recently merged PRs, several caught by Flash Review's own dogfooded review of the fix PRs themselves) plus one new feature. Two real regressions were caught and fixed before merge, not shipped: `_class_name_and_superclass` (Rails model-association clustering, #580) gave up on an entire file if its first class definition lacked a superclass, instead of trying the next sibling class - Flash Review's own review of that fix PR caught it. `airview_scanner_context.py`'s new truncation caps (#586) had 5 real issues Flash Review caught in the same PR - 4 non-fully-deterministic sort keys and one genuine `TypeError` crash risk (sorting a list that could mix dicts and strings). Also fixed before merge: a `db_column=""` truthiness bug (#587, `db_column or field_name` treats an explicit empty string as absent). Other real fixes in this batch: `require.resolve('pkg')` never recognized as an import (#581); a Django unsupported-op catch-all fabricated a `migrations.` prefix regardless of the call's real receiver (#582); a cache-hit Flash Review recheck bypassed the AIR-tier verification gate entirely, silently giving free-tier installations a paid-only DeepSeek verification call (#583 - a real, live spend-leak, now closed); `RunSQL`/`op.execute`/`execute` with a non-literal SQL argument silently vanished instead of being flagged unsupported (#585); the endpoint-health dashboard never disclosed its 64-endpoint monitoring cap (#588). **New feature, with a real migration**: customers can now explicitly choose which endpoints get health-checked once a repo has more than the 64-endpoint cap, instead of Aletheore silently picking the first 64 in scan order (#590, migration `060_endpoint_health_selection.sql` - a new table, `CREATE TABLE`/`INDEX IF NOT EXISTS`, confirmed idempotent before deploying). Note: #590 was originally PR #589, stacked on #588's branch - GitHub auto-closed it when #588's branch was deleted post-squash-merge (a squash-merged branch can't be cleanly re-parented), so it was recreated as #590 targeting master directly, requiring a 3-file manual conflict resolution (`dashboard.py`, `frontend.py`, `test_dashboard.py`) verified with 539 passing local tests before pushing.
+**Snapshot Freshness:** CURRENT as of 2026-09-08 (second deploy) - production was redeployed to `master` (commit `a6e2457`, tagged `github-app-deploy-2026-09-08-2`) and re-verified live via SSH the same day. 14 commits since the previous deploy tag (`github-app-deploy-2026-09-08`): a second, independent 10-PR hardening pass (a fresh adversarial audit round, disjoint from the first) plus one product removal. Real fixes in the audit batch: a Rails `reversible do |dir|` block's `dir.down` was read as forward-migration code (#593); Go/Rust/Java/C# compiled-language entry points always looked unreachable to dead-code detection (#594); the secret scanner missed `SECRET_KEY`/`*_TOKEN` assignments entirely (#595); a Flash Review hunk-scope correction fired a self-contradictory false positive on every Python class-header hunk (#596); Gin route groups silently dropped their `.Group()` prefix (#597); the repo's own license went undetected for Rust/PHP/Ruby/C#/Java (#598); a Maven `pom.xml` with no declared `xmlns` was invisible to vulnerability scanning (#599); JVM co-located test files (`FooTest.kt` beside `Foo.kt`) were invisible to test-path detection (#600); evidence resolution misattributed commits by whole-file recency and dropped risk findings on a package-name mismatch (#601); `aletheore_ast_pattern` ignored `.aletheore.json` exclusions and `mcp-install` could follow a symlink out of the repo (#603); a nested/nonstandard build-tool Dockerfile and Symfony's `.env.dist` convention were both invisible to detection (#602). Every one of these 10 PRs was independently reviewed before merge, not rubber-stamped: Flash Review's own inline findings were checked against the real diff, and 5 held up as genuine bugs the fix PRs hadn't fully closed - all fixed before merging, not shipped: the `dir.down` exclusion matched any receiver's `.down()` call, not just a real `reversible` block's (#593); three compiled-language entry-point regexes were simultaneously too loose (Rust matched a nested `fn main` inside `mod tests`) and too strict (Java's modifier order, C#'s cross-line static+Main) (#594); a gemspec license regex matched commented-out assignments (#598); Maven namespace-stripping removed every `{uri}` prefix, not just Maven's own, so a foreign-namespaced plugin config block could be parsed as real dependency metadata (#599); the Gin group-prefix binding table was keyed file-wide instead of per function scope, so two functions reusing the idiomatic "v1" group-variable name bled into each other's routes (#597). One finding (a claimed git-blame `^` boundary-commit marker in `--porcelain` output, #601) was checked against real git 2.52.0 behavior across both documented trigger cases and did not reproduce - dismissed with the evidence rather than fixed blind. **Product removal, with a real migration**: the public, unauthenticated "paste a repo" website demo was removed entirely (#605) - its own RQ worker, Docker-socket-holding sidecar, three Dockerfiles, docker-compose services, and website form, on the reasoning that the free CLI already covers what it offered and it was the only unauthenticated internet-facing attack surface in the system (this session's own audit had just found a real crash bug in it, #604, closed as superseded by the removal). Migration `061_drop_demo_scan_rate_limits.sql` drops the now-orphaned table (no FK references it, IP+timestamp rate-limit state only). Independently re-verified before merging, not just trusted: repo-wide grep for zero remaining references, the migration's safety, the CORS-narrowing change against `website/status.js`'s real cross-origin call, and both test suites run locally (1779/1779 `src`, 1742 passed + 8 skipped `github-app`, matching the PR's own claims exactly) - one real gap found and fixed before merge: the root `README.md`'s repository-layout line still described `website/` as carrying "the marketing site and live demo", missed by a literal demo-scan/demo-sandbox string search since it names neither.
 
 ## Purpose
 
@@ -30,7 +30,48 @@ Before claiming a hardening change is live, verify:
 
 ## Current Server Snapshot
 
-As of 2026-09-08, following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - back to the usual five, no lockfile changes in this batch so `jina-embed`/`demo-scan-worker` didn't need rebuilding), live inspection found:
+As of 2026-09-08 (second deploy), following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - the usual five; the only lockfile change in this batch was `requirements-demo-scan-worker.lock.txt` itself being deleted, so nothing else needed rebuilding), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `a6e2457`.
+- Working tree: clean aside from the expected untracked `github-app/backups/` directory.
+- 14 commits since the previous deploy tag (`github-app-deploy-2026-09-08`) - see Snapshot
+  Freshness above for the second hardening batch, the 5 real findings caught before merge, and
+  the demo-scan removal. Full per-PR writeups in `github-app/CHANGELOG.md`.
+- **Real migration this deploy**: `git diff --stat` against the previous deploy tag showed one
+  new file under `github-app/migrations/` (`061_drop_demo_scan_rate_limits.sql`, a `DROP TABLE
+  IF EXISTS`) - confirmed no FK referenced the table before dropping, not assumed.
+- All five app-relevant services rebuilt (`app-server`, `scan-worker`, `scan-worker-2`,
+  `health-worker`, `scheduler`) - `jina-embed` left untouched (no lockfile change);
+  `demo-scan-worker`/`demo-sandbox`/`demo-sandbox-runner` no longer exist as of this deploy
+  (removed by #605, not merely left unrebuilt).
+- Services running: all five `Up`, all five reporting Docker-healthcheck `healthy` within ~16
+  seconds of recreation.
+- Migration applied, not just "no pending" - confirmed live in Postgres, not just a log line:
+  `SELECT filename FROM schema_migrations ORDER BY filename DESC LIMIT 3` shows
+  `061_drop_demo_scan_rate_limits.sql` as the newest row, and `\dt demo_scan_rate_limits`
+  reports the table no longer exists.
+- Post-deploy, verified live by executing directly inside the running `app-server` container,
+  not by re-reading the repo: `import app_server.demo_scan_api` raises `ModuleNotFoundError` -
+  the module is genuinely gone from the running image, not just absent from source.
+- The removed public attack surface is closed live, not just in code: `POST
+  https://app.aletheore.com/v1/demo-scan` returned `202 Accepted` (queued, but orphaned - no
+  worker left to consume it) immediately after the container teardown but *before* this
+  redeploy, and returns `404` after it, confirmed by two real requests against the live
+  endpoint, not assumed from the diff.
+- Health checks: internal `/healthz` returns `200
+  {"status":"ok","checks":{"database":"ok","redis":"ok"}}`.
+- No errors, tracebacks, or exceptions in any of the five rebuilt services' logs after restart.
+- Not re-verified this pass (out of scope, no relevant Dockerfile/host changes in the diff other
+  than the three deleted demo-* Dockerfiles): Docker socket mount absence, non-root users,
+  CPU/mem limits, backup cron execution, base-image digest pinning, restore-drill target
+  availability, disk space. Each was last directly verified in the 2026-08-10 deploy (restore
+  drill itself upgraded 2026-08-24) - re-check if any host-level or Dockerfile change touches
+  them.
+
+## 2026-09-08 (first deploy) Snapshot
+
+As of 2026-09-08 (first deploy), following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - back to the usual five, no lockfile changes in this batch so `jina-embed`/`demo-scan-worker` didn't need rebuilding), live inspection found:
 
 - Host: `srv1675832` (`root@187.127.169.89`).
 - Commit: `fd7c2c3`.
