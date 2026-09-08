@@ -397,6 +397,36 @@ def test_openai_free_tier_reservation_arithmetic_is_correct_at_the_cap_boundary(
     assert redis_conn.data[_openai_free_tier_token_key()] == OPENAI_FREE_TIER_DAILY_TOKEN_CAP
 
 
+def test_reserve_openai_free_tier_budget_honors_an_explicit_empty_string_key(monkeypatch):
+    # Flash Review finding: `key or _openai_free_tier_token_key()` treats
+    # an explicitly-passed empty string the same as "no key given" and
+    # silently reserves against a freshly computed key instead - this
+    # function's own docstring promises "the caller may pass the exact
+    # key to reserve against", which an empty string is a legal (if
+    # unusual) instance of.
+    from scan_worker.model_tiers import OPENAI_FREE_TIER_RESERVATION_TOKENS, _reserve_openai_free_tier_budget
+
+    redis_conn = _FakeRedis()
+
+    assert _reserve_openai_free_tier_budget(redis_conn, key="") is True
+
+    assert "" in redis_conn.data
+    assert redis_conn.data[""] == OPENAI_FREE_TIER_RESERVATION_TOKENS
+
+
+def test_true_up_openai_free_tier_reservation_honors_an_explicit_empty_string_key(monkeypatch):
+    from scan_worker.model_tiers import (
+        OPENAI_FREE_TIER_RESERVATION_TOKENS,
+        _true_up_openai_free_tier_reservation,
+    )
+
+    redis_conn = _FakeRedis({"": OPENAI_FREE_TIER_RESERVATION_TOKENS})
+
+    _true_up_openai_free_tier_reservation(redis_conn, 500, key="")
+
+    assert redis_conn.data[""] == 500
+
+
 def test_openai_free_tier_reservation_is_atomic_across_real_concurrent_threads(monkeypatch):
     # The TOCTOU race this closes: two concurrent reviews both attempting
     # to reserve budget right at the cap boundary. A plain read-then-decide
@@ -518,6 +548,54 @@ def test_openai_free_tier_on_call_failed_releases_against_the_same_day_the_reser
 
     assert redis_conn.data["free_tier:openai_tokens:2026-01-01"] == 0
     assert redis_conn.data.get("free_tier:openai_tokens:2026-01-02") is None
+
+
+def test_openai_free_tier_reserved_key_is_isolated_across_concurrent_threads(monkeypatch):
+    # Flash Review finding: the reserved key used to live in one dict
+    # shared by every call through this adapter. Two real, concurrent
+    # calls whose reservations land on DIFFERENT keys (the UTC-midnight
+    # case the sequential tests above already cover one at a time) used
+    # to race: thread B's reservation could overwrite thread A's key in
+    # the shared cell before A's true-up ran, so A's true-up/release
+    # would silently correct B's key instead of its own. A Barrier forces
+    # both threads to reserve before either trues up, so this only passes
+    # if each thread's key is really isolated, not just usually not
+    # clobbered by scheduling luck.
+    monkeypatch.setattr("scan_worker.model_tiers.has_api_key", lambda *a, **k: True)
+    import scan_worker.model_tiers as model_tiers_module
+
+    # Each thread computes its own key by name, standing in for two calls
+    # whose reservations land on different real dates (this file's other
+    # UTC-boundary tests already prove the date->key mapping itself; this
+    # test is only about whether concurrent calls keep their keys apart).
+    monkeypatch.setattr(
+        model_tiers_module, "_openai_free_tier_token_key",
+        lambda: f"free_tier:openai_tokens:{threading.current_thread().name}",
+    )
+    redis_conn = _FakeRedis()
+    chain = writing_adapter_chain_for_free_tier(redis_conn)
+    openai_adapter = next(a for a in chain if a.name == "OpenAI-FreeTier")
+
+    reserve_barrier = threading.Barrier(2)
+    true_up_barrier = threading.Barrier(2)
+
+    def _run(true_up_amount: int) -> None:
+        reserve_barrier.wait()  # both threads reserve before either trues up
+        assert openai_adapter._before_llm_call() is True
+        true_up_barrier.wait()
+        openai_adapter._on_usage(true_up_amount, 0)
+
+    thread_a = threading.Thread(target=_run, args=(11_000,), name="thread-a")
+    thread_b = threading.Thread(target=_run, args=(22_000,), name="thread-b")
+    thread_a.start()
+    thread_b.start()
+    thread_a.join()
+    thread_b.join()
+
+    # Each thread's own key trued up to its own real total, not the other
+    # thread's - the exact corruption the shared-dict version risked.
+    assert redis_conn.data["free_tier:openai_tokens:thread-a"] == 11_000
+    assert redis_conn.data["free_tier:openai_tokens:thread-b"] == 22_000
 
 
 def test_openai_free_tier_usage_still_forwards_to_the_shared_on_usage(monkeypatch):

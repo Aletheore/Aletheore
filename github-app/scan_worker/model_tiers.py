@@ -23,6 +23,7 @@ price entry from the start.)
 
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -84,8 +85,12 @@ def _reserve_openai_free_tier_budget(redis_conn, key: str | None = None) -> bool
     run_with_free_tier_fallback's chain-building, which captures this
     same key for the later true-up/release call) - defaults to computing
     a fresh one, preserving this function's own standalone behavior for
-    any other caller."""
-    key = key or _openai_free_tier_token_key()
+    any other caller. Checked against None, not truthiness - Flash
+    Review finding: `key or ...` would silently discard a caller-supplied
+    empty string and reserve against a freshly computed key instead,
+    contradicting this docstring's own "the exact key to use" contract.
+    """
+    key = key if key is not None else _openai_free_tier_token_key()
     new_total = redis_conn.incrby(key, OPENAI_FREE_TIER_RESERVATION_TOKENS)
     if hasattr(redis_conn, "expire"):
         # 2 days: comfortably outlives the single calendar day this key is
@@ -114,10 +119,12 @@ def _true_up_openai_free_tier_reservation(
     day it actually ran on (bounded by the key's own 2-day TTL) and
     leaking negative headroom into the next day's real allowance.
     Defaults to computing a fresh key, preserving this function's own
-    standalone behavior for any other caller."""
+    standalone behavior for any other caller. Checked against None, not
+    truthiness, for the same reason _reserve_openai_free_tier_budget's
+    own `key` parameter is - see its docstring."""
     delta = real_total_tokens - OPENAI_FREE_TIER_RESERVATION_TOKENS
     if delta != 0:
-        redis_conn.incrby(key or _openai_free_tier_token_key(), delta)
+        redis_conn.incrby(key if key is not None else _openai_free_tier_token_key(), delta)
 
 LUNA_MODEL = "gpt-5.6-luna"
 PRO_MODEL = "deepseek-v4-pro"
@@ -383,21 +390,29 @@ def writing_adapter_chain_for_free_tier(
         # on_usage/on_call_failed correct that SAME day's counter even if
         # the real call straddles the UTC midnight boundary between
         # reservation and true-up - see both functions' own docstrings
-        # for the real corruption this closes. A plain dict (not a bare
-        # local) since it's written from inside a nested closure.
-        _reserved_key: dict[str, str] = {}
+        # for the real corruption this closes. threading.local(), not a
+        # plain dict, so a concurrent second call through this same
+        # adapter (this chain is built fresh per job today, but the
+        # adapter object itself carries no such guarantee) gets its own
+        # isolated slot instead of racing the first call's key through
+        # one shared mutable cell - Flash Review finding: a plain dict
+        # here means an overlapping second reservation overwrites the
+        # first call's key, so a usage/failure callback can true-up or
+        # release the WRONG call's Redis reservation.
+        _reserved_key_local = threading.local()
 
         def _reserve_and_capture_key() -> bool:
             key = _openai_free_tier_token_key()
             ok = _reserve_openai_free_tier_budget(redis_conn, key=key)
             if ok:
-                _reserved_key["key"] = key
+                _reserved_key_local.key = key
             return ok
 
         def _true_up_reserved_key(real_total_tokens: int) -> None:
-            _true_up_openai_free_tier_reservation(
-                redis_conn, real_total_tokens, key=_reserved_key.pop("key", None)
-            )
+            key = getattr(_reserved_key_local, "key", None)
+            if key is not None:
+                del _reserved_key_local.key
+            _true_up_openai_free_tier_reservation(redis_conn, real_total_tokens, key=key)
 
         def _on_openai_free_tier_usage(
             prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
