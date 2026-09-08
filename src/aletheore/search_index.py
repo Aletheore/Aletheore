@@ -301,6 +301,20 @@ def _truncate_for_embedding(text: str) -> str:
     return text[:MAX_EMBEDDING_CHARS] + "\n... (truncated for embedding)"
 
 
+# JVM (Java/Kotlin) PascalCase test-suffix convention (FooTest.kt,
+# StatisticsScreenTest.kt) - the same real, confirmed shape
+# dead_code.py's own TEST_PATH_PATTERNS already excludes (see its comment
+# citing android/architecture-samples), never carried over to this
+# module's own, independently-implemented test-path check. A bare
+# _has_dotnet_test_suffix check on the filename segment can't catch this:
+# it requires the "Tests?" match at the literal end of the segment, but a
+# real filename ends in ".kt"/".kts"/".java", not "Test"/"Tests" - so a
+# co-located test file (FooTest.kt sitting beside Foo.kt, the common
+# layout for a small-to-medium JVM package with no dedicated test source
+# set) was never excluded, polluting search results with test code the
+# same way AutoMapper's .NET test projects did before the check above.
+_JVM_TEST_SUFFIX_RE = re.compile(r"(^|/)[^/]+Test\.(kt|kts|java)$")
+
 _DOTNET_TEST_SUFFIX_RE = re.compile(r"Tests?$")
 
 
@@ -354,6 +368,8 @@ def _is_test_path(module_path: str) -> bool:
     # by a preceding "."/"-"/"_" separator or a lower-to-upper case
     # transition (AutoMapper.DI.Tests, UnitTests) - not a bare suffix.
     if any(_has_dotnet_test_suffix(part) for part in raw_parts):
+        return True
+    if _JVM_TEST_SUFFIX_RE.search(module_path):
         return True
     if any(part.endswith(".test") for part in parts):
         return True
