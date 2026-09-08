@@ -34,6 +34,7 @@ from scan_worker.db import (
     get_last_endpoint_health,
     get_last_reviewed_sha,
     get_latest_evidence,
+    get_llm_spend_breakdown,
     get_llm_spend_this_month,
     get_seconds_since_last_health_check,
     get_wiki_overview,
@@ -903,6 +904,47 @@ async def test_record_llm_spend_sync_warns_once_when_crossing_the_threshold(pool
     warnings = [r for r in caplog.records if "installation=301" in r.message]
     assert len(warnings) == 1
     assert "30%" in warnings[0].message
+
+
+@pytest.mark.asyncio
+async def test_record_llm_spend_writes_a_durable_per_feature_event(pool):
+    # Real gap found via audit: llm_spend only ever kept one blended monthly
+    # total per installation - the only place a feature label was ever
+    # attached to a cost was a log line, which doesn't survive a container
+    # restart. llm_spend_events is the durable fix.
+    await _insert_installation(pool, 1090, "a")
+    record_llm_spend(TEST_DATABASE_URL, 1090, 0.30, feature="flash_review")
+    record_llm_spend(TEST_DATABASE_URL, 1090, 0.20, feature="airview_incremental")
+    record_llm_spend(TEST_DATABASE_URL, 1090, 0.05, feature="flash_review")
+
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    breakdown = get_llm_spend_breakdown(TEST_DATABASE_URL, 1090, since)
+
+    assert breakdown == {"flash_review": pytest.approx(0.35), "airview_incremental": pytest.approx(0.20)}
+
+
+@pytest.mark.asyncio
+async def test_record_llm_spend_does_not_write_an_event_for_zero_cost(pool):
+    # Matches the existing logger.info guard (cost_usd > 0) - a zero-cost
+    # cache-hit call shouldn't add a noise row to the ledger.
+    await _insert_installation(pool, 1091, "a")
+    record_llm_spend(TEST_DATABASE_URL, 1091, 0.0, feature="flash_review")
+
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    breakdown = get_llm_spend_breakdown(TEST_DATABASE_URL, 1091, since)
+
+    assert breakdown == {}
+
+
+@pytest.mark.asyncio
+async def test_get_llm_spend_breakdown_excludes_events_before_since(pool):
+    await _insert_installation(pool, 1092, "a")
+    record_llm_spend(TEST_DATABASE_URL, 1092, 0.10, feature="flash_review")
+
+    since = datetime.now(timezone.utc) + timedelta(hours=1)  # in the future
+    breakdown = get_llm_spend_breakdown(TEST_DATABASE_URL, 1092, since)
+
+    assert breakdown == {}
 
 
 @pytest.mark.asyncio
