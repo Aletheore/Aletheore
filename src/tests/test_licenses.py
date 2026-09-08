@@ -123,6 +123,82 @@ def test_detect_repo_license_from_package_json(tmp_path):
     assert "package.json" in result["detected_from"]
 
 
+def test_detect_repo_license_from_cargo_toml(tmp_path):
+    # Real bug found via audit: this scanner already has a working
+    # dependency-license fetcher for Rust (_fetch_crates_license), but the
+    # repo's-OWN-license path only ever checked pyproject.toml/package.json
+    # - a Rust repo's own real, machine-readable Cargo.toml license field
+    # was silently invisible.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Cargo.toml").write_text('[package]\nname = "app"\nversion = "0.1.0"\nlicense = "MIT"\n')
+
+    result = detect_repo_license(repo)
+
+    assert result["category"] == "permissive"
+    assert "Cargo.toml" in result["detected_from"]
+
+
+def test_detect_repo_license_from_composer_json_dual_license_array(tmp_path):
+    # Real bug found via audit: same gap as Cargo.toml above, for PHP.
+    # Composer's schema allows a dual/multi-license array, matching how
+    # _fetch_packagist_license already treats the identical shape.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "composer.json").write_text(json.dumps({"name": "vendor/app", "license": ["MIT", "GPL-2.0"]}))
+
+    result = detect_repo_license(repo)
+
+    assert result["category"] == "permissive"
+    assert "composer.json" in result["detected_from"]
+
+
+def test_detect_repo_license_from_gemspec(tmp_path):
+    # Real bug found via audit: same gap for Ruby.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.gemspec").write_text('Gem::Specification.new do |s|\n  s.license = "MIT"\nend\n')
+
+    result = detect_repo_license(repo)
+
+    assert result["category"] == "permissive"
+    assert "app.gemspec" in result["detected_from"]
+
+
+def test_detect_repo_license_from_csproj_nested_in_a_project_directory(tmp_path):
+    # Real bug found via audit: same gap for C#. Uses rglob (not a
+    # root-level check) since a real .csproj almost never sits at a .NET
+    # solution's repo root - matches how vulnerabilities.py's own
+    # csproj dependency parser already searches.
+    repo = tmp_path / "repo"
+    (repo / "src" / "MyApp").mkdir(parents=True)
+    (repo / "src" / "MyApp" / "MyApp.csproj").write_text(
+        "<Project><PropertyGroup><PackageLicenseExpression>Apache-2.0"
+        "</PackageLicenseExpression></PropertyGroup></Project>"
+    )
+
+    result = detect_repo_license(repo)
+
+    assert result["category"] == "permissive"
+    assert "MyApp.csproj" in result["detected_from"]
+
+
+def test_detect_repo_license_from_pom_xml_without_a_namespace_declaration(tmp_path):
+    # Real bug found via audit: same gap for Java, plus a real, hand-
+    # written pom.xml commonly omits the xmlns Maven Central's own served
+    # POMs always carry - the namespaced lookup alone would silently miss it.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pom.xml").write_text(
+        "<project><licenses><license><name>MIT License</name></license></licenses></project>"
+    )
+
+    result = detect_repo_license(repo)
+
+    assert result["category"] == "permissive"
+    assert "pom.xml" in result["detected_from"]
+
+
 # The real, verbatim opening of the Apache License 2.0 (as published at
 # apache.org/licenses/LICENSE-2.0.txt) - not a hand-typed guess at what an
 # Apache license file looks like. This used to be read live from this
