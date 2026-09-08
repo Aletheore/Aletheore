@@ -1324,6 +1324,37 @@ def _rb_call_name(call: Node, source: bytes) -> str | None:
     return _rb_text(method, source) if method is not None else None
 
 
+def _rb_call_receiver(call: Node, source: bytes) -> str | None:
+    receiver = call.child_by_field_name("receiver")
+    return _rb_text(receiver, source) if receiver is not None else None
+
+
+def _rails_reversible_dir_names(root: Node, source: bytes) -> set[str]:
+    """Every block-parameter name bound by a `reversible do |dir| ... end`
+    call anywhere in this file - almost always just `{"dir"}`, but read
+    from the real source rather than hardcoded, since the parameter name
+    is the migration author's choice, not a Rails-enforced convention.
+    """
+    names: set[str] = set()
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == "call" and _rb_call_name(node, source) == "reversible":
+            do_block = node.child_by_field_name("block") or next(
+                (c for c in node.children if c.type == "do_block"), None
+            )
+            if do_block is not None:
+                params = next(
+                    (c for c in do_block.children if c.type == "block_parameters"), None
+                )
+                if params is not None:
+                    names.update(
+                        _rb_text(c, source) for c in params.children if c.type == "identifier"
+                    )
+        stack.extend(node.children)
+    return names
+
+
 def _rb_args(call: Node) -> list[Node]:
     args = call.child_by_field_name("arguments")
     if args is None:
@@ -1846,10 +1877,17 @@ def rails_events_from_source(source: bytes, rel_path: str) -> list[dict]:
     event from code that only runs on rollback - worse than the `def
     down` case, since here it's silent even in a `def change` migration
     that never uses the separate-methods form at all.
+
+    The exclusion is scoped to receivers bound by an actual `reversible`
+    block parameter in this file (see `_rails_reversible_dir_names`) -
+    matching every `<anything>.down { ... }` call by method name alone
+    would also silently drop unrelated forward-migration code that
+    happens to call a `.down` method on some other receiver.
     """
     events: list[dict] = []
     parser = _rb_parser()
     tree = parser.parse(source)
+    dir_names = _rails_reversible_dir_names(tree.root_node, source)
     # A plain (non-reversed) push+pop here would visit sibling
     # statements in reverse source order - confirmed via a real
     # multi-statement `change` block (rename_column, rename_table,
@@ -1864,7 +1902,7 @@ def rails_events_from_source(source: bytes, rel_path: str) -> list[dict]:
                 continue  # rollback-only code - never applied by a real deploy
         if node.type == "call":
             name = _rb_call_name(node, source)
-            if name == "down":
+            if name == "down" and _rb_call_receiver(node, source) in dir_names:
                 continue  # dir.down { ... } inside `reversible do |dir|` - rollback-only
             if name == "create_table":
                 events.extend(_rails_create_table_events(node, source, rel_path))

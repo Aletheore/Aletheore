@@ -649,6 +649,39 @@ end
     }
 
 
+def test_rails_down_call_on_an_unrelated_receiver_is_not_treated_as_rollback_only(tmp_path):
+    # Flash Review finding on the fix above: matching every call named
+    # "down" by method name alone (regardless of receiver) would also
+    # silently drop forward-migration code that happens to call a
+    # ".down" method on some other object - not just dir.down inside a
+    # real `reversible` block. Scoping the exclusion to receivers bound
+    # by an actual `reversible do |dir| ... end` block parameter means a
+    # same-named method on an unrelated receiver is read normally.
+    repo = write_files(
+        tmp_path,
+        {
+            "db/migrate/20230101000000_add_status.rb": """
+class AddStatus < ActiveRecord::Migration[7.0]
+  def change
+    migration_helper.down { add_column :posts, :status, :string }
+  end
+end
+"""
+        },
+    )
+    events, _sources = extract_rails_migrations(repo, ["db/migrate"])
+    assert len(events) == 1
+    assert events[0] == {
+        "kind": "add_column", "table": "posts", "relation": None,
+        "file": "db/migrate/20230101000000_add_status.rb", "line": 4,
+        "column": {
+            "name": "status", "type": "STRING", "primary_key": False,
+            "nullable": True, "unique": False, "default": None,
+            "file": "db/migrate/20230101000000_add_status.rb", "line": 4,
+        },
+    }
+
+
 def test_rails_create_table_block_index_and_foreign_key_are_not_silently_dropped(tmp_path):
     # Real bug found via audit: t.index and t.foreign_key inside a
     # create_table do |t| ... end block aren't type methods and aren't
