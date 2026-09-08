@@ -147,12 +147,42 @@ SECRET_PATTERNS = [
             # negative by direct testing: 'os.environ["API_KEY"] = "sk-..."' never
             # matched, the same failure shape the quoted-key fix above already covers
             # for a plain dict literal.
-            r"(?i)(?:^|[\s_.'\"-])(PASSWORD|SECRET|API_KEY)['\"]?\]?\s*[:=]\s*"
+            #
+            # TOKEN and SECRET_KEY were added to the keyword alternation as their own
+            # real-world-confirmed gaps. TOKEN alone (not just the pre-existing
+            # PASSWORD/SECRET/API_KEY) covers AUTH_TOKEN=/ACCESS_TOKEN=/API_TOKEN=/bare
+            # TOKEN= via the existing "_" left-boundary - every one of those was a
+            # silent false negative before (nothing in the old keyword list matched an
+            # opaque bearer/session token unless its VALUE happened to match a
+            # format-specific pattern like gh*_/xox*-, which an arbitrary token never
+            # will). SECRET_KEY is added explicitly rather than relying on bare "SECRET"
+            # matching a "_KEY" suffix: Django's and Flask's own settings variable is
+            # named exactly SECRET_KEY, and "SECRET" alone does NOT match at that
+            # position (it's followed by "_KEY=", not the separator) - confirmed
+            # directly: SECRET_KEY="django-insecure-..." matched zero findings before
+            # this fix despite SECRET being in the keyword list. A bare "KEY" was
+            # deliberately NOT added: PUBLIC_KEY="ssh-rsa ..." is a real, common, and
+            # genuinely non-secret shape (public keys are meant to be public) that a
+            # bare KEY keyword would false-positive on.
+            r"(?i)(?:^|[\s_.'\"-])(PASSWORD|SECRET|SECRET_KEY|API_KEY|TOKEN)['\"]?\]?\s*[:=]\s*"
             r"['\"]?([A-Za-z0-9+/=_.-]{16,})['\"]?(?=\s|$|[,#;)}\]])"
         ),
         2,
     ),
 ]
+
+
+def _overlaps_a_specific_pattern_match(
+    value_span: tuple[int, int], claimed_spans: list[tuple[int, int]]
+) -> bool:
+    """True if `value_span` overlaps a span a dedicated, more specific
+    pattern already matched on this same line. generic_credential_assignment
+    is deliberately last in SECRET_PATTERNS, so callers only ever check this
+    for it - it can never suppress a dedicated pattern's own finding, only
+    its own redundant one.
+    """
+    start, end = value_span
+    return any(start < claimed_end and claimed_start < end for claimed_start, claimed_end in claimed_spans)
 
 
 def iter_all_files(repo_path: Path, ignored_paths: list[str] | None = None):
@@ -421,8 +451,23 @@ def find_secrets(repo_path: Path, baseline: list[dict] | None = None) -> dict:
         rel_path = path.relative_to(repo_path).as_posix()
         lines = text.splitlines()
         for line_no, line in enumerate(lines, start=1):
+            claimed_spans: list[tuple[int, int]] = []
             for pattern_name, pattern, value_group in SECRET_PATTERNS:
                 for match in pattern.finditer(line):
+                    value_span = match.span(value_group)
+                    if pattern_name == "generic_credential_assignment" and _overlaps_a_specific_pattern_match(
+                        value_span, claimed_spans
+                    ):
+                        # A dedicated pattern (github_token, aws_access_key_id, ...)
+                        # already matched this exact value on this line - e.g.
+                        # "token: ghs_..." matches both github_token AND, now that
+                        # TOKEN is a generic keyword, generic_credential_assignment
+                        # too. Without this, one real secret produced two findings
+                        # for the same value under two different pattern names,
+                        # which reads as the scanner double-counting rather than as
+                        # two real, independent secrets.
+                        continue
+                    claimed_spans.append(value_span)
                     value = match.group(value_group)
                     match_preview = _redact(value, f"{rel_path}:{pattern_name}")
                     likely_placeholder = _is_likely_placeholder(rel_path, value, pattern_name)
@@ -531,8 +576,15 @@ def find_secrets_in_history(
                 continue
 
             content = line[1:]
+            claimed_spans: list[tuple[int, int]] = []
             for pattern_name, pattern, value_group in SECRET_PATTERNS:
                 for match in pattern.finditer(content):
+                    value_span = match.span(value_group)
+                    if pattern_name == "generic_credential_assignment" and _overlaps_a_specific_pattern_match(
+                        value_span, claimed_spans
+                    ):
+                        continue  # see find_secrets' identical check for why
+                    claimed_spans.append(value_span)
                     value = match.group(value_group)
                     match_preview = _redact(value, f"{current_file}:{pattern_name}")
                     findings.append(
