@@ -99,6 +99,32 @@ def test_load_repo_config_still_reads_existing_keys(tmp_path: Path):
     assert config["accepted_secrets"] == [{"path": "a.py", "pattern": "x", "match_preview": "y"}]
 
 
+def test_load_repo_config_drops_a_non_int_layer_marker_rank(tmp_path: Path):
+    # Real bug found via audit: an unvalidated string rank flowed straight
+    # into architecture.detect_layer_violations's `from_rank < to_rank`
+    # comparison. "2" < "10" is False under lexicographic string
+    # comparison, so a real inner-to-outer violation went unreported with
+    # no error - and mixing a string-ranked custom marker with any
+    # built-in int-ranked marker raised a TypeError that crashed the
+    # whole scan. cluster_resolution is already type-checked for exactly
+    # this reason; layer_markers must be too.
+    (tmp_path / ".aletheore.json").write_text(
+        json.dumps({"layer_markers": {"domain": "2", "web": 10}})
+    )
+    config = load_repo_config(tmp_path)
+    assert config["layer_markers"] == {"web": 10}
+
+
+def test_load_repo_config_drops_a_bool_layer_marker_rank(tmp_path: Path):
+    # bool is a subclass of int in Python - True/False must not slip
+    # through as a rank of 1/0.
+    (tmp_path / ".aletheore.json").write_text(
+        json.dumps({"layer_markers": {"domain": True, "web": 10}})
+    )
+    config = load_repo_config(tmp_path)
+    assert config["layer_markers"] == {"web": 10}
+
+
 def test_is_ignored_no_patterns_matches_nothing():
     assert is_ignored("vendor/lib.js", []) is False
 

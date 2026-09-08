@@ -57,7 +57,23 @@ def parse_repo_config(raw_text: str | None) -> dict:
 
     layer_markers = data.get("layer_markers", {})
     if isinstance(layer_markers, dict):
-        result["layer_markers"] = layer_markers
+        # Real bug found via audit: an unvalidated rank flows straight into
+        # architecture.detect_layer_violations's `from_rank < to_rank`
+        # comparison. A string rank (e.g. from a user who quoted their
+        # numbers) silently compares lexicographically instead of
+        # numerically ("2" < "10" is False), producing false negatives -
+        # a real inner-to-outer violation goes unreported with no error.
+        # Mixing a string-ranked custom marker with any of this module's
+        # own built-in int-ranked markers raises TypeError mid-comparison,
+        # crashing the whole `aletheore scan`, not just layer-violation
+        # detection. cluster_resolution two lines below is already
+        # type-checked for exactly this reason; this closes the same gap
+        # for layer_markers.
+        result["layer_markers"] = {
+            name: rank
+            for name, rank in layer_markers.items()
+            if isinstance(name, str) and isinstance(rank, int) and not isinstance(rank, bool)
+        }
 
     cluster_resolution = data.get("cluster_resolution", 1.0)
     if isinstance(cluster_resolution, (int, float)) and not isinstance(cluster_resolution, bool):
