@@ -357,6 +357,37 @@ def test_parse_maven_pins_reads_direct_dependencies(tmp_path):
     assert not any(p[0] == "com.example:interpolated" for p in pins)
 
 
+def test_parse_maven_pins_reads_dependencies_from_a_pom_with_no_declared_namespace(tmp_path):
+    # Real bug found via audit: every lookup in _parse_maven_pom was
+    # namespace-prefixed against "http://maven.apache.org/POM/4.0.0", but
+    # Maven does not require a pom.xml to declare that xmlns on <project>
+    # for a build to work - a real, hand-written or legacy pom.xml commonly
+    # omits it, unlike the POMs Maven Central itself serves. Every m:-
+    # prefixed lookup silently matched nothing against such a file,
+    # returning [] - indistinguishable from "no dependencies" - for a repo
+    # whose real pom.xml declares real, potentially vulnerable dependencies.
+    from aletheore.vulnerabilities import _parse_maven_pins
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pom.xml").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        "<project>\n"
+        "  <dependencies>\n"
+        "    <dependency>\n"
+        "      <groupId>com.fasterxml.jackson.core</groupId>\n"
+        "      <artifactId>jackson-databind</artifactId>\n"
+        "      <version>2.9.8</version>\n"
+        "    </dependency>\n"
+        "  </dependencies>\n"
+        "</project>\n"
+    )
+
+    pins = _parse_maven_pins(repo)
+
+    assert ("com.fasterxml.jackson.core:jackson-databind", "2.9.8", "Maven") in pins
+
+
 def test_parse_maven_pins_empty_when_no_pom(tmp_path):
     from aletheore.vulnerabilities import _parse_maven_pins
 
