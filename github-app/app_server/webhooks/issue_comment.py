@@ -9,6 +9,25 @@ logger = logging.getLogger(__name__)
 
 AUDIT_COMMAND = "/aletheore audit"
 
+
+def _matches_command(line: str, command: str) -> bool:
+    """True if `line` (already stripped) IS `command`, or starts with
+    `command` followed by whitespace - not a bare string-prefix check.
+
+    Real bug this closes: `line.startswith(command)` also matches an
+    ordinary English word sharing the same stem - "/aletheore auditing
+    this PR now" or "/aletheore auditorium" both satisfied the old
+    check, on a GitHub PR thread whose entire subject is reviewing/
+    auditing code, exactly the conversational context where a commenter
+    typing a sentence starting with "audit..." is a real, not
+    hypothetical, risk. Confirmed directly: both fired the real, billed,
+    AIR-tier-gated managed-audit job with no intent to trigger it.
+    """
+    if line == command:
+        return True
+    return line.startswith(command) and line[len(command) : len(command) + 1].isspace()
+
+
 # Anyone who can push to the repo can already do everything a managed audit
 # does (read the code, spend the org's own compute) - "read" or below is
 # exactly the set of people an outside PR commenter represents, which is
@@ -30,7 +49,7 @@ async def handle_issue_comment_event(payload: dict, pool, redis_url: str, queue=
         return
     comment = payload.get("comment", {})
     body = comment.get("body", "")
-    if not any(line.strip().startswith(AUDIT_COMMAND) for line in body.splitlines()):
+    if not any(_matches_command(line.strip(), AUDIT_COMMAND) for line in body.splitlines()):
         return
     if comment.get("user", {}).get("type") == "Bot":
         return

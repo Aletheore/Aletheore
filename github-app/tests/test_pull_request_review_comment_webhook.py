@@ -121,6 +121,33 @@ async def test_dismiss_reply_captures_the_reason_text(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_word_sharing_the_command_stem_does_not_record(pool, monkeypatch):
+    # Real bug found via audit: a bare string-prefix check
+    # (line.startswith(DISMISS_COMMAND)) also matches an ordinary English
+    # word sharing the same stem - "/dismissed this already" or
+    # "/dismissing for now" both silently dismissed a real finding with
+    # no intent to trigger it, on a thread whose entire subject is
+    # dismissing/discussing findings. The same bug in _dismiss_reason's
+    # slicing also produced a garbled reason ("/dismissed this
+    # already"[8:] == "ed this already") - both are fixed by the same
+    # word-boundary check.
+    await _seed_installation(pool)
+    await _seed_tracked_comment(pool)
+    _mock_permission_check(monkeypatch, "write")
+
+    await handle_pull_request_review_comment_event(
+        _payload("/dismissed this already"), pool, "redis://unused"
+    )
+
+    row = await pool.fetchrow(
+        "SELECT reason FROM dismissed_findings WHERE installation_id = $1 AND identity_key = $2",
+        111,
+        "app.py\x1f10\x1fabc123",
+    )
+    assert row is None
+
+
+@pytest.mark.asyncio
 async def test_dismiss_reply_from_a_read_only_commenter_does_not_record(pool, monkeypatch):
     await _seed_installation(pool)
     await _seed_tracked_comment(pool)

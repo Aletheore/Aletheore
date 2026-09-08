@@ -124,6 +124,24 @@ async def test_quoted_command_does_not_enqueue(pool, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_word_sharing_the_command_stem_does_not_enqueue(pool, monkeypatch):
+    # Real bug found via audit: a bare string-prefix check
+    # (line.startswith(AUDIT_COMMAND)) also matches an ordinary English
+    # word sharing the same stem - on a GitHub PR thread whose entire
+    # subject is reviewing/auditing code, a commenter typing a sentence
+    # starting with "audit..." is a real, not hypothetical, risk. This
+    # used to enqueue a real, billed, AIR-tier-gated managed audit with
+    # no intent to trigger it.
+    await _seed_paid_installation(pool)
+    _mock_permission_check(monkeypatch, "write")
+    fake_queue = MagicMock()
+    await handle_issue_comment_event(
+        _payload("/aletheore auditing this PR now"), pool, "redis://unused", queue=fake_queue
+    )
+    fake_queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_bot_command_does_not_enqueue(pool, monkeypatch):
     await _seed_paid_installation(pool)
     _mock_permission_check(monkeypatch, "write")
