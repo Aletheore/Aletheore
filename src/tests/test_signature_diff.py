@@ -273,6 +273,17 @@ def test_is_backward_compatible_change_accepts_added_defaults_and_variadics():
     assert is_backward_compatible_change("(a)", "(a, b=(1, 2))") is True
 
 
+def test_is_backward_compatible_change_accepts_a_string_default_containing_a_comma():
+    # Real bug found via audit: a string-literal default with a comma
+    # (`sep: str = ", "`) was torn into two bogus parameters by
+    # _split_params, which is not tracking quote state - only bracket
+    # depth. That made a purely additive change get rejected as breaking:
+    # the exact false-positive-noise-on-a-merge-blocking-check failure
+    # this module exists to prevent.
+    assert is_backward_compatible_change("(a)", '(a, sep: str = ", ")') is True
+    assert is_backward_compatible_change("(a)", "(a, sep: str = ', ')") is True
+
+
 def test_is_backward_compatible_change_rejects_anything_a_caller_can_trip_on():
     assert is_backward_compatible_change("(a)", "(a, b)") is False        # new required arg
     assert is_backward_compatible_change("(a, b)", "(a)") is False        # removed arg
