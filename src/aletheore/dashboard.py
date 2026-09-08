@@ -72,8 +72,23 @@ def build_history_summary(repo_path: Path) -> list[dict]:
             evidence = json.loads(snapshot_path.read_text())
         except json.JSONDecodeError:
             continue
-        result.append(
-            {
+        # Real bug found via audit: this indexed straight into
+        # evidence["security"]["dependency_vulnerabilities"]["findings"]
+        # etc. with no schema check - unlike load_evidence_file, imported
+        # into this same file specifically to guard against exactly this.
+        # An older-schema snapshot (a real, reachable shape in this exact
+        # history/ directory - see history.py's own _compute_curated_diff,
+        # which had the identical gap) raised an uncaught KeyError here,
+        # and since this loop has no per-snapshot isolation, one bad
+        # snapshot anywhere in history killed the whole summary - the
+        # History tab's only caller, api_history, has no try/except of
+        # its own, so this propagated as an unhandled 500 for the entire
+        # session, not just that one snapshot's display. Skip a snapshot
+        # missing an expected key or shaped wrong, same "treat as
+        # unavailable" contract load_evidence_file already establishes,
+        # rather than losing every other snapshot's history alongside it.
+        try:
+            entry = {
                 "scanned_at": evidence["scanned_at"],
                 "module_count": len(evidence["repository"]["modules"]),
                 "secrets_findings": len(evidence["security"]["secrets"]["findings"]),
@@ -81,7 +96,9 @@ def build_history_summary(repo_path: Path) -> list[dict]:
                     evidence["security"]["dependency_vulnerabilities"]["findings"]
                 ),
             }
-        )
+        except (KeyError, TypeError):
+            continue
+        result.append(entry)
     return result
 
 
