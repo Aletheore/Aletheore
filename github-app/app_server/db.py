@@ -1264,13 +1264,30 @@ async def get_endpoint_uptime_pct_since(
     # aggregate percentage rather than the raw per-check history exposed
     # on the authenticated dashboard endpoint - an unauthenticated,
     # CORS-open route shouldn't hand out granular check-by-check timing
-    # data to anyone who asks.
+    # data to anyone who asks (including which specific target is
+    # unhealthy - see the worst-case aggregation below).
+    #
+    # Real bug found via audit: this used to GROUP BY endpoint_method,
+    # endpoint_path alone. Two targets checking the exact same endpoint
+    # (e.g. staging and production) blended into one row - a production
+    # target with 0% uptime over the window, sitting next to a staging
+    # target with 100%, reported a misleading 50% instead of the real,
+    # customer-relevant fact that production has been down the whole
+    # time. Computing per-target uptime_pct first, then taking the
+    # MINIMUM across targets per endpoint, means a real outage on any one
+    # target can never be hidden behind a healthy sibling target -
+    # without exposing which target it was (still just one number per
+    # endpoint, same public-API contract as before).
     rows = await pool.fetch(
         """
-        SELECT endpoint_method, endpoint_path,
-               (count(*) FILTER (WHERE reachable))::float / count(*) AS uptime_pct
-        FROM endpoint_health
-        WHERE installation_id = $1 AND repo_full_name = $2 AND checked_at >= $3
+        SELECT endpoint_method, endpoint_path, min(uptime_pct) AS uptime_pct
+        FROM (
+            SELECT target_id, endpoint_method, endpoint_path,
+                   (count(*) FILTER (WHERE reachable))::float / count(*) AS uptime_pct
+            FROM endpoint_health
+            WHERE installation_id = $1 AND repo_full_name = $2 AND checked_at >= $3
+            GROUP BY target_id, endpoint_method, endpoint_path
+        ) per_target
         GROUP BY endpoint_method, endpoint_path
         """,
         installation_id,
@@ -1285,22 +1302,35 @@ async def get_endpoint_health_summary_since(
     installation_id: int,
     repo_full_name: str,
     since: datetime,
-) -> dict[tuple[str, str], dict]:
+) -> dict[tuple[int | None, str, str], dict]:
+    # Real bug found via audit: this used to GROUP BY endpoint_method,
+    # endpoint_path alone, so bool_or(reachable) blended every target
+    # checking the same endpoint together - a permanently-broken
+    # production target (never once reachable) was invisible to
+    # find_stale_endpoints as long as a healthy staging target shared its
+    # (method, path). Grouped per target_id instead, matching
+    # get_recent_endpoint_health's already-fixed shape - the authenticated
+    # dashboard this backs already shows a per-target breakdown via that
+    # function, so surfacing target-level staleness here too is not new
+    # exposure, just internal consistency.
     rows = await pool.fetch(
         """
-        SELECT endpoint_method, endpoint_path, bool_or(reachable) AS ever_reachable, count(*) AS check_count
-        FROM endpoint_health
-        WHERE installation_id = $1 AND repo_full_name = $2 AND checked_at >= $3
-        GROUP BY endpoint_method, endpoint_path
+        SELECT eh.target_id, t.label AS target_label, eh.endpoint_method, eh.endpoint_path,
+               bool_or(eh.reachable) AS ever_reachable, count(*) AS check_count
+        FROM endpoint_health eh
+        LEFT JOIN health_check_targets t ON t.id = eh.target_id
+        WHERE eh.installation_id = $1 AND eh.repo_full_name = $2 AND eh.checked_at >= $3
+        GROUP BY eh.target_id, t.label, eh.endpoint_method, eh.endpoint_path
         """,
         installation_id,
         repo_full_name,
         since,
     )
     return {
-        (row["endpoint_method"], row["endpoint_path"]): {
+        (row["target_id"], row["endpoint_method"], row["endpoint_path"]): {
             "ever_reachable": row["ever_reachable"],
             "check_count": row["check_count"],
+            "target_label": row["target_label"],
         }
         for row in rows
     }

@@ -49,23 +49,38 @@ STALE_ENDPOINT_WINDOW_DAYS = 30
 
 
 def find_stale_endpoints(
-    endpoints: list[dict], health_summary: dict[tuple[str, str], dict]
+    endpoints: list[dict], health_summary: dict[tuple[int | None, str, str], dict]
 ) -> list[dict]:
-    stale = []
+    # health_summary is now keyed per (target_id, method, path) - real bug
+    # found via audit: get_endpoint_health_summary_since used to blend
+    # every target checking the same endpoint into one summary, so a
+    # permanently-broken production target could be hidden behind a
+    # healthy staging target sharing its (method, path) and never get
+    # flagged here. One endpoint can now surface as stale once per target
+    # that's actually stale, each carrying its own target_id/target_label
+    # so the caller can tell which target the flag is about - the same
+    # per-target detail get_recent_endpoint_health already exposes
+    # elsewhere on this same authenticated dashboard.
+    endpoints_by_key: dict[tuple[str, str], dict] = {}
     for endpoint in endpoints:
-        key = (endpoint.get("method"), endpoint.get("path"))
-        summary = health_summary.get(key)
-        if summary is None:
+        endpoints_by_key.setdefault((endpoint.get("method"), endpoint.get("path")), endpoint)
+
+    stale = []
+    for (target_id, method, path), summary in health_summary.items():
+        endpoint = endpoints_by_key.get((method, path))
+        if endpoint is None:
             continue
         if summary["ever_reachable"] or summary["check_count"] < MIN_CHECKS_FOR_STALE_CONFIDENCE:
             continue
         stale.append(
             {
-                "method": endpoint.get("method"),
-                "path": endpoint.get("path"),
+                "method": method,
+                "path": path,
                 "file": endpoint.get("file"),
                 "line": endpoint.get("line"),
                 "check_count": summary["check_count"],
+                "target_id": target_id,
+                "target_label": summary.get("target_label"),
             }
         )
     return stale
@@ -683,13 +698,32 @@ async def get_public_health(org: str, repo: str, request: Request, response: Res
             headers={"Access-Control-Allow-Origin": "*"},
         )
 
+    # Real bug found via audit: this used to DISTINCT ON (endpoint_method,
+    # endpoint_path) alone. Two targets checking the exact same endpoint
+    # (e.g. staging and production) collapsed into whichever target
+    # happened to have the more recently checked_at row - a genuinely
+    # down production target could be silently reported as "up" whenever
+    # a healthy staging target's row landed later. latest_per_target first
+    # gets each target's own latest row (matching get_recent_endpoint_
+    # health's already-fixed shape), then the outer query orders
+    # `reachable` ascending (false sorts before true in Postgres) so a
+    # down target is always what gets surfaced for that endpoint - a real
+    # outage on any one target can never be hidden behind a healthy
+    # sibling target on this public, unauthenticated status page, without
+    # exposing which specific target it was.
     rows = await request.app.state.db_pool.fetch(
         """
+        WITH latest_per_target AS (
+            SELECT DISTINCT ON (target_id, endpoint_method, endpoint_path)
+                target_id, endpoint_method, endpoint_path, reachable, status_code, latency_ms, checked_at
+            FROM endpoint_health
+            WHERE installation_id = $1 AND repo_full_name = $2 AND checked_at >= $3
+            ORDER BY target_id, endpoint_method, endpoint_path, checked_at DESC, id DESC
+        )
         SELECT DISTINCT ON (endpoint_method, endpoint_path)
             endpoint_method, endpoint_path, reachable, status_code, latency_ms, checked_at
-        FROM endpoint_health
-        WHERE installation_id = $1 AND repo_full_name = $2 AND checked_at >= $3
-        ORDER BY endpoint_method, endpoint_path, checked_at DESC, id DESC
+        FROM latest_per_target
+        ORDER BY endpoint_method, endpoint_path, reachable ASC, checked_at DESC
         """,
         installation["installation_id"],
         repo_full_name,
