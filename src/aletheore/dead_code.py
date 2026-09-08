@@ -148,7 +148,7 @@ _HTML_SCRIPT_SRC_PATTERN = re.compile(r'<script[^>]+src=["\']([^"\']+)["\']', re
 # Celery task names, cron-style job registries) is never imported by another module
 # either - the same blind spot as the __main__-guard case above, just for library-level
 # dynamic dispatch instead of direct script invocation. Confirmed on this repo:
-# scan_worker/jobs.py and scan_worker/demo_scan.py are the busiest modules in the
+# scan_worker/jobs.py is one of the busiest modules in the
 # worker, dispatched exclusively via `queue.enqueue("scan_worker.jobs.<fn>", ...)`
 # string literals from scheduler.py and friends, and looked completely unreachable
 # without this check. Minimum 2 dotted segments required - a single bare segment

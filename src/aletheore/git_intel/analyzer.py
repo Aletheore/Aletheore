@@ -17,8 +17,8 @@ HOTSPOT_LIMIT = 30
 CADENCE_WEEKS_RETURNED = 52
 
 # Distinct from the generic exit code 1 other scan failures use, so callers
-# that only see a subprocess exit code (scan_worker/jobs.py, demo_scan.py)
-# can tell "the repo is likely too large for the memory available" apart
+# that only see a subprocess exit code (scan_worker/jobs.py) can tell "the
+# repo is likely too large for the memory available" apart
 # from "something else went wrong" without parsing stderr text.
 GIT_ANALYSIS_RESOURCE_EXIT_CODE = 2
 

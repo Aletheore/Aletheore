@@ -49,7 +49,6 @@ Scope of a purge, in one transaction:
 | Installation-scoped rows (evidence, findings, docs, wiki, tokens, seats, health targets, billing links) | Deleted. Every such table declares `ON DELETE CASCADE` against `installations`. |
 | `github_user_emails`, `sessions` for anyone who has accessed the installation | Deleted **only** for people left with no other Aletheore installation. A user who administers two orgs is not logged out of the second when the first deletes itself. "Anyone who has accessed" is tracked in `installation_access_log`, on every plan - not `installation_members`, which exists only for paid-seat billing and would silently miss every Community-plan user. |
 | `cli_telemetry_events` | Retained, but no longer written to (CLI usage telemetry removed 2026-08-19; existing rows are historical only, keyed by a rotating anonymous ID with no link to an installation or a person). |
-| `demo_scan_rate_limits` | Retained. IP-keyed abuse control for the unauthenticated demo scanner, not customer data. |
 | `data_deletion_log` | Written, never deleted. See below. |
 
 Every purge writes one `data_deletion_log` row: installation ID, account login,
