@@ -3,6 +3,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from aletheore.dead_code import _package_import_names
+
 CONFIDENCE_ORDER = {"unavailable": 0, "weak": 1, "inferred": 2, "exact": 3}
 CANONICAL_FIELDS = (
     "kind",
@@ -186,10 +188,65 @@ def resolve_owner(repo_path: Path, file_path: str) -> dict:
 
 
 def resolve_recent_commit(repo_path: Path, file_path: str, line: int | None = None) -> dict:
-    del line
+    """The commit that most recently touched file_path - the specific
+    LINE when one is given, via `git blame` (the real per-line
+    attribution signal), falling back to the whole file's own most
+    recent commit only when no line is given.
+
+    A prior version accepted `line` but silently discarded it (`del
+    line`), always answering with the whole file's most recent commit
+    regardless of which line a finding was actually attached to. On any
+    file with more than one contributor, a finding at a line nobody has
+    touched since it was first written still got attributed to whoever
+    most recently edited some OTHER, unrelated line in the same file -
+    confirmed directly against a real two-commit, two-author repo: a
+    finding at bar()'s own line, never touched after Alice's original
+    commit, was attributed to Bob purely because Bob's later, unrelated
+    commit happened to touch foo() elsewhere in the same file.
+
+    Falls back to the same whole-file lookup no `line` gets (rather than
+    reporting unavailable) whenever blame itself can't answer - a line
+    number past the file's real current length (stale evidence from
+    before the file shrank, or evidence describing a symbol slightly
+    differently than the file's exact current line count), an
+    uncommitted/working-tree-only line, or any other blame failure -
+    the same "a partial/degraded result beats none" preference this
+    codebase applies elsewhere (schema_map's partial-schema-over-failed-
+    scan, CI's fail-soft config loading), not silently swallowed.
+    """
+    sha_from_blame: str | None = None
+    if line is not None:
+        try:
+            blame_proc = subprocess.run(
+                ["git", "blame", "-L", f"{line},{line}", "--porcelain", "HEAD", "--", file_path],
+                cwd=repo_path,
+                check=False,
+                capture_output=True,
+                text=True,
+                errors="ignore",
+                timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            blame_proc = None
+        if blame_proc is not None and blame_proc.returncode == 0 and blame_proc.stdout:
+            # porcelain's first line is "<sha> <orig-line> <final-line> [<count>]".
+            candidate = blame_proc.stdout.split(None, 1)[0]
+            # git blame's own convention for a line that exists only in
+            # the uncommitted working tree (no real commit to report yet)
+            # is an all-zero SHA - not a bug to route around, a genuine
+            # "no commit for this exact line", falls through to the
+            # whole-file lookup below same as any other blame failure.
+            if candidate and set(candidate) != {"0"}:
+                sha_from_blame = candidate
+
+    log_args = ["git", "log", "-1", "--format=%H%x1f%an%x1f%aI%x1f%s"]
+    if sha_from_blame is not None:
+        log_args.append(sha_from_blame)
+    else:
+        log_args.extend(["--", file_path])
     try:
         proc = subprocess.run(
-            ["git", "log", "-1", "--format=%H%x1f%an%x1f%aI%x1f%s", "--", file_path],
+            log_args,
             cwd=repo_path,
             check=False,
             capture_output=True,
@@ -276,7 +333,18 @@ def attach_risk_evidence(evidence: dict, resolution: dict, max_risks: int = 5) -
         evidence.get("security", {}).get("dependency_vulnerabilities", {}).get("findings", [])
     ):
         package = finding.get("package")
-        if not dependencies or package in dependencies:
+        # dependencies holds import-time names (module["imports"]) - a
+        # finding's own "package" is the real registry name
+        # (dependency_vulnerabilities/dependency_licenses both come from
+        # PyPI/npm/etc lookups against the manifest-declared package name).
+        # These two diverge for a real, common set of packages (PyYAML vs
+        # yaml, beautifulsoup4 vs bs4, Pillow vs PIL) - a bare `package in
+        # dependencies` equality check silently dropped every real match
+        # whenever they differed, the exact same PyYAML/yaml divergence
+        # dead_code.py's own PACKAGE_IMPORT_ALIASES already exists to
+        # handle for its own, structurally identical unused-dependency
+        # check - reused here rather than re-solving the same problem.
+        if not dependencies or (package and _package_import_names(package) & dependencies):
             risks.append(
                 _risk(
                     "vulnerability",
@@ -290,7 +358,7 @@ def attach_risk_evidence(evidence: dict, resolution: dict, max_risks: int = 5) -
         evidence.get("security", {}).get("dependency_licenses", {}).get("findings", [])
     ):
         package = finding.get("package")
-        if package in dependencies:
+        if package and _package_import_names(package) & dependencies:
             risks.append(
                 _risk(
                     "license",

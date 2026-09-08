@@ -200,6 +200,61 @@ def test_resolve_recent_commit_returns_unavailable_for_non_git_repo(tmp_path):
     assert result["commit_status"] == "unavailable"
 
 
+def test_resolve_recent_commit_attributes_a_line_to_its_own_last_editor_not_the_file(tmp_path):
+    # Real bug found via audit: a prior version accepted `line` but
+    # silently discarded it (`del line`), always answering with the whole
+    # file's most recent commit - so a line nobody has touched since it
+    # was first written still got attributed to whoever most recently
+    # edited some OTHER, unrelated line in the same file.
+    repo = tmp_path
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Alice"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "alice@example.com"], cwd=repo, check=True)
+    (repo / "app.py").write_text("def foo():\n    return 1\n\ndef bar():\n    return 2\n")
+    subprocess.run(["git", "add", "app.py"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Alice adds foo and bar"], cwd=repo, check=True, capture_output=True
+    )
+    subprocess.run(["git", "config", "user.name", "Bob"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "bob@example.com"], cwd=repo, check=True)
+    (repo / "app.py").write_text("def foo():\n    return 100\n\ndef bar():\n    return 2\n")
+    subprocess.run(["git", "add", "app.py"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Bob edits foo only"], cwd=repo, check=True, capture_output=True
+    )
+
+    bar_line = resolve_recent_commit(repo, "app.py", line=5)
+    foo_line = resolve_recent_commit(repo, "app.py", line=2)
+    whole_file = resolve_recent_commit(repo, "app.py")
+
+    assert bar_line["commit"]["author"] == "Alice"
+    assert bar_line["commit"]["subject"] == "Alice adds foo and bar"
+    assert foo_line["commit"]["author"] == "Bob"
+    # Whole-file fallback (no line given) is unchanged: the most recent
+    # commit touching the file at all, regardless of which line.
+    assert whole_file["commit"]["author"] == "Bob"
+
+
+def test_resolve_recent_commit_falls_back_to_whole_file_when_the_line_is_out_of_range(tmp_path):
+    # A line number past the file's real current length (stale evidence,
+    # or evidence describing a symbol at a slightly different line than
+    # the file's exact current line count) makes `git blame -L` fail -
+    # this must degrade to the same whole-file answer `line=None` gets,
+    # not silently report the commit as unavailable.
+    repo = tmp_path
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Alice"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "alice@example.com"], cwd=repo, check=True)
+    (repo / "app.py").write_text("print('hello')\n")
+    subprocess.run(["git", "add", "app.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "add app"], cwd=repo, check=True, capture_output=True)
+
+    result = resolve_recent_commit(repo, "app.py", line=999)
+
+    assert result["commit"]["subject"] == "add app"
+    assert result["commit_status"] == "available"
+
+
 def test_attach_dependency_evidence_uses_module_imports():
     resolution = resolve_endpoint(make_evidence(), "GET", "/v1/users")
 
@@ -219,6 +274,37 @@ def test_attach_risk_evidence_attaches_matching_findings():
     assert "architecture" in categories
     assert "vulnerability" in categories
     assert result["risk_status"] == "available"
+
+
+def test_attach_risk_evidence_matches_a_finding_whose_package_name_differs_from_the_import_name():
+    # Real bug found via audit: dependencies holds import-time names
+    # (module["imports"]) but a finding's own "package" is the real
+    # registry name - these diverge for a real, common set of packages
+    # (PyYAML vs yaml, beautifulsoup4 vs bs4, Pillow vs PIL). A bare
+    # `package in dependencies` equality check silently dropped every
+    # real vulnerability/license match whenever they differed.
+    evidence = {
+        "security": {
+            "dependency_vulnerabilities": {
+                "findings": [
+                    {"package": "PyYAML", "severity": "high", "advisory_id": "CVE-2024-XXXX"}
+                ]
+            },
+            "dependency_licenses": {
+                "findings": [
+                    {"package": "beautifulsoup4", "license": "MIT", "severity": "low"}
+                ]
+            },
+        }
+    }
+    resolution = normalize_resolution(
+        kind="symbol", file="app.py", dependency=["yaml", "bs4"], confidence="exact"
+    )
+
+    result = attach_risk_evidence(evidence, resolution)
+
+    categories = {risk["category"] for risk in result["risk"]}
+    assert categories == {"vulnerability", "license"}
 
 
 def test_normalize_resolution_sets_suggestion_and_status():
