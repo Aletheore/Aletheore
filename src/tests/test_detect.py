@@ -166,6 +166,22 @@ def test_detect_build_tools_finds_dockerfile(tmp_path):
     assert "docker" in names
 
 
+def test_detect_build_tools_finds_a_dockerfile_in_a_subdirectory(tmp_path):
+    # Real bug found via audit: every marker was checked only at repo_path
+    # itself, never recursively - a Dockerfile living in a subdirectory
+    # (services/api/Dockerfile, the ordinary layout for any microservices/
+    # monorepo project) was completely invisible, unlike
+    # _detect_docker_compose_services, which already correctly searches
+    # the whole pruned tree for docker-compose.yml.
+    repo = make_repo(tmp_path)
+    (repo / "services" / "api").mkdir(parents=True)
+    (repo / "services" / "api" / "Dockerfile").write_text("FROM python:3.11\n")
+
+    tools = detect_build_tools(repo)
+
+    assert {"name": "docker", "evidence": "services/api/Dockerfile"} in tools
+
+
 def test_detect_monorepo_detects_npm_workspaces(tmp_path):
     repo = make_repo(tmp_path)
     (repo / "package.json").write_text(
@@ -786,6 +802,21 @@ def test_detect_declared_env_vars_returns_empty_when_no_env_files(tmp_path):
     (repo / "main.py").write_text("x = 1\n")
 
     assert _detect_declared_env_vars(repo) == []
+
+
+def test_detect_declared_env_vars_reads_symfonys_env_dist_convention(tmp_path):
+    # Real bug found via audit: .env.dist is Symfony's own canonical
+    # convention (PHP is one of the 12 languages this scanner otherwise
+    # fully supports), missing from ENV_FILE_MARKERS entirely.
+    from aletheore.scanner.detect import _detect_declared_env_vars
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".env.dist").write_text("DATABASE_URL=\n")
+
+    result = _detect_declared_env_vars(repo)
+
+    assert result == [{"name": "DATABASE_URL", "source": ".env.dist"}]
 
 
 def test_detect_infrastructure_combines_all_categories(tmp_path):
