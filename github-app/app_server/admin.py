@@ -150,7 +150,15 @@ class SetDocsRepoCommitRequest(BaseModel):
 class AddHealthCheckTargetRequest(BaseModel):
     label: str = Field(min_length=1, max_length=100, pattern=_LABEL_PATTERN)
     base_url: str
-    latency_threshold_ms: int | None = None
+    # Real bug found via audit: no lower bound meant 0 or a negative
+    # number was accepted with no validation error - jobs.py's own
+    # _latency_flipped compares strictly (latency_ms > threshold_ms), so
+    # a 0 threshold fires an immediate, permanent "latency degraded"
+    # alert on the customer's very first health check regardless of how
+    # fast the target actually responds. Confirmed directly: threshold=0
+    # flagged a healthy 45ms response as exceeded, threshold=500 (or
+    # None, meaning "don't check latency at all") did not.
+    latency_threshold_ms: int | None = Field(default=None, ge=1)
 
 
 class EndpointSelectionEntry(BaseModel):
