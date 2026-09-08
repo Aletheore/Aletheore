@@ -33,6 +33,18 @@ def test_parse_judge_response_raises_when_no_json_present():
         parse_judge_response("I refuse to answer in JSON.")
 
 
+def test_parse_judge_response_rejects_a_non_object_score_value():
+    # Real bug found via audit: a judge model that misreads the requested
+    # shape and returns a list (or any other non-object) per tool used to
+    # crash with a raw AttributeError from score.get() deep inside this
+    # function's own validation loop, instead of the clean ValueError this
+    # module otherwise guarantees for malformed judge output (see the
+    # invalid-recall-value test above).
+    response_text = '{"Tool A": ["hit", "partial"]}'
+    with pytest.raises(ValueError, match="expected an object of scores"):
+        parse_judge_response(response_text)
+
+
 class _FakeMessage:
     def __init__(self, content):
         self.content = content
