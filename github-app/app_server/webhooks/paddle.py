@@ -1,4 +1,5 @@
 import logging
+import math
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
@@ -103,6 +104,14 @@ def _seat_item_quantity(item: dict) -> int:
     if isinstance(quantity, int):
         return quantity
     if isinstance(quantity, float):
+        # Flash Review finding: JSON's own grammar has no literal for
+        # inf/-inf/nan, but Python's json module accepts them anyway
+        # (a real, if nonstandard, shape a sender can transmit) - int()
+        # on either raises OverflowError (inf) or ValueError (nan), the
+        # exact same "crash the whole webhook handler" failure mode this
+        # function exists to close for None/string quantity.
+        if not math.isfinite(quantity):
+            return 0
         return int(quantity)
     if isinstance(quantity, str):
         try:

@@ -791,6 +791,39 @@ async def test_subscription_updated_with_a_string_seat_quantity_reconciles_corre
 
 
 @pytest.mark.asyncio
+async def test_subscription_updated_with_a_non_finite_seat_quantity_does_not_crash(pool):
+    # Flash Review finding on the null/string-quantity fix above: the float
+    # branch called int(quantity) unconditionally, but JSON's own grammar
+    # has no literal for inf/-inf/nan - Python's json module accepts them
+    # anyway (a real, if nonstandard, shape a sender can transmit), and
+    # int() on either raises OverflowError (inf) or ValueError (nan), the
+    # exact same "crash the whole webhook handler" failure this function
+    # exists to close.
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, extra_seats) "
+        "VALUES (310, 'acme', 'air', 3)"
+    )
+    payload = {
+        "event_type": "subscription.updated",
+        "data": {
+            "id": "sub_test_310",
+            "customer_id": "ctm_test_310",
+            "status": "active",
+            "custom_data": {"installation_token": _installation_token(310)},
+            "items": [
+                {"price": {"id": "pri_01kyhevc8bkcghfpwjymz16y2h"}, "quantity": 1},
+                {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": float("nan")},
+            ],
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert await get_extra_seats(pool, 310) == 0
+
+
+@pytest.mark.asyncio
 async def test_subscription_canceled_resets_extra_seats_to_zero(pool):
     fake_queue = MagicMock()
     await pool.execute(
