@@ -65,9 +65,30 @@ def _parse_json_object(raw: str) -> dict:
 
 def _symbols_needing_work(module: dict, polish_existing: bool) -> list[dict]:
     all_symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
+
+    # A symbol name that appears more than once in this file (e.g. two
+    # functions named `foo` - a real, if unusual, shape: a conditional
+    # redefinition, or a scanner capturing both branches of an @overload
+    # pair) can't be safely round-tripped through this module's name-keyed
+    # request/response contract - the model's JSON response can only ever
+    # carry one entry per name. Real bug found via audit: this used to
+    # happily request descriptions for every colliding name anyway, and
+    # the name-keyed `hashes`/`result` dicts downstream kept whichever one
+    # wrote last, silently discarding the other symbol's real description
+    # and corrupting its content_hash-based change-detection with a
+    # sibling's hash. Excluded entirely rather than guessing which one
+    # "wins" - matches this module's own fail-closed philosophy (an
+    # unrepresentable response degrades to no AI description, not a wrong
+    # one silently attributed to the wrong symbol).
+    name_counts: dict[str, int] = {}
+    for symbol in all_symbols:
+        name_counts[symbol["name"]] = name_counts.get(symbol["name"], 0) + 1
+
     if polish_existing:
-        return [s for s in all_symbols if s.get("is_public") and s.get("docstring")]
-    return [s for s in all_symbols if s.get("is_public") and not s.get("docstring")]
+        candidates = [s for s in all_symbols if s.get("is_public") and s.get("docstring")]
+    else:
+        candidates = [s for s in all_symbols if s.get("is_public") and not s.get("docstring")]
+    return [s for s in candidates if name_counts[s["name"]] == 1]
 
 
 def _symbol_snippet(source_lines: list[str], symbol: dict) -> str:
