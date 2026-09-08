@@ -240,6 +240,24 @@ def get_llm_spend_this_month(dsn: str, installation_id: int) -> float:
             return float(row[0]) if row else 0.0
 
 
+def get_llm_spend_breakdown(dsn: str, installation_id: int, since: datetime) -> dict[str, float]:
+    """Per-feature cost breakdown for one installation since `since` - the
+    query llm_spend's own blended monthly total can never answer, and the
+    reason llm_spend_events exists (see record_llm_spend)."""
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT feature, SUM(cost_usd) FROM llm_spend_events
+                WHERE installation_id = %s AND created_at >= %s
+                GROUP BY feature
+                ORDER BY SUM(cost_usd) DESC
+                """,
+                (installation_id, since),
+            )
+            return {feature: float(total) for feature, total in cur.fetchall()}
+
+
 def record_llm_spend(
     dsn: str,
     installation_id: int,
@@ -273,6 +291,20 @@ def record_llm_spend(
                 (installation_id, cost_usd),
             )
             row = cur.fetchone()
+            # Durable per-feature breakdown - llm_spend above only ever
+            # keeps one blended monthly total per installation, and the
+            # logger.info below is the only other place a feature label
+            # was ever attached to a cost, which doesn't survive a
+            # container restart (every deploy wipes it). Same transaction
+            # as the aggregate update, so the two can never disagree.
+            if cost_usd > 0:
+                cur.execute(
+                    """
+                    INSERT INTO llm_spend_events (installation_id, feature, cost_usd)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (installation_id, feature, cost_usd),
+                )
         conn.commit()
 
     if cost_usd > 0:
