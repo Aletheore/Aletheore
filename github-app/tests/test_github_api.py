@@ -500,6 +500,37 @@ def test_trim_patch_context_handles_pure_removal():
     assert trimmed == patch
 
 
+def test_trim_patch_context_drops_the_no_newline_at_end_of_file_marker():
+    # Real bug found via audit: git emits a literal "\ No newline at end
+    # of file" line immediately after a +/- line whenever that version of
+    # the file lacks a trailing newline - a real, common shape, not an
+    # edge case (any hunk touching the last line of such a file). Its own
+    # tag ("\\") matched neither "-" nor "+", so it fell into the
+    # unchanged-context branch and was treated as real content present in
+    # BOTH old and new file versions - injecting a fake source line into
+    # the model-facing trimmed diff and inflating the hunk's reported
+    # line count to match.
+    patch = (
+        "@@ -1,3 +1,3 @@\n"
+        " line1\n"
+        " line2\n"
+        "-line3_old\n"
+        r"\ No newline at end of file" + "\n"
+        "+line3_new\n"
+        r"\ No newline at end of file"
+    )
+
+    trimmed = _trim_patch_context(patch, context_lines=1)
+
+    assert r"\ No newline at end of file" not in trimmed
+    assert trimmed == (
+        "@@ -2,2 +2,2 @@\n"
+        " line2\n"
+        "-line3_old\n"
+        "+line3_new"
+    )
+
+
 def test_fetch_pr_diff_packs_smallest_patches_first_under_a_total_byte_budget():
     # Real gap: fetch_pr_diff had no total size cap at all before this -
     # every file's patch got concatenated unconditionally. Packs smallest
