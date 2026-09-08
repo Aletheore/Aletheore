@@ -807,8 +807,9 @@ def _query(
             search_ast_pattern,
         )
 
+        ignored_paths = load_repo_config(Path(repo_path).resolve())["ignored_paths"]
         try:
-            result = search_ast_pattern(Path(repo_path).resolve(), language, target)
+            result = search_ast_pattern(Path(repo_path).resolve(), language, target, ignored_paths)
         except UnknownLanguageError as exc:
             console.print(f"[bold red]error:[/bold red] {exc}")
             return 1
@@ -1148,9 +1149,48 @@ def _claude_desktop_server_name(repo_path: Path) -> str:
     return f"aletheore-{repo_path.name}-{digest}"
 
 
+def _config_path_escapes_repo(config_path: Path, repo_path: Path) -> bool:
+    """True if config_path - once any symlinked component along it (the
+    file itself, or an intermediate directory like .cursor/.vscode/.kiro)
+    is resolved - would land outside repo_path.
+
+    Real bug this closes: `mcp-install` is commonly run against a freshly
+    cloned or downloaded repository, which is attacker-controlled input
+    the same way a scanned repo's source is everywhere else in this
+    codebase (see the SSRF/sandboxing hardening history) - but the write
+    path here (`config_path.exists()`/`.write_text()`) followed a symlink
+    transparently, both for the config file itself and for any parent
+    directory in its path. A malicious repo shipping `.mcp.json` (or
+    `.cursor`, `.vscode`, `.kiro/settings`) as a symlink to an arbitrary
+    path outside the repo had that target silently overwritten - not
+    merely a file inside the scanned repo, any file the OS user running
+    this command can write to (a shell rc file, another project's real
+    config, anything). Path.resolve() with a nonexistent final segment
+    still resolves every existing parent component, which is exactly the
+    case that matters: the config file usually doesn't exist yet, but a
+    symlinked *directory* component already does.
+    """
+    try:
+        resolved = config_path.resolve()
+    except OSError:
+        return True
+    return not resolved.is_relative_to(repo_path)
+
+
 def _write_json_mcp_client_config(
-    config_path: Path, top_level_key: str, entry: dict, *, server_name: str = "aletheore"
+    config_path: Path,
+    top_level_key: str,
+    entry: dict,
+    *,
+    server_name: str = "aletheore",
+    repo_path: Path | None = None,
 ) -> str:
+    # repo_path is None for claude-desktop's target: that config file is
+    # deliberately global (shared across every project on this machine,
+    # not under any one repo), so there's no repo boundary to check -
+    # every other target writes a per-repo path and must pass repo_path.
+    if repo_path is not None and _config_path_escapes_repo(config_path, repo_path):
+        return f"skipped (path escapes the repo via a symlink): {config_path}"
     if config_path.exists():
         try:
             data = json.loads(config_path.read_text())
@@ -1174,7 +1214,11 @@ def _write_json_mcp_client_config(
     return f"{'updated' if already_present else 'wrote'} {config_path}"
 
 
-def _write_toml_mcp_client_config(config_path: Path, top_level_key: str, entry: dict) -> str:
+def _write_toml_mcp_client_config(
+    config_path: Path, top_level_key: str, entry: dict, *, repo_path: Path | None = None
+) -> str:
+    if repo_path is not None and _config_path_escapes_repo(config_path, repo_path):
+        return f"skipped (path escapes the repo via a symlink): {config_path}"
     if config_path.exists():
         try:
             data = tomllib.loads(config_path.read_text())
@@ -1214,7 +1258,7 @@ def _mcp_install(path: str, targets: list[str]) -> int:
         if target == "codex-cli":
             config_path = repo_path / ".codex" / "config.toml"
             entry = {"command": _aletheore_command(), "args": ["mcp", str(repo_path)]}
-            message = _write_toml_mcp_client_config(config_path, "mcp_servers", entry)
+            message = _write_toml_mcp_client_config(config_path, "mcp_servers", entry, repo_path=repo_path)
         elif target == "claude-desktop":
             config_path = _claude_desktop_config_path()
             if config_path is None:
@@ -1236,7 +1280,7 @@ def _mcp_install(path: str, targets: list[str]) -> int:
             relative_path, top_level_key, entry_builder = _MCP_CLIENT_CONFIGS[target]
             config_path = repo_path / relative_path
             entry = entry_builder(repo_path)
-            message = _write_json_mcp_client_config(config_path, top_level_key, entry)
+            message = _write_json_mcp_client_config(config_path, top_level_key, entry, repo_path=repo_path)
         console.print(f"[bold green]{target}[/bold green]: {message}")
 
     console.print(

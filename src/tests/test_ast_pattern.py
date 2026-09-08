@@ -94,6 +94,29 @@ def test_search_ast_pattern_matches_a_function_with_a_try_statement(tmp_path):
     assert match["captures"]["whole"][0]["start_line"] == 4
 
 
+def test_search_ast_pattern_respects_ignored_paths(tmp_path):
+    # Real bug found via audit: this used to always walk every file
+    # regardless of the repo's own .aletheore.json ignored_paths config -
+    # aletheore_search (mcp_server.py's _search_files) correctly loaded
+    # and passed it through, but aletheore_ast_pattern silently didn't,
+    # still returning matches from inside a directory the repo owner had
+    # deliberately excluded (a vendored/generated/third-party tree).
+    vendor = tmp_path / "vendor"
+    vendor.mkdir()
+    (vendor / "generated.py").write_text("def vendored_func():\n    pass\n")
+    (tmp_path / "app.py").write_text("def real_func():\n    pass\n")
+
+    result = search_ast_pattern(
+        tmp_path,
+        "python",
+        "(function_definition name: (identifier) @name)",
+        ignored_paths=["vendor/**"],
+    )
+
+    files = {m["file"] for m in result["matches"]}
+    assert files == {"app.py"}
+
+
 def test_search_ast_pattern_returns_nothing_when_no_file_matches(tmp_path):
     (tmp_path / "app.py").write_text("def plain():\n    return 1\n")
 

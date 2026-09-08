@@ -239,7 +239,9 @@ def _search_file_batch(
     return results, total_chars, truncated
 
 
-def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> dict:
+def search_ast_pattern(
+    repo_path: Path, language: str, query_source: str, ignored_paths: list[str] | None = None
+) -> dict:
     """Runs a tree-sitter S-expression query against every file of
     `language` under repo_path. Returns `{"matches": [...], "truncated": bool}` -
     one dict per match in "matches":
@@ -253,6 +255,14 @@ def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> dic
     reasoning as mcp_server.py's file-search tool - and also set when a
     batch's worker process crashes before finishing (see module docstring).
 
+    ignored_paths: the repo's own .aletheore.json-configured exclusions
+    (vendored/generated/third-party code, say) - a real gap found via
+    audit: this used to always pass None here regardless of what the
+    caller had, so aletheore_search honored a repo owner's explicit
+    ignored_paths config while aletheore_ast_pattern silently didn't,
+    still returning matches from inside a directory the owner had
+    deliberately excluded.
+
     Raises UnknownLanguageError for a language name LANGUAGE_BY_EXTENSION
     doesn't recognize, InvalidPatternError for a query_source that fails
     to compile against the language's grammar.
@@ -263,7 +273,7 @@ def search_ast_pattern(repo_path: Path, language: str, query_source: str) -> dic
     valid_extensions = {ext for ext, _ in ext_languages}
     rel_paths = [
         path.relative_to(repo_path).as_posix()
-        for path in _iter_source_files(repo_path)
+        for path in _iter_source_files(repo_path, ignored_paths)
         if path.suffix in valid_extensions
     ]
     batches = [
