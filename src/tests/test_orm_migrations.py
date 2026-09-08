@@ -617,6 +617,109 @@ end
     }
 
 
+def test_rails_reversible_dir_down_block_is_not_read_as_forward_migration(tmp_path):
+    # Real bug found via audit: `reversible do |dir| ... end` is the modern
+    # equivalent of the separate def up/def down pair above, but dir.down
+    # is a `call` node named "down" (receiver `dir`), not a `method` node -
+    # the up/down exclusion above only matched the latter shape. Without
+    # this fix, dir.down's block was walked right alongside dir.up's,
+    # fabricating a forward add_column from code that only runs on
+    # rollback, inside a single def change that never uses def up/def down
+    # at all.
+    repo = write_files(
+        tmp_path,
+        {
+            "db/migrate/20230101000000_remove_last_post_id.rb": """
+class RemoveLastPostId < ActiveRecord::Migration[7.0]
+  def change
+    reversible do |dir|
+      dir.up { remove_column :topics, :last_post_id }
+      dir.down { add_column :topics, :last_post_id, :integer }
+    end
+  end
+end
+"""
+        },
+    )
+    events, _sources = extract_rails_migrations(repo, ["db/migrate"])
+    assert len(events) == 1
+    assert events[0] == {
+        "kind": "remove_column", "table": "topics", "name": "last_post_id",
+        "file": "db/migrate/20230101000000_remove_last_post_id.rb", "line": 5,
+    }
+
+
+def test_rails_create_table_block_index_and_foreign_key_are_not_silently_dropped(tmp_path):
+    # Real bug found via audit: t.index and t.foreign_key inside a
+    # create_table do |t| ... end block aren't type methods and aren't
+    # references/belongs_to, so _rails_column_from_typed_call returned
+    # (None, None) for both with no unsupported fallback - a real, common
+    # Rails idiom vanished from the schema with zero trace.
+    repo = write_files(
+        tmp_path,
+        {
+            "db/migrate/20230101000000_create_posts.rb": """
+class CreatePosts < ActiveRecord::Migration[7.0]
+  def change
+    create_table :posts do |t|
+      t.string :title
+      t.index :title
+      t.bigint :author_id
+      t.foreign_key :authors
+    end
+  end
+end
+"""
+        },
+    )
+    events, _sources = extract_rails_migrations(repo, ["db/migrate"])
+    create = next(e for e in events if e["kind"] == "create_table")
+    assert create["relations"] == []
+    index_events = [e for e in events if e["kind"] == "create_index"]
+    assert index_events == [
+        {"kind": "create_index", "table": "posts", "name": "index_posts_on_title",
+         "columns": ["title"], "unique": False,
+         "file": "db/migrate/20230101000000_create_posts.rb", "line": 6}
+    ]
+    relation_events = [e for e in events if e["kind"] == "add_relation"]
+    assert relation_events == [
+        {"kind": "add_relation", "table": "posts",
+         "file": "db/migrate/20230101000000_create_posts.rb", "line": 8,
+         "relation": {"from_column": "author_id", "to_table": "authors", "to_column": "id",
+                      "on_delete": None,
+                      "file": "db/migrate/20230101000000_create_posts.rb", "line": 8}}
+    ]
+
+
+def test_rails_change_table_block_foreign_key_is_not_silently_dropped(tmp_path):
+    # Same gap as create_table above, but change_table's block previously
+    # only special-cased t.index (not t.foreign_key) before falling
+    # through to the same silent (None, None) drop.
+    repo = write_files(
+        tmp_path,
+        {
+            "db/migrate/20230101000000_add_author_to_posts.rb": """
+class AddAuthorToPosts < ActiveRecord::Migration[7.0]
+  def change
+    change_table :posts do |t|
+      t.foreign_key :authors, column: :writer_id
+    end
+  end
+end
+"""
+        },
+    )
+    events, _sources = extract_rails_migrations(repo, ["db/migrate"])
+    assert len(events) == 1
+    assert events[0] == {
+        "kind": "add_relation", "table": "posts",
+        "file": "db/migrate/20230101000000_add_author_to_posts.rb", "line": 5,
+        "relation": {"from_column": "writer_id", "to_table": "authors", "to_column": "id",
+                     "on_delete": None,
+                     "file": "db/migrate/20230101000000_add_author_to_posts.rb", "line": 5},
+    }
+
+
 def test_rails_id_false_omits_primary_key(tmp_path):
     repo = write_files(
         tmp_path,

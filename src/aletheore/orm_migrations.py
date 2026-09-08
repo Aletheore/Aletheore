@@ -1418,6 +1418,60 @@ def _rails_column_from_typed_call(
     return column, None
 
 
+def _rails_block_side_event(
+    method: str, args: list[Node], positional: list[Node],
+    table: str, source: bytes, rel_path: str, line: int
+) -> dict | None:
+    """`t.index`/`t.foreign_key` inside a `create_table do |t|` or
+    `change_table do |t|` block - the same two calls, accepted identically
+    by both block forms. Returns None for anything else; each caller
+    already special-cases its own remaining `t.<method>` shapes
+    (timestamps, typed columns, and - change_table only - remove/rename).
+
+    Both were previously silently dropped: neither is a type method
+    (`_RAILS_TYPE_METHODS`) nor `references`/`belongs_to`, so
+    `_rails_column_from_typed_call` returned `(None, None)` for them with
+    no `unsupported` fallback - a real, common Rails idiom
+    (`create_table :posts do |t| ... t.index :title; t.foreign_key
+    :authors ... end`) vanished from the schema with zero trace, the
+    exact failure mode this module's own docstring says it exists to
+    prevent.
+    """
+    if method == "index":
+        if not positional:
+            return None
+        col_name = _rb_symbol_text(positional[0], source)
+        if not col_name:
+            return None
+        return {
+            "kind": "create_index", "table": table,
+            "name": f"index_{table}_on_{col_name}", "columns": [col_name],
+            "unique": _rb_bool_kwarg(args, "unique", source) is True,
+            "file": rel_path, "line": line,
+        }
+    if method == "foreign_key":
+        if not positional:
+            return None
+        to_table = _rb_symbol_text(positional[0], source)
+        if not to_table:
+            return None
+        col_kw = _rb_kwarg(args, "column", source)
+        # Same crude-but-consistent singularization the top-level
+        # add_foreign_key handler already uses for this same default.
+        from_column = _rb_symbol_text(col_kw, source) if col_kw else f"{to_table[:-1]}_id"
+        on_delete_kw = _rb_kwarg(args, "on_delete", source)
+        on_delete = _rb_symbol_text(on_delete_kw, source) if on_delete_kw else None
+        return {
+            "kind": "add_relation", "table": table, "file": rel_path, "line": line,
+            "relation": {
+                "from_column": from_column, "to_table": to_table, "to_column": "id",
+                "on_delete": on_delete.upper() if on_delete else None,
+                "file": rel_path, "line": line,
+            },
+        }
+    return None
+
+
 def _rails_create_table_events(call: Node, source: bytes, rel_path: str) -> list[dict]:
     args = _rb_args(call)
     positional = [a for a in args if a.type != "pair"]
@@ -1437,6 +1491,7 @@ def _rails_create_table_events(call: Node, source: bytes, rel_path: str) -> list
              "unique": True, "default": None, "file": rel_path, "line": line}
         )
 
+    extra_events: list[dict] = []
     do_block = call.child_by_field_name("block") or next(
         (c for c in call.children if c.type == "do_block"), None
     )
@@ -1447,17 +1502,24 @@ def _rails_create_table_events(call: Node, source: bytes, rel_path: str) -> list
             if inner.type != "call" or _rb_call_name(inner, source) == "":
                 continue
             method = _rb_call_name(inner, source)
+            inner_line = inner.start_point[0] + 1
             if method == "timestamps":
                 for tcol in ("created_at", "updated_at"):
                     columns.append(
                         {"name": tcol, "type": "DATETIME", "primary_key": False,
                          "nullable": False, "unique": False, "default": None,
-                         "file": rel_path, "line": inner.start_point[0] + 1}
+                         "file": rel_path, "line": inner_line}
                     )
                 continue
-            column, relation = _rails_column_from_typed_call(
-                inner, source, rel_path, inner.start_point[0] + 1
+            inner_args = _rb_args(inner)
+            inner_positional = [a for a in inner_args if a.type != "pair"]
+            side_event = _rails_block_side_event(
+                method, inner_args, inner_positional, table, source, rel_path, inner_line
             )
+            if side_event is not None:
+                extra_events.append(side_event)
+                continue
+            column, relation = _rails_column_from_typed_call(inner, source, rel_path, inner_line)
             if column is not None:
                 columns.append(column)
             if relation is not None:
@@ -1466,7 +1528,7 @@ def _rails_create_table_events(call: Node, source: bytes, rel_path: str) -> list
     return [
         {"kind": "create_table", "table": table, "file": rel_path, "line": line,
          "columns": columns, "relations": relations}
-    ]
+    ] + extra_events
 
 
 def _rails_change_table_events(call: Node, source: bytes, rel_path: str) -> list[dict]:
@@ -1517,16 +1579,12 @@ def _rails_change_table_events(call: Node, source: bytes, rel_path: str) -> list
                          "new_name": new_name, "file": rel_path, "line": inner_line}
                     )
             continue
-        if method == "index":
-            if inner_positional:
-                col_name = _rb_symbol_text(inner_positional[0], source)
-                if col_name:
-                    events.append(
-                        {"kind": "create_index", "table": table,
-                         "name": f"index_{table}_on_{col_name}", "columns": [col_name],
-                         "unique": _rb_bool_kwarg(inner_args, "unique", source) is True,
-                         "file": rel_path, "line": inner_line}
-                    )
+        if method in ("index", "foreign_key"):
+            side_event = _rails_block_side_event(
+                method, inner_args, inner_positional, table, source, rel_path, inner_line
+            )
+            if side_event is not None:
+                events.append(side_event)
             continue
         if method == "timestamps":
             for tcol in ("created_at", "updated_at"):
@@ -1779,6 +1837,15 @@ def rails_events_from_source(source: bytes, rel_path: str) -> list[dict]:
     `down` adds it back) - without this exclusion, the down method's
     add_column was read right alongside up's remove_column, as if the
     migration both removed and re-added the same column.
+
+    The same rollback-only shape also appears inside one `change` method
+    as `reversible do |dir|; dir.up { ... }; dir.down { ... }; end` - a
+    `call` node named "down" (receiver `dir`), not a `method` node, so it
+    needs its own exclusion below. Without it, `dir.down`'s block was
+    walked right alongside `dir.up`'s, fabricating a forward-migration
+    event from code that only runs on rollback - worse than the `def
+    down` case, since here it's silent even in a `def change` migration
+    that never uses the separate-methods form at all.
     """
     events: list[dict] = []
     parser = _rb_parser()
@@ -1797,6 +1864,8 @@ def rails_events_from_source(source: bytes, rel_path: str) -> list[dict]:
                 continue  # rollback-only code - never applied by a real deploy
         if node.type == "call":
             name = _rb_call_name(node, source)
+            if name == "down":
+                continue  # dir.down { ... } inside `reversible do |dir|` - rollback-only
             if name == "create_table":
                 events.extend(_rails_create_table_events(node, source, rel_path))
                 continue
