@@ -9,6 +9,7 @@ serves this model behind a plain /embed endpoint.
 
 import functools
 import logging
+import math
 import os
 
 import httpx
@@ -78,7 +79,19 @@ def embed_text(text: str, base_url: str | None = None, timeout_seconds: float = 
     if not isinstance(embedding, list) or not embedding:
         logger.warning("embedding response missing embedding array; treating cache as unavailable")
         return None
-    if not all(isinstance(value, int | float) for value in embedding):
+    # bool is a subclass of int in Python, and float('nan')/float('inf')
+    # are still `float` instances - a plain isinstance(value, int | float)
+    # check lets a NaN/Infinity/bare-boolean response through as a
+    # "valid" embedding, silently poisoning the similarity cache: NaN
+    # comparisons are always False and Infinity dominates a dot product
+    # under any downstream cosine-similarity/distance comparison.
+    # Python's json module accepts NaN/Infinity/-Infinity as non-standard
+    # literals by default, so a corrupted or numerically unstable
+    # response from jina-embed could plausibly include them.
+    if not all(
+        isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+        for value in embedding
+    ):
         logger.warning("embedding response contains non-numeric values; treating cache as unavailable")
         return None
     return [float(value) for value in embedding]

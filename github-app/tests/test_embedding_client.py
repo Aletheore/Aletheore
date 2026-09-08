@@ -111,6 +111,52 @@ def test_embed_text_returns_none_on_malformed_response(monkeypatch):
     assert embed_text("some evidence text") is None
 
 
+def test_embed_text_returns_none_when_response_contains_nan(monkeypatch):
+    # Real bug found via audit: `isinstance(value, int | float)` does not
+    # reject float('nan')/float('inf') - both are still `float` instances
+    # - so a NaN/Infinity-poisoned vector was silently returned as a
+    # "valid" embedding instead of hitting this function's own
+    # "treating cache as unavailable" fallback. json.loads accepts NaN/
+    # Infinity/-Infinity as non-standard literals by default, so a real
+    # corrupted or numerically unstable jina-embed response could
+    # plausibly include them.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b'{"embedding": [0.1, NaN, 0.3]}')
+
+    monkeypatch.setattr(
+        "scan_worker.embedding_client._client",
+        lambda base_url=None: httpx.Client(transport=httpx.MockTransport(handler), base_url="http://jina-embed:80"),
+    )
+
+    assert embed_text("some evidence text") is None
+
+
+def test_embed_text_returns_none_when_response_contains_infinity(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b'{"embedding": [0.1, Infinity, -Infinity]}')
+
+    monkeypatch.setattr(
+        "scan_worker.embedding_client._client",
+        lambda base_url=None: httpx.Client(transport=httpx.MockTransport(handler), base_url="http://jina-embed:80"),
+    )
+
+    assert embed_text("some evidence text") is None
+
+
+def test_embed_text_returns_none_when_response_contains_a_bare_bool(monkeypatch):
+    # bool is a subclass of int in Python - a bare true/false in the
+    # embedding array must not silently pass as a numeric component.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"embedding": [0.1, True, 0.3]})
+
+    monkeypatch.setattr(
+        "scan_worker.embedding_client._client",
+        lambda base_url=None: httpx.Client(transport=httpx.MockTransport(handler), base_url="http://jina-embed:80"),
+    )
+
+    assert embed_text("some evidence text") is None
+
+
 def test_client_is_pooled_not_reconstructed_per_call():
     # Real bug this guards: _client used to build a brand-new httpx.Client
     # (and pay a fresh TCP handshake to the jina-embed sidecar) on every
