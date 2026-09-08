@@ -237,7 +237,20 @@ def detect_repo_license(repo_path: Path) -> dict:
 
     for gemspec in sorted(repo_path.glob("*.gemspec")):
         text = gemspec.read_text(encoding="utf-8", errors="ignore")
-        match = _GEMSPEC_LICENSE_RE.search(text)
+        # Drop full-line Ruby comments before searching - otherwise a
+        # commented-out assignment (a stale `# s.license = "GPL-3.0"` left
+        # behind from an earlier relicensing, a real thing to find in a
+        # gemspec's history) can be the first match _GEMSPEC_LICENSE_RE
+        # finds if it appears before the real, active assignment,
+        # fabricating the wrong repo license entirely. Only strips a line
+        # whose first non-whitespace character is "#" - not an inline
+        # trailing comment - since a license string is never expected to
+        # contain a literal "#" itself, this is enough without a full
+        # Ruby-comment/string-literal parse.
+        active_text = "\n".join(
+            line for line in text.splitlines() if not line.lstrip().startswith("#")
+        )
+        match = _GEMSPEC_LICENSE_RE.search(active_text)
         if match:
             return {
                 "category": categorize_license(match.group(1)),

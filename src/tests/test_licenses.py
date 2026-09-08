@@ -165,6 +165,27 @@ def test_detect_repo_license_from_gemspec(tmp_path):
     assert "app.gemspec" in result["detected_from"]
 
 
+def test_detect_repo_license_from_gemspec_ignores_a_commented_out_assignment(tmp_path):
+    # Flash Review finding on PR #598: the gemspec regex searched the raw
+    # file text without excluding comments, so a commented-out assignment
+    # left over from an earlier relicensing (a real thing to find in a
+    # gemspec's history) could be matched before the real, active one if
+    # it appears first in the file, fabricating the wrong repo license.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.gemspec").write_text(
+        "Gem::Specification.new do |s|\n"
+        '  # s.license = "GPL-3.0"\n'
+        '  s.license = "MIT"\n'
+        "end\n"
+    )
+
+    result = detect_repo_license(repo)
+
+    assert result["category"] == "permissive"
+    assert "MIT" in result["detected_from"]
+
+
 def test_detect_repo_license_from_csproj_nested_in_a_project_directory(tmp_path):
     # Real bug found via audit: same gap for C#. Uses rglob (not a
     # root-level check) since a real .csproj almost never sits at a .NET
