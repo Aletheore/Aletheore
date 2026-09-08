@@ -49,6 +49,28 @@ def test_list_snapshots_returns_chronological_order(tmp_path):
     ]
 
 
+def test_list_snapshots_tolerates_a_non_utf8_file_in_the_history_dir(tmp_path):
+    # Flash Review finding: read_text() can raise UnicodeDecodeError for a
+    # non-UTF-8 *.json file, but the sort key only caught OSError and
+    # json.JSONDecodeError - one corrupt or unrelated non-UTF-8 file in
+    # the history directory made snapshot listing (and rotation, which
+    # calls the same sort) fail entirely for every real snapshot, a
+    # regression from the previous filename-only sort, which never
+    # inspected file contents at all.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    save_snapshot(make_evidence("2026-07-15T10:00:00.000000+00:00"), repo)
+    history_dir = repo / ".aletheore" / "history"
+    (history_dir / "not-real-utf8.json").write_bytes(b"\xff\xfe\x00\x01garbage")
+
+    snapshots = list_snapshots(repo)
+
+    assert len(snapshots) == 2
+    real_snapshot = next(p for p in snapshots if p.name != "not-real-utf8.json")
+    assert json.loads(real_snapshot.read_text())["scanned_at"] == "2026-07-15T10:00:00.000000+00:00"
+
+
 def test_save_snapshot_rotates_at_21st_save_keeping_the_20_newest(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

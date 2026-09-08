@@ -33,7 +33,13 @@ def _snapshot_sort_key(path: Path) -> tuple[str, int]:
     # evidence while keeping an older one.
     try:
         scanned_at = json.loads(path.read_text()).get("scanned_at", "")
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        # Flash Review finding: read_text() can raise UnicodeDecodeError
+        # for a non-UTF-8 *.json file, which this only caught OSError/
+        # JSONDecodeError for - one corrupt or unrelated non-UTF-8 file
+        # in the history directory made both snapshot listing and
+        # rotation fail entirely, a regression from the previous
+        # filename-only sort, which never inspected file contents at all.
         scanned_at = ""
     if not isinstance(scanned_at, str):
         scanned_at = ""
