@@ -166,6 +166,42 @@ def test_stream_commit_touches_handles_merge_commit_with_no_file_changes(tmp_pat
     assert len(touches) == 3
 
 
+def test_stream_commit_touches_survives_a_control_character_in_the_author_name(tmp_path):
+    # Real bug found via audit: the intra-line field parser used to split on
+    # `\x1f` (unit separator), on the assumption a real commit would never
+    # contain a raw control byte in that position. GIT_AUTHOR_NAME accepts
+    # arbitrary bytes though, and a name containing a literal `\x1f`
+    # (confirmed directly against the pre-fix parser) shifted every field
+    # after it: author_email became a fragment of the author name, the
+    # commit's real date landed in the wrong field and failed to parse
+    # (silently falling back to the 1970 epoch), and the subject came out as
+    # the real date and subject concatenated - all with no error raised.
+    repo = init_repo(tmp_path)
+    (repo / "a.txt").write_text("1")
+    run(repo, "add", "a.txt")
+    env = os.environ.copy()
+    env["GIT_AUTHOR_NAME"] = "Weird\x1fName"
+    env["GIT_AUTHOR_EMAIL"] = "weird@example.com"
+    env["GIT_AUTHOR_DATE"] = "2026-06-01T00:00:00+00:00"
+    env["GIT_COMMITTER_DATE"] = "2026-06-01T00:00:00+00:00"
+    subprocess.run(
+        ["git", "commit", "-m", "commit with a control character in the author name"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+
+    touches = list(stream_commit_touches(repo, "HEAD"))
+    assert len(touches) == 1
+    touch = touches[0]
+    assert touch.author_name == "Weird\x1fName"
+    assert touch.author_email == "weird@example.com"
+    assert touch.committed_at == datetime.fromisoformat("2026-06-01T00:00:00+00:00")
+    assert touch.subject == "commit with a control character in the author name"
+    assert touch.files == ("a.txt",)
+
+
 # --- fold: pure aggregation, must be additive for incremental correctness ---
 
 

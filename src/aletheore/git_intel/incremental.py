@@ -49,14 +49,28 @@ MAX_CO_CHANGE_PARTNERS_TRACKED = 200
 
 # A commit header line in the streamed format below always starts with this
 # byte - real file paths never do, so it unambiguously marks "new commit"
-# without needing a second git invocation just to know where one ends.
+# without needing a second git invocation just to know where one ends. It
+# also separates the fields *within* one header line (sha/name/email/date/
+# subject) - not just between commits. Real bug found via audit: an earlier
+# version used `\x1f` (unit separator) for the intra-line field split, on the
+# assumption that a real commit would "vanishingly unlikely" contain a raw
+# control byte. That assumption is false - GIT_AUTHOR_NAME accepts arbitrary
+# bytes, and a name containing a literal `\x1f` (confirmed directly) shifted
+# every field after it: author_email silently became a fragment of the
+# author name, the commit's real date landed in the wrong field and failed
+# to parse (silently falling back to the 1970 epoch), and the subject came
+# out as the real date and subject concatenated - all with no error raised.
+# `\x00` doesn't have this problem: it's git's own record-boundary byte and
+# genuinely cannot occur inside any of these fields (not "unlikely" - a
+# commit's author/committer line and message are built from NUL-terminated
+# strings internally, so this is the same guarantee the record separator
+# below already depends on, just applied to every field instead of one).
 # `%x00` (four literal characters) is git's own pretty-format escape for a
 # NUL byte - it belongs in the --format argument. The real `\x00` byte only
 # ever appears in git's *output*, never in argv (POSIX forbids embedding a
 # raw NUL in an argv string - subprocess correctly rejects that outright).
 _RECORD_SEP_FORMAT = "%x00"
 _RECORD_SEP = "\x00"
-_FIELD_SEP = "\x1f"
 
 
 class GitLogStreamError(RuntimeError):
@@ -116,7 +130,8 @@ def stream_commit_touches(
     prefix = _scan_root_prefix(repo_path)
     args = [
         "log",
-        f"--format={_RECORD_SEP_FORMAT}%H{_FIELD_SEP}%an{_FIELD_SEP}%ae{_FIELD_SEP}%ad{_FIELD_SEP}%s",
+        f"--format={_RECORD_SEP_FORMAT}%H{_RECORD_SEP_FORMAT}%an{_RECORD_SEP_FORMAT}%ae"
+        f"{_RECORD_SEP_FORMAT}%ad{_RECORD_SEP_FORMAT}%s",
         "--date=iso-strict",
         "--name-only",
     ]
@@ -143,11 +158,11 @@ def stream_commit_touches(
             if line.startswith(_RECORD_SEP):
                 if pending_header is not None:
                     yield CommitTouch(*pending_header, files=tuple(pending_files), subject=pending_subject)
-                # maxsplit=4: a subject line containing a literal field-sep
-                # byte (vanishingly unlikely - it's a control character, not
-                # something a real commit message would contain) lands
-                # whole in the subject rather than breaking the unpack.
-                sha, name, email, date_str, pending_subject = line[1:].split(_FIELD_SEP, 4)
+                # maxsplit=4 defensively, though `\x00` cannot occur inside
+                # any of these fields (see the module-level comment on
+                # _RECORD_SEP) - a fifth split point would only ever come
+                # from something the fields themselves can never contain.
+                sha, name, email, date_str, pending_subject = line[1:].split(_RECORD_SEP, 4)
                 pending_header = (sha, name, email, parse_commit_date(date_str))
                 pending_files = []
             elif line.strip():
