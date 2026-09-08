@@ -26,7 +26,15 @@ def run_managed_audit_request(
     timeout: float = 300.0,
 ) -> str:
     owns_client = http_client is None
-    client = http_client or httpx.Client(base_url=api_base_url)
+    # Flash Review finding: `http_client or httpx.Client(...)` chooses by
+    # truthiness while owns_client above checks identity against None - a
+    # caller-supplied client-like object that's falsy (unusual, but not
+    # impossible - a test double with a custom __bool__, an httpx.Client
+    # subclass overriding it) would be silently discarded here in favor
+    # of a freshly created one, while owns_client still says "not owned",
+    # so that new client is never closed. Both checks now use the same
+    # None comparison.
+    client = http_client if http_client is not None else httpx.Client(base_url=api_base_url)
     headers = {"Authorization": f"Bearer {token}"}
 
     try:

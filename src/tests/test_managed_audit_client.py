@@ -158,6 +158,31 @@ def test_no_http_client_passed_closes_the_client_it_creates_on_error(monkeypatch
     assert created[0].is_closed is True
 
 
+def test_a_falsy_caller_supplied_http_client_is_still_used_and_never_closed():
+    # Flash Review finding: client selection used to be `http_client or
+    # httpx.Client(...)` (truthiness) while ownership was tracked via
+    # `http_client is None` (identity) - a caller-supplied client that's
+    # falsy (unusual, but real: any object can define __bool__) would be
+    # silently discarded in favor of a freshly created one, while
+    # ownership still said "not owned", so that new client leaked -
+    # never closed, and the caller's own client silently never used.
+    class FalsyClient(httpx.Client):
+        def __bool__(self) -> bool:
+            return False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(202, json={"job_id": "job-1"})
+        return httpx.Response(200, json={"status": "finished", "result": "# Report"})
+
+    client = FalsyClient(transport=httpx.MockTransport(handler), base_url="https://aletheore.com")
+    report = run_managed_audit_request({"scanned_at": "x"}, "real-token", http_client=client, poll_interval=0)
+
+    assert report == "# Report"  # proves the caller's own falsy client was really used
+    assert client.is_closed is False
+    client.close()
+
+
 def test_a_caller_supplied_http_client_is_never_closed():
     # The caller owns the lifecycle of a client it passed in explicitly
     # (e.g. one reused across several managed-audit calls) - this function
