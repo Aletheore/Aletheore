@@ -74,6 +74,18 @@ def _load_saved_key(provider_name: str, credentials_path: Path) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    """os.write(fd, data) on a regular file can write fewer bytes than
+    given - the filesystem running out of space mid-write is the real,
+    if rare, case (Flash Review finding) - and the return value has to
+    be checked and looped on, or a short write leaves credentials.json
+    truncated with incomplete JSON while the call itself returns
+    normally, no exception raised."""
+    written = 0
+    while written < len(data):
+        written += os.write(fd, data[written:])
+
+
 @contextlib.contextmanager
 def _locked_rw_credentials_file(credentials_path: Path):
     """Opens credentials_path for read+write under an exclusive advisory
@@ -124,7 +136,7 @@ def _locked_rw_credentials_file(credentials_path: Path):
             yield data
             os.lseek(fd, 0, os.SEEK_SET)
             os.ftruncate(fd, 0)
-            os.write(fd, json.dumps(data, indent=2).encode())
+            _write_all(fd, json.dumps(data, indent=2).encode())
         finally:
             if sys.platform == "win32":
                 os.lseek(fd, 0, os.SEEK_SET)

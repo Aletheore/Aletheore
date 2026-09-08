@@ -189,6 +189,36 @@ def test_concurrent_saves_do_not_silently_lose_each_others_keys(tmp_path):
     }
 
 
+def test_write_all_loops_through_a_short_write_instead_of_dropping_bytes(monkeypatch):
+    # Flash Review finding: os.write's return value was ignored - a write
+    # to a regular file can write fewer bytes than requested (a full
+    # filesystem is the real, if rare, case), leaving credentials.json
+    # truncated with incomplete JSON while the call itself still returns
+    # normally, no exception raised. Simulates a short write (a real fd
+    # would only write 3 of 10 bytes here) and confirms the retry loop
+    # picks up exactly where the short write left off.
+    import os as os_module
+
+    from aletheore.credentials import _write_all
+
+    data = b"0123456789"
+    written_chunks = []
+    calls = {"n": 0}
+
+    def fake_write(fd, buf):
+        calls["n"] += 1
+        chunk_len = 3 if calls["n"] == 1 else len(buf)
+        written_chunks.append(buf[:chunk_len])
+        return chunk_len
+
+    monkeypatch.setattr(os_module, "write", fake_write)
+
+    _write_all(123, data)
+
+    assert b"".join(written_chunks) == data
+    assert calls["n"] == 2  # one short write, one that finishes it
+
+
 def test_save_api_token_is_readable_via_get_api_key(monkeypatch, tmp_path):
     monkeypatch.delenv("TESTPROVIDER_API_KEY", raising=False)
     creds_path = tmp_path / "creds.json"
