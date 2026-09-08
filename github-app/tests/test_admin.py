@@ -859,6 +859,27 @@ async def test_add_health_check_target_returns_422_for_non_integer_threshold(poo
 
 
 @pytest.mark.asyncio
+async def test_add_health_check_target_returns_422_for_a_zero_or_negative_threshold(pool, monkeypatch):
+    # Real bug found via audit: latency_threshold_ms had no lower bound -
+    # jobs.py's own _latency_flipped compares strictly (latency_ms >
+    # threshold_ms), so a 0 (or negative) threshold fires an immediate,
+    # permanent "latency degraded" alert on the customer's very first
+    # health check regardless of how fast the target actually responds.
+    client = await _logged_in_client(pool, monkeypatch, installation_id=100)
+    async with client:
+        zero_response = await client.post(
+            "/admin/octocat/hello-world/health-targets",
+            json={"label": "Production", "base_url": "https://api.example.com", "latency_threshold_ms": 0},
+        )
+        negative_response = await client.post(
+            "/admin/octocat/hello-world/health-targets",
+            json={"label": "Production", "base_url": "https://api.example.com", "latency_threshold_ms": -100},
+        )
+    assert zero_response.status_code == 422
+    assert negative_response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_add_health_check_target_enforces_plan_limit(pool, monkeypatch):
     # Pro's included limit is 5 (INCLUDED_HEALTH_CHECK_TARGETS) - filling
     # it up, then the 6th add should be rejected.
