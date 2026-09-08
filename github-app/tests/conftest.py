@@ -49,7 +49,7 @@ async def pool():
         # need no separate entry: both DO have an installations FK with ON
         # DELETE CASCADE, so truncating installations already clears them.
         await conn.execute(
-            "TRUNCATE installations, sessions, demo_scan_rate_limits, cli_telemetry_events, "
+            "TRUNCATE installations, sessions, cli_telemetry_events, "
             "github_user_emails, sent_emails, data_deletion_log, webhook_deliveries, affiliates CASCADE"
         )
     yield p

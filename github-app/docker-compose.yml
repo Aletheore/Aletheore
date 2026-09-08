@@ -245,89 +245,6 @@ services:
       - ALL
     pids_limit: 512
 
-  # Never started via `up` - this service exists purely so `docker compose
-  # build demo-sandbox` produces the aletheore-demo-sandbox:latest image on
-  # the host daemon for demo-scan-worker (which has docker socket access)
-  # to `docker run --runtime=runsc` on demand, one ephemeral container per
-  # live website demo request.
-  demo-sandbox:
-    build:
-      context: ..
-      dockerfile: github-app/Dockerfile.demo-sandbox
-    image: aletheore-demo-sandbox:latest
-    profiles: ["build-only"]
-
-  demo-scan-worker:
-    build:
-      context: ..
-      dockerfile: github-app/Dockerfile.demo-scan-worker
-    restart: unless-stopped
-    # Same reasoning as scan-worker's identical comment above, scaled to
-    # this worker's own queue: it only ever consumes "demo_scan", whose
-    # longest job is DEMO_SCAN_JOB_TIMEOUT_SECONDS = 120s
-    # (app_server/demo_scan_api.py), not the 1800s "scans" jobs scan-worker
-    # handles. Sibling gap #409 (this file's other three stop_grace_period
-    # entries) left uncovered here - a redeploy landing mid-demo-scan still
-    # got SIGKILL'd at the old 10s default instead of finishing or hitting
-    # a clean JobTimeoutException. Lower severity than #409's original
-    # symptom (OPS_MONITORED_QUEUES doesn't include "demo_scan", so this
-    # was never a false ops alert), but a real reliability gap for whoever
-    # was mid-demo when a redeploy landed.
-    stop_grace_period: 3m
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      - DEMO_SANDBOX_RUNNER_URL=http://demo-sandbox-runner:8090
-    # No Docker socket here - see Dockerfile.demo-scan-worker and
-    # scan_worker/demo_scan.py. Deliberately gets no DB credentials, no
-    # GitHub App key, no LLM keys either. Only consumes the demo_scan
-    # queue, completely separate from paying customers' real scan/audit
-    # jobs.
-    depends_on:
-      redis:
-        condition: service_started
-      demo-sandbox-runner:
-        condition: service_started
-    cpus: "1.0"
-    mem_limit: 512m
-    # See app-server's identical block above for the reasoning.
-    security_opt:
-      - "no-new-privileges:true"
-    cap_drop:
-      - ALL
-    pids_limit: 512
-
-  demo-sandbox-runner:
-    build:
-      context: ..
-      dockerfile: github-app/Dockerfile.demo-sandbox-runner
-    restart: unless-stopped
-    # The only service with the host's Docker socket. Exposes exactly one
-    # internal-only operation (see scan_worker/demo_sandbox_runner.py) -
-    # "run this repo_url through the fixed sandbox command" - built
-    # entirely server-side from a validated repo_url, not a proxied
-    # Docker API. A tecnativa/docker-socket-proxy-style method/path
-    # allowlist was tested directly against this same daemon and does
-    # NOT close this: with only CONTAINERS+POST enabled, `docker run -v
-    # /:/hostfs alpine ls /hostfs` still succeeded, since POST=1
-    # (required for `docker run` to work at all) already allows an
-    # arbitrary bind mount in the request body. No host port published -
-    # only reachable from other containers on this compose network.
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    cpus: "1.0"
-    mem_limit: 256m
-    # See app-server's identical block above for the reasoning - talking to
-    # the mounted Docker socket is Unix-socket file-permission-based, not
-    # gated by this container's own Linux capabilities, so dropping them
-    # doesn't affect the one thing this service does.
-    security_opt:
-      - "no-new-privileges:true"
-    cap_drop:
-      - ALL
-    pids_limit: 256
-
   postgres:
     image: postgres:16
     restart: unless-stopped
@@ -450,7 +367,7 @@ services:
       # llama.cpp's matmul kernels, while N single-threaded instances
       # processing N requests pay none of that. It also reduces queueing
       # delay under concurrent load specifically: today every caller (two
-      # scan-worker replicas, demo-scan-worker, hosted index builds) queues
+      # scan-worker replicas, hosted index builds) queues
       # behind one locked instance even when their requests are otherwise
       # fully independent - this exact queueing was part of what pushed a
       # thrift-scale request past the 60s embeddings_api timeout at the old

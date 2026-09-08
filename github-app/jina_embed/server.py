@@ -37,7 +37,7 @@ successful requests, on two different corpora (gson after ~33 requests,
 apache/thrift after ~38 minutes) - not tied to any one input's size or
 content, consistent with a race rather than a bad chunk. This process
 serves exactly one shared model to every caller (two scan-worker replicas,
-demo-scan-worker, hosted `aletheore index` traffic), so concurrent callers
+hosted `aletheore index` traffic), so concurrent callers
 are the normal case, not an edge case - serializing access to any single
 instance is the correct fix, not a workaround.
 

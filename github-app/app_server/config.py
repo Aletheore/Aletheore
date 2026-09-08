@@ -22,7 +22,6 @@ class Settings:
     paddle_environment: str
     paddle_api_key: str | None
     github_app_slug: str
-    github_demo_readonly_token: str | None
     resend_api_key: str | None
     email_from_address: str
     email_reply_to_address: str
@@ -111,11 +110,6 @@ def get_settings() -> Settings:
         # nothing else depends on.
         paddle_api_key=os.environ.get("PADDLE_API_KEY", "").strip() or None,
         github_app_slug=_required_env("GITHUB_APP_SLUG"),
-        # Only used to raise the rate limit on the pre-clone repo-size check
-        # for the public demo (60/hr unauthenticated vs 5000/hr with a
-        # token) - a public_repo-scoped read-only PAT is enough, and the
-        # demo works without one, just at a much lower shared ceiling.
-        github_demo_readonly_token=os.environ.get("GITHUB_DEMO_READONLY_TOKEN", "").strip() or None,
         # Optional, not required: transactional email is additive - a
         # missing key means send_transactional_email_job logs and skips
         # rather than the server refusing to start, since nothing else
