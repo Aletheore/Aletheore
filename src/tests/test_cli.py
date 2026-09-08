@@ -25,6 +25,7 @@ from aletheore.cli import (
     _opencode_entry,
     _print_query_result,
     _stdio_entry,
+    _write_config_file_no_symlink_follow,
     _write_json_mcp_client_config,
     _write_toml_mcp_client_config,
     app,
@@ -367,6 +368,45 @@ def test_write_json_mcp_client_config_without_repo_path_keeps_the_prior_global_b
 
     assert "wrote" in message
     assert json.loads(config_path.read_text()) == {"mcpServers": {"aletheore": entry}}
+
+
+def test_write_config_file_no_symlink_follow_refuses_a_symlinked_leaf(tmp_path):
+    # Flash Review finding on PR #603: _config_path_escapes_repo's
+    # resolve()-then-check happens as a separate step from the later
+    # write, leaving a TOCTOU window where a symlink put in place (or
+    # swapped in) between the two would still be followed by a plain
+    # write_text() call. This exercises the O_NOFOLLOW write directly -
+    # even with no prior "does this escape the repo" check at all, the
+    # open() call itself must refuse a symlinked leaf, atomically.
+    outside_target = tmp_path / "outside_secret.json"
+    outside_target.write_text("do not touch")
+    leaf = tmp_path / "repo" / ".mcp.json"
+    leaf.parent.mkdir()
+    leaf.symlink_to(outside_target)
+
+    with pytest.raises(OSError):
+        _write_config_file_no_symlink_follow(leaf, "clobbered")
+
+    assert outside_target.read_text() == "do not touch"
+
+
+def test_write_json_mcp_client_config_without_repo_path_still_follows_a_symlink(tmp_path):
+    # The O_NOFOLLOW hardening is deliberately scoped to repo-relative
+    # writes only - claude-desktop's global config (repo_path=None) has
+    # no attacker-controlled repo boundary to defend, and a symlink there
+    # is the user's own legitimate choice (e.g. dotfiles synced through a
+    # symlinked config directory), so that case must keep following it
+    # exactly like before this fix.
+    real_target = tmp_path / "real_claude_desktop_config.json"
+    real_target.write_text("{}")
+    config_path = tmp_path / "claude_desktop_config.json"
+    config_path.symlink_to(real_target)
+    entry = {"command": "aletheore", "args": ["mcp", "/some/repo"]}
+
+    message = _write_json_mcp_client_config(config_path, "mcpServers", entry)
+
+    assert "wrote" in message
+    assert json.loads(real_target.read_text()) == {"mcpServers": {"aletheore": entry}}
 
 
 def test_mcp_install_skips_a_symlinked_config_path_end_to_end(tmp_path):

@@ -1177,6 +1177,37 @@ def _config_path_escapes_repo(config_path: Path, repo_path: Path) -> bool:
     return not resolved.is_relative_to(repo_path)
 
 
+def _write_config_file_no_symlink_follow(config_path: Path, content: str) -> None:
+    """Writes content to config_path's leaf file without ever following a
+    symlink there, closing the TOCTOU gap _config_path_escapes_repo's
+    separate resolve()-then-check-then-write shape leaves open: a plain
+    `write_text()` call, made afterwards, still follows a symlink
+    transparently if one was put in place (or swapped in) between the
+    check and this call. O_NOFOLLOW makes the open() syscall itself fail
+    atomically when the leaf is a symlink, rather than resolving and
+    checking as two separate steps with a real (if narrow, for a local,
+    single-user CLI run) window between them.
+
+    Deliberately narrower than a fully race-proof write: an intermediate
+    *directory* component (.cursor/.vscode/.kiro) swapped for a symlink
+    in that same window is still followed by the mkdir(parents=True)/open
+    calls below - closing that too needs walking and O_NOFOLLOW-checking
+    every parent component individually, which _config_path_escapes_repo
+    already does for the common case (a symlinked directory that exists
+    at scan time, the actual malicious-repo shape found and fixed here).
+
+    O_NOFOLLOW is POSIX-only - os doesn't define it on Windows, where this
+    CLI also runs (claude-desktop is a supported target there). `getattr`
+    with a 0 fallback means the flag simply has no effect on a platform
+    that lacks it, falling back to the pre-existing follow-symlink
+    behavior rather than crashing with AttributeError on every write.
+    """
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(str(config_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | no_follow, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(content)
+
+
 def _write_json_mcp_client_config(
     config_path: Path,
     top_level_key: str,
@@ -1210,7 +1241,18 @@ def _write_json_mcp_client_config(
     data[top_level_key] = servers
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps(data, indent=2) + "\n")
+    content = json.dumps(data, indent=2) + "\n"
+    if repo_path is not None:
+        try:
+            _write_config_file_no_symlink_follow(config_path, content)
+        except OSError:
+            return f"skipped (path escapes the repo via a symlink): {config_path}"
+    else:
+        # claude-desktop's global config has no repo boundary to enforce -
+        # a symlink here is the user's own, legitimate choice (e.g.
+        # dotfiles synced through a symlinked config directory), not
+        # attacker-controlled repo content, so it's followed as before.
+        config_path.write_text(content)
     return f"{'updated' if already_present else 'wrote'} {config_path}"
 
 
@@ -1238,7 +1280,14 @@ def _write_toml_mcp_client_config(
     data[top_level_key] = servers
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(tomli_w.dumps(data))
+    content = tomli_w.dumps(data)
+    if repo_path is not None:
+        try:
+            _write_config_file_no_symlink_follow(config_path, content)
+        except OSError:
+            return f"skipped (path escapes the repo via a symlink): {config_path}"
+    else:
+        config_path.write_text(content)
     return f"{'updated' if already_present else 'wrote'} {config_path}"
 
 
