@@ -387,6 +387,48 @@ def test_find_blast_radius_truncates_transitive_dependents_past_the_cap(tmp_path
     assert result["transitive_dependents_truncated"] is True
 
 
+def test_find_blast_radius_truncates_direct_dependents_past_the_cap(tmp_path, monkeypatch):
+    # Real bug found via audit: direct_dependents (evidence's own raw
+    # imported_by list) was returned verbatim with no cap at all, unlike
+    # transitive_dependents just above and unlike flash_review.py's own
+    # sibling implementation this function's docstring says it mirrors -
+    # a genuinely central module (a shared utils.py) can have hundreds to
+    # thousands of direct importers on a real repo.
+    import aletheore.query as query_module
+
+    monkeypatch.setattr(query_module, "_BLAST_RADIUS_MAX_DIRECT", 1)
+
+    result = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py")
+
+    assert result["direct_dependents"] == ["service/handler.py"]
+    assert result["direct_dependents_truncated"] is False
+
+    monkeypatch.setattr(query_module, "_BLAST_RADIUS_MAX_DIRECT", 0)
+
+    truncated_result = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py")
+
+    assert truncated_result["direct_dependents"] == []
+    assert truncated_result["direct_dependents_truncated"] is True
+
+
+def test_find_blast_radius_truncating_direct_dependents_does_not_shrink_transitive_reach(tmp_path, monkeypatch):
+    # The truncation above must be display-only: the BFS, confirmed_callers,
+    # and layer_violations filtering all still need the FULL direct_dependents
+    # list internally, or capping the displayed list would silently understate
+    # a real hub's true transitive reach and layer-violation exposure.
+    import aletheore.query as query_module
+
+    monkeypatch.setattr(query_module, "_BLAST_RADIUS_MAX_DIRECT", 0)
+
+    result = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py")
+
+    assert result["direct_dependents"] == []
+    assert set(result["transitive_dependents"]) == {"api/routes.py", "web/app.py"}
+    assert result["layer_violations"] == [
+        {"from": "service/handler.py", "to": "web/app.py", "reason": "inner imports outer"}
+    ]
+
+
 def test_find_blast_radius_omits_confirmed_callers_without_a_symbol(tmp_path):
     result = find_blast_radius(_blast_radius_evidence(), tmp_path, "core/util.py")
     assert "confirmed_callers" not in result
