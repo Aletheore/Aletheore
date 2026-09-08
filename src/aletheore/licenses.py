@@ -103,6 +103,23 @@ _PERMISSIVE_MARKERS = (
 )
 
 
+# Ruby gemspecs are executable Ruby, not structured data - `s.license =
+# "MIT"`/`spec.licenses = ["MIT"]` (both the singular and Array-plural forms
+# are real, valid RubyGems specification attributes) are extracted the same
+# lightweight-regex way `_MAIN_GUARD_PATTERN`-style content checks elsewhere
+# in this codebase read a single, unambiguous line rather than fully
+# parsing the file.
+_GEMSPEC_LICENSE_RE = re.compile(r"\.licenses?\s*=\s*(?:\[\s*)?['\"]([^'\"]+)['\"]")
+
+# .NET SDK-style csproj: <PackageLicenseExpression>MIT</PackageLicenseExpression>.
+# The other real NuGet convention, <PackageLicenseFile>, names a bundled file
+# rather than an SPDX expression - not handled here, the same way pyproject.toml's
+# "license-file"-only shape isn't a machine-readable identifier this function can use.
+_CSPROJ_LICENSE_EXPRESSION_RE = re.compile(
+    r"<PackageLicenseExpression>\s*([^<]+?)\s*</PackageLicenseExpression>"
+)
+
+
 def _contains_marker(text: str, marker: str) -> bool:
     # A bare substring check breaks on real license *text* (as opposed to a short
     # SPDX-style string like "MPL-2.0", which is what these markers are also used
@@ -174,6 +191,99 @@ def detect_repo_license(repo_path: Path) -> dict:
                 "category": categorize_license(license_field),
                 "detected_from": f"package.json: {license_field}",
             }
+
+    # Every one of these 5 has a working dependency-license fetcher already
+    # in this same file (_fetch_crates_license, _fetch_packagist_license,
+    # _fetch_rubygems_license, _fetch_nuget_license, _fetch_maven_license) -
+    # but the repo's-OWN-license path above only ever checked pyproject.toml
+    # and package.json, so a Rust/PHP/Ruby/C#/Java repo with a real,
+    # machine-readable license field fell all the way through to the
+    # LICENSE-file text fallback (or "unknown" with no LICENSE file at all),
+    # despite this scanner otherwise fully supporting all 12 of these
+    # languages. Confirmed as a real, silent gap by direct testing, not
+    # hypothetical - the same "one ecosystem quietly unhandled while its
+    # siblings work" shape already found for Gin route groups this session.
+    cargo_toml = repo_path / "Cargo.toml"
+    if cargo_toml.exists():
+        try:
+            data = tomllib.loads(cargo_toml.read_text(encoding="utf-8", errors="ignore"))
+        except tomllib.TOMLDecodeError:
+            data = {}
+        license_field = data.get("package", {}).get("license")
+        if isinstance(license_field, str):
+            return {
+                "category": categorize_license(license_field),
+                "detected_from": f"Cargo.toml: {license_field}",
+            }
+
+    composer_json = repo_path / "composer.json"
+    if composer_json.exists():
+        try:
+            data = json.loads(composer_json.read_text(encoding="utf-8", errors="ignore"))
+        except json.JSONDecodeError:
+            data = {}
+        license_field = data.get("license")
+        # Composer's schema allows a bare string or a dual/multi-license
+        # array ("license": ["MIT", "GPL-2.0"]) - matches how
+        # _fetch_packagist_license already treats the identical shape from
+        # Packagist's own API response (licenses[0] if licenses else None).
+        if isinstance(license_field, list) and license_field:
+            license_field = license_field[0]
+        if isinstance(license_field, str):
+            return {
+                "category": categorize_license(license_field),
+                "detected_from": f"composer.json: {license_field}",
+            }
+
+    for gemspec in sorted(repo_path.glob("*.gemspec")):
+        text = gemspec.read_text(encoding="utf-8", errors="ignore")
+        # Drop full-line Ruby comments before searching - otherwise a
+        # commented-out assignment (a stale `# s.license = "GPL-3.0"` left
+        # behind from an earlier relicensing, a real thing to find in a
+        # gemspec's history) can be the first match _GEMSPEC_LICENSE_RE
+        # finds if it appears before the real, active assignment,
+        # fabricating the wrong repo license entirely. Only strips a line
+        # whose first non-whitespace character is "#" - not an inline
+        # trailing comment - since a license string is never expected to
+        # contain a literal "#" itself, this is enough without a full
+        # Ruby-comment/string-literal parse.
+        active_text = "\n".join(
+            line for line in text.splitlines() if not line.lstrip().startswith("#")
+        )
+        match = _GEMSPEC_LICENSE_RE.search(active_text)
+        if match:
+            return {
+                "category": categorize_license(match.group(1)),
+                "detected_from": f"{gemspec.name}: {match.group(1)}",
+            }
+
+    for csproj in sorted(repo_path.rglob("*.csproj")):
+        text = csproj.read_text(encoding="utf-8", errors="ignore")
+        match = _CSPROJ_LICENSE_EXPRESSION_RE.search(text)
+        if match:
+            rel = csproj.relative_to(repo_path).as_posix()
+            return {
+                "category": categorize_license(match.group(1)),
+                "detected_from": f"{rel}: {match.group(1)}",
+            }
+
+    pom_xml = repo_path / "pom.xml"
+    if pom_xml.exists():
+        try:
+            root = ElementTree.fromstring(pom_xml.read_text(encoding="utf-8", errors="ignore"))
+        except ElementTree.ParseError:
+            root = None
+        if root is not None:
+            # A real, hand-written repo pom.xml doesn't always declare the
+            # xmlns Maven Central's own served POMs always carry -
+            # namespaced lookup first, falling back to a bare (no-prefix)
+            # lookup so an unnamespaced pom.xml isn't silently missed.
+            license_name = root.find(".//m:licenses/m:license/m:name", _MAVEN_POM_NS)
+            if license_name is None:
+                license_name = root.find(".//licenses/license/name")
+            if license_name is not None and license_name.text and license_name.text.strip():
+                text = license_name.text.strip()
+                return {"category": categorize_license(text), "detected_from": f"pom.xml: {text}"}
 
     # LICENSE.rst added after this benchmark's real-repo stress test:
     # Flask's own real repo uses exactly this filename (a common
