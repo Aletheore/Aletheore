@@ -35,9 +35,25 @@ def select_adapter(
         print("Available agent providers:")
         for i, name in enumerate(names, start=1):
             print(f"  {i}. {name}")
-        choice = input(f"Which one? [1-{len(names)}]: ").strip()
-        index = int(choice) - 1
-        return available[index]
+        # Real bug found via audit: a non-numeric answer raised a raw
+        # ValueError from int(), and an out-of-range number raised a raw
+        # IndexError from the list access - neither is caught by this
+        # function's only caller (cli.py only catches NoAdapterAvailableError/
+        # AmbiguousAdapterError), so a mistyped answer crashed the whole
+        # command with an unhandled traceback instead of a clean re-prompt.
+        # interactive is only ever True when the caller already confirmed
+        # sys.stdin.isatty(), so a bounded re-prompt loop here is safe - it
+        # can't hang against a closed/non-tty stdin.
+        for _ in range(5):
+            choice = input(f"Which one? [1-{len(names)}]: ").strip()
+            try:
+                index = int(choice) - 1
+                if 0 <= index < len(available):
+                    return available[index]
+            except ValueError:
+                pass
+            print(f"Not a valid choice - enter a number from 1 to {len(names)}.")
+        raise NoAdapterAvailableError("no valid selection made after multiple attempts")
 
     names = ", ".join(a.name for a in available)
     raise AmbiguousAdapterError(
