@@ -111,6 +111,37 @@ def test_summarize_handles_empty_evidence_gracefully():
     assert summary["secrets"]["finding_count"] == 0
 
 
+def test_summarize_handles_a_null_section_gracefully(tmp_path):
+    # Real bug found via audit: evidence comes from demo_sandbox_runner
+    # over HTTP, a separate process this file has no control over - a
+    # "200 OK, JSON parses, but one AIR section serialized as null"
+    # response (a partial/degraded scan result that didn't hard-fail)
+    # crashed with an unhandled AttributeError on the very next .get()
+    # call, since dict.get(key, {}) only supplies its default when the
+    # key is MISSING, not when it's present with an explicit null.
+    summary = _summarize_for_public_display(
+        {"repository": {"dead_code": None, "api_endpoints": None}, "security": None, "architecture": None}
+    )
+    assert summary["dead_code"]["unreachable_module_count"] == 0
+    assert summary["secrets"]["finding_count"] == 0
+    assert summary["dependency_licenses"]["issue_count"] == 0
+    assert summary["api_endpoints"]["count"] == 0
+    assert summary["architecture"]["cluster_count"] == 0
+
+
+def test_summarize_handles_evidence_that_is_entirely_null_sections():
+    # Every top-level section null at once, not just one - repository/
+    # security/architecture themselves must degrade the same way their
+    # own nested fields do.
+    summary = _summarize_for_public_display(
+        {"repository": None, "security": None, "architecture": None}
+    )
+    assert summary["languages"] == []
+    assert summary["dead_code"]["unreachable_module_count"] == 0
+    assert summary["secrets"]["finding_count"] == 0
+    assert summary["architecture"]["cluster_count"] == 0
+
+
 def test_summarize_notes_osv_is_held_back():
     summary = _summarize_for_public_display(_fake_evidence())
     assert "OSV" in summary["held_back"]["vulnerabilities"]

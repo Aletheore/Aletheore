@@ -80,19 +80,43 @@ def _run_sandboxed_scan(repo_url: str) -> dict:
         raise DemoScanError("demo scan is temporarily unavailable - please try again shortly") from exc
 
 
-def _summarize_for_public_display(evidence: dict) -> dict:
-    repository = evidence.get("repository", {})
-    security = evidence.get("security", {})
-    architecture = evidence.get("architecture", {})
+def _dict_or_empty(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
 
-    languages = repository.get("languages", [])
-    dead_code = repository.get("dead_code", {})
-    unreachable_modules = dead_code.get("unreachable_modules", [])
-    unused_dependencies = dead_code.get("unused_dependencies", [])
-    secrets_findings = security.get("secrets", {}).get("findings", [])
-    license_findings = security.get("dependency_licenses", {}).get("findings", [])
-    endpoints = repository.get("api_endpoints", {}).get("endpoints", [])
-    clusters = architecture.get("clusters", [])
+
+def _list_or_empty(value: object) -> list:
+    return value if isinstance(value, list) else []
+
+
+def _summarize_for_public_display(evidence: dict) -> dict:
+    # Real bug this closes: evidence comes from demo_sandbox_runner over
+    # HTTP, a separate process this file has no control over - a
+    # `dict.get(key, {})`/`.get(key, [])` default only ever applies when
+    # the key is MISSING, not when it's present with an explicit JSON
+    # null (Python None). A "200 OK, JSON parses, but one AIR section
+    # serialized as null" response (a partial/degraded scan result that
+    # didn't hard-fail the way timeout/memory_limited/nonzero_exit do)
+    # crashed here with an unhandled AttributeError - 'NoneType' object
+    # has no attribute 'get' - on the very next .get() call, surfacing as
+    # a raw traceback in the RQ job instead of this file's own
+    # established clean-error pattern for every OTHER failure shape.
+    # _dict_or_empty/_list_or_empty check the value itself, not just
+    # whether the key exists, so every step below degrades to the same
+    # empty-but-valid shape regardless of which sections evidence supplies.
+    repository = _dict_or_empty(evidence.get("repository"))
+    security = _dict_or_empty(evidence.get("security"))
+    architecture = _dict_or_empty(evidence.get("architecture"))
+
+    languages = _list_or_empty(repository.get("languages"))
+    dead_code = _dict_or_empty(repository.get("dead_code"))
+    unreachable_modules = _list_or_empty(dead_code.get("unreachable_modules"))
+    unused_dependencies = _list_or_empty(dead_code.get("unused_dependencies"))
+    secrets_findings = _list_or_empty(_dict_or_empty(security.get("secrets")).get("findings"))
+    license_findings = _list_or_empty(
+        _dict_or_empty(security.get("dependency_licenses")).get("findings")
+    )
+    endpoints = _list_or_empty(_dict_or_empty(repository.get("api_endpoints")).get("endpoints"))
+    clusters = _list_or_empty(architecture.get("clusters"))
 
     return {
         "languages": [
