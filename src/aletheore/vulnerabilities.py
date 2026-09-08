@@ -251,8 +251,43 @@ def _maven_text(element: ElementTree.Element | None) -> str | None:
     return text or None
 
 
-def _maven_child(element: ElementTree.Element, tag: str, ns: dict[str, str]) -> ElementTree.Element | None:
-    return element.find(f"m:{tag}", ns)
+def _maven_child(element: ElementTree.Element, tag: str) -> ElementTree.Element | None:
+    return element.find(tag)
+
+
+_MAVEN_POM_NAMESPACE_PREFIX = "{http://maven.apache.org/POM/4.0.0}"
+
+
+def _strip_xml_namespace_prefixes(root: ElementTree.Element) -> ElementTree.Element:
+    """Removes the `{uri}` prefix ElementTree attaches to every element's
+    tag when a document declares a default xmlns, so a plain, unprefixed
+    tag name (`dependencies/dependency`, not `m:dependencies/m:dependency`)
+    matches regardless of whether the source declared one.
+
+    Maven does not require a pom.xml to declare
+    xmlns="http://maven.apache.org/POM/4.0.0" on <project> for a build to
+    work, and a real, hand-written or legacy repo pom.xml commonly omits
+    it - unlike the POMs Maven Central itself serves (what
+    licenses.py's _fetch_maven_license reads), which always declare it.
+    Every m:-prefixed lookup below silently matched nothing against such a
+    file before this fix: _parse_maven_pins returned [] - indistinguishable
+    from "no dependencies" - for a repo whose real pom.xml declares
+    dependencies with real, potentially vulnerable versions, not a
+    partial result or an error.
+
+    Scoped to exactly the Maven POM namespace, not every `{uri}` prefix in
+    the document - a pom.xml can embed foreign-namespaced elements (e.g. a
+    build plugin's own `<vendor:dependencies>` config block), and
+    stripping those too would make them indistinguishable from real Maven
+    <dependencies>/<properties> elements, producing dependency or
+    vulnerability results from content Maven itself never treats as POM
+    metadata.
+    """
+    prefix_len = len(_MAVEN_POM_NAMESPACE_PREFIX)
+    for element in root.iter():
+        if isinstance(element.tag, str) and element.tag.startswith(_MAVEN_POM_NAMESPACE_PREFIX):
+            element.tag = element.tag[prefix_len:]
+    return root
 
 
 def _maven_resolve_property(version: str | None, properties: dict[str, str]) -> str | None:
@@ -325,43 +360,43 @@ def _parse_maven_pom(pom: Path, seen: set[Path]) -> list[tuple[str, str, str]]:
         root = ElementTree.fromstring(pom.read_text(encoding="utf-8", errors="ignore"))
     except ElementTree.ParseError:
         return []
-    ns = {"m": "http://maven.apache.org/POM/4.0.0"}
+    root = _strip_xml_namespace_prefixes(root)
     properties = {
-        child.tag.rsplit("}", 1)[-1]: child.text.strip()
-        for child in root.findall("m:properties/*", ns)
+        child.tag: child.text.strip()
+        for child in root.findall("properties/*")
         if child.text and child.text.strip()
     }
     managed_versions = {}
-    management = root.find("m:dependencyManagement/m:dependencies", ns)
+    management = root.find("dependencyManagement/dependencies")
     if management is not None:
-        for dep in management.findall("m:dependency", ns):
-            group = _maven_text(_maven_child(dep, "groupId", ns))
-            artifact = _maven_text(_maven_child(dep, "artifactId", ns))
+        for dep in management.findall("dependency"):
+            group = _maven_text(_maven_child(dep, "groupId"))
+            artifact = _maven_text(_maven_child(dep, "artifactId"))
             version = _maven_resolve_property(
-                _maven_text(_maven_child(dep, "version", ns)),
+                _maven_text(_maven_child(dep, "version")),
                 properties,
             )
             if group and artifact and version:
                 managed_versions[(group, artifact)] = version
 
     pins = []
-    dependencies = root.find("m:dependencies", ns)
+    dependencies = root.find("dependencies")
     if dependencies is not None:
-        for dep in dependencies.findall("m:dependency", ns):
-            group = _maven_text(_maven_child(dep, "groupId", ns))
-            artifact = _maven_text(_maven_child(dep, "artifactId", ns))
+        for dep in dependencies.findall("dependency"):
+            group = _maven_text(_maven_child(dep, "groupId"))
+            artifact = _maven_text(_maven_child(dep, "artifactId"))
             if not group or not artifact:
                 continue
             version = _maven_resolve_property(
-                _maven_text(_maven_child(dep, "version", ns)),
+                _maven_text(_maven_child(dep, "version")),
                 properties,
             ) or managed_versions.get((group, artifact))
             if version:
                 pins.append((f"{group}:{artifact}", version, "Maven"))
 
-    modules = root.find("m:modules", ns)
+    modules = root.find("modules")
     if modules is not None:
-        for module in modules.findall("m:module", ns):
+        for module in modules.findall("module"):
             module_name = _maven_text(module)
             if not module_name:
                 continue
