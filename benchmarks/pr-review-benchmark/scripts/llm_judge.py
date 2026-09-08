@@ -35,6 +35,10 @@ def parse_judge_response(response_text: str) -> dict:
         raise ValueError("judge response did not contain a JSON object")
     parsed = json.loads(response_text[start:end + 1])
     for label, score in parsed.items():
+        if not isinstance(score, dict):
+            raise ValueError(
+                f"{label}: expected an object of scores, got {type(score).__name__}: {score!r}"
+            )
         if score.get("recall") not in {"hit", "partial", "miss"}:
             raise ValueError(
                 f"{label}: recall must be hit/partial/miss, got {score.get('recall')!r}"
