@@ -712,8 +712,106 @@ def _extract_go_net_http_routes(root: Node, source: bytes, rel_path: str) -> lis
     return entries
 
 
+# Go's `:=` short declarations are scoped to the function they're declared
+# in (or visible to a nested closure referencing an outer variable), never
+# to a sibling function that merely happens to reuse the same identifier -
+# real Go code does this routinely (every route-registration function in a
+# typical gin app names its own local group variable "v1", "admin", "api").
+_GO_FUNCTION_SCOPE_TYPES = {"function_declaration", "method_declaration", "func_literal"}
+
+
+def _go_scope_chain(node: Node, root: Node) -> list[int]:
+    """Ids of every function-scope boundary enclosing `node`, innermost
+    first, always ending with the file's own root id (for a `:=` at file
+    scope, which Go doesn't actually allow but costs nothing to fall back
+    to safely)."""
+    chain: list[int] = []
+    current = node.parent
+    while current is not None:
+        if current.type in _GO_FUNCTION_SCOPE_TYPES:
+            chain.append(current.id)
+        current = current.parent
+    chain.append(root.id)
+    return chain
+
+
+def _resolve_group_prefix(
+    bindings: dict[tuple[int, str], str], node: Node, root: Node, var_name: str
+) -> str:
+    for scope_id in _go_scope_chain(node, root):
+        prefix = bindings.get((scope_id, var_name))
+        if prefix is not None:
+            return prefix
+    return ""
+
+
+def _gin_group_prefix_bindings(root: Node, source: bytes) -> dict[tuple[int, str], str]:
+    """(enclosing-function-scope id, var name) -> composed URL prefix for
+    every `x := y.Group("/prefix")` short variable declaration in this
+    file, including nested groups (`v2 := v1.Group("/v2")`).
+
+    Keyed by scope, not by name alone: a flat file-wide `{name: prefix}`
+    map means a later, unrelated `v1 := other.Group("/admin")` in a
+    completely different function silently overwrites the map entry for
+    every earlier route that used "v1" as its own, differently-scoped
+    group variable - found via Flash Review, confirmed against a real
+    two-function gin router file where this produced a wrong, plausible-
+    looking `/admin` prefix on routes that were never actually grouped
+    under `/admin` at all.
+
+    A single forward pass is still sufficient within each scope: Go
+    requires a variable declared before use, and _walk_tree visits nodes
+    in source order, so a group's own receiver binding (if it has one) is
+    already recorded by the time a later declaration in the same or an
+    enclosing scope composes on top of it. A receiver not found in any
+    enclosing scope (e.g. the base `*gin.Engine` returned by
+    gin.Default()/gin.New(), which is never itself the result of a
+    .Group() call) resolves to "" - the same unprefixed behavior every
+    route already had before this existed, so this is purely additive,
+    never a regression for the ungrouped case.
+    """
+    bindings: dict[tuple[int, str], str] = {}
+    for n in _walk_tree(root):
+        if n.type != "short_var_declaration":
+            continue
+        left = n.child_by_field_name("left")
+        right = n.child_by_field_name("right")
+        if left is None or right is None:
+            continue
+        left_names = left.named_children
+        right_exprs = right.named_children
+        if len(left_names) != 1 or left_names[0].type != "identifier":
+            continue
+        if len(right_exprs) != 1 or right_exprs[0].type != "call_expression":
+            continue
+        call = right_exprs[0]
+        func = call.child_by_field_name("function")
+        if func is None or func.type != "selector_expression":
+            continue
+        field = func.child_by_field_name("field")
+        operand = func.child_by_field_name("operand")
+        if field is None or operand is None or operand.type != "identifier":
+            continue
+        if source[field.start_byte : field.end_byte].decode() != "Group":
+            continue
+        args = call.child_by_field_name("arguments")
+        if args is None:
+            continue
+        arg_named = args.named_children
+        if not arg_named or arg_named[0].type != "interpreted_string_literal":
+            continue
+        prefix_literal = _go_string_literal_text(arg_named[0], source)
+        receiver_name = source[operand.start_byte : operand.end_byte].decode()
+        base_prefix = _resolve_group_prefix(bindings, n, root, receiver_name)
+        var_name = source[left_names[0].start_byte : left_names[0].end_byte].decode()
+        scope_id = _go_scope_chain(n, root)[0]
+        bindings[(scope_id, var_name)] = f"{base_prefix.rstrip('/')}/{prefix_literal.strip('/')}"
+    return bindings
+
+
 def _extract_gin_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
     entries: list[dict] = []
+    group_prefixes = _gin_group_prefix_bindings(root, source)
 
     for n in _walk_tree(root):
         if n.type == "call_expression":
@@ -730,10 +828,22 @@ def _extract_gin_routes(root: Node, source: bytes, rel_path: str) -> list[dict]:
                                 path = _go_string_literal_text(named[0], source)
                                 handler = _go_handler_name(named, source)
                                 method = "ANY" if field_name == "Any" else field_name
+                                operand = func.child_by_field_name("operand")
+                                receiver_name = (
+                                    source[operand.start_byte : operand.end_byte].decode()
+                                    if operand is not None and operand.type == "identifier"
+                                    else None
+                                )
+                                prefix = (
+                                    _resolve_group_prefix(group_prefixes, n, root, receiver_name)
+                                    if receiver_name
+                                    else ""
+                                )
+                                full_path = f"{prefix.rstrip('/')}/{path.lstrip('/')}" if prefix else path
                                 entries.append(
                                     {
                                         "method": method,
-                                        "path": path,
+                                        "path": full_path,
                                         "framework": "gin",
                                         "file": rel_path,
                                         "line": n.start_point[0] + 1,
