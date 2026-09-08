@@ -150,6 +150,19 @@ def find_layer_violations(evidence: dict, target: str | None) -> dict:
 _BLAST_RADIUS_CONFIRM_CANDIDATES = 40
 _BLAST_RADIUS_CONFIRMED_CALLERS_SHOWN = 10
 _BLAST_RADIUS_MAX_TRANSITIVE = 50
+# Real bug found via audit: direct_dependents (evidence's own raw
+# imported_by list) was returned verbatim with no cap at all - unlike
+# transitive_dependents just below (capped, with an honest truncated
+# flag) and unlike flash_review.py's own build_blast_radius_context,
+# which this function's docstring says it mirrors - that sibling caps
+# its candidate list at MAX_BLAST_RADIUS_CANDIDATES (40) right at the
+# start. A genuinely central module (a shared utils.py/models.py) can
+# have hundreds-to-thousands of direct importers on a real repo -
+# confirmed directly: a 500-file synthetic hub returned all 500 with no
+# truncation signal, the same unbounded-MCP/CLI-result failure mode
+# already hardened twice this session for aletheore_search and
+# aletheore_ast_pattern.
+_BLAST_RADIUS_MAX_DIRECT = 50
 
 
 def find_blast_radius(
@@ -205,7 +218,13 @@ def find_blast_radius(
 
     result: dict[str, Any] = {
         "target": target,
-        "direct_dependents": direct_dependents,
+        # Truncated for DISPLAY only - the BFS above, confirmed_callers
+        # below, and blast_radius_modules further down all still use the
+        # full, untruncated direct_dependents list, so a large hub's real
+        # transitive reach and layer-violation exposure are never
+        # understated just because its own direct-importer list is long.
+        "direct_dependents": direct_dependents[:_BLAST_RADIUS_MAX_DIRECT],
+        "direct_dependents_truncated": len(direct_dependents) > _BLAST_RADIUS_MAX_DIRECT,
         "transitive_dependents": transitive_dependents,
         "transitive_dependents_truncated": truncated,
     }
