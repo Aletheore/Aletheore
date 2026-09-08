@@ -393,6 +393,157 @@ def test_swift_target_with_no_reachable_member_stays_unreachable(tmp_path):
     assert "Sources/Orphan/OrphanThing.swift" in paths
 
 
+def test_go_package_main_func_main_is_never_unreachable(tmp_path):
+    # Real bug found via audit: a Go binary's entry point is never imported
+    # by anything in the repo (nothing in Go *can* import package main), so
+    # it always looked unreachable by the plain imported_by signal alone -
+    # same category as Python's __main__ guard and Swift's @main, just for
+    # Go's own real convention (package main + func main()).
+    (tmp_path / "main.go").write_text(
+        "package main\n\nimport \"example.com/app/internal/util\"\n\n"
+        "func main() {\n\tutil.Hello()\n}\n"
+    )
+    modules = [_module("main.go")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "main.go" in result["entry_points_detected"]
+
+
+def test_go_func_main_without_package_main_is_still_unreachable(tmp_path):
+    # A file merely containing a function named "main" in some other
+    # package isn't a real binary entry point - both signals (package main
+    # AND func main()) are required, not just the function name alone.
+    (tmp_path / "helper.go").write_text("package util\n\nfunc main() {}\n")
+    modules = [_module("helper.go")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    paths = [m["path"] for m in result["unreachable_modules"]]
+    assert "helper.go" in paths
+
+
+def test_rust_fn_main_is_never_unreachable(tmp_path):
+    # Real bug found via audit: same shape as Go above - Cargo's binary
+    # entry point (src/main.rs's fn main(), or any src/bin/*.rs) is never
+    # imported by anything else in the crate.
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "main.rs").write_text("mod util;\n\nfn main() {\n    util::hello();\n}\n")
+    modules = [_module("src/main.rs")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "src/main.rs" in result["entry_points_detected"]
+
+
+def test_java_public_static_void_main_is_never_unreachable(tmp_path):
+    # Real bug found via audit: same shape again for Java's real entry-point
+    # convention - unlike Python's main.py/__main__.py filename heuristic,
+    # Java's entry class can be named anything, so this has to be a content
+    # check on the actual method signature, not a filename.
+    pkg_dir = tmp_path / "src" / "main" / "java" / "com" / "example"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "Main.java").write_text(
+        "package com.example;\n\npublic class Main {\n"
+        "    public static void main(String[] args) {\n        Helper.hello();\n    }\n}\n"
+    )
+    modules = [_module("src/main/java/com/example/Main.java")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "src/main/java/com/example/Main.java" in result["entry_points_detected"]
+
+
+def test_java_package_sibling_of_the_main_method_is_never_unreachable(tmp_path):
+    # Real bug found via audit: same-package Java classes need no import
+    # statement either (JLS 7.5.1), the identical rule the Kotlin package-
+    # propagation fix already covers - but this only grouped .kt/.kts files
+    # before, so Helper.java (referenced only by Main.java, no import)
+    # still looked unreachable even after Main.java itself is recognized as
+    # an entry point.
+    pkg_dir = tmp_path / "src" / "main" / "java" / "com" / "example"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "Main.java").write_text(
+        "package com.example;\n\npublic class Main {\n"
+        "    public static void main(String[] args) {\n        Helper.hello();\n    }\n}\n"
+    )
+    (pkg_dir / "Helper.java").write_text(
+        "package com.example;\n\npublic class Helper {\n    public static void hello() {}\n}\n"
+    )
+    modules = [
+        _module("src/main/java/com/example/Main.java"),
+        _module("src/main/java/com/example/Helper.java"),
+    ]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+
+
+def test_csharp_static_main_method_is_never_unreachable(tmp_path):
+    # Real bug found via audit: C#'s Main is the same shape once more - the
+    # process entry point, never imported (C# doesn't even use imports for
+    # local resolution the way Java/Python do).
+    (tmp_path / "Program.cs").write_text(
+        "using System;\n\nclass Program {\n"
+        "    static void Main(string[] args) {\n        Helper.Hello();\n    }\n}\n"
+    )
+    modules = [_module("Program.cs")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "Program.cs" in result["entry_points_detected"]
+
+
+def test_rust_nested_fn_main_in_a_test_module_is_not_a_crate_entry_point(tmp_path):
+    # Flash Review finding on PR #594: the original `^\s*fn\s+main\s*\(`
+    # allowed arbitrary leading whitespace, so a library file's nested
+    # `mod tests { fn main() {} }` (rustfmt always indents block contents)
+    # was treated as if it were the crate's real, unimported binary entry
+    # point. The real fn main() below is unindented (column 0); the one
+    # inside mod tests is indented and must not match.
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    (src_dir / "lib.rs").write_text(
+        "pub fn helper() {}\n\n#[cfg(test)]\nmod tests {\n    fn main() {}\n}\n"
+    )
+    modules = [_module("src/lib.rs")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "src/lib.rs" in [m["path"] for m in result["unreachable_modules"]]
+    assert "src/lib.rs" not in result["entry_points_detected"]
+
+
+def test_java_main_with_extra_modifiers_in_any_order_is_still_an_entry_point(tmp_path):
+    # Flash Review finding on PR #594: the original pattern only matched
+    # the exact sequences "public static" or "static public" immediately
+    # before "void main(" - real, legal Java main methods can carry extra
+    # modifiers (final, synchronized) in any position, e.g.
+    # `public final static void main(...)` or
+    # `public static synchronized void main(...)`.
+    pkg_dir = tmp_path / "src" / "main" / "java" / "com" / "example"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "Main.java").write_text(
+        "package com.example;\n\npublic class Main {\n"
+        "    public final static synchronized void main(String[] args) {\n"
+        "        Helper.hello();\n    }\n}\n"
+    )
+    modules = [_module("src/main/java/com/example/Main.java")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert result["unreachable_modules"] == []
+    assert "src/main/java/com/example/Main.java" in result["entry_points_detected"]
+
+
+def test_csharp_static_helper_and_separate_instance_main_is_not_an_entry_point(tmp_path):
+    # Flash Review finding on PR #594: the original check searched the
+    # whole file independently for "static" and "Main(" as two separate
+    # signals, so a file with an unrelated static helper method AND a
+    # separate non-static instance Main() was wrongly treated as having a
+    # real static entry point - they must co-occur on the same
+    # declaration, not just both appear somewhere in the file.
+    (tmp_path / "Program.cs").write_text(
+        "using System;\n\nclass Program {\n"
+        "    static int Helper() { return 1; }\n"
+        "    void Main() { RunThing(); }\n}\n"
+    )
+    modules = [_module("Program.cs")]
+    result = find_dead_code(tmp_path, modules, config=None)
+    assert "Program.cs" in [m["path"] for m in result["unreachable_modules"]]
+    assert "Program.cs" not in result["entry_points_detected"]
+
+
 def test_config_can_add_custom_entry_points(tmp_path):
     modules = [_module("app/worker.py")]
     config = {"dead_code_entry_points": ["app/worker.py"]}
