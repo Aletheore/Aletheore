@@ -3,6 +3,41 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.14 — 2026-09-08
+
+Five real bugs found via a backward audit of recently merged PRs, all in the ORM-migration/schema
+and dead-code detection paths:
+
+- **`require.resolve('pkg')` was never recognized as a real import**, always flagging the package
+  as unused - a real, common shape for webpack aliasing and worker entry points (e.g. `new
+  Worker(require.resolve('./worker'))`). The import regex only matched the literal substring
+  `require(`, not `require.resolve(`.
+- **Module-namespaced Rails models were invisible to association clustering.** A model class
+  wrapped in one or more `module` blocks (`module Admin; class User < ApplicationRecord; ...; end;
+  end` - a common real Rails namespacing pattern) was silently treated as not a model at all,
+  contributing zero association edges. Found and fixed twice this pass: the first fix (searching
+  for the first class definition through nested modules) introduced its own real regression - if
+  that first class lacked a superclass, the whole file was given up on instead of trying the next
+  sibling class, the same way the original top-level-only loop already handled that case.
+- **A Django migration's unsupported-operation citation fabricated its receiver.** The catch-all
+  added to flag unmodeled Django operations (rather than silently drop them) hardcoded a
+  `migrations.` prefix regardless of the call's actual receiver - a custom `Operation` subclass
+  imported under its own module alias (common for `django.contrib.postgres.operations` and
+  hand-rolled subclasses) got an invented prefix in a statement whose whole purpose is to be a
+  real, grounded citation of what the migration file actually says.
+- **`RunSQL`/`op.execute`/`execute` with a non-literal SQL argument silently vanished** instead of
+  being flagged unsupported. All three are explicitly "modeled" raw-SQL escape hatches whose whole
+  point is to never silently disappear - a module-level constant, local variable, f-string, or
+  heredoc (all common, real styles for keeping migration files readable) instead of an inline
+  string literal made a real schema-changing migration structurally indistinguishable from a
+  no-op.
+- **A Django field's `db_column` override was ignored, fabricating a wrong column name.**
+  `db_column=...` is a common real Django idiom (legacy-database integration, gradual renames)
+  that overrides the actual database column name - the extractor always used the Python field
+  name instead, reporting a column that doesn't exist in the real database. Also fixed a narrower
+  truthiness bug in the same fix: `db_column or field_name` treated an explicit `db_column=""` as
+  if it had never been given at all.
+
 ## 0.9.13 — 2026-09-07
 
 - **`aletheore index` no longer requires Ollama to be pre-installed and running for local
