@@ -1447,12 +1447,6 @@ def review_diff(
 
     valid = _merge_semantic_findings(valid, semantic_findings)
 
-    if cache_write is not None:
-        try:
-            cache_write(diff_text, valid, model_used)
-        except Exception as exc:
-            logger.warning("flash review cache write failed (%s); continuing without cache", type(exc).__name__)
-
     kept = _validate_findings(valid, diff_text, file_contents, diff_patches)
     if on_grounding_result is not None:
         on_grounding_result({"proposed": len(valid), "kept": len(kept)})
@@ -1471,4 +1465,23 @@ def review_diff(
             model_part, diff_text, on_usage=on_verification_usage
         )
         kept = semantic_part + verified_model_part
+
+    # Real bug found via audit: this used to write `valid` (only basic
+    # structural validation) to the similarity cache BEFORE grounding
+    # (_validate_findings) and second-model verification got a chance to
+    # reject a finding. A finding the verifier explicitly determined was a
+    # false positive still got written to cache as if it were kept - and
+    # worse than the sibling read-side bugs #549/#583 already fixed, a
+    # rejected finding WITH a quotable citation would never be rechecked
+    # on any future cache hit (needs_recheck only rechecks findings
+    # lacking one), so it would be served as valid forever on any similar
+    # future diff for that installation/repo. Write the same post-
+    # verification `kept` list this function actually returns, so nothing
+    # the verifier rejected can ever enter the cache.
+    if cache_write is not None:
+        try:
+            cache_write(diff_text, kept, model_used)
+        except Exception as exc:
+            logger.warning("flash review cache write failed (%s); continuing without cache", type(exc).__name__)
+
     return kept

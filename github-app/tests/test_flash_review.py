@@ -767,6 +767,49 @@ def test_review_diff_writes_to_cache_after_a_fresh_call(mock_adapter_class):
     ]
 
 
+@patch("scan_worker.model_tiers.verification_adapter")
+@patch("scan_worker.flash_review.writing_adapter_for")
+def test_review_diff_does_not_cache_a_finding_the_second_model_verifier_rejects(
+    mock_adapter_class, mock_verification_adapter
+):
+    # Real bug found via audit: cache_write used to receive `valid` -
+    # findings that had only passed basic structural validation - BEFORE
+    # grounding (_validate_findings) and second-model verification got a
+    # chance to reject a finding. A finding the verifier explicitly
+    # determined was a false positive still got written to the similarity
+    # cache as if it were kept. Worse than the sibling read-side bugs
+    # #549/#583 already fixed: a rejected finding WITH a quotable citation
+    # (like this one) would never be rechecked on any future cache hit
+    # (needs_recheck only rechecks findings lacking one), so it would be
+    # served as valid forever on any future similar diff for that
+    # installation/repo.
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = (
+        '[{"file": "app.py", "line": 42, "issue": "hardcoded secret in \\"sk-abc123\\""}]'
+    )
+    mock_adapter_class.return_value = mock_adapter
+
+    mock_verifier = MagicMock()
+    mock_verifier.is_available.return_value = True
+    mock_verifier.simple_completion.return_value = '{"verdict": "REJECT", "reason": "already fixed"}'
+    mock_verification_adapter.return_value = mock_verifier
+
+    diff_text = "--- app.py ---\n@@ -40,1 +42,1 @@\n+key = \"sk-abc123\""
+    file_contents = {"app.py": "\n".join(f"line {i}" for i in range(1, 42)) + '\nkey = "sk-abc123"\n'}
+    written = []
+
+    findings = review_diff(
+        diff_text,
+        cache_lookup=lambda diff: None,
+        cache_write=lambda diff, findings, model_used: written.append(findings),
+        file_contents=file_contents,
+        verify_with_second_model=True,
+    )
+
+    assert findings == []
+    assert written == [[]]
+
+
 @patch("scan_worker.flash_review.writing_adapter_for")
 def test_review_diff_resolves_model_used_dynamically_when_not_passed(mock_adapter_class, monkeypatch):
     mock_adapter = MagicMock()
