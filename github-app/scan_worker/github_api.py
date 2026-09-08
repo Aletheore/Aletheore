@@ -97,6 +97,21 @@ def _trim_patch_context(patch: str, context_lines: int = DIFF_PROMPT_CONTEXT_LIN
                 old_lines.append(text)
             elif tag == "+":
                 new_lines.append(text)
+            elif line == r"\ No newline at end of file":
+                # Real bug found via audit: git emits this literal marker
+                # line immediately after a +/- line whenever that version
+                # of the file has no trailing newline - a real, common
+                # shape (any hunk touching the last line of such a file),
+                # not an edge case. Its tag ("\\") matched neither "-" nor
+                # "+", so it fell into the else branch below and was
+                # treated as genuine unchanged context present in BOTH
+                # file versions - injecting a fake source line into the
+                # model-facing diff and inflating the reconstructed
+                # hunk's line count to match. Skipped entirely: it
+                # carries no real content, and difflib's own hunk-header
+                # math already correctly accounts for one fewer real line
+                # once it's excluded.
+                continue
             else:
                 old_lines.append(text)
                 new_lines.append(text)
