@@ -731,6 +731,66 @@ async def test_subscription_updated_reconciles_extra_seats_from_items(pool):
 
 
 @pytest.mark.asyncio
+async def test_subscription_updated_with_a_null_seat_quantity_does_not_crash(pool):
+    # Real bug found via audit: item.get("quantity", 0) only supplies its
+    # default when the key is MISSING, not when Paddle sends it present
+    # with an explicit null - crashed the whole webhook handler with an
+    # unhandled TypeError, permanently stuck (Paddle keeps retrying the
+    # same payload) rather than a legitimate plan/seat change ever
+    # applying for that customer.
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, extra_seats) "
+        "VALUES (308, 'acme', 'air', 3)"
+    )
+    payload = {
+        "event_type": "subscription.updated",
+        "data": {
+            "id": "sub_test_308",
+            "customer_id": "ctm_test_308",
+            "status": "active",
+            "custom_data": {"installation_token": _installation_token(308)},
+            "items": [
+                {"price": {"id": "pri_01kyhevc8bkcghfpwjymz16y2h"}, "quantity": 1},
+                {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": None},
+            ],
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert await get_extra_seats(pool, 308) == 0
+
+
+@pytest.mark.asyncio
+async def test_subscription_updated_with_a_string_seat_quantity_reconciles_correctly(pool):
+    # Same gap as the null case above - Paddle's own real quantity field is
+    # always an int, but this must not crash on a non-int shape either.
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, extra_seats) "
+        "VALUES (309, 'acme', 'air', 0)"
+    )
+    payload = {
+        "event_type": "subscription.updated",
+        "data": {
+            "id": "sub_test_309",
+            "customer_id": "ctm_test_309",
+            "status": "active",
+            "custom_data": {"installation_token": _installation_token(309)},
+            "items": [
+                {"price": {"id": "pri_01kyhevc8bkcghfpwjymz16y2h"}, "quantity": 1},
+                {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": "3"},
+            ],
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert await get_extra_seats(pool, 309) == 3
+
+
+@pytest.mark.asyncio
 async def test_subscription_canceled_resets_extra_seats_to_zero(pool):
     fake_queue = MagicMock()
     await pool.execute(
