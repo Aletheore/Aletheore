@@ -294,13 +294,13 @@ New Paddle plumbing - no equivalent exists today.
   both re-arm after the next renewal.
 - Release-on-failure correctly reverses a reservation's base/top-up split.
 
-## Open Questions
+## Resolved Questions
 
-1. **Low-balance threshold**: proposed 15% of that cycle's starting combined
-   total (base + top-up at the moment of the last renewal or top-up
-   purchase, whichever is more recent) - needs explicit confirmation before
-   implementation, since "15% of what" has more than one reasonable reading
-   once top-ups are in play.
-
-(Top-up amount is resolved, not open - see Decision 1a: customer-chosen
-quantity against one $1/unit price, $5 minimum, not a fixed pack menu.)
+1. **Low-balance threshold: 15%, confirmed.** Defined as 15% of a rolling
+   high-water mark - the combined balance (base + top-up) immediately after
+   the most recent event that raised it (a renewal reset or a top-up
+   purchase, whichever happened most recently). `low_balance_email_sent_at`
+   dedupes within that window; a later top-up purchase establishes a new,
+   higher high-water mark and re-arms the check against the new 15%.
+2. **Top-up amount: resolved, not open** - see Decision 1a. Customer-chosen
+   quantity against one $1/unit price, $5 minimum, not a fixed pack menu.
