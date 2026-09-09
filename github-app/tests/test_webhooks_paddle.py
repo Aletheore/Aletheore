@@ -1708,6 +1708,13 @@ async def test_transaction_completed_credits_topup_purchase(pool):
             "customer_id": "ctm_test_1910",
             "custom_data": {"installation_token": _installation_token(installation_id)},
             "items": [{"price": {"id": CREDIT_TOPUP_PRICE_ID}, "quantity": 10}],
+            # details.totals.total (Paddle's actual collected amount, in
+            # cents) is what determines the credited amount, not quantity -
+            # this happens to be a round, undiscounted $10.00 (quantity * 100
+            # cents) so this test alone doesn't prove the fix; see
+            # test_transaction_completed_credits_topup_purchase_at_discounted_total
+            # below for the case where they deliberately diverge.
+            "details": {"totals": {"total": "1000"}},
             "billed_at": "2026-09-01T12:00:00Z",
         },
     }
@@ -1719,6 +1726,39 @@ async def test_transaction_completed_credits_topup_purchase(pool):
         installation_id,
     )
     assert float(row["topup_credit_balance_usd"]) == pytest.approx(10.00)
+    assert row["balance_epoch"] == 1
+
+
+@pytest.mark.asyncio
+async def test_transaction_completed_credits_topup_purchase_at_discounted_total(pool):
+    # Real production billing bug: crediting used to trust the line item's
+    # raw quantity (assuming exactly $1.00/unit was collected), ignoring
+    # any discount actually applied by Paddle. Here quantity is 10 (which
+    # would wrongly credit $10.00) but Paddle only collected $8.00 net of a
+    # discount - proving the fix credits details.totals.total, not
+    # quantity.
+    await upsert_installation(pool, 1914, "acme")
+    installation_id = 1914
+    payload = {
+        "event_id": "evt_topup_1914",
+        "event_type": "transaction.completed",
+        "data": {
+            "id": "txn_topup_wire_1914",
+            "customer_id": "ctm_test_1914",
+            "custom_data": {"installation_token": _installation_token(installation_id)},
+            "items": [{"price": {"id": CREDIT_TOPUP_PRICE_ID}, "quantity": 10}],
+            "details": {"totals": {"total": "800"}},
+            "billed_at": "2026-09-01T12:00:00Z",
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    row = await pool.fetchrow(
+        "SELECT topup_credit_balance_usd, balance_epoch FROM installations WHERE installation_id = $1",
+        installation_id,
+    )
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(8.00)
     assert row["balance_epoch"] == 1
 
 
@@ -1741,6 +1781,7 @@ async def test_transaction_completed_topup_is_independent_of_referral_commission
             "customer_id": "ctm_test_1911",
             "custom_data": {"installation_token": _installation_token(installation_id)},
             "items": [{"price": {"id": CREDIT_TOPUP_PRICE_ID}, "quantity": 5}],
+            "details": {"totals": {"total": "500"}},
             "billed_at": "2026-09-01T12:00:00Z",
         },
     }

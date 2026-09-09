@@ -448,24 +448,32 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
         None,
     )
     if topup_item is not None:
-        # TODO(before CREDIT_TOPUP_PRICE_ID becomes a real, chargeable Paddle
-        # price): credit the amount Paddle actually COLLECTED, not the line
-        # item's quantity. float(quantity) below silently ignores any
-        # discount and assumes exactly $1 of credit per unit - the referral
-        # path further down already reads the real figure from
-        # details.totals.total (in minor units), and this must do the same.
-        # Deliberately not fixed here: with CREDIT_TOPUP_PRICE_ID still a
-        # placeholder that no real transaction can match, this whole branch
-        # is inert, and the correct per-unit/total semantics can only be
-        # settled against the real price once it exists. Fix it in the same
-        # change that creates that price.
-        quantity = topup_item.get("quantity")
+        # Credit the amount Paddle actually COLLECTED for this transaction,
+        # not the line item's quantity - quantity assumes exactly $1 of
+        # credit per unit and silently ignores any discount. A top-up
+        # transaction never bundles a top-up with any other line item (see
+        # the buyCredit() comment below), so details.totals.total - Paddle's
+        # collected amount net of discount, in the currency's minor unit, as
+        # a string - IS the real dollar amount collected for this top-up.
+        # Same parsing pattern as the referral commission calculation below.
         transaction_id = data.get("id")
-        if quantity and transaction_id:
-            await credit_topup_purchase(pool, installation_id, float(quantity), transaction_id)
+        total_raw = ((data.get("details") or {}).get("totals") or {}).get("total")
+        if transaction_id and total_raw is not None:
+            try:
+                total_minor_units = Decimal(str(total_raw))
+            except InvalidOperation:
+                logger.warning(
+                    "credit topup transaction.completed has an unparseable total: %s",
+                    data.get("id"),
+                )
+            else:
+                amount_usd = (total_minor_units / Decimal(100)).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+                await credit_topup_purchase(pool, installation_id, float(amount_usd), transaction_id)
         else:
             logger.warning(
-                "credit topup transaction.completed missing quantity or id: %s",
+                "credit topup transaction.completed missing total or id: %s",
                 data.get("id"),
             )
         # Credit top-ups are pass-through LLM spend with near-zero margin -
