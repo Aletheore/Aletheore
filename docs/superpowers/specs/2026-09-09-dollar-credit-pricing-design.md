@@ -39,7 +39,7 @@ top of it.
   this change could violate.
 - Refunds or prorating a cancelled subscription's remaining balance.
 - Changing what AIRview/Docs/Flash Review/managed audits actually cost to run.
-- Annual billing for credit packs (packs are one-time purchases regardless of
+- Annual billing for top-up credit (it's a one-time purchase regardless of
   the underlying subscription's billing interval).
 
 ## Current State (what this replaces)
@@ -72,9 +72,18 @@ top of it.
 
 ## Decisions (from brainstorming)
 
-1. **Top-up credit packs are one-time purchases, never expire.** Not a
-   recurring line item (unlike the existing extra-seat pattern). Matches
-   RepoWise's own "$5 packs, never expire" framing, confirmed with the user.
+1. **Top-up credit is a one-time purchase, never expires.** Not a recurring
+   line item (unlike the existing extra-seat pattern). Matches RepoWise's own
+   "packs, never expire" framing, confirmed with the user.
+1a. **The amount is customer-chosen, not a fixed menu of packs.** One credit
+   price at $1/unit, billed by quantity - the customer picks the quantity at
+   checkout (quantity 8 = $8 of credit). This reuses the exact "billed by
+   quantity against one price" mechanism `EXTRA_SEAT_PRICE_ID` already uses
+   in this codebase, just as a one-time transaction instead of a recurring
+   subscription line item, rather than requiring a customer to pick from a
+   predefined set of pack sizes. A $5 minimum purchase applies so Paddle's
+   fixed per-transaction processing fee doesn't eat a disproportionate share
+   of a very small purchase; no maximum.
 2. **The plan's base included credit resets every renewal**, independent of
    any top-up balance. It does not accumulate across cycles - unused base
    credit at the end of a cycle is gone, same as the current review-count
@@ -195,17 +204,20 @@ than once.
 
 New Paddle plumbing - no equivalent exists today.
 
-1. Customer buys a credit pack (a new, real, one-time Paddle price - not a
-   subscription line item) from the dashboard's "buy more" flow.
+1. Customer picks a dollar amount ($5 minimum) in the dashboard's "buy more"
+   flow, which sets the quantity on a single one-time Paddle price
+   (`CREDIT_TOPUP_PRICE_ID`, $1/unit) at checkout - not a subscription line
+   item, and not a predefined pack.
 2. Paddle sends `transaction.completed` for that one-time purchase. The
    webhook handler (new branch in `webhooks/paddle.py`) verifies the
-   signature (existing mechanism, unchanged), resolves the price ID against
-   a new `CREDIT_PACK_PRICE_TO_AMOUNT_USD` mapping (parallel to the existing
-   `PADDLE_PRICE_TO_PLAN`), and attributes the purchase to an installation
-   via `customer_id` matching `installations.paddle_customer_id` - the same
+   signature (existing mechanism, unchanged), confirms the price ID matches
+   `CREDIT_TOPUP_PRICE_ID`, reads the real purchased amount from the
+   transaction's quantity/total (not a lookup table, since the amount is
+   customer-chosen), and attributes the purchase to an installation via
+   `customer_id` matching `installations.paddle_customer_id` - the same
    attribution pattern subscription webhooks already use
    (`PaddleWebhookAttributionError` on a miss).
-3. Atomically increments `topup_credit_balance_usd` by the pack's dollar
+3. Atomically increments `topup_credit_balance_usd` by the purchased
    amount.
 4. Idempotency: Paddle retries a webhook it didn't get a 2xx for, with the
    *same* `transaction.id`. A `processed_paddle_transactions` table (id
@@ -220,14 +232,14 @@ New Paddle plumbing - no equivalent exists today.
 - Migration: new `installations` columns + `processed_paddle_transactions`
   table.
 - `PLAN_BASE_CREDIT_USD` mapping (`llm_cost.py`).
-- `CREDIT_PACK_PRICE_TO_AMOUNT_USD` mapping (`paddle_pricing.py`), plus
-  whatever real Paddle price IDs get created for the packs (start simple:
-  $5/$10/$20 packs).
+- `CREDIT_TOPUP_PRICE_ID` (`paddle_pricing.py`): one real Paddle price,
+  $1/unit, billed by customer-chosen quantity - the real price ID gets
+  created live via the Paddle MCP, same as `EXTRA_SEAT_PRICE_ID`'s history.
 - Rewrite `reserve_llm_spend`/`release_llm_spend_reservation` (`db.py`) to
   read/write the two balance columns on `installations` instead of the
   single `llm_spend` monthly total, base-first draw-down.
-- New `webhooks/paddle.py` branch for `transaction.completed` on a credit
-  pack price, with the idempotency ledger.
+- New `webhooks/paddle.py` branch for `transaction.completed` on
+  `CREDIT_TOPUP_PRICE_ID`, with the idempotency ledger.
 - New `webhooks/paddle.py` renewal-reset branch on `subscription.updated`,
   scoped by `current_billing_period_start` comparison.
 - Email-trigger hooks at the two points identified in the data flow above,
@@ -242,8 +254,9 @@ New Paddle plumbing - no equivalent exists today.
 - Balance display component (`app_server/frontend.py`): current
   `base_credit_remaining_usd` + `topup_credit_balance_usd`, clearly
   distinguishing "included this month" from "purchased, never expires."
-- "Buy more credit" flow: pack selection UI wired to Paddle checkout for the
-  new one-time prices.
+- "Buy more credit" flow: an amount input ($5 minimum) wired to Paddle
+  checkout against `CREDIT_TOPUP_PRICE_ID` with quantity set from that
+  amount.
 - Email templates/copy for the two new notifications (low-balance,
   exhausted), triggered by the backend hooks above - this agent owns the
   content and rendering, not the trigger logic.
@@ -288,6 +301,6 @@ New Paddle plumbing - no equivalent exists today.
    purchase, whichever is more recent) - needs explicit confirmation before
    implementation, since "15% of what" has more than one reasonable reading
    once top-ups are in play.
-2. **Credit pack sizes**: proposed $5/$10/$20 as a starting point - easy to
-   change later since it's just new Paddle price IDs, not a structural
-   decision, so not blocking implementation start.
+
+(Top-up amount is resolved, not open - see Decision 1a: customer-chosen
+quantity against one $1/unit price, $5 minimum, not a fixed pack menu.)
