@@ -2701,6 +2701,45 @@ def test_semantic_checker_does_not_flag_an_unchanged_except_body_kept_real_handl
     assert findings == []
 
 
+def test_semantic_checker_does_not_flag_an_untouched_except_when_an_unrelated_hunk_change_reduces_to_pass():
+    """Real Flash Review finding on the fix above: gating on the WHOLE
+    hunk's added/removed content doesn't prove the removed content
+    actually belonged to the except block a match happened to find
+    nearby. Here an unrelated if-branch (not exception handling at all)
+    has its real body replaced with `pass` in the same hunk as a
+    genuinely untouched except block that already legitimately contained
+    `pass` - the untouched except block must not be misattributed the
+    unrelated change and falsely flagged."""
+    source = (
+        "def do_thing():\n"
+        "    if condition:\n"
+        "        pass\n"
+        "    try:\n"
+        "        risky_call()\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    return None\n"
+    )
+    diff = (
+        "--- app.py ---\n"
+        "@@ -1,9 +1,8 @@\n"
+        " def do_thing():\n"
+        "     if condition:\n"
+        "-        real_stuff()\n"
+        "-        more_stuff()\n"
+        "+        pass\n"
+        "     try:\n"
+        "         risky_call()\n"
+        "     except Exception:\n"
+        "         pass\n"
+        "     return None\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"app.py": source}, "")
+
+    assert findings == []
+
+
 def test_semantic_checker_finds_os_system_shell_injection():
     """Real shape: os.system always runs through a shell - concatenating a
     caller-influenced value directly into the command is a classic
