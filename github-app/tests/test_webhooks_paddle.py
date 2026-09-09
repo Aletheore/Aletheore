@@ -1574,6 +1574,129 @@ async def test_subscription_updated_replay_does_not_reset_spent_down_credit(pool
 
 
 @pytest.mark.asyncio
+async def test_mid_cycle_seat_purchase_credits_the_balance_immediately(pool):
+    # I5 of the final-review fix wave: a seat purchase fires
+    # subscription.updated with the SAME current_billing_period.starts_at, so
+    # reset_billing_period_credit is a deliberate no-op - the per-seat bonus
+    # baked into base_credit_for_plan never landed until the next real
+    # renewal, and a customer paid $6.99/seat for $0 of extra credit for up
+    # to a month. (The old flat cap recomputed itself live from
+    # get_extra_seats at every enforcement call site, so it used to rise
+    # immediately.)
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, extra_seats, "
+        "base_credit_remaining_usd, current_billing_period_start) "
+        "VALUES (407, 'acme', 'air', 1, 12.00, '2026-09-01T00:00:00Z')"
+    )
+    payload = {
+        "event_id": "evt_seat_407",
+        "event_type": "subscription.updated",
+        "data": {
+            "id": "sub_test_407",
+            "customer_id": "ctm_test_407",
+            "status": "active",
+            "custom_data": {"installation_token": _installation_token(407)},
+            "items": [
+                {"price": {"id": "pri_01kyhevc8bkcghfpwjymz16y2h"}, "quantity": 1},
+                {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": 3},
+            ],
+            # Same period as what's already stored - so the renewal reset is
+            # correctly a no-op and cannot be what applies the seat credit.
+            "current_billing_period": {"starts_at": "2026-09-01T00:00:00Z"},
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert await get_extra_seats(pool, 407) == 3
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, balance_epoch FROM installations "
+        "WHERE installation_id = $1",
+        407,
+    )
+    # 2 seats added (1 -> 3) x EXTRA_SEAT_LLM_CAP_USD (3.00), on top of the
+    # already-spent-down 12.00 - NOT a reset to base_credit_for_plan.
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(12.00 + 2 * 3.00)
+    # Balance went up, so the low-balance email dedupe epoch advances too.
+    assert row["balance_epoch"] == 1
+
+
+@pytest.mark.asyncio
+async def test_seat_removal_does_not_change_the_credit_balance(pool):
+    # Only an INCREASE credits. Removing a seat must not claw credit back
+    # mid-cycle (the customer already paid for the period it was bought in);
+    # the smaller allotment simply applies at the next renewal reset.
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, extra_seats, "
+        "base_credit_remaining_usd, current_billing_period_start) "
+        "VALUES (408, 'acme', 'air', 3, 12.00, '2026-09-01T00:00:00Z')"
+    )
+    payload = {
+        "event_id": "evt_seat_408",
+        "event_type": "subscription.updated",
+        "data": {
+            "id": "sub_test_408",
+            "customer_id": "ctm_test_408",
+            "status": "active",
+            "custom_data": {"installation_token": _installation_token(408)},
+            "items": [
+                {"price": {"id": "pri_01kyhevc8bkcghfpwjymz16y2h"}, "quantity": 1},
+                {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": 1},
+            ],
+            "current_billing_period": {"starts_at": "2026-09-01T00:00:00Z"},
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    assert await get_extra_seats(pool, 408) == 1
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd FROM installations WHERE installation_id = $1", 408
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(12.00)
+
+
+@pytest.mark.asyncio
+async def test_renewal_with_more_seats_resets_without_double_counting_the_seat_bonus(pool):
+    # A genuine renewal that ALSO carries a higher seat count: the reset
+    # already sets the balance to base_credit_for_plan(plan, extra_seats),
+    # which includes the new seats - crediting the mid-cycle bonus on top of
+    # that would double-count it.
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, extra_seats, "
+        "base_credit_remaining_usd, current_billing_period_start) "
+        "VALUES (409, 'acme', 'air', 1, 2.00, '2026-08-01T00:00:00Z')"
+    )
+    payload = {
+        "event_id": "evt_renewal_seats_409",
+        "event_type": "subscription.updated",
+        "data": {
+            "id": "sub_test_409",
+            "customer_id": "ctm_test_409",
+            "status": "active",
+            "custom_data": {"installation_token": _installation_token(409)},
+            "items": [
+                {"price": {"id": "pri_01kyhevc8bkcghfpwjymz16y2h"}, "quantity": 1},
+                {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": 3},
+            ],
+            "current_billing_period": {"starts_at": "2026-09-01T00:00:00Z"},
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd FROM installations WHERE installation_id = $1", 409
+    )
+    # base_credit_for_plan("air", 3) = 18.00 + 3 * 3.00 = 27.00, and nothing
+    # more on top of it.
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(27.00)
+
+
+@pytest.mark.asyncio
 async def test_transaction_completed_credits_topup_purchase(pool):
     await upsert_installation(pool, 910 + 1000, "acme")
     installation_id = 1910

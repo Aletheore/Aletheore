@@ -13,7 +13,9 @@ from app_server.db import (
     claim_webhook_delivery,
     claim_free_to_paid_plan,
     claim_paid_setup,
+    credit_extra_seat_purchase,
     credit_topup_purchase,
+    get_extra_seats,
     get_installation,
     list_installation_member_emails,
     release_webhook_delivery,
@@ -257,11 +259,37 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     # together means a crash here now looks identical to never having
     # started, from any later retry's point of view - no partial state to
     # reason about, whether the retry is immediate or 15 minutes later.
+    #
+    # Seats bought MID-CYCLE need their credit applied here, because the
+    # reset above cannot do it: a seat purchase fires subscription.updated
+    # with the SAME current_billing_period.starts_at, so
+    # reset_billing_period_credit is a deliberate no-op and the per-seat
+    # bonus baked into base_credit_for_plan never lands until the next real
+    # renewal. Before this, a customer paid $6.99 for a seat and got $0 of
+    # extra credit for up to a month (the old flat cap recomputed itself
+    # live from get_extra_seats at every enforcement call site, so the
+    # ceiling used to rise immediately). Read BEFORE set_extra_seats below
+    # overwrites it, and applied inside the same transaction for the same
+    # split-write reason documented on that block.
+    previous_extra_seats = await get_extra_seats(pool, installation_id) if plan != "free" else 0
+
     transitioned_to_paid = False
     async with pool.acquire() as conn:
         async with conn.transaction():
+            reset_happened = False
             if plan != "free" and period_start:
-                await reset_billing_period_credit(conn, installation_id, plan, extra_seats, period_start)
+                reset_happened = await reset_billing_period_credit(
+                    conn, installation_id, plan, extra_seats, period_start
+                )
+
+            # Only when the renewal reset did NOT fire - a real reset already
+            # sets the balance to base_credit_for_plan(plan, extra_seats),
+            # which includes the new seat count, so crediting again on top of
+            # it would double-count.
+            if plan != "free" and not reset_happened and extra_seats > previous_extra_seats:
+                await credit_extra_seat_purchase(
+                    conn, installation_id, extra_seats - previous_extra_seats
+                )
 
             if plan != "free":
                 transitioned_to_paid = await claim_free_to_paid_plan(conn, installation_id, plan)

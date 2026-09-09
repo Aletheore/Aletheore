@@ -6,7 +6,12 @@ import asyncpg
 
 from aletheore.evidence import is_evidence_version_compatible
 from app_server.evidence_limits import check_evidence_size
-from app_server.llm_cost import WARN_FRACTION_OF_CAP, base_credit_for_plan, crossed_spend_warning_threshold
+from app_server.llm_cost import (
+    EXTRA_SEAT_LLM_CAP_USD,
+    WARN_FRACTION_OF_CAP,
+    base_credit_for_plan,
+    crossed_spend_warning_threshold,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +229,39 @@ async def reset_billing_period_credit(
         installation_id, new_credit, period_start_dt,
     )
     return row is not None
+
+
+async def credit_extra_seat_purchase(
+    pool: asyncpg.Pool, installation_id: int, added_seats: int
+) -> None:
+    """Credits the per-seat LLM bonus for seats bought MID-CYCLE, when
+    reset_billing_period_credit cannot.
+
+    The per-seat bonus is folded into base_credit_for_plan, which only ever
+    gets applied by a real renewal reset - and a seat purchase fires
+    subscription.updated with the SAME current_billing_period.starts_at, so
+    that reset is a deliberate no-op. Before this, a customer paid
+    EXTRA_SEAT_PRICE_USD ($6.99) for a seat and got $0 of extra credit until
+    their next renewal, up to a month later; the old flat cap recomputed
+    itself live from get_extra_seats at every enforcement call site, so
+    raising the ceiling used to be immediate.
+
+    Same `pool`-only-needs-`.execute()` contract reset_billing_period_credit
+    documents: webhooks/paddle.py passes the open `conn` from the
+    subscription handler's transaction so this commits atomically with that
+    block's plan/extra_seats/Paddle-id writes, rather than as a split write.
+
+    balance_epoch is incremented, matching credit_topup_purchase: the
+    balance just went UP, so a low-balance warning already sent for the old
+    epoch must not suppress a later one for the new, larger allotment."""
+    if added_seats <= 0:
+        return
+    await pool.execute(
+        "UPDATE installations SET base_credit_remaining_usd = "
+        "base_credit_remaining_usd + $2, balance_epoch = balance_epoch + 1 "
+        "WHERE installation_id = $1",
+        installation_id, EXTRA_SEAT_LLM_CAP_USD * added_seats,
+    )
 
 
 async def credit_topup_purchase(
