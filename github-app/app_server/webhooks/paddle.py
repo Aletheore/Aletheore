@@ -235,15 +235,21 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     # no-op (reset_billing_period_credit itself checks this) when
     # current_billing_period.starts_at hasn't actually changed - a replayed
     # or unrelated subscription.updated for the same period must not wipe
-    # out credit the installation has already spent down.
+    # out credit the installation has already spent down. Folded into the
+    # same transaction as the plan/extra_seats/Paddle-id writes below
+    # (rather than run as its own standalone call first) so a crash between
+    # this reset and that block can't leave base_credit_remaining_usd and
+    # current_billing_period_start pointed at the new period while plan/
+    # extra_seats/Paddle IDs stay stale - the same split-write hazard
+    # documented on that block below, and reset_billing_period_credit only
+    # ever calls .fetchrow() on what it's given, so passing it the open
+    # `conn` from that transaction instead of `pool` works unchanged.
     period_start = (data.get("current_billing_period") or {}).get("starts_at")
-    if plan != "free" and period_start:
-        await reset_billing_period_credit(pool, installation_id, plan, extra_seats, period_start)
 
-    # One transaction, not three independent writes: a crash between any two
-    # of these previously left the installation on the new plan with stale
-    # extra_seats, or upgraded with no Paddle IDs recorded - a state that
-    # persisted until a Paddle retry happened to land outside
+    # One transaction, not three (now four) independent writes: a crash
+    # between any two of these previously left the installation on the new
+    # plan with stale extra_seats, or upgraded with no Paddle IDs recorded -
+    # a state that persisted until a Paddle retry happened to land outside
     # claim_webhook_delivery's 15-minute reclaim window (see
     # docs/audits/Claude_Audit.md finding 11; confirmed live by injecting a
     # crash between add_paddle_ids_to_installation and set_extra_seats - the
@@ -254,6 +260,9 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     transitioned_to_paid = False
     async with pool.acquire() as conn:
         async with conn.transaction():
+            if plan != "free" and period_start:
+                await reset_billing_period_credit(conn, installation_id, plan, extra_seats, period_start)
+
             if plan != "free":
                 transitioned_to_paid = await claim_free_to_paid_plan(conn, installation_id, plan)
                 if not transitioned_to_paid:

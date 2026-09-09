@@ -194,7 +194,14 @@ async def reset_billing_period_credit(
     a no-op on a replayed or unrelated subscription.updated event.
     Increments balance_epoch on a real reset, which doubles as the
     dedupe key both new credit-notification emails key off of. Returns
-    whether a reset actually happened."""
+    whether a reset actually happened.
+
+    Despite the parameter name/type, `pool` only needs to support
+    `.fetchrow()` - webhooks/paddle.py passes an open `conn` acquired from
+    an existing `pool.acquire()`/`conn.transaction()` block (the same
+    pattern claim_free_to_paid_plan and friends already use) so this
+    reset commits atomically with that block's plan/extra_seats/Paddle-id
+    writes instead of as an independent standalone call."""
     new_credit = base_credit_for_plan(plan, extra_seats)
     # Paddle sends ISO 8601 with a trailing "Z" (e.g.
     # "2026-09-01T00:00:00Z") - same format webhooks/paddle.py already

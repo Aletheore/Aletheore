@@ -589,6 +589,60 @@ async def test_crash_between_writes_rolls_back_the_plan_change_atomically(pool):
 
 
 @pytest.mark.asyncio
+async def test_crash_between_reset_and_plan_write_rolls_back_the_credit_reset_too(pool):
+    # Fix round 1 regression test: reset_billing_period_credit used to run
+    # as its own standalone call BEFORE the "one transaction" block below,
+    # so a crash between the two left base_credit_remaining_usd/
+    # current_billing_period_start/balance_epoch already committed to the
+    # new period while plan/extra_seats/Paddle IDs stayed stale - exactly
+    # the split-write hazard the block's own comment (and the test above)
+    # documents, just with the reset on the wrong side of the boundary.
+    # Folding the reset into the same `conn`/`conn.transaction()` as the
+    # rest means a crash after the reset runs (here, injected at
+    # set_extra_seats, same crash point as the test above) must now roll
+    # the reset back too - proven below by asserting the credit/period/
+    # epoch columns are untouched, not just plan/extra_seats/Paddle IDs.
+    import app_server.webhooks.paddle as paddle_mod
+
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, base_credit_remaining_usd) "
+        "VALUES (407, 'acme', 'air', 2.00)"
+    )
+    payload = {
+        "event_id": "evt_crash_mid_reset_407",
+        "event_type": "subscription.updated",
+        "data": {
+            "id": "sub_should_not_persist_407",
+            "customer_id": "ctm_should_not_persist_407",
+            "status": "active",
+            "custom_data": {"installation_token": _installation_token(407)},
+            "items": [{"price": {"id": "pri_01kyhevc8bkcghfpwjymz16y2h"}, "quantity": 1}],
+            "current_billing_period": {"starts_at": "2026-09-01T00:00:00Z"},
+        },
+    }
+
+    async def _crash(*a, **k):
+        raise RuntimeError("simulated crash: pod killed here")
+
+    with patch.object(paddle_mod, "set_extra_seats", _crash):
+        with pytest.raises(RuntimeError):
+            await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=MagicMock())
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, current_billing_period_start, balance_epoch, "
+        "paddle_subscription_id FROM installations WHERE installation_id = $1",
+        407,
+    )
+    # The reset (18.00, a real current_billing_period_start, balance_epoch
+    # 1) must NOT have survived the crash, exactly like the Paddle-id write
+    # below it in the same transaction didn't.
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(2.00)
+    assert row["current_billing_period_start"] is None
+    assert row["balance_epoch"] == 0
+    assert row["paddle_subscription_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_crash_after_plan_write_still_runs_setup_on_retry(pool):
     """Simulates a process death between the plan write committing and
     setup (wiki/docs build, attribution) running: claim_free_to_paid_plan
