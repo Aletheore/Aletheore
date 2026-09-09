@@ -53,6 +53,29 @@ PLAN_MONTHLY_PRICE_USD = {
     "flash": 8.00,
 }
 
+# The customer-facing, advertised included credit per plan - replaces the
+# "up to 800 reviews/month" style promise with the real dollar unit the
+# system already enforces. Deliberately below PLAN_CAP_OVERRIDE_USD
+# (real enforced worst-case ceiling: $6.00 flash / $20.00 air) so there's
+# real margin between what's promised and what's technically possible,
+# same spirit as every other cap-vs-price margin already documented in
+# this file.
+PLAN_BASE_CREDIT_USD = {
+    "flash": 5.00,
+    "air": 18.00,
+}
+
+
+def base_credit_for_plan(plan: str, extra_seats: int) -> float:
+    """The base credit an installation's balance resets to on a real
+    renewal. Applies the same per-seat bonus monthly_cap_for_installation
+    already used, so a larger AIR team keeps getting proportionally more
+    credit, not the same flat amount regardless of seat count."""
+    base = PLAN_BASE_CREDIT_USD.get(plan, 0.0)
+    if base == 0.0:
+        return 0.0
+    return base + EXTRA_SEAT_LLM_CAP_USD * extra_seats
+
 # flash's real spend cap is a deliberately looser fraction of its price
 # than the shared 50% default below (75%, $6 of $8 - raised from $5 on
 # 2026-09-07 alongside github_api.MAX_CONTEXT_FILE_BYTES's 80KB->100KB

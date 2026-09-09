@@ -6,6 +6,7 @@ from app_server import llm_cost
 from app_server.llm_cost import (
     WARN_FRACTION_OF_CAP,
     base_cap_for_plan,
+    base_credit_for_plan,
     cost_for_usage,
     crossed_spend_warning_threshold,
     monthly_cap_for_installation,
@@ -142,3 +143,21 @@ def test_crossed_spend_warning_threshold_never_fires_for_a_zero_cap():
     """A zero cap means no plan matched (base_cap_for_plan's default) - not
     a real installation to warn about."""
     assert crossed_spend_warning_threshold(0.0, 100.0, 0.0) is False
+
+
+def test_base_credit_for_plan_flash():
+    assert base_credit_for_plan("flash", extra_seats=0) == 5.00
+
+
+def test_base_credit_for_plan_air_no_extra_seats():
+    assert base_credit_for_plan("air", extra_seats=0) == 18.00
+
+
+def test_base_credit_for_plan_air_with_extra_seats():
+    # Same per-seat bonus the old monthly_cap_for_installation used -
+    # EXTRA_SEAT_LLM_CAP_USD ($3.00) per extra seat.
+    assert base_credit_for_plan("air", extra_seats=2) == 18.00 + 2 * 3.00
+
+
+def test_base_credit_for_plan_unknown_plan_is_zero():
+    assert base_credit_for_plan("free", extra_seats=0) == 0.0
