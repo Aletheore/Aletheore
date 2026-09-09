@@ -6841,6 +6841,77 @@ def test_run_live_wiki_full_build_job_is_noop_when_every_cluster_already_covered
     assert build_status_calls == [("ready", None)]
 
 
+def test_run_live_wiki_full_build_job_prunes_a_deleted_clusters_stale_subsystem(monkeypatch):
+    # Real gap found via audit: _clusters_with_uncovered_wiki_work only
+    # looks at clusters CURRENTLY in evidence, so a stored subsystem
+    # whose cluster was deleted from the repo entirely was invisible to
+    # it - "nothing new to do" isn't the same as "nothing to prune".
+    # _store_wiki_subsystem_records is the only place
+    # delete_wiki_subsystems_not_in ever runs, so without this, a repo
+    # that reaches steady-state coverage never called it again and a
+    # deleted cluster's stale wiki page survived forever. Cluster "1" is
+    # covered in the DB but no longer exists in current evidence.
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    evidence = _multi_cluster_wiki_evidence([0])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: evidence)
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_wiki_subsystems",
+        lambda *a, **k: [{"subsystem_id": "0"}, {"subsystem_id": "1"}],
+    )
+    generate_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems",
+        lambda *a, **k: generate_calls.append(1),
+    )
+    store_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._store_wiki_subsystem_records",
+        lambda dsn, iid, repo, ev, records, commit: store_calls.append(records),
+    )
+    build_status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error=None: build_status_calls.append((status, error)),
+    )
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    # No new generation work (cluster 0 is already covered) - the prune
+    # call costs no LLM call, only cluster 1's stale row gets pruned.
+    assert generate_calls == []
+    assert store_calls == [[]]
+    assert build_status_calls == [("ready", None)]
+
+
+def test_run_live_wiki_full_build_job_does_not_prune_when_every_covered_cluster_still_exists(
+    monkeypatch,
+):
+    # The other half: no orphan means no prune call at all, not even a
+    # cheap no-op one - matches the pre-existing noop test's expectation
+    # that nothing DB-writing runs when there's genuinely nothing to do.
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    evidence = _multi_cluster_wiki_evidence([0, 1])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: evidence)
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_wiki_subsystems",
+        lambda *a, **k: [{"subsystem_id": "0"}, {"subsystem_id": "1"}],
+    )
+    store_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._store_wiki_subsystem_records",
+        lambda *a, **k: store_calls.append(1),
+    )
+    monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert store_calls == []
+
+
 def test_live_wiki_catchup_sweep_job_rebuilds_each_due_repo(monkeypatch):
     from scan_worker.jobs import run_live_wiki_catchup_sweep_job
 
