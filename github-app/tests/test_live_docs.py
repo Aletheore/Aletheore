@@ -182,6 +182,31 @@ def test_a_colliding_name_does_not_block_an_unrelated_symbol_in_the_same_file():
     assert result == {"bar": {"description": "Returns a constant.", "mode": "generated"}}
 
 
+def test_a_name_shared_across_different_docstring_states_is_not_treated_as_a_collision():
+    # Real Flash Review finding on the fix above: name_counts used to be
+    # computed across ALL symbols regardless of docstring state, so an
+    # undocumented "foo" got excluded just because a DIFFERENTLY
+    # documented "foo" also existed in the file - even though
+    # generate_file_descriptions' own single-mode request only ever sends
+    # the undocumented one. There's no real name collision in what this
+    # call's own request actually contains; excluding it was a false
+    # negative, not a safety measure.
+    module = _module(
+        "a.py",
+        [
+            _symbol("foo", start_line=1, end_line=2),
+            _symbol("foo", start_line=4, end_line=5, docstring="Existing doc."),
+        ],
+    )
+    adapter = _adapter(json.dumps({"foo": {"description": "Returns 1."}}))
+
+    result = generate_file_descriptions(
+        module, ["def foo():", "    return 1", "", "def foo():", "    return 2"], adapter
+    )
+
+    assert result == {"foo": {"description": "Returns 1.", "mode": "generated"}}
+
+
 def test_combined_handles_generate_and_polish_symbols_in_one_call():
     # One module with both an undocumented symbol (needs generate) and an
     # already-documented one (needs polish) - the whole point of the
