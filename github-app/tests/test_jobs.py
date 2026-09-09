@@ -1218,8 +1218,11 @@ def test_maybe_create_regression_fence_check_run_skips_free_plan(monkeypatch):
 
 
 def test_managed_audit_api_job_returns_report_text(monkeypatch):
+    # Real balance needed so the upfront fast-fail check (Task 7 of the
+    # dollar-credit-pricing plan) doesn't itself reject this run.
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
     )
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
@@ -1249,8 +1252,11 @@ def test_managed_audit_api_job_releases_lock_during_audit(monkeypatch):
         finally:
             lock_state["held"] = False
 
+    # Real balance needed so the upfront fast-fail check (Task 7 of the
+    # dollar-credit-pricing plan) doesn't itself reject this run.
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
     )
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _tracking_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
@@ -1275,8 +1281,11 @@ def test_managed_audit_api_job_releases_lock_during_audit(monkeypatch):
 
 
 def test_managed_audit_api_job_signs_and_persists_the_report(monkeypatch):
+    # Real balance needed so the upfront fast-fail check (Task 7 of the
+    # dollar-credit-pricing plan) doesn't itself reject this run.
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
     )
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
@@ -1312,8 +1321,11 @@ def test_managed_audit_api_job_signs_and_persists_the_report(monkeypatch):
 
 
 def test_managed_audit_api_job_still_returns_report_when_signing_fails(monkeypatch):
+    # Real balance needed so the upfront fast-fail check (Task 7 of the
+    # dollar-credit-pricing plan) doesn't itself reject this run.
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
     )
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
@@ -1339,6 +1351,12 @@ def test_managed_audit_api_job_still_returns_report_when_signing_fails(monkeypat
 
 
 def test_managed_audit_api_job_raises_when_spend_cap_reached(monkeypatch):
+    # No base_credit_remaining_usd/topup_credit_balance_usd in this mock -
+    # defaults to a $0 combined balance (Task 7 of the dollar-credit-
+    # pricing plan replaced the old flat monthly_cap check with a direct
+    # read of the installation's real balance), so the upfront fast-fail
+    # check below is exercised the same way get_llm_spend_this_month=999
+    # used to force it under the old mechanism.
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
     )
@@ -1352,7 +1370,7 @@ def test_managed_audit_api_job_raises_when_spend_cap_reached(monkeypatch):
     )
     from scan_worker.jobs import run_managed_audit_api_job
 
-    with pytest.raises(Exception, match="spend cap"):
+    with pytest.raises(Exception, match="credit balance exhausted"):
         run_managed_audit_api_job(
             installation_id=100,
             evidence={"scanned_at": "2026-01-01"},
@@ -1494,8 +1512,13 @@ async def test_reserve_llm_spend_rejection_triggers_exhausted_email(pool, monkey
 
 
 def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeypatch):
+    # Real balance needed so the upfront fast-fail check (installation's
+    # own combined credit balance, Task 7 of the dollar-credit-pricing
+    # plan) doesn't itself reject before this test's own mocked
+    # reserve_llm_spend/record_llm_spend budget-stop logic ever runs.
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
     )
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
@@ -1585,8 +1608,12 @@ def test_managed_audit_pr_job_clones_pr_head_runs_audit_and_replies(monkeypatch,
     )
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    # Real balance needed so the fast-fail check (Task 7 of the
+    # dollar-credit-pricing plan re-reads get_installation_row fresh at
+    # that point) doesn't itself reject this run.
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
     )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: str(bare))
@@ -1671,8 +1698,14 @@ def test_managed_audit_pr_job_records_each_call_and_stops_mid_run_when_cap_reach
         return evidence_path
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    # Real balance needed so the fast-fail check (Task 7 of the
+    # dollar-credit-pricing plan) doesn't itself reject this run - the
+    # actual budget-stop-mid-run behavior below is still driven entirely
+    # by the mocked reserve_llm_spend/record_llm_spend pair against
+    # MONTHLY_CAP, unaffected by this row's real balance fields.
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
     )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.managed_audit_definitely_still_cooling_down", lambda *a, **k: False)
@@ -1758,8 +1791,12 @@ def test_managed_audit_pr_job_persists_and_signs_the_report(monkeypatch, tmp_pat
     )
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    # Real balance needed so the fast-fail check (Task 7 of the
+    # dollar-credit-pricing plan re-reads get_installation_row fresh at
+    # that point) doesn't itself reject this run.
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
     )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: str(bare))
@@ -1895,7 +1932,10 @@ def test_managed_audit_pr_job_still_posts_report_when_signing_fails(monkeypatch,
     )
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
     monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs._clone_url", lambda repo_full_name, token: str(bare))
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
@@ -1983,7 +2023,13 @@ def test_managed_audit_pr_job_skips_llm_call_when_spend_cap_reached(monkeypatch,
     run_managed_audit_pr_job(1, "octocat/hello-world", 42)
 
     assert llm_called == []
-    assert "spend cap" in posted["body"].lower()
+    # No base_credit_remaining_usd/topup_credit_balance_usd in this mock -
+    # defaults to a $0 combined balance (Task 7 of the dollar-credit-
+    # pricing plan replaced the old flat monthly_cap check with a direct
+    # balance read), so the fast-fail check is exercised the same way
+    # get_llm_spend_this_month=999 used to force it under the old
+    # mechanism.
+    assert "credit balance exhausted" in posted["body"].lower()
     assert posted["marker"] == AUDIT_COMMENT_MARKER
 
 
@@ -5608,7 +5654,7 @@ def test_maybe_update_live_wiki_generates_and_stores_for_affected_clusters(monke
     from scan_worker.jobs import _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
     monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
 
     fake_record = {
@@ -5650,7 +5696,7 @@ def test_maybe_update_live_wiki_fetches_and_threads_prior_records_through(monkey
     from scan_worker.jobs import _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
     stored_prior = [{"subsystem_id": "0", "files": [{"path": "auth/login.py", "role": "Old.", "key_symbols": []}]}]
     monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: stored_prior)
 
@@ -5676,7 +5722,7 @@ def test_maybe_update_live_wiki_records_failure_status_on_exception(monkeypatch)
     from scan_worker.jobs import _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
     monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
 
     def _boom(*a, **k):
@@ -5720,7 +5766,12 @@ def test_maybe_update_live_wiki_skips_llm_call_when_spend_cap_reached(monkeypatc
 
     assert llm_called == []
     assert status_calls[0][0] == "failed"
-    assert "spend cap" in status_calls[0][1]
+    # No base_credit_remaining_usd/topup_credit_balance_usd in this mock -
+    # defaults to a $0 combined balance (Task 7 of the dollar-credit-
+    # pricing plan), so the fast-fail check is exercised the same way
+    # get_llm_spend_this_month=999 used to force it under the old
+    # mechanism.
+    assert "credit balance exhausted" in status_calls[0][1]
 
 
 def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pushes(monkeypatch):
@@ -5736,7 +5787,16 @@ def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pus
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    # Real balance needed so the fast-fail check (Task 7 of the
+    # dollar-credit-pricing plan) doesn't itself reject both threads before
+    # the race below is even exercised - the actual atomic-reservation
+    # race is still driven entirely by the mocked reserve_llm_spend/
+    # get_llm_spend_this_month pair and the barrier below, unaffected by
+    # this row's real balance fields.
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
     monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
     monkeypatch.setattr("scan_worker.jobs._store_wiki_generation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._real_line_count_fetcher", lambda *a, **k: (lambda path: None))
@@ -6512,7 +6572,8 @@ def test_run_live_wiki_full_build_job_generates_and_stores(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
     monkeypatch.setattr(
-        "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
     )
     monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
 
@@ -6554,7 +6615,7 @@ def test_run_live_wiki_full_build_job_records_failed_status_on_error(monkeypatch
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
     monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
 
     def _raise(*a, **k):
@@ -6605,7 +6666,12 @@ def test_run_live_wiki_full_build_job_skips_llm_call_when_spend_cap_reached(monk
 
     assert llm_called == []
     assert build_status_calls[0][0] == "failed"
-    assert "spend cap" in build_status_calls[0][1]
+    # No base_credit_remaining_usd/topup_credit_balance_usd in this mock -
+    # defaults to a $0 combined balance (Task 7 of the dollar-credit-
+    # pricing plan), so the fast-fail check is exercised the same way
+    # get_llm_spend_this_month=999 used to force it under the old
+    # mechanism.
+    assert "credit balance exhausted" in build_status_calls[0][1]
 
 
 def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurrent_repos(monkeypatch):
@@ -6629,7 +6695,16 @@ def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurre
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    # Real balance needed so the fast-fail check (Task 7 of the
+    # dollar-credit-pricing plan) doesn't itself reject both threads before
+    # the race below is even exercised - the actual atomic-reservation
+    # race is still driven entirely by the mocked reserve_llm_spend/
+    # get_llm_spend_this_month pair and the barrier below, unaffected by
+    # this row's real balance fields.
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
     monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
     monkeypatch.setattr("scan_worker.jobs._store_wiki_subsystem_records", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs._regenerate_wiki_overview", lambda *a, **k: None)
@@ -6762,7 +6837,7 @@ def test_run_live_wiki_full_build_job_passes_fetch_line_count_through(monkeypatc
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _wiki_evidence())
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
     monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
     sentinel = lambda path: 42  # noqa: E731
     monkeypatch.setattr("scan_worker.jobs._real_line_count_fetcher", lambda *a, **k: sentinel)
@@ -6846,7 +6921,7 @@ def test_run_live_wiki_full_build_job_only_requests_uncovered_clusters(monkeypat
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     evidence = _multi_cluster_wiki_evidence([0, 1, 2])
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: evidence)
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
     monkeypatch.setattr(
         "scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [{"subsystem_id": "0"}]
     )
@@ -6893,7 +6968,7 @@ def test_run_live_wiki_full_build_job_persists_each_chunk_before_the_next_one_st
     cluster_ids = list(range(120))
     evidence = _multi_cluster_wiki_evidence(cluster_ids)
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: evidence)
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
     monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
     monkeypatch.setattr(
         "scan_worker.jobs.live_wiki.generate_subsystems",
@@ -6943,7 +7018,7 @@ def test_run_live_wiki_full_build_job_keeps_earlier_chunks_persisted_when_a_late
     cluster_ids = list(range(120))
     evidence = _multi_cluster_wiki_evidence(cluster_ids)
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: evidence)
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
     monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
 
     call_count = {"n": 0}
@@ -7073,7 +7148,7 @@ def test_maybe_update_live_wiki_passes_fetch_line_count_through(monkeypatch):
     from scan_worker.jobs import _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
     monkeypatch.setattr("scan_worker.jobs.list_wiki_subsystems", lambda *a, **k: [])
     sentinel = lambda path: 42  # noqa: E731
     monkeypatch.setattr("scan_worker.jobs._real_line_count_fetcher", lambda *a, **k: sentinel)
@@ -7379,7 +7454,12 @@ def test_run_live_docs_full_build_job_skips_llm_call_when_spend_cap_reached(monk
 
     assert adapter_calls == []
     assert status_calls[0][0] == "failed"
-    assert "spend cap" in status_calls[0][1]
+    # No base_credit_remaining_usd/topup_credit_balance_usd in this mock -
+    # defaults to a $0 combined balance (Task 7 of the dollar-credit-
+    # pricing plan), so the fast-fail check is exercised the same way
+    # get_llm_spend_this_month=999 used to force it under the old
+    # mechanism.
+    assert "credit balance exhausted" in status_calls[0][1]
 
 
 def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
@@ -7392,7 +7472,7 @@ def test_run_live_docs_full_build_job_survives_one_module_failing(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([bad, good])
     )
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
     monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
@@ -7440,7 +7520,16 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
         for i in range(3)
     ]
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence(modules))
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    # Real balance needed so the fast-fail check (Task 7 of the
+    # dollar-credit-pricing plan re-reads get_installation_row fresh, and
+    # cap_message() below also reads it) doesn't itself reject this run -
+    # the actual budget-stop-mid-run behavior is still driven entirely by
+    # the mocked reserve_llm_spend/record_llm_spend pair against
+    # MONTHLY_CAP, unaffected by this row's real balance fields.
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
     monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
@@ -7510,7 +7599,10 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
     assert recorded_deltas == [pytest.approx(-0.04)]
     assert status_calls[0][0] == "ready"
     assert "1/3 files processed" in status_calls[0][1]
-    assert "spend cap" in status_calls[0][1]
+    # cap_message() now reads the real (mocked, $10 combined) balance
+    # rather than referencing a flat monthly_cap (Task 7 of the
+    # dollar-credit-pricing plan).
+    assert "credit balance exhausted" in status_calls[0][1]
 
 
 def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(monkeypatch):
@@ -7520,7 +7612,7 @@ def test_run_live_docs_full_build_job_reports_failed_when_every_module_fails(mon
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     module = _docs_module(functions=[{"name": "f", "is_public": True, "docstring": None}])
     monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: _docs_evidence([module]))
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
     monkeypatch.setattr("scan_worker.jobs.list_docs_symbols", lambda *a, **k: [])
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
@@ -7612,7 +7704,12 @@ def test_maybe_update_live_docs_skips_llm_call_when_spend_cap_reached(monkeypatc
 
     assert adapter_calls == []
     assert status_calls[0][0] == "failed"
-    assert "spend cap" in status_calls[0][1]
+    # No base_credit_remaining_usd/topup_credit_balance_usd in this mock -
+    # defaults to a $0 combined balance (Task 7 of the dollar-credit-
+    # pricing plan), so the fast-fail check is exercised the same way
+    # get_llm_spend_this_month=999 used to force it under the old
+    # mechanism.
+    assert "credit balance exhausted" in status_calls[0][1]
 
 
 def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
@@ -7620,7 +7717,7 @@ def test_maybe_update_live_docs_survives_one_module_failing(monkeypatch):
     from scan_worker.jobs import _maybe_update_live_docs
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
@@ -7655,7 +7752,7 @@ def test_maybe_update_live_docs_excludes_test_files_from_changed_modules(monkeyp
     from scan_worker.jobs import _maybe_update_live_docs
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0})
     monkeypatch.setattr(
         "scan_worker.jobs._github_client_and_token", lambda *a, **k: (object(), "tok")
     )
@@ -7806,7 +7903,16 @@ def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_
             },
         )(),
     )
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    # Real balance needed so the fast-fail check (Task 7 of the
+    # dollar-credit-pricing plan) doesn't itself reject both threads before
+    # the race below is even exercised - the actual atomic-reservation
+    # race is still driven entirely by the mocked reserve_llm_spend/
+    # get_llm_spend_this_month pair and the barrier below, unaffected by
+    # this row's real balance fields.
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {"plan": "air", "base_credit_remaining_usd": 10.0, "topup_credit_balance_usd": 0.0},
+    )
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
     monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "fake-token")

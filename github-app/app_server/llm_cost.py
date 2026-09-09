@@ -111,6 +111,17 @@ def base_credit_for_plan(plan: str, extra_seats: int) -> float:
 # real single-digit dollars, not fractions of a cent) needs real headroom
 # to make meaningful progress per catch-up cycle instead of the old cap
 # forcing an artificially small per-sweep batch just to stay under it.
+# SUPERSEDED as of Task 7 of the dollar-credit-pricing plan (2026-09-09):
+# no remaining call site in scan_worker/jobs.py or app_server/admin.py
+# reads PLAN_CAP_OVERRIDE_USD, base_cap_for_plan, or
+# monthly_cap_for_installation (below) any more - real enforcement is now
+# each installation's own real balance (installations.base_credit_
+# remaining_usd + topup_credit_balance_usd, see PLAN_BASE_CREDIT_USD/
+# base_credit_for_plan above and reserve_llm_spend in scan_worker/db.py).
+# Left in place, not deleted, so that pass stayed a pure call-site
+# migration - deleting these (and updating every test that still
+# references them) is a separate, lower-risk follow-up once the balance-
+# based enforcement is confirmed working in production.
 PLAN_CAP_OVERRIDE_USD = {
     "flash": 6.00,
     "air": 20.00,

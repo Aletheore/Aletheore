@@ -342,6 +342,19 @@ async def test_admin_page_surfaces_llm_spend_and_flash_review_usage(pool, monkey
         100,
         7,
     )
+    # llm_spend_cap now reflects the real per-installation credit balance
+    # (base_credit_remaining_usd + topup_credit_balance_usd), not the old
+    # flat monthly_cap_for_installation(base_cap_for_plan(...)) ceiling -
+    # both columns default to 0 on a fresh installation row, so this needs
+    # a real balance set explicitly (Task 7 of the dollar-credit-pricing
+    # plan, 2026-09-09).
+    await pool.execute(
+        "UPDATE installations SET base_credit_remaining_usd = $2, "
+        "topup_credit_balance_usd = $3 WHERE installation_id = $1",
+        100,
+        15.00,
+        2.50,
+    )
 
     async with client:
         response = await client.get("/admin/octocat/hello-world")
@@ -350,7 +363,7 @@ async def test_admin_page_surfaces_llm_spend_and_flash_review_usage(pool, monkey
     body = response.json()
     assert body["llm_spend_month_to_date"] == 4.20
     assert body["flash_reviews_month_to_date"] == 7
-    assert body["llm_spend_cap"] > 0
+    assert body["llm_spend_cap"] == 17.50
 
 
 @pytest.mark.asyncio

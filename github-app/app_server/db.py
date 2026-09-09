@@ -68,7 +68,8 @@ async def get_installation(pool: asyncpg.Pool, installation_id: int) -> dict | N
         SELECT installation_id, account_login, plan, webhook_url, alert_email,
                pushover_user_key, max_api_tokens, health_check_base_url,
                health_check_latency_threshold_ms, paddle_subscription_id,
-               paddle_customer_id, llm_suggestions_enabled
+               paddle_customer_id, llm_suggestions_enabled,
+               base_credit_remaining_usd, topup_credit_balance_usd
         FROM installations
         WHERE installation_id = $1
         """,
