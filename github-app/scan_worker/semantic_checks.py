@@ -575,6 +575,22 @@ def _unchanged_except_body_weakened(file: str, source: str, hunk: _Hunk) -> dict
                     old_body.append(stripped)
                 if tag in (" ", "+"):
                     new_body.append(stripped)
+            else:
+                # Real gap found via audit: the hunk's own context window
+                # (a unified diff only shows a few lines around each real
+                # change) can run out before we ever see a dedent back to
+                # the except header's own indent - that isn't proof the
+                # block ended, only that the diff stopped showing it.
+                # Reporting on an incomplete reconstruction here could
+                # flag a handler as reduced to bare `pass` even though
+                # real, unchanged handling continues past the hunk's
+                # cutoff - e.g. only the FIRST statement of a multi-
+                # statement body was replaced with `pass`, and the rest
+                # of the block (still real handling) simply isn't in this
+                # hunk. Bail rather than guess - matches this file's own
+                # fail-closed philosophy elsewhere (an unrepresentable
+                # case degrades to no finding, not a wrong one).
+                continue
 
         non_comment_old = [b for b in old_body if not b.startswith("#")]
         non_comment_new = [b for b in new_body if not b.startswith("#")]

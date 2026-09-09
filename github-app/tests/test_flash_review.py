@@ -2740,6 +2740,40 @@ def test_semantic_checker_does_not_flag_an_untouched_except_when_an_unrelated_hu
     assert findings == []
 
 
+def test_semantic_checker_does_not_flag_a_partial_body_replacement_when_the_rest_falls_outside_the_hunk():
+    """Real Flash Review finding on the fix above: the check assumed
+    new_body was complete once hunk.raw_body ran out, but a unified
+    diff's hunk only shows a window of context around each real change -
+    real, unchanged handling that continues past that window is invisible
+    to it. Here only the FIRST statement of a two-statement except body
+    was replaced with `pass`; the second statement (`raise`) is real,
+    unchanged handling that simply isn't inside this hunk at all - the
+    block was never actually reduced to bare `pass`."""
+    source = (
+        "def do_thing():\n"
+        "    try:\n"
+        "        risky_call()\n"
+        "    except Exception:\n"
+        "        logger.warning(\"risky_call failed\")\n"
+        "        raise\n"
+        "    return None\n"
+    )
+    diff = (
+        "--- app.py ---\n"
+        "@@ -1,5 +1,5 @@\n"
+        " def do_thing():\n"
+        "     try:\n"
+        "         risky_call()\n"
+        "     except Exception:\n"
+        '-        logger.warning("risky_call failed")\n'
+        "+        pass\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"app.py": source}, "")
+
+    assert findings == []
+
+
 def test_semantic_checker_finds_os_system_shell_injection():
     """Real shape: os.system always runs through a shell - concatenating a
     caller-influenced value directly into the command is a classic
