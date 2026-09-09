@@ -1091,50 +1091,98 @@ async def test_reserve_flash_review_count_is_atomic_under_real_concurrency(pool)
 
 
 @pytest.mark.asyncio
-async def test_reserve_llm_spend_allows_up_to_cap_then_blocks(pool):
-    await _insert_installation(pool, 405, "a")
-    first = reserve_llm_spend(TEST_DATABASE_URL, 405, reserve_usd=0.5, monthly_cap=1.0)
-    second = reserve_llm_spend(TEST_DATABASE_URL, 405, reserve_usd=0.5, monthly_cap=1.0)
-    third = reserve_llm_spend(TEST_DATABASE_URL, 405, reserve_usd=0.5, monthly_cap=1.0)
-    assert (first, second, third) == (True, True, False)
-    assert get_llm_spend_this_month(TEST_DATABASE_URL, 405) == pytest.approx(1.0)
+async def test_reserve_llm_spend_draws_from_base_credit_first(pool):
+    await _insert_installation(
+        pool, 405, "a", base_credit_remaining_usd=5.00, topup_credit_balance_usd=10.00
+    )
+    ok = reserve_llm_spend(TEST_DATABASE_URL, 405, 2.00)
+    assert ok is True
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        405,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(3.00)
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(10.00)
 
 
 @pytest.mark.asyncio
-async def test_release_llm_spend_reservation_gives_back_the_reserved_amount(pool):
-    await _insert_installation(pool, 406, "a")
-    reserve_llm_spend(TEST_DATABASE_URL, 406, reserve_usd=0.5, monthly_cap=1.0)
-    release_llm_spend_reservation(TEST_DATABASE_URL, 406, reserve_usd=0.5)
-    assert get_llm_spend_this_month(TEST_DATABASE_URL, 406) == pytest.approx(0.0)
+async def test_reserve_llm_spend_spills_into_topup_when_base_insufficient(pool):
+    await _insert_installation(
+        pool, 406, "a", base_credit_remaining_usd=1.00, topup_credit_balance_usd=10.00
+    )
+    ok = reserve_llm_spend(TEST_DATABASE_URL, 406, 3.00)
+    assert ok is True
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        406,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(0.00)
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(8.00)
 
 
 @pytest.mark.asyncio
-async def test_release_llm_spend_reservation_never_goes_negative(pool):
-    await _insert_installation(pool, 407, "a")
-    release_llm_spend_reservation(TEST_DATABASE_URL, 407, reserve_usd=0.5)
-    assert get_llm_spend_this_month(TEST_DATABASE_URL, 407) == pytest.approx(0.0)
+async def test_reserve_llm_spend_rejects_when_combined_balance_insufficient(pool):
+    await _insert_installation(
+        pool, 407, "a", base_credit_remaining_usd=1.00, topup_credit_balance_usd=1.00
+    )
+    ok = reserve_llm_spend(TEST_DATABASE_URL, 407, 5.00)
+    assert ok is False
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        407,
+    )
+    # Rejected reservation must not have mutated either column.
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(1.00)
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(1.00)
+
+
+@pytest.mark.asyncio
+async def test_release_llm_spend_reservation_credits_topup_before_base(pool):
+    # A release always credits back to topup_credit_balance_usd first,
+    # mirroring "spend base first, so give back topup first" - the
+    # simplest consistent inverse of the base-first draw-down order.
+    await _insert_installation(
+        pool, 408, "a", base_credit_remaining_usd=0.00, topup_credit_balance_usd=8.00
+    )
+    release_llm_spend_reservation(TEST_DATABASE_URL, 408, 2.00)
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        408,
+    )
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(10.00)
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(0.00)
 
 
 @pytest.mark.asyncio
 async def test_reserve_llm_spend_is_atomic_under_real_concurrency(pool):
     import concurrent.futures
 
-    await _insert_installation(pool, 408, "a")
-    reserve_usd = 0.5
-    cap = 5.0
-    max_successes = 10  # cap / reserve_usd
-    attempts = 30
+    await _insert_installation(
+        pool, 409, "a", base_credit_remaining_usd=10.00, topup_credit_balance_usd=0.00
+    )
+    reserve_usd = 1.00
+    max_successes = 10  # combined $10.00 balance / $1.00 per reservation
+    attempts = 20
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=attempts) as pool_exec:
         results = list(
             pool_exec.map(
-                lambda _: reserve_llm_spend(TEST_DATABASE_URL, 408, reserve_usd, cap),
+                lambda _: reserve_llm_spend(TEST_DATABASE_URL, 409, reserve_usd),
                 range(attempts),
             )
         )
 
     assert sum(results) == max_successes
-    assert get_llm_spend_this_month(TEST_DATABASE_URL, 408) == pytest.approx(max_successes * reserve_usd)
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        409,
+    )
+    assert float(row["base_credit_remaining_usd"]) + float(row["topup_credit_balance_usd"]) == pytest.approx(0.00)
 
 
 @pytest.mark.asyncio

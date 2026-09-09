@@ -393,40 +393,29 @@ def release_flash_review_count_reservation(dsn: str, installation_id: int) -> No
         conn.commit()
 
 
-def reserve_llm_spend(dsn: str, installation_id: int, reserve_usd: float, monthly_cap: float) -> bool:
-    """Same atomic reserve-before-spend pattern as
-    reserve_flash_review_count, for the dollar cap - reserves a
-    conservative flat estimate (see jobs.py's FLASH_REVIEW_SPEND_RESERVE_USD)
-    up front, since the real cost of a Flash Review isn't known until the
-    LLM call and grounding pass complete. record_llm_spend's own additive
-    upsert then trues the reservation up to the real cost afterward (pass
-    `real_cost - reserve_usd` as the delta - negative if the real cost came
-    in under the reservation, which is the common case).
-
-    Note: on the very first reservation of a new month (no llm_spend row
-    yet for this installation), the ON CONFLICT...WHERE clause only gates
-    the UPDATE branch, not the INSERT branch, so that first reservation
-    always succeeds regardless of monthly_cap. This matches the pre-existing
-    check-then-act behavior, which also couldn't reject a single review
-    whose cost alone would exceed the cap - not a new gap, and not reachable
-    in practice since reserve_usd is always small relative to any real
-    monthly_cap.
-
-    Returns True (and reserves) if under cap, False (no reservation) if
-    already at/over it. Call release_llm_spend_reservation if the review
-    then never actually runs."""
+def reserve_llm_spend(dsn: str, installation_id: int, reserve_usd: float) -> bool:
+    """Atomically reserves reserve_usd against an installation's real
+    credit balance (base_credit_remaining_usd, drawn down first, then
+    topup_credit_balance_usd) - replaces the old flat monthly_cap
+    parameter entirely; the ceiling is now this installation's own
+    stored balance, not a constant shared by every installation on the
+    same plan. Same atomicity guarantee as before: a single UPDATE ...
+    WHERE, so two concurrent callers against the same installation can
+    never together reserve more than what's actually available."""
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO llm_spend (installation_id, month, total_cost_usd)
-                VALUES (%s, date_trunc('month', now())::date, %s)
-                ON CONFLICT (installation_id, month) DO UPDATE
-                SET total_cost_usd = llm_spend.total_cost_usd + %s
-                WHERE llm_spend.total_cost_usd + %s <= %s
-                RETURNING total_cost_usd
+                UPDATE installations
+                SET
+                    base_credit_remaining_usd = GREATEST(base_credit_remaining_usd - %(reserve)s, 0),
+                    topup_credit_balance_usd = topup_credit_balance_usd
+                        - GREATEST(%(reserve)s - base_credit_remaining_usd, 0)
+                WHERE installation_id = %(installation_id)s
+                    AND base_credit_remaining_usd + topup_credit_balance_usd >= %(reserve)s
+                RETURNING installation_id
                 """,
-                (installation_id, reserve_usd, reserve_usd, reserve_usd, monthly_cap),
+                {"reserve": reserve_usd, "installation_id": installation_id},
             )
             row = cur.fetchone()
         conn.commit()
@@ -434,17 +423,19 @@ def reserve_llm_spend(dsn: str, installation_id: int, reserve_usd: float, monthl
 
 
 def release_llm_spend_reservation(dsn: str, installation_id: int, reserve_usd: float) -> None:
-    """Undoes one reserve_llm_spend reservation for a review that was
-    charged against the cap but never actually ran."""
+    """Undoes one reserve_llm_spend reservation - credits topup_credit_
+    balance_usd first, then base_credit_remaining_usd, the reverse of the
+    base-first draw-down order (spend base first, so give back topup
+    first)."""
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE llm_spend
-                SET total_cost_usd = GREATEST(total_cost_usd - %s, 0)
-                WHERE installation_id = %s AND month = date_trunc('month', now())::date
+                UPDATE installations
+                SET topup_credit_balance_usd = topup_credit_balance_usd + %(reserve)s
+                WHERE installation_id = %(installation_id)s
                 """,
-                (reserve_usd, installation_id),
+                {"reserve": reserve_usd, "installation_id": installation_id},
             )
         conn.commit()
 
