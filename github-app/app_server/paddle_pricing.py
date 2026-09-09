@@ -14,12 +14,11 @@
 # bundle into the base $29.99/mo price.
 EXTRA_SEAT_PRICE_ID = "pri_01m123rwvvtgbm6bmmxcbav4hh"
 
-# Placeholder until Task 7 creates the real Paddle price via the Paddle
-# MCP and replaces this with the real pri_... id - the webhook logic
-# only needs to compare against whatever this constant is, so the rest
-# of this task can proceed and be tested without the real price
-# existing yet.
-CREDIT_TOPUP_PRICE_ID = "pri_PLACEHOLDER_credit_topup"
+# Credit top-up - $1.00 USD/unit, one-time (not a subscription), customer-
+# chosen quantity (5-1000, i.e. $5-$1000 per purchase). Created live via
+# the Paddle MCP, real and chargeable as of 2026-09-09. Product:
+# pro_01m23jw9evjvn00a6gs276ynrw ("Aletheore Credit Top-up").
+CREDIT_TOPUP_PRICE_ID = "pri_01m23jw9qbsnm4zmv28bfebx4t"
 
 # The flash plan's real Paddle product (pro_01m1754jf8nkvhrn3sbaj9rmyq,
 # "Aletheore Flash") and its one price - monthly only, no annual yet,
