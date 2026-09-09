@@ -381,9 +381,12 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
 
 async def _handle_transaction_completed(data: dict, pool) -> None:
     """Records an affiliate commission for one completed transaction, if
-    and only if the paying installation has a referral on file. Every other
-    (unreferred) transaction.completed event - the overwhelming majority -
-    is a fast no-op after the referral lookup.
+    and only if the paying installation has a referral on file AND the
+    transaction is not a credit top-up purchase (see the early return
+    below - top-ups are pass-through LLM spend with no margin to pay a
+    commission from). Every other (unreferred, or top-up) transaction.completed
+    event - the overwhelming majority - is a fast no-op after the relevant
+    check.
 
     15% of `details.totals.total`, Paddle's collected amount net of that
     transaction's own discount, in the currency's minor unit (cents) as a
@@ -406,12 +409,11 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
     if installation_id is None:
         return
 
-    # A customer-purchased credit top-up, independent of the affiliate-
-    # commission logic below - both can apply to the same transaction (a
-    # referred installation buying a top-up owes its referrer commission
-    # AND gets credited), so this must run before the referral early-return
-    # just below, not after it - the overwhelming majority of transactions
-    # have no referral on file at all and would otherwise never reach this.
+    # A customer-purchased credit top-up. This still needs to run before the
+    # referral lookup below (rather than after an early return on "no
+    # referral"), because a referred installation's top-up must still be
+    # credited even though - see the early return at the end of this block -
+    # it is deliberately excluded from earning its referrer any commission.
     items = data.get("items") or []
     topup_item = next(
         (item for item in items if (item.get("price") or {}).get("id") == CREDIT_TOPUP_PRICE_ID),
@@ -427,6 +429,19 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
                 "credit topup transaction.completed missing quantity or id: %s",
                 data.get("id"),
             )
+        # Credit top-ups are pass-through LLM spend with near-zero margin -
+        # paying 15% affiliate commission on them (as the code below would,
+        # unconditionally, on the full transaction total) is a real loss with
+        # no offsetting revenue to pay it from, unlike commission on a genuine
+        # subscription/seat sale. Deliberately conservative: skip commission
+        # for the WHOLE transaction if it contains a top-up item at all,
+        # rather than trying to parse Paddle's per-line-item totals to
+        # subtract just the top-up portion (this codebase has never parsed
+        # per-item totals, only the transaction-level total) - the current
+        # buyCredit() checkout flow is a standalone purchase action that
+        # never bundles a top-up with a subscription/seat item in the same
+        # transaction, so this has no practical downside today.
+        return
 
     referral = await get_referral(pool, installation_id)
     if referral is None:

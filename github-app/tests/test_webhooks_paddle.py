@@ -1601,11 +1601,13 @@ async def test_transaction_completed_credits_topup_purchase(pool):
 
 @pytest.mark.asyncio
 async def test_transaction_completed_topup_is_independent_of_referral_commission(pool):
-    # A topup purchase and a referral commission on the same transaction
-    # aren't mutually exclusive - both must apply. Also proves the topup
-    # branch isn't skipped by the referral early-return for unreferred
-    # transactions (the common case), since this installation has no
-    # referral on file at all.
+    # Proves the topup branch isn't skipped by the referral early-return
+    # for unreferred transactions (the common case), since this
+    # installation has no referral on file at all. (For a *referred*
+    # installation, a topup transaction is deliberately excluded from
+    # commission entirely - see
+    # test_transaction_completed_topup_for_referred_installation_is_excluded_from_commission
+    # below.)
     installation_id = 1911
     await upsert_installation(pool, installation_id, "acme")
     payload = {
@@ -1631,3 +1633,68 @@ async def test_transaction_completed_topup_is_independent_of_referral_commission
     # referral early-return in _handle_transaction_completed doesn't
     # prevent the (independent) topup branch from running.
     assert await get_referral(pool, installation_id) is None
+
+
+@pytest.mark.asyncio
+async def test_transaction_completed_topup_for_referred_installation_is_excluded_from_commission(pool):
+    # Real production billing bug: credit top-ups are pass-through LLM
+    # spend with near-zero margin. Before this fix, a referred
+    # installation's top-up purchase still fell through into the
+    # unconditional commission block below and paid its referrer 15% of
+    # the top-up amount - a real, recurring loss with no offsetting
+    # revenue. The top-up must still be credited (that part is real
+    # revenue-neutral top-up crediting, unrelated to the affiliate
+    # program), but this transaction must NOT generate a commission.
+    affiliate = await create_affiliate(pool, "TOPUPEXCL10", "dsc_topupexcl_wh", "Topupexcl")
+    installation_id = 1912
+    await upsert_installation(pool, installation_id, "acme")
+    await record_referral(pool, installation_id, affiliate["id"])
+
+    payload = {
+        "event_id": "evt_topup_1912",
+        "event_type": "transaction.completed",
+        "data": {
+            "id": "txn_topup_wire_1912",
+            "customer_id": "ctm_test_1912",
+            "custom_data": {"installation_token": _installation_token(installation_id)},
+            "items": [{"price": {"id": CREDIT_TOPUP_PRICE_ID}, "quantity": 20}],
+            # A large total (20 * $1 topup unit price scope aside) - if the
+            # commission bug were still present this would pay a very
+            # visible $3.00 (15% of $20.00) commission.
+            "details": {"totals": {"total": "2000"}},
+            "billed_at": "2026-09-01T12:00:00Z",
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    # The top-up itself was still credited.
+    row = await pool.fetchrow(
+        "SELECT topup_credit_balance_usd FROM installations WHERE installation_id = $1",
+        installation_id,
+    )
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(20.00)
+
+    # But no commission was recorded for the referring affiliate.
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("0")
+
+
+@pytest.mark.asyncio
+async def test_transaction_completed_regular_purchase_for_referred_installation_still_records_commission(pool):
+    # Companion to the exclusion test above: a referred installation's
+    # ordinary (non-topup) subscription/seat transaction must still earn
+    # its referrer commission exactly as before - the topup exclusion
+    # must not have broken the existing, correct commission path.
+    affiliate = await create_affiliate(pool, "REGULAR10", "dsc_regular_wh", "Regular")
+    installation_id = 1913
+    await upsert_installation(pool, installation_id, "acme")
+    await record_referral(pool, installation_id, affiliate["id"])
+
+    # $26.99 (2699 cents), no CREDIT_TOPUP_PRICE_ID item - same shape as
+    # test_transaction_completed_for_referred_installation_records_commission.
+    payload = _transaction_completed_payload(installation_id, "2699", transaction_id="txn_regular_1913")
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
+    assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("4.05")
