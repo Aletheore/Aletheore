@@ -4623,7 +4623,24 @@ def _module_has_uncovered_docs_work(module: dict, already_covered_names: set[str
     """
     needing = live_docs._symbols_needing_work(module, polish_existing=False)
     needing += live_docs._symbols_needing_work(module, polish_existing=True)
-    return any(s["name"] not in already_covered_names for s in needing)
+    if any(s["name"] not in already_covered_names for s in needing):
+        return True
+    # Real gap found via audit: a name in already_covered_names that no
+    # longer appears among the module's CURRENT symbols (deleted from the
+    # source since it was last documented) can never show up in `needing`
+    # above - it isn't a real symbol anymore, so _symbols_needing_work
+    # never asks about it. Without this check, a module whose remaining
+    # symbols are all already covered was judged to have zero uncovered
+    # work and skipped entirely - so _store_docs_generation_for_module
+    # (the only place anything ever prunes an orphaned docs_symbols row,
+    # via delete_docs_symbols_not_in) never ran for it, and a deleted
+    # symbol's stale AI-generated description survived indefinitely on
+    # the customer-facing Docs page. This doesn't cost an LLM call by
+    # itself - _store_docs_generation_for_module makes no LLM call when
+    # there's nothing left needing generation/polish, it just still runs
+    # the (free) prune.
+    current_names = {s["name"] for s in module["symbols"]["functions"] + module["symbols"]["classes"]}
+    return bool(already_covered_names - current_names)
 
 
 def _modules_with_uncovered_docs_work(

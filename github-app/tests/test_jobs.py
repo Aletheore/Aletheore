@@ -7007,6 +7007,26 @@ def test_module_has_uncovered_docs_work_false_when_nothing_needs_work_at_all():
     assert _module_has_uncovered_docs_work(module, already_covered_names=set()) is False
 
 
+def test_module_has_uncovered_docs_work_true_when_a_covered_symbol_was_deleted():
+    # Real gap found via audit: a symbol removed from the source file
+    # simply isn't in live_docs._symbols_needing_work's output anymore -
+    # it isn't a real symbol - so if every symbol still present is already
+    # covered, this used to report False even though a stale docs_symbols
+    # row for the deleted symbol exists and would never get pruned (the
+    # only place that prunes it, _store_docs_generation_for_module, only
+    # ever runs for a module this function says has work).
+    from scan_worker.jobs import _module_has_uncovered_docs_work
+
+    module = _docs_module(functions=[{"name": "keep_me", "is_public": True, "docstring": "d"}])
+
+    assert (
+        _module_has_uncovered_docs_work(module, already_covered_names={"keep_me", "deleted_fn"})
+        is True
+    )
+    # No orphan - every covered name still exists in the module - stays False.
+    assert _module_has_uncovered_docs_work(module, already_covered_names={"keep_me"}) is False
+
+
 def test_modules_with_uncovered_docs_work_filters_and_caps():
     from scan_worker.jobs import _modules_with_uncovered_docs_work
 
@@ -7032,6 +7052,25 @@ def test_modules_with_uncovered_docs_work_filters_and_caps():
     # fully-untouched files come first so a capped run can't get crowded
     # out by files that are already mostly done.
     assert paths[0] == "untouched.py"
+
+
+def test_modules_with_uncovered_docs_work_includes_a_module_with_only_an_orphaned_symbol():
+    # Same real gap as _module_has_uncovered_docs_work's own test above,
+    # exercised at this function's level: a module whose only remaining
+    # symbol is already covered, but whose covered set also names a
+    # symbol deleted from the source, must still come back - it's the
+    # only way _run_docs_build_for_modules ever reaches this module to
+    # prune the orphaned docs_symbols row.
+    from scan_worker.jobs import _modules_with_uncovered_docs_work
+
+    stale = _docs_module(
+        "stale.py", functions=[{"name": "keep_me", "is_public": True, "docstring": "d"}]
+    )
+    covered_by_module = {"stale.py": {"keep_me", "deleted_fn"}}
+
+    result = _modules_with_uncovered_docs_work([stale], covered_by_module, limit=10)
+
+    assert [m["path"] for m in result] == ["stale.py"]
 
 
 def test_modules_with_uncovered_docs_work_respects_limit():
