@@ -1458,7 +1458,7 @@ async def test_reserve_llm_spend_low_balance_triggers_email_enqueue(pool, monkey
     # computed against (see reserve_llm_spend_with_email_hooks).
     # 15% of 5.00 is 0.75; reserving 4.30 leaves 0.70, crossing it.
     await _insert_installation(
-        pool, installation_id, "a", plan="flash",
+        pool, installation_id, "a", plan="flash", alert_email="ops@example.com",
         base_credit_remaining_usd=5.00, topup_credit_balance_usd=0.00, balance_epoch=1,
     )
 
@@ -1504,7 +1504,7 @@ async def test_low_balance_email_fires_on_a_small_reservation_crossing_the_thres
     )
     installation_id = 9302
     await _insert_installation(
-        pool, installation_id, "a", plan="flash",
+        pool, installation_id, "a", plan="flash", alert_email="ops@example.com",
         base_credit_remaining_usd=0.80, topup_credit_balance_usd=0.00, balance_epoch=3,
     )
 
@@ -1543,7 +1543,7 @@ async def test_low_balance_threshold_scales_with_purchased_extra_seats(pool, mon
     )
     installation_id = 9303
     await _insert_installation(
-        pool, installation_id, "a", plan="air", extra_seats=2,
+        pool, installation_id, "a", plan="air", extra_seats=2, alert_email="ops@example.com",
         base_credit_remaining_usd=3.70, topup_credit_balance_usd=0.00, balance_epoch=1,
     )
 
@@ -1567,7 +1567,7 @@ async def test_reserve_llm_spend_rejection_triggers_exhausted_email(pool, monkey
     )
     installation_id = 9301
     await _insert_installation(
-        pool, installation_id, "a", plan="flash",
+        pool, installation_id, "a", plan="flash", alert_email="ops@example.com",
         base_credit_remaining_usd=0.01, topup_credit_balance_usd=0.00, balance_epoch=1,
     )
 
@@ -1586,6 +1586,32 @@ async def test_reserve_llm_spend_rejection_triggers_exhausted_email(pool, monkey
         "base_credit_remaining_usd": pytest.approx(0.01),
         "topup_credit_balance_usd": pytest.approx(0.00),
     }
+
+
+@pytest.mark.asyncio
+async def test_credit_balance_email_is_skipped_when_no_alert_email_is_configured(pool, monkeypatch):
+    # alert_email is nullable and opt-in - most installations have none, so
+    # enqueuing with to_email=None only queues a job the sender must reject.
+    # Guarded the same way the pre-existing health-alert enqueue is.
+    enqueued = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **kw: enqueued.append((a, kw)),
+    )
+    installation_id = 9304
+    await _insert_installation(
+        pool, installation_id, "a", plan="flash",
+        base_credit_remaining_usd=0.01, topup_credit_balance_usd=0.00, balance_epoch=1,
+    )
+
+    # Would otherwise enqueue "credit_exhausted" - the reservation is far
+    # larger than the balance.
+    result = reserve_llm_spend_with_email_hooks(
+        TEST_DATABASE_URL, installation_id, reserve_usd=5.00, feature="flash_review",
+    )
+
+    assert result is False
+    assert enqueued == []
 
 
 @pytest.mark.asyncio

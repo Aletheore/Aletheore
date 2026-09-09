@@ -3990,6 +3990,20 @@ def reserve_llm_spend_with_email_hooks(
 
 
 def _enqueue_credit_balance_email(template_name: str, installation_id: int, row: dict) -> None:
+    # alert_email is nullable and opt-in, so most installations have none -
+    # there is no address to deliver to, and enqueuing with to_email=None
+    # only puts a job on the queue for the sender to reject. Guarded the
+    # same way the pre-existing health-alert enqueue in
+    # _send_alerts_if_configured already guards it. Logged at debug, not
+    # warning: this is the common, expected state, not a fault.
+    alert_email = row.get("alert_email")
+    if not alert_email:
+        logging.getLogger("scan_worker.jobs").debug(
+            "%s email skipped for installation=%s - no alert_email configured",
+            template_name, installation_id,
+        )
+        return
+
     dedupe_key = f"{template_name}:{installation_id}:{row.get('balance_epoch', 0)}"
     try:
         enqueue_transactional_email(
@@ -4002,7 +4016,7 @@ def _enqueue_credit_balance_email(template_name: str, installation_id: int, row:
                 "base_credit_remaining_usd": float(row.get("base_credit_remaining_usd", 0)),
                 "topup_credit_balance_usd": float(row.get("topup_credit_balance_usd", 0)),
             },
-            to_email=row.get("alert_email"),
+            to_email=alert_email,
             installation_id=installation_id,
         )
     except Exception:  # noqa: BLE001
