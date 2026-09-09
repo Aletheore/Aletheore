@@ -573,6 +573,8 @@ async def admin_page(org: str, repo: str, request: Request):
         "llm_spend_month_to_date": llm_spend_month_to_date,
         "llm_spend_cap": llm_spend_cap,
         "flash_reviews_month_to_date": flash_reviews_month_to_date,
+        "base_credit_remaining_usd": float(installation["base_credit_remaining_usd"]),
+        "topup_credit_balance_usd": float(installation["topup_credit_balance_usd"]),
     }
 
 
