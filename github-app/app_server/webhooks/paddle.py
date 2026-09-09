@@ -448,6 +448,17 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
         None,
     )
     if topup_item is not None:
+        # TODO(before CREDIT_TOPUP_PRICE_ID becomes a real, chargeable Paddle
+        # price): credit the amount Paddle actually COLLECTED, not the line
+        # item's quantity. float(quantity) below silently ignores any
+        # discount and assumes exactly $1 of credit per unit - the referral
+        # path further down already reads the real figure from
+        # details.totals.total (in minor units), and this must do the same.
+        # Deliberately not fixed here: with CREDIT_TOPUP_PRICE_ID still a
+        # placeholder that no real transaction can match, this whole branch
+        # is inert, and the correct per-unit/total semantics can only be
+        # settled against the real price once it exists. Fix it in the same
+        # change that creates that price.
         quantity = topup_item.get("quantity")
         transaction_id = data.get("id")
         if quantity and transaction_id:

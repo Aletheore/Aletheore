@@ -1140,6 +1140,33 @@ async def test_reserve_llm_spend_rejects_when_combined_balance_insufficient(pool
 
 
 @pytest.mark.asyncio
+async def test_reserve_llm_spend_succeeds_when_reserve_exactly_equals_combined_balance(pool):
+    # The boundary the WHERE clause's `>=` is supposed to admit: spending
+    # the balance down to exactly nothing must succeed (not be rejected as
+    # if it were an overdraft), and must leave BOTH columns at 0 rather than
+    # driving topup_credit_balance_usd negative.
+    #
+    # pytest.approx, matching this file's convention throughout: the columns
+    # are NUMERIC but reserve_llm_spend's parameters bind as double
+    # precision, so the arithmetic is not guaranteed exact-decimal.
+    await _insert_installation(
+        pool, 410, "a", base_credit_remaining_usd=1.25, topup_credit_balance_usd=0.75
+    )
+    ok = reserve_llm_spend(TEST_DATABASE_URL, 410, 2.00)
+    assert ok is True
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        410,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(0.00)
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(0.00)
+
+    # And one more cent is now genuinely refused.
+    assert reserve_llm_spend(TEST_DATABASE_URL, 410, 0.01) is False
+
+
+@pytest.mark.asyncio
 async def test_release_llm_spend_reservation_credits_topup_before_base(pool):
     # A release always credits back to topup_credit_balance_usd first,
     # mirroring "spend base first, so give back topup first" - the
