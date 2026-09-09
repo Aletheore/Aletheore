@@ -2194,7 +2194,7 @@ async function openBillingPortal() {{
   }}
 }}
 
-function buyCredit() {{
+async function buyCredit() {{
   const amount = parseInt(document.getElementById('topup-amount').value, 10);
   const statusEl = document.getElementById('topup-status');
   if (!amount || amount < 5) {{
@@ -2202,10 +2202,21 @@ function buyCredit() {{
     return;
   }}
   statusEl.textContent = 'Opening checkout...';
+  // The installation token is minted with a 30-minute TTL (auth.py's
+  // sign_checkout_installation_id) - re-fetch it fresh here instead of
+  // reusing loadSettings()'s page-load-time copy, so a tab left open past
+  // 30 minutes doesn't send Paddle a token the webhook can no longer
+  // resolve (money taken, no credit granted). window._creditTopupPriceId
+  // is a static price id set once at page load and doesn't need refreshing.
+  const res = await apiGet(adminBase);
+  if (!res || !res.ok) {{
+    statusEl.textContent = 'Could not start checkout - try again.';
+    return;
+  }}
+  const data = await res.json();
   Paddle.Checkout.open({{
-    // TODO(backend): replace once CREDIT_TOPUP_PRICE_ID lands in paddle_pricing.py
-    items: [{{ priceId: "PENDING_CREDIT_TOPUP_PRICE_ID", quantity: amount }}],
-    customData: {{ installation_token: window._checkoutInstallationToken }},
+    items: [{{ priceId: window._creditTopupPriceId, quantity: amount }}],
+    customData: {{ installation_token: data.checkout_installation_token }},
     settings: {{
       displayMode: 'overlay',
       variant: 'one-page',
@@ -2374,6 +2385,11 @@ async function loadSettings() {{
   // values baked into the page's own <script> at module-import time) -
   // buyCredit() reads this at click time to authorize its checkout call.
   window._checkoutInstallationToken = data.checkout_installation_token;
+  // Static app-wide price id, not per-session like the token above - set
+  // once here and never re-fetched. Falsy (null) until the backend's
+  // CREDIT_TOPUP_PRICE_ID constant lands; the buy-flow UI below is gated
+  // on it so there's no dead, clickable button in the meantime.
+  window._creditTopupPriceId = data.credit_topup_price_id;
 
   const seatBillingHtml = window._hasActiveSubscription
     ? '<div class="form-row">' +
@@ -2395,11 +2411,13 @@ async function loadSettings() {{
           (topupCredit > 0 ? ' + $' + topupCredit.toFixed(2) + ' purchased (never expires)' : '') +
         '</div>' +
         '<div class="settings-block-hint">$' + combinedCredit.toFixed(2) + ' total available for AI reviews and builds</div>' +
-        '<div class="form-row" style="margin-top: 10px;">' +
-          '<input type="number" id="topup-amount" min="5" step="1" value="10" style="width: 80px;">' +
-          '<button class="btn" onclick="buyCredit()" style="margin-left: 6px;">Buy more credit</button>' +
-        '</div>' +
-        '<div id="topup-status" class="settings-block-hint"></div>' +
+        (data.credit_topup_price_id
+          ? '<div class="form-row" style="margin-top: 10px;">' +
+              '<input type="number" id="topup-amount" min="5" step="1" value="10" style="width: 80px;">' +
+              '<button class="btn" onclick="buyCredit()" style="margin-left: 6px;">Buy more credit</button>' +
+            '</div>' +
+            '<div id="topup-status" class="settings-block-hint"></div>'
+          : '<div class="settings-block-hint">Buying additional credit is coming soon.</div>') +
       '</div>' +
     '</section>';
 

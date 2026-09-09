@@ -369,7 +369,19 @@ def subscription_canceled_email(account_login: str, plan: str) -> dict:
 def credit_low_balance_email(
     account_login: str, plan: str, base_credit_remaining_usd: float, topup_credit_balance_usd: float
 ) -> dict:
+    # base_credit_remaining_usd/topup_credit_balance_usd may arrive as
+    # Decimal (asyncpg's NUMERIC type) once the real caller lands - coerce
+    # up front so the arithmetic below never raises a Decimal/float TypeError.
+    base_credit_remaining_usd = float(base_credit_remaining_usd)
+    topup_credit_balance_usd = float(topup_credit_balance_usd)
     plan_name = _plan_display_name(plan)
+    is_air = plan == "air"
+    cta_url = _DASHBOARD_URL if is_air else _PRICING_URL
+    buy_more_line = (
+        "Buy more credit any time from your dashboard - it never expires."
+        if is_air
+        else "Buy more credit any time - it never expires."
+    )
     combined = base_credit_remaining_usd + topup_credit_balance_usd
     subject = f"Your Aletheore {plan_name} credit is running low"
     preheader = f"${combined:.2f} remaining this cycle."
@@ -380,7 +392,7 @@ def credit_low_balance_email(
         f"${topup_credit_balance_usd:.2f} from purchased top-ups). "
         "Once it runs out, automatic PR reviews and other AI-powered features "
         "will pause until your next renewal or you buy more.\n\n"
-        "Buy more credit any time from your dashboard - it never expires."
+        f"{buy_more_line}"
     )
     html = _shell(
         preheader,
@@ -390,7 +402,7 @@ def credit_low_balance_email(
         "purchased top-ups.</p>"
         "<p>Once it runs out, automatic PR reviews and other AI-powered features will pause "
         "until your next renewal or you buy more.</p>"
-        + _button("Buy more credit", "https://app.aletheore.com/"),
+        + _button("Buy more credit", cta_url),
     )
     return {"subject": subject, "html": html, "text": text}
 
@@ -398,7 +410,14 @@ def credit_low_balance_email(
 def credit_exhausted_email(
     account_login: str, plan: str, base_credit_remaining_usd: float, topup_credit_balance_usd: float
 ) -> dict:
+    # See credit_low_balance_email above - coerce Decimal/float args up
+    # front so the (currently arithmetic-free, but future-proofed) usage
+    # below never raises a Decimal/float TypeError.
+    base_credit_remaining_usd = float(base_credit_remaining_usd)
+    topup_credit_balance_usd = float(topup_credit_balance_usd)
     plan_name = _plan_display_name(plan)
+    is_air = plan == "air"
+    cta_url = _DASHBOARD_URL if is_air else _PRICING_URL
     subject = f"Your Aletheore {plan_name} credit has run out"
     preheader = "AI-powered features are paused until you buy more credit or your plan renews."
     text = (
@@ -414,7 +433,7 @@ def credit_exhausted_email(
         f"<p>Your Aletheore {plan_name} plan has run out of AI credit for this billing cycle.</p>"
         "<p>Automatic PR reviews and other AI-powered features are paused - deterministic "
         "scanning and everything in Community continues to work normally.</p>"
-        + _button("Buy more credit", "https://app.aletheore.com/"),
+        + _button("Buy more credit", cta_url),
     )
     return {"subject": subject, "html": html, "text": text}
 

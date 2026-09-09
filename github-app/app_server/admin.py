@@ -83,6 +83,15 @@ from app_server.paddle_client import create_portal_session
 from app_server.paddle_client import get_subscription as get_paddle_subscription
 from app_server.paddle_client import update_subscription_items as update_paddle_subscription_items
 from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
+
+try:
+    # CREDIT_TOPUP_PRICE_ID lands in a separate, not-yet-merged backend
+    # task - fall back to None so admin_page can still serve, with the
+    # buy-more-credit UI self-gating on a null price id (frontend.py's
+    # loadSettings()) until then.
+    from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID
+except ImportError:
+    CREDIT_TOPUP_PRICE_ID = None
 from app_server.rate_limit import is_rate_limited
 from app_server.redis_client import get_redis_client
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
@@ -583,6 +592,7 @@ async def admin_page(org: str, repo: str, request: Request):
         "base_credit_remaining_usd": float(installation["base_credit_remaining_usd"]),
         "topup_credit_balance_usd": float(installation["topup_credit_balance_usd"]),
         "checkout_installation_token": checkout_installation_token,
+        "credit_topup_price_id": CREDIT_TOPUP_PRICE_ID,
     }
 
 
