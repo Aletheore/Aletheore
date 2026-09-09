@@ -987,14 +987,33 @@ def list_recent_endpoint_incidents(
     repo_full_name: str,
     since: datetime,
 ) -> list[dict]:
+    # Real bug found via audit: this used to GROUP BY endpoint_method,
+    # endpoint_path alone - the same collapse-across-targets class
+    # already found and fixed twice this session in sibling functions
+    # (get_endpoint_health_summary, PR #624; the public status API +
+    # get_endpoint_uptime_pct_since, PR #628). Two targets checking the
+    # exact same endpoint (e.g. Staging and Production) blended their
+    # down-incident counts into one row, so a healthy target's row could
+    # silently overwrite a genuinely down sibling target's real incident
+    # count in the caller's (method, path)-keyed lookup - traced into the
+    # real regression-risk check-run (find_touched_incident_endpoints /
+    # _maybe_create_regression_risk_check_run), a Staging-only outage
+    # could get reported with the wrong count, or dropped to zero
+    # entirely by a healthy Production row landing later in the result
+    # set. Grouped per target_id instead, matching the already-fixed
+    # sibling functions' shape; find_touched_incident_endpoints now
+    # aggregates across a (method, path)'s own targets explicitly rather
+    # than relying on whichever target's row happens to overwrite the
+    # others in a naive dict keyed on (method, path) alone.
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
                 """
-                SELECT endpoint_method, endpoint_path, count(*) AS incident_count, max(checked_at) AS last_incident_at
+                SELECT target_id, endpoint_method, endpoint_path,
+                       count(*) AS incident_count, max(checked_at) AS last_incident_at
                 FROM endpoint_health
                 WHERE installation_id = %s AND repo_full_name = %s AND reachable = false AND checked_at >= %s
-                GROUP BY endpoint_method, endpoint_path
+                GROUP BY target_id, endpoint_method, endpoint_path
                 """,
                 (installation_id, repo_full_name, since),
             )

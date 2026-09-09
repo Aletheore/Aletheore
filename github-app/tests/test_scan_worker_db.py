@@ -684,6 +684,64 @@ async def test_list_recent_endpoint_incidents_excludes_old_incidents(pool):
 
 
 @pytest.mark.asyncio
+async def test_list_recent_endpoint_incidents_does_not_collapse_across_targets(pool):
+    # Real bug found via audit: this used to GROUP BY endpoint_method,
+    # endpoint_path alone - the same collapse-across-targets class
+    # already found and fixed twice this session in sibling functions
+    # (PR #624, PR #628). Two targets checking the exact same endpoint
+    # blended their down-incident counts into one row, so a healthy
+    # target's row could overwrite a genuinely down sibling target's
+    # real incident count in a (method, path)-keyed lookup.
+    await _insert_installation(pool, 433, "incident-org")
+
+    from scan_worker.db import list_recent_endpoint_incidents
+
+    async with pool.acquire() as conn:
+        staging_id = await conn.fetchval(
+            """
+            INSERT INTO health_check_targets (installation_id, repo_full_name, label, base_url)
+            VALUES (433, 'incident-org/repo', 'Staging', 'https://staging.example.com') RETURNING id
+            """
+        )
+        prod_id = await conn.fetchval(
+            """
+            INSERT INTO health_check_targets (installation_id, repo_full_name, label, base_url)
+            VALUES (433, 'incident-org/repo', 'Production', 'https://prod.example.com') RETURNING id
+            """
+        )
+        await conn.execute(
+            """
+            INSERT INTO endpoint_health
+                (installation_id, repo_full_name, endpoint_method, endpoint_path, reachable, target_id)
+            VALUES
+                (433, 'incident-org/repo', 'GET', '/api/users', false, $1),
+                (433, 'incident-org/repo', 'GET', '/api/users', false, $1),
+                (433, 'incident-org/repo', 'GET', '/api/users', false, $1),
+                (433, 'incident-org/repo', 'GET', '/api/users', false, $1),
+                (433, 'incident-org/repo', 'GET', '/api/users', false, $1),
+                (433, 'incident-org/repo', 'GET', '/api/users', true, $2)
+            """,
+            staging_id,
+            prod_id,
+        )
+
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    incidents = list_recent_endpoint_incidents(
+        TEST_DATABASE_URL,
+        433,
+        "incident-org/repo",
+        since,
+    )
+
+    # Production is perfectly healthy (no down rows) and correctly
+    # produces no incident row at all; Staging's real 5 incidents must
+    # survive as their own row, not get collapsed away.
+    assert len(incidents) == 1
+    assert incidents[0]["target_id"] == staging_id
+    assert incidents[0]["incident_count"] == 5
+
+
+@pytest.mark.asyncio
 async def test_insert_and_get_last_endpoint_health_with_response_shape(pool):
     await _insert_installation(pool, 301, "a")
 

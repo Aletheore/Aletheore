@@ -715,7 +715,20 @@ def find_touched_incident_endpoints(
     evidence: dict,
     incidents: list[dict],
 ) -> list[dict]:
-    incident_by_key = {(i["endpoint_method"], i["endpoint_path"]): i for i in incidents}
+    # incidents is now per-target (list_recent_endpoint_incidents groups
+    # by target_id too, closing a real cross-target collapse bug - see
+    # its own docstring comment). Aggregate every target's incidents for
+    # the same (method, path) explicitly here, rather than keying a dict
+    # on (method, path) alone and letting whichever target's row lands
+    # last in the result set silently overwrite the others - summing
+    # incident_count reports the real total across all targets instead
+    # of an arbitrary single target's count, and taking the max
+    # last_incident_at reports the most recent incident from ANY target.
+    incidents_by_key: dict[tuple[str, str], list[dict]] = {}
+    for incident in incidents:
+        key = (incident["endpoint_method"], incident["endpoint_path"])
+        incidents_by_key.setdefault(key, []).append(incident)
+
     endpoints = evidence.get("repository", {}).get("api_endpoints", {}).get("endpoints", [])
     changed = set(changed_files)
     touched = []
@@ -723,8 +736,8 @@ def find_touched_incident_endpoints(
         if endpoint.get("file") not in changed:
             continue
         key = (endpoint.get("method"), endpoint.get("path"))
-        incident = incident_by_key.get(key)
-        if incident is None:
+        matching_incidents = incidents_by_key.get(key)
+        if not matching_incidents:
             continue
         touched.append(
             {
@@ -732,8 +745,8 @@ def find_touched_incident_endpoints(
                 "path": endpoint.get("path"),
                 "file": endpoint.get("file"),
                 "line": endpoint.get("line"),
-                "incident_count": incident["incident_count"],
-                "last_incident_at": incident["last_incident_at"],
+                "incident_count": sum(i["incident_count"] for i in matching_incidents),
+                "last_incident_at": max(i["last_incident_at"] for i in matching_incidents),
             }
         )
     return touched
@@ -844,8 +857,14 @@ def _maybe_create_regression_risk_check_run(
             f"{item['incident_count']} reachability incident(s) in the last "
             f"{REGRESSION_FENCE_WINDOW_DAYS} days"
         )
+    # Real bug found via audit: unconditionally claimed "production"
+    # regardless of which health-check target(s) actually recorded the
+    # incidents - a health_check_targets label (e.g. "Staging") is a
+    # free-text field a customer names themselves, with no structural
+    # "this one is production" flag this code can rely on. Incidents
+    # from a non-production target got the same "production" claim.
     summary = (
-        "This PR touches a handler with recent production reachability incidents:\n"
+        "This PR touches a handler with recent reachability incidents:\n"
         + "\n".join(lines)
     )
     create_check_run(

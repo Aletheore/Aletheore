@@ -982,6 +982,97 @@ def test_maybe_create_regression_risk_check_run_skips_free_plan(monkeypatch):
     assert touched_incidents == []
 
 
+def test_maybe_create_regression_risk_check_run_does_not_claim_production_unconditionally(monkeypatch):
+    # Real bug found via audit: the summary unconditionally said
+    # "production reachability incidents" regardless of which target
+    # actually recorded them - a health_check_targets label is a
+    # free-text field a customer names themselves, with no structural
+    # "this one is production" flag this code can rely on.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_recent_endpoint_incidents",
+        lambda *a, **k: [
+            {
+                "target_id": 1,
+                "endpoint_method": "GET",
+                "endpoint_path": "/x",
+                "incident_count": 3,
+                "last_incident_at": "2026-07-20T00:00:00Z",
+            }
+        ],
+    )
+    created = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.create_check_run",
+        lambda client, token, repo, sha, conclusion, summary, name="Aletheore secrets check": created.append(
+            summary
+        ),
+    )
+    evidence = {
+        "repository": {
+            "api_endpoints": {
+                "endpoints": [{"method": "GET", "path": "/x", "file": "app.py", "line": 10}]
+            }
+        }
+    }
+
+    from scan_worker.jobs import _maybe_create_regression_risk_check_run
+
+    _maybe_create_regression_risk_check_run(
+        client=None,
+        token="tok",
+        repo_full_name="octocat/hello-world",
+        head_sha="sha1",
+        installation_id=1,
+        evidence=evidence,
+        changed_files=["app.py"],
+    )
+
+    assert "production" not in created[0].lower()
+
+
+def test_find_touched_incident_endpoints_aggregates_across_targets():
+    # Real bug found via audit: incidents is now per-target
+    # (list_recent_endpoint_incidents groups by target_id too) - a naive
+    # dict keyed on (method, path) alone would let whichever target's
+    # row lands last in the result set silently overwrite the others.
+    # Summing incident_count across targets and taking the max
+    # last_incident_at reports the real total and the most recent
+    # incident from any target, instead of an arbitrary single one.
+    from scan_worker.jobs import find_touched_incident_endpoints
+
+    evidence = {
+        "repository": {
+            "api_endpoints": {
+                "endpoints": [{"method": "GET", "path": "/x", "file": "app.py", "line": 10}]
+            }
+        }
+    }
+    incidents = [
+        {
+            "target_id": 1,
+            "endpoint_method": "GET",
+            "endpoint_path": "/x",
+            "incident_count": 3,
+            "last_incident_at": "2026-07-20T00:00:00Z",
+        },
+        {
+            "target_id": 2,
+            "endpoint_method": "GET",
+            "endpoint_path": "/x",
+            "incident_count": 5,
+            "last_incident_at": "2026-07-25T00:00:00Z",
+        },
+    ]
+
+    touched = find_touched_incident_endpoints(["app.py"], evidence, incidents)
+
+    assert len(touched) == 1
+    assert touched[0]["incident_count"] == 8
+    assert touched[0]["last_incident_at"] == "2026-07-25T00:00:00Z"
+
+
 def test_maybe_create_regression_fence_check_run_creates_neutral_check_run(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
