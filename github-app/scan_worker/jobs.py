@@ -3926,10 +3926,17 @@ class _IncrementalSpendBudget:
         dsn: str,
         installation_id: int,
         model: str,
-        monthly_cap: float,
+        monthly_cap: float | None = None,
         next_call_reserve_usd: float = DEFAULT_LLM_NEXT_CALL_RESERVE_USD,
         feature: str = "unknown",
     ) -> None:
+        # monthly_cap is no longer used to gate reservations (see
+        # can_start_next_call below - reserve_llm_spend now reads this
+        # installation's own real credit balance instead of a flat cap
+        # passed in per call, Task 3 of the dollar-credit-pricing plan).
+        # Kept as an optional constructor arg, still populated by every
+        # real caller and still used by cap_message()'s display text below,
+        # purely so this doesn't force an unrelated call-site rewrite here.
         self.dsn = dsn
         self.installation_id = installation_id
         self.model = model
@@ -3938,9 +3945,7 @@ class _IncrementalSpendBudget:
         self.feature = feature
 
     def can_start_next_call(self) -> bool:
-        return reserve_llm_spend(
-            self.dsn, self.installation_id, self.next_call_reserve_usd, self.monthly_cap
-        )
+        return reserve_llm_spend(self.dsn, self.installation_id, self.next_call_reserve_usd)
 
     def record_usage(
         self, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0
@@ -3958,6 +3963,16 @@ class _IncrementalSpendBudget:
         delta = cost - self.next_call_reserve_usd
         if delta == 0:
             return
+        # True up the real credit balance too, not just the llm_spend
+        # accounting table below - can_start_next_call() only reserved an
+        # ESTIMATE (next_call_reserve_usd); now that the real cost is
+        # known, the difference must be additionally drawn from (delta > 0)
+        # or given back to (delta < 0) this installation's stored balance,
+        # or the balance silently drifts from real spend over many calls.
+        if delta > 0:
+            reserve_llm_spend(self.dsn, self.installation_id, delta)
+        elif delta < 0:
+            release_llm_spend_reservation(self.dsn, self.installation_id, -delta)
         record_llm_spend(self.dsn, self.installation_id, delta, feature=self.feature)
 
     def cap_message(self) -> str:

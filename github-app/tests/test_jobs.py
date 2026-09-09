@@ -82,6 +82,27 @@ def _patch_no_spend_cap(monkeypatch) -> None:
     monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
 
 
+async def _insert_installation(pool, installation_id: int, account_login: str, **values) -> None:
+    # Same shape as test_scan_worker_db.py's own _insert_installation - kept
+    # identical rather than inventing a second convention in this file.
+    columns = ["installation_id", "account_login", *values.keys()]
+    params = [installation_id, account_login, *values.values()]
+    placeholders = ", ".join(f"${i}" for i in range(1, len(params) + 1))
+    await pool.execute(
+        f"INSERT INTO installations ({', '.join(columns)}) VALUES ({placeholders})",
+        *params,
+    )
+
+
+async def _get_balance(pool, installation_id: int) -> dict:
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        installation_id,
+    )
+    return dict(row)
+
+
 class _FakeCodeGraphStore:
     """Stands in for scan_worker.code_graph_store.CodeGraphStore so
     _sync_code_graph's wiring can be tested without a real database - the
@@ -1339,13 +1360,80 @@ def test_managed_audit_api_job_raises_when_spend_cap_reached(monkeypatch):
     assert llm_called == []
 
 
+@pytest.mark.asyncio
+async def test_incremental_spend_budget_record_usage_trues_up_the_credit_balance(pool):
+    # real_cost exceeds the $0.01 next_call_reserve_usd reserved up front -
+    # the extra must additionally be reserved from the credit balance, not
+    # just recorded in llm_spend (Task 4: without this, the stored balance
+    # silently drifts from real spend over many calls).
+    #
+    # deepseek-v4-flash rates (MODEL_RATES_PER_MILLION_USD in
+    # app_server/llm_cost.py): $0.44/M input, $1.32/M output. For
+    # prompt_tokens=50000, completion_tokens=10000:
+    #   50000 * 0.44 / 1e6 = 0.022
+    #   10000 * 1.32 / 1e6 = 0.0132
+    #   total = 0.0352
+    # Verified against the real cost_for_usage/MODEL_RATES_PER_MILLION_USD
+    # constants rather than assumed - this does NOT land on $0.03 exactly.
+    # No integer (prompt_tokens, completion_tokens) pair can: output's rate
+    # is exactly 3x input's (1.32 = 3 * 0.44), so cost is always an integer
+    # multiple of 0.44/1e6, and 0.03 * 1e6 / 0.44 = 68181.81... is not an
+    # integer - $0.03 is simply unreachable with this model's real rates.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9101
+    await _insert_installation(
+        pool, installation_id, "a", base_credit_remaining_usd=5.00, topup_credit_balance_usd=0.00
+    )
+
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "deepseek-v4-flash",
+        next_call_reserve_usd=0.01, feature="airview_incremental",
+    )
+    assert budget.can_start_next_call() is True
+    budget.record_usage(prompt_tokens=50000, completion_tokens=10000)
+
+    remaining = await _get_balance(pool, installation_id)
+    assert float(remaining["base_credit_remaining_usd"]) == pytest.approx(5.00 - 0.0352, abs=0.001)
+
+
+@pytest.mark.asyncio
+async def test_incremental_spend_budget_record_usage_refunds_when_actual_cost_is_lower(pool):
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9102
+    await _insert_installation(
+        pool, installation_id, "a", base_credit_remaining_usd=5.00, topup_credit_balance_usd=0.00
+    )
+
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "deepseek-v4-flash",
+        next_call_reserve_usd=0.10, feature="airview_incremental",
+    )
+    assert budget.can_start_next_call() is True
+    # A tiny real call - actual cost is far below the 0.10 reserved.
+    budget.record_usage(prompt_tokens=10, completion_tokens=1)
+
+    remaining = await _get_balance(pool, installation_id)
+    # Reserved 0.10, actual cost is a few thousandths of a cent - most of
+    # the 0.10 reservation must be given back. release_llm_spend_reservation
+    # always credits topup_credit_balance_usd, never base_credit_remaining_usd
+    # (see its docstring/implementation in scan_worker/db.py - a known,
+    # deliberate Task 3 simplification, not something this task changes), so
+    # this checks the COMBINED balance rather than assuming which column
+    # absorbs the refund.
+    combined = float(remaining["base_credit_remaining_usd"]) + float(remaining["topup_credit_balance_usd"])
+    assert combined > 4.95
+
+
 def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
     )
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
-    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.0012)
+    MONTHLY_CAP = 0.0012
+    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: MONTHLY_CAP)
     monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.0006)
     # In-memory stand-in for the real atomic reserve_llm_spend/record_llm_spend
     # pair, sharing running-total state the same way the real DB row does -
@@ -1356,8 +1444,12 @@ def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeyp
     spend_state = {"total": 0.0}
     recorded_deltas = []
 
-    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
-        if spend_state["total"] + reserve_usd <= monthly_cap:
+    def _reserve_llm_spend(dsn, iid, reserve_usd):
+        # reserve_llm_spend no longer takes monthly_cap (Task 3/4 of the
+        # dollar-credit-pricing plan) - MONTHLY_CAP is captured via closure
+        # instead, same value the monthly_cap_for_installation mock above
+        # feeds into the real (untouched) upstream call site.
+        if spend_state["total"] + reserve_usd <= MONTHLY_CAP:
             spend_state["total"] += reserve_usd
             return True
         return False
@@ -1368,6 +1460,13 @@ def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeyp
 
     monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
+    # record_usage's new true-up (Task 4) additionally calls
+    # release_llm_spend_reservation for this test's negative delta - a
+    # no-op here keeps spend_state's semantics exactly as before this task
+    # (only reserve_llm_spend/record_llm_spend drive the cap-check total
+    # this test exercises; the real credit-balance columns this call would
+    # otherwise touch have their own dedicated real-DB tests).
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.insert_audit_report", lambda *a, **k: None)
 
@@ -1518,7 +1617,8 @@ def test_managed_audit_pr_job_records_each_call_and_stops_mid_run_when_cap_reach
     monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda: object())
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
-    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.0012)
+    MONTHLY_CAP = 0.0012
+    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: MONTHLY_CAP)
     monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.0006)
     monkeypatch.setattr("scan_worker.jobs._sign_and_persist_audit_report", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
@@ -1529,8 +1629,8 @@ def test_managed_audit_pr_job_records_each_call_and_stops_mid_run_when_cap_reach
     spend_state = {"total": 0.0}
     recorded_deltas = []
 
-    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
-        if spend_state["total"] + reserve_usd <= monthly_cap:
+    def _reserve_llm_spend(dsn, iid, reserve_usd):
+        if spend_state["total"] + reserve_usd <= MONTHLY_CAP:
             spend_state["total"] += reserve_usd
             return True
         return False
@@ -1541,6 +1641,9 @@ def test_managed_audit_pr_job_records_each_call_and_stops_mid_run_when_cap_reach
 
     monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
+    # See test_managed_audit_api_job_records_each_call_and_exposes_budget_stop
+    # for why this must be a no-op rather than touching spend_state.
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
 
     budget_checks = []
 
@@ -5583,9 +5686,9 @@ def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pus
         cap_check_barrier.wait(timeout=5)
         return value
 
-    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
+    def _reserve_llm_spend(dsn, iid, reserve_usd):
         with state_lock:
-            if spend_state["total"] + reserve_usd <= monthly_cap:
+            if spend_state["total"] + reserve_usd <= DEFAULT_LLM_NEXT_CALL_RESERVE_USD:
                 spend_state["total"] += reserve_usd
                 return True
             return False
@@ -6486,9 +6589,9 @@ def test_run_live_wiki_full_build_job_reserves_spend_atomically_against_concurre
         cap_check_barrier.wait(timeout=5)
         return value
 
-    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
+    def _reserve_llm_spend(dsn, iid, reserve_usd):
         with state_lock:
-            if spend_state["total"] + reserve_usd <= monthly_cap:
+            if spend_state["total"] + reserve_usd <= WIKI_FULL_BUILD_LLM_RESERVE_USD:
                 spend_state["total"] += reserve_usd
                 return True
             return False
@@ -7280,7 +7383,8 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
     # reserve amount: one reservation fits (0.10 <= 0.12), a real cost
     # below the reserve (0.06) reduces the running total afterward, then
     # a second reservation (0.06 + 0.10 = 0.16) no longer fits.
-    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.12)
+    MONTHLY_CAP = 0.12
+    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: MONTHLY_CAP)
     monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.06)
     monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: "source")
 
@@ -7306,8 +7410,8 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
     spend_state = {"total": 0.0}
     recorded_deltas = []
 
-    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
-        if spend_state["total"] + reserve_usd <= monthly_cap:
+    def _reserve_llm_spend(dsn, iid, reserve_usd):
+        if spend_state["total"] + reserve_usd <= MONTHLY_CAP:
             spend_state["total"] += reserve_usd
             return True
         return False
@@ -7318,6 +7422,10 @@ def test_run_live_docs_full_build_job_stops_midway_at_remaining_spend_budget(mon
 
     monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
+    # See test_managed_audit_api_job_records_each_call_and_exposes_budget_stop
+    # for why record_usage's new true-up call for this test's negative
+    # delta must be a no-op here rather than touching spend_state.
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     status_calls = []
     monkeypatch.setattr(
         "scan_worker.jobs.set_docs_build_status",
@@ -7667,9 +7775,9 @@ def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_
         cap_check_barrier.wait(timeout=5)
         return value
 
-    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
+    def _reserve_llm_spend(dsn, iid, reserve_usd):
         with state_lock:
-            if spend_state["total"] + reserve_usd <= monthly_cap:
+            if spend_state["total"] + reserve_usd <= DEFAULT_LLM_NEXT_CALL_RESERVE_USD:
                 spend_state["total"] += reserve_usd
                 return True
             return False
