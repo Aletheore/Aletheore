@@ -1,4 +1,6 @@
 from app_server.email_templates import (
+    credit_exhausted_email,
+    credit_low_balance_email,
     deletion_otp_email,
     health_alert_email,
     payment_failed_email,
@@ -193,3 +195,23 @@ def test_weekly_digest_email_omits_endpoint_monitoring_and_dashboard_for_flash()
     assert "Manage your subscription" in message["text"]
     assert "pricing.html" in message["text"]
     assert "$1.23" in message["text"]
+
+
+def test_credit_low_balance_email_mentions_both_balances():
+    message = credit_low_balance_email(
+        account_login="acme", plan="flash",
+        base_credit_remaining_usd=0.70, topup_credit_balance_usd=0.00,
+    )
+    assert "subject" in message and "html" in message and "text" in message
+    assert "0.70" in message["text"]
+    assert "acme" in message["text"]
+
+
+def test_credit_exhausted_email_mentions_buying_more():
+    message = credit_exhausted_email(
+        account_login="acme", plan="air",
+        base_credit_remaining_usd=0.00, topup_credit_balance_usd=0.00,
+    )
+    assert "subject" in message and "html" in message and "text" in message
+    # Must give the customer an actual next step, not just "you're out."
+    assert "credit" in message["text"].lower()

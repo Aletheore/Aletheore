@@ -366,6 +366,59 @@ def subscription_canceled_email(account_login: str, plan: str) -> dict:
     return {"subject": subject, "html": html, "text": text}
 
 
+def credit_low_balance_email(
+    account_login: str, plan: str, base_credit_remaining_usd: float, topup_credit_balance_usd: float
+) -> dict:
+    plan_name = _plan_display_name(plan)
+    combined = base_credit_remaining_usd + topup_credit_balance_usd
+    subject = f"Your Aletheore {plan_name} credit is running low"
+    preheader = f"${combined:.2f} remaining this cycle."
+    text = (
+        f"Hi {account_login},\n\n"
+        f"Your Aletheore {plan_name} plan has ${combined:.2f} of AI credit left "
+        f"this billing cycle (${base_credit_remaining_usd:.2f} included, "
+        f"${topup_credit_balance_usd:.2f} from purchased top-ups). "
+        "Once it runs out, automatic PR reviews and other AI-powered features "
+        "will pause until your next renewal or you buy more.\n\n"
+        "Buy more credit any time from your dashboard - it never expires."
+    )
+    html = _shell(
+        preheader,
+        f"<p>Your Aletheore {plan_name} plan has <strong>${combined:.2f}</strong> of AI credit "
+        "left this billing cycle.</p>"
+        f"<p>${base_credit_remaining_usd:.2f} included, ${topup_credit_balance_usd:.2f} from "
+        "purchased top-ups.</p>"
+        "<p>Once it runs out, automatic PR reviews and other AI-powered features will pause "
+        "until your next renewal or you buy more.</p>"
+        + _button("Buy more credit", "https://app.aletheore.com/"),
+    )
+    return {"subject": subject, "html": html, "text": text}
+
+
+def credit_exhausted_email(
+    account_login: str, plan: str, base_credit_remaining_usd: float, topup_credit_balance_usd: float
+) -> dict:
+    plan_name = _plan_display_name(plan)
+    subject = f"Your Aletheore {plan_name} credit has run out"
+    preheader = "AI-powered features are paused until you buy more credit or your plan renews."
+    text = (
+        f"Hi {account_login},\n\n"
+        f"Your Aletheore {plan_name} plan has run out of AI credit for this billing cycle. "
+        "Automatic PR reviews and other AI-powered features are paused - deterministic "
+        "scanning and everything in Community continues to work normally.\n\n"
+        "Buy more credit any time to resume immediately, or wait for your next renewal "
+        "when your included credit refreshes."
+    )
+    html = _shell(
+        preheader,
+        f"<p>Your Aletheore {plan_name} plan has run out of AI credit for this billing cycle.</p>"
+        "<p>Automatic PR reviews and other AI-powered features are paused - deterministic "
+        "scanning and everything in Community continues to work normally.</p>"
+        + _button("Buy more credit", "https://app.aletheore.com/"),
+    )
+    return {"subject": subject, "html": html, "text": text}
+
+
 def health_alert_email(alert_text: str) -> dict:
     # alert_text is exactly what scan_worker/slack.py's format_reachability_alert/
     # format_latency_alert/format_shape_change_alert already built for
