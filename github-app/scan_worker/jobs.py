@@ -42,7 +42,12 @@ from app_server.dismissed_findings import filter_dismissed, finding_identity_key
 from app_server.error_alerts import send_error_alert
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.http_client import get_github_api_client
-from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation
+from app_server.llm_cost import (
+    base_cap_for_plan,
+    base_credit_for_plan,
+    cost_for_usage,
+    monthly_cap_for_installation,
+)
 from app_server.logging_config import log_job
 from app_server.redis_client import get_redis_client
 from app_server.rate_limit import (
@@ -3929,7 +3934,8 @@ def reserve_llm_spend_with_email_hooks(
     existing tests as a minimal {"plan": ...} dict (no account_login/
     alert_email/balance_epoch/credit columns) for tests that predate this
     email feature and don't care about it - this wrapper must not KeyError
-    for any of those.
+    for any of those. get_extra_seats (used for the low-balance threshold
+    below) is mocked in the same tests for the same reason.
 
     The enqueue_transactional_email call itself is wrapped in try/except,
     same reasoning _send_alerts_if_configured already documents for its
@@ -3955,17 +3961,29 @@ def reserve_llm_spend_with_email_hooks(
     after_total = float(after_row.get("base_credit_remaining_usd", 0)) + float(
         after_row.get("topup_credit_balance_usd", 0)
     )
-    # This installation's own high-water mark is whatever the combined
-    # balance was immediately after its most recent renewal reset or
-    # top-up (both of those set balance_epoch and, transitively, the
-    # totals this check compares against) - approximated here as
-    # before_total when no reservation has yet been made this epoch. A
-    # precise high-water-mark value isn't separately stored; using
-    # before_total on the FIRST reservation of an epoch is exact, and is
-    # a conservative (slightly-late-to-fire, since a later reservation's
-    # before_total is already lower than the true high-water mark)
-    # trigger on later reservations within the same epoch.
-    threshold = before_total * LOW_BALANCE_WARNING_FRACTION
+    # Compared against the plan's real base allotment, NOT against
+    # before_total. before_total was a high-water-mark approximation, and
+    # since after_total is always exactly before_total - reserve_usd, that
+    # version could only ever fire when a SINGLE reservation consumed >=85%
+    # of whatever was left. For AIRview/Docs, whose reservations are
+    # $0.001-$0.10, that means it essentially never fired until the balance
+    # was already gone - the "low balance" and "exhausted" emails arrived
+    # together, with zero advance warning, which is the opposite of what a
+    # low-balance warning is for.
+    #
+    # base_credit_for_plan is the known, real, current allotment for this
+    # plan and seat count, recomputed per call (cheap - one small indexed
+    # read for extra_seats). Against a fixed reference the edge-trigger
+    # works as intended: it fires exactly once, on whichever reservation
+    # takes the combined balance across 15% of the allotment, regardless of
+    # how small that reservation is. A precise "balance at last reset/top-up"
+    # high-water mark isn't stored anywhere, and adding a column for it is a
+    # larger change than this; the plan allotment is the right reference
+    # anyway, since that IS what a renewal resets the balance to.
+    plan_allotment = base_credit_for_plan(
+        row.get("plan", ""), get_extra_seats(dsn, installation_id)
+    )
+    threshold = plan_allotment * LOW_BALANCE_WARNING_FRACTION
     if after_total <= threshold and before_total > threshold:
         _enqueue_credit_balance_email("credit_low_balance", installation_id, after_row)
     return True

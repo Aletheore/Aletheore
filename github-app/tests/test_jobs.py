@@ -1454,10 +1454,8 @@ async def test_reserve_llm_spend_low_balance_triggers_email_enqueue(pool, monkey
     )
     installation_id = 9300
     # balance_epoch=1, starting balance 5.00 - the real base_credit_for_plan
-    # ("flash") value, i.e. this row is at the start of its epoch, so
-    # before_total genuinely IS this epoch's high-water mark (matches
-    # reserve_llm_spend_with_email_hooks's own "before_total on the FIRST
-    # reservation of an epoch is exact" reasoning - see its docstring).
+    # ("flash", 0) value, which is also the reference the threshold is
+    # computed against (see reserve_llm_spend_with_email_hooks).
     # 15% of 5.00 is 0.75; reserving 4.30 leaves 0.70, crossing it.
     await _insert_installation(
         pool, installation_id, "a", plan="flash",
@@ -1479,6 +1477,85 @@ async def test_reserve_llm_spend_low_balance_triggers_email_enqueue(pool, monkey
         "base_credit_remaining_usd": pytest.approx(0.70),
         "topup_credit_balance_usd": pytest.approx(0.00),
     }
+
+
+@pytest.mark.asyncio
+async def test_low_balance_email_fires_on_a_small_reservation_crossing_the_threshold(
+    pool, monkeypatch
+):
+    # I1 of the final-review fix wave: the threshold used to be
+    # before_total * LOW_BALANCE_WARNING_FRACTION. Since after_total is
+    # always exactly before_total - reserve_usd, that could only ever fire
+    # when a SINGLE reservation ate >=85% of the remaining balance - so for
+    # AIRview/Docs' $0.001-$0.10 reservations it never fired until the
+    # balance was already gone, and the low-balance and exhausted emails
+    # arrived together. The threshold is now a fixed fraction of the plan's
+    # real base allotment (base_credit_for_plan), so a small reservation
+    # that happens to cross it triggers the warning.
+    #
+    # flash allotment: 5.00, so the threshold is 0.75. Starting at 0.80 and
+    # reserving a tiny 0.10 leaves 0.70 - a real crossing. Under the old
+    # before_total approximation the threshold here would have been
+    # 0.80 * 0.15 = 0.12, and 0.70 > 0.12, so no email would have been sent.
+    enqueued = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **kw: enqueued.append((a, kw)),
+    )
+    installation_id = 9302
+    await _insert_installation(
+        pool, installation_id, "a", plan="flash",
+        base_credit_remaining_usd=0.80, topup_credit_balance_usd=0.00, balance_epoch=3,
+    )
+
+    result = reserve_llm_spend_with_email_hooks(
+        TEST_DATABASE_URL, installation_id, reserve_usd=0.10, feature="airview_full_build",
+    )
+
+    assert result is True
+    assert len(enqueued) == 1
+    _, kwargs = enqueued[0]
+    assert kwargs["template_name"] == "credit_low_balance"
+    assert kwargs["dedupe_key"] == f"credit_low_balance:{installation_id}:3"
+
+    # Edge-triggered, not level-triggered: a second small reservation once
+    # already under the threshold must not enqueue a second warning. (The
+    # sent_emails/dedupe_key mechanism would also suppress a duplicate
+    # downstream, but this check is about the trigger itself.)
+    assert (
+        reserve_llm_spend_with_email_hooks(
+            TEST_DATABASE_URL, installation_id, reserve_usd=0.10, feature="airview_full_build",
+        )
+        is True
+    )
+    assert len(enqueued) == 1
+
+
+@pytest.mark.asyncio
+async def test_low_balance_threshold_scales_with_purchased_extra_seats(pool, monkeypatch):
+    # The reference is base_credit_for_plan(plan, extra_seats), not the bare
+    # plan constant - an AIR team with 2 extra seats has an 18.00 + 2*3.00 =
+    # 24.00 allotment, so its 15% threshold is 3.60, not 2.70.
+    enqueued = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **kw: enqueued.append((a, kw)),
+    )
+    installation_id = 9303
+    await _insert_installation(
+        pool, installation_id, "a", plan="air", extra_seats=2,
+        base_credit_remaining_usd=3.70, topup_credit_balance_usd=0.00, balance_epoch=1,
+    )
+
+    # 3.70 -> 3.55 crosses 3.60 (the seat-inclusive threshold) but not 2.70
+    # (what the threshold would be if extra_seats were ignored).
+    result = reserve_llm_spend_with_email_hooks(
+        TEST_DATABASE_URL, installation_id, reserve_usd=0.15, feature="airview_full_build",
+    )
+
+    assert result is True
+    assert len(enqueued) == 1
+    assert enqueued[0][1]["template_name"] == "credit_low_balance"
 
 
 @pytest.mark.asyncio
