@@ -289,7 +289,22 @@ def _patch_fix_suggestion_spend_gate(monkeypatch, plan: str = "air") -> None:
     # below still gets its cap-reached behavior from get_llm_spend_this_month,
     # since _llm_spend_cap_reached's fast-fail hint runs before reserve_llm_spend
     # is ever attempted.
-    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": plan})
+    # Task 7 of the dollar-credit-pricing plan made _fix_suggestion_
+    # attachment compute this installation's combined credit balance
+    # straight off this row (base_credit_remaining_usd +
+    # topup_credit_balance_usd, both via .get(key, 0)) and refuse the LLM
+    # call when it's zero. A bare {"plan": plan} therefore reads as a $0
+    # balance and silently short-circuits every test using this helper -
+    # give it a real positive balance, matching the ~20 equivalent mocks
+    # already fixed the same way in test_jobs.py.
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {
+            "plan": plan,
+            "base_credit_remaining_usd": 10.0,
+            "topup_credit_balance_usd": 0.0,
+        },
+    )
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
@@ -312,7 +327,18 @@ def test_fix_suggestion_attachment_returns_none_when_file_content_unavailable(mo
 def test_fix_suggestion_attachment_skips_the_llm_call_when_spend_cap_reached(monkeypatch):
     monkeypatch.setattr("scan_worker.jobs.get_settings", lambda: FakeHealthSettings())
     _patch_fix_suggestion_spend_gate(monkeypatch)
-    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 999.0)
+    # An exhausted balance is what blocks the call now, not a
+    # get_llm_spend_this_month total over a flat cap (Task 7 of the
+    # dollar-credit-pricing plan retired that comparison entirely) - this
+    # overrides the helper's own healthy-balance row above.
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row",
+        lambda *a, **k: {
+            "plan": "air",
+            "base_credit_remaining_usd": 0.0,
+            "topup_credit_balance_usd": 0.0,
+        },
+    )
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "jwt")
     monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "token")
     llm_called = []
