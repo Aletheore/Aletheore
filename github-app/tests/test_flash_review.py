@@ -2606,6 +2606,174 @@ def test_semantic_checker_does_not_flag_an_except_body_with_more_than_pass():
     assert findings == []
 
 
+def test_semantic_checker_finds_a_weakened_body_under_an_unchanged_except_header():
+    """Real bug found via audit, previously identified but never fixed:
+    commit bad16b7's own message documented this as a second real finding
+    from the same review, explicitly "tracked separately" and never
+    implemented. The main swallow check only ever looked for the `except`
+    line itself inside the diff's added lines - a PR that replaces an
+    EXISTING except block's real handling with a bare `pass`, without
+    touching the except line's own text (a common refactor shape - an
+    IDE-assisted edit, or a partial revert), was invisible to it entirely,
+    since the diff hunk parser never records unchanged context lines."""
+    source = (
+        "def do_thing():\n"
+        "    try:\n"
+        "        risky_call()\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    return None\n"
+    )
+    diff = (
+        "--- app.py ---\n"
+        "@@ -1,6 +1,5 @@\n"
+        " def do_thing():\n"
+        "     try:\n"
+        "         risky_call()\n"
+        "     except Exception:\n"
+        '-        logger.warning("risky_call failed: %s", exc)\n'
+        "+        pass\n"
+        "     return None\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"app.py": source}, "")
+
+    assert len(findings) == 1
+    assert "bare `pass`" in findings[0]["issue"]
+    assert findings[0]["line"] == 4
+
+
+def test_semantic_checker_does_not_flag_an_unchanged_except_already_pass():
+    """An except block that was ALREADY `pass` before this hunk, with only
+    unrelated surrounding code changing nearby, must not be flagged -
+    nothing about the except block's own handling actually changed."""
+    source = (
+        "def do_thing():\n"
+        "    try:\n"
+        "        risky_call()\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    return None\n"
+    )
+    diff = (
+        "--- app.py ---\n"
+        "@@ -1,6 +1,6 @@\n"
+        " def do_thing():\n"
+        "     try:\n"
+        "-        risky_call()\n"
+        "+        risky_call(retry=True)\n"
+        "     except Exception:\n"
+        "         pass\n"
+        "     return None\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"app.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_an_unchanged_except_body_kept_real_handling():
+    """A hunk that removes and re-adds the SAME real handling (e.g. a
+    reformat) under an unchanged except header must not be flagged - the
+    hunk's own added content isn't a bare pass."""
+    source = (
+        "def do_thing():\n"
+        "    try:\n"
+        "        risky_call()\n"
+        "    except Exception:\n"
+        "        logger.warning('risky_call failed')\n"
+        "    return None\n"
+    )
+    diff = (
+        "--- app.py ---\n"
+        "@@ -1,6 +1,6 @@\n"
+        " def do_thing():\n"
+        "     try:\n"
+        "         risky_call()\n"
+        "     except Exception:\n"
+        "-        logger.warning(\"risky_call failed\")\n"
+        "+        logger.warning('risky_call failed')\n"
+        "     return None\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"app.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_an_untouched_except_when_an_unrelated_hunk_change_reduces_to_pass():
+    """Real Flash Review finding on the fix above: gating on the WHOLE
+    hunk's added/removed content doesn't prove the removed content
+    actually belonged to the except block a match happened to find
+    nearby. Here an unrelated if-branch (not exception handling at all)
+    has its real body replaced with `pass` in the same hunk as a
+    genuinely untouched except block that already legitimately contained
+    `pass` - the untouched except block must not be misattributed the
+    unrelated change and falsely flagged."""
+    source = (
+        "def do_thing():\n"
+        "    if condition:\n"
+        "        pass\n"
+        "    try:\n"
+        "        risky_call()\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    return None\n"
+    )
+    diff = (
+        "--- app.py ---\n"
+        "@@ -1,9 +1,8 @@\n"
+        " def do_thing():\n"
+        "     if condition:\n"
+        "-        real_stuff()\n"
+        "-        more_stuff()\n"
+        "+        pass\n"
+        "     try:\n"
+        "         risky_call()\n"
+        "     except Exception:\n"
+        "         pass\n"
+        "     return None\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"app.py": source}, "")
+
+    assert findings == []
+
+
+def test_semantic_checker_does_not_flag_a_partial_body_replacement_when_the_rest_falls_outside_the_hunk():
+    """Real Flash Review finding on the fix above: the check assumed
+    new_body was complete once hunk.raw_body ran out, but a unified
+    diff's hunk only shows a window of context around each real change -
+    real, unchanged handling that continues past that window is invisible
+    to it. Here only the FIRST statement of a two-statement except body
+    was replaced with `pass`; the second statement (`raise`) is real,
+    unchanged handling that simply isn't inside this hunk at all - the
+    block was never actually reduced to bare `pass`."""
+    source = (
+        "def do_thing():\n"
+        "    try:\n"
+        "        risky_call()\n"
+        "    except Exception:\n"
+        "        logger.warning(\"risky_call failed\")\n"
+        "        raise\n"
+        "    return None\n"
+    )
+    diff = (
+        "--- app.py ---\n"
+        "@@ -1,5 +1,5 @@\n"
+        " def do_thing():\n"
+        "     try:\n"
+        "         risky_call()\n"
+        "     except Exception:\n"
+        '-        logger.warning("risky_call failed")\n'
+        "+        pass\n"
+    )
+
+    findings = find_semantic_regressions(diff, {"app.py": source}, "")
+
+    assert findings == []
+
+
 def test_semantic_checker_finds_os_system_shell_injection():
     """Real shape: os.system always runs through a shell - concatenating a
     caller-influenced value directly into the command is a classic
