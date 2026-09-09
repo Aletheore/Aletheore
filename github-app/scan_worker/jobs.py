@@ -4255,9 +4255,28 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
     }
     cluster_ids = _clusters_with_uncovered_wiki_work(evidence, covered_cluster_ids, MAX_WIKI_FULL_BUILD_CLUSTERS)
     if not cluster_ids:
-        # Nothing new to do - a prior run (or the catch-up sweep) already
-        # covers every cluster current evidence calls for. Still a real
-        # "ready" outcome, not a no-op to be silent about.
+        # Real gap found via audit: _clusters_with_uncovered_wiki_work only
+        # looks at clusters CURRENTLY in evidence, so a stored subsystem
+        # whose cluster was deleted from the repo entirely is invisible to
+        # it - "nothing new to do" isn't the same as "nothing to prune".
+        # _store_wiki_subsystem_records is the only place
+        # delete_wiki_subsystems_not_in ever runs; without this, once a
+        # repo reaches steady-state coverage, nothing ever calls it again,
+        # so a deleted subsystem's stale wiki page (description, Mermaid
+        # diagram, file references naming files that no longer exist)
+        # would survive on the AIRview page forever, unless some unrelated
+        # new cluster happens to appear elsewhere in the same repo and
+        # incidentally triggers a store call. fresh_records=[] below costs
+        # no LLM call - it only runs the prune half.
+        current_cluster_ids = {
+            str(c["id"]) for c in evidence.get("architecture", {}).get("clusters", [])
+        }
+        if covered_cluster_ids - current_cluster_ids:
+            with wiki_write_lock(dsn, installation_id, repo_full_name):
+                _store_wiki_subsystem_records(dsn, installation_id, repo_full_name, evidence, [], None)
+        # Nothing new to generate - a prior run (or the catch-up sweep)
+        # already covers every cluster current evidence calls for. Still a
+        # real "ready" outcome, not a no-op to be silent about.
         set_wiki_build_status(dsn, installation_id, repo_full_name, "ready")
         return
 
