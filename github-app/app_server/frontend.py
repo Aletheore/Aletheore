@@ -2331,14 +2331,23 @@ async function loadSettings() {{
   // is the first place a customer actually sees what their AI review
   // usage is costing/producing, previously invisible to them.
   const llmSpend = data.llm_spend_month_to_date || 0;
-  const llmCap = data.llm_spend_cap || 0;
+  // Despite the key name, this is now the installation's REMAINING credit
+  // balance, not a fixed cap - admin.py keeps the old "llm_spend_cap" key
+  // only to avoid a lockstep API/JS rename (see its own comment). So it
+  // shrinks as llmSpend grows: rendering "$X of $Y spend cap used (Z%)"
+  // divided a rising number by a falling one, which made both the sentence
+  // and the percentage nonsense (at exhaustion: "$4.98 of $0.00 spend cap
+  // used (0%)"). Stated as two independent facts instead, with no
+  // percentage-of-a-shrinking-denominator. A proper redesign of this panel
+  // belongs to the parallel dashboard plan; this is the minimum change that
+  // stops it asserting something false in the meantime.
+  const llmCreditRemaining = data.llm_spend_cap || 0;
   const flashReviews = data.flash_reviews_month_to_date || 0;
-  const spendPct = llmCap > 0 ? Math.min(100, Math.round((llmSpend / llmCap) * 100)) : 0;
   const usageHtml =
     '<div class="settings-block">' +
       '<div class="settings-block-label">AI usage this month</div>' +
       '<div class="settings-block-hint">' + flashReviews + ' automated PR review' + (flashReviews === 1 ? '' : 's') + '</div>' +
-      '<div class="settings-block-hint">$' + llmSpend.toFixed(2) + ' of $' + llmCap.toFixed(2) + ' spend cap used (' + spendPct + '%)</div>' +
+      '<div class="settings-block-hint">$' + llmSpend.toFixed(2) + ' spent this month, $' + llmCreditRemaining.toFixed(2) + ' credit remaining</div>' +
     '</div>';
 
   const seatBillingHtml = window._hasActiveSubscription
