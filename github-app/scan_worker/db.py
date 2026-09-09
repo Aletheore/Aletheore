@@ -283,6 +283,7 @@ def record_llm_spend(
     cost_usd: float,
     monthly_cap: float | None = None,
     feature: str = "unknown",
+    ledger_cost_usd: float | None = None,
 ) -> None:
     """monthly_cap: when given, logs a one-time warning if this call is the
     one that pushes the installation's spend this month past
@@ -296,7 +297,20 @@ def record_llm_spend(
     without this logged breakdown there is no way to later reconstruct
     which feature is actually driving an installation's spend. Every
     caller should pass a real label; "unknown" exists only so this doesn't
-    hard-fail if a future call site forgets to set it."""
+    hard-fail if a future call site forgets to set it.
+
+    ledger_cost_usd: the real total cost to attribute to `feature`, when it
+    differs from `cost_usd`. reserve_llm_spend's true-up callers pass
+    `real_cost - reserve_usd` as `cost_usd` (the aggregate delta, correct
+    for llm_spend's running total) - real found via audit: ledgering that
+    same delta into llm_spend_events silently drops the event whenever real
+    cost is at or under the reservation (delta <= 0, the common case per
+    reserve_llm_spend's own docstring), and under-reports by the reservation
+    amount otherwise, even though the delta can be a real, nonzero cost.
+    Pass the real total here so the per-feature breakdown doesn't collapse
+    to zero or under-count; omit it for a call that was never preceded by a
+    reservation (the two already coincide there: no reservation, no
+    discrepancy)."""
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -316,20 +330,21 @@ def record_llm_spend(
             # was ever attached to a cost, which doesn't survive a
             # container restart (every deploy wipes it). Same transaction
             # as the aggregate update, so the two can never disagree.
-            if cost_usd > 0:
+            ledger_amount = cost_usd if ledger_cost_usd is None else ledger_cost_usd
+            if ledger_amount > 0:
                 cur.execute(
                     """
                     INSERT INTO llm_spend_events (installation_id, feature, cost_usd)
                     VALUES (%s, %s, %s)
                     """,
-                    (installation_id, feature, cost_usd),
+                    (installation_id, feature, ledger_amount),
                 )
         conn.commit()
 
-    if cost_usd > 0:
+    if ledger_amount > 0:
         logger.info(
             "llm_spend: installation=%s feature=%s cost_usd=%.4f",
-            installation_id, feature, cost_usd,
+            installation_id, feature, ledger_amount,
         )
 
     if monthly_cap is not None and row is not None:

@@ -310,6 +310,256 @@ def test_ensure_persistent_checkout_strips_credentials_on_reuse_path_too(tmp_pat
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
 
 
+def test_clone_ref_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
+    # Real gap found via audit: _clone_ref's own docstring assumption
+    # ("deleted with the whole job_dir within minutes" - see
+    # _ensure_persistent_checkout's docstring, which contrasts against
+    # this function by name) only holds on a clean return or a Python
+    # exception, both of which run the caller job's own try/finally
+    # job_dir cleanup. A hard process kill (this file's own _run_scan
+    # comment documents real OOM kills on large repos) skips that
+    # entirely and falls back to run_job_temp_dir_cleanup_job's periodic
+    # sweep, which only reaps a job_dir after JOB_TEMP_DIR_MAX_AGE_SECONDS
+    # (6 hours) - not "minutes". Nothing after this function ever needs to
+    # fetch against origin again, so the live token has no reason to still
+    # be on disk once the checkout is done.
+    from scan_worker.jobs import _clone_ref
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "ephemeral"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    _clone_ref(credentialed_url, "somesha", dest)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls, "expected a 'git remote set-url' call scrubbing the clone"
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+    assert "livetoken" not in set_url_calls[-1][-1]
+
+
+def test_clone_ref_scrubs_the_token_even_when_checkout_fails(tmp_path, monkeypatch):
+    # Proves the scrub runs from a finally block, not just after a
+    # successful checkout - a failed checkout must not leave the
+    # credentialed .git/config behind for run_job_temp_dir_cleanup_job's
+    # 6-hour sweep to be the only thing standing between a live token and
+    # disk.
+    from scan_worker.jobs import _clone_ref
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            return subprocess.CompletedProcess(args, 0)
+        if args[:2] == ["git", "checkout"]:
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "ephemeral-fail"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_ref(credentialed_url, "badsha", dest)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls, "expected the scrub to still run in a finally block"
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+
+
+def test_clone_ref_scrubs_the_token_even_when_the_clone_itself_is_interrupted(tmp_path, monkeypatch):
+    # Real Flash Review finding on the first version of this fix: the
+    # clone call sat before the try, so an interruption DURING the clone
+    # (e.g. an RQ job timeout - not a raw OOM SIGKILL, which no
+    # try/finally placement can survive regardless of where it sits)
+    # skipped the scrub entirely, even though the clone had already
+    # written the credentialed URL into .git/config by the time it was
+    # interrupted.
+    from scan_worker.jobs import _clone_ref
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            # git writes .git/config with the credentialed remote before
+            # the clone finishes populating the working tree - simulate
+            # an interruption after that point.
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "ephemeral-clone-interrupted"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_ref(credentialed_url, "somesha", dest)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls, "expected the scrub to still run even though the clone itself was interrupted"
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+
+
+def test_clone_ref_does_not_attempt_a_scrub_when_the_clone_never_created_a_git_dir(tmp_path, monkeypatch):
+    # The other half: a clone interrupted before git ever created .git at
+    # all (e.g. a DNS failure) must not attempt a `git remote set-url`
+    # against a directory that has no repo in it.
+    from scan_worker.jobs import _clone_ref
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "ephemeral-never-cloned"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_ref(credentialed_url, "somesha", dest)
+
+    assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
+
+
+def test_clone_pr_head_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
+    # Same real gap as _clone_ref above, for the PR-head clone path (used
+    # by run_managed_audit_pr_job).
+    from scan_worker.jobs import _clone_pr_head
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "pr-head"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    _clone_pr_head(credentialed_url, 42, dest)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls, "expected a 'git remote set-url' call scrubbing the clone"
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+    assert "livetoken" not in set_url_calls[-1][-1]
+
+
+def test_clone_pr_head_scrubs_the_token_even_when_the_clone_itself_is_interrupted(tmp_path, monkeypatch):
+    # Same Flash Review finding as _clone_ref's identical test above.
+    from scan_worker.jobs import _clone_pr_head
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "pr-head-clone-interrupted"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_pr_head(credentialed_url, 42, dest)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls, "expected the scrub to still run even though the clone itself was interrupted"
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+
+
+def test_clone_pr_head_does_not_attempt_a_scrub_when_the_clone_never_created_a_git_dir(
+    tmp_path, monkeypatch
+):
+    from scan_worker.jobs import _clone_pr_head
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "pr-head-never-cloned"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_pr_head(credentialed_url, 42, dest)
+
+    assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
+
+
+def test_incremental_spend_budget_record_usage_ledgers_the_real_cost_not_the_delta(monkeypatch):
+    # Real gap found via audit: record_usage passed the true-up delta
+    # (cost - next_call_reserve_usd) as both the aggregate update AND the
+    # per-feature ledger amount - correct for the former, wrong for the
+    # latter, the same class of bug as run_flash_review_job's own
+    # dollar-cap true-up (see record_llm_spend's ledger_cost_usd).
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_llm_spend",
+        lambda dsn, iid, delta, **k: calls.append((delta, k)),
+    )
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.03)
+
+    budget = _IncrementalSpendBudget(
+        "dsn", 1, "model", monthly_cap=5.0, next_call_reserve_usd=0.05, feature="airview_full_build",
+    )
+    budget.record_usage(prompt_tokens=100, completion_tokens=50)
+
+    assert len(calls) == 1
+    delta, kwargs = calls[0]
+    assert delta == pytest.approx(0.03 - 0.05)
+    assert kwargs["ledger_cost_usd"] == pytest.approx(0.03)
+    assert kwargs["feature"] == "airview_full_build"
+
+
+def test_incremental_spend_budget_record_usage_still_ledgers_when_cost_exactly_matches_reservation(
+    monkeypatch,
+):
+    # Before this fix, delta == 0 short-circuited with an early return,
+    # silently skipping the ledger event entirely even though a real,
+    # nonzero cost was spent - it just happened to equal the reservation.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_llm_spend",
+        lambda dsn, iid, delta, **k: calls.append((delta, k)),
+    )
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.05)
+
+    budget = _IncrementalSpendBudget(
+        "dsn", 1, "model", monthly_cap=5.0, next_call_reserve_usd=0.05, feature="docs_incremental",
+    )
+    budget.record_usage(prompt_tokens=100, completion_tokens=50)
+
+    assert len(calls) == 1
+    delta, kwargs = calls[0]
+    assert delta == 0
+    assert kwargs["ledger_cost_usd"] == pytest.approx(0.05)
+
+
 def test_run_pr_scan_job_uses_persistent_checkout_and_unchanged_cache_for_head(
     bare_repo_with_two_commits, monkeypatch
 ):
