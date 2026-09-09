@@ -3221,6 +3221,51 @@ def test_flash_review_job_posts_failure_comment_instead_of_raising(monkeypatch):
     assert "GitHub API timed out" in posted["body"]
 
 
+def test_flash_review_job_logs_when_it_cannot_even_post_the_failure_comment(monkeypatch, caplog):
+    # Real gap found via audit: this inner except was a bare `pass` with no
+    # logging at all - unlike _try_post_failure_comment (used by
+    # run_pr_scan_job/run_managed_audit_api_job for the identical
+    # situation), which logs a warning when the failure comment itself
+    # fails to post. An ops issue in this specific path (e.g. token
+    # expiry, a GitHub API auth failure) was invisible until a customer
+    # complained.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+
+    def _raise_diff_fetch(*a, **k):
+        raise RuntimeError("GitHub API timed out")
+
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", _raise_diff_fetch)
+
+    def _raise_on_comment(*a, **k):
+        raise RuntimeError("installation token expired")
+
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", _raise_on_comment)
+
+    from scan_worker.jobs import run_flash_review_job
+
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert any(
+        "flash review failed to post failure comment" in record.message
+        and "installation token expired" in record.message
+        for record in caplog.records
+    )
+
+
 def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkeypatch):
     # Real hallucination this exists to prevent: Flash Review claimed an
     # imported function needed `await`, citing "usage in admin.py", when
@@ -4118,6 +4163,50 @@ def test_send_alerts_if_configured_isolates_a_slack_failure_from_other_channels(
     )
 
     assert len(email_sent) == 1
+    assert len(pushover_sent) == 1
+
+
+def test_send_alerts_if_configured_isolates_an_email_failure_from_pushover(monkeypatch):
+    # Real bug found via audit, the same class as the Slack isolation test
+    # above but for the email branch: unlike Slack/Teams and Pushover,
+    # enqueue_transactional_email's call was unguarded -
+    # get_redis_client()/Queue(...).enqueue(...) can both raise (a
+    # transient Redis blip is not hypothetical), and that exception
+    # propagated out of this function entirely, skipping Pushover below
+    # even when it's configured and healthy.
+    from app_server.config import get_settings
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("PUSHOVER_API_TOKEN", "server-app-token")
+    get_settings.cache_clear()
+
+    slack_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_health_alert", lambda *a, **k: slack_sent.append(a)
+    )
+
+    def failing_enqueue(*a, **k):
+        raise RuntimeError("redis connection refused")
+
+    monkeypatch.setattr("scan_worker.jobs.enqueue_transactional_email", failing_enqueue)
+    pushover_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_pushover_alert", lambda *a, **k: pushover_sent.append(a)
+    )
+
+    _send_alerts_if_configured(
+        {
+            "installation_id": 1,
+            "target_id": 900,
+            "webhook_url": "https://slack.example.com/webhook",
+            "alert_email": "ops@example.com",
+            "pushover_user_key": "u" * 30,
+        },
+        {"text": "down"},
+    )
+
+    assert len(slack_sent) == 1
     assert len(pushover_sent) == 1
 
 

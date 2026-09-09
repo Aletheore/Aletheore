@@ -1772,8 +1772,23 @@ def run_flash_review_job(
             _post_flash_review_failure_comment(
                 settings, installation_id, repo_full_name, pr_number, exc
             )
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as comment_exc:  # noqa: BLE001
+            # Real gap found via audit: this was a bare `pass` with no
+            # logging at all, unlike _try_post_failure_comment (used by
+            # run_pr_scan_job/run_managed_audit_api_job for the identical
+            # situation), which logs a warning when the failure comment
+            # itself fails to post. Flash Review was the one job whose
+            # "couldn't even tell the customer it failed" case left zero
+            # trace anywhere - an ops issue in this specific path (e.g.
+            # token expiry, a GitHub API auth failure) would be invisible
+            # until a customer complained.
+            logging.getLogger("scan_worker.jobs").warning(
+                "flash review failed to post failure comment for installation=%s repo=%s pr=%s (%s)",
+                installation_id,
+                repo_full_name,
+                pr_number,
+                comment_exc,
+            )
     finally:
         # A reservation that never became a real review (every free-tier
         # provider failed, no provider keys configured, or an unrelated
@@ -2419,14 +2434,29 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
     if alert_email:
         settings = get_settings()
         target_id = installation.get("target_id")
-        enqueue_transactional_email(
-            settings.redis_url,
-            dedupe_key=f"health_alert:{target_id}:{int(time.time())}",
-            template_name="health_alert",
-            template_arg=message["text"],
-            to_email=alert_email,
-            installation_id=installation.get("installation_id"),
-        )
+        # Real gap found via audit: unlike the Slack/Teams and Pushover
+        # branches, this call was unguarded - enqueue_transactional_email
+        # calls get_redis_client() then Queue(...).enqueue(...), both of
+        # which can raise (a transient Redis blip is not hypothetical).
+        # An unhandled exception here propagated out of this function
+        # entirely, skipping Pushover below even when it's configured and
+        # healthy - exactly the "one channel's failure takes down the
+        # others" bug this docstring already documents fixing for the
+        # other two channels, just not for email.
+        try:
+            enqueue_transactional_email(
+                settings.redis_url,
+                dedupe_key=f"health_alert:{target_id}:{int(time.time())}",
+                template_name="health_alert",
+                template_arg=message["text"],
+                to_email=alert_email,
+                installation_id=installation.get("installation_id"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("scan_worker.jobs").warning(
+                "email alert failed for installation=%s (%s)",
+                installation.get("installation_id"), exc,
+            )
 
     pushover_user_key = installation.get("pushover_user_key")
     if pushover_user_key:
