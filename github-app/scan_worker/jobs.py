@@ -2252,8 +2252,22 @@ def _run_flash_review(
     # record_llm_spend's own UPSERT is already atomic per call, and it was
     # only ever paired with the (now-removed) count increment for the
     # illusion of atomicity, not because either write needed one on its own.
+    #
+    # True up the real credit balance too, not just the llm_spend accounting
+    # table below - exactly the same reasoning (and the same primitives) as
+    # _IncrementalSpendBudget.record_usage. run_flash_review_job reserved a
+    # flat FLASH_REVIEW_SPEND_RESERVE_USD ($0.50) estimate; a real review
+    # costs a fraction of a cent of that, so without this the balance drops
+    # by the flat reserve per review instead of the real cost - a $5.00
+    # flash base credit would buy ~10 reviews rather than the ~1,000 the
+    # pricing is justified by.
+    delta = spend_accumulator["total"] - reserved_spend
+    if delta > 0:
+        reserve_llm_spend(settings.database_url, installation_id, delta)
+    elif delta < 0:
+        release_llm_spend_reservation(settings.database_url, installation_id, -delta)
     record_llm_spend(
-        settings.database_url, installation_id, spend_accumulator["total"] - reserved_spend,
+        settings.database_url, installation_id, delta,
         feature="flash_review",
     )
 
