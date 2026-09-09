@@ -110,6 +110,51 @@ def test_failed_job_raises_managed_audit_error():
         run_managed_audit_request({"scanned_at": "x"}, "real-token", http_client=client, poll_interval=0)
 
 
+def test_successful_request_appends_the_verify_link_when_a_verification_token_is_returned():
+    # Real bug found via audit: the server signs the report and persists
+    # a verification_token whenever signing succeeds (see jobs.py's
+    # run_managed_audit_api_job / get_managed_audit_status), but this
+    # function used to return only body["result"] - the CLI user got the
+    # raw report text with no indication the report is a cryptographically
+    # signed, independently verifiable certificate, or where to verify it.
+    # Matches the identical "[Verify this report](url)" convention the
+    # PR-comment path (run_managed_audit_pr_job) already uses on success.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(202, json={"job_id": "job-1"})
+        return httpx.Response(
+            200,
+            json={"status": "finished", "result": "# Report", "verification_token": "abc123"},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://aletheore.com")
+    report = run_managed_audit_request(
+        {"scanned_at": "x"}, "real-token", api_base_url="https://aletheore.com",
+        http_client=client, poll_interval=0,
+    )
+
+    assert report == (
+        "# Report\n\n[Verify this report](https://aletheore.com/v1/audit/abc123/verify)"
+    )
+
+
+def test_successful_request_omits_the_verify_link_when_no_verification_token_is_returned():
+    # A failed signing (per jobs.py's own branch: `if verification_token
+    # is not None`) means the server itself never signed a certificate -
+    # nothing to link to, and no invented link should be appended.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(202, json={"job_id": "job-1"})
+        return httpx.Response(200, json={"status": "finished", "result": "# Report", "verification_token": None})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://aletheore.com")
+    report = run_managed_audit_request(
+        {"scanned_at": "x"}, "real-token", http_client=client, poll_interval=0
+    )
+
+    assert report == "# Report"
+
+
 def test_no_http_client_passed_closes_the_client_it_creates_on_success(monkeypatch):
     # Real bug found via audit: run_managed_audit_request created its own
     # httpx.Client whenever a caller didn't pass one in, but never closed

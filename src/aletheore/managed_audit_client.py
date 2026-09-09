@@ -59,7 +59,26 @@ def run_managed_audit_request(
             status_response.raise_for_status()
             body = status_response.json()
             if body["status"] == "finished":
-                return body["result"]
+                result = body["result"]
+                # Real bug found via audit: the server signs the report
+                # and persists a verification_token whenever signing
+                # succeeds (see jobs.py's run_managed_audit_api_job /
+                # get_managed_audit_status), but this was the only real
+                # consumer of that endpoint that never read it - the CLI
+                # user got the raw report text with no indication the
+                # report is a cryptographically signed, independently
+                # verifiable certificate, or where to verify it. The
+                # PR-comment path (run_managed_audit_pr_job) already
+                # appends the identical "[Verify this report](url)" link
+                # directly into the report text on success - matching
+                # that same convention here instead of inventing a new
+                # one, and keeping this function's return type a plain
+                # str rather than changing its public contract.
+                verification_token = body.get("verification_token")
+                if verification_token:
+                    verify_url = f"{api_base_url}/v1/audit/{verification_token}/verify"
+                    result = f"{result}\n\n[Verify this report]({verify_url})"
+                return result
             if body["status"] == "failed":
                 raise ManagedAuditError("managed audit job failed on the server")
             if poll_interval:
