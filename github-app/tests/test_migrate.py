@@ -99,6 +99,64 @@ def test_run_migrations_backfills_schema_migrations_for_already_bootstrapped_db(
     assert second == []
 
 
+def test_migration_063_backfills_existing_paid_installations_credit(fresh_database):
+    """063's credit columns default to 0, and the only thing that ever raises
+    base_credit_remaining_usd is a Paddle renewal webhook carrying a NEW
+    billing-period start - so without the backfill every installation that
+    already existed at deploy time sits at $0 and is locked out of every AI
+    feature until its next renewal, up to a full month away.
+
+    Re-executes 063's own file text against rows that look exactly like that
+    pre-migration population (zero balance, no billing period recorded yet).
+    """
+    run_migrations(fresh_database)
+    backfill_sql = (MIGRATIONS_DIR / "063_installation_credit_balance.sql").read_text()
+
+    with psycopg.connect(fresh_database) as conn:
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO installations (installation_id, account_login, plan, extra_seats) "
+                "VALUES (%s, %s, %s, %s)",
+                [
+                    (1, "solo-flash", "flash", 0),
+                    (2, "solo-air", "air", 0),
+                    (3, "team-air", "air", 2),
+                    (4, "freeloader", "free", 0),
+                ],
+            )
+        conn.commit()
+
+        with conn.cursor() as cur:
+            cur.execute(backfill_sql)
+        conn.commit()
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT installation_id, base_credit_remaining_usd FROM installations "
+                "ORDER BY installation_id"
+            )
+            balances = {row[0]: float(row[1]) for row in cur.fetchall()}
+
+        # PLAN_BASE_CREDIT_USD + EXTRA_SEAT_LLM_CAP_USD per extra seat
+        # (app_server/llm_cost.py's base_credit_for_plan).
+        assert balances == {1: 5.00, 2: 18.00, 3: 18.00 + 2 * 3.00, 4: 0.00}
+
+        # Re-executing the file (the docker-entrypoint-initdb.d + migrate.py
+        # overlap scripts/migrate.py documents) must not double-credit.
+        with conn.cursor() as cur:
+            cur.execute(backfill_sql)
+        conn.commit()
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT installation_id, base_credit_remaining_usd FROM installations "
+                "ORDER BY installation_id"
+            )
+            again = {row[0]: float(row[1]) for row in cur.fetchall()}
+
+        assert again == balances
+
+
 def test_concurrent_migrate_runs_do_not_collide(tmp_path):
     """Two processes running migrate.py against the same database at once -
     the shape of starting a second app-server replica, or a restart
