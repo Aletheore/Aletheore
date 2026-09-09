@@ -5051,7 +5051,17 @@ def run_live_wiki_incremental_update_job(
     dsn = get_settings().database_url
     evidence = get_evidence_by_id(dsn, installation_id, repo_full_name, history_id)
     if evidence is None:
-        return  # nothing scanned for this repo yet - nothing to update from
+        # Not necessarily "nothing scanned yet" - repo_history's retention
+        # trim (see REPO_HISTORY_TRIM_GRACE_SECONDS) can in principle still
+        # evict this exact row under a large enough scan burst before this
+        # job is dequeued. Logged rather than silently returning, so a
+        # skipped wiki update is at least visible instead of invisible.
+        logging.getLogger("scan_worker.jobs").warning(
+            "live wiki incremental update: history_id=%s not found for installation=%s repo=%s "
+            "(evicted by retention, or never scanned)",
+            history_id, installation_id, repo_full_name,
+        )
+        return
     _maybe_update_live_wiki(installation_id, repo_full_name, evidence, changed_files, head_sha)
 
 
@@ -5067,5 +5077,11 @@ def run_live_docs_incremental_update_job(
     dsn = get_settings().database_url
     evidence = get_evidence_by_id(dsn, installation_id, repo_full_name, history_id)
     if evidence is None:
+        # See run_live_wiki_incremental_update_job's identical logging above.
+        logging.getLogger("scan_worker.jobs").warning(
+            "live docs incremental update: history_id=%s not found for installation=%s repo=%s "
+            "(evicted by retention, or never scanned)",
+            history_id, installation_id, repo_full_name,
+        )
         return
     _maybe_update_live_docs(installation_id, repo_full_name, evidence, changed_files, head_sha)
