@@ -10,6 +10,7 @@ from scan_worker.airview_scanner_context import (
     MAX_DEAD_CODE_ENTRIES,
     MAX_ENDPOINTS,
     MAX_ENV_VARS,
+    MAX_INFRASTRUCTURE_SERVICES,
     MAX_SCHEMA_RELATIONS,
     MAX_SCHEMA_TABLES,
     MAX_VULNERABILITY_FINDINGS,
@@ -160,7 +161,7 @@ def test_infrastructure_context_flattens_compose_services_and_flags_iac():
         "helm_charts": [],
     }}}
     infra = build_repo_context(evidence)["infrastructure"]
-    assert infra["docker_compose_services"] == ["web", "db"]
+    assert infra["docker_compose_services"] == ["db", "web"]
     assert infra["has_kubernetes_manifests"] is True
     assert infra["has_terraform"] is False
 
@@ -325,6 +326,21 @@ def test_dead_code_context_caps_deterministically_with_total_counts():
     assert dead_code["unreachable_modules"][0] == "legacy/m000.py"
     assert len(dead_code["unused_dependencies"]) == MAX_DEAD_CODE_ENTRIES
     assert dead_code["unused_dependencies_total_count"] == MAX_DEAD_CODE_ENTRIES + 5
+
+
+def test_infrastructure_context_caps_services_deterministically_with_total_count():
+    # Real bug found via audit: this was the one section PR #586's
+    # unboundedness fix missed - it never capped or deterministically
+    # sorted docker_compose_services, unlike every sibling section above.
+    evidence = {"repository": {"infrastructure": {
+        "docker_compose_services": [
+            {"services": [f"svc{i:03d}" for i in range(MAX_INFRASTRUCTURE_SERVICES + 5)]}
+        ],
+    }}}
+    infra = build_repo_context(evidence)["infrastructure"]
+    assert len(infra["docker_compose_services"]) == MAX_INFRASTRUCTURE_SERVICES
+    assert infra["docker_compose_services_total_count"] == MAX_INFRASTRUCTURE_SERVICES + 5
+    assert infra["docker_compose_services"][0] == "svc000"
 
 
 def test_env_vars_context_caps_deterministically():
