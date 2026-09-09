@@ -376,6 +376,64 @@ def test_clone_ref_scrubs_the_token_even_when_checkout_fails(tmp_path, monkeypat
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
 
 
+def test_clone_ref_scrubs_the_token_even_when_the_clone_itself_is_interrupted(tmp_path, monkeypatch):
+    # Real Flash Review finding on the first version of this fix: the
+    # clone call sat before the try, so an interruption DURING the clone
+    # (e.g. an RQ job timeout - not a raw OOM SIGKILL, which no
+    # try/finally placement can survive regardless of where it sits)
+    # skipped the scrub entirely, even though the clone had already
+    # written the credentialed URL into .git/config by the time it was
+    # interrupted.
+    from scan_worker.jobs import _clone_ref
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            # git writes .git/config with the credentialed remote before
+            # the clone finishes populating the working tree - simulate
+            # an interruption after that point.
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "ephemeral-clone-interrupted"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_ref(credentialed_url, "somesha", dest)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls, "expected the scrub to still run even though the clone itself was interrupted"
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+
+
+def test_clone_ref_does_not_attempt_a_scrub_when_the_clone_never_created_a_git_dir(tmp_path, monkeypatch):
+    # The other half: a clone interrupted before git ever created .git at
+    # all (e.g. a DNS failure) must not attempt a `git remote set-url`
+    # against a directory that has no repo in it.
+    from scan_worker.jobs import _clone_ref
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "ephemeral-never-cloned"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_ref(credentialed_url, "somesha", dest)
+
+    assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
+
+
 def test_clone_pr_head_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
     # Same real gap as _clone_ref above, for the PR-head clone path (used
     # by run_managed_audit_pr_job).
@@ -399,6 +457,54 @@ def test_clone_pr_head_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch
     assert set_url_calls, "expected a 'git remote set-url' call scrubbing the clone"
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
     assert "livetoken" not in set_url_calls[-1][-1]
+
+
+def test_clone_pr_head_scrubs_the_token_even_when_the_clone_itself_is_interrupted(tmp_path, monkeypatch):
+    # Same Flash Review finding as _clone_ref's identical test above.
+    from scan_worker.jobs import _clone_pr_head
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "pr-head-clone-interrupted"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_pr_head(credentialed_url, 42, dest)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls, "expected the scrub to still run even though the clone itself was interrupted"
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+
+
+def test_clone_pr_head_does_not_attempt_a_scrub_when_the_clone_never_created_a_git_dir(
+    tmp_path, monkeypatch
+):
+    from scan_worker.jobs import _clone_pr_head
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "pr-head-never-cloned"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_pr_head(credentialed_url, 42, dest)
+
+    assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
 
 
 def test_incremental_spend_budget_record_usage_ledgers_the_real_cost_not_the_delta(monkeypatch):

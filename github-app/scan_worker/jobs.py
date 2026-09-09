@@ -373,10 +373,10 @@ def _run_git(args: list[str], **kwargs) -> None:
 
 def _clone_ref(url: str, ref: str, dest: Path) -> None:
     # Scrubs the credentialed URL from dest/.git/config in a finally block
-    # right after cloning, the same reasoning and shape as
-    # _ensure_persistent_checkout's own reset: real audit found this
-    # ephemeral checkout's own docstring assumption ("deleted with the
-    # whole job_dir within minutes") only holds on a clean return or a
+    # covering the clone itself, the same reasoning and shape as
+    # _ensure_persistent_checkout's own fresh-clone path: real audit found
+    # this ephemeral checkout's own docstring assumption ("deleted with
+    # the whole job_dir within minutes") only holds on a clean return or a
     # Python exception, both of which run the caller's job-level
     # try/finally cleanup - a hard process kill (e.g. the OOM kills this
     # file's own _run_scan comment documents as real on large repos) skips
@@ -387,15 +387,28 @@ def _clone_ref(url: str, ref: str, dest: Path) -> None:
     # scan that follows only runs local git/static-analysis commands), so
     # there's no reason for the live token to still be on disk once the
     # checkout itself is done.
-    _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
+    #
+    # Flash Review finding on the first version of this fix: the clone
+    # call itself sat before the try, so an interruption during the clone
+    # (not just the checkout after it) skipped the scrub entirely. Real
+    # for the catchable subset of interruptions this fix already protects
+    # against elsewhere in this same file (RQ's signal-based job_timeout,
+    # not a raw OOM SIGKILL - no try/finally anywhere can run after that,
+    # regardless of placement, since the whole process is gone) - moved
+    # inside the try, mirroring _ensure_persistent_checkout's own
+    # fresh-clone path exactly, including its `.git` existence guard
+    # (clone interrupted before `git init` ever ran leaves no `.git` to
+    # run `git remote set-url` against).
     try:
+        _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
         subprocess.run(["git", "checkout", "-q", ref], cwd=dest, check=True)
     finally:
-        subprocess.run(
-            ["git", "remote", "set-url", "origin", _url_without_credentials(url)],
-            cwd=dest,
-            check=True,
-        )
+        if (dest / ".git").exists():
+            subprocess.run(
+                ["git", "remote", "set-url", "origin", _url_without_credentials(url)],
+                cwd=dest,
+                check=True,
+            )
 
 
 # Root for persistent, reused-across-scans checkouts (see
@@ -1386,12 +1399,14 @@ def run_push_scan_job(
 
 
 def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
-    # See _clone_ref's identical scrub - this checkout still needs to
-    # fetch against the credentialed origin (the PR head isn't in the
-    # initial clone), so the scrub can only happen after that fetch, but
-    # nothing here needs it afterward either.
-    _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
+    # See _clone_ref's identical scrub (including the Flash Review finding
+    # that moved the clone itself inside the try, and why the `.git`
+    # existence guard is needed) - this checkout still needs to fetch
+    # against the credentialed origin (the PR head isn't in the initial
+    # clone), so the scrub can only happen after that fetch, but nothing
+    # here needs it afterward either.
     try:
+        _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
         subprocess.run(
             ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
             cwd=dest,
@@ -1399,11 +1414,12 @@ def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
         )
         subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
     finally:
-        subprocess.run(
-            ["git", "remote", "set-url", "origin", _url_without_credentials(url)],
-            cwd=dest,
-            check=True,
-        )
+        if (dest / ".git").exists():
+            subprocess.run(
+                ["git", "remote", "set-url", "origin", _url_without_credentials(url)],
+                cwd=dest,
+                check=True,
+            )
 
 
 def _git_rev_parse_head(repo_dir: Path) -> str | None:
