@@ -1006,6 +1006,44 @@ async def test_get_llm_spend_breakdown_excludes_events_before_since(pool):
 
 
 @pytest.mark.asyncio
+async def test_record_llm_spend_ledgers_the_real_cost_not_the_true_up_delta(pool):
+    # Real gap found via audit: reserve_llm_spend's true-up callers pass
+    # (real_cost - reserve_usd) as cost_usd - the correct delta for
+    # llm_spend's running total, but before this fix that same delta was
+    # also what got ledgered into llm_spend_events. Real cost under the
+    # reservation (the common case per reserve_llm_spend's own docstring)
+    # made the delta <= 0, so no event was written at all despite real
+    # money being spent - exactly defeating the ledger's purpose.
+    await _insert_installation(pool, 1093, "a")
+    reserve_llm_spend(TEST_DATABASE_URL, 1093, reserve_usd=0.05, monthly_cap=5.0)
+    real_cost = 0.03  # under the reservation - delta is negative
+    record_llm_spend(
+        TEST_DATABASE_URL, 1093, real_cost - 0.05, feature="flash_review", ledger_cost_usd=real_cost,
+    )
+
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    breakdown = get_llm_spend_breakdown(TEST_DATABASE_URL, 1093, since)
+
+    assert breakdown == {"flash_review": pytest.approx(real_cost)}
+    # The aggregate total must still reflect the true-up delta, not
+    # ledger_cost_usd - the two are deliberately allowed to differ.
+    assert get_llm_spend_this_month(TEST_DATABASE_URL, 1093) == pytest.approx(real_cost)
+
+
+@pytest.mark.asyncio
+async def test_record_llm_spend_ledger_cost_usd_defaults_to_cost_usd_when_omitted(pool):
+    # Non-true-up callers (no reservation involved) never pass
+    # ledger_cost_usd - must behave exactly as before this fix.
+    await _insert_installation(pool, 1094, "a")
+    record_llm_spend(TEST_DATABASE_URL, 1094, 0.12, feature="managed_audit")
+
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    breakdown = get_llm_spend_breakdown(TEST_DATABASE_URL, 1094, since)
+
+    assert breakdown == {"managed_audit": pytest.approx(0.12)}
+
+
+@pytest.mark.asyncio
 async def test_get_extra_seats_sync_defaults_to_zero(pool):
     await _insert_installation(pool, 301, "a")
     assert get_extra_seats(TEST_DATABASE_URL, 301) == 0

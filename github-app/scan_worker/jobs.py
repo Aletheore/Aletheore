@@ -372,8 +372,30 @@ def _run_git(args: list[str], **kwargs) -> None:
 
 
 def _clone_ref(url: str, ref: str, dest: Path) -> None:
+    # Scrubs the credentialed URL from dest/.git/config in a finally block
+    # right after cloning, the same reasoning and shape as
+    # _ensure_persistent_checkout's own reset: real audit found this
+    # ephemeral checkout's own docstring assumption ("deleted with the
+    # whole job_dir within minutes") only holds on a clean return or a
+    # Python exception, both of which run the caller's job-level
+    # try/finally cleanup - a hard process kill (e.g. the OOM kills this
+    # file's own _run_scan comment documents as real on large repos) skips
+    # that entirely and falls back to run_job_temp_dir_cleanup_job's
+    # periodic sweep, which only reaps a job_dir after
+    # JOB_TEMP_DIR_MAX_AGE_SECONDS (6 hours) - not "minutes". Nothing
+    # after this function ever needs to fetch against origin again (the
+    # scan that follows only runs local git/static-analysis commands), so
+    # there's no reason for the live token to still be on disk once the
+    # checkout itself is done.
     _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
-    subprocess.run(["git", "checkout", "-q", ref], cwd=dest, check=True)
+    try:
+        subprocess.run(["git", "checkout", "-q", ref], cwd=dest, check=True)
+    finally:
+        subprocess.run(
+            ["git", "remote", "set-url", "origin", _url_without_credentials(url)],
+            cwd=dest,
+            check=True,
+        )
 
 
 # Root for persistent, reused-across-scans checkouts (see
@@ -1364,13 +1386,24 @@ def run_push_scan_job(
 
 
 def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
+    # See _clone_ref's identical scrub - this checkout still needs to
+    # fetch against the credentialed origin (the PR head isn't in the
+    # initial clone), so the scrub can only happen after that fetch, but
+    # nothing here needs it afterward either.
     _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
-    subprocess.run(
-        ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
-        cwd=dest,
-        check=True,
-    )
-    subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
+    try:
+        subprocess.run(
+            ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
+            cwd=dest,
+            check=True,
+        )
+        subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
+    finally:
+        subprocess.run(
+            ["git", "remote", "set-url", "origin", _url_without_credentials(url)],
+            cwd=dest,
+            check=True,
+        )
 
 
 def _git_rev_parse_head(repo_dir: Path) -> str | None:
@@ -2257,6 +2290,7 @@ def _run_flash_review(
     record_llm_spend(
         settings.database_url, installation_id, spend_accumulator["total"] - reserved_spend,
         monthly_cap=monthly_cap, feature="flash_review",
+        ledger_cost_usd=spend_accumulator["total"],
     )
 
     proposed = grounding_result.get("proposed", 0)
@@ -3956,9 +3990,15 @@ class _IncrementalSpendBudget:
             )
         cost = cost_for_usage(self.model, prompt_tokens, completion_tokens)
         delta = cost - self.next_call_reserve_usd
-        if delta == 0:
-            return
-        record_llm_spend(self.dsn, self.installation_id, delta, feature=self.feature)
+        # Always call through, even when delta == 0 (real cost landed
+        # exactly on the reservation) - the aggregate write is a genuine
+        # no-op then, but skipping the call used to also skip ledgering
+        # this call's real cost entirely (see record_llm_spend's
+        # ledger_cost_usd - the delta this reservation pattern produces is
+        # never the right amount to attribute to a feature).
+        record_llm_spend(
+            self.dsn, self.installation_id, delta, feature=self.feature, ledger_cost_usd=cost,
+        )
 
     def cap_message(self) -> str:
         return (
