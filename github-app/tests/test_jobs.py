@@ -3145,6 +3145,10 @@ def test_flash_review_job_reserves_the_cap_before_running_the_review(monkeypatch
     monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", _reserve_flash_review_count)
     monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
     monkeypatch.setattr("scan_worker.jobs.review_diff", _review_diff)
+    # The post-review true-up gives back the unused part of the flat $0.50
+    # reservation (review_diff is mocked, so the real cost is $0) - a real DB
+    # write this order-only test doesn't otherwise need.
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
@@ -3226,7 +3230,14 @@ def test_flash_review_job_releases_reservation_when_the_review_never_runs(monkey
 
 
 def test_flash_review_job_does_not_release_reservation_after_a_successful_review(monkeypatch):
-    released = {"count": False, "spend": False}
+    # "Does not release" means the finally block must not hand the WHOLE
+    # FLASH_REVIEW_SPEND_RESERVE_USD back for a review that really ran.
+    # _run_flash_review's success path does now call
+    # release_llm_spend_reservation, but only for the UNUSED portion of that
+    # flat reserve (the true-up to real cost - see
+    # test_flash_review_trues_up_the_credit_balance_to_the_real_cost), so
+    # this records amounts rather than a bare bool and distinguishes the two.
+    released = {"count": False, "spend": []}
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
@@ -3243,7 +3254,7 @@ def test_flash_review_job_does_not_release_reservation_after_a_successful_review
     )
     monkeypatch.setattr(
         "scan_worker.jobs.release_llm_spend_reservation",
-        lambda *a, **k: released.__setitem__("spend", True),
+        lambda dsn, iid, amount: released["spend"].append(amount),
     )
     monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
     monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
@@ -3251,10 +3262,16 @@ def test_flash_review_job_does_not_release_reservation_after_a_successful_review
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
     monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
     monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
-    monkeypatch.setattr(
-        "scan_worker.jobs.review_diff",
-        lambda diff_text, file_context="", **kwargs: [{"file": "app.py", "line": 1, "issue": "x", "source": "llm"}],
-    )
+    monkeypatch.setattr("scan_worker.jobs.resolve_model", lambda *a, **k: "deepseek-v4-flash")
+
+    def _review_diff_with_usage(diff_text, file_context="", **kwargs):
+        # Real token usage, so the true-up's give-back (0.50 - real cost) is
+        # distinguishable from a full-reservation release. deepseek-v4-flash:
+        # 10000 * 0.44/1e6 + 2000 * 1.32/1e6 = 0.00704.
+        kwargs["on_usage"](10000, 2000)
+        return [{"file": "app.py", "line": 1, "issue": "x", "source": "llm"}]
+
+    monkeypatch.setattr("scan_worker.jobs.review_diff", _review_diff_with_usage)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
@@ -3277,7 +3294,15 @@ def test_flash_review_job_does_not_release_reservation_after_a_successful_review
     )
     run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
 
-    assert released == {"count": False, "spend": False}
+    assert released["count"] is False
+    # Exactly one release, and it is the true-up's partial give-back - NOT
+    # the full FLASH_REVIEW_SPEND_RESERVE_USD the finally block would return
+    # for a review that never ran.
+    real_cost = 10000 * 0.44 / 1e6 + 2000 * 1.32 / 1e6
+    assert released["spend"] == [
+        pytest.approx(FLASH_REVIEW_SPEND_RESERVE_USD - real_cost)
+    ]
+    assert released["spend"][0] < FLASH_REVIEW_SPEND_RESERVE_USD
 
 
 def test_flash_review_job_posts_grounding_note_when_some_findings_are_dropped(monkeypatch):
