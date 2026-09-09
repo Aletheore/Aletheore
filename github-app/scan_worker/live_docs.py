@@ -65,9 +65,43 @@ def _parse_json_object(raw: str) -> dict:
 
 def _symbols_needing_work(module: dict, polish_existing: bool) -> list[dict]:
     all_symbols = module["symbols"]["functions"] + module["symbols"]["classes"]
+
     if polish_existing:
-        return [s for s in all_symbols if s.get("is_public") and s.get("docstring")]
-    return [s for s in all_symbols if s.get("is_public") and not s.get("docstring")]
+        candidates = [s for s in all_symbols if s.get("is_public") and s.get("docstring")]
+    else:
+        candidates = [s for s in all_symbols if s.get("is_public") and not s.get("docstring")]
+
+    # A symbol name that appears more than once among candidates THIS CALL
+    # would actually request (e.g. two undocumented functions named `foo`
+    # - a real, if unusual, shape: a conditional redefinition, or a
+    # scanner capturing both branches of an @overload pair) can't be
+    # safely round-tripped through this module's name-keyed request/
+    # response contract - the model's JSON response can only ever carry
+    # one entry per name. Real bug found via audit: this used to happily
+    # request descriptions for every colliding name anyway, and the
+    # name-keyed `hashes`/`result` dicts downstream kept whichever one
+    # wrote last, silently discarding the other symbol's real description
+    # and corrupting its content_hash-based change-detection with a
+    # sibling's hash. Excluded entirely rather than guessing which one
+    # "wins" - matches this module's own fail-closed philosophy (an
+    # unrepresentable response degrades to no AI description, not a wrong
+    # one silently attributed to the wrong symbol).
+    #
+    # Real Flash Review finding on this same fix: counting collisions
+    # across ALL symbols (both docstring states) over-excluded a symbol
+    # that has no real collision in what THIS call's own request actually
+    # sends - two same-named symbols where one is undocumented (eligible
+    # here) and the other already documented (eligible only for the
+    # OTHER mode's call, never sent together in this call's own request)
+    # were being treated as colliding when they never would be. Scoped to
+    # `candidates` - this call's own request - fixes that false negative.
+    # generate_file_descriptions_combined, which DOES send both modes'
+    # candidates in one combined request, does its own additional
+    # cross-mode dedup below for exactly that shape.
+    name_counts: dict[str, int] = {}
+    for symbol in candidates:
+        name_counts[symbol["name"]] = name_counts.get(symbol["name"], 0) + 1
+    return [s for s in candidates if name_counts[s["name"]] == 1]
 
 
 def _symbol_snippet(source_lines: list[str], symbol: dict) -> str:
@@ -143,6 +177,22 @@ def generate_file_descriptions_combined(
     """
     generate_symbols = _symbols_needing_work(module, polish_existing=False)
     polish_symbols = _symbols_needing_work(module, polish_existing=True)
+
+    # This call combines both modes' candidates into ONE request, unlike
+    # generate_file_descriptions' single-mode call - a name that's unique
+    # within generate_symbols and unique within polish_symbols separately
+    # (so _symbols_needing_work's own per-call dedup above lets both
+    # through) can still collide once combined here (an undocumented
+    # `foo` needing generation and a differently-documented `foo`
+    # needing polish, both real, both eligible, both about to be sent
+    # under the same name key in the same request). Excluded from BOTH
+    # lists rather than guessing which one wins - the same fail-closed
+    # reasoning as the per-call dedup, applied to what this function
+    # actually sends as one combined request.
+    cross_mode_names = {s["name"] for s in generate_symbols} & {s["name"] for s in polish_symbols}
+    if cross_mode_names:
+        generate_symbols = [s for s in generate_symbols if s["name"] not in cross_mode_names]
+        polish_symbols = [s for s in polish_symbols if s["name"] not in cross_mode_names]
 
     hashes = {
         s["name"]: _content_hash(_symbol_snippet(source_lines, s))
