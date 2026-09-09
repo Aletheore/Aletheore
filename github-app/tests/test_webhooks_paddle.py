@@ -17,13 +17,15 @@ from app_server.db import (
     add_installation_member,
     claim_free_to_paid_plan,
     claim_webhook_delivery,
+    credit_topup_purchase,
     get_extra_seats,
     get_installation,
+    reset_billing_period_credit,
     upsert_github_user_email,
     upsert_installation,
 )
 from app_server.main import app
-from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
+from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID, EXTRA_SEAT_PRICE_ID
 from app_server.webhooks.paddle import handle_paddle_webhook_event
 
 WEBHOOK_SECRET = "pdl_ntfset_test_secret"
@@ -1348,3 +1350,230 @@ async def test_full_webhook_route_records_commission_for_referred_installation(p
     assert response.status_code == 200
     totals = {row["id"]: row for row in await list_affiliates_with_totals(pool)}
     assert totals[affiliate["id"]]["total_owed_usd"] == Decimal("4.05")
+
+
+# --- reset_billing_period_credit / credit_topup_purchase (Task 5) ---
+# Real per-installation dollar-credit balance mutations: a billing-period
+# renewal resets base_credit_remaining_usd to the plan's real included
+# credit, and a customer-purchased top-up adds to topup_credit_balance_usd
+# exactly once per Paddle transaction id. Both increment balance_epoch,
+# the dedupe key the low-balance/exhausted credit-notification emails
+# (Task 6) key off of.
+
+
+@pytest.mark.asyncio
+async def test_reset_billing_period_credit_on_genuine_new_period(pool):
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (401, 'acme', 'air')"
+    )
+
+    changed = await reset_billing_period_credit(
+        pool, 401, "air", extra_seats=0, period_start="2026-09-01T00:00:00Z"
+    )
+
+    assert changed is True
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, current_billing_period_start, balance_epoch "
+        "FROM installations WHERE installation_id = $1",
+        401,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    assert row["balance_epoch"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reset_billing_period_credit_is_a_noop_on_the_same_period(pool):
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (402, 'acme', 'air')"
+    )
+    await reset_billing_period_credit(
+        pool, 402, "air", extra_seats=0, period_start="2026-09-01T00:00:00Z"
+    )
+    # Spend some of it down.
+    await pool.execute(
+        "UPDATE installations SET base_credit_remaining_usd = 2.00 WHERE installation_id = $1",
+        402,
+    )
+
+    # Same period_start delivered again (a replayed or unrelated subscription.updated).
+    changed = await reset_billing_period_credit(
+        pool, 402, "air", extra_seats=0, period_start="2026-09-01T00:00:00Z"
+    )
+
+    assert changed is False
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd FROM installations WHERE installation_id = $1",
+        402,
+    )
+    # Must NOT have been reset back to 18.00 - the spent-down 2.00 survives.
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(2.00)
+
+
+@pytest.mark.asyncio
+async def test_credit_topup_purchase_increments_topup_balance(pool):
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (403, 'acme', 'flash')"
+    )
+
+    credited = await credit_topup_purchase(pool, 403, 8.00, "txn_topup_403")
+
+    assert credited is True
+    row = await pool.fetchrow(
+        "SELECT topup_credit_balance_usd, balance_epoch FROM installations WHERE installation_id = $1",
+        403,
+    )
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(8.00)
+    assert row["balance_epoch"] == 1
+
+
+@pytest.mark.asyncio
+async def test_credit_topup_purchase_is_idempotent_on_replayed_transaction(pool):
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (404, 'acme', 'flash')"
+    )
+
+    first = await credit_topup_purchase(pool, 404, 8.00, "txn_topup_404")
+    second = await credit_topup_purchase(pool, 404, 8.00, "txn_topup_404")
+
+    assert first is True
+    assert second is False
+    row = await pool.fetchrow(
+        "SELECT topup_credit_balance_usd FROM installations WHERE installation_id = $1",
+        404,
+    )
+    # Only credited once, not twice.
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(8.00)
+
+
+# --- Webhook wiring for the two mutations above ---
+
+
+@pytest.mark.asyncio
+async def test_subscription_updated_with_current_billing_period_resets_credit(pool):
+    # A genuine renewal delivered as subscription.updated: current_billing_
+    # period.starts_at is new for this installation (NULL -> a real
+    # timestamp), so the base credit must reset to the plan's real included
+    # credit even though the balance had been spent down to 2.00.
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, base_credit_remaining_usd) "
+        "VALUES (405, 'acme', 'air', 2.00)"
+    )
+    payload = {
+        "event_id": "evt_renewal_405",
+        "event_type": "subscription.updated",
+        "data": {
+            "id": "sub_test_405",
+            "customer_id": "ctm_test_405",
+            "status": "active",
+            "custom_data": {"installation_token": _installation_token(405)},
+            "items": [{"price": {"id": "pri_01kyhevc8bkcghfpwjymz16y2h"}, "quantity": 1}],
+            "current_billing_period": {"starts_at": "2026-09-01T00:00:00Z"},
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, balance_epoch, current_billing_period_start "
+        "FROM installations WHERE installation_id = $1",
+        405,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    assert row["balance_epoch"] == 1
+    assert row["current_billing_period_start"] is not None
+
+
+@pytest.mark.asyncio
+async def test_subscription_updated_replay_does_not_reset_spent_down_credit(pool):
+    # The same current_billing_period.starts_at delivered twice (a Paddle
+    # retry, or an unrelated subscription.updated within the same period)
+    # must not reset the balance back up a second time.
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (406, 'acme', 'air')"
+    )
+    payload = {
+        "event_id": "evt_renewal_406a",
+        "event_type": "subscription.updated",
+        "data": {
+            "id": "sub_test_406",
+            "customer_id": "ctm_test_406",
+            "status": "active",
+            "custom_data": {"installation_token": _installation_token(406)},
+            "items": [{"price": {"id": "pri_01kyhevc8bkcghfpwjymz16y2h"}, "quantity": 1}],
+            "current_billing_period": {"starts_at": "2026-09-01T00:00:00Z"},
+        },
+    }
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+    await pool.execute(
+        "UPDATE installations SET base_credit_remaining_usd = 3.00 WHERE installation_id = $1", 406
+    )
+
+    payload["event_id"] = "evt_renewal_406b"
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd FROM installations WHERE installation_id = $1", 406
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(3.00)
+
+
+@pytest.mark.asyncio
+async def test_transaction_completed_credits_topup_purchase(pool):
+    await upsert_installation(pool, 910 + 1000, "acme")
+    installation_id = 1910
+    payload = {
+        "event_id": "evt_topup_1910",
+        "event_type": "transaction.completed",
+        "data": {
+            "id": "txn_topup_wire_1910",
+            "customer_id": "ctm_test_1910",
+            "custom_data": {"installation_token": _installation_token(installation_id)},
+            "items": [{"price": {"id": CREDIT_TOPUP_PRICE_ID}, "quantity": 10}],
+            "billed_at": "2026-09-01T12:00:00Z",
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    row = await pool.fetchrow(
+        "SELECT topup_credit_balance_usd, balance_epoch FROM installations WHERE installation_id = $1",
+        installation_id,
+    )
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(10.00)
+    assert row["balance_epoch"] == 1
+
+
+@pytest.mark.asyncio
+async def test_transaction_completed_topup_is_independent_of_referral_commission(pool):
+    # A topup purchase and a referral commission on the same transaction
+    # aren't mutually exclusive - both must apply. Also proves the topup
+    # branch isn't skipped by the referral early-return for unreferred
+    # transactions (the common case), since this installation has no
+    # referral on file at all.
+    installation_id = 1911
+    await upsert_installation(pool, installation_id, "acme")
+    payload = {
+        "event_id": "evt_topup_1911",
+        "event_type": "transaction.completed",
+        "data": {
+            "id": "txn_topup_wire_1911",
+            "customer_id": "ctm_test_1911",
+            "custom_data": {"installation_token": _installation_token(installation_id)},
+            "items": [{"price": {"id": CREDIT_TOPUP_PRICE_ID}, "quantity": 5}],
+            "billed_at": "2026-09-01T12:00:00Z",
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    row = await pool.fetchrow(
+        "SELECT topup_credit_balance_usd FROM installations WHERE installation_id = $1",
+        installation_id,
+    )
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(5.00)
+    # No affiliate/referral was ever recorded for this installation - the
+    # referral early-return in _handle_transaction_completed doesn't
+    # prevent the (independent) topup branch from running.
+    assert await get_referral(pool, installation_id) is None

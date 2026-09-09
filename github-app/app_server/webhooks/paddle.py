@@ -13,9 +13,11 @@ from app_server.db import (
     claim_webhook_delivery,
     claim_free_to_paid_plan,
     claim_paid_setup,
+    credit_topup_purchase,
     get_installation,
     list_installation_member_emails,
     release_webhook_delivery,
+    reset_billing_period_credit,
     set_extra_seats,
     set_installation_plan,
     set_paid_installation_plan,
@@ -23,7 +25,7 @@ from app_server.db import (
 from app_server.email_queue import enqueue_transactional_email
 from app_server.error_alerts import send_error_alert
 from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for, is_known_paddle_ip
-from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID, resolve_plan_for_price_id
+from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID, EXTRA_SEAT_PRICE_ID, resolve_plan_for_price_id
 from app_server.paddle_webhook_verify import verify_paddle_signature
 
 paddle_webhook_router = APIRouter()
@@ -224,6 +226,20 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
         else 0
     )
 
+    # A genuine billing-period renewal resets base_credit_remaining_usd to
+    # the plan's real included credit (see db.py's reset_billing_period_
+    # credit) - gated on plan != "free" the same way extra_seats above is,
+    # since current_billing_period is only meaningful for an active paid
+    # subscription: a cancellation or a past_due card decline already
+    # resolves plan to "free" above and shouldn't reset anything. Also a
+    # no-op (reset_billing_period_credit itself checks this) when
+    # current_billing_period.starts_at hasn't actually changed - a replayed
+    # or unrelated subscription.updated for the same period must not wipe
+    # out credit the installation has already spent down.
+    period_start = (data.get("current_billing_period") or {}).get("starts_at")
+    if plan != "free" and period_start:
+        await reset_billing_period_credit(pool, installation_id, plan, extra_seats, period_start)
+
     # One transaction, not three independent writes: a crash between any two
     # of these previously left the installation on the new plan with stale
     # extra_seats, or upgraded with no Paddle IDs recorded - a state that
@@ -380,6 +396,28 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
     )
     if installation_id is None:
         return
+
+    # A customer-purchased credit top-up, independent of the affiliate-
+    # commission logic below - both can apply to the same transaction (a
+    # referred installation buying a top-up owes its referrer commission
+    # AND gets credited), so this must run before the referral early-return
+    # just below, not after it - the overwhelming majority of transactions
+    # have no referral on file at all and would otherwise never reach this.
+    items = data.get("items") or []
+    topup_item = next(
+        (item for item in items if (item.get("price") or {}).get("id") == CREDIT_TOPUP_PRICE_ID),
+        None,
+    )
+    if topup_item is not None:
+        quantity = topup_item.get("quantity")
+        transaction_id = data.get("id")
+        if quantity and transaction_id:
+            await credit_topup_purchase(pool, installation_id, float(quantity), transaction_id)
+        else:
+            logger.warning(
+                "credit topup transaction.completed missing quantity or id: %s",
+                data.get("id"),
+            )
 
     referral = await get_referral(pool, installation_id)
     if referral is None:

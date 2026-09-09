@@ -6,7 +6,7 @@ import asyncpg
 
 from aletheore.evidence import is_evidence_version_compatible
 from app_server.evidence_limits import check_evidence_size
-from app_server.llm_cost import WARN_FRACTION_OF_CAP, crossed_spend_warning_threshold
+from app_server.llm_cost import WARN_FRACTION_OF_CAP, base_credit_for_plan, crossed_spend_warning_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +183,64 @@ async def add_paddle_ids_to_installation(
         paddle_subscription_id,
         paddle_customer_id,
     )
+
+
+async def reset_billing_period_credit(
+    pool: asyncpg.Pool, installation_id: int, plan: str, extra_seats: int, period_start: str
+) -> bool:
+    """Resets base_credit_remaining_usd to this plan's real included
+    credit (base_credit_for_plan, same per-seat bonus the old flat cap
+    used) only if period_start is genuinely new for this installation -
+    a no-op on a replayed or unrelated subscription.updated event.
+    Increments balance_epoch on a real reset, which doubles as the
+    dedupe key both new credit-notification emails key off of. Returns
+    whether a reset actually happened."""
+    new_credit = base_credit_for_plan(plan, extra_seats)
+    # Paddle sends ISO 8601 with a trailing "Z" (e.g.
+    # "2026-09-01T00:00:00Z") - same format webhooks/paddle.py already
+    # parses for billed_at via datetime.fromisoformat (Python 3.11+
+    # accepts the "Z" suffix directly). asyncpg's timestamptz codec needs
+    # a real datetime, not a string, even with an explicit ::timestamptz
+    # cast in the query.
+    period_start_dt = datetime.fromisoformat(period_start)
+    row = await pool.fetchrow(
+        """
+        UPDATE installations
+        SET base_credit_remaining_usd = $2,
+            current_billing_period_start = $3,
+            balance_epoch = balance_epoch + 1
+        WHERE installation_id = $1
+            AND (current_billing_period_start IS DISTINCT FROM $3)
+        RETURNING installation_id
+        """,
+        installation_id, new_credit, period_start_dt,
+    )
+    return row is not None
+
+
+async def credit_topup_purchase(
+    pool: asyncpg.Pool, installation_id: int, amount_usd: float, transaction_id: str
+) -> bool:
+    """Credits a real, customer-purchased top-up to topup_credit_balance_
+    usd, exactly once per transaction_id even if the webhook is
+    redelivered. Returns whether this call actually credited anything
+    (False on a replay)."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            inserted = await conn.fetchrow(
+                "INSERT INTO processed_paddle_transactions (id) VALUES ($1) "
+                "ON CONFLICT (id) DO NOTHING RETURNING id",
+                transaction_id,
+            )
+            if inserted is None:
+                return False
+            await conn.execute(
+                "UPDATE installations SET topup_credit_balance_usd = "
+                "topup_credit_balance_usd + $2, balance_epoch = balance_epoch + 1 "
+                "WHERE installation_id = $1",
+                installation_id, amount_usd,
+            )
+    return True
 
 
 async def list_installations_for_ids(pool: asyncpg.Pool, installation_ids: list[int]) -> list[dict]:
