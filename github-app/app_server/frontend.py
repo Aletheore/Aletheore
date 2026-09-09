@@ -14,6 +14,7 @@ each fetches only the data it needs and can show full detail without
 competing for space with five other sections.
 """
 
+from functools import lru_cache
 from html import escape
 from urllib.parse import quote
 
@@ -357,6 +358,7 @@ table.findings tr:last-child td { border-bottom: none; }
 .wiki-md code { font-family: var(--font-mono); font-size: 11.5px; background: var(--slate-100); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
 
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.settings-section { margin-top: 24px; }
 .settings-block { background: var(--paper); border: 1px solid var(--border); border-radius: 12px;
   padding: 16px 18px; box-shadow: var(--shadow-card); margin-bottom: 16px; }
 .settings-block-label { font-size: 13px; font-weight: 600; margin-bottom: 9px; }
@@ -1943,7 +1945,19 @@ SETTINGS_LOCKED_PREVIEW = (
     "</div>"
 )
 
-SETTINGS_HTML = _page_head("Settings — {repo} — Aletheore") + _shell(
+# A function, not a plain module-level constant like the other _HTML pages
+# above: its script block needs get_settings().paddle_environment /
+# .paddle_client_token (for Paddle.Initialize()) baked in once, and calling
+# get_settings() at real module-import time would make importing this file
+# require a fully configured settings environment (DATABASE_URL, etc.) just
+# to load the module - a regression from every other page in this file.
+# lru_cache defers that call to the first real request, after the app has
+# actually started with a real settings environment, while still computing
+# the page only once for the process's lifetime, matching the other pages'
+# "built once" shape.
+@lru_cache(maxsize=1)
+def _settings_html() -> str:
+    return _page_head("Settings — {repo} — Aletheore") + _shell(
     "settings",
     _topbar("Settings")
     + """
@@ -1955,10 +1969,20 @@ SETTINGS_HTML = _page_head("Settings — {repo} — Aletheore") + _shell(
     </section>
 """
 ) + f"""
+<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script>
 {FETCH_HELPERS}
 {PAGE_HEAD_JS}
 {CONFIRM_UPGRADE_JS}
+
+// Only the settings page's own buyCredit() (a one-time credit top-up) needs
+// a client-side Paddle.Checkout.open() call - seat purchases go through a
+// server-side POST to /seats/buy instead. paddle_client_token is Paddle's
+// client-side publishable token, already sent to every browser today via
+// the /subscribe page's own Paddle.Initialize() call - not a secret being
+// newly exposed here.
+Paddle.Environment.set("{get_settings().paddle_environment}");
+Paddle.Initialize({{ token: "{get_settings().paddle_client_token}" }});
 
 async function revokeToken(tokenId, btn) {{
   btn.disabled = true;
@@ -2170,6 +2194,26 @@ async function openBillingPortal() {{
   }}
 }}
 
+function buyCredit() {{
+  const amount = parseInt(document.getElementById('topup-amount').value, 10);
+  const statusEl = document.getElementById('topup-status');
+  if (!amount || amount < 5) {{
+    statusEl.textContent = 'Minimum purchase is $5.';
+    return;
+  }}
+  statusEl.textContent = 'Opening checkout...';
+  Paddle.Checkout.open({{
+    // TODO(backend): replace once CREDIT_TOPUP_PRICE_ID lands in paddle_pricing.py
+    items: [{{ priceId: "PENDING_CREDIT_TOPUP_PRICE_ID", quantity: amount }}],
+    customData: {{ installation_token: window._checkoutInstallationToken }},
+    settings: {{
+      displayMode: 'overlay',
+      variant: 'one-page',
+      successUrl: 'https://app.aletheore.com/dashboard',
+    }},
+  }});
+}}
+
 // The danger zone renders on every plan, including free and lapsed - the
 // settings page 402s those customers out of everything else, but locking
 // someone out of erasing their own data because their card failed is not
@@ -2325,30 +2369,11 @@ async function loadSettings() {{
   const installation = data.installation;
   window._hasActiveSubscription = !!installation.paddle_subscription_id;
   window._extraSeats = data.extra_seats || 0;
-
-  // llm_spend and flash_review_monthly_count were already tracked
-  // internally for the hard spend cap (see app_server/llm_cost.py) - this
-  // is the first place a customer actually sees what their AI review
-  // usage is costing/producing, previously invisible to them.
-  const llmSpend = data.llm_spend_month_to_date || 0;
-  // Despite the key name, this is now the installation's REMAINING credit
-  // balance, not a fixed cap - admin.py keeps the old "llm_spend_cap" key
-  // only to avoid a lockstep API/JS rename (see its own comment). So it
-  // shrinks as llmSpend grows: rendering "$X of $Y spend cap used (Z%)"
-  // divided a rising number by a falling one, which made both the sentence
-  // and the percentage nonsense (at exhaustion: "$4.98 of $0.00 spend cap
-  // used (0%)"). Stated as two independent facts instead, with no
-  // percentage-of-a-shrinking-denominator. A proper redesign of this panel
-  // belongs to the parallel dashboard plan; this is the minimum change that
-  // stops it asserting something false in the meantime.
-  const llmCreditRemaining = data.llm_spend_cap || 0;
-  const flashReviews = data.flash_reviews_month_to_date || 0;
-  const usageHtml =
-    '<div class="settings-block">' +
-      '<div class="settings-block-label">AI usage this month</div>' +
-      '<div class="settings-block-hint">' + flashReviews + ' automated PR review' + (flashReviews === 1 ? '' : 's') + '</div>' +
-      '<div class="settings-block-hint">$' + llmSpend.toFixed(2) + ' spent this month, $' + llmCreditRemaining.toFixed(2) + ' credit remaining</div>' +
-    '</div>';
+  // Per-installation, only known after this per-request JSON fetch resolves
+  // (unlike the Paddle client token/environment, which are static app-wide
+  // values baked into the page's own <script> at module-import time) -
+  // buyCredit() reads this at click time to authorize its checkout call.
+  window._checkoutInstallationToken = data.checkout_installation_token;
 
   const seatBillingHtml = window._hasActiveSubscription
     ? '<div class="form-row">' +
@@ -2357,6 +2382,26 @@ async function loadSettings() {{
       '<button class="btn" onclick="openBillingPortal()" style="margin-left:6px;">Manage billing</button>' +
       '</div><div id="seat-billing-status" class="settings-block-hint"></div>'
     : '<div class="settings-block-hint">Extra seats need an active subscription - subscribe first to buy one.</div>';
+
+  const baseCredit = data.base_credit_remaining_usd || 0;
+  const topupCredit = data.topup_credit_balance_usd || 0;
+  const combinedCredit = baseCredit + topupCredit;
+  const usageHtml =
+    '<section class="settings-section" id="usage-section">' +
+      '<h2>Usage</h2>' +
+      '<div class="settings-block">' +
+        '<div class="settings-block-label">Credit balance</div>' +
+        '<div class="settings-block-hint">$' + baseCredit.toFixed(2) + ' included this month' +
+          (topupCredit > 0 ? ' + $' + topupCredit.toFixed(2) + ' purchased (never expires)' : '') +
+        '</div>' +
+        '<div class="settings-block-hint">$' + combinedCredit.toFixed(2) + ' total available for AI reviews and builds</div>' +
+        '<div class="form-row" style="margin-top: 10px;">' +
+          '<input type="number" id="topup-amount" min="5" step="1" value="10" style="width: 80px;">' +
+          '<button class="btn" onclick="buyCredit()" style="margin-left: 6px;">Buy more credit</button>' +
+        '</div>' +
+        '<div id="topup-status" class="settings-block-hint"></div>' +
+      '</div>' +
+    '</section>';
 
   body.innerHTML =
     '<div class="settings-grid">' +
@@ -2369,7 +2414,6 @@ async function loadSettings() {{
           '<div id="member-status" class="settings-block-hint"></div>' +
           seatBillingHtml +
         '</div>' +
-        usageHtml +
         '<div class="settings-block">' +
           '<div class="settings-block-label">API tokens</div>' +
           '<div id="token-list">' + renderTokenRows(data.tokens) + '</div>' +
@@ -2428,6 +2472,7 @@ async function loadSettings() {{
         '</div>' +
       '</div>' +
     '</div>' +
+    usageHtml +
     '<div id="export-zone"></div>' +
     '<div id="danger-zone"></div>';
   loadExportZone();
@@ -2691,4 +2736,4 @@ async def dashboard_settings_page(org: str, repo: str, request: Request):
     redirect = await _require_session_or_redirect(request)
     if redirect is not None:
         return redirect
-    return _no_store_html(SETTINGS_HTML)
+    return _no_store_html(_settings_html())

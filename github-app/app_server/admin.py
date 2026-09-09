@@ -17,7 +17,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app_server.affiliates import create_affiliate, list_affiliates_with_totals, mark_commissions_paid
-from app_server.auth import encrypt_access_token, get_current_session, refresh_github_access_token
+from app_server.auth import (
+    encrypt_access_token,
+    get_current_session,
+    refresh_github_access_token,
+    sign_checkout_installation_id,
+)
 from app_server.config import get_settings
 from app_server.github_auth import generate_app_jwt, get_installation_token, get_repo_permission_for_user
 from app_server.github_pagination import fetch_paginated_github_collection
@@ -555,6 +560,8 @@ async def admin_page(org: str, repo: str, request: Request):
         installation["topup_credit_balance_usd"]
     )
     public_status_enabled = await get_public_status_enabled(pool, installation_id, repo_full_name)
+    settings = get_settings()
+    checkout_installation_token = sign_checkout_installation_id(installation_id, settings.session_secret)
     return {
         "installation": installation,
         "tokens": tokens,
@@ -575,6 +582,7 @@ async def admin_page(org: str, repo: str, request: Request):
         "flash_reviews_month_to_date": flash_reviews_month_to_date,
         "base_credit_remaining_usd": float(installation["base_credit_remaining_usd"]),
         "topup_credit_balance_usd": float(installation["topup_credit_balance_usd"]),
+        "checkout_installation_token": checkout_installation_token,
     }
 
 
