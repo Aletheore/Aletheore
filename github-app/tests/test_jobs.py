@@ -5694,7 +5694,7 @@ def test_run_live_wiki_incremental_update_job_reloads_evidence_and_delegates(mon
     assert called["head_sha"] == "sha1"
 
 
-def test_run_live_wiki_incremental_update_job_noop_when_no_evidence_yet(monkeypatch):
+def test_run_live_wiki_incremental_update_job_noop_when_no_evidence_yet(monkeypatch, caplog):
     from scan_worker.jobs import run_live_wiki_incremental_update_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -5702,12 +5702,22 @@ def test_run_live_wiki_incremental_update_job_noop_when_no_evidence_yet(monkeypa
     called = []
     monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: called.append(True))
 
-    run_live_wiki_incremental_update_job(
-        installation_id=1, repo_full_name="octocat/hello-world",
-        changed_files=["auth/login.py"], head_sha="sha1", history_id=99,
-    )
+    # Real gap found via audit: this used to be a silent `return` with a
+    # misleading "nothing scanned yet" comment - repo_history's retention
+    # trim can in principle evict this exact history_id (see
+    # REPO_HISTORY_TRIM_GRACE_SECONDS) even after real scans happened, so
+    # a skipped wiki update must be logged, not invisible.
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        run_live_wiki_incremental_update_job(
+            installation_id=1, repo_full_name="octocat/hello-world",
+            changed_files=["auth/login.py"], head_sha="sha1", history_id=99,
+        )
 
     assert called == []
+    assert any(
+        "history_id=99" in record.message and "octocat/hello-world" in record.message
+        for record in caplog.records
+    )
 
 
 def test_run_live_docs_incremental_update_job_reloads_evidence_and_delegates(monkeypatch):
@@ -5744,7 +5754,7 @@ def test_run_live_docs_incremental_update_job_reloads_evidence_and_delegates(mon
     assert called["head_sha"] == "sha1"
 
 
-def test_run_live_docs_incremental_update_job_noop_when_no_evidence_yet(monkeypatch):
+def test_run_live_docs_incremental_update_job_noop_when_no_evidence_yet(monkeypatch, caplog):
     from scan_worker.jobs import run_live_docs_incremental_update_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -5752,12 +5762,19 @@ def test_run_live_docs_incremental_update_job_noop_when_no_evidence_yet(monkeypa
     called = []
     monkeypatch.setattr("scan_worker.jobs._maybe_update_live_docs", lambda *a, **k: called.append(True))
 
-    run_live_docs_incremental_update_job(
-        installation_id=1, repo_full_name="octocat/hello-world",
-        changed_files=["auth/login.py"], head_sha="sha1", history_id=99,
-    )
+    # Same real gap as run_live_wiki_incremental_update_job's identical
+    # test above - see REPO_HISTORY_TRIM_GRACE_SECONDS.
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        run_live_docs_incremental_update_job(
+            installation_id=1, repo_full_name="octocat/hello-world",
+            changed_files=["auth/login.py"], head_sha="sha1", history_id=99,
+        )
 
     assert called == []
+    assert any(
+        "history_id=99" in record.message and "octocat/hello-world" in record.message
+        for record in caplog.records
+    )
 
 
 class _FakeScansQueue:

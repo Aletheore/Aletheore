@@ -33,6 +33,24 @@ logger = logging.getLogger(__name__)
 # in sync with any new namespace either file adds.
 SCAN_SLOT_LOCK_NAMESPACE = 1
 SPEND_LOCK_NAMESPACE = 2
+# Real gap found via audit: insert_repo_history's retention trim (below)
+# used to delete purely by row count (`keep`), with no regard for whether
+# a row was still needed. run_live_wiki_incremental_update_job/
+# run_live_docs_incremental_update_job reload evidence by this exact
+# history_id after being dequeued (see their own docstrings - deliberately
+# not get_latest_evidence, to avoid combining stale changed_files/head_sha
+# with a newer scan's evidence). A burst of 20+ more scans for the same
+# repo persisting before one of those jobs is dequeued (a realistic queue-
+# lag scenario - see run_live_wiki_incremental_update_job's own docstring
+# on real "Work-horse terminated unexpectedly" job-timeout incidents this
+# decoupling exists to survive) could trim the exact row that job needs,
+# silently no-oping the update with no signal to anyone. This grace
+# window keeps a row from ever being trimmed until it's old enough that
+# any job still legitimately queued against it would already have run -
+# same reasoning and same value as JOB_TEMP_DIR_MAX_AGE_SECONDS
+# (jobs.py), this codebase's other "how long could a real backlog
+# realistically make something wait" bound.
+REPO_HISTORY_TRIM_GRACE_SECONDS = 6 * 3600
 # Namespace 3 is reserved for the per-repo checkout lock (see
 # repo_checkout_lock) - key 2 is hashtext(installation_id:repo_full_name)
 # rather than a bare int, since the resource being protected is a
@@ -98,8 +116,9 @@ def insert_repo_history(
                     ORDER BY scanned_at DESC, id DESC
                     OFFSET %s
                 )
+                AND scanned_at < now() - make_interval(secs => %s)
                 """,
-                (installation_id, repo_full_name, keep),
+                (installation_id, repo_full_name, keep, REPO_HISTORY_TRIM_GRACE_SECONDS),
             )
         conn.commit()
     return new_id

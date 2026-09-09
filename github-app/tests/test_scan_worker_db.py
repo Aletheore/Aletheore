@@ -531,6 +531,57 @@ async def test_insert_repo_history_returns_the_new_rows_id(pool):
 
 
 @pytest.mark.asyncio
+async def test_insert_repo_history_trim_never_deletes_a_row_within_the_grace_window(pool):
+    # Real gap found via audit: the retention trim used to delete purely
+    # by row count (`keep`) - a burst of `keep`-or-more scans for the same
+    # repo persisting before a queued run_live_wiki_incremental_update_job/
+    # run_live_docs_incremental_update_job was dequeued could delete the
+    # exact history_id that job needs (see get_evidence_by_id's docstring
+    # and REPO_HISTORY_TRIM_GRACE_SECONDS), silently no-oping the update
+    # with no signal to anyone.
+    from scan_worker.db import get_evidence_by_id
+
+    await _insert_installation(pool, 308, "a")
+    first_id = insert_repo_history(
+        TEST_DATABASE_URL, 308, "a/repo1", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "first"}, keep=1,
+    )
+    # Two more scans immediately after - beyond keep=1 by row count, but
+    # all recent - the first row must still survive the trim.
+    insert_repo_history(
+        TEST_DATABASE_URL, 308, "a/repo1", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "second"}, keep=1,
+    )
+    insert_repo_history(
+        TEST_DATABASE_URL, 308, "a/repo1", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "third"}, keep=1,
+    )
+
+    assert get_evidence_by_id(TEST_DATABASE_URL, 308, "a/repo1", first_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_insert_repo_history_trim_still_deletes_rows_past_the_grace_window(pool):
+    # The grace window narrows the race, it doesn't disable retention -
+    # a row old enough that no realistically-queued job could still be
+    # waiting on it must still be cleaned up.
+    from scan_worker.db import get_evidence_by_id
+
+    await _insert_installation(pool, 309, "a")
+    old_scan = datetime.now(timezone.utc) - timedelta(hours=7)
+    old_id = insert_repo_history(
+        TEST_DATABASE_URL, 309, "a/repo1", old_scan,
+        {"aletheore_version": EVIDENCE_VERSION, "v": "old"}, keep=1,
+    )
+    insert_repo_history(
+        TEST_DATABASE_URL, 309, "a/repo1", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "new"}, keep=1,
+    )
+
+    assert get_evidence_by_id(TEST_DATABASE_URL, 309, "a/repo1", old_id) is None
+
+
+@pytest.mark.asyncio
 async def test_get_evidence_by_id_returns_the_exact_row_not_the_latest(pool):
     # Real bug this guards: a queued follow-up job that reloaded evidence
     # via get_latest_evidence (rather than the specific row its own scan
