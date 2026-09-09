@@ -696,7 +696,8 @@ def get_installation(dsn: str, installation_id: int) -> dict | None:
                 """
                 SELECT installation_id, account_login, plan, webhook_url, alert_email,
                        pushover_user_key, health_check_base_url,
-                       health_check_latency_threshold_ms, llm_suggestions_enabled
+                       health_check_latency_threshold_ms, llm_suggestions_enabled,
+                       base_credit_remaining_usd, topup_credit_balance_usd, balance_epoch
                 FROM installations
                 WHERE installation_id = %s
                 """,

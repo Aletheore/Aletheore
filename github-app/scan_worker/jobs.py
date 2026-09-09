@@ -1756,7 +1756,9 @@ def run_flash_review_job(
         ):
             return
         reserved_spend = FLASH_REVIEW_SPEND_RESERVE_USD
-        if not reserve_llm_spend(settings.database_url, installation_id, reserved_spend, monthly_cap):
+        if not reserve_llm_spend_with_email_hooks(
+            settings.database_url, installation_id, reserved_spend, feature="flash_review"
+        ):
             release_flash_review_count_reservation(settings.database_url, installation_id)
             return
 
@@ -3880,6 +3882,95 @@ def _llm_spend_cap_reached(dsn: str, installation_id: int, plan: str) -> tuple[b
     return current_spend >= monthly_cap, monthly_cap
 
 
+LOW_BALANCE_WARNING_FRACTION = 0.15
+
+
+def reserve_llm_spend_with_email_hooks(
+    dsn: str, installation_id: int, reserve_usd: float, feature: str
+) -> bool:
+    """Wraps reserve_llm_spend with the two customer-facing email triggers -
+    reused by both the Flash Review direct-reservation path and
+    _IncrementalSpendBudget.can_start_next_call, so both surfaces get
+    identical notification behavior instead of two hand-rolled copies.
+
+    Interface contract (must match exactly - a separate, parallel plan
+    builds the dashboard + email templates against this): template_name
+    is "credit_low_balance" or "credit_exhausted"; template_arg is
+    {"account_login": str, "plan": str, "base_credit_remaining_usd":
+    float, "topup_credit_balance_usd": float}; dedupe_key is
+    f"credit_low_balance:{installation_id}:{balance_epoch}" /
+    f"credit_exhausted:{installation_id}:{balance_epoch}".
+
+    Row field access below uses dict.get(...) with defaults rather than
+    row[...]: get_installation_row is mocked throughout this file's
+    existing tests as a minimal {"plan": ...} dict (no account_login/
+    alert_email/balance_epoch/credit columns) for tests that predate this
+    email feature and don't care about it - this wrapper must not KeyError
+    for any of those.
+
+    The enqueue_transactional_email call itself is wrapped in try/except,
+    same reasoning _send_alerts_if_configured already documents for its
+    own channels: a failed/unreachable notification send is a real,
+    independent failure mode (network/Redis) that must never take down
+    the actual spend-reservation result this function returns to its
+    caller - that result gates whether an LLM call is allowed to proceed.
+    """
+    row = get_installation_row(dsn, installation_id)
+    if row is None:
+        return reserve_llm_spend(dsn, installation_id, reserve_usd)
+
+    before_total = float(row.get("base_credit_remaining_usd", 0)) + float(
+        row.get("topup_credit_balance_usd", 0)
+    )
+    ok = reserve_llm_spend(dsn, installation_id, reserve_usd)
+
+    if not ok:
+        _enqueue_credit_balance_email("credit_exhausted", installation_id, row)
+        return False
+
+    after_row = get_installation_row(dsn, installation_id) or row
+    after_total = float(after_row.get("base_credit_remaining_usd", 0)) + float(
+        after_row.get("topup_credit_balance_usd", 0)
+    )
+    # This installation's own high-water mark is whatever the combined
+    # balance was immediately after its most recent renewal reset or
+    # top-up (both of those set balance_epoch and, transitively, the
+    # totals this check compares against) - approximated here as
+    # before_total when no reservation has yet been made this epoch. A
+    # precise high-water-mark value isn't separately stored; using
+    # before_total on the FIRST reservation of an epoch is exact, and is
+    # a conservative (slightly-late-to-fire, since a later reservation's
+    # before_total is already lower than the true high-water mark)
+    # trigger on later reservations within the same epoch.
+    threshold = before_total * LOW_BALANCE_WARNING_FRACTION
+    if after_total <= threshold and before_total > threshold:
+        _enqueue_credit_balance_email("credit_low_balance", installation_id, after_row)
+    return True
+
+
+def _enqueue_credit_balance_email(template_name: str, installation_id: int, row: dict) -> None:
+    dedupe_key = f"{template_name}:{installation_id}:{row.get('balance_epoch', 0)}"
+    try:
+        enqueue_transactional_email(
+            redis_url=get_settings().redis_url,
+            dedupe_key=dedupe_key,
+            template_name=template_name,
+            template_arg={
+                "account_login": row.get("account_login", ""),
+                "plan": row.get("plan", ""),
+                "base_credit_remaining_usd": float(row.get("base_credit_remaining_usd", 0)),
+                "topup_credit_balance_usd": float(row.get("topup_credit_balance_usd", 0)),
+            },
+            to_email=row.get("alert_email"),
+            installation_id=installation_id,
+        )
+    except Exception:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "%s email enqueue failed for installation=%s", template_name, installation_id,
+            exc_info=True,
+        )
+
+
 class _IncrementalSpendBudget:
     """Gates a job that makes several sequential LLM calls (managed audits,
     AIRview/Docs full builds) against the monthly dollar cap.
@@ -3945,7 +4036,9 @@ class _IncrementalSpendBudget:
         self.feature = feature
 
     def can_start_next_call(self) -> bool:
-        return reserve_llm_spend(self.dsn, self.installation_id, self.next_call_reserve_usd)
+        return reserve_llm_spend_with_email_hooks(
+            self.dsn, self.installation_id, self.next_call_reserve_usd, self.feature
+        )
 
     def record_usage(
         self, prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0

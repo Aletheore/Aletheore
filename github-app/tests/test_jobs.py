@@ -11,6 +11,7 @@ from scan_worker.jobs import (
     LIVE_DOCS_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS,
     LIVE_WIKI_INCREMENTAL_UPDATE_JOB_TIMEOUT_SECONDS,
     MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH,
+    reserve_llm_spend_with_email_hooks,
     run_pr_scan_job,
 )
 
@@ -1426,6 +1427,72 @@ async def test_incremental_spend_budget_record_usage_refunds_when_actual_cost_is
     assert combined > 4.95
 
 
+@pytest.mark.asyncio
+async def test_reserve_llm_spend_low_balance_triggers_email_enqueue(pool, monkeypatch):
+    enqueued = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **kw: enqueued.append((a, kw)),
+    )
+    installation_id = 9300
+    # balance_epoch=1, starting balance 5.00 - the real base_credit_for_plan
+    # ("flash") value, i.e. this row is at the start of its epoch, so
+    # before_total genuinely IS this epoch's high-water mark (matches
+    # reserve_llm_spend_with_email_hooks's own "before_total on the FIRST
+    # reservation of an epoch is exact" reasoning - see its docstring).
+    # 15% of 5.00 is 0.75; reserving 4.30 leaves 0.70, crossing it.
+    await _insert_installation(
+        pool, installation_id, "a", plan="flash",
+        base_credit_remaining_usd=5.00, topup_credit_balance_usd=0.00, balance_epoch=1,
+    )
+
+    result = reserve_llm_spend_with_email_hooks(
+        TEST_DATABASE_URL, installation_id, reserve_usd=4.30, feature="flash_review",
+    )
+
+    assert result is True
+    assert len(enqueued) == 1
+    _, kwargs = enqueued[0]
+    assert kwargs["template_name"] == "credit_low_balance"
+    assert kwargs["dedupe_key"] == f"credit_low_balance:{installation_id}:1"
+    assert kwargs["template_arg"] == {
+        "account_login": "a",
+        "plan": "flash",
+        "base_credit_remaining_usd": pytest.approx(0.70),
+        "topup_credit_balance_usd": pytest.approx(0.00),
+    }
+
+
+@pytest.mark.asyncio
+async def test_reserve_llm_spend_rejection_triggers_exhausted_email(pool, monkeypatch):
+    enqueued = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.enqueue_transactional_email",
+        lambda *a, **kw: enqueued.append((a, kw)),
+    )
+    installation_id = 9301
+    await _insert_installation(
+        pool, installation_id, "a", plan="flash",
+        base_credit_remaining_usd=0.01, topup_credit_balance_usd=0.00, balance_epoch=1,
+    )
+
+    result = reserve_llm_spend_with_email_hooks(
+        TEST_DATABASE_URL, installation_id, reserve_usd=5.00, feature="flash_review",
+    )
+
+    assert result is False
+    assert len(enqueued) == 1
+    _, kwargs = enqueued[0]
+    assert kwargs["template_name"] == "credit_exhausted"
+    assert kwargs["dedupe_key"] == f"credit_exhausted:{installation_id}:1"
+    assert kwargs["template_arg"] == {
+        "account_login": "a",
+        "plan": "flash",
+        "base_credit_remaining_usd": pytest.approx(0.01),
+        "topup_credit_balance_usd": pytest.approx(0.00),
+    }
+
+
 def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeypatch):
     monkeypatch.setattr(
         "scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"}
@@ -2822,7 +2889,11 @@ def test_flash_review_job_reserves_the_cap_before_running_the_review(monkeypatch
         call_order.append("reserve_count")
         return True
 
-    def _reserve_llm_spend(dsn, iid, reserve_usd, monthly_cap):
+    def _reserve_llm_spend(dsn, iid, reserve_usd):
+        # reserve_llm_spend no longer takes monthly_cap (Task 3/4 of the
+        # dollar-credit-pricing plan) - the run_flash_review_job call site
+        # now goes through reserve_llm_spend_with_email_hooks (Task 6),
+        # which calls this bare 3-arg reserve_llm_spend.
         call_order.append("reserve_spend")
         return True
 
