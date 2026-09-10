@@ -1167,12 +1167,16 @@ async def test_reserve_llm_spend_succeeds_when_reserve_exactly_equals_combined_b
 
 
 @pytest.mark.asyncio
-async def test_release_llm_spend_reservation_credits_topup_before_base(pool):
-    # A release always credits back to topup_credit_balance_usd first,
-    # mirroring "spend base first, so give back topup first" - the
-    # simplest consistent inverse of the base-first draw-down order.
+async def test_release_llm_spend_reservation_spills_to_topup_when_base_is_at_its_allotment(pool):
+    # No room in base (it is already sitting at this billing period's full
+    # allotment - i.e. the reservation being released must have been paid
+    # for out of topup), so the whole release goes back to topup. This is
+    # the ONLY shape in which a release should touch topup at all.
     await _insert_installation(
-        pool, 408, "a", base_credit_remaining_usd=0.00, topup_credit_balance_usd=8.00
+        pool, 408, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=5.00,
+        topup_credit_balance_usd=8.00,
     )
     release_llm_spend_reservation(TEST_DATABASE_URL, 408, 2.00)
     row = await pool.fetchrow(
@@ -1181,7 +1185,59 @@ async def test_release_llm_spend_reservation_credits_topup_before_base(pool):
         408,
     )
     assert float(row["topup_credit_balance_usd"]) == pytest.approx(10.00)
-    assert float(row["base_credit_remaining_usd"]) == pytest.approx(0.00)
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(5.00)
+
+
+@pytest.mark.asyncio
+async def test_release_llm_spend_reservation_refills_base_without_exceeding_the_allotment(pool):
+    # The bug this cap exists for: releasing the unused part of a flat
+    # reservation used to credit 100% to topup_credit_balance_usd, which
+    # NEVER expires - so on every Flash Review (real cost ~$0.007 against a
+    # $0.50 flat reserve) ~$0.49 of the monthly, use-it-or-lose-it base
+    # allotment permanently migrated into the never-expiring bucket, and a
+    # customer's spendable balance grew without bound instead of resetting
+    # each renewal.
+    #
+    # $0.50 was drawn out of a $5.00 allotment, so there is exactly $0.50 of
+    # room: releasing $0.50 must land base back at exactly its allotment
+    # with nothing at all spilling into topup.
+    await _insert_installation(
+        pool, 411, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=4.50,
+        topup_credit_balance_usd=2.00,
+    )
+    release_llm_spend_reservation(TEST_DATABASE_URL, 411, 0.50)
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        411,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(5.00)
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(2.00)
+
+
+@pytest.mark.asyncio
+async def test_release_llm_spend_reservation_spills_only_the_overflow_into_topup(pool):
+    # Same $0.50 of room, but $0.80 released - which can only happen when
+    # the reservation itself was partly funded from topup (base ran out
+    # mid-reservation, see reserve_llm_spend's spill-over). Base refills to
+    # its ceiling and exactly the $0.30 that base has no room for goes
+    # back where it came from.
+    await _insert_installation(
+        pool, 412, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=4.50,
+        topup_credit_balance_usd=2.00,
+    )
+    release_llm_spend_reservation(TEST_DATABASE_URL, 412, 0.80)
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        412,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(5.00)
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(2.30)
 
 
 @pytest.mark.asyncio

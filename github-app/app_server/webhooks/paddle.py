@@ -288,7 +288,7 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
             # it would double-count.
             if plan != "free" and not reset_happened and extra_seats > previous_extra_seats:
                 await credit_extra_seat_purchase(
-                    conn, installation_id, extra_seats - previous_extra_seats
+                    conn, installation_id, extra_seats - previous_extra_seats, plan, extra_seats
                 )
 
             if plan != "free":

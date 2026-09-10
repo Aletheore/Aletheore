@@ -1422,7 +1422,10 @@ async def test_incremental_spend_budget_record_usage_refunds_when_actual_cost_is
 
     installation_id = 9102
     await _insert_installation(
-        pool, installation_id, "a", base_credit_remaining_usd=5.00, topup_credit_balance_usd=0.00
+        pool, installation_id, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=5.00,
+        topup_credit_balance_usd=0.00,
     )
 
     budget = _IncrementalSpendBudget(
@@ -1435,14 +1438,17 @@ async def test_incremental_spend_budget_record_usage_refunds_when_actual_cost_is
 
     remaining = await _get_balance(pool, installation_id)
     # Reserved 0.10, actual cost is a few thousandths of a cent - most of
-    # the 0.10 reservation must be given back. release_llm_spend_reservation
-    # always credits topup_credit_balance_usd, never base_credit_remaining_usd
-    # (see its docstring/implementation in scan_worker/db.py - a known,
-    # deliberate Task 3 simplification, not something this task changes), so
-    # this checks the COMBINED balance rather than assuming which column
-    # absorbs the refund.
+    # the 0.10 reservation must be given back, and it must go back to the
+    # column it came OUT of: base_credit_remaining_usd, up to (never past)
+    # base_credit_allotment_usd. Crediting it to topup_credit_balance_usd
+    # instead - as release_llm_spend_reservation used to do unconditionally -
+    # kept the combined total right while quietly converting monthly,
+    # use-it-or-lose-it base credit into never-expiring purchased credit on
+    # every single call, so this asserts the split, not just the total.
     combined = float(remaining["base_credit_remaining_usd"]) + float(remaining["topup_credit_balance_usd"])
     assert combined > 4.95
+    assert float(remaining["topup_credit_balance_usd"]) == pytest.approx(0.00)
+    assert float(remaining["base_credit_remaining_usd"]) == pytest.approx(combined)
 
 
 @pytest.mark.asyncio
@@ -1638,6 +1644,7 @@ async def test_flash_review_trues_up_the_credit_balance_to_the_real_cost(pool, m
     installation_id = 9400
     await _insert_installation(
         pool, installation_id, "a", plan="flash",
+        base_credit_allotment_usd=5.00,
         base_credit_remaining_usd=5.00, topup_credit_balance_usd=0.00, balance_epoch=1,
     )
 
@@ -1704,6 +1711,120 @@ async def test_flash_review_trues_up_the_credit_balance_to_the_real_cost(pool, m
     # The whole point: the balance must be down by the REAL ~$0.007 cost,
     # not by the flat $0.50 reserve.
     assert combined == pytest.approx(5.00 - real_cost, abs=1e-6)
+    # And every cent of it must still be BASE credit. The reservation came
+    # out of base, so the true-up's $0.493 give-back belongs back in base
+    # (capped at base_credit_allotment_usd, which is where it started) -
+    # crediting it to topup_credit_balance_usd, as release_llm_spend_
+    # reservation used to do unconditionally, kept this combined total
+    # correct while permanently migrating ~$0.49 of monthly use-it-or-lose-it
+    # credit into the never-expiring purchased-credit bucket on EVERY
+    # review. Over a month of reviews that bucket grows without bound and
+    # the "resets every renewal" allotment never actually resets.
+    assert float(remaining["base_credit_remaining_usd"]) == pytest.approx(
+        5.00 - real_cost, abs=1e-6
+    )
+    assert float(remaining["topup_credit_balance_usd"]) == pytest.approx(0.00)
+
+
+@pytest.mark.asyncio
+async def test_flash_review_reserves_only_what_is_left_when_the_balance_is_below_the_flat_reserve(
+    pool, monkeypatch
+):
+    # reserve_llm_spend is all-or-nothing by design: its
+    # `>= %(reserve)s` WHERE clause is what makes two concurrent reviews
+    # unable to together overdraw one installation, so it must NOT be
+    # weakened. But that means a flat $0.50 request is refused outright for
+    # any balance in the $0-$0.50 tail - and now that the success path trues
+    # the reservation up to the real cost (~$0.007), a customer with $0.30
+    # left would see Flash Review go silent while still holding ~40 reviews'
+    # worth of real credit. Stranded, not spent.
+    #
+    # Fixed at the call site: reserve no more than what's actually there.
+    installation_id = 9401
+    await _insert_installation(
+        pool, installation_id, "a", plan="flash",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=0.30, topup_credit_balance_usd=0.00, balance_epoch=1,
+    )
+
+    # Records what run_flash_review_job actually asked to reserve, while
+    # still letting the REAL reservation happen against the real row - a
+    # fully-mocked reserve would prove nothing about whether the DB accepts
+    # it.
+    from scan_worker.jobs import reserve_llm_spend_with_email_hooks as _real_hooks
+
+    requested = []
+
+    def _spy_hooks(dsn, iid, reserve_usd, feature):
+        requested.append(reserve_usd)
+        return _real_hooks(dsn, iid, reserve_usd, feature)
+
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend_with_email_hooks", _spy_hooks)
+    monkeypatch.setenv("DATABASE_URL", TEST_DATABASE_URL)
+    monkeypatch.setattr("scan_worker.jobs.resolve_model", lambda *a, **k: "deepseek-v4-flash")
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_count_this_month", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs._token_sync", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", lambda *a, **k: "--- app.py ---\n+bug")
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_changed_files", lambda *a, **k: ["app.py"])
+    monkeypatch.setattr("scan_worker.jobs.fetch_review_file_context", lambda *a, **k: ("", {}))
+    monkeypatch.setattr("scan_worker.jobs.fetch_file_content", lambda *a, **k: None)
+
+    def _fake_review_diff(diff_text, file_context="", **kwargs):
+        kwargs["on_usage"](10000, 2000)
+        return []
+
+    monkeypatch.setattr("scan_worker.jobs.review_diff", _fake_review_diff)
+    monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    released_count = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.release_flash_review_count_reservation",
+        lambda *a, **k: released_count.append(True),
+    )
+    reviewed = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_last_reviewed_sha", lambda *a, **k: reviewed.append(True)
+    )
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_dismissed_identity_keys",
+        lambda *a, **k: {"flash_review_llm": set(), "flash_review_semantic": set()},
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_flash_review_finding_comments", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "scan_worker.jobs.mark_flash_review_finding_comment_resolved", lambda *a, **k: False
+    )
+
+    from scan_worker.jobs import run_flash_review_job
+
+    run_flash_review_job(installation_id, "octocat/hello-world", 42, "aaa", "bbb")
+
+    # $0.30, not the flat $0.50 - and the review really ran rather than
+    # being refused and having its count reservation handed back.
+    assert requested == [pytest.approx(0.30)]
+    assert reviewed == [True]
+    assert released_count == []
+
+    real_cost = 10000 * 0.44 / 1e6 + 2000 * 1.32 / 1e6
+    remaining = await _get_balance(pool, installation_id)
+    # The smaller reservation is trued up exactly like the full one: the
+    # balance ends down by the real cost only.
+    assert float(remaining["base_credit_remaining_usd"]) == pytest.approx(
+        0.30 - real_cost, abs=1e-6
+    )
+    assert float(remaining["topup_credit_balance_usd"]) == pytest.approx(0.00)
 
 
 def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeypatch):

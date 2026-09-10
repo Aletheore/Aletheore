@@ -194,10 +194,12 @@ async def add_paddle_ids_to_installation(
 async def reset_billing_period_credit(
     pool: asyncpg.Pool, installation_id: int, plan: str, extra_seats: int, period_start: str
 ) -> bool:
-    """Resets base_credit_remaining_usd to this plan's real included
-    credit (base_credit_for_plan, same per-seat bonus the old flat cap
-    used) only if period_start is genuinely new for this installation -
-    a no-op on a replayed or unrelated subscription.updated event.
+    """Resets base_credit_remaining_usd - and base_credit_allotment_usd,
+    this billing period's ceiling, to the same value - to this plan's
+    real included credit (base_credit_for_plan, same per-seat bonus the
+    old flat cap used) only if period_start is genuinely new for this
+    installation; a no-op on a replayed or unrelated subscription.updated
+    event.
     Increments balance_epoch on a real reset, which doubles as the
     dedupe key both new credit-notification emails key off of. Returns
     whether a reset actually happened.
@@ -220,6 +222,7 @@ async def reset_billing_period_credit(
         """
         UPDATE installations
         SET base_credit_remaining_usd = $2,
+            base_credit_allotment_usd = $2,
             current_billing_period_start = $3,
             balance_epoch = balance_epoch + 1
         WHERE installation_id = $1
@@ -232,10 +235,11 @@ async def reset_billing_period_credit(
 
 
 async def credit_extra_seat_purchase(
-    pool: asyncpg.Pool, installation_id: int, added_seats: int
+    pool: asyncpg.Pool, installation_id: int, added_seats: int, plan: str, extra_seats: int
 ) -> None:
     """Credits the per-seat LLM bonus for seats bought MID-CYCLE, when
-    reset_billing_period_credit cannot.
+    reset_billing_period_credit cannot - clamped at what the CURRENT seat
+    count actually entitles the installation to.
 
     The per-seat bonus is folded into base_credit_for_plan, which only ever
     gets applied by a real renewal reset - and a seat purchase fires
@@ -253,14 +257,32 @@ async def credit_extra_seat_purchase(
 
     balance_epoch is incremented, matching credit_topup_purchase: the
     balance just went UP, so a low-balance warning already sent for the old
-    epoch must not suppress a later one for the new, larger allotment."""
+    epoch must not suppress a later one for the new, larger allotment.
+
+    `plan` and `extra_seats` are the installation's CURRENT (post-purchase)
+    values, and base_credit_for_plan(plan, extra_seats) is therefore the
+    ceiling this installation is actually entitled to right now. Clamping
+    the credit at that ceiling - rather than adding the bonus
+    unconditionally - is what closes a self-service farming ratchet: seat
+    removal doesn't call this function and doesn't debit anything, so an
+    unclamped `+=` let a customer remove and re-add the same seat over and
+    over within one billing cycle, stacking a fresh EXTRA_SEAT_LLM_CAP_USD
+    bonus every round-trip. With the clamp, no number of remove/re-add
+    cycles can push the balance past what the current seat count pays for.
+    base_credit_allotment_usd is set to the same ceiling, keeping the
+    "release credits base first, capped at the allotment" invariant in
+    scan_worker/db.py's release_llm_spend_reservation true for the rest of
+    this billing period."""
     if added_seats <= 0:
         return
+    ceiling = base_credit_for_plan(plan, extra_seats)
     await pool.execute(
-        "UPDATE installations SET base_credit_remaining_usd = "
-        "base_credit_remaining_usd + $2, balance_epoch = balance_epoch + 1 "
+        "UPDATE installations SET "
+        "base_credit_remaining_usd = LEAST(base_credit_remaining_usd + $2, $3), "
+        "base_credit_allotment_usd = $3, "
+        "balance_epoch = balance_epoch + 1 "
         "WHERE installation_id = $1",
-        installation_id, EXTRA_SEAT_LLM_CAP_USD * added_seats,
+        installation_id, EXTRA_SEAT_LLM_CAP_USD * added_seats, ceiling,
     )
 
 

@@ -423,16 +423,27 @@ def reserve_llm_spend(dsn: str, installation_id: int, reserve_usd: float) -> boo
 
 
 def release_llm_spend_reservation(dsn: str, installation_id: int, reserve_usd: float) -> None:
-    """Undoes one reserve_llm_spend reservation - credits topup_credit_
-    balance_usd first, then base_credit_remaining_usd, the reverse of the
-    base-first draw-down order (spend base first, so give back topup
-    first)."""
+    """Undoes one reserve_llm_spend reservation - credits base_credit_
+    remaining_usd first, capped at this installation's stored
+    base_credit_allotment_usd (this billing period's real ceiling), and
+    spills only the remainder into topup_credit_balance_usd. Capping at
+    the allotment is what makes base credit actually reset every
+    renewal instead of permanently leaking into the never-expiring
+    topup bucket on every partial release."""
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE installations
-                SET topup_credit_balance_usd = topup_credit_balance_usd + %(reserve)s
+                SET
+                    base_credit_remaining_usd = LEAST(
+                        base_credit_remaining_usd + %(reserve)s, base_credit_allotment_usd
+                    ),
+                    topup_credit_balance_usd = topup_credit_balance_usd
+                        + GREATEST(
+                            %(reserve)s - GREATEST(base_credit_allotment_usd - base_credit_remaining_usd, 0),
+                            0
+                        )
                 WHERE installation_id = %(installation_id)s
                 """,
                 {"reserve": reserve_usd, "installation_id": installation_id},

@@ -17,6 +17,7 @@ from app_server.db import (
     add_installation_member,
     claim_free_to_paid_plan,
     claim_webhook_delivery,
+    credit_extra_seat_purchase,
     credit_topup_purchase,
     get_extra_seats,
     get_installation,
@@ -1427,11 +1428,18 @@ async def test_reset_billing_period_credit_on_genuine_new_period(pool):
 
     assert changed is True
     row = await pool.fetchrow(
-        "SELECT base_credit_remaining_usd, current_billing_period_start, balance_epoch "
+        "SELECT base_credit_remaining_usd, base_credit_allotment_usd, "
+        "current_billing_period_start, balance_epoch "
         "FROM installations WHERE installation_id = $1",
         401,
     )
     assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    # The ceiling resets with the balance, to the same number: it is what
+    # release_llm_spend_reservation caps a true-up refill at, so a stale
+    # allotment from a previous period/seat count would either strand credit
+    # (too low) or let base credit leak into the never-expiring topup bucket
+    # (too high).
+    assert float(row["base_credit_allotment_usd"]) == pytest.approx(18.00)
     assert row["balance_epoch"] == 1
 
 
@@ -1464,6 +1472,76 @@ async def test_reset_billing_period_credit_is_a_noop_on_the_same_period(pool):
 
 
 @pytest.mark.asyncio
+async def test_credit_extra_seat_purchase_cannot_be_farmed_by_removing_and_re_adding_a_seat(pool):
+    # Seat REMOVAL deliberately doesn't debit anything (the customer already
+    # paid for the period the seat was bought in - see
+    # test_seat_removal_does_not_change_the_credit_balance), and only an
+    # increase credits. With an unconditional "+= EXTRA_SEAT_LLM_CAP_USD"
+    # that made the pair asymmetric and self-service farmable: remove the
+    # seat, re-add it, collect another $3.00, repeat, all within one billing
+    # cycle and with no ceiling.
+    #
+    # The clamp at base_credit_for_plan(plan, extra_seats) - the CURRENT,
+    # post-purchase seat count - closes it: the balance can never exceed
+    # what the seats actually on the subscription right now entitle it to.
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, extra_seats, "
+        "base_credit_remaining_usd, base_credit_allotment_usd) "
+        "VALUES (413, 'acme', 'flash', 0, 5.00, 5.00)"
+    )
+
+    # First purchase: 0 -> 1 seat. Ceiling is base_credit_for_plan("flash", 1)
+    # = 5.00 + 3.00 = 8.00, and 5.00 + 3.00 lands exactly on it.
+    await credit_extra_seat_purchase(pool, 413, added_seats=1, plan="flash", extra_seats=1)
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, base_credit_allotment_usd, balance_epoch "
+        "FROM installations WHERE installation_id = $1",
+        413,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(8.00)
+    assert float(row["base_credit_allotment_usd"]) == pytest.approx(8.00)
+    assert row["balance_epoch"] == 1
+
+    # The seat is now removed (no code path credits or debits for that) and
+    # re-added: the second purchase is again "one seat added, one extra seat
+    # in total afterwards", so the ceiling is still 8.00 - and the balance
+    # stays 8.00 instead of ratcheting to 11.00.
+    await credit_extra_seat_purchase(pool, 413, added_seats=1, plan="flash", extra_seats=1)
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, base_credit_allotment_usd FROM installations "
+        "WHERE installation_id = $1",
+        413,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(8.00)
+    assert float(row["base_credit_allotment_usd"]) == pytest.approx(8.00)
+
+
+@pytest.mark.asyncio
+async def test_credit_extra_seat_purchase_still_credits_a_spent_down_balance_in_full(pool):
+    # The clamp must not turn into a silent no-op for the normal case: a
+    # customer who has already spent most of the period's credit and then
+    # buys a seat still gets the whole EXTRA_SEAT_LLM_CAP_USD bonus, because
+    # 1.00 + 3.00 is nowhere near the 8.00 ceiling.
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, extra_seats, "
+        "base_credit_remaining_usd, base_credit_allotment_usd) "
+        "VALUES (414, 'acme', 'flash', 0, 1.00, 5.00)"
+    )
+
+    await credit_extra_seat_purchase(pool, 414, added_seats=1, plan="flash", extra_seats=1)
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, base_credit_allotment_usd FROM installations "
+        "WHERE installation_id = $1",
+        414,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(4.00)
+    # The ceiling still moves to the new seat count's real allotment, even
+    # though the balance is far below it.
+    assert float(row["base_credit_allotment_usd"]) == pytest.approx(8.00)
+
+
+@pytest.mark.asyncio
 async def test_credit_topup_purchase_increments_topup_balance(pool):
     await pool.execute(
         "INSERT INTO installations (installation_id, account_login, plan) VALUES (403, 'acme', 'flash')"
@@ -1473,11 +1551,19 @@ async def test_credit_topup_purchase_increments_topup_balance(pool):
 
     assert credited is True
     row = await pool.fetchrow(
-        "SELECT topup_credit_balance_usd, balance_epoch FROM installations WHERE installation_id = $1",
+        "SELECT topup_credit_balance_usd, base_credit_remaining_usd, "
+        "base_credit_allotment_usd, balance_epoch "
+        "FROM installations WHERE installation_id = $1",
         403,
     )
     assert float(row["topup_credit_balance_usd"]) == pytest.approx(8.00)
     assert row["balance_epoch"] == 1
+    # A purchased top-up is never-expiring credit and touches NEITHER base
+    # column: raising base_credit_allotment_usd here would let the next
+    # true-up release convert purchased topup credit into monthly base
+    # credit that a renewal then wipes out.
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(0.00)
+    assert float(row["base_credit_allotment_usd"]) == pytest.approx(0.00)
 
 
 @pytest.mark.asyncio
@@ -1611,13 +1697,20 @@ async def test_mid_cycle_seat_purchase_credits_the_balance_immediately(pool):
 
     assert await get_extra_seats(pool, 407) == 3
     row = await pool.fetchrow(
-        "SELECT base_credit_remaining_usd, balance_epoch FROM installations "
-        "WHERE installation_id = $1",
+        "SELECT base_credit_remaining_usd, base_credit_allotment_usd, balance_epoch "
+        "FROM installations WHERE installation_id = $1",
         407,
     )
     # 2 seats added (1 -> 3) x EXTRA_SEAT_LLM_CAP_USD (3.00), on top of the
-    # already-spent-down 12.00 - NOT a reset to base_credit_for_plan.
+    # already-spent-down 12.00 - NOT a reset to base_credit_for_plan. Well
+    # under the new ceiling, so the anti-farming clamp doesn't bite.
     assert float(row["base_credit_remaining_usd"]) == pytest.approx(12.00 + 2 * 3.00)
+    # And the ceiling itself moves to what 3 seats now entitle this
+    # installation to - base_credit_for_plan("air", 3) = 18.00 + 3 * 3.00.
+    # This is also what proves the webhook passes the CURRENT plan and seat
+    # count through to credit_extra_seat_purchase: with the pre-purchase
+    # seat count it would land at 21.00 instead.
+    assert float(row["base_credit_allotment_usd"]) == pytest.approx(27.00)
     # Balance went up, so the low-balance email dedupe epoch advances too.
     assert row["balance_epoch"] == 1
 
