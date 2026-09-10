@@ -162,6 +162,8 @@
     "stdlib",
     "subrouter",
     "subprocessor",
+    "topup",
+    "TOPUP",
     "tree-sitter",
     "uncertains",
     "unhide",
