@@ -2047,6 +2047,46 @@ async def test_transaction_completed_credits_topup_purchase_at_discounted_total(
 
 
 @pytest.mark.asyncio
+async def test_transaction_completed_skips_topup_credit_when_bundled_with_another_item(pool, caplog):
+    # This codebase has never parsed Paddle's per-line-item totals, only the
+    # transaction-level total - crediting details.totals.total when the
+    # top-up isn't the only item would credit the OTHER item's cost too.
+    # buyCredit() itself never sends more than one item, but nothing
+    # server-side enforced that before this guard: a devtools-crafted
+    # Paddle.Checkout.open() call could otherwise bundle a top-up with
+    # another price (e.g. an extra seat) and get topped up for the combined
+    # amount. Proves the transaction is skipped, not partially credited.
+    installation_id = 1915
+    await upsert_installation(pool, installation_id, "acme")
+    payload = {
+        "event_id": "evt_topup_1915",
+        "event_type": "transaction.completed",
+        "data": {
+            "id": "txn_topup_wire_1915",
+            "customer_id": "ctm_test_1915",
+            "custom_data": {"installation_token": _installation_token(installation_id)},
+            "items": [
+                {"price": {"id": CREDIT_TOPUP_PRICE_ID}, "quantity": 10},
+                {"price": {"id": EXTRA_SEAT_PRICE_ID}, "quantity": 1},
+            ],
+            "details": {"totals": {"total": "1699"}},
+            "billed_at": "2026-09-01T12:00:00Z",
+        },
+    }
+
+    with caplog.at_level(logging.WARNING):
+        await handle_paddle_webhook_event(payload, pool, "redis://unused")
+
+    row = await pool.fetchrow(
+        "SELECT topup_credit_balance_usd, balance_epoch FROM installations WHERE installation_id = $1",
+        installation_id,
+    )
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(0.00)
+    assert row["balance_epoch"] == 0
+    assert "bundled with other line items" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_transaction_completed_topup_is_independent_of_referral_commission(pool):
     # Proves the topup branch isn't skipped by the referral early-return
     # for unreferred transactions (the common case), since this
