@@ -65,6 +65,19 @@ plus an independent 10-PR hardening/feature batch and one cost-focused cleanup.
 
 Full per-PR detail in each PR's own description; this entry summarizes rather than duplicates it.
 
+## 2026-09-10 (second deploy)
+
+One commit since the first 2026-09-10 deploy, tagged `github-app-deploy-2026-09-10-2` (commit
+`f8b2f36`) - a small, real UI fix on the just-shipped dollar-credit dashboard (#651), caught from a
+live screenshot of the deployed settings page: `.settings-grid` defaulted to `align-items:
+stretch`, so the shorter Team/API tokens column was force-stretched to match the taller
+Alert-channels/Endpoint-health/Managed-audit column, leaving a large visible gap before the Usage
+section - fixed with `align-items: start`. Separately, `buyCredit()`'s "Opening checkout..." status
+text never updated again after `Paddle.Checkout.open()`, since `Paddle.Initialize()` had no
+`eventCallback` - added one that clears the status once the overlay loads, shows success on
+`checkout.completed`, clears on `checkout.closed` (unless a purchase just completed), and surfaces
+a real message on `checkout.error`.
+
 ## 2026-09-08
 
 12 commits since the previous deploy, tagged `github-app-deploy-2026-09-08` (commit `fd7c2c3`) -
