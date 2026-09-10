@@ -4,8 +4,17 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-08
-**Snapshot Freshness:** CURRENT as of 2026-09-08 (second deploy) - production was redeployed to `master` (commit `a6e2457`, tagged `github-app-deploy-2026-09-08-2`) and re-verified live via SSH the same day. 14 commits since the previous deploy tag (`github-app-deploy-2026-09-08`): a second, independent 10-PR hardening pass (a fresh adversarial audit round, disjoint from the first) plus one product removal. Real fixes in the audit batch: a Rails `reversible do |dir|` block's `dir.down` was read as forward-migration code (#593); Go/Rust/Java/C# compiled-language entry points always looked unreachable to dead-code detection (#594); the secret scanner missed `SECRET_KEY`/`*_TOKEN` assignments entirely (#595); a Flash Review hunk-scope correction fired a self-contradictory false positive on every Python class-header hunk (#596); Gin route groups silently dropped their `.Group()` prefix (#597); the repo's own license went undetected for Rust/PHP/Ruby/C#/Java (#598); a Maven `pom.xml` with no declared `xmlns` was invisible to vulnerability scanning (#599); JVM co-located test files (`FooTest.kt` beside `Foo.kt`) were invisible to test-path detection (#600); evidence resolution misattributed commits by whole-file recency and dropped risk findings on a package-name mismatch (#601); `aletheore_ast_pattern` ignored `.aletheore.json` exclusions and `mcp-install` could follow a symlink out of the repo (#603); a nested/nonstandard build-tool Dockerfile and Symfony's `.env.dist` convention were both invisible to detection (#602). Every one of these 10 PRs was independently reviewed before merge, not rubber-stamped: Flash Review's own inline findings were checked against the real diff, and 5 held up as genuine bugs the fix PRs hadn't fully closed - all fixed before merging, not shipped: the `dir.down` exclusion matched any receiver's `.down()` call, not just a real `reversible` block's (#593); three compiled-language entry-point regexes were simultaneously too loose (Rust matched a nested `fn main` inside `mod tests`) and too strict (Java's modifier order, C#'s cross-line static+Main) (#594); a gemspec license regex matched commented-out assignments (#598); Maven namespace-stripping removed every `{uri}` prefix, not just Maven's own, so a foreign-namespaced plugin config block could be parsed as real dependency metadata (#599); the Gin group-prefix binding table was keyed file-wide instead of per function scope, so two functions reusing the idiomatic "v1" group-variable name bled into each other's routes (#597). One finding (a claimed git-blame `^` boundary-commit marker in `--porcelain` output, #601) was checked against real git 2.52.0 behavior across both documented trigger cases and did not reproduce - dismissed with the evidence rather than fixed blind. **Product removal, with a real migration**: the public, unauthenticated "paste a repo" website demo was removed entirely (#605) - its own RQ worker, Docker-socket-holding sidecar, three Dockerfiles, docker-compose services, and website form, on the reasoning that the free CLI already covers what it offered and it was the only unauthenticated internet-facing attack surface in the system (this session's own audit had just found a real crash bug in it, #604, closed as superseded by the removal). Migration `061_drop_demo_scan_rate_limits.sql` drops the now-orphaned table (no FK references it, IP+timestamp rate-limit state only). Independently re-verified before merging, not just trusted: repo-wide grep for zero remaining references, the migration's safety, the CORS-narrowing change against `website/status.js`'s real cross-origin call, and both test suites run locally (1779/1779 `src`, 1742 passed + 8 skipped `github-app`, matching the PR's own claims exactly) - one real gap found and fixed before merge: the root `README.md`'s repository-layout line still described `website/` as carrying "the marketing site and live demo", missed by a literal demo-scan/demo-sandbox string search since it names neither.
+**Last Updated:** 2026-09-10
+**Snapshot Freshness:** CURRENT as of 2026-09-10 - production was redeployed to `master` (commit
+`ee927c8`, tagged `github-app-deploy-2026-09-10`) and re-verified live via SSH the same session.
+25 commits since the previous deploy tag (`github-app-deploy-2026-09-08-2`): the dollar-credit
+pricing launch (real per-installation LLM-spend balance replacing the flat cap, live Paddle top-up
+purchases, a new scheduled monthly-credit-reset job for annual AIR subscribers), a Flash Review
+prompt-caching fix, and an independent 10-PR hardening/feature batch. Full detail in
+`github-app/CHANGELOG.md`'s own 2026-09-10 entry - this section is the live-verification record,
+not a duplicate of the changelog.
+
+**Previous:** CURRENT as of 2026-09-08 (second deploy) - production was redeployed to `master` (commit `a6e2457`, tagged `github-app-deploy-2026-09-08-2`) and re-verified live via SSH the same day. 14 commits since the previous deploy tag (`github-app-deploy-2026-09-08`): a second, independent 10-PR hardening pass (a fresh adversarial audit round, disjoint from the first) plus one product removal. Real fixes in the audit batch: a Rails `reversible do |dir|` block's `dir.down` was read as forward-migration code (#593); Go/Rust/Java/C# compiled-language entry points always looked unreachable to dead-code detection (#594); the secret scanner missed `SECRET_KEY`/`*_TOKEN` assignments entirely (#595); a Flash Review hunk-scope correction fired a self-contradictory false positive on every Python class-header hunk (#596); Gin route groups silently dropped their `.Group()` prefix (#597); the repo's own license went undetected for Rust/PHP/Ruby/C#/Java (#598); a Maven `pom.xml` with no declared `xmlns` was invisible to vulnerability scanning (#599); JVM co-located test files (`FooTest.kt` beside `Foo.kt`) were invisible to test-path detection (#600); evidence resolution misattributed commits by whole-file recency and dropped risk findings on a package-name mismatch (#601); `aletheore_ast_pattern` ignored `.aletheore.json` exclusions and `mcp-install` could follow a symlink out of the repo (#603); a nested/nonstandard build-tool Dockerfile and Symfony's `.env.dist` convention were both invisible to detection (#602). Every one of these 10 PRs was independently reviewed before merge, not rubber-stamped: Flash Review's own inline findings were checked against the real diff, and 5 held up as genuine bugs the fix PRs hadn't fully closed - all fixed before merging, not shipped: the `dir.down` exclusion matched any receiver's `.down()` call, not just a real `reversible` block's (#593); three compiled-language entry-point regexes were simultaneously too loose (Rust matched a nested `fn main` inside `mod tests`) and too strict (Java's modifier order, C#'s cross-line static+Main) (#594); a gemspec license regex matched commented-out assignments (#598); Maven namespace-stripping removed every `{uri}` prefix, not just Maven's own, so a foreign-namespaced plugin config block could be parsed as real dependency metadata (#599); the Gin group-prefix binding table was keyed file-wide instead of per function scope, so two functions reusing the idiomatic "v1" group-variable name bled into each other's routes (#597). One finding (a claimed git-blame `^` boundary-commit marker in `--porcelain` output, #601) was checked against real git 2.52.0 behavior across both documented trigger cases and did not reproduce - dismissed with the evidence rather than fixed blind. **Product removal, with a real migration**: the public, unauthenticated "paste a repo" website demo was removed entirely (#605) - its own RQ worker, Docker-socket-holding sidecar, three Dockerfiles, docker-compose services, and website form, on the reasoning that the free CLI already covers what it offered and it was the only unauthenticated internet-facing attack surface in the system (this session's own audit had just found a real crash bug in it, #604, closed as superseded by the removal). Migration `061_drop_demo_scan_rate_limits.sql` drops the now-orphaned table (no FK references it, IP+timestamp rate-limit state only). Independently re-verified before merging, not just trusted: repo-wide grep for zero remaining references, the migration's safety, the CORS-narrowing change against `website/status.js`'s real cross-origin call, and both test suites run locally (1779/1779 `src`, 1742 passed + 8 skipped `github-app`, matching the PR's own claims exactly) - one real gap found and fixed before merge: the root `README.md`'s repository-layout line still described `website/` as carrying "the marketing site and live demo", missed by a literal demo-scan/demo-sandbox string search since it names neither.
 
 ## Purpose
 
@@ -29,6 +38,50 @@ Before claiming a hardening change is live, verify:
 - Restore drill target database availability.
 
 ## Current Server Snapshot
+
+As of 2026-09-10, following a redeploy to `master` (`git fetch` + `git merge --ff-only
+origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker
+scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - the usual five, no
+lockfile changes in this batch), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `ee927c8`.
+- Working tree: clean aside from the expected untracked `backups/` directory.
+- 25 commits since the previous deploy tag (`github-app-deploy-2026-09-08-2`) - see
+  `github-app/CHANGELOG.md`'s 2026-09-10 entry for the full breakdown (dollar-credit pricing launch,
+  LLM cost cleanup, and an independent 10-PR hardening batch).
+- **Real migrations this deploy, all four confirmed applied live, not just "no pending" logged**:
+  `SELECT filename FROM schema_migrations ORDER BY filename DESC LIMIT 6` shows `065_annual_air_
+  monthly_credit_reset.sql`, `064_base_credit_allotment.sql`, `063_installation_credit_balance.sql`,
+  and `062_llm_spend_events.sql` as the four newest rows. Confirmed live in the running
+  `installations` table via `\d installations`: `base_credit_remaining_usd`, `topup_credit_balance_
+  usd`, `base_credit_allotment_usd`, and `next_monthly_credit_reset_at` all present with the
+  expected types/defaults, and the new partial index (`installations_next_monthly_credit_reset_at`,
+  `WHERE next_monthly_credit_reset_at IS NOT NULL`) exists via `\di`.
+- All five app-relevant services rebuilt and recreated (`app-server`, `scan-worker`,
+  `scan-worker-2`, `health-worker`, `scheduler`) - `jina-embed` left untouched (no lockfile change).
+- Services running: all five `Up`, all five reporting Docker-healthcheck `healthy` within ~26
+  seconds of recreation.
+- **New scheduled job confirmed running, not just registered in code**: `run_monthly_credit_reset_
+  sweep_job` (added to `scheduler.py`'s existing `run_forever` tick) completed successfully on its
+  first tick post-deploy - `rq.worker` log shows it picked up, executed, and completed in ~10ms
+  (currently a no-op sweep, zero real annual-AIR subscribers exist yet).
+- Real Paddle top-up price confirmed live inside the running container, not re-read from source:
+  `python -c "from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID; print(...)"` returns
+  `pri_01m23jw9qbsnm4zmv28bfebx4t`, matching the real price created via the Paddle MCP.
+- Real credit-allotment math confirmed live: `base_credit_for_plan('flash', 0)` returns `5.0`,
+  `base_credit_for_plan('air', 2)` returns `24.0` ($18 + $3 x 2 extra seats).
+- Health checks: internal `/healthz` returns `200 {"status":"ok","checks":{"database":"ok",
+  "redis":"ok"}}`.
+- No errors, tracebacks, or exceptions in any of the five rebuilt services' logs after restart
+  (checked the full window since recreation, not a narrow grep).
+- Not re-verified this pass (out of scope, no relevant Dockerfile/host changes in this batch):
+  Docker socket mount absence, non-root users, CPU/mem limits, backup cron execution, base-image
+  digest pinning, restore-drill target availability, disk space. Each was last directly verified in
+  the 2026-08-10 deploy (restore drill itself upgraded 2026-08-24) - re-check if any host-level or
+  Dockerfile change touches them.
+
+## 2026-09-08 (second deploy) Snapshot
 
 As of 2026-09-08 (second deploy), following a redeploy to `master` (`git fetch` + `git merge --ff-only origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - the usual five; the only lockfile change in this batch was `requirements-demo-scan-worker.lock.txt` itself being deleted, so nothing else needed rebuilding), live inspection found:
 
