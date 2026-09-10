@@ -4146,7 +4146,23 @@ class _IncrementalSpendBudget:
         # or given back to (delta < 0) this installation's stored balance,
         # or the balance silently drifts from real spend over many calls.
         if delta > 0:
-            reserve_llm_spend(self.dsn, self.installation_id, delta)
+            if not reserve_llm_spend(self.dsn, self.installation_id, delta):
+                # reserve_llm_spend no-ops (mutates nothing) when the
+                # combined balance can't cover the full overage. The LLM
+                # call already happened and its real cost is sunk - leaving
+                # the balance untouched would overstate what the
+                # installation actually has left, the exact invariant this
+                # whole mechanism exists to protect. Best-effort recovery:
+                # drain whatever is still there down to zero, same
+                # fetch-then-reserve pattern the Flash Review call site
+                # uses for its own near-zero tail.
+                row = get_installation_row(self.dsn, self.installation_id)
+                if row is not None:
+                    remaining = float(row.get("base_credit_remaining_usd", 0)) + float(
+                        row.get("topup_credit_balance_usd", 0)
+                    )
+                    if remaining > 0:
+                        reserve_llm_spend(self.dsn, self.installation_id, remaining)
         elif delta < 0:
             release_llm_spend_reservation(self.dsn, self.installation_id, -delta)
         record_llm_spend(self.dsn, self.installation_id, delta, feature=self.feature)

@@ -1417,6 +1417,41 @@ async def test_incremental_spend_budget_record_usage_trues_up_the_credit_balance
 
 
 @pytest.mark.asyncio
+async def test_incremental_spend_budget_record_usage_drains_balance_when_true_up_reservation_fails(pool):
+    # reserve_llm_spend no-ops (mutates nothing, returns False) when the
+    # combined balance can't cover the requested amount - the true-up call
+    # in record_usage used to ignore that return value, so a real cost
+    # that exceeded the up-front reservation AND exceeded the installation's
+    # remaining balance left the balance untouched (overstating what's left)
+    # while record_llm_spend logged the full overage into the accounting
+    # table anyway. This installation has only $0.02 left, far less than
+    # the ~$0.0352 real cost of this call (see the sibling true-up test for
+    # the exact rate math) - the true-up reservation of the ~$0.0252
+    # overage (delta = 0.0352 - 0.01) must fail, and the fix must drain the
+    # remaining $0.02 to exactly zero rather than leave it at $0.02.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    installation_id = 9103
+    await _insert_installation(
+        pool, installation_id, "a",
+        base_credit_allotment_usd=0.02,
+        base_credit_remaining_usd=0.02,
+        topup_credit_balance_usd=0.00,
+    )
+
+    budget = _IncrementalSpendBudget(
+        TEST_DATABASE_URL, installation_id, "deepseek-v4-flash",
+        next_call_reserve_usd=0.01, feature="airview_incremental",
+    )
+    assert budget.can_start_next_call() is True
+    budget.record_usage(prompt_tokens=50000, completion_tokens=10000)
+
+    remaining = await _get_balance(pool, installation_id)
+    assert float(remaining["base_credit_remaining_usd"]) == pytest.approx(0.00)
+    assert float(remaining["topup_credit_balance_usd"]) == pytest.approx(0.00)
+
+
+@pytest.mark.asyncio
 async def test_incremental_spend_budget_record_usage_refunds_when_actual_cost_is_lower(pool):
     from scan_worker.jobs import _IncrementalSpendBudget
 
