@@ -10,6 +10,7 @@ features this release, all correctness/security fixes across scanning, evidence 
 managed-audit pipeline, and the CLI itself.
 
 **Security and detection gaps:**
+
 - The secret scanner missed `SECRET_KEY`/`*_TOKEN` assignments entirely - one of the most common
   real credential shapes (#595).
 - A Maven `pom.xml` with no declared `xmlns` was totally invisible to vulnerability scanning (#599).
@@ -18,12 +19,14 @@ managed-audit pipeline, and the CLI itself.
   symlink out of the repo (#603).
 
 **Dead-code and entry-point detection:**
+
 - Go/Rust/Java/C# compiled-language entry points were always flagged as dead code - unreachable to
   the detector by construction (#594).
 - `find_blast_radius`'s `direct_dependents` was completely unbounded (#608).
 - JVM co-located test files (`FooTest.kt` beside `Foo.kt`) were invisible to `_is_test_path` (#600).
 
 **ORM, migrations, and framework parsing:**
+
 - Rails migration parser silently dropped `t.index`/`t.foreign_key` and misread `dir.down` as
   forward-migration code (#593).
 - Gin route groups silently dropped their `.Group()` prefix, producing wrong but plausible-looking
@@ -32,6 +35,7 @@ managed-audit pipeline, and the CLI itself.
   to detection (#602).
 
 **Evidence resolution and git intelligence:**
+
 - Evidence resolution misattributed commits by whole-file recency and dropped risk findings on a
   package-name mismatch (#601).
 - The git-intel field parser silently corrupted commits with a control character in the author
@@ -48,6 +52,7 @@ managed-audit pipeline, and the CLI itself.
   comma-containing string (#618).
 
 **Managed audits and the CLI:**
+
 - The CLI's `aletheore audit` command never surfaced the signed report's verification link, even
   though every other managed-audit surface (the PR-comment path) already showed it (#637).
 - The managed-audit HTTP client leaked a connection pool on every call (#620).
