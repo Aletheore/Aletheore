@@ -1757,7 +1757,28 @@ def run_flash_review_job(
             settings.database_url, installation_id, review_count_cap
         ):
             return
+        # reserve_llm_spend rejects the WHOLE reservation when the combined
+        # balance is below the requested amount (its `>= %(reserve)s` WHERE
+        # clause - deliberately untouched, that atomicity is what stops two
+        # concurrent reviews from together overdrawing). Now that the
+        # success path trues the reservation up to the real cost
+        # (~$0.007 for a typical review), a flat $0.50 request would make
+        # Flash Review go silent for any balance in the $0-$0.50 tail even
+        # though the review costs a fraction of a cent - a stranded
+        # balance, not a spent one. Reserving no more than what's actually
+        # there fixes it at the call site: the full flat amount whenever
+        # the balance comfortably covers it, only the remainder in that
+        # near-zero tail. A zero/unknown balance still requests the full
+        # amount, so the reservation is rejected and the exhausted-email
+        # path fires exactly as before.
+        # Read off the installation row already fetched above, not a second
+        # query.
+        combined_balance = float(installation.get("base_credit_remaining_usd", 0)) + float(
+            installation.get("topup_credit_balance_usd", 0)
+        )
         reserved_spend = FLASH_REVIEW_SPEND_RESERVE_USD
+        if 0 < combined_balance < reserved_spend:
+            reserved_spend = combined_balance
         if not reserve_llm_spend_with_email_hooks(
             settings.database_url, installation_id, reserved_spend, feature="flash_review"
         ):
@@ -3801,6 +3822,22 @@ def send_transactional_email_job(
     if not settings.resend_api_key:
         logger.warning(
             "RESEND_API_KEY not configured, skipping email", extra={"dedupe_key": dedupe_key}
+        )
+        return
+
+    # The credit-balance emails (credit_low_balance / credit_exhausted) are
+    # enqueued by reserve_llm_spend_with_email_hooks on this branch, but
+    # their templates land on the parallel dashboard/emails branch - so
+    # depending on merge order this worker can legitimately be asked for a
+    # template it doesn't have yet. Unguarded, that KeyError becomes an RQ
+    # failed job plus an error alert for every low-balance event. Skipping
+    # with a warning doesn't close that gap (the other branch's templates
+    # do), it just keeps this branch independently deployable.
+    if template_name not in _EMAIL_TEMPLATES:
+        logger.warning(
+            "no email template registered for %s (installation_id=%s) - skipping",
+            template_name,
+            installation_id,
         )
         return
 

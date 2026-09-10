@@ -285,10 +285,11 @@ def _patch_fix_suggestion_spend_gate(monkeypatch, plan: str = "air") -> None:
     # replacing the old check-under-one-lock/record-under-another-lock
     # shape - see before_launch_fixes.md finding #2) - default it to
     # succeed so these tests exercise the same happy path they did before
-    # that migration; test_fix_suggestion_attachment_skips_the_llm_call_when_spend_cap_reached
-    # below still gets its cap-reached behavior from get_llm_spend_this_month,
-    # since _llm_spend_cap_reached's fast-fail hint runs before reserve_llm_spend
-    # is ever attempted.
+    # that migration. test_fix_suggestion_attachment_skips_the_llm_call_when_spend_cap_reached
+    # below gets its blocked behavior from a zeroed credit balance on the
+    # installation row, NOT from get_llm_spend_this_month: Task 7 removed
+    # the _llm_spend_cap_reached fast-fail hint from this call site
+    # entirely.
     # Task 7 of the dollar-credit-pricing plan made _fix_suggestion_
     # attachment compute this installation's combined credit balance
     # straight off this row (base_credit_remaining_usd +
@@ -306,7 +307,6 @@ def _patch_fix_suggestion_spend_gate(monkeypatch, plan: str = "air") -> None:
         },
     )
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
-    monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", lambda *a, **k: None)
