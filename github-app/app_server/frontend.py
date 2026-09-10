@@ -1981,8 +1981,16 @@ def _settings_html() -> str:
 // client-side publishable token, already sent to every browser today via
 // the /subscribe page's own Paddle.Initialize() call - not a secret being
 // newly exposed here.
-Paddle.Environment.set("{get_settings().paddle_environment}");
-Paddle.Initialize({{ token: "{get_settings().paddle_client_token}" }});
+// cdn.paddle.com/paddle/v2/paddle.js is a third-party script an adblocker or
+// corporate proxy can legitimately block - guarded so a blocked load only
+// disables the credit top-up button (buyCredit() re-checks the same guard),
+// instead of throwing on this unconditional top-level statement and taking
+// down the rest of this script block, including the loadSettings() call at
+// the bottom that renders the whole page.
+if (typeof Paddle !== "undefined") {{
+  Paddle.Environment.set("{get_settings().paddle_environment}");
+  Paddle.Initialize({{ token: "{get_settings().paddle_client_token}" }});
+}}
 
 async function revokeToken(tokenId, btn) {{
   btn.disabled = true;
@@ -2195,8 +2203,16 @@ async function openBillingPortal() {{
 }}
 
 async function buyCredit() {{
-  const amount = parseInt(document.getElementById('topup-amount').value, 10);
   const statusEl = document.getElementById('topup-status');
+  if (typeof Paddle === "undefined") {{
+    statusEl.textContent = 'Checkout is unavailable right now - try disabling any ad/script blocker and reload.';
+    return;
+  }}
+  // parseInt would accept "7.9" (silently truncated to 7) or "1e5" (parsed
+  // as 1) - Number() + an explicit integer check rejects both instead of
+  // quietly charging a different amount than what's on screen.
+  const rawAmount = Number(document.getElementById('topup-amount').value);
+  const amount = Number.isInteger(rawAmount) ? rawAmount : NaN;
   if (!amount || amount < 5) {{
     statusEl.textContent = 'Minimum purchase is $5.';
     return;
@@ -2214,9 +2230,19 @@ async function buyCredit() {{
     return;
   }}
   const data = await res.json();
+  // Associates the checkout with the installation's existing Paddle
+  // customer record (already returned in data.installation, same source
+  // /subscribe's checkout page reads for its own pwCustomer wiring) -
+  // without it, an existing subscriber topping up credit would re-enter
+  // their email and Paddle would silently open a second customer record,
+  // splitting billing history and producing a transaction whose
+  // customer_id the subscription webhook path can't attribute back to
+  // this installation.
+  const paddleCustomerId = data.installation && data.installation.paddle_customer_id;
   Paddle.Checkout.open({{
     items: [{{ priceId: window._creditTopupPriceId, quantity: amount }}],
     customData: {{ installation_token: data.checkout_installation_token }},
+    ...(paddleCustomerId ? {{ customer: {{ id: paddleCustomerId }} }} : {{}}),
     settings: {{
       displayMode: 'overlay',
       variant: 'one-page',
