@@ -380,6 +380,26 @@ async def test_admin_page_reports_zero_usage_before_any_spend(pool, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_admin_page_surfaces_credit_balance(pool, monkeypatch):
+    client = await _logged_in_client(pool, monkeypatch, plan="air")
+    # Set credit balance for the test installation (id=100)
+    await pool.execute(
+        "UPDATE installations SET base_credit_remaining_usd = $1, topup_credit_balance_usd = $2 WHERE installation_id = $3",
+        3.50,
+        12.00,
+        100,
+    )
+
+    async with client:
+        response = await client.get("/admin/octocat/hello-world")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["base_credit_remaining_usd"] == pytest.approx(3.50)
+    assert body["topup_credit_balance_usd"] == pytest.approx(12.00)
+
+
+@pytest.mark.asyncio
 async def test_generate_token_returns_raw_value_once(pool, monkeypatch):
     client = await _logged_in_client(pool, monkeypatch)
     async with client:

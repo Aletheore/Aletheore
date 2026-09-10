@@ -366,6 +366,96 @@ def subscription_canceled_email(account_login: str, plan: str) -> dict:
     return {"subject": subject, "html": html, "text": text}
 
 
+def credit_low_balance_email(
+    account_login: str, plan: str, base_credit_remaining_usd: float, topup_credit_balance_usd: float
+) -> dict:
+    # base_credit_remaining_usd/topup_credit_balance_usd may arrive as
+    # Decimal (asyncpg's NUMERIC type) once the real caller lands - coerce
+    # up front so the arithmetic below never raises a Decimal/float TypeError.
+    base_credit_remaining_usd = float(base_credit_remaining_usd)
+    topup_credit_balance_usd = float(topup_credit_balance_usd)
+    plan_name = _plan_display_name(plan)
+    is_air = plan == "air"
+    # The buy-more-credit flow lives on the AIR-only dashboard settings page
+    # (admin.py's _require_admin_installation 402s any other plan) - a
+    # non-AIR customer can't "buy more credit" at all without upgrading
+    # first, so both the copy and the CTA button need to say that, not
+    # dangle a promise the account can't act on.
+    cta_url = _DASHBOARD_URL if is_air else _PRICING_URL
+    cta_label = "Buy more credit" if is_air else "Upgrade to AIR"
+    buy_more_line = (
+        "Buy more credit any time from your dashboard - it never expires."
+        if is_air
+        else "Upgrade to Aletheore AIR to buy more credit any time - it never expires."
+    )
+    combined = base_credit_remaining_usd + topup_credit_balance_usd
+    subject = f"Your Aletheore {plan_name} credit is running low"
+    preheader = f"${combined:.2f} remaining this cycle."
+    text = (
+        f"Hi {account_login},\n\n"
+        f"Your Aletheore {plan_name} plan has ${combined:.2f} of AI credit left "
+        f"this billing cycle (${base_credit_remaining_usd:.2f} included, "
+        f"${topup_credit_balance_usd:.2f} from purchased top-ups). "
+        "Once it runs out, automatic PR reviews and other AI-powered features "
+        "will pause until your next renewal or you buy more.\n\n"
+        f"{buy_more_line}"
+        f"{_FOOTER_TEXT}"
+    )
+    html = _shell(
+        preheader,
+        f"<p>Your Aletheore {plan_name} plan has <strong>${combined:.2f}</strong> of AI credit "
+        "left this billing cycle.</p>"
+        f"<p>${base_credit_remaining_usd:.2f} included, ${topup_credit_balance_usd:.2f} from "
+        "purchased top-ups.</p>"
+        "<p>Once it runs out, automatic PR reviews and other AI-powered features will pause "
+        "until your next renewal or you buy more.</p>"
+        + _button(cta_label, cta_url),
+    )
+    return {"subject": subject, "html": html, "text": text}
+
+
+def credit_exhausted_email(
+    account_login: str, plan: str, base_credit_remaining_usd: float, topup_credit_balance_usd: float
+) -> dict:
+    # See credit_low_balance_email above - coerce Decimal/float args up
+    # front so the (currently arithmetic-free, but future-proofed) usage
+    # below never raises a Decimal/float TypeError.
+    base_credit_remaining_usd = float(base_credit_remaining_usd)
+    topup_credit_balance_usd = float(topup_credit_balance_usd)
+    plan_name = _plan_display_name(plan)
+    is_air = plan == "air"
+    # See credit_low_balance_email above - the buy-more-credit flow is
+    # AIR-only, so a non-AIR customer needs "upgrade" copy, not a promise
+    # to "buy more credit" they can't act on without upgrading first.
+    cta_url = _DASHBOARD_URL if is_air else _PRICING_URL
+    cta_label = "Buy more credit" if is_air else "Upgrade to AIR"
+    resume_line = (
+        "Buy more credit any time to resume immediately, or wait for your next renewal "
+        "when your included credit refreshes."
+        if is_air
+        else "Upgrade to Aletheore AIR to buy more credit and resume immediately, or wait "
+        "for your next renewal when your included credit refreshes."
+    )
+    subject = f"Your Aletheore {plan_name} credit has run out"
+    preheader = "AI-powered features are paused until you buy more credit or your plan renews."
+    text = (
+        f"Hi {account_login},\n\n"
+        f"Your Aletheore {plan_name} plan has run out of AI credit for this billing cycle. "
+        "Automatic PR reviews and other AI-powered features are paused - deterministic "
+        "scanning and everything in Community continues to work normally.\n\n"
+        f"{resume_line}"
+        f"{_FOOTER_TEXT}"
+    )
+    html = _shell(
+        preheader,
+        f"<p>Your Aletheore {plan_name} plan has run out of AI credit for this billing cycle.</p>"
+        "<p>Automatic PR reviews and other AI-powered features are paused - deterministic "
+        "scanning and everything in Community continues to work normally.</p>"
+        + _button(cta_label, cta_url),
+    )
+    return {"subject": subject, "html": html, "text": text}
+
+
 def health_alert_email(alert_text: str) -> dict:
     # alert_text is exactly what scan_worker/slack.py's format_reachability_alert/
     # format_latency_alert/format_shape_change_alert already built for

@@ -17,7 +17,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app_server.affiliates import create_affiliate, list_affiliates_with_totals, mark_commissions_paid
-from app_server.auth import encrypt_access_token, get_current_session, refresh_github_access_token
+from app_server.auth import (
+    encrypt_access_token,
+    get_current_session,
+    refresh_github_access_token,
+    sign_checkout_installation_id,
+)
 from app_server.config import get_settings
 from app_server.github_auth import generate_app_jwt, get_installation_token, get_repo_permission_for_user
 from app_server.github_pagination import fetch_paginated_github_collection
@@ -77,7 +82,7 @@ from app_server.paddle_client import create_discount as create_paddle_discount
 from app_server.paddle_client import create_portal_session
 from app_server.paddle_client import get_subscription as get_paddle_subscription
 from app_server.paddle_client import update_subscription_items as update_paddle_subscription_items
-from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID
+from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID, EXTRA_SEAT_PRICE_ID
 from app_server.rate_limit import is_rate_limited
 from app_server.redis_client import get_redis_client
 from app_server.url_validation import UnsafeURLError, validate_external_https_url
@@ -555,6 +560,8 @@ async def admin_page(org: str, repo: str, request: Request):
         installation["topup_credit_balance_usd"]
     )
     public_status_enabled = await get_public_status_enabled(pool, installation_id, repo_full_name)
+    settings = get_settings()
+    checkout_installation_token = sign_checkout_installation_id(installation_id, settings.session_secret)
     return {
         "installation": installation,
         "tokens": tokens,
@@ -573,6 +580,10 @@ async def admin_page(org: str, repo: str, request: Request):
         "llm_spend_month_to_date": llm_spend_month_to_date,
         "llm_spend_cap": llm_spend_cap,
         "flash_reviews_month_to_date": flash_reviews_month_to_date,
+        "base_credit_remaining_usd": float(installation["base_credit_remaining_usd"]),
+        "topup_credit_balance_usd": float(installation["topup_credit_balance_usd"]),
+        "checkout_installation_token": checkout_installation_token,
+        "credit_topup_price_id": CREDIT_TOPUP_PRICE_ID,
     }
 
 

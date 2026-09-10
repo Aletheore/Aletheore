@@ -23,11 +23,21 @@ _PAGE_CONSTANTS = [
     if name.endswith("_HTML") and isinstance(getattr(frontend, name), str)
 ]
 
+# _settings_html() is the one page built as a zero-argument, lru_cache'd
+# function instead of a module-level constant (it defers get_settings() to
+# the first real request rather than Python import time - see its own
+# docstring), so it doesn't match the isinstance(..., str) filter above and
+# was silently falling out of this test's coverage entirely. Named
+# explicitly so its <script> block (including buyCredit()) keeps getting
+# the same JS syntax check as every other dashboard page.
+_PAGE_CONSTANTS = _PAGE_CONSTANTS + ["_settings_html"]
+
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not available in this environment")
 @pytest.mark.parametrize("page_constant", _PAGE_CONSTANTS)
 def test_embedded_script_blocks_are_valid_javascript(page_constant, tmp_path):
-    html = getattr(frontend, page_constant)
+    page = getattr(frontend, page_constant)
+    html = page() if callable(page) else page
     scripts = _SCRIPT_BLOCK.findall(html)
     if not scripts:
         pytest.skip(f"{page_constant} has no <script> block")

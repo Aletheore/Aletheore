@@ -160,6 +160,8 @@ from scan_worker.github_api import (
     upsert_pr_comment,
 )
 from app_server.email_templates import (
+    credit_exhausted_email,
+    credit_low_balance_email,
     health_alert_email,
     payment_failed_email,
     subscription_canceled_email,
@@ -3869,6 +3871,8 @@ _EMAIL_TEMPLATES = {
     "subscription_canceled": subscription_canceled_email,
     "weekly_digest": weekly_digest_email,
     "health_alert": health_alert_email,
+    "credit_low_balance": credit_low_balance_email,
+    "credit_exhausted": credit_exhausted_email,
 }
 
 
