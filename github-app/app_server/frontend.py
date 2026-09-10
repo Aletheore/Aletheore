@@ -357,7 +357,7 @@ table.findings tr:last-child td { border-bottom: none; }
 .wiki-md-list li { font-size: 12.5px; color: var(--slate-600); line-height: 1.6; margin-bottom: 3px; }
 .wiki-md code { font-family: var(--font-mono); font-size: 11.5px; background: var(--slate-100); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
 
-.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
 .settings-section { margin-top: 24px; }
 .settings-block { background: var(--paper); border: 1px solid var(--border); border-radius: 12px;
   padding: 16px 18px; box-shadow: var(--shadow-card); margin-bottom: 16px; }
@@ -1989,7 +1989,32 @@ def _settings_html() -> str:
 // the bottom that renders the whole page.
 if (typeof Paddle !== "undefined") {{
   Paddle.Environment.set("{get_settings().paddle_environment}");
-  Paddle.Initialize({{ token: "{get_settings().paddle_client_token}" }});
+  // eventCallback is global (Paddle.Initialize() runs once for the whole
+  // page) - buyCredit() is the only flow that opens a checkout here, so
+  // topup-status is the only element it needs to drive. Without this,
+  // buyCredit()'s "Opening checkout..." status never changes again: there
+  // was no handler for the overlay actually loading, the user closing it,
+  // a mid-checkout error, or a completed payment, so the text just sat
+  // there regardless of what happened next.
+  Paddle.Initialize({{
+    token: "{get_settings().paddle_client_token}",
+    eventCallback: function (event) {{
+      const status = document.getElementById('topup-status');
+      if (!status || !event || !event.name) return;
+      if (event.name === 'checkout.loaded') {{
+        status.textContent = '';
+      }} else if (event.name === 'checkout.completed') {{
+        window._creditCheckoutCompleted = true;
+        status.textContent = 'Purchase complete - your balance updates once the payment is confirmed.';
+        status.style.color = 'var(--success)';
+      }} else if (event.name === 'checkout.closed' && !window._creditCheckoutCompleted) {{
+        status.textContent = '';
+      }} else if (event.name === 'checkout.error') {{
+        status.textContent = 'Checkout error - try again.';
+        status.style.color = 'var(--critical)';
+      }}
+    }},
+  }});
 }}
 
 async function revokeToken(tokenId, btn) {{
@@ -2218,6 +2243,8 @@ async function buyCredit() {{
     return;
   }}
   statusEl.textContent = 'Opening checkout...';
+  statusEl.style.color = '';
+  window._creditCheckoutCompleted = false;
   // The installation token is minted with a 30-minute TTL (auth.py's
   // sign_checkout_installation_id) - re-fetch it fresh here instead of
   // reusing loadSettings()'s page-load-time copy, so a tab left open past
