@@ -333,6 +333,46 @@ DOCS_FULL_BUILD_LLM_RESERVE_USD = 0.10
 # throttle legitimate usage near the cap boundary.
 FLASH_REVIEW_SPEND_RESERVE_USD = 0.50
 
+# The remaining five _IncrementalSpendBudget callers (managed_audit x2,
+# health_fix_suggestion, airview_incremental, docs_incremental) were still
+# left on DEFAULT_LLM_NEXT_CALL_RESERVE_USD's near-zero $0.001 placeholder
+# above - the exact gap independent audit of PR #562 already flagged and
+# fixed for the two full-build jobs, just not swept into these five at the
+# time. Same reasoning as WIKI_FULL_BUILD_LLM_RESERVE_USD/
+# FLASH_REVIEW_SPEND_RESERVE_USD applies to each: size the reserve close to
+# (or, where the real cost varies a lot, conservatively above) a single
+# real call's likely cost so the atomic reserve-per-call check actually
+# bounds concurrent overshoot, rather than passing trivially every time.
+
+# run_managed_audit's reasoning phase is agentic (adapter.invoke, not a
+# single simple_completion - see aletheore.report.run_reasoning_phase) and
+# can make several sequential LLM calls per audit, each carrying a growing
+# conversation prefix (managed_audit measured 96% cache hit on that
+# append-only prefix in a real test, per MODEL_RATES_PER_MILLION_USD's own
+# comment - real, but not 100%, so the uncached tail of a large-repo audit
+# turn is still the failure mode to size against). deepseek-v4-flash's
+# $0.44/$1.32 per-million rate applied to a large tool-result-laden turn
+# can plausibly exceed FLASH_REVIEW_SPEND_RESERVE_USD's single-diff
+# estimate, so this is sized higher rather than reused as-is.
+MANAGED_AUDIT_LLM_RESERVE_USD = 1.00
+
+# health_fix_suggestion's whole prompt is a ~30-line code snippet plus a
+# few short JSON fields (endpoint, status, file, line, symbol - see
+# _attach_health_fix_suggestion's user_prompt) with a short suggestion as
+# output: two orders of magnitude smaller than a Flash Review diff even at
+# PRO_MODEL's (deepseek-v4-pro, $1.32/$3.96 per million) higher rate, so a
+# reserve this size still leaves wide margin without over-throttling.
+HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD = 0.05
+
+# airview_incremental/docs_incremental call the identical generate_
+# subsystems batching path (live_wiki.py's _run_batched_with_retry) the
+# full-build jobs do, just over fewer (changed-only) clusters - same
+# order-of-magnitude real cost as WIKI_FULL_BUILD_LLM_RESERVE_USD/
+# DOCS_FULL_BUILD_LLM_RESERVE_USD per batch, reused directly rather than
+# re-estimated from scratch.
+WIKI_INCREMENTAL_LLM_RESERVE_USD = 0.10
+DOCS_INCREMENTAL_LLM_RESERVE_USD = 0.10
+
 
 def _job_temp_dir() -> Path:
     path = JOBS_ROOT / str(uuid.uuid4())
@@ -1560,6 +1600,7 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                     installation_id,
                     MANAGED_AUDIT_MODEL,
                     monthly_cap,
+                    next_call_reserve_usd=MANAGED_AUDIT_LLM_RESERVE_USD,
                     feature="managed_audit",
                 )
                 report_text = run_managed_audit(
@@ -1658,6 +1699,7 @@ def run_managed_audit_api_job(
             installation_id,
             MANAGED_AUDIT_MODEL,
             monthly_cap,
+            next_call_reserve_usd=MANAGED_AUDIT_LLM_RESERVE_USD,
             feature="managed_audit",
         )
 
@@ -2153,11 +2195,21 @@ def _run_flash_review(
             with spend_lock:
                 spend_accumulator["total"] += cost
 
+        # Shared with _cache_write below so a cache-miss review only pays
+        # for one embed_text call against the jina-embed sidecar for this
+        # diff, not two (lookup used to embed diff_text, then store
+        # embedded the identical diff_text again from scratch).
+        _diff_vector_cache: dict[str, list[float] | None] = {}
+
         def _cache_lookup(diff: str) -> list[dict] | None:
-            return lookup_cached_flash_review_result(dsn, installation_id, repo_full_name, diff)
+            return lookup_cached_flash_review_result(
+                dsn, installation_id, repo_full_name, diff, vector_cache=_diff_vector_cache
+            )
 
         def _cache_write(diff: str, found: list[dict], used: str) -> None:
-            store_flash_review_result(dsn, installation_id, repo_full_name, diff, found, used)
+            store_flash_review_result(
+                dsn, installation_id, repo_full_name, diff, found, used, vector_cache=_diff_vector_cache
+            )
 
         def _on_grounding_result(stats: dict) -> None:
             grounding_result.update(stats)
@@ -2816,7 +2868,8 @@ def _fix_suggestion_attachment(
 
         fix_suggestion_model = model_for_plan(plan)
         spend_budget = _IncrementalSpendBudget(
-            dsn, installation_id, fix_suggestion_model, monthly_cap, feature="health_fix_suggestion"
+            dsn, installation_id, fix_suggestion_model, monthly_cap,
+            next_call_reserve_usd=HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD, feature="health_fix_suggestion",
         )
         if not spend_budget.can_start_next_call():
             return None
@@ -4291,6 +4344,11 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
     )
 
     covered_count = 0
+    # Shared across every cache_lookup/cache_write pair in this build
+    # (keyed by packet content hash - lookups run concurrently across
+    # distinct packets, see live_wiki.generate_subsystems) so a packet
+    # that misses the cache only pays for one embed_text call, not two.
+    _packet_vector_cache: dict[str, list[float] | None] = {}
     try:
         naming_adapter = _live_wiki_naming_adapter(
             on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
@@ -4332,9 +4390,12 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
                 naming_adapter,
                 writing_adapter,
                 cluster_ids=set(chunk),
-                cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
+                cache_lookup=lambda packet: lookup_cached_result(
+                    dsn, installation_id, repo_full_name, packet, vector_cache=_packet_vector_cache
+                ),
                 cache_write=lambda packet, output, used: store_result(
-                    dsn, installation_id, repo_full_name, packet, output, used
+                    dsn, installation_id, repo_full_name, packet, output, used,
+                    vector_cache=_packet_vector_cache,
                 ),
                 model_used=model_used,
                 fetch_line_count=fetch_line_count,
@@ -4465,9 +4526,14 @@ def _maybe_update_live_wiki(
     # No longer dynamic - see _live_wiki_update_writing_adapter.
     update_model = live_wiki.UPDATE_MODEL
     spend_budget = _IncrementalSpendBudget(
-        dsn, installation_id, update_model, monthly_cap, feature="airview_incremental"
+        dsn, installation_id, update_model, monthly_cap,
+        next_call_reserve_usd=WIKI_INCREMENTAL_LLM_RESERVE_USD, feature="airview_incremental",
     )
 
+    # Shared across every cache_lookup/cache_write pair in this build - see
+    # the matching comment on run_live_wiki_full_build_job's own
+    # _packet_vector_cache.
+    _packet_vector_cache: dict[str, list[float] | None] = {}
     try:
         naming_adapter = _live_wiki_naming_adapter(
             on_usage=spend_budget.record_usage, before_llm_call=spend_budget.can_start_next_call
@@ -4487,9 +4553,12 @@ def _maybe_update_live_wiki(
             naming_adapter,
             writing_adapter,
             cluster_ids=cluster_ids,
-            cache_lookup=lambda packet: lookup_cached_result(dsn, installation_id, repo_full_name, packet),
+            cache_lookup=lambda packet: lookup_cached_result(
+                dsn, installation_id, repo_full_name, packet, vector_cache=_packet_vector_cache
+            ),
             cache_write=lambda packet, output, used: store_result(
-                dsn, installation_id, repo_full_name, packet, output, used
+                dsn, installation_id, repo_full_name, packet, output, used,
+                vector_cache=_packet_vector_cache,
             ),
             model_used=update_model,
             fetch_line_count=fetch_line_count,
@@ -4948,7 +5017,7 @@ def _maybe_update_live_docs(
     update_model = resolve_model(live_docs.FLASH_MODEL)
     spend_budget = _IncrementalSpendBudget(
         dsn, installation_id, update_model, monthly_cap,
-        feature="docs_incremental",
+        next_call_reserve_usd=DOCS_INCREMENTAL_LLM_RESERVE_USD, feature="docs_incremental",
     )
 
     def _on_usage(prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> None:

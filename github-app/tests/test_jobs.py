@@ -1345,14 +1345,15 @@ def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeyp
     )
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
-    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.0012)
-    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.0006)
+    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 1.5)
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.6)
     # In-memory stand-in for the real atomic reserve_llm_spend/record_llm_spend
     # pair, sharing running-total state the same way the real DB row does -
     # reserve_llm_spend reserves next_call_reserve_usd up front (atomic
     # check-and-add), record_llm_spend's delta then trues it up to the real
-    # cost. `cost_for_usage` mocked to 0.0006 < DEFAULT_LLM_NEXT_CALL_RESERVE_USD
-    # (0.001), so the true-up delta is negative: -0.0004.
+    # cost. Cap of 1.5 fits exactly one MANAGED_AUDIT_LLM_RESERVE_USD (1.00)
+    # reservation but not two. `cost_for_usage` mocked to 0.6 <
+    # MANAGED_AUDIT_LLM_RESERVE_USD, so the true-up delta is negative: -0.4.
     spend_state = {"total": 0.0}
     recorded_deltas = []
 
@@ -1391,7 +1392,7 @@ def test_managed_audit_api_job_records_each_call_and_exposes_budget_stop(monkeyp
     )
 
     assert "Partial managed audit" in result
-    assert recorded_deltas == [pytest.approx(-0.0004)]
+    assert recorded_deltas == [pytest.approx(-0.4)]
     assert budget_checks == [True, False]
 
 
@@ -1518,8 +1519,8 @@ def test_managed_audit_pr_job_records_each_call_and_stops_mid_run_when_cap_reach
     monkeypatch.setattr("scan_worker.jobs.get_github_api_client", lambda: object())
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", lambda *a, **k: 0.0)
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
-    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 0.0012)
-    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.0006)
+    monkeypatch.setattr("scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: 1.5)
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.6)
     monkeypatch.setattr("scan_worker.jobs._sign_and_persist_audit_report", lambda *a, **k: None)
     monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", lambda *a, **k: None)
 
@@ -1560,7 +1561,7 @@ def test_managed_audit_pr_job_records_each_call_and_stops_mid_run_when_cap_reach
 
     run_managed_audit_pr_job(1, "octocat/hello-world", 42)
 
-    assert recorded_deltas == [pytest.approx(-0.0004)]
+    assert recorded_deltas == [pytest.approx(-0.4)]
     assert budget_checks == [True, False]
 
 
@@ -5558,7 +5559,7 @@ def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pus
     # recorded spend.
     import threading
 
-    from scan_worker.jobs import DEFAULT_LLM_NEXT_CALL_RESERVE_USD, _maybe_update_live_wiki
+    from scan_worker.jobs import WIKI_INCREMENTAL_LLM_RESERVE_USD, _maybe_update_live_wiki
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr("scan_worker.jobs.installation_spend_lock", _noop_spend_lock)
@@ -5569,7 +5570,7 @@ def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pus
 
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+        "scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: WIKI_INCREMENTAL_LLM_RESERVE_USD
     )
 
     spend_state = {"total": 0.0}
@@ -5598,7 +5599,7 @@ def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pus
     monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
     monkeypatch.setattr(
-        "scan_worker.jobs.cost_for_usage", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+        "scan_worker.jobs.cost_for_usage", lambda *a, **k: WIKI_INCREMENTAL_LLM_RESERVE_USD
     )
 
     status_calls = []
@@ -7612,7 +7613,7 @@ def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_
     # rather than reading a value that can go stale before it's acted on.
     import threading
 
-    from scan_worker.jobs import DEFAULT_LLM_NEXT_CALL_RESERVE_USD, _fix_suggestion_attachment
+    from scan_worker.jobs import HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD, _fix_suggestion_attachment
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
     monkeypatch.setattr(
@@ -7637,11 +7638,12 @@ def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_
     )
     monkeypatch.setattr("scan_worker.jobs.model_for_plan", lambda *a, **k: "gpt-5.6-luna")
 
-    # Only one reservation of DEFAULT_LLM_NEXT_CALL_RESERVE_USD fits under
-    # this cap - the second concurrent call must be rejected.
+    # Only one reservation of HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD fits
+    # under this cap - the second concurrent call must be rejected.
     monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "scan_worker.jobs.monthly_cap_for_installation", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+        "scan_worker.jobs.monthly_cap_for_installation",
+        lambda *a, **k: HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD,
     )
 
     # In-memory stand-in for the real atomic llm_spend row, sharing running-
@@ -7685,7 +7687,7 @@ def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_
     # delta is exactly 0 (a no-op) - isolates this test to the reservation
     # race itself, instead of a coincidental true-up masking it.
     monkeypatch.setattr(
-        "scan_worker.jobs.cost_for_usage", lambda *a, **k: DEFAULT_LLM_NEXT_CALL_RESERVE_USD
+        "scan_worker.jobs.cost_for_usage", lambda *a, **k: HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD
     )
 
     class _FakeAdapter:

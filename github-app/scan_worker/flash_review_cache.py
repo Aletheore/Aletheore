@@ -37,10 +37,29 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 def lookup_cached_result(
-    dsn: str, installation_id: int, repo_full_name: str, diff_text: str
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    diff_text: str,
+    vector_cache: dict[str, list[float] | None] | None = None,
 ) -> list[dict] | None:
     try:
-        vector = embed_text(diff_text)
+        key = _content_hash(diff_text)
+        # vector_cache lets a caller that also calls store_result for this
+        # same diff_text (the review_diff cache-miss path: a lookup here,
+        # a write later once generation finishes) reuse the vector instead
+        # of paying for a second embed_text round-trip against the
+        # jina-embed sidecar for identical content. Optional and keyed by
+        # content hash (not a single slot) so it's also safe to share
+        # across multiple distinct diffs/packets in flight at once - see
+        # packet_cache.lookup_cached_result, which has real concurrent
+        # callers.
+        if vector_cache is not None and key in vector_cache:
+            vector = vector_cache[key]
+        else:
+            vector = embed_text(diff_text)
+            if vector_cache is not None:
+                vector_cache[key] = vector
         if vector is None:
             return None
 
@@ -73,9 +92,16 @@ def store_result(
     diff_text: str,
     findings: list[dict],
     model_used: str,
+    vector_cache: dict[str, list[float] | None] | None = None,
 ) -> None:
     try:
-        vector = embed_text(diff_text)
+        key = _content_hash(diff_text)
+        if vector_cache is not None and key in vector_cache:
+            vector = vector_cache[key]
+        else:
+            vector = embed_text(diff_text)
+            if vector_cache is not None:
+                vector_cache[key] = vector
         if vector is None:
             logger.warning("embedding unavailable; skipping flash review cache write")
             return
@@ -84,7 +110,7 @@ def store_result(
             dsn,
             installation_id,
             repo_full_name,
-            _content_hash(diff_text),
+            key,
             vector,
             diff_text,
             findings,
