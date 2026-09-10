@@ -42,7 +42,12 @@ from app_server.dismissed_findings import filter_dismissed, finding_identity_key
 from app_server.error_alerts import send_error_alert
 from app_server.github_auth import generate_app_jwt, get_installation_token
 from app_server.http_client import get_github_api_client
-from app_server.llm_cost import base_cap_for_plan, cost_for_usage, monthly_cap_for_installation
+from app_server.llm_cost import (
+    base_cap_for_plan,
+    base_credit_for_plan,
+    cost_for_usage,
+    monthly_cap_for_installation,
+)
 from app_server.logging_config import log_job
 from app_server.redis_client import get_redis_client
 from app_server.rate_limit import (
@@ -54,6 +59,7 @@ from app_server.url_validation import UnsafeURLError, validate_and_pin_https_url
 from aletheore.docs_reference import build_api_reference
 from scan_worker import live_docs, live_wiki
 from scan_worker.db import (
+    apply_monthly_credit_reset,
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     check_and_reserve_monthly_repo_scan_slot,
@@ -94,6 +100,7 @@ from scan_worker.db import (
     list_docs_symbols,
     list_health_check_targets_all,
     list_installation_member_emails,
+    list_installations_due_for_monthly_credit_reset,
     list_paid_installations_due_for_digest,
     list_paid_repos_due_for_docs_catchup,
     list_paid_repos_due_for_wiki_catchup,
@@ -1571,25 +1578,29 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                 f"{cooldown_seconds // 3600} hours. Try again later."
             )
         else:
-            extra_seats = get_extra_seats(settings.database_url, installation_id)
-            monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
             # No lock: this is a fast-fail hint (skip straight to a clear PR
-            # comment when the cap is obviously already blown), not the
-            # enforcement itself - real enforcement is spend_budget.
+            # comment when the balance is obviously already exhausted), not
+            # the enforcement itself - real enforcement is spend_budget.
             # can_start_next_call() below, reserving atomically against the
             # live total before every real LLM call this (possibly
             # multi-call) audit makes. Same discipline as
             # run_managed_audit_api_job - a stale read here has no
             # financial-integrity consequence, just a possibly-later-than-
             # ideal rejection.
-            current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
-            cap_reached = current_spend >= monthly_cap
+            balance_row = get_installation_row(settings.database_url, installation_id)
+            combined_balance = (
+                float(balance_row.get("base_credit_remaining_usd", 0))
+                + float(balance_row.get("topup_credit_balance_usd", 0))
+                if balance_row is not None else 0.0
+            )
+            cap_reached = combined_balance <= 0
 
             if cap_reached:
                 body = (
                     f"{AUDIT_COMMENT_MARKER}\n### Aletheore managed audit\n\n"
-                    f"Monthly spend cap reached for this installation (${monthly_cap:.2f}). "
-                    "Resumes next month, or email support@aletheore.com to raise the limit sooner."
+                    f"Credit balance exhausted for this installation (${combined_balance:.2f} "
+                    "remaining). Resumes next billing period, or email support@aletheore.com "
+                    "to top up sooner."
                 )
             else:
                 # run_managed_audit can make several sequential LLM calls and
@@ -1608,7 +1619,6 @@ def run_managed_audit_pr_job(installation_id: int, repo_full_name: str, pr_numbe
                     settings.database_url,
                     installation_id,
                     MANAGED_AUDIT_MODEL,
-                    monthly_cap,
                     feature="managed_audit",
                 )
                 report_text = run_managed_audit(
@@ -1669,7 +1679,6 @@ def run_managed_audit_api_job(
 ) -> str:
     settings = get_settings()
     installation = get_installation_row(settings.database_url, installation_id)
-    plan = installation["plan"] if installation is not None else "free"
     # Read off the row already fetched rather than a second query. Defaults to
     # on for a missing row or an older row, matching the column default - a
     # lookup miss must not silently change what a customer's report contains.
@@ -1677,17 +1686,19 @@ def run_managed_audit_api_job(
         installation.get("llm_suggestions_enabled", True) if installation is not None else True
     )
     # No lock: this is a fast-fail hint (skip the setup work below if the
-    # cap is obviously already blown), not the enforcement itself - real
-    # enforcement is each _IncrementalSpendBudget.can_start_next_call()
+    # balance is obviously already exhausted), not the enforcement itself -
+    # real enforcement is each _IncrementalSpendBudget.can_start_next_call()
     # reserving atomically against the live total, so a stale read here has
     # no financial-integrity consequence, just a possibly-later-than-ideal
     # rejection.
-    extra_seats = get_extra_seats(settings.database_url, installation_id)
-    monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
-    current_spend = get_llm_spend_this_month(settings.database_url, installation_id)
-    if current_spend >= monthly_cap:
+    combined_balance = (
+        float(installation.get("base_credit_remaining_usd", 0))
+        + float(installation.get("topup_credit_balance_usd", 0))
+        if installation is not None else 0.0
+    )
+    if combined_balance <= 0:
         raise RuntimeError(
-            f"monthly spend cap reached for this installation (${monthly_cap:.2f})"
+            f"credit balance exhausted for this installation (${combined_balance:.2f} remaining)"
         )
     # run_managed_audit can make several sequential LLM calls (see
     # _IncrementalSpendBudget) and has been observed to take minutes -
@@ -1706,7 +1717,6 @@ def run_managed_audit_api_job(
             settings.database_url,
             installation_id,
             MANAGED_AUDIT_MODEL,
-            monthly_cap,
             feature="managed_audit",
         )
 
@@ -1783,13 +1793,7 @@ def run_flash_review_job(
             settings.database_url, installation_id, MAX_FREE_TIER_FLASH_REVIEWS_PER_MONTH
         ):
             return
-        monthly_cap = 0.0  # no dollar cap for free tier
     else:
-        # Reads only, no lock needed - extra_seats/monthly_cap are inputs to
-        # this request's own reservation below, not shared mutable state
-        # that itself needs cross-process atomicity.
-        extra_seats = get_extra_seats(settings.database_url, installation_id)
-        monthly_cap = monthly_cap_for_installation(base_cap_for_plan(installation["plan"]), extra_seats)
         # flash's own real, separately-validated cap (800), not AIR's 500 -
         # see MAX_FLASH_TIER_FLASH_REVIEWS_PER_MONTH. Any other non-free
         # plan value falls back to the AIR cap, matching this codebase's
@@ -1804,15 +1808,38 @@ def run_flash_review_job(
             settings.database_url, installation_id, review_count_cap
         ):
             return
+        # reserve_llm_spend rejects the WHOLE reservation when the combined
+        # balance is below the requested amount (its `>= %(reserve)s` WHERE
+        # clause - deliberately untouched, that atomicity is what stops two
+        # concurrent reviews from together overdrawing). Now that the
+        # success path trues the reservation up to the real cost
+        # (~$0.007 for a typical review), a flat $0.50 request would make
+        # Flash Review go silent for any balance in the $0-$0.50 tail even
+        # though the review costs a fraction of a cent - a stranded
+        # balance, not a spent one. Reserving no more than what's actually
+        # there fixes it at the call site: the full flat amount whenever
+        # the balance comfortably covers it, only the remainder in that
+        # near-zero tail. A zero/unknown balance still requests the full
+        # amount, so the reservation is rejected and the exhausted-email
+        # path fires exactly as before.
+        # Read off the installation row already fetched above, not a second
+        # query.
+        combined_balance = float(installation.get("base_credit_remaining_usd", 0)) + float(
+            installation.get("topup_credit_balance_usd", 0)
+        )
         reserved_spend = FLASH_REVIEW_SPEND_RESERVE_USD
-        if not reserve_llm_spend(settings.database_url, installation_id, reserved_spend, monthly_cap):
+        if 0 < combined_balance < reserved_spend:
+            reserved_spend = combined_balance
+        if not reserve_llm_spend_with_email_hooks(
+            settings.database_url, installation_id, reserved_spend, feature="flash_review"
+        ):
             release_flash_review_count_reservation(settings.database_url, installation_id)
             return
 
     review_ran = False
     try:
         review_ran = _run_flash_review(
-            settings, installation_id, repo_full_name, pr_number, base_sha, head_sha, monthly_cap,
+            settings, installation_id, repo_full_name, pr_number, base_sha, head_sha,
             reserved_spend, is_free_tier=is_free_tier,
             verify_with_second_model=(installation["plan"] == "air"),
         )
@@ -1987,7 +2014,6 @@ def _run_flash_review(
     pr_number: int,
     base_sha: str,
     head_sha: str,
-    monthly_cap: float,
     reserved_spend: float,
     *,
     is_free_tier: bool = False,
@@ -2318,9 +2344,23 @@ def _run_flash_review(
     # record_llm_spend's own UPSERT is already atomic per call, and it was
     # only ever paired with the (now-removed) count increment for the
     # illusion of atomicity, not because either write needed one on its own.
+    #
+    # True up the real credit balance too, not just the llm_spend accounting
+    # table below - exactly the same reasoning (and the same primitives) as
+    # _IncrementalSpendBudget.record_usage. run_flash_review_job reserved a
+    # flat FLASH_REVIEW_SPEND_RESERVE_USD ($0.50) estimate; a real review
+    # costs a fraction of a cent of that, so without this the balance drops
+    # by the flat reserve per review instead of the real cost - a $5.00
+    # flash base credit would buy ~10 reviews rather than the ~1,000 the
+    # pricing is justified by.
+    delta = spend_accumulator["total"] - reserved_spend
+    if delta > 0:
+        reserve_llm_spend(settings.database_url, installation_id, delta)
+    elif delta < 0:
+        release_llm_spend_reservation(settings.database_url, installation_id, -delta)
     record_llm_spend(
-        settings.database_url, installation_id, spend_accumulator["total"] - reserved_spend,
-        monthly_cap=monthly_cap, feature="flash_review",
+        settings.database_url, installation_id, delta,
+        feature="flash_review",
         ledger_cost_usd=spend_accumulator["total"],
     )
 
@@ -2890,13 +2930,17 @@ def _fix_suggestion_attachment(
         installation = get_installation_row(dsn, installation_id)
         plan = installation["plan"] if installation is not None else "free"
 
-        cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
-        if cap_reached:
+        combined_balance = (
+            float(installation.get("base_credit_remaining_usd", 0))
+            + float(installation.get("topup_credit_balance_usd", 0))
+            if installation is not None else 0.0
+        )
+        if combined_balance <= 0:
             return None
 
         fix_suggestion_model = model_for_plan(plan)
         spend_budget = _IncrementalSpendBudget(
-            dsn, installation_id, fix_suggestion_model, monthly_cap, feature="health_fix_suggestion"
+            dsn, installation_id, fix_suggestion_model, feature="health_fix_suggestion"
         )
         if not spend_budget.can_start_next_call():
             return None
@@ -3863,6 +3907,22 @@ def send_transactional_email_job(
         )
         return
 
+    # The credit-balance emails (credit_low_balance / credit_exhausted) are
+    # enqueued by reserve_llm_spend_with_email_hooks on this branch, but
+    # their templates land on the parallel dashboard/emails branch - so
+    # depending on merge order this worker can legitimately be asked for a
+    # template it doesn't have yet. Unguarded, that KeyError becomes an RQ
+    # failed job plus an error alert for every low-balance event. Skipping
+    # with a warning doesn't close that gap (the other branch's templates
+    # do), it just keeps this branch independently deployable.
+    if template_name not in _EMAIL_TEMPLATES:
+        logger.warning(
+            "no email template registered for %s (installation_id=%s) - skipping",
+            template_name,
+            installation_id,
+        )
+        return
+
     render = _EMAIL_TEMPLATES[template_name]
     message = render(**template_arg) if isinstance(template_arg, dict) else render(template_arg)
 
@@ -3942,8 +4002,74 @@ def run_weekly_digest_sweep_job() -> None:
             )
 
 
+@log_job
+def run_monthly_credit_reset_sweep_job() -> None:
+    """Gives ANNUAL subscribers the monthly credit allotment they pay for.
+
+    Runs on "scans" (see scheduler.py), same placement as the weekly
+    digest sweep - a due date caught minutes or hours late is harmless
+    here, so this doesn't need "email" queue urgency.
+
+    base_credit_remaining_usd is otherwise only ever refreshed by
+    app_server/db.py's reset_billing_period_credit, which fires when
+    Paddle's current_billing_period.starts_at genuinely changes. For a
+    monthly subscriber that is once a month, which is exactly right. For
+    an ANNUAL AIR subscriber it is once a YEAR - so the $18/month
+    allotment (PLAN_BASE_CREDIT_USD), which is monthly regardless of how
+    the customer chooses to pay, landed once for the whole year: 1/12th of
+    what they bought. This sweep is the synthetic monthly clock that fixes
+    that, driven by next_monthly_credit_reset_at (migration 065) rather
+    than by Paddle's own billing period.
+
+    Only annual subscribers are ever touched: that column is NULL for
+    every monthly subscriber and every free installation, and both the due
+    query and the UPDATE require it to be non-NULL. A monthly subscriber
+    must never appear here - their real renewal reset plus a synthetic one
+    in the same month would double-credit them.
+
+    The allotment is recomputed from the installation's CURRENT plan and
+    seat count via base_credit_for_plan, not carried over from
+    base_credit_allotment_usd: a seat bought mid-year has to be reflected
+    in every later month's reset, exactly as it would be at a real
+    renewal.
+    """
+    dsn = get_settings().database_url
+    logger = logging.getLogger("scan_worker.jobs")
+
+    for installation_id in list_installations_due_for_monthly_credit_reset(dsn):
+        try:
+            installation = get_installation_row(dsn, installation_id)
+            if installation is None:
+                continue
+
+            new_credit = base_credit_for_plan(
+                installation["plan"], get_extra_seats(dsn, installation_id)
+            )
+            apply_monthly_credit_reset(dsn, installation_id, new_credit)
+        except Exception:  # noqa: BLE001
+            # One installation's bad data (a missing row, a query hiccup)
+            # must not deny every other annual customer due this tick the
+            # credit they paid for - matches the weekly digest sweep's own
+            # per-installation isolation. The next tick retries it, since
+            # nothing advanced its due date.
+            logger.warning(
+                "monthly credit reset sweep failed for installation=%s",
+                installation_id,
+                exc_info=True,
+            )
+
+
 def _llm_spend_cap_reached(dsn: str, installation_id: int, plan: str) -> tuple[bool, float]:
-    """(cap_reached, monthly_cap) - a plain read, no lock required. For
+    """SUPERSEDED as of Task 7 of the dollar-credit-pricing plan
+    (2026-09-09): every real call site below now checks this
+    installation's own combined credit balance (base_credit_remaining_usd
+    + topup_credit_balance_usd via get_installation_row) directly instead
+    of calling this. Left in place, not deleted, so that pass stayed a
+    pure call-site migration - deletion is a separate, lower-risk
+    follow-up once the balance-based enforcement is confirmed working in
+    production.
+
+    (cap_reached, monthly_cap) - a plain read, no lock required. For
     every caller, real enforcement is an _IncrementalSpendBudget's
     can_start_next_call() reserving atomically per call (see
     _fix_suggestion_attachment for the single-call shape, AIRview/Docs
@@ -3958,6 +4084,122 @@ def _llm_spend_cap_reached(dsn: str, installation_id: int, plan: str) -> tuple[b
     monthly_cap = monthly_cap_for_installation(base_cap_for_plan(plan), extra_seats)
     current_spend = get_llm_spend_this_month(dsn, installation_id)
     return current_spend >= monthly_cap, monthly_cap
+
+
+LOW_BALANCE_WARNING_FRACTION = 0.15
+
+
+def reserve_llm_spend_with_email_hooks(
+    dsn: str, installation_id: int, reserve_usd: float, feature: str
+) -> bool:
+    """Wraps reserve_llm_spend with the two customer-facing email triggers -
+    reused by both the Flash Review direct-reservation path and
+    _IncrementalSpendBudget.can_start_next_call, so both surfaces get
+    identical notification behavior instead of two hand-rolled copies.
+
+    Interface contract (must match exactly - a separate, parallel plan
+    builds the dashboard + email templates against this): template_name
+    is "credit_low_balance" or "credit_exhausted"; template_arg is
+    {"account_login": str, "plan": str, "base_credit_remaining_usd":
+    float, "topup_credit_balance_usd": float}; dedupe_key is
+    f"credit_low_balance:{installation_id}:{balance_epoch}" /
+    f"credit_exhausted:{installation_id}:{balance_epoch}".
+
+    Row field access below uses dict.get(...) with defaults rather than
+    row[...]: get_installation_row is mocked throughout this file's
+    existing tests as a minimal {"plan": ...} dict (no account_login/
+    alert_email/balance_epoch/credit columns) for tests that predate this
+    email feature and don't care about it - this wrapper must not KeyError
+    for any of those. get_extra_seats (used for the low-balance threshold
+    below) is mocked in the same tests for the same reason.
+
+    The enqueue_transactional_email call itself is wrapped in try/except,
+    same reasoning _send_alerts_if_configured already documents for its
+    own channels: a failed/unreachable notification send is a real,
+    independent failure mode (network/Redis) that must never take down
+    the actual spend-reservation result this function returns to its
+    caller - that result gates whether an LLM call is allowed to proceed.
+    """
+    row = get_installation_row(dsn, installation_id)
+    if row is None:
+        return reserve_llm_spend(dsn, installation_id, reserve_usd)
+
+    before_total = float(row.get("base_credit_remaining_usd", 0)) + float(
+        row.get("topup_credit_balance_usd", 0)
+    )
+    ok = reserve_llm_spend(dsn, installation_id, reserve_usd)
+
+    if not ok:
+        _enqueue_credit_balance_email("credit_exhausted", installation_id, row)
+        return False
+
+    after_row = get_installation_row(dsn, installation_id) or row
+    after_total = float(after_row.get("base_credit_remaining_usd", 0)) + float(
+        after_row.get("topup_credit_balance_usd", 0)
+    )
+    # Compared against the plan's real base allotment, NOT against
+    # before_total. before_total was a high-water-mark approximation, and
+    # since after_total is always exactly before_total - reserve_usd, that
+    # version could only ever fire when a SINGLE reservation consumed >=85%
+    # of whatever was left. For AIRview/Docs, whose reservations are
+    # $0.001-$0.10, that means it essentially never fired until the balance
+    # was already gone - the "low balance" and "exhausted" emails arrived
+    # together, with zero advance warning, which is the opposite of what a
+    # low-balance warning is for.
+    #
+    # base_credit_for_plan is the known, real, current allotment for this
+    # plan and seat count, recomputed per call (cheap - one small indexed
+    # read for extra_seats). Against a fixed reference the edge-trigger
+    # works as intended: it fires exactly once, on whichever reservation
+    # takes the combined balance across 15% of the allotment, regardless of
+    # how small that reservation is. A precise "balance at last reset/top-up"
+    # high-water mark isn't stored anywhere, and adding a column for it is a
+    # larger change than this; the plan allotment is the right reference
+    # anyway, since that IS what a renewal resets the balance to.
+    plan_allotment = base_credit_for_plan(
+        row.get("plan", ""), get_extra_seats(dsn, installation_id)
+    )
+    threshold = plan_allotment * LOW_BALANCE_WARNING_FRACTION
+    if after_total <= threshold and before_total > threshold:
+        _enqueue_credit_balance_email("credit_low_balance", installation_id, after_row)
+    return True
+
+
+def _enqueue_credit_balance_email(template_name: str, installation_id: int, row: dict) -> None:
+    # alert_email is nullable and opt-in, so most installations have none -
+    # there is no address to deliver to, and enqueuing with to_email=None
+    # only puts a job on the queue for the sender to reject. Guarded the
+    # same way the pre-existing health-alert enqueue in
+    # _send_alerts_if_configured already guards it. Logged at debug, not
+    # warning: this is the common, expected state, not a fault.
+    alert_email = row.get("alert_email")
+    if not alert_email:
+        logging.getLogger("scan_worker.jobs").debug(
+            "%s email skipped for installation=%s - no alert_email configured",
+            template_name, installation_id,
+        )
+        return
+
+    dedupe_key = f"{template_name}:{installation_id}:{row.get('balance_epoch', 0)}"
+    try:
+        enqueue_transactional_email(
+            redis_url=get_settings().redis_url,
+            dedupe_key=dedupe_key,
+            template_name=template_name,
+            template_arg={
+                "account_login": row.get("account_login", ""),
+                "plan": row.get("plan", ""),
+                "base_credit_remaining_usd": float(row.get("base_credit_remaining_usd", 0)),
+                "topup_credit_balance_usd": float(row.get("topup_credit_balance_usd", 0)),
+            },
+            to_email=alert_email,
+            installation_id=installation_id,
+        )
+    except Exception:  # noqa: BLE001
+        logging.getLogger("scan_worker.jobs").warning(
+            "%s email enqueue failed for installation=%s", template_name, installation_id,
+            exc_info=True,
+        )
 
 
 class _IncrementalSpendBudget:
@@ -4006,20 +4248,18 @@ class _IncrementalSpendBudget:
         dsn: str,
         installation_id: int,
         model: str,
-        monthly_cap: float,
         next_call_reserve_usd: float = DEFAULT_LLM_NEXT_CALL_RESERVE_USD,
         feature: str = "unknown",
     ) -> None:
         self.dsn = dsn
         self.installation_id = installation_id
         self.model = model
-        self.monthly_cap = monthly_cap
         self.next_call_reserve_usd = next_call_reserve_usd
         self.feature = feature
 
     def can_start_next_call(self) -> bool:
-        return reserve_llm_spend(
-            self.dsn, self.installation_id, self.next_call_reserve_usd, self.monthly_cap
+        return reserve_llm_spend_with_email_hooks(
+            self.dsn, self.installation_id, self.next_call_reserve_usd, self.feature
         )
 
     def record_usage(
@@ -4036,6 +4276,32 @@ class _IncrementalSpendBudget:
             )
         cost = cost_for_usage(self.model, prompt_tokens, completion_tokens)
         delta = cost - self.next_call_reserve_usd
+        # True up the real credit balance too, not just the llm_spend
+        # accounting table below - can_start_next_call() only reserved an
+        # ESTIMATE (next_call_reserve_usd); now that the real cost is
+        # known, the difference must be additionally drawn from (delta > 0)
+        # or given back to (delta < 0) this installation's stored balance,
+        # or the balance silently drifts from real spend over many calls.
+        if delta > 0:
+            if not reserve_llm_spend(self.dsn, self.installation_id, delta):
+                # reserve_llm_spend no-ops (mutates nothing) when the
+                # combined balance can't cover the full overage. The LLM
+                # call already happened and its real cost is sunk - leaving
+                # the balance untouched would overstate what the
+                # installation actually has left, the exact invariant this
+                # whole mechanism exists to protect. Best-effort recovery:
+                # drain whatever is still there down to zero, same
+                # fetch-then-reserve pattern the Flash Review call site
+                # uses for its own near-zero tail.
+                row = get_installation_row(self.dsn, self.installation_id)
+                if row is not None:
+                    remaining = float(row.get("base_credit_remaining_usd", 0)) + float(
+                        row.get("topup_credit_balance_usd", 0)
+                    )
+                    if remaining > 0:
+                        reserve_llm_spend(self.dsn, self.installation_id, remaining)
+        elif delta < 0:
+            release_llm_spend_reservation(self.dsn, self.installation_id, -delta)
         # Always call through, even when delta == 0 (real cost landed
         # exactly on the reservation) - the aggregate write is a genuine
         # no-op then, but skipping the call used to also skip ledgering
@@ -4047,8 +4313,18 @@ class _IncrementalSpendBudget:
         )
 
     def cap_message(self) -> str:
+        # Reads the real current balance at the point can_start_next_call()
+        # just refused a reservation, rather than a value captured once at
+        # construction time (there is no flat monthly_cap left to display -
+        # see reserve_llm_spend/PLAN_BASE_CREDIT_USD in scan_worker/db.py
+        # and app_server/llm_cost.py).
+        row = get_installation_row(self.dsn, self.installation_id)
+        combined_balance = (
+            float(row.get("base_credit_remaining_usd", 0)) + float(row.get("topup_credit_balance_usd", 0))
+            if row is not None else 0.0
+        )
         return (
-            f"monthly spend cap reached (${self.monthly_cap:.2f}); "
+            f"credit balance exhausted (${combined_balance:.2f} remaining); "
             "stopped before starting the next LLM call"
         )
 
@@ -4367,7 +4643,6 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
         return
 
     installation = get_installation_row(dsn, installation_id)
-    plan = installation["plan"] if installation is not None else "free"
     # No longer plan-dependent - see _live_wiki_full_build_writing_adapter.
     model_used = live_wiki.FLASH_MODEL
 
@@ -4378,20 +4653,25 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
     # how many clusters get batched into one call (see live_wiki.py's
     # _run_batched_with_retry) - a per-cluster loop check here couldn't do
     # that cleanly the way Docs' per-module loop check can.
-    cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
-    if cap_reached:
+    combined_balance = (
+        float(installation.get("base_credit_remaining_usd", 0))
+        + float(installation.get("topup_credit_balance_usd", 0))
+        if installation is not None else 0.0
+    )
+    if combined_balance <= 0:
         logging.getLogger("scan_worker.jobs").info(
-            "live wiki full build skipped for installation=%s repo=%s - monthly spend cap reached (${%.2f})",
-            installation_id, repo_full_name, monthly_cap,
+            "live wiki full build skipped for installation=%s repo=%s - "
+            "credit balance exhausted ($%.2f remaining)",
+            installation_id, repo_full_name, combined_balance,
         )
         set_wiki_build_status(
             dsn, installation_id, repo_full_name, "failed",
-            f"monthly spend cap reached (${monthly_cap:.2f})",
+            f"credit balance exhausted (${combined_balance:.2f} remaining)",
         )
         return
 
     spend_budget = _IncrementalSpendBudget(
-        dsn, installation_id, model_used, monthly_cap,
+        dsn, installation_id, model_used,
         next_call_reserve_usd=WIKI_FULL_BUILD_LLM_RESERVE_USD, feature="airview_full_build",
     )
 
@@ -4551,26 +4831,28 @@ def _maybe_update_live_wiki(
         return
 
     dsn = settings.database_url
-    plan = installation["plan"]
     # Fast-fail hint only, no lock - see _IncrementalSpendBudget's docstring
     # and run_live_wiki_full_build_job's identical comment above.
-    cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
-    if cap_reached:
+    combined_balance = (
+        float(installation.get("base_credit_remaining_usd", 0))
+        + float(installation.get("topup_credit_balance_usd", 0))
+    )
+    if combined_balance <= 0:
         logging.getLogger("scan_worker.jobs").info(
             "live wiki incremental update skipped for installation=%s repo=%s - "
-            "monthly spend cap reached (${%.2f})",
-            installation_id, repo_full_name, monthly_cap,
+            "credit balance exhausted ($%.2f remaining)",
+            installation_id, repo_full_name, combined_balance,
         )
         set_wiki_build_status(
             dsn, installation_id, repo_full_name, "failed",
-            f"monthly spend cap reached (${monthly_cap:.2f})",
+            f"credit balance exhausted (${combined_balance:.2f} remaining)",
         )
         return
 
     # No longer dynamic - see _live_wiki_update_writing_adapter.
     update_model = live_wiki.UPDATE_MODEL
     spend_budget = _IncrementalSpendBudget(
-        dsn, installation_id, update_model, monthly_cap, feature="airview_incremental"
+        dsn, installation_id, update_model, feature="airview_incremental"
     )
 
     try:
@@ -4906,22 +5188,30 @@ def run_live_docs_full_build_job(installation_id: int, repo_full_name: str) -> N
 
     # Fast-fail hint only, no lock - see _IncrementalSpendBudget's docstring;
     # real enforcement is its can_start_next_call() reserving atomically per
-    # call below.
-    cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
-    if cap_reached:
+    # call below. Re-read fresh rather than reusing the `installation` row
+    # fetched above - a real GitHub round-trip (_github_client_and_token)
+    # happened in between.
+    balance_row = get_installation_row(dsn, installation_id)
+    combined_balance = (
+        float(balance_row.get("base_credit_remaining_usd", 0))
+        + float(balance_row.get("topup_credit_balance_usd", 0))
+        if balance_row is not None else 0.0
+    )
+    if combined_balance <= 0:
         logging.getLogger("scan_worker.jobs").info(
-            "live docs full build skipped for installation=%s repo=%s - monthly spend cap reached (${%.2f})",
-            installation_id, repo_full_name, monthly_cap,
+            "live docs full build skipped for installation=%s repo=%s - "
+            "credit balance exhausted ($%.2f remaining)",
+            installation_id, repo_full_name, combined_balance,
         )
         set_docs_build_status(
             dsn, installation_id, repo_full_name, "failed",
-            f"monthly spend cap reached (${monthly_cap:.2f})",
+            f"credit balance exhausted (${combined_balance:.2f} remaining)",
         )
         return
 
     full_build_model = model_for_plan(plan)
     spend_budget = _IncrementalSpendBudget(
-        dsn, installation_id, full_build_model, monthly_cap,
+        dsn, installation_id, full_build_model,
         next_call_reserve_usd=DOCS_FULL_BUILD_LLM_RESERVE_USD, feature="docs_full_build",
     )
 
@@ -5047,29 +5337,35 @@ def _maybe_update_live_docs(
     client, token = client_and_token
 
     dsn = settings.database_url
-    plan = installation["plan"]
     # Fast-fail hint only, no lock - see _IncrementalSpendBudget's docstring;
     # real enforcement is its can_start_next_call() reserving atomically per
     # call below. This closes the actual gap: two concurrent jobs spending
     # against the same installation (e.g. this incremental update racing a
     # Flash Review or a full build) no longer share one stale current_spend
-    # snapshot that neither can see the other invalidate mid-run.
-    cap_reached, monthly_cap = _llm_spend_cap_reached(dsn, installation_id, plan)
-    if cap_reached:
+    # snapshot that neither can see the other invalidate mid-run. Re-read
+    # fresh rather than reusing the `installation` row fetched above - a
+    # real GitHub round-trip (_github_client_and_token) happened in between.
+    balance_row = get_installation_row(dsn, installation_id)
+    combined_balance = (
+        float(balance_row.get("base_credit_remaining_usd", 0))
+        + float(balance_row.get("topup_credit_balance_usd", 0))
+        if balance_row is not None else 0.0
+    )
+    if combined_balance <= 0:
         logging.getLogger("scan_worker.jobs").info(
             "live docs incremental update skipped for installation=%s repo=%s - "
-            "monthly spend cap reached (${%.2f})",
-            installation_id, repo_full_name, monthly_cap,
+            "credit balance exhausted ($%.2f remaining)",
+            installation_id, repo_full_name, combined_balance,
         )
         set_docs_build_status(
             dsn, installation_id, repo_full_name, "failed",
-            f"monthly spend cap reached (${monthly_cap:.2f})",
+            f"credit balance exhausted (${combined_balance:.2f} remaining)",
         )
         return
 
     update_model = resolve_model(live_docs.FLASH_MODEL)
     spend_budget = _IncrementalSpendBudget(
-        dsn, installation_id, update_model, monthly_cap,
+        dsn, installation_id, update_model,
         feature="docs_incremental",
     )
 

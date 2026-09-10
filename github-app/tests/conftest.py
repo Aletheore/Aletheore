@@ -48,9 +48,18 @@ async def pool():
         # one test into the next. affiliate_referrals/affiliate_commissions
         # need no separate entry: both DO have an installations FK with ON
         # DELETE CASCADE, so truncating installations already clears them.
+        # processed_paddle_transactions is listed explicitly for the same
+        # reason as webhook_deliveries above: it has no FK to installations
+        # (a transaction_id is a Paddle identifier, not an installation
+        # one), so the CASCADE from truncating installations never reaches
+        # it - without this it would leak rows across tests/runs, and
+        # test_credit_topup_purchase_is_idempotent_on_replayed_transaction
+        # relies on a clean slate to tell a genuine first credit from a
+        # stale row left by a previous run.
         await conn.execute(
             "TRUNCATE installations, sessions, cli_telemetry_events, "
-            "github_user_emails, sent_emails, data_deletion_log, webhook_deliveries, affiliates CASCADE"
+            "github_user_emails, sent_emails, data_deletion_log, webhook_deliveries, affiliates, "
+            "processed_paddle_transactions CASCADE"
         )
     yield p
     await p.close()

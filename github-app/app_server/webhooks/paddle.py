@@ -13,9 +13,13 @@ from app_server.db import (
     claim_webhook_delivery,
     claim_free_to_paid_plan,
     claim_paid_setup,
+    credit_extra_seat_purchase,
+    credit_topup_purchase,
+    get_extra_seats,
     get_installation,
     list_installation_member_emails,
     release_webhook_delivery,
+    reset_billing_period_credit,
     set_extra_seats,
     set_installation_plan,
     set_paid_installation_plan,
@@ -23,7 +27,12 @@ from app_server.db import (
 from app_server.email_queue import enqueue_transactional_email
 from app_server.error_alerts import send_error_alert
 from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for, is_known_paddle_ip
-from app_server.paddle_pricing import EXTRA_SEAT_PRICE_ID, resolve_plan_for_price_id
+from app_server.paddle_pricing import (
+    CREDIT_TOPUP_PRICE_ID,
+    EXTRA_SEAT_PRICE_ID,
+    PLAN_INTERVAL_TO_PRICE_ID,
+    resolve_plan_for_price_id,
+)
 from app_server.paddle_webhook_verify import verify_paddle_signature
 
 paddle_webhook_router = APIRouter()
@@ -173,15 +182,20 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     if data.get("status") in _ACTIVE_SUBSCRIPTION_STATUSES:
         # The base plan price is whichever item resolves to a known plan -
         # not necessarily items[0], since the extra-seat add-on can be
-        # either item once seats are involved.
-        plan = next(
+        # either item once seats are involved. The matched price ID itself
+        # is kept, not just the plan name it resolves to: a plan has both a
+        # monthly and (for AIR) an annual price, and only the price ID says
+        # which of the two this subscription is actually billed on - needed
+        # for is_annual below.
+        matched_price_id = next(
             (
-                resolved
+                (item.get("price") or {}).get("id")
                 for item in items
-                if (resolved := resolve_plan_for_price_id((item.get("price") or {}).get("id")))
+                if resolve_plan_for_price_id((item.get("price") or {}).get("id"))
             ),
             None,
         )
+        plan = resolve_plan_for_price_id(matched_price_id) if matched_price_id else None
         if not plan:
             logger.warning(
                 "%s has an active status but no resolvable plan price id in items", event_type
@@ -189,6 +203,7 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
             return
     else:
         plan = "free"
+        matched_price_id = None
 
     previous = await get_installation(pool, installation_id)
     previous_plan = previous["plan"] if previous is not None else "free"
@@ -224,10 +239,44 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
         else 0
     )
 
-    # One transaction, not three independent writes: a crash between any two
-    # of these previously left the installation on the new plan with stale
-    # extra_seats, or upgraded with no Paddle IDs recorded - a state that
-    # persisted until a Paddle retry happened to land outside
+    # A genuine billing-period renewal resets base_credit_remaining_usd to
+    # the plan's real included credit (see db.py's reset_billing_period_
+    # credit) - gated on plan != "free" the same way extra_seats above is,
+    # since current_billing_period is only meaningful for an active paid
+    # subscription: a cancellation or a past_due card decline already
+    # resolves plan to "free" above and shouldn't reset anything. Also a
+    # no-op (reset_billing_period_credit itself checks this) when
+    # current_billing_period.starts_at hasn't actually changed - a replayed
+    # or unrelated subscription.updated for the same period must not wipe
+    # out credit the installation has already spent down. Folded into the
+    # same transaction as the plan/extra_seats/Paddle-id writes below
+    # (rather than run as its own standalone call first) so a crash between
+    # this reset and that block can't leave base_credit_remaining_usd and
+    # current_billing_period_start pointed at the new period while plan/
+    # extra_seats/Paddle IDs stay stale - the same split-write hazard
+    # documented on that block below, and reset_billing_period_credit only
+    # ever calls .fetchrow() on what it's given, so passing it the open
+    # `conn` from that transaction instead of `pool` works unchanged.
+    period_start = (data.get("current_billing_period") or {}).get("starts_at")
+
+    # An ANNUAL subscriber's current_billing_period.starts_at only advances
+    # once a YEAR, so the reset above - the only thing that ever refreshes
+    # base credit - would hand them 1/12th of the $18/month AIR allotment
+    # that is meant to be monthly regardless of how the customer pays.
+    # Flagging the annual price here is what lets reset_billing_period_
+    # credit arm next_monthly_credit_reset_at, the synthetic monthly clock
+    # scan_worker/jobs.py's run_monthly_credit_reset_sweep_job fires off.
+    # Compared against the price ID rather than any interval field in the
+    # payload: PLAN_INTERVAL_TO_PRICE_ID is this codebase's own source of
+    # truth for which price means which interval (the same map the checkout
+    # page builds from), so a plan with no annual price at all - "flash"
+    # today - resolves to None and can never be mistaken for annual.
+    is_annual = plan != "free" and matched_price_id == PLAN_INTERVAL_TO_PRICE_ID.get((plan, "year"))
+
+    # One transaction, not three (now four) independent writes: a crash
+    # between any two of these previously left the installation on the new
+    # plan with stale extra_seats, or upgraded with no Paddle IDs recorded -
+    # a state that persisted until a Paddle retry happened to land outside
     # claim_webhook_delivery's 15-minute reclaim window (see
     # docs/audits/Claude_Audit.md finding 11; confirmed live by injecting a
     # crash between add_paddle_ids_to_installation and set_extra_seats - the
@@ -235,9 +284,38 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     # together means a crash here now looks identical to never having
     # started, from any later retry's point of view - no partial state to
     # reason about, whether the retry is immediate or 15 minutes later.
+    #
+    # Seats bought MID-CYCLE need their credit applied here, because the
+    # reset above cannot do it: a seat purchase fires subscription.updated
+    # with the SAME current_billing_period.starts_at, so
+    # reset_billing_period_credit is a deliberate no-op and the per-seat
+    # bonus baked into base_credit_for_plan never lands until the next real
+    # renewal. Before this, a customer paid $6.99 for a seat and got $0 of
+    # extra credit for up to a month (the old flat cap recomputed itself
+    # live from get_extra_seats at every enforcement call site, so the
+    # ceiling used to rise immediately). Read BEFORE set_extra_seats below
+    # overwrites it, and applied inside the same transaction for the same
+    # split-write reason documented on that block.
+    previous_extra_seats = await get_extra_seats(pool, installation_id) if plan != "free" else 0
+
     transitioned_to_paid = False
     async with pool.acquire() as conn:
         async with conn.transaction():
+            reset_happened = False
+            if plan != "free" and period_start:
+                reset_happened = await reset_billing_period_credit(
+                    conn, installation_id, plan, extra_seats, period_start, is_annual
+                )
+
+            # Only when the renewal reset did NOT fire - a real reset already
+            # sets the balance to base_credit_for_plan(plan, extra_seats),
+            # which includes the new seat count, so crediting again on top of
+            # it would double-count.
+            if plan != "free" and not reset_happened and extra_seats > previous_extra_seats:
+                await credit_extra_seat_purchase(
+                    conn, installation_id, extra_seats - previous_extra_seats, plan, extra_seats
+                )
+
             if plan != "free":
                 transitioned_to_paid = await claim_free_to_paid_plan(conn, installation_id, plan)
                 if not transitioned_to_paid:
@@ -356,9 +434,12 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
 
 async def _handle_transaction_completed(data: dict, pool) -> None:
     """Records an affiliate commission for one completed transaction, if
-    and only if the paying installation has a referral on file. Every other
-    (unreferred) transaction.completed event - the overwhelming majority -
-    is a fast no-op after the referral lookup.
+    and only if the paying installation has a referral on file AND the
+    transaction is not a credit top-up purchase (see the early return
+    below - top-ups are pass-through LLM spend with no margin to pay a
+    commission from). Every other (unreferred, or top-up) transaction.completed
+    event - the overwhelming majority - is a fast no-op after the relevant
+    check.
 
     15% of `details.totals.total`, Paddle's collected amount net of that
     transaction's own discount, in the currency's minor unit (cents) as a
@@ -379,6 +460,59 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
         else None
     )
     if installation_id is None:
+        return
+
+    # A customer-purchased credit top-up. This still needs to run before the
+    # referral lookup below (rather than after an early return on "no
+    # referral"), because a referred installation's top-up must still be
+    # credited even though - see the early return at the end of this block -
+    # it is deliberately excluded from earning its referrer any commission.
+    items = data.get("items") or []
+    topup_item = next(
+        (item for item in items if (item.get("price") or {}).get("id") == CREDIT_TOPUP_PRICE_ID),
+        None,
+    )
+    if topup_item is not None:
+        # Credit the amount Paddle actually COLLECTED for this transaction,
+        # not the line item's quantity - quantity assumes exactly $1 of
+        # credit per unit and silently ignores any discount. A top-up
+        # transaction never bundles a top-up with any other line item (see
+        # the buyCredit() comment below), so details.totals.total - Paddle's
+        # collected amount net of discount, in the currency's minor unit, as
+        # a string - IS the real dollar amount collected for this top-up.
+        # Same parsing pattern as the referral commission calculation below.
+        transaction_id = data.get("id")
+        total_raw = ((data.get("details") or {}).get("totals") or {}).get("total")
+        if transaction_id and total_raw is not None:
+            try:
+                total_minor_units = Decimal(str(total_raw))
+            except InvalidOperation:
+                logger.warning(
+                    "credit topup transaction.completed has an unparseable total: %s",
+                    data.get("id"),
+                )
+            else:
+                amount_usd = (total_minor_units / Decimal(100)).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+                await credit_topup_purchase(pool, installation_id, float(amount_usd), transaction_id)
+        else:
+            logger.warning(
+                "credit topup transaction.completed missing total or id: %s",
+                data.get("id"),
+            )
+        # Credit top-ups are pass-through LLM spend with near-zero margin -
+        # paying 15% affiliate commission on them (as the code below would,
+        # unconditionally, on the full transaction total) is a real loss with
+        # no offsetting revenue to pay it from, unlike commission on a genuine
+        # subscription/seat sale. Deliberately conservative: skip commission
+        # for the WHOLE transaction if it contains a top-up item at all,
+        # rather than trying to parse Paddle's per-line-item totals to
+        # subtract just the top-up portion (this codebase has never parsed
+        # per-item totals, only the transaction-level total) - the current
+        # buyCredit() checkout flow is a standalone purchase action that
+        # never bundles a top-up with a subscription/seat item in the same
+        # transaction, so this has no practical downside today.
         return
 
     referral = await get_referral(pool, installation_id)

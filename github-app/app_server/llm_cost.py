@@ -53,6 +53,29 @@ PLAN_MONTHLY_PRICE_USD = {
     "flash": 8.00,
 }
 
+# The customer-facing, advertised included credit per plan - replaces the
+# "up to 800 reviews/month" style promise with the real dollar unit the
+# system already enforces. Deliberately below PLAN_CAP_OVERRIDE_USD
+# (real enforced worst-case ceiling: $6.00 flash / $20.00 air) so there's
+# real margin between what's promised and what's technically possible,
+# same spirit as every other cap-vs-price margin already documented in
+# this file.
+PLAN_BASE_CREDIT_USD = {
+    "flash": 5.00,
+    "air": 18.00,
+}
+
+
+def base_credit_for_plan(plan: str, extra_seats: int) -> float:
+    """The base credit an installation's balance resets to on a real
+    renewal. Applies the same per-seat bonus monthly_cap_for_installation
+    already used, so a larger AIR team keeps getting proportionally more
+    credit, not the same flat amount regardless of seat count."""
+    base = PLAN_BASE_CREDIT_USD.get(plan, 0.0)
+    if base == 0.0:
+        return 0.0
+    return base + EXTRA_SEAT_LLM_CAP_USD * extra_seats
+
 # flash's real spend cap is a deliberately looser fraction of its price
 # than the shared 50% default below (75%, $6 of $8 - raised from $5 on
 # 2026-09-07 alongside github_api.MAX_CONTEXT_FILE_BYTES's 80KB->100KB
@@ -88,6 +111,17 @@ PLAN_MONTHLY_PRICE_USD = {
 # real single-digit dollars, not fractions of a cent) needs real headroom
 # to make meaningful progress per catch-up cycle instead of the old cap
 # forcing an artificially small per-sweep batch just to stay under it.
+# SUPERSEDED as of Task 7 of the dollar-credit-pricing plan (2026-09-09):
+# no remaining call site in scan_worker/jobs.py or app_server/admin.py
+# reads PLAN_CAP_OVERRIDE_USD, base_cap_for_plan, or
+# monthly_cap_for_installation (below) any more - real enforcement is now
+# each installation's own real balance (installations.base_credit_
+# remaining_usd + topup_credit_balance_usd, see PLAN_BASE_CREDIT_USD/
+# base_credit_for_plan above and reserve_llm_spend in scan_worker/db.py).
+# Left in place, not deleted, so that pass stayed a pure call-site
+# migration - deleting these (and updating every test that still
+# references them) is a separate, lower-risk follow-up once the balance-
+# based enforcement is confirmed working in production.
 PLAN_CAP_OVERRIDE_USD = {
     "flash": 6.00,
     "air": 20.00,

@@ -1,12 +1,17 @@
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import asyncpg
 
 from aletheore.evidence import is_evidence_version_compatible
 from app_server.evidence_limits import check_evidence_size
-from app_server.llm_cost import WARN_FRACTION_OF_CAP, crossed_spend_warning_threshold
+from app_server.llm_cost import (
+    EXTRA_SEAT_LLM_CAP_USD,
+    WARN_FRACTION_OF_CAP,
+    base_credit_for_plan,
+    crossed_spend_warning_threshold,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +73,8 @@ async def get_installation(pool: asyncpg.Pool, installation_id: int) -> dict | N
         SELECT installation_id, account_login, plan, webhook_url, alert_email,
                pushover_user_key, max_api_tokens, health_check_base_url,
                health_check_latency_threshold_ms, paddle_subscription_id,
-               paddle_customer_id, llm_suggestions_enabled
+               paddle_customer_id, llm_suggestions_enabled,
+               base_credit_remaining_usd, topup_credit_balance_usd
         FROM installations
         WHERE installation_id = $1
         """,
@@ -183,6 +189,154 @@ async def add_paddle_ids_to_installation(
         paddle_subscription_id,
         paddle_customer_id,
     )
+
+
+async def reset_billing_period_credit(
+    pool: asyncpg.Pool,
+    installation_id: int,
+    plan: str,
+    extra_seats: int,
+    period_start: str,
+    is_annual: bool,
+) -> bool:
+    """Resets base_credit_remaining_usd - and base_credit_allotment_usd,
+    this billing period's ceiling, to the same value - to this plan's
+    real included credit (base_credit_for_plan, same per-seat bonus the
+    old flat cap used) only if period_start is genuinely new for this
+    installation; a no-op on a replayed or unrelated subscription.updated
+    event.
+    Increments balance_epoch on a real reset, which doubles as the
+    dedupe key both new credit-notification emails key off of. Returns
+    whether a reset actually happened.
+
+    Despite the parameter name/type, `pool` only needs to support
+    `.fetchrow()` - webhooks/paddle.py passes an open `conn` acquired from
+    an existing `pool.acquire()`/`conn.transaction()` block (the same
+    pattern claim_free_to_paid_plan and friends already use) so this
+    reset commits atomically with that block's plan/extra_seats/Paddle-id
+    writes instead of as an independent standalone call.
+
+    is_annual controls next_monthly_credit_reset_at: set to one month past
+    this reset for an annual subscriber (see
+    run_monthly_credit_reset_sweep_job in scan_worker/jobs.py, which
+    resets base credit again every time that date arrives, independent of
+    Paddle's own once-a-year billing period), or cleared to NULL for a
+    monthly subscriber (whose base credit is already correctly refreshed
+    every month by THIS function alone, so the synthetic sweep must never
+    also touch them - both firing in the same month would double-credit).
+
+    That first synthetic due date is period_start + 30 days rather than a
+    true calendar month: python-dateutil's relativedelta would express
+    "+ 1 month" exactly, but dateutil is not a dependency of this service
+    (it appears in requirements.lock.txt only transitively, via croniter,
+    and nothing in app_server/scan_worker imports it) and this fix is not
+    worth adding one for. The tradeoff is small and bounded: only the
+    FIRST interval of each year is 30 days - the sweep itself advances by
+    a real `interval '1 month'` from its own previous due date afterwards
+    - and the real annual renewal re-synchronizes this column from
+    period_start every year, so the slight calendar drift can never
+    accumulate beyond one billing year."""
+    new_credit = base_credit_for_plan(plan, extra_seats)
+    # Paddle sends ISO 8601 with a trailing "Z" (e.g.
+    # "2026-09-01T00:00:00Z") - same format webhooks/paddle.py already
+    # parses for billed_at via datetime.fromisoformat (Python 3.11+
+    # accepts the "Z" suffix directly). asyncpg's timestamptz codec needs
+    # a real datetime, not a string, even with an explicit ::timestamptz
+    # cast in the query.
+    period_start_dt = datetime.fromisoformat(period_start)
+    next_monthly_reset = period_start_dt + timedelta(days=30) if is_annual else None
+    row = await pool.fetchrow(
+        """
+        UPDATE installations
+        SET base_credit_remaining_usd = $2,
+            base_credit_allotment_usd = $2,
+            current_billing_period_start = $3,
+            next_monthly_credit_reset_at = $4,
+            balance_epoch = balance_epoch + 1
+        WHERE installation_id = $1
+            AND (current_billing_period_start IS DISTINCT FROM $3)
+        RETURNING installation_id
+        """,
+        installation_id, new_credit, period_start_dt, next_monthly_reset,
+    )
+    return row is not None
+
+
+async def credit_extra_seat_purchase(
+    pool: asyncpg.Pool, installation_id: int, added_seats: int, plan: str, extra_seats: int
+) -> None:
+    """Credits the per-seat LLM bonus for seats bought MID-CYCLE, when
+    reset_billing_period_credit cannot - clamped at what the CURRENT seat
+    count actually entitles the installation to.
+
+    The per-seat bonus is folded into base_credit_for_plan, which only ever
+    gets applied by a real renewal reset - and a seat purchase fires
+    subscription.updated with the SAME current_billing_period.starts_at, so
+    that reset is a deliberate no-op. Before this, a customer paid
+    EXTRA_SEAT_PRICE_USD ($6.99) for a seat and got $0 of extra credit until
+    their next renewal, up to a month later; the old flat cap recomputed
+    itself live from get_extra_seats at every enforcement call site, so
+    raising the ceiling used to be immediate.
+
+    Same `pool`-only-needs-`.execute()` contract reset_billing_period_credit
+    documents: webhooks/paddle.py passes the open `conn` from the
+    subscription handler's transaction so this commits atomically with that
+    block's plan/extra_seats/Paddle-id writes, rather than as a split write.
+
+    balance_epoch is incremented, matching credit_topup_purchase: the
+    balance just went UP, so a low-balance warning already sent for the old
+    epoch must not suppress a later one for the new, larger allotment.
+
+    `plan` and `extra_seats` are the installation's CURRENT (post-purchase)
+    values, and base_credit_for_plan(plan, extra_seats) is therefore the
+    ceiling this installation is actually entitled to right now. Clamping
+    the credit at that ceiling - rather than adding the bonus
+    unconditionally - is what closes a self-service farming ratchet: seat
+    removal doesn't call this function and doesn't debit anything, so an
+    unclamped `+=` let a customer remove and re-add the same seat over and
+    over within one billing cycle, stacking a fresh EXTRA_SEAT_LLM_CAP_USD
+    bonus every round-trip. With the clamp, no number of remove/re-add
+    cycles can push the balance past what the current seat count pays for.
+    base_credit_allotment_usd is set to the same ceiling, keeping the
+    "release credits base first, capped at the allotment" invariant in
+    scan_worker/db.py's release_llm_spend_reservation true for the rest of
+    this billing period."""
+    if added_seats <= 0:
+        return
+    ceiling = base_credit_for_plan(plan, extra_seats)
+    await pool.execute(
+        "UPDATE installations SET "
+        "base_credit_remaining_usd = LEAST(base_credit_remaining_usd + $2, $3), "
+        "base_credit_allotment_usd = $3, "
+        "balance_epoch = balance_epoch + 1 "
+        "WHERE installation_id = $1",
+        installation_id, EXTRA_SEAT_LLM_CAP_USD * added_seats, ceiling,
+    )
+
+
+async def credit_topup_purchase(
+    pool: asyncpg.Pool, installation_id: int, amount_usd: float, transaction_id: str
+) -> bool:
+    """Credits a real, customer-purchased top-up to topup_credit_balance_
+    usd, exactly once per transaction_id even if the webhook is
+    redelivered. Returns whether this call actually credited anything
+    (False on a replay)."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            inserted = await conn.fetchrow(
+                "INSERT INTO processed_paddle_transactions (id) VALUES ($1) "
+                "ON CONFLICT (id) DO NOTHING RETURNING id",
+                transaction_id,
+            )
+            if inserted is None:
+                return False
+            await conn.execute(
+                "UPDATE installations SET topup_credit_balance_usd = "
+                "topup_credit_balance_usd + $2, balance_epoch = balance_epoch + 1 "
+                "WHERE installation_id = $1",
+                installation_id, amount_usd,
+            )
+    return True
 
 
 async def list_installations_for_ids(pool: asyncpg.Pool, installation_ids: list[int]) -> list[dict]:

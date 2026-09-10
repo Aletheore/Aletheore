@@ -427,40 +427,29 @@ def release_flash_review_count_reservation(dsn: str, installation_id: int) -> No
         conn.commit()
 
 
-def reserve_llm_spend(dsn: str, installation_id: int, reserve_usd: float, monthly_cap: float) -> bool:
-    """Same atomic reserve-before-spend pattern as
-    reserve_flash_review_count, for the dollar cap - reserves a
-    conservative flat estimate (see jobs.py's FLASH_REVIEW_SPEND_RESERVE_USD)
-    up front, since the real cost of a Flash Review isn't known until the
-    LLM call and grounding pass complete. record_llm_spend's own additive
-    upsert then trues the reservation up to the real cost afterward (pass
-    `real_cost - reserve_usd` as the delta - negative if the real cost came
-    in under the reservation, which is the common case).
-
-    Note: on the very first reservation of a new month (no llm_spend row
-    yet for this installation), the ON CONFLICT...WHERE clause only gates
-    the UPDATE branch, not the INSERT branch, so that first reservation
-    always succeeds regardless of monthly_cap. This matches the pre-existing
-    check-then-act behavior, which also couldn't reject a single review
-    whose cost alone would exceed the cap - not a new gap, and not reachable
-    in practice since reserve_usd is always small relative to any real
-    monthly_cap.
-
-    Returns True (and reserves) if under cap, False (no reservation) if
-    already at/over it. Call release_llm_spend_reservation if the review
-    then never actually runs."""
+def reserve_llm_spend(dsn: str, installation_id: int, reserve_usd: float) -> bool:
+    """Atomically reserves reserve_usd against an installation's real
+    credit balance (base_credit_remaining_usd, drawn down first, then
+    topup_credit_balance_usd) - replaces the old flat monthly_cap
+    parameter entirely; the ceiling is now this installation's own
+    stored balance, not a constant shared by every installation on the
+    same plan. Same atomicity guarantee as before: a single UPDATE ...
+    WHERE, so two concurrent callers against the same installation can
+    never together reserve more than what's actually available."""
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO llm_spend (installation_id, month, total_cost_usd)
-                VALUES (%s, date_trunc('month', now())::date, %s)
-                ON CONFLICT (installation_id, month) DO UPDATE
-                SET total_cost_usd = llm_spend.total_cost_usd + %s
-                WHERE llm_spend.total_cost_usd + %s <= %s
-                RETURNING total_cost_usd
+                UPDATE installations
+                SET
+                    base_credit_remaining_usd = GREATEST(base_credit_remaining_usd - %(reserve)s, 0),
+                    topup_credit_balance_usd = topup_credit_balance_usd
+                        - GREATEST(%(reserve)s - base_credit_remaining_usd, 0)
+                WHERE installation_id = %(installation_id)s
+                    AND base_credit_remaining_usd + topup_credit_balance_usd >= %(reserve)s
+                RETURNING installation_id
                 """,
-                (installation_id, reserve_usd, reserve_usd, reserve_usd, monthly_cap),
+                {"reserve": reserve_usd, "installation_id": installation_id},
             )
             row = cur.fetchone()
         conn.commit()
@@ -468,17 +457,30 @@ def reserve_llm_spend(dsn: str, installation_id: int, reserve_usd: float, monthl
 
 
 def release_llm_spend_reservation(dsn: str, installation_id: int, reserve_usd: float) -> None:
-    """Undoes one reserve_llm_spend reservation for a review that was
-    charged against the cap but never actually ran."""
+    """Undoes one reserve_llm_spend reservation - credits base_credit_
+    remaining_usd first, capped at this installation's stored
+    base_credit_allotment_usd (this billing period's real ceiling), and
+    spills only the remainder into topup_credit_balance_usd. Capping at
+    the allotment is what makes base credit actually reset every
+    renewal instead of permanently leaking into the never-expiring
+    topup bucket on every partial release."""
     with get_db_pool(dsn).connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                UPDATE llm_spend
-                SET total_cost_usd = GREATEST(total_cost_usd - %s, 0)
-                WHERE installation_id = %s AND month = date_trunc('month', now())::date
+                UPDATE installations
+                SET
+                    base_credit_remaining_usd = LEAST(
+                        base_credit_remaining_usd + %(reserve)s, base_credit_allotment_usd
+                    ),
+                    topup_credit_balance_usd = topup_credit_balance_usd
+                        + GREATEST(
+                            %(reserve)s - GREATEST(base_credit_allotment_usd - base_credit_remaining_usd, 0),
+                            0
+                        )
+                WHERE installation_id = %(installation_id)s
                 """,
-                (reserve_usd, installation_id),
+                {"reserve": reserve_usd, "installation_id": installation_id},
             )
         conn.commit()
 
@@ -524,6 +526,83 @@ def get_extra_seats(dsn: str, installation_id: int) -> int:
             )
             row = cur.fetchone()
             return row[0] if row else 0
+
+
+def list_installations_due_for_monthly_credit_reset(dsn: str) -> list[int]:
+    """Installations whose synthetic monthly credit clock has come due -
+    the due list for run_monthly_credit_reset_sweep_job in jobs.py.
+
+    next_monthly_credit_reset_at is non-NULL for ANNUAL subscribers only
+    (set by app_server/db.py's reset_billing_period_credit, migration
+    065): their Paddle current_billing_period only advances once a year,
+    so the webhook-driven reset alone would credit their monthly
+    allotment once for the whole year. The IS NOT NULL half of this
+    filter is load-bearing, not just an optimisation - a monthly
+    subscriber is already refreshed correctly by that webhook reset, and
+    the sweep firing for them too would double-credit them every month.
+    """
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
+            cur.execute(
+                """
+                SELECT installation_id FROM installations
+                WHERE next_monthly_credit_reset_at IS NOT NULL
+                    AND next_monthly_credit_reset_at <= now()
+                """
+            )
+            return [row[0] for row in cur.fetchall()]
+
+
+def apply_monthly_credit_reset(dsn: str, installation_id: int, new_credit: float) -> None:
+    """One synthetic monthly reset for an annual subscriber: the same
+    write reset_billing_period_credit performs on a real Paddle renewal,
+    minus current_billing_period_start (which still belongs to Paddle's
+    own once-a-year period and must not be faked forward).
+
+    Two deliberate choices here:
+
+    (a) next_monthly_credit_reset_at advances by one month past ITS OWN
+    PREVIOUS VALUE, not past now(). The scheduler ticks about every three
+    minutes and the sweep runs behind whatever else is on the "scans"
+    queue, so a due date is always caught some minutes - occasionally
+    hours - late. Anchoring the next date on now() would bake each of
+    those delays into the schedule permanently, walking the reset day
+    later and later through the year; anchoring it on the previous due
+    date keeps it fixed to the calendar no matter how late any individual
+    tick lands.
+
+    (b) balance_epoch is incremented, exactly as a real renewal reset
+    does. That is the actual reset mechanism for the low-balance/
+    exhausted credit emails - they are deduped through sent_emails on
+    f"credit_low_balance:{installation_id}:{balance_epoch}" (see
+    reserve_llm_spend_with_email_hooks in jobs.py), there are no
+    per-installation "email sent" timestamp columns to clear. Without the
+    increment, a customer warned in month three would never be warned
+    again for the rest of the year, because every later month would reuse
+    that month's dedupe key.
+
+    Idempotent per due date rather than per call: the WHERE clause
+    re-checks that the row is still actually due, so a second sweep in
+    the same tick window (or a retried RQ job) finds the date already
+    advanced past now() and changes nothing.
+    """
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE installations
+                SET base_credit_remaining_usd = %(new_credit)s,
+                    base_credit_allotment_usd = %(new_credit)s,
+                    next_monthly_credit_reset_at =
+                        next_monthly_credit_reset_at + interval '1 month',
+                    balance_epoch = balance_epoch + 1
+                WHERE installation_id = %(installation_id)s
+                    AND next_monthly_credit_reset_at IS NOT NULL
+                    AND next_monthly_credit_reset_at <= now()
+                """,
+                {"new_credit": new_credit, "installation_id": installation_id},
+            )
+        conn.commit()
 
 
 @contextmanager
@@ -739,7 +818,8 @@ def get_installation(dsn: str, installation_id: int) -> dict | None:
                 """
                 SELECT installation_id, account_login, plan, webhook_url, alert_email,
                        pushover_user_key, health_check_base_url,
-                       health_check_latency_threshold_ms, llm_suggestions_enabled
+                       health_check_latency_threshold_ms, llm_suggestions_enabled,
+                       base_credit_remaining_usd, topup_credit_balance_usd, balance_epoch
                 FROM installations
                 WHERE installation_id = %s
                 """,

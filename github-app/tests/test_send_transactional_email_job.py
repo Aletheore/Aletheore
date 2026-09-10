@@ -107,11 +107,38 @@ def test_dict_template_arg_is_expanded_as_keyword_args(monkeypatch):
     assert "2 scans" in send_calls[0]["text"]
 
 
-def test_unknown_template_name_raises(monkeypatch):
+def test_unknown_template_name_is_skipped_with_a_warning_instead_of_raising(monkeypatch, caplog):
+    # Previously a KeyError. The credit-balance emails
+    # (credit_low_balance/credit_exhausted) are enqueued by
+    # reserve_llm_spend_with_email_hooks on this branch, but their templates
+    # land on the parallel dashboard/emails branch - so depending on merge
+    # order this worker really can be handed a template name it doesn't have
+    # yet. Unguarded, @log_job turns that KeyError into a failed RQ job plus
+    # an error alert for EVERY low-balance/exhausted event, which is a much
+    # worse failure mode than a missing email. The guard doesn't close the
+    # template gap (the other branch's templates do); it makes this branch
+    # deployable independently of merge order.
+    import logging
+
     monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
     monkeypatch.setattr("scan_worker.jobs.email_already_sent", lambda dsn, key: False)
 
-    import pytest
+    def _fail_if_called(*a, **k):
+        raise AssertionError("should not attempt to send an unrenderable template")
 
-    with pytest.raises(KeyError):
-        send_transactional_email_job("x:1", "not_a_real_template", "octocat", "o@example.com")
+    monkeypatch.setattr("scan_worker.jobs.send_transactional_email", _fail_if_called)
+    monkeypatch.setattr("scan_worker.jobs.record_sent_email", _fail_if_called)
+
+    with caplog.at_level(logging.WARNING, logger="scan_worker.jobs"):
+        send_transactional_email_job(
+            "credit_low_balance:42:1",
+            "credit_low_balance",
+            {"account_login": "acme"},
+            "o@example.com",
+            installation_id=42,
+        )
+
+    assert "no email template registered for credit_low_balance" in caplog.text
+    # Nothing recorded either: the dedupe key must stay unclaimed so the
+    # same event can send for real once the templates land.
+    assert "installation_id=42" in caplog.text

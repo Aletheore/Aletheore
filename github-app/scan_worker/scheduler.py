@@ -55,6 +55,13 @@ WIKI_CATCHUP_SWEEP_JOB_TIMEOUT_SECONDS = 1800
 # the actual Resend calls happen there, not in this job, so this stays
 # bounded even if many installations are due the same tick.
 WEEKLY_DIGEST_SWEEP_JOB_TIMEOUT_SECONDS = 300
+# Same bounded shape as ENDPOINT_HEALTH_CLEANUP_JOB_TIMEOUT_SECONDS, hence
+# the same 60s: one indexed query over installations_next_monthly_credit_
+# reset_at (migration 065's partial index, which only contains the handful
+# of annual subscribers at all) plus, for the rare installation actually
+# due, a couple of single-row reads and one single-row UPDATE. Most ticks
+# find nothing due and do no work beyond that one query.
+MONTHLY_CREDIT_RESET_JOB_TIMEOUT_SECONDS = 60
 # A single max(checked_at) query plus, on the rare stale tick, one email -
 # nothing here can run long.
 HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS = 60
@@ -121,6 +128,10 @@ def run_forever(
         scans_queue.enqueue(
             "scan_worker.jobs.run_weekly_digest_sweep_job",
             job_timeout=WEEKLY_DIGEST_SWEEP_JOB_TIMEOUT_SECONDS,
+        )
+        scans_queue.enqueue(
+            "scan_worker.jobs.run_monthly_credit_reset_sweep_job",
+            job_timeout=MONTHLY_CREDIT_RESET_JOB_TIMEOUT_SECONDS,
         )
         # Deliberately on "scans" (scan-worker), not "health" (health-worker)
         # - the whole point is that this keeps running, and alerting, even

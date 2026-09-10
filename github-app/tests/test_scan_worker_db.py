@@ -11,6 +11,8 @@ from aletheore.evidence import EVIDENCE_VERSION
 from app_server.db import hide_repo
 from app_server.evidence_limits import EvidenceTooLargeError, MAX_EVIDENCE_BYTES
 from scan_worker.db import (
+    apply_monthly_credit_reset,
+    list_installations_due_for_monthly_credit_reset,
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     managed_audit_definitely_still_cooling_down,
@@ -1066,7 +1068,7 @@ async def test_record_llm_spend_ledgers_the_real_cost_not_the_true_up_delta(pool
     # made the delta <= 0, so no event was written at all despite real
     # money being spent - exactly defeating the ledger's purpose.
     await _insert_installation(pool, 1093, "a")
-    reserve_llm_spend(TEST_DATABASE_URL, 1093, reserve_usd=0.05, monthly_cap=5.0)
+    reserve_llm_spend(TEST_DATABASE_URL, 1093, reserve_usd=0.05)
     real_cost = 0.03  # under the reservation - delta is negative
     record_llm_spend(
         TEST_DATABASE_URL, 1093, real_cost - 0.05, feature="flash_review", ledger_cost_usd=real_cost,
@@ -1077,8 +1079,13 @@ async def test_record_llm_spend_ledgers_the_real_cost_not_the_true_up_delta(pool
 
     assert breakdown == {"flash_review": pytest.approx(real_cost)}
     # The aggregate total must still reflect the true-up delta, not
-    # ledger_cost_usd - the two are deliberately allowed to differ.
-    assert get_llm_spend_this_month(TEST_DATABASE_URL, 1093) == pytest.approx(real_cost)
+    # ledger_cost_usd - the two are deliberately allowed to differ. Pre-
+    # existing bug in this assertion (asserted real_cost instead of the
+    # delta it names in its own comment) found and fixed while merging
+    # master into the dollar-credit-pricing branch: record_llm_spend's
+    # INSERT sets a fresh row's total_cost_usd directly to cost_usd (the
+    # delta), never to ledger_cost_usd.
+    assert get_llm_spend_this_month(TEST_DATABASE_URL, 1093) == pytest.approx(real_cost - 0.05)
 
 
 @pytest.mark.asyncio
@@ -1180,50 +1187,181 @@ async def test_reserve_flash_review_count_is_atomic_under_real_concurrency(pool)
 
 
 @pytest.mark.asyncio
-async def test_reserve_llm_spend_allows_up_to_cap_then_blocks(pool):
-    await _insert_installation(pool, 405, "a")
-    first = reserve_llm_spend(TEST_DATABASE_URL, 405, reserve_usd=0.5, monthly_cap=1.0)
-    second = reserve_llm_spend(TEST_DATABASE_URL, 405, reserve_usd=0.5, monthly_cap=1.0)
-    third = reserve_llm_spend(TEST_DATABASE_URL, 405, reserve_usd=0.5, monthly_cap=1.0)
-    assert (first, second, third) == (True, True, False)
-    assert get_llm_spend_this_month(TEST_DATABASE_URL, 405) == pytest.approx(1.0)
+async def test_reserve_llm_spend_draws_from_base_credit_first(pool):
+    await _insert_installation(
+        pool, 405, "a", base_credit_remaining_usd=5.00, topup_credit_balance_usd=10.00
+    )
+    ok = reserve_llm_spend(TEST_DATABASE_URL, 405, 2.00)
+    assert ok is True
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        405,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(3.00)
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(10.00)
 
 
 @pytest.mark.asyncio
-async def test_release_llm_spend_reservation_gives_back_the_reserved_amount(pool):
-    await _insert_installation(pool, 406, "a")
-    reserve_llm_spend(TEST_DATABASE_URL, 406, reserve_usd=0.5, monthly_cap=1.0)
-    release_llm_spend_reservation(TEST_DATABASE_URL, 406, reserve_usd=0.5)
-    assert get_llm_spend_this_month(TEST_DATABASE_URL, 406) == pytest.approx(0.0)
+async def test_reserve_llm_spend_spills_into_topup_when_base_insufficient(pool):
+    await _insert_installation(
+        pool, 406, "a", base_credit_remaining_usd=1.00, topup_credit_balance_usd=10.00
+    )
+    ok = reserve_llm_spend(TEST_DATABASE_URL, 406, 3.00)
+    assert ok is True
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        406,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(0.00)
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(8.00)
 
 
 @pytest.mark.asyncio
-async def test_release_llm_spend_reservation_never_goes_negative(pool):
-    await _insert_installation(pool, 407, "a")
-    release_llm_spend_reservation(TEST_DATABASE_URL, 407, reserve_usd=0.5)
-    assert get_llm_spend_this_month(TEST_DATABASE_URL, 407) == pytest.approx(0.0)
+async def test_reserve_llm_spend_rejects_when_combined_balance_insufficient(pool):
+    await _insert_installation(
+        pool, 407, "a", base_credit_remaining_usd=1.00, topup_credit_balance_usd=1.00
+    )
+    ok = reserve_llm_spend(TEST_DATABASE_URL, 407, 5.00)
+    assert ok is False
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        407,
+    )
+    # Rejected reservation must not have mutated either column.
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(1.00)
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(1.00)
+
+
+@pytest.mark.asyncio
+async def test_reserve_llm_spend_succeeds_when_reserve_exactly_equals_combined_balance(pool):
+    # The boundary the WHERE clause's `>=` is supposed to admit: spending
+    # the balance down to exactly nothing must succeed (not be rejected as
+    # if it were an overdraft), and must leave BOTH columns at 0 rather than
+    # driving topup_credit_balance_usd negative.
+    #
+    # pytest.approx, matching this file's convention throughout: the columns
+    # are NUMERIC but reserve_llm_spend's parameters bind as double
+    # precision, so the arithmetic is not guaranteed exact-decimal.
+    await _insert_installation(
+        pool, 410, "a", base_credit_remaining_usd=1.25, topup_credit_balance_usd=0.75
+    )
+    ok = reserve_llm_spend(TEST_DATABASE_URL, 410, 2.00)
+    assert ok is True
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        410,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(0.00)
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(0.00)
+
+    # And one more cent is now genuinely refused.
+    assert reserve_llm_spend(TEST_DATABASE_URL, 410, 0.01) is False
+
+
+@pytest.mark.asyncio
+async def test_release_llm_spend_reservation_spills_to_topup_when_base_is_at_its_allotment(pool):
+    # No room in base (it is already sitting at this billing period's full
+    # allotment - i.e. the reservation being released must have been paid
+    # for out of topup), so the whole release goes back to topup. This is
+    # the ONLY shape in which a release should touch topup at all.
+    await _insert_installation(
+        pool, 408, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=5.00,
+        topup_credit_balance_usd=8.00,
+    )
+    release_llm_spend_reservation(TEST_DATABASE_URL, 408, 2.00)
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        408,
+    )
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(10.00)
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(5.00)
+
+
+@pytest.mark.asyncio
+async def test_release_llm_spend_reservation_refills_base_without_exceeding_the_allotment(pool):
+    # The bug this cap exists for: releasing the unused part of a flat
+    # reservation used to credit 100% to topup_credit_balance_usd, which
+    # NEVER expires - so on every Flash Review (real cost ~$0.007 against a
+    # $0.50 flat reserve) ~$0.49 of the monthly, use-it-or-lose-it base
+    # allotment permanently migrated into the never-expiring bucket, and a
+    # customer's spendable balance grew without bound instead of resetting
+    # each renewal.
+    #
+    # $0.50 was drawn out of a $5.00 allotment, so there is exactly $0.50 of
+    # room: releasing $0.50 must land base back at exactly its allotment
+    # with nothing at all spilling into topup.
+    await _insert_installation(
+        pool, 411, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=4.50,
+        topup_credit_balance_usd=2.00,
+    )
+    release_llm_spend_reservation(TEST_DATABASE_URL, 411, 0.50)
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        411,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(5.00)
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(2.00)
+
+
+@pytest.mark.asyncio
+async def test_release_llm_spend_reservation_spills_only_the_overflow_into_topup(pool):
+    # Same $0.50 of room, but $0.80 released - which can only happen when
+    # the reservation itself was partly funded from topup (base ran out
+    # mid-reservation, see reserve_llm_spend's spill-over). Base refills to
+    # its ceiling and exactly the $0.30 that base has no room for goes
+    # back where it came from.
+    await _insert_installation(
+        pool, 412, "a",
+        base_credit_allotment_usd=5.00,
+        base_credit_remaining_usd=4.50,
+        topup_credit_balance_usd=2.00,
+    )
+    release_llm_spend_reservation(TEST_DATABASE_URL, 412, 0.80)
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        412,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(5.00)
+    assert float(row["topup_credit_balance_usd"]) == pytest.approx(2.30)
 
 
 @pytest.mark.asyncio
 async def test_reserve_llm_spend_is_atomic_under_real_concurrency(pool):
     import concurrent.futures
 
-    await _insert_installation(pool, 408, "a")
-    reserve_usd = 0.5
-    cap = 5.0
-    max_successes = 10  # cap / reserve_usd
-    attempts = 30
+    await _insert_installation(
+        pool, 409, "a", base_credit_remaining_usd=10.00, topup_credit_balance_usd=0.00
+    )
+    reserve_usd = 1.00
+    max_successes = 10  # combined $10.00 balance / $1.00 per reservation
+    attempts = 20
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=attempts) as pool_exec:
         results = list(
             pool_exec.map(
-                lambda _: reserve_llm_spend(TEST_DATABASE_URL, 408, reserve_usd, cap),
+                lambda _: reserve_llm_spend(TEST_DATABASE_URL, 409, reserve_usd),
                 range(attempts),
             )
         )
 
     assert sum(results) == max_successes
-    assert get_llm_spend_this_month(TEST_DATABASE_URL, 408) == pytest.approx(max_successes * reserve_usd)
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, topup_credit_balance_usd "
+        "FROM installations WHERE installation_id = $1",
+        409,
+    )
+    assert float(row["base_credit_remaining_usd"]) + float(row["topup_credit_balance_usd"]) == pytest.approx(0.00)
 
 
 @pytest.mark.asyncio
@@ -2379,3 +2517,153 @@ async def test_insert_repo_history_without_head_sha_does_not_tag_the_stored_evid
 
     evidence = get_latest_evidence(TEST_DATABASE_URL, 826, "a/repo1")
     assert "_scan_head_sha" not in evidence
+
+
+# --- Synthetic monthly credit reset for annual subscribers (migration 065) ---
+
+
+@pytest.mark.asyncio
+async def test_monthly_credit_reset_due_list_only_includes_armed_and_due_rows(pool):
+    # 830: an annual subscriber whose synthetic due date has arrived.
+    await _insert_installation(pool, 830, "annual-due", plan="air")
+    # 831: an annual subscriber whose due date is still in the future.
+    await _insert_installation(pool, 831, "annual-not-yet", plan="air")
+    # 832: a MONTHLY subscriber - NULL clock. Their base credit is already
+    # refreshed every month by the Paddle-driven reset, so the sweep picking
+    # them up would double-credit them; this is the case the IS NOT NULL half
+    # of the query exists for.
+    await _insert_installation(pool, 832, "monthly", plan="air")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE installations SET next_monthly_credit_reset_at = now() - interval '1 hour' "
+            "WHERE installation_id = $1",
+            830,
+        )
+        await conn.execute(
+            "UPDATE installations SET next_monthly_credit_reset_at = now() + interval '5 days' "
+            "WHERE installation_id = $1",
+            831,
+        )
+
+    due = list_installations_due_for_monthly_credit_reset(TEST_DATABASE_URL)
+
+    assert 830 in due
+    assert 831 not in due
+    assert 832 not in due
+
+
+@pytest.mark.asyncio
+async def test_apply_monthly_credit_reset_advances_the_due_date_without_drift(pool):
+    # The next due date must be one month past ITS OWN PREVIOUS VALUE, not
+    # one month past now(). A sweep tick always lands somewhat late (the
+    # scheduler ticks every ~3 minutes and this job queues behind whatever
+    # else is on "scans"), and anchoring on now() would bake every one of
+    # those delays permanently into the schedule, walking the reset day later
+    # and later through the year.
+    await _insert_installation(pool, 833, "annual-co", plan="air", base_credit_remaining_usd=1.25)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE installations SET next_monthly_credit_reset_at = $2 WHERE installation_id = $1",
+            833,
+            datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
+
+    apply_monthly_credit_reset(TEST_DATABASE_URL, 833, 18.00)
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, base_credit_allotment_usd, balance_epoch, "
+        "next_monthly_credit_reset_at FROM installations WHERE installation_id = $1",
+        833,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    assert float(row["base_credit_allotment_usd"]) == pytest.approx(18.00)
+    # Exactly 2026-10-01, the old due date + 1 month - NOT now() + 1 month,
+    # which would have been over a year out from this fixed old date.
+    assert row["next_monthly_credit_reset_at"] == datetime(2026, 10, 1, tzinfo=timezone.utc)
+    # The dedupe key for the low-balance/exhausted credit emails is
+    # f"credit_low_balance:{installation_id}:{balance_epoch}" - without this
+    # bump, a customer warned once would never be warned again all year.
+    assert row["balance_epoch"] == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_monthly_credit_reset_leaves_paddles_own_billing_period_alone(pool):
+    # current_billing_period_start belongs to Paddle's real once-a-year
+    # period. If the synthetic sweep faked it forward, the next genuine
+    # annual renewal webhook would look like a replay to
+    # reset_billing_period_credit and be skipped entirely.
+    await _insert_installation(pool, 834, "annual-co", plan="air")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE installations SET next_monthly_credit_reset_at = now() - interval '1 minute', "
+            "current_billing_period_start = $2 WHERE installation_id = $1",
+            834,
+            datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
+
+    apply_monthly_credit_reset(TEST_DATABASE_URL, 834, 18.00)
+
+    row = await pool.fetchrow(
+        "SELECT current_billing_period_start FROM installations WHERE installation_id = $1", 834
+    )
+    assert row["current_billing_period_start"] == datetime(2026, 9, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_apply_monthly_credit_reset_run_twice_back_to_back_only_fires_once(pool):
+    # Two sweeps in the same tick window (or a retried RQ job): the first
+    # advances the due date a month into the future, so the second finds the
+    # row no longer due and must not credit a second allotment on top.
+    await _insert_installation(pool, 835, "annual-co", plan="air")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE installations SET next_monthly_credit_reset_at = now() - interval '1 minute' "
+            "WHERE installation_id = $1",
+            835,
+        )
+
+    apply_monthly_credit_reset(TEST_DATABASE_URL, 835, 18.00)
+    after_first = await pool.fetchrow(
+        "SELECT next_monthly_credit_reset_at, balance_epoch FROM installations "
+        "WHERE installation_id = $1",
+        835,
+    )
+    # The row is no longer in the due list at all after one firing.
+    assert 835 not in list_installations_due_for_monthly_credit_reset(TEST_DATABASE_URL)
+
+    # Spend it down, then sweep again immediately.
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE installations SET base_credit_remaining_usd = 4.00 WHERE installation_id = $1",
+            835,
+        )
+    apply_monthly_credit_reset(TEST_DATABASE_URL, 835, 18.00)
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, balance_epoch, next_monthly_credit_reset_at "
+        "FROM installations WHERE installation_id = $1",
+        835,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(4.00)
+    assert row["balance_epoch"] == after_first["balance_epoch"]
+    assert row["next_monthly_credit_reset_at"] == after_first["next_monthly_credit_reset_at"]
+
+
+@pytest.mark.asyncio
+async def test_apply_monthly_credit_reset_never_touches_a_monthly_subscriber(pool):
+    # Belt and braces on the invariant that matters most for money: even
+    # called directly with a monthly subscriber's id (NULL clock), the write
+    # must be a no-op. Their real Paddle renewal is the only thing allowed to
+    # reset their credit.
+    await _insert_installation(pool, 836, "monthly-co", plan="air", base_credit_remaining_usd=2.00)
+
+    apply_monthly_credit_reset(TEST_DATABASE_URL, 836, 18.00)
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, balance_epoch, next_monthly_credit_reset_at "
+        "FROM installations WHERE installation_id = $1",
+        836,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(2.00)
+    assert row["balance_epoch"] == 0
+    assert row["next_monthly_credit_reset_at"] is None
