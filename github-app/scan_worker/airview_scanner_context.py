@@ -54,6 +54,7 @@ MAX_ENDPOINTS = 50
 MAX_VULNERABILITY_FINDINGS = 30
 MAX_DEAD_CODE_ENTRIES = 30
 MAX_ENV_VARS = 50
+MAX_INFRASTRUCTURE_SERVICES = 50
 
 
 def build_repo_context(evidence: dict) -> dict:
@@ -202,22 +203,34 @@ def _dead_code_context(dead_code: dict) -> dict | None:
 
 
 def _infrastructure_context(infrastructure: dict) -> dict | None:
-    services = [
+    # Real gap found via audit: this was the one section PR #586's
+    # unboundedness fix missed - every sibling section below got capped
+    # and sorted deterministically, but this one still flattens every
+    # docker-compose service across every compose file with no cap and no
+    # stable sort (dict/list iteration order, not guaranteed stable for
+    # identical evidence). A real monorepo with many small services
+    # (50 compose files x 20 services - not an extreme case) reproduces
+    # the same unbounded-payload-on-every-generation-call problem #586
+    # fixed everywhere else in this file.
+    services = sorted(
         service
         for entry in infrastructure.get("docker_compose_services", [])
         for service in entry.get("services", [])
-    ]
+    )
     has_k8s = bool(infrastructure.get("kubernetes_manifests"))
     has_terraform = bool(infrastructure.get("terraform_files"))
     has_helm = bool(infrastructure.get("helm_charts"))
     if not services and not (has_k8s or has_terraform or has_helm):
         return None
-    return {
-        "docker_compose_services": services,
+    result = {
+        "docker_compose_services": services[:MAX_INFRASTRUCTURE_SERVICES],
         "has_kubernetes_manifests": has_k8s,
         "has_terraform": has_terraform,
         "has_helm_charts": has_helm,
     }
+    if len(services) > MAX_INFRASTRUCTURE_SERVICES:
+        result["docker_compose_services_total_count"] = len(services)
+    return result
 
 
 def _env_vars_context(env_vars: dict) -> list[str] | None:

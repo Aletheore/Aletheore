@@ -332,6 +332,261 @@ def test_ensure_persistent_checkout_strips_credentials_on_reuse_path_too(tmp_pat
     assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
 
 
+def test_clone_ref_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
+    # Real gap found via audit: _clone_ref's own docstring assumption
+    # ("deleted with the whole job_dir within minutes" - see
+    # _ensure_persistent_checkout's docstring, which contrasts against
+    # this function by name) only holds on a clean return or a Python
+    # exception, both of which run the caller job's own try/finally
+    # job_dir cleanup. A hard process kill (this file's own _run_scan
+    # comment documents real OOM kills on large repos) skips that
+    # entirely and falls back to run_job_temp_dir_cleanup_job's periodic
+    # sweep, which only reaps a job_dir after JOB_TEMP_DIR_MAX_AGE_SECONDS
+    # (6 hours) - not "minutes". Nothing after this function ever needs to
+    # fetch against origin again, so the live token has no reason to still
+    # be on disk once the checkout is done.
+    from scan_worker.jobs import _clone_ref
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "ephemeral"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    _clone_ref(credentialed_url, "somesha", dest)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls, "expected a 'git remote set-url' call scrubbing the clone"
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+    assert "livetoken" not in set_url_calls[-1][-1]
+
+
+def test_clone_ref_scrubs_the_token_even_when_checkout_fails(tmp_path, monkeypatch):
+    # Proves the scrub runs from a finally block, not just after a
+    # successful checkout - a failed checkout must not leave the
+    # credentialed .git/config behind for run_job_temp_dir_cleanup_job's
+    # 6-hour sweep to be the only thing standing between a live token and
+    # disk.
+    from scan_worker.jobs import _clone_ref
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            return subprocess.CompletedProcess(args, 0)
+        if args[:2] == ["git", "checkout"]:
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "ephemeral-fail"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_ref(credentialed_url, "badsha", dest)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls, "expected the scrub to still run in a finally block"
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+
+
+def test_clone_ref_scrubs_the_token_even_when_the_clone_itself_is_interrupted(tmp_path, monkeypatch):
+    # Real Flash Review finding on the first version of this fix: the
+    # clone call sat before the try, so an interruption DURING the clone
+    # (e.g. an RQ job timeout - not a raw OOM SIGKILL, which no
+    # try/finally placement can survive regardless of where it sits)
+    # skipped the scrub entirely, even though the clone had already
+    # written the credentialed URL into .git/config by the time it was
+    # interrupted.
+    from scan_worker.jobs import _clone_ref
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            # git writes .git/config with the credentialed remote before
+            # the clone finishes populating the working tree - simulate
+            # an interruption after that point.
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "ephemeral-clone-interrupted"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_ref(credentialed_url, "somesha", dest)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls, "expected the scrub to still run even though the clone itself was interrupted"
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+
+
+def test_clone_ref_does_not_attempt_a_scrub_when_the_clone_never_created_a_git_dir(tmp_path, monkeypatch):
+    # The other half: a clone interrupted before git ever created .git at
+    # all (e.g. a DNS failure) must not attempt a `git remote set-url`
+    # against a directory that has no repo in it.
+    from scan_worker.jobs import _clone_ref
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "ephemeral-never-cloned"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_ref(credentialed_url, "somesha", dest)
+
+    assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
+
+
+def test_clone_pr_head_does_not_leave_a_live_token_on_disk(tmp_path, monkeypatch):
+    # Same real gap as _clone_ref above, for the PR-head clone path (used
+    # by run_managed_audit_pr_job).
+    from scan_worker.jobs import _clone_pr_head
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "pr-head"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    _clone_pr_head(credentialed_url, 42, dest)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls, "expected a 'git remote set-url' call scrubbing the clone"
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+    assert "livetoken" not in set_url_calls[-1][-1]
+
+
+def test_clone_pr_head_scrubs_the_token_even_when_the_clone_itself_is_interrupted(tmp_path, monkeypatch):
+    # Same Flash Review finding as _clone_ref's identical test above.
+    from scan_worker.jobs import _clone_pr_head
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            os.makedirs(os.path.join(args[-1], ".git"), exist_ok=True)
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "pr-head-clone-interrupted"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_pr_head(credentialed_url, 42, dest)
+
+    set_url_calls = [c for c in calls if c[:3] == ["git", "remote", "set-url"]]
+    assert set_url_calls, "expected the scrub to still run even though the clone itself was interrupted"
+    assert set_url_calls[-1][-1] == "https://github.com/org/repo.git"
+
+
+def test_clone_pr_head_does_not_attempt_a_scrub_when_the_clone_never_created_a_git_dir(
+    tmp_path, monkeypatch
+):
+    from scan_worker.jobs import _clone_pr_head
+
+    calls = []
+
+    def fake_run(args, cwd=None, check=None):
+        calls.append(args)
+        if args[:2] == ["git", "clone"]:
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("scan_worker.jobs.subprocess.run", fake_run)
+
+    dest = tmp_path / "pr-head-never-cloned"
+    credentialed_url = "https://x-access-token:livetoken@github.com/org/repo.git"
+    with pytest.raises(subprocess.CalledProcessError):
+        _clone_pr_head(credentialed_url, 42, dest)
+
+    assert [c for c in calls if c[:3] == ["git", "remote", "set-url"]] == []
+
+
+def test_incremental_spend_budget_record_usage_ledgers_the_real_cost_not_the_delta(monkeypatch):
+    # Real gap found via audit: record_usage passed the true-up delta
+    # (cost - next_call_reserve_usd) as both the aggregate update AND the
+    # per-feature ledger amount - correct for the former, wrong for the
+    # latter, the same class of bug as run_flash_review_job's own
+    # dollar-cap true-up (see record_llm_spend's ledger_cost_usd).
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_llm_spend",
+        lambda dsn, iid, delta, **k: calls.append((delta, k)),
+    )
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.03)
+    # delta = 0.03 - 0.05 = -0.02 (negative): record_usage's own true-up
+    # (Task 4 of the dollar-credit-pricing plan, not part of this ledger
+    # fix) releases the unused reservation back to the credit balance -
+    # mocked here since it's not what this test is about.
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+
+    budget = _IncrementalSpendBudget(
+        "dsn", 1, "model", next_call_reserve_usd=0.05, feature="airview_full_build",
+    )
+    budget.record_usage(prompt_tokens=100, completion_tokens=50)
+
+    assert len(calls) == 1
+    delta, kwargs = calls[0]
+    assert delta == pytest.approx(0.03 - 0.05)
+    assert kwargs["ledger_cost_usd"] == pytest.approx(0.03)
+    assert kwargs["feature"] == "airview_full_build"
+
+
+def test_incremental_spend_budget_record_usage_still_ledgers_when_cost_exactly_matches_reservation(
+    monkeypatch,
+):
+    # Before this fix, delta == 0 short-circuited with an early return,
+    # silently skipping the ledger event entirely even though a real,
+    # nonzero cost was spent - it just happened to equal the reservation.
+    from scan_worker.jobs import _IncrementalSpendBudget
+
+    calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.record_llm_spend",
+        lambda dsn, iid, delta, **k: calls.append((delta, k)),
+    )
+    monkeypatch.setattr("scan_worker.jobs.cost_for_usage", lambda *a, **k: 0.05)
+
+    budget = _IncrementalSpendBudget(
+        "dsn", 1, "model", next_call_reserve_usd=0.05, feature="docs_incremental",
+    )
+    budget.record_usage(prompt_tokens=100, completion_tokens=50)
+
+    assert len(calls) == 1
+    delta, kwargs = calls[0]
+    assert delta == 0
+    assert kwargs["ledger_cost_usd"] == pytest.approx(0.05)
+
+
 def test_run_pr_scan_job_uses_persistent_checkout_and_unchanged_cache_for_head(
     bare_repo_with_two_commits, monkeypatch
 ):
@@ -3910,6 +4165,51 @@ def test_flash_review_job_posts_failure_comment_instead_of_raising(monkeypatch):
     assert "GitHub API timed out" in posted["body"]
 
 
+def test_flash_review_job_logs_when_it_cannot_even_post_the_failure_comment(monkeypatch, caplog):
+    # Real gap found via audit: this inner except was a bare `pass` with no
+    # logging at all - unlike _try_post_failure_comment (used by
+    # run_pr_scan_job/run_managed_audit_api_job for the identical
+    # situation), which logs a warning when the failure comment itself
+    # fails to post. An ops issue in this specific path (e.g. token
+    # expiry, a GitHub API auth failure) was invisible until a customer
+    # complained.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", lambda *a, **k: {"plan": "air"})
+    monkeypatch.setattr("scan_worker.jobs._evidence_by_head_sha_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs._latest_evidence_or_none", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_flash_review_attempt", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.check_and_reserve_monthly_repo_scan_slot", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda *a, **k: 0)
+    monkeypatch.setattr("scan_worker.jobs.reserve_flash_review_count", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", lambda *a, **k: True)
+    monkeypatch.setattr("scan_worker.jobs.release_flash_review_count_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
+    monkeypatch.setattr("scan_worker.jobs.get_installation_token", lambda *a, **k: "fake-token")
+    monkeypatch.setattr("scan_worker.jobs.generate_app_jwt", lambda *a, **k: "fake-jwt")
+    monkeypatch.setattr("scan_worker.jobs.get_last_reviewed_sha", lambda *a, **k: None)
+
+    def _raise_diff_fetch(*a, **k):
+        raise RuntimeError("GitHub API timed out")
+
+    monkeypatch.setattr("scan_worker.jobs.fetch_pr_diff", _raise_diff_fetch)
+
+    def _raise_on_comment(*a, **k):
+        raise RuntimeError("installation token expired")
+
+    monkeypatch.setattr("scan_worker.jobs.upsert_pr_comment", _raise_on_comment)
+
+    from scan_worker.jobs import run_flash_review_job
+
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        run_flash_review_job(1, "octocat/hello-world", 42, "aaa", "bbb")
+
+    assert any(
+        "flash review failed to post failure comment" in record.message
+        and "installation token expired" in record.message
+        for record in caplog.records
+    )
+
+
 def test_flash_review_job_passes_referenced_symbol_context_to_review_diff(monkeypatch):
     # Real hallucination this exists to prevent: Flash Review claimed an
     # imported function needed `await`, citing "usage in admin.py", when
@@ -4807,6 +5107,50 @@ def test_send_alerts_if_configured_isolates_a_slack_failure_from_other_channels(
     )
 
     assert len(email_sent) == 1
+    assert len(pushover_sent) == 1
+
+
+def test_send_alerts_if_configured_isolates_an_email_failure_from_pushover(monkeypatch):
+    # Real bug found via audit, the same class as the Slack isolation test
+    # above but for the email branch: unlike Slack/Teams and Pushover,
+    # enqueue_transactional_email's call was unguarded -
+    # get_redis_client()/Queue(...).enqueue(...) can both raise (a
+    # transient Redis blip is not hypothetical), and that exception
+    # propagated out of this function entirely, skipping Pushover below
+    # even when it's configured and healthy.
+    from app_server.config import get_settings
+    from scan_worker.jobs import _send_alerts_if_configured
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("PUSHOVER_API_TOKEN", "server-app-token")
+    get_settings.cache_clear()
+
+    slack_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_health_alert", lambda *a, **k: slack_sent.append(a)
+    )
+
+    def failing_enqueue(*a, **k):
+        raise RuntimeError("redis connection refused")
+
+    monkeypatch.setattr("scan_worker.jobs.enqueue_transactional_email", failing_enqueue)
+    pushover_sent = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.send_pushover_alert", lambda *a, **k: pushover_sent.append(a)
+    )
+
+    _send_alerts_if_configured(
+        {
+            "installation_id": 1,
+            "target_id": 900,
+            "webhook_url": "https://slack.example.com/webhook",
+            "alert_email": "ops@example.com",
+            "pushover_user_key": "u" * 30,
+        },
+        {"text": "down"},
+    )
+
+    assert len(slack_sent) == 1
     assert len(pushover_sent) == 1
 
 
@@ -6397,7 +6741,7 @@ def test_run_live_wiki_incremental_update_job_reloads_evidence_and_delegates(mon
     assert called["head_sha"] == "sha1"
 
 
-def test_run_live_wiki_incremental_update_job_noop_when_no_evidence_yet(monkeypatch):
+def test_run_live_wiki_incremental_update_job_noop_when_no_evidence_yet(monkeypatch, caplog):
     from scan_worker.jobs import run_live_wiki_incremental_update_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -6405,12 +6749,22 @@ def test_run_live_wiki_incremental_update_job_noop_when_no_evidence_yet(monkeypa
     called = []
     monkeypatch.setattr("scan_worker.jobs._maybe_update_live_wiki", lambda *a, **k: called.append(True))
 
-    run_live_wiki_incremental_update_job(
-        installation_id=1, repo_full_name="octocat/hello-world",
-        changed_files=["auth/login.py"], head_sha="sha1", history_id=99,
-    )
+    # Real gap found via audit: this used to be a silent `return` with a
+    # misleading "nothing scanned yet" comment - repo_history's retention
+    # trim can in principle evict this exact history_id (see
+    # REPO_HISTORY_TRIM_GRACE_SECONDS) even after real scans happened, so
+    # a skipped wiki update must be logged, not invisible.
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        run_live_wiki_incremental_update_job(
+            installation_id=1, repo_full_name="octocat/hello-world",
+            changed_files=["auth/login.py"], head_sha="sha1", history_id=99,
+        )
 
     assert called == []
+    assert any(
+        "history_id=99" in record.message and "octocat/hello-world" in record.message
+        for record in caplog.records
+    )
 
 
 def test_run_live_docs_incremental_update_job_reloads_evidence_and_delegates(monkeypatch):
@@ -6447,7 +6801,7 @@ def test_run_live_docs_incremental_update_job_reloads_evidence_and_delegates(mon
     assert called["head_sha"] == "sha1"
 
 
-def test_run_live_docs_incremental_update_job_noop_when_no_evidence_yet(monkeypatch):
+def test_run_live_docs_incremental_update_job_noop_when_no_evidence_yet(monkeypatch, caplog):
     from scan_worker.jobs import run_live_docs_incremental_update_job
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
@@ -6455,12 +6809,19 @@ def test_run_live_docs_incremental_update_job_noop_when_no_evidence_yet(monkeypa
     called = []
     monkeypatch.setattr("scan_worker.jobs._maybe_update_live_docs", lambda *a, **k: called.append(True))
 
-    run_live_docs_incremental_update_job(
-        installation_id=1, repo_full_name="octocat/hello-world",
-        changed_files=["auth/login.py"], head_sha="sha1", history_id=99,
-    )
+    # Same real gap as run_live_wiki_incremental_update_job's identical
+    # test above - see REPO_HISTORY_TRIM_GRACE_SECONDS.
+    with caplog.at_level("WARNING", logger="scan_worker.jobs"):
+        run_live_docs_incremental_update_job(
+            installation_id=1, repo_full_name="octocat/hello-world",
+            changed_files=["auth/login.py"], head_sha="sha1", history_id=99,
+        )
 
     assert called == []
+    assert any(
+        "history_id=99" in record.message and "octocat/hello-world" in record.message
+        for record in caplog.records
+    )
 
 
 class _FakeScansQueue:
@@ -7559,6 +7920,77 @@ def test_run_live_wiki_full_build_job_is_noop_when_every_cluster_already_covered
     assert build_status_calls == [("ready", None)]
 
 
+def test_run_live_wiki_full_build_job_prunes_a_deleted_clusters_stale_subsystem(monkeypatch):
+    # Real gap found via audit: _clusters_with_uncovered_wiki_work only
+    # looks at clusters CURRENTLY in evidence, so a stored subsystem
+    # whose cluster was deleted from the repo entirely was invisible to
+    # it - "nothing new to do" isn't the same as "nothing to prune".
+    # _store_wiki_subsystem_records is the only place
+    # delete_wiki_subsystems_not_in ever runs, so without this, a repo
+    # that reaches steady-state coverage never called it again and a
+    # deleted cluster's stale wiki page survived forever. Cluster "1" is
+    # covered in the DB but no longer exists in current evidence.
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    evidence = _multi_cluster_wiki_evidence([0])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: evidence)
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_wiki_subsystems",
+        lambda *a, **k: [{"subsystem_id": "0"}, {"subsystem_id": "1"}],
+    )
+    generate_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.live_wiki.generate_subsystems",
+        lambda *a, **k: generate_calls.append(1),
+    )
+    store_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._store_wiki_subsystem_records",
+        lambda dsn, iid, repo, ev, records, commit: store_calls.append(records),
+    )
+    build_status_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs.set_wiki_build_status",
+        lambda dsn, iid, repo, status, error=None: build_status_calls.append((status, error)),
+    )
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    # No new generation work (cluster 0 is already covered) - the prune
+    # call costs no LLM call, only cluster 1's stale row gets pruned.
+    assert generate_calls == []
+    assert store_calls == [[]]
+    assert build_status_calls == [("ready", None)]
+
+
+def test_run_live_wiki_full_build_job_does_not_prune_when_every_covered_cluster_still_exists(
+    monkeypatch,
+):
+    # The other half: no orphan means no prune call at all, not even a
+    # cheap no-op one - matches the pre-existing noop test's expectation
+    # that nothing DB-writing runs when there's genuinely nothing to do.
+    from scan_worker.jobs import run_live_wiki_full_build_job
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused")
+    evidence = _multi_cluster_wiki_evidence([0, 1])
+    monkeypatch.setattr("scan_worker.jobs.get_latest_evidence", lambda *a, **k: evidence)
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_wiki_subsystems",
+        lambda *a, **k: [{"subsystem_id": "0"}, {"subsystem_id": "1"}],
+    )
+    store_calls = []
+    monkeypatch.setattr(
+        "scan_worker.jobs._store_wiki_subsystem_records",
+        lambda *a, **k: store_calls.append(1),
+    )
+    monkeypatch.setattr("scan_worker.jobs.set_wiki_build_status", lambda *a, **k: None)
+
+    run_live_wiki_full_build_job(1, "octocat/hello-world")
+
+    assert store_calls == []
+
+
 def test_live_wiki_catchup_sweep_job_rebuilds_each_due_repo(monkeypatch):
     from scan_worker.jobs import run_live_wiki_catchup_sweep_job
 
@@ -7725,6 +8157,26 @@ def test_module_has_uncovered_docs_work_false_when_nothing_needs_work_at_all():
     assert _module_has_uncovered_docs_work(module, already_covered_names=set()) is False
 
 
+def test_module_has_uncovered_docs_work_true_when_a_covered_symbol_was_deleted():
+    # Real gap found via audit: a symbol removed from the source file
+    # simply isn't in live_docs._symbols_needing_work's output anymore -
+    # it isn't a real symbol - so if every symbol still present is already
+    # covered, this used to report False even though a stale docs_symbols
+    # row for the deleted symbol exists and would never get pruned (the
+    # only place that prunes it, _store_docs_generation_for_module, only
+    # ever runs for a module this function says has work).
+    from scan_worker.jobs import _module_has_uncovered_docs_work
+
+    module = _docs_module(functions=[{"name": "keep_me", "is_public": True, "docstring": "d"}])
+
+    assert (
+        _module_has_uncovered_docs_work(module, already_covered_names={"keep_me", "deleted_fn"})
+        is True
+    )
+    # No orphan - every covered name still exists in the module - stays False.
+    assert _module_has_uncovered_docs_work(module, already_covered_names={"keep_me"}) is False
+
+
 def test_modules_with_uncovered_docs_work_filters_and_caps():
     from scan_worker.jobs import _modules_with_uncovered_docs_work
 
@@ -7750,6 +8202,25 @@ def test_modules_with_uncovered_docs_work_filters_and_caps():
     # fully-untouched files come first so a capped run can't get crowded
     # out by files that are already mostly done.
     assert paths[0] == "untouched.py"
+
+
+def test_modules_with_uncovered_docs_work_includes_a_module_with_only_an_orphaned_symbol():
+    # Same real gap as _module_has_uncovered_docs_work's own test above,
+    # exercised at this function's level: a module whose only remaining
+    # symbol is already covered, but whose covered set also names a
+    # symbol deleted from the source, must still come back - it's the
+    # only way _run_docs_build_for_modules ever reaches this module to
+    # prune the orphaned docs_symbols row.
+    from scan_worker.jobs import _modules_with_uncovered_docs_work
+
+    stale = _docs_module(
+        "stale.py", functions=[{"name": "keep_me", "is_public": True, "docstring": "d"}]
+    )
+    covered_by_module = {"stale.py": {"keep_me", "deleted_fn"}}
+
+    result = _modules_with_uncovered_docs_work([stale], covered_by_module, limit=10)
+
+    assert [m["path"] for m in result] == ["stale.py"]
 
 
 def test_modules_with_uncovered_docs_work_respects_limit():

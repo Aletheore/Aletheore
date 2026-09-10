@@ -379,8 +379,43 @@ def _run_git(args: list[str], **kwargs) -> None:
 
 
 def _clone_ref(url: str, ref: str, dest: Path) -> None:
-    _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
-    subprocess.run(["git", "checkout", "-q", ref], cwd=dest, check=True)
+    # Scrubs the credentialed URL from dest/.git/config in a finally block
+    # covering the clone itself, the same reasoning and shape as
+    # _ensure_persistent_checkout's own fresh-clone path: real audit found
+    # this ephemeral checkout's own docstring assumption ("deleted with
+    # the whole job_dir within minutes") only holds on a clean return or a
+    # Python exception, both of which run the caller's job-level
+    # try/finally cleanup - a hard process kill (e.g. the OOM kills this
+    # file's own _run_scan comment documents as real on large repos) skips
+    # that entirely and falls back to run_job_temp_dir_cleanup_job's
+    # periodic sweep, which only reaps a job_dir after
+    # JOB_TEMP_DIR_MAX_AGE_SECONDS (6 hours) - not "minutes". Nothing
+    # after this function ever needs to fetch against origin again (the
+    # scan that follows only runs local git/static-analysis commands), so
+    # there's no reason for the live token to still be on disk once the
+    # checkout itself is done.
+    #
+    # Flash Review finding on the first version of this fix: the clone
+    # call itself sat before the try, so an interruption during the clone
+    # (not just the checkout after it) skipped the scrub entirely. Real
+    # for the catchable subset of interruptions this fix already protects
+    # against elsewhere in this same file (RQ's signal-based job_timeout,
+    # not a raw OOM SIGKILL - no try/finally anywhere can run after that,
+    # regardless of placement, since the whole process is gone) - moved
+    # inside the try, mirroring _ensure_persistent_checkout's own
+    # fresh-clone path exactly, including its `.git` existence guard
+    # (clone interrupted before `git init` ever ran leaves no `.git` to
+    # run `git remote set-url` against).
+    try:
+        _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
+        subprocess.run(["git", "checkout", "-q", ref], cwd=dest, check=True)
+    finally:
+        if (dest / ".git").exists():
+            subprocess.run(
+                ["git", "remote", "set-url", "origin", _url_without_credentials(url)],
+                cwd=dest,
+                check=True,
+            )
 
 
 # Root for persistent, reused-across-scans checkouts (see
@@ -1371,13 +1406,27 @@ def run_push_scan_job(
 
 
 def _clone_pr_head(url: str, pr_number: int, dest: Path) -> None:
-    _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
-    subprocess.run(
-        ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
-        cwd=dest,
-        check=True,
-    )
-    subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
+    # See _clone_ref's identical scrub (including the Flash Review finding
+    # that moved the clone itself inside the try, and why the `.git`
+    # existence guard is needed) - this checkout still needs to fetch
+    # against the credentialed origin (the PR head isn't in the initial
+    # clone), so the scrub can only happen after that fetch, but nothing
+    # here needs it afterward either.
+    try:
+        _run_git(["git", "clone", "-q", "--no-checkout", url, str(dest)])
+        subprocess.run(
+            ["git", "fetch", "-q", "origin", f"refs/pull/{pr_number}/head"],
+            cwd=dest,
+            check=True,
+        )
+        subprocess.run(["git", "checkout", "-q", "FETCH_HEAD"], cwd=dest, check=True)
+    finally:
+        if (dest / ".git").exists():
+            subprocess.run(
+                ["git", "remote", "set-url", "origin", _url_without_credentials(url)],
+                cwd=dest,
+                check=True,
+            )
 
 
 def _git_rev_parse_head(repo_dir: Path) -> str | None:
@@ -1799,8 +1848,23 @@ def run_flash_review_job(
             _post_flash_review_failure_comment(
                 settings, installation_id, repo_full_name, pr_number, exc
             )
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as comment_exc:  # noqa: BLE001
+            # Real gap found via audit: this was a bare `pass` with no
+            # logging at all, unlike _try_post_failure_comment (used by
+            # run_pr_scan_job/run_managed_audit_api_job for the identical
+            # situation), which logs a warning when the failure comment
+            # itself fails to post. Flash Review was the one job whose
+            # "couldn't even tell the customer it failed" case left zero
+            # trace anywhere - an ops issue in this specific path (e.g.
+            # token expiry, a GitHub API auth failure) would be invisible
+            # until a customer complained.
+            logging.getLogger("scan_worker.jobs").warning(
+                "flash review failed to post failure comment for installation=%s repo=%s pr=%s (%s)",
+                installation_id,
+                repo_full_name,
+                pr_number,
+                comment_exc,
+            )
     finally:
         # A reservation that never became a real review (every free-tier
         # provider failed, no provider keys configured, or an unrelated
@@ -2297,6 +2361,7 @@ def _run_flash_review(
     record_llm_spend(
         settings.database_url, installation_id, delta,
         feature="flash_review",
+        ledger_cost_usd=spend_accumulator["total"],
     )
 
     proposed = grounding_result.get("proposed", 0)
@@ -2459,14 +2524,29 @@ def _send_alerts_if_configured(installation: dict, message: dict) -> None:
     if alert_email:
         settings = get_settings()
         target_id = installation.get("target_id")
-        enqueue_transactional_email(
-            settings.redis_url,
-            dedupe_key=f"health_alert:{target_id}:{int(time.time())}",
-            template_name="health_alert",
-            template_arg=message["text"],
-            to_email=alert_email,
-            installation_id=installation.get("installation_id"),
-        )
+        # Real gap found via audit: unlike the Slack/Teams and Pushover
+        # branches, this call was unguarded - enqueue_transactional_email
+        # calls get_redis_client() then Queue(...).enqueue(...), both of
+        # which can raise (a transient Redis blip is not hypothetical).
+        # An unhandled exception here propagated out of this function
+        # entirely, skipping Pushover below even when it's configured and
+        # healthy - exactly the "one channel's failure takes down the
+        # others" bug this docstring already documents fixing for the
+        # other two channels, just not for email.
+        try:
+            enqueue_transactional_email(
+                settings.redis_url,
+                dedupe_key=f"health_alert:{target_id}:{int(time.time())}",
+                template_name="health_alert",
+                template_arg=message["text"],
+                to_email=alert_email,
+                installation_id=installation.get("installation_id"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("scan_worker.jobs").warning(
+                "email alert failed for installation=%s (%s)",
+                installation.get("installation_id"), exc,
+            )
 
     pushover_user_key = installation.get("pushover_user_key")
     if pushover_user_key:
@@ -4196,8 +4276,6 @@ class _IncrementalSpendBudget:
             )
         cost = cost_for_usage(self.model, prompt_tokens, completion_tokens)
         delta = cost - self.next_call_reserve_usd
-        if delta == 0:
-            return
         # True up the real credit balance too, not just the llm_spend
         # accounting table below - can_start_next_call() only reserved an
         # ESTIMATE (next_call_reserve_usd); now that the real cost is
@@ -4224,7 +4302,15 @@ class _IncrementalSpendBudget:
                         reserve_llm_spend(self.dsn, self.installation_id, remaining)
         elif delta < 0:
             release_llm_spend_reservation(self.dsn, self.installation_id, -delta)
-        record_llm_spend(self.dsn, self.installation_id, delta, feature=self.feature)
+        # Always call through, even when delta == 0 (real cost landed
+        # exactly on the reservation) - the aggregate write is a genuine
+        # no-op then, but skipping the call used to also skip ledgering
+        # this call's real cost entirely (see record_llm_spend's
+        # ledger_cost_usd - the delta this reservation pattern produces is
+        # never the right amount to attribute to a feature).
+        record_llm_spend(
+            self.dsn, self.installation_id, delta, feature=self.feature, ledger_cost_usd=cost,
+        )
 
     def cap_message(self) -> str:
         # Reads the real current balance at the point can_start_next_call()
@@ -4531,9 +4617,28 @@ def run_live_wiki_full_build_job(installation_id: int, repo_full_name: str) -> N
     }
     cluster_ids = _clusters_with_uncovered_wiki_work(evidence, covered_cluster_ids, MAX_WIKI_FULL_BUILD_CLUSTERS)
     if not cluster_ids:
-        # Nothing new to do - a prior run (or the catch-up sweep) already
-        # covers every cluster current evidence calls for. Still a real
-        # "ready" outcome, not a no-op to be silent about.
+        # Real gap found via audit: _clusters_with_uncovered_wiki_work only
+        # looks at clusters CURRENTLY in evidence, so a stored subsystem
+        # whose cluster was deleted from the repo entirely is invisible to
+        # it - "nothing new to do" isn't the same as "nothing to prune".
+        # _store_wiki_subsystem_records is the only place
+        # delete_wiki_subsystems_not_in ever runs; without this, once a
+        # repo reaches steady-state coverage, nothing ever calls it again,
+        # so a deleted subsystem's stale wiki page (description, Mermaid
+        # diagram, file references naming files that no longer exist)
+        # would survive on the AIRview page forever, unless some unrelated
+        # new cluster happens to appear elsewhere in the same repo and
+        # incidentally triggers a store call. fresh_records=[] below costs
+        # no LLM call - it only runs the prune half.
+        current_cluster_ids = {
+            str(c["id"]) for c in evidence.get("architecture", {}).get("clusters", [])
+        }
+        if covered_cluster_ids - current_cluster_ids:
+            with wiki_write_lock(dsn, installation_id, repo_full_name):
+                _store_wiki_subsystem_records(dsn, installation_id, repo_full_name, evidence, [], None)
+        # Nothing new to generate - a prior run (or the catch-up sweep)
+        # already covers every cluster current evidence calls for. Still a
+        # real "ready" outcome, not a no-op to be silent about.
         set_wiki_build_status(dsn, installation_id, repo_full_name, "ready")
         return
 
@@ -4905,7 +5010,24 @@ def _module_has_uncovered_docs_work(module: dict, already_covered_names: set[str
     """
     needing = live_docs._symbols_needing_work(module, polish_existing=False)
     needing += live_docs._symbols_needing_work(module, polish_existing=True)
-    return any(s["name"] not in already_covered_names for s in needing)
+    if any(s["name"] not in already_covered_names for s in needing):
+        return True
+    # Real gap found via audit: a name in already_covered_names that no
+    # longer appears among the module's CURRENT symbols (deleted from the
+    # source since it was last documented) can never show up in `needing`
+    # above - it isn't a real symbol anymore, so _symbols_needing_work
+    # never asks about it. Without this check, a module whose remaining
+    # symbols are all already covered was judged to have zero uncovered
+    # work and skipped entirely - so _store_docs_generation_for_module
+    # (the only place anything ever prunes an orphaned docs_symbols row,
+    # via delete_docs_symbols_not_in) never ran for it, and a deleted
+    # symbol's stale AI-generated description survived indefinitely on
+    # the customer-facing Docs page. This doesn't cost an LLM call by
+    # itself - _store_docs_generation_for_module makes no LLM call when
+    # there's nothing left needing generation/polish, it just still runs
+    # the (free) prune.
+    current_names = {s["name"] for s in module["symbols"]["functions"] + module["symbols"]["classes"]}
+    return bool(already_covered_names - current_names)
 
 
 def _modules_with_uncovered_docs_work(
@@ -5311,7 +5433,17 @@ def run_live_wiki_incremental_update_job(
     dsn = get_settings().database_url
     evidence = get_evidence_by_id(dsn, installation_id, repo_full_name, history_id)
     if evidence is None:
-        return  # nothing scanned for this repo yet - nothing to update from
+        # Not necessarily "nothing scanned yet" - repo_history's retention
+        # trim (see REPO_HISTORY_TRIM_GRACE_SECONDS) can in principle still
+        # evict this exact row under a large enough scan burst before this
+        # job is dequeued. Logged rather than silently returning, so a
+        # skipped wiki update is at least visible instead of invisible.
+        logging.getLogger("scan_worker.jobs").warning(
+            "live wiki incremental update: history_id=%s not found for installation=%s repo=%s "
+            "(evicted by retention, or never scanned)",
+            history_id, installation_id, repo_full_name,
+        )
+        return
     _maybe_update_live_wiki(installation_id, repo_full_name, evidence, changed_files, head_sha)
 
 
@@ -5327,5 +5459,11 @@ def run_live_docs_incremental_update_job(
     dsn = get_settings().database_url
     evidence = get_evidence_by_id(dsn, installation_id, repo_full_name, history_id)
     if evidence is None:
+        # See run_live_wiki_incremental_update_job's identical logging above.
+        logging.getLogger("scan_worker.jobs").warning(
+            "live docs incremental update: history_id=%s not found for installation=%s repo=%s "
+            "(evicted by retention, or never scanned)",
+            history_id, installation_id, repo_full_name,
+        )
         return
     _maybe_update_live_docs(installation_id, repo_full_name, evidence, changed_files, head_sha)

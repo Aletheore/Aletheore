@@ -61,13 +61,20 @@ DIFF_HUNK_TOLERANCE = 8
 
 
 class _Hunk:
-    __slots__ = ("new_start", "new_end", "removed", "added")
+    __slots__ = ("new_start", "new_end", "removed", "added", "raw_body")
 
     def __init__(self, new_start: int, new_end: int) -> None:
         self.new_start = new_start
         self.new_end = new_end
         self.removed: list[str] = []
         self.added: list[str] = []
+        # Every body line in this hunk, in original diff order, WITH its
+        # raw one-character diff tag ("-", "+", or " " for unchanged
+        # context) still attached - unlike removed/added, which flatten
+        # everything into two untagged, unordered-relative-to-each-other
+        # lists. Only _unchanged_except_body_weakened reads this; every
+        # other check in this file uses removed/added as before.
+        self.raw_body: list[str] = []
 
     def near(self, line: int) -> bool:
         return (self.new_start - DIFF_HUNK_TOLERANCE) <= line <= (self.new_end + DIFF_HUNK_TOLERANCE)
@@ -121,6 +128,7 @@ def _diff_hunks_by_file(diff_text: str) -> dict[str, list[_Hunk]]:
         prev_blank = False
         if current_hunk is None or not current_file:
             continue
+        current_hunk.raw_body.append(line)
         # Real bug this fixes: once inside a hunk body, past both marker
         # checks above, a line's first character is unambiguously the diff
         # +/- prefix - the file-marker collision this "---"/"+++" exclusion
@@ -509,14 +517,110 @@ _LOG_OR_RERAISE_RE = re.compile(
 )
 
 
+def _unchanged_except_body_weakened(file: str, source: str, hunk: _Hunk) -> dict | None:
+    """A sibling gap to the main loop below: this check only ever looked
+    for the `except` line itself inside hunk.added - a PR that replaces
+    an EXISTING except block's body with a bare `pass`, without touching
+    the except line's own text, is invisible to that path entirely.
+    _diff_hunks_by_file never records unchanged context lines into
+    hunk.added/removed (only +/- lines), so an unchanged except header
+    sitting just above the hunk's real change has nowhere to be matched.
+
+    Real, previously-identified-but-deferred gap: commit bad16b7's own
+    message documented this as a second, real (not theoretical) finding
+    from the same review that fixed the comment-scoping bug, and said it
+    "needs new detection logic... tracked separately" - that follow-up
+    was never implemented until now.
+
+    Real Flash Review finding on this check's first version: gating on
+    the WHOLE hunk's added/removed content (was the hunk's real added
+    content exactly `pass`, was its real removed content more than
+    `pass`) doesn't prove the removed content actually belonged to the
+    except block a match happened to find nearby - an unchanged handler
+    that already legitimately contains `pass` could be falsely reported
+    when an unrelated change elsewhere in the SAME hunk replaces real
+    code with `pass`. Scoped instead to hunk.raw_body - every body line
+    in original diff order with its real "-"/"+"/" " tag still attached
+    - walking forward from the except header's own position and
+    reconstructing the OLD (context + removed) and NEW (context + added)
+    body text separately, stopping at the first line back at or above
+    the except's own indentation. Only that block's own old/new content
+    is compared, the same reconstruction technique github_api.py's
+    _trim_patch_context uses for old/new hunk text generally.
+    """
+    for idx, raw_line in enumerate(hunk.raw_body):
+        if raw_line[:1] != " ":
+            continue  # an except header that's itself newly added is
+            # already handled by the main loop below - this path is only
+            # for one sitting in the diff as unchanged context.
+        match = _BROAD_EXCEPT_RE.match(raw_line[1:])
+        if match is None:
+            continue
+        except_indent = len(match.group("indent"))
+        inline_rest = re.sub(r"#.*$", "", match.group("rest")).strip()
+
+        if inline_rest:
+            old_body = new_body = [inline_rest]
+        else:
+            old_body, new_body = [], []
+            for later in hunk.raw_body[idx + 1 :]:
+                tag, text = later[:1], later[1:]
+                stripped = text.strip()
+                if not stripped:
+                    continue
+                indent = len(text) - len(text.lstrip())
+                if indent <= except_indent:
+                    break
+                if tag in (" ", "-"):
+                    old_body.append(stripped)
+                if tag in (" ", "+"):
+                    new_body.append(stripped)
+            else:
+                # Real gap found via audit: the hunk's own context window
+                # (a unified diff only shows a few lines around each real
+                # change) can run out before we ever see a dedent back to
+                # the except header's own indent - that isn't proof the
+                # block ended, only that the diff stopped showing it.
+                # Reporting on an incomplete reconstruction here could
+                # flag a handler as reduced to bare `pass` even though
+                # real, unchanged handling continues past the hunk's
+                # cutoff - e.g. only the FIRST statement of a multi-
+                # statement body was replaced with `pass`, and the rest
+                # of the block (still real handling) simply isn't in this
+                # hunk. Bail rather than guess - matches this file's own
+                # fail-closed philosophy elsewhere (an unrepresentable
+                # case degrades to no finding, not a wrong one).
+                continue
+
+        non_comment_old = [b for b in old_body if not b.startswith("#")]
+        non_comment_new = [b for b in new_body if not b.startswith("#")]
+        if not non_comment_old or non_comment_old == ["pass"]:
+            continue  # this block's own old body had no real handling to lose
+        if non_comment_new != ["pass"]:
+            continue  # this block's own new body isn't reduced to bare pass
+
+        return _finding(
+            file,
+            _line_number_near_hunk(source, raw_line[1:].strip(), hunk) or hunk.new_start,
+            "This except block's body was replaced with a bare `pass`, discarding real error "
+            "handling that used to run here - no logging, no re-raise. If the wrapped call ever "
+            "fails, the failure is now silently swallowed and there's no way to diagnose what went "
+            "wrong.",
+            "Restore logging (e.g. `logger.warning(...)`) or re-raising instead of silently passing.",
+        )
+    return None
+
+
 def _swallowed_exception_findings(file: str, source: str, hunks: list[_Hunk]) -> list[dict]:
     findings: list[dict] = []
     for hunk in hunks:
         added = hunk.added
+        found_except_in_added = False
         for idx, line in enumerate(added):
             match = _BROAD_EXCEPT_RE.match(line)
             if not match:
                 continue
+            found_except_in_added = True
             except_indent = len(match.group("indent"))
 
             # A common idiom the old regex's "colon, then only whitespace or
@@ -574,6 +678,10 @@ def _swallowed_exception_findings(file: str, source: str, hunks: list[_Hunk]) ->
                     "silently passing.",
                 )
             )
+        if not found_except_in_added:
+            finding = _unchanged_except_body_weakened(file, source, hunk)
+            if finding is not None:
+                findings.append(finding)
     return findings
 
 

@@ -533,6 +533,57 @@ async def test_insert_repo_history_returns_the_new_rows_id(pool):
 
 
 @pytest.mark.asyncio
+async def test_insert_repo_history_trim_never_deletes_a_row_within_the_grace_window(pool):
+    # Real gap found via audit: the retention trim used to delete purely
+    # by row count (`keep`) - a burst of `keep`-or-more scans for the same
+    # repo persisting before a queued run_live_wiki_incremental_update_job/
+    # run_live_docs_incremental_update_job was dequeued could delete the
+    # exact history_id that job needs (see get_evidence_by_id's docstring
+    # and REPO_HISTORY_TRIM_GRACE_SECONDS), silently no-oping the update
+    # with no signal to anyone.
+    from scan_worker.db import get_evidence_by_id
+
+    await _insert_installation(pool, 308, "a")
+    first_id = insert_repo_history(
+        TEST_DATABASE_URL, 308, "a/repo1", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "first"}, keep=1,
+    )
+    # Two more scans immediately after - beyond keep=1 by row count, but
+    # all recent - the first row must still survive the trim.
+    insert_repo_history(
+        TEST_DATABASE_URL, 308, "a/repo1", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "second"}, keep=1,
+    )
+    insert_repo_history(
+        TEST_DATABASE_URL, 308, "a/repo1", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "third"}, keep=1,
+    )
+
+    assert get_evidence_by_id(TEST_DATABASE_URL, 308, "a/repo1", first_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_insert_repo_history_trim_still_deletes_rows_past_the_grace_window(pool):
+    # The grace window narrows the race, it doesn't disable retention -
+    # a row old enough that no realistically-queued job could still be
+    # waiting on it must still be cleaned up.
+    from scan_worker.db import get_evidence_by_id
+
+    await _insert_installation(pool, 309, "a")
+    old_scan = datetime.now(timezone.utc) - timedelta(hours=7)
+    old_id = insert_repo_history(
+        TEST_DATABASE_URL, 309, "a/repo1", old_scan,
+        {"aletheore_version": EVIDENCE_VERSION, "v": "old"}, keep=1,
+    )
+    insert_repo_history(
+        TEST_DATABASE_URL, 309, "a/repo1", datetime.now(timezone.utc),
+        {"aletheore_version": EVIDENCE_VERSION, "v": "new"}, keep=1,
+    )
+
+    assert get_evidence_by_id(TEST_DATABASE_URL, 309, "a/repo1", old_id) is None
+
+
+@pytest.mark.asyncio
 async def test_get_evidence_by_id_returns_the_exact_row_not_the_latest(pool):
     # Real bug this guards: a queued follow-up job that reloaded evidence
     # via get_latest_evidence (rather than the specific row its own scan
@@ -1005,6 +1056,49 @@ async def test_get_llm_spend_breakdown_excludes_events_before_since(pool):
     breakdown = get_llm_spend_breakdown(TEST_DATABASE_URL, 1092, since)
 
     assert breakdown == {}
+
+
+@pytest.mark.asyncio
+async def test_record_llm_spend_ledgers_the_real_cost_not_the_true_up_delta(pool):
+    # Real gap found via audit: reserve_llm_spend's true-up callers pass
+    # (real_cost - reserve_usd) as cost_usd - the correct delta for
+    # llm_spend's running total, but before this fix that same delta was
+    # also what got ledgered into llm_spend_events. Real cost under the
+    # reservation (the common case per reserve_llm_spend's own docstring)
+    # made the delta <= 0, so no event was written at all despite real
+    # money being spent - exactly defeating the ledger's purpose.
+    await _insert_installation(pool, 1093, "a")
+    reserve_llm_spend(TEST_DATABASE_URL, 1093, reserve_usd=0.05)
+    real_cost = 0.03  # under the reservation - delta is negative
+    record_llm_spend(
+        TEST_DATABASE_URL, 1093, real_cost - 0.05, feature="flash_review", ledger_cost_usd=real_cost,
+    )
+
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    breakdown = get_llm_spend_breakdown(TEST_DATABASE_URL, 1093, since)
+
+    assert breakdown == {"flash_review": pytest.approx(real_cost)}
+    # The aggregate total must still reflect the true-up delta, not
+    # ledger_cost_usd - the two are deliberately allowed to differ. Pre-
+    # existing bug in this assertion (asserted real_cost instead of the
+    # delta it names in its own comment) found and fixed while merging
+    # master into the dollar-credit-pricing branch: record_llm_spend's
+    # INSERT sets a fresh row's total_cost_usd directly to cost_usd (the
+    # delta), never to ledger_cost_usd.
+    assert get_llm_spend_this_month(TEST_DATABASE_URL, 1093) == pytest.approx(real_cost - 0.05)
+
+
+@pytest.mark.asyncio
+async def test_record_llm_spend_ledger_cost_usd_defaults_to_cost_usd_when_omitted(pool):
+    # Non-true-up callers (no reservation involved) never pass
+    # ledger_cost_usd - must behave exactly as before this fix.
+    await _insert_installation(pool, 1094, "a")
+    record_llm_spend(TEST_DATABASE_URL, 1094, 0.12, feature="managed_audit")
+
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    breakdown = get_llm_spend_breakdown(TEST_DATABASE_URL, 1094, since)
+
+    assert breakdown == {"managed_audit": pytest.approx(0.12)}
 
 
 @pytest.mark.asyncio
