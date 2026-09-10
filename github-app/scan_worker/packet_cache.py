@@ -43,14 +43,35 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 def lookup_cached_result(
-    dsn: str, installation_id: int, repo_full_name: str, packet: dict
+    dsn: str,
+    installation_id: int,
+    repo_full_name: str,
+    packet: dict,
+    vector_cache: dict[str, list[float] | None] | None = None,
 ) -> tuple[dict, str] | None:
     if not packet.get("cache_eligible"):
         return None
 
     try:
         text = _packet_text(packet)
-        vector = embed_text(text)
+        key = _content_hash(text)
+        # vector_cache: see flash_review_cache.lookup_cached_result's
+        # docstring comment. Keyed by content hash (not a single slot)
+        # because generate_subsystems' lookup phase runs concurrently
+        # across many distinct packets (see live_wiki.generate_subsystems'
+        # _run_concurrently call) - a single shared vector would be
+        # overwritten by another packet's lookup before this packet's own
+        # store_result call ever reads it back. A plain dict is safe here
+        # under CPython's GIL for the single-key get/set this does; the
+        # only race is two threads both missing the same key and each
+        # paying for one redundant embed call, never worse than today's
+        # always-recompute behavior.
+        if vector_cache is not None and key in vector_cache:
+            vector = vector_cache[key]
+        else:
+            vector = embed_text(text)
+            if vector_cache is not None:
+                vector_cache[key] = vector
         if vector is None:
             return None
 
@@ -83,13 +104,20 @@ def store_result(
     packet: dict,
     raw_model_output: dict,
     model_used: str,
+    vector_cache: dict[str, list[float] | None] | None = None,
 ) -> None:
     if not packet.get("cache_eligible"):
         return
 
     try:
         text = _packet_text(packet)
-        vector = embed_text(text)
+        key = _content_hash(text)
+        if vector_cache is not None and key in vector_cache:
+            vector = vector_cache[key]
+        else:
+            vector = embed_text(text)
+            if vector_cache is not None:
+                vector_cache[key] = vector
         if vector is None:
             logger.warning("embedding unavailable; skipping evidence packet cache write")
             return
@@ -98,7 +126,7 @@ def store_result(
             dsn,
             installation_id,
             repo_full_name,
-            _content_hash(text),
+            key,
             vector,
             packet,
             raw_model_output,

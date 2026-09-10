@@ -154,9 +154,31 @@ def _build_full_file_context(changed_files: list[str], file_contents: dict[str, 
     return "\n\n".join(parts)
 
 
+PROVIDER_CONFIG = {
+    "openai": {
+        "name": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "api_key_env_var": "OPENAI_API_KEY",
+        # matches OpenAICompatibleAdapter's own default; no override needed.
+        "supports_tool_choice": True,
+    },
+    "deepseek": {
+        "name": "DeepSeek",
+        "base_url": "https://api.deepseek.com",
+        "api_key_env_var": "DEEPSEEK_API_KEY",
+        # deepseek-v4-pro runs in thinking mode by default, which rejects
+        # tool_choice="required" (400 invalid_request_error) - same reason
+        # writing_adapter_for() in scan_worker/model_tiers.py sets this for
+        # its own DeepSeek adapter construction.
+        "supports_tool_choice": False,
+    },
+}
+
+
 def run_case(
     case_id: str, model: str, workdir: Path, *,
     seed: int | None = None, full_context: bool = False, verify: bool = False,
+    provider: str = "openai",
 ) -> dict:
     case_dir = CASES_DIR / case_id
     diff_path = case_dir / "pr.diff"
@@ -230,13 +252,15 @@ def run_case(
             "cached_tokens": cached_tokens,
         })
 
+    provider_config = PROVIDER_CONFIG[provider]
     adapter = OpenAICompatibleAdapter(
-        name="OpenAI",
-        base_url="https://api.openai.com/v1",
-        api_key_env_var="OPENAI_API_KEY",
+        name=provider_config["name"],
+        base_url=provider_config["base_url"],
+        api_key_env_var=provider_config["api_key_env_var"],
         model=model,
         on_usage=_on_usage,
         extra_body={"seed": seed} if seed is not None else None,
+        supports_tool_choice=provider_config["supports_tool_choice"],
     )
 
     file_context = _build_full_file_context(changed_files, file_contents) if full_context else ""
@@ -282,6 +306,10 @@ def run_case(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, help="model name to pass to the OpenAI-compatible adapter")
+    parser.add_argument(
+        "--provider", default="openai", choices=sorted(PROVIDER_CONFIG),
+        help="which OpenAI-compatible endpoint to call --model against (default: openai)",
+    )
     parser.add_argument("--cases", nargs="*", default=None, help="specific case ids to run (default: all)")
     parser.add_argument(
         "--seed", type=int, default=None,
@@ -303,7 +331,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    model_slug = args.model.replace(".", "").replace("-", "") + (f"_{args.tag}" if args.tag else "")
+    model_slug = (
+        args.model.replace(".", "").replace("-", "").replace("/", "_")
+        + (f"_{args.tag}" if args.tag else "")
+    )
     raw_dir = RESULTS_DIR / f"raw_{model_slug}"
     token_dir = RESULTS_DIR / "token_usage"
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -311,8 +342,8 @@ def main() -> None:
 
     case_ids = args.cases or CASE_IDS
     print(
-        f"Running {len(case_ids)} cases with model={args.model} seed={args.seed} "
-        f"full_context={args.full_context} verify={args.verify} tag={args.tag!r}",
+        f"Running {len(case_ids)} cases with model={args.model} provider={args.provider} "
+        f"seed={args.seed} full_context={args.full_context} verify={args.verify} tag={args.tag!r}",
         file=sys.stderr,
     )
 
@@ -329,6 +360,7 @@ def main() -> None:
                 result = run_case(
                     case_id, args.model, workdir,
                     seed=args.seed, full_context=args.full_context, verify=args.verify,
+                    provider=args.provider,
                 )
             except Exception as exc:  # noqa: BLE001
                 print(f"  FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)

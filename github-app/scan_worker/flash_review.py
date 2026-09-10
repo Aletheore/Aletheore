@@ -1332,7 +1332,20 @@ def review_diff(
                 on_grounding_result({"proposed": len(combined), "kept": len(kept)})
             return kept
 
-    prompt_parts = [diff_text]
+    # Stable-first, diff last: provider-side prompt caching (DeepSeek,
+    # OpenAI, etc.) only ever caches a matching PREFIX of the request, and
+    # only the leading run of byte-identical content counts - diff_text is
+    # the one part guaranteed to differ on every single call, so putting it
+    # first (as this used to) made every byte after it, however reusable,
+    # structurally uncacheable regardless of how much file_context/
+    # code_evidence_context/referenced_symbol_context two calls actually
+    # shared (e.g. two reviews on the same repo close together, or a
+    # re-push where the file set is unchanged). Cache-hit pricing is
+    # roughly 50x cheaper than a miss on DeepSeek's own published rates -
+    # this costs nothing to fix and can only help, since a cache hit still
+    # requires the model itself to be deterministic about what it caches;
+    # this change just stops ruling it out by construction.
+    prompt_parts = []
     if file_context:
         prompt_parts.append(file_context)
     if code_evidence_context:
@@ -1341,6 +1354,7 @@ def review_diff(
         prompt_parts.append(referenced_symbol_context)
     if pr_context:
         prompt_parts.append(pr_context)
+    prompt_parts.append(diff_text)
     user_prompt = "\n\n".join(prompt_parts)
 
     def _call_adapter(used_adapter) -> str:

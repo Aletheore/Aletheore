@@ -1802,6 +1802,41 @@ def test_review_diff_includes_referenced_symbol_context_in_prompt(mock_adapter_c
     assert "_github_http_client" in user_prompt
 
 
+@patch("scan_worker.flash_review.writing_adapter_for")
+def test_review_diff_puts_diff_text_after_stable_context_for_prompt_caching(mock_adapter_class):
+    # Provider-side prompt caching (DeepSeek, OpenAI) only ever caches a
+    # matching PREFIX of the request - diff_text is the one part guaranteed
+    # to differ on every call, so it must come LAST, after every part that
+    # could plausibly repeat across calls (file_context, code_evidence_
+    # context, referenced_symbol_context, pr_context). Putting it first
+    # (the bug this fix closed) made everything after it structurally
+    # uncacheable regardless of how much context two calls actually shared.
+    mock_adapter = MagicMock()
+    mock_adapter.simple_completion.return_value = "[]"
+    mock_adapter_class.return_value = mock_adapter
+
+    diff_text = "--- a.py ---\n@@ -1,1 +1,1 @@\n+UNIQUE_DIFF_MARKER"
+    review_diff(
+        diff_text,
+        file_context="UNIQUE_FILE_CONTEXT_MARKER",
+        code_evidence_context="UNIQUE_EVIDENCE_MARKER",
+        referenced_symbol_context="UNIQUE_SYMBOL_MARKER",
+        pr_context="UNIQUE_PR_MARKER",
+    )
+
+    user_prompt = mock_adapter.simple_completion.call_args[0][1]
+    diff_index = user_prompt.index("UNIQUE_DIFF_MARKER")
+    for stable_marker in (
+        "UNIQUE_FILE_CONTEXT_MARKER",
+        "UNIQUE_EVIDENCE_MARKER",
+        "UNIQUE_SYMBOL_MARKER",
+        "UNIQUE_PR_MARKER",
+    ):
+        assert user_prompt.index(stable_marker) < diff_index, (
+            f"{stable_marker} must appear before the diff for prompt caching to work"
+        )
+
+
 def test_system_prompt_instructs_model_not_to_guess_about_unresolved_symbols():
     # The same real hallucination this whole change exists to prevent: a
     # claim about an imported symbol's behavior with no real definition in
