@@ -2474,6 +2474,14 @@ async function loadSettings() {{
       '</div>' +
     '</section>';
 
+  // Managed audit content sits in the LEFT column deliberately, not with
+  // Alert channels/Endpoint health where it reads more naturally - Alert
+  // channels alone (3 webhook/email/Pushover forms) is taller than the
+  // other 4 cards combined, so grid's one implicit row sizes to whichever
+  // column holds it regardless of align-items, and the other column just
+  // shows blank space below its shorter content. Pairing Managed audit
+  // content with Team/API tokens instead keeps both columns close to
+  // even height; moving it back re-lopsides the layout.
   body.innerHTML =
     '<div class="settings-grid">' +
       '<div>' +
@@ -2492,6 +2500,21 @@ async function loadSettings() {{
           '<button class="btn" onclick="generateToken()">Generate</button></div>' +
           '<div id="token-reveal"></div>' +
           '<div class="settings-block-hint">Used to authenticate the CLI (<code>aletheore login</code> or <code>ALETHEORE_API_TOKEN</code>) and the MCP server\\'s <code>aletheore_managed_audit</code> tool against this installation\\'s hosted managed audits, and to send runtime events from your app into Aletheore. Give each token a label so you can tell them apart later, and revoke one any time without affecting the others.</div>' +
+        '</div>' +
+        '<div class="settings-block">' +
+          '<div class="settings-block-label">Managed audit content</div>' +
+          '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;">' +
+          '<input type="checkbox" id="llm-suggestions-toggle"' +
+          (installation.llm_suggestions_enabled === false ? '' : ' checked') +
+          ' onchange="saveLlmSuggestions(this)">' +
+          'Include the model\\'s second opinion' +
+          '</label>' +
+          '<div id="llm-suggestions-status" class="settings-block-hint"></div>' +
+          '<div class="settings-block-hint">Every finding in an audit is tied to a citation in your code. ' +
+          'This one optional section is not: it is the model\\'s own overall rating and improvement ideas, ' +
+          'appended after the evidence-backed findings and labelled as such. Turn it off to have audits ' +
+          'contain only cited findings - the signed report and its verification page will then confirm ' +
+          'the report is fully evidence-backed.</div>' +
         '</div>' +
       '</div>' +
       '<div>' +
@@ -2525,21 +2548,6 @@ async function loadSettings() {{
         '<div class="settings-block">' +
           '<div class="settings-block-label">Endpoint health targets</div>' +
           '<div class="settings-block-hint">Configure staging/production URLs and see live results on the <a data-href="/health">Endpoint health</a> page.</div>' +
-        '</div>' +
-        '<div class="settings-block">' +
-          '<div class="settings-block-label">Managed audit content</div>' +
-          '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;">' +
-          '<input type="checkbox" id="llm-suggestions-toggle"' +
-          (installation.llm_suggestions_enabled === false ? '' : ' checked') +
-          ' onchange="saveLlmSuggestions(this)">' +
-          'Include the model\\'s second opinion' +
-          '</label>' +
-          '<div id="llm-suggestions-status" class="settings-block-hint"></div>' +
-          '<div class="settings-block-hint">Every finding in an audit is tied to a citation in your code. ' +
-          'This one optional section is not: it is the model\\'s own overall rating and improvement ideas, ' +
-          'appended after the evidence-backed findings and labelled as such. Turn it off to have audits ' +
-          'contain only cited findings - the signed report and its verification page will then confirm ' +
-          'the report is fully evidence-backed.</div>' +
         '</div>' +
       '</div>' +
     '</div>' +
