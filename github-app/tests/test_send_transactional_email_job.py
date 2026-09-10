@@ -108,16 +108,16 @@ def test_dict_template_arg_is_expanded_as_keyword_args(monkeypatch):
 
 
 def test_unknown_template_name_is_skipped_with_a_warning_instead_of_raising(monkeypatch, caplog):
-    # Previously a KeyError. The credit-balance emails
-    # (credit_low_balance/credit_exhausted) are enqueued by
-    # reserve_llm_spend_with_email_hooks on this branch, but their templates
-    # land on the parallel dashboard/emails branch - so depending on merge
-    # order this worker really can be handed a template name it doesn't have
-    # yet. Unguarded, @log_job turns that KeyError into a failed RQ job plus
-    # an error alert for EVERY low-balance/exhausted event, which is a much
-    # worse failure mode than a missing email. The guard doesn't close the
-    # template gap (the other branch's templates do); it makes this branch
-    # deployable independently of merge order.
+    # Previously a KeyError. Originally written against credit_low_balance
+    # as the example unregistered name, back when the credit-balance emails
+    # (enqueued by reserve_llm_spend_with_email_hooks on the backend branch)
+    # and their templates (added on the parallel dashboard/emails branch)
+    # hadn't merged yet - see git history. Now that both branches share a
+    # tree, credit_low_balance IS a registered template, so this test uses
+    # a name that can never legitimately exist instead: the guard this
+    # protects (an unregistered template name failing an RQ job with an
+    # error alert instead of skipping with a warning) is still exactly as
+    # real for any future new email type as it was for this one.
     import logging
 
     monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
@@ -131,14 +131,14 @@ def test_unknown_template_name_is_skipped_with_a_warning_instead_of_raising(monk
 
     with caplog.at_level(logging.WARNING, logger="scan_worker.jobs"):
         send_transactional_email_job(
-            "credit_low_balance:42:1",
-            "credit_low_balance",
+            "totally_unregistered_template:42:1",
+            "totally_unregistered_template",
             {"account_login": "acme"},
             "o@example.com",
             installation_id=42,
         )
 
-    assert "no email template registered for credit_low_balance" in caplog.text
+    assert "no email template registered for totally_unregistered_template" in caplog.text
     # Nothing recorded either: the dedupe key must stay unclaimed so the
-    # same event can send for real once the templates land.
+    # same event can send for real once a real template is registered.
     assert "installation_id=42" in caplog.text
