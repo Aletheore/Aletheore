@@ -26,6 +26,12 @@
       "pattern": "private_key_header",
       "match_preview": "sha256:40f75f63f07b",
       "note": "The PEM header text appears in a docstring/comment example, not an actual key - the pattern's own literal regex source unavoidably matches itself."
+    },
+    {
+      "path": "github-app/app_server/admin.py",
+      "pattern": "generic_credential_assignment",
+      "match_preview": "sha256:9c7b5e7dda9e",
+      "note": "\"checkout_installation_token\": checkout_installation_token - the dict value is a bare variable reference (a signed, 30-minute-TTL token already minted a few lines above via sign_checkout_installation_id, returned to the authenticated dashboard owner in their own JSON response), not a hardcoded literal. generic_credential_assignment's value class can't tell a plain identifier from a real secret value; _value_looks_like_an_identifier_reference only recognizes dotted references (self.token, config.api_key), not a bare single-word identifier like this one - a real scanner gap, not something to fix by hand-tuning this one line."
     }
   ],
   "ignored_paths": [
