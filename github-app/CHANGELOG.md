@@ -18,6 +18,53 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-10
+
+25 commits since the previous deploy (`github-app-deploy-2026-09-08-2`, tagged
+`github-app-deploy-2026-09-10`, commit `ee927c8`) - headlined by the dollar-credit pricing launch,
+plus an independent 10-PR hardening/feature batch and one cost-focused cleanup.
+
+- **Dollar-credit pricing goes live** (#645, #646, #647): replaces the flat `PLAN_CAP_OVERRIDE_USD`
+  LLM-spend ceiling with a real per-installation balance - `base_credit_remaining_usd` (resets every
+  billing-period renewal to $5/flash or $18/air + $3/extra seat) plus `topup_credit_balance_usd`
+  (never-expiring, customer-purchased top-up credit at $1/unit via a real live Paddle price,
+  `pri_01m23jw9qbsnm4zmv28bfebx4t`). Four new migrations (`062`-`065`): the per-feature LLM spend
+  ledger, the credit-balance columns + backfill, a `base_credit_allotment_usd` ceiling (closing a
+  critical bug a fix-wave re-review caught - true-up releases were leaking monthly base credit into
+  never-expiring top-up credit), and a synthetic monthly reset clock for annual AIR subscribers
+  (Paddle's own billing period only advances once a year for them, so without this they'd get their
+  $18 once for the whole year instead of refreshed monthly - fires via a new scheduled sweep,
+  `run_monthly_credit_reset_sweep_job`, added to the existing scheduler tick). A dedicated dashboard
+  Usage section, buy-more-credit flow, and low-balance/exhausted email templates ship alongside it.
+  Also closes a real bug a peer session caught independently: credit top-up purchases were paying
+  15% affiliate commission on near-zero-margin pass-through spend (#645's own commit), and a
+  follow-up audit found a devtools-crafted checkout could bundle a top-up with another line item to
+  get over-credited for the combined total (#647).
+- **LLM cost cleanup** (#648): Flash Review's prompt now puts the diff last instead of first, so
+  provider-side prompt caching (DeepSeek, OpenAI) can actually hit on the shared evidence-context
+  prefix - confirmed live in prod logs before this fix that Luna's Flash Review calls were landing
+  zero cache hits over 24h while DeepSeek's AIRview calls (same underlying mechanism, different
+  prompt ordering) were hitting >95% on some calls. Also right-sizes `_IncrementalSpendBudget`'s
+  reserve for 5 previously-mis-sized call sites (managed_audit, health_fix_suggestion,
+  airview_incremental, docs_incremental - still on the old near-zero placeholder) and dedupes a
+  redundant `embed_text` round-trip between a cache miss and its own write-back.
+- **Independent 10-PR batch** (#606-#644, excluding the dollar-credit-pricing commits above):
+  Paddle webhook null/string seat-quantity crash (#609), ChatOps trigger-phrase false positives
+  (#610), a UTC-midnight Redis key bug in OpenAI free-tier reservation true-ups (#611), a false
+  latency alert on `latency_threshold_ms<=0` (#612), embedding_client accepting NaN/Infinity/bool as
+  a valid embedding (#623), stale Flash Review cache hits on findings the verifier had already
+  rejected (#625), AIRview permanently blanking a file newly joining a subsystem cluster (#626),
+  health-check rows blending across targets (#628), two symbols sharing a name corrupting each
+  other's Docs description (#630), AIRview's infrastructure-context truncation gap (#633), a
+  swallowed-exception check blind spot (#634), the durable per-feature LLM spend ledger (#635, the
+  foundation migration `062` for this deploy's own credit-ledger work), a diff-corrupting
+  "no newline at EOF" marker bug (#636), a regression-risk check-run mislabeling incidents as
+  production (#638), Pushover alert delivery silently skipping on failure (#640), repo_history
+  retention starving queued incremental updates (#641), and stale Live Docs/Wiki pages surviving a
+  deleted symbol or cluster (#643, #644).
+
+Full per-PR detail in each PR's own description; this entry summarizes rather than duplicates it.
+
 ## 2026-09-08
 
 12 commits since the previous deploy, tagged `github-app-deploy-2026-09-08` (commit `fd7c2c3`) -
