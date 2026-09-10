@@ -479,11 +479,28 @@ async def _handle_transaction_completed(data: dict, pool) -> None:
         # transaction never bundles a top-up with any other line item (see
         # the buyCredit() comment below), so details.totals.total - Paddle's
         # collected amount net of discount, in the currency's minor unit, as
-        # a string - IS the real dollar amount collected for this top-up.
-        # Same parsing pattern as the referral commission calculation below.
+        # a string - IS the real dollar amount collected for this top-up,
+        # PROVIDED the top-up is the only item. This codebase has never
+        # parsed Paddle's per-line-item totals, only the transaction-level
+        # one, so a transaction with the top-up item plus anything else has
+        # no way to isolate just the top-up's share here - crediting the
+        # whole total in that case would over-credit by whatever the other
+        # item(s) cost. buyCredit() itself never sends more than one item,
+        # but nothing server-side enforced that until this check: a
+        # devtools-crafted Paddle.Checkout.open() call could otherwise bundle
+        # a top-up with another price and get topped up for the combined
+        # amount. Guarded rather than parsed because there has never been a
+        # real transaction shaped this way to build correct per-item parsing
+        # against - skip and log instead of guessing.
         transaction_id = data.get("id")
         total_raw = ((data.get("details") or {}).get("totals") or {}).get("total")
-        if transaction_id and total_raw is not None:
+        if len(items) != 1:
+            logger.warning(
+                "credit topup transaction.completed bundled with other line items, "
+                "skipping to avoid over-crediting: %s",
+                data.get("id"),
+            )
+        elif transaction_id and total_raw is not None:
             try:
                 total_minor_units = Decimal(str(total_raw))
             except InvalidOperation:
