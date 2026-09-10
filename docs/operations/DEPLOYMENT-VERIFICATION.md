@@ -5,12 +5,25 @@
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
 **Last Updated:** 2026-09-10
-**Snapshot Freshness:** CURRENT as of 2026-09-10 - production was redeployed to `master` (commit
-`ee927c8`, tagged `github-app-deploy-2026-09-10`) and re-verified live via SSH the same session.
-25 commits since the previous deploy tag (`github-app-deploy-2026-09-08-2`): the dollar-credit
-pricing launch (real per-installation LLM-spend balance replacing the flat cap, live Paddle top-up
-purchases, a new scheduled monthly-credit-reset job for annual AIR subscribers), a Flash Review
-prompt-caching fix, and an independent 10-PR hardening/feature batch. Full detail in
+**Snapshot Freshness:** CURRENT as of 2026-09-10 (third deploy) - production's `app-server` was
+redeployed to `master` (commit `428e8fd`, tagged `github-app-deploy-2026-09-10-3`) and re-verified
+live via SSH the same session. Single-file fix (#654): PR #651's `align-items: start` fix for the
+settings-page column gap was a visual no-op (that property only repositions a shorter item within
+an already-tall grid row, it doesn't shrink the row) - the real fix moves "Managed audit content"
+into the left column instead of the right, the best 2-way height partition of the five settings
+cards, cutting the empty gap from ~400px to ~50px. `app-server` alone rebuilt and force-recreated;
+confirmed healthy, the fix present in the running container's actual source (`inspect.getsource`
+checked for the "Managed audit content sits in the LEFT column deliberately" comment, not re-read
+from the repo), zero errors in logs. The rest of this section (all five services, the migrations,
+the credit-balance schema) is unaffected and still accurate for everything except the `app-server`
+commit, which is now `428e8fd`.
+
+**Previous:** CURRENT as of 2026-09-10 (first deploy) - production was redeployed to `master`
+(commit `ee927c8`, tagged `github-app-deploy-2026-09-10`) and re-verified live via SSH the same
+session. 25 commits since the previous deploy tag (`github-app-deploy-2026-09-08-2`): the
+dollar-credit pricing launch (real per-installation LLM-spend balance replacing the flat cap, live
+Paddle top-up purchases, a new scheduled monthly-credit-reset job for annual AIR subscribers), a
+Flash Review prompt-caching fix, and an independent 10-PR hardening/feature batch. Full detail in
 `github-app/CHANGELOG.md`'s own 2026-09-10 entry - this section is the live-verification record,
 not a duplicate of the changelog.
 
@@ -39,15 +52,23 @@ Before claiming a hardening change is live, verify:
 
 ## Current Server Snapshot
 
-**Superseded by a same-day follow-up:** a second, smaller redeploy landed after the snapshot below
+**Superseded by two same-day follow-ups:** two further, smaller redeploys landed after the
+snapshot below
 
 - commit `f8b2f36` (tag `github-app-deploy-2026-09-10-2`), `app-server` only (single-file frontend
 fix, #651 - settings-page CSS dead space and a stuck "Opening checkout..." status with no
 `eventCallback`). Rebuilt and force-recreated `app-server` alone; confirmed healthy, both fixes
 present in the running container's source (`inspect.getsource` checked for `align-items: start`
-and `eventCallback`, not re-read from the repo), zero errors in logs. The rest of this section (all
-five services, the migrations, the credit-balance schema) is unaffected and still accurate for
-everything except the `app-server` commit, which is now `f8b2f36`.
+and `eventCallback`, not re-read from the repo), zero errors in logs.
+- commit `428e8fd` (tag `github-app-deploy-2026-09-10-3`), `app-server` only (single-file frontend
+fix, #654 - the `align-items: start` fix above turned out to be a visual no-op; the real fix moves
+"Managed audit content" into the left settings column instead of the right, the best 2-way height
+partition of the five cards). Rebuilt and force-recreated `app-server` alone; confirmed healthy,
+the fix present in the running container's actual source, zero errors in logs.
+
+The rest of this section (all five services, the migrations, the credit-balance schema) is
+unaffected by either follow-up and still accurate for everything except the `app-server` commit,
+which is now `428e8fd`.
 
 As of 2026-09-10 (first deploy), following a redeploy to `master` (`git fetch` + `git merge --ff-only
 origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker

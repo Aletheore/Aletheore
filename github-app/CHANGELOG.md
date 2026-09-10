@@ -78,6 +78,24 @@ text never updated again after `Paddle.Checkout.open()`, since `Paddle.Initializ
 `checkout.completed`, clears on `checkout.closed` (unless a purchase just completed), and surfaces
 a real message on `checkout.error`.
 
+## 2026-09-10 (third deploy)
+
+One commit since the second 2026-09-10 deploy, tagged `github-app-deploy-2026-09-10-3` (commit
+`428e8fd`) - a real follow-up fix to #651's own fix (#654): the `align-items: start` change did not
+actually work, as a post-deploy screenshot showed. Root cause of the miss: `.settings-grid` has
+exactly one implicit grid row (two wrapper divs, one row), and automatic row-track sizing is based
+on each item's content height regardless of `align-items` - that property only repositions a
+*shorter* item within an already-tall row, it doesn't shrink the row itself, so the row height
+still matched the taller column no matter what. Switching to CSS multi-column (`columns: 2`) was
+tried and rejected too: "Alert channels" alone (Slack/Teams + Email + Pushover forms, ~430px)
+outweighs the other four cards combined, and multi-column can only pick a split point in DOM order,
+not reorder content, so it converges on the same lopsided split. The fix that actually works: move
+"Managed audit content" into the left column (with Team/API tokens) instead of the right (with
+Alert channels/Endpoint health targets) - the best 2-way partition of the five cards by rendered
+height, cutting the empty gap from ~400px to ~50px. Verified this time with a real headless-Chrome
+render of the actual extracted `loadSettings()` markup before shipping, not a hand-typed
+approximation.
+
 ## 2026-09-08
 
 12 commits since the previous deploy, tagged `github-app-deploy-2026-09-08` (commit `fd7c2c3`) -
