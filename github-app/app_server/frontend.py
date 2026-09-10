@@ -2010,7 +2010,7 @@ if (typeof Paddle !== "undefined") {{
       }} else if (event.name === 'checkout.closed' && !window._creditCheckoutCompleted) {{
         status.textContent = '';
       }} else if (event.name === 'checkout.error') {{
-        status.textContent = 'Checkout failed to open - try again.';
+        status.textContent = 'Checkout error - try again.';
         status.style.color = 'var(--critical)';
       }}
     }},
@@ -2243,6 +2243,7 @@ async function buyCredit() {{
     return;
   }}
   statusEl.textContent = 'Opening checkout...';
+  statusEl.style.color = '';
   window._creditCheckoutCompleted = false;
   // The installation token is minted with a 30-minute TTL (auth.py's
   // sign_checkout_installation_id) - re-fetch it fresh here instead of
