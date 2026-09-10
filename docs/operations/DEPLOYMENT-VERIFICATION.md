@@ -40,6 +40,7 @@ Before claiming a hardening change is live, verify:
 ## Current Server Snapshot
 
 **Superseded by a same-day follow-up:** a second, smaller redeploy landed after the snapshot below
+
 - commit `f8b2f36` (tag `github-app-deploy-2026-09-10-2`), `app-server` only (single-file frontend
 fix, #651 - settings-page CSS dead space and a stuck "Opening checkout..." status with no
 `eventCallback`). Rebuilt and force-recreated `app-server` alone; confirmed healthy, both fixes
