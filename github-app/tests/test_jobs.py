@@ -6633,7 +6633,14 @@ def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pus
 
     def _reserve_llm_spend(dsn, iid, reserve_usd):
         with state_lock:
-            if spend_state["total"] + reserve_usd <= DEFAULT_LLM_NEXT_CALL_RESERVE_USD:
+            # Cap check against this call site's own real reserve size
+            # (WIKI_INCREMENTAL_LLM_RESERVE_USD, 0.10 - the peer-session fix
+            # that right-sized this from DEFAULT_LLM_NEXT_CALL_RESERVE_USD's
+            # near-zero placeholder), not the generic default - the real
+            # _maybe_update_live_wiki call site now reserves that amount,
+            # so a simulated check against the old placeholder would reject
+            # a reservation the real code never actually sizes that small.
+            if spend_state["total"] + reserve_usd <= WIKI_INCREMENTAL_LLM_RESERVE_USD:
                 spend_state["total"] += reserve_usd
                 return True
             return False
@@ -6645,6 +6652,14 @@ def test_maybe_update_live_wiki_reserves_spend_atomically_against_concurrent_pus
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", _get_llm_spend_this_month)
     monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
+    # record_usage's true-up (Task 4) calls release_llm_spend_reservation
+    # for real whenever the true-up delta is negative - cost_for_usage is
+    # mocked to exactly match the reserve below (delta 0, no release
+    # expected in the happy path), but this is here defensively so a
+    # negative delta from either thread's timing can't hit a real DB pool
+    # against this test's fake DSN - same gap already closed for the
+    # sibling full-build test this one mirrors.
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     monkeypatch.setattr(
         "scan_worker.jobs.cost_for_usage", lambda *a, **k: WIKI_INCREMENTAL_LLM_RESERVE_USD
     )
@@ -8896,7 +8911,16 @@ def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_
 
     def _reserve_llm_spend(dsn, iid, reserve_usd):
         with state_lock:
-            if spend_state["total"] + reserve_usd <= DEFAULT_LLM_NEXT_CALL_RESERVE_USD:
+            # Cap check against this call site's own real reserve size
+            # (HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD, 0.05 - the peer-
+            # session fix that right-sized this from DEFAULT_LLM_NEXT_
+            # CALL_RESERVE_USD's near-zero placeholder), matching what
+            # _fix_suggestion_attachment actually reserves now - a check
+            # against the old placeholder would reject every reservation
+            # outright (0.05 > the placeholder), failing both threads
+            # instead of exercising the one-succeeds-one-fails race this
+            # test exists to prove.
+            if spend_state["total"] + reserve_usd <= HEALTH_FIX_SUGGESTION_LLM_RESERVE_USD:
                 spend_state["total"] += reserve_usd
                 return True
             return False
@@ -8908,6 +8932,13 @@ def test_fix_suggestion_attachment_reserves_spend_atomically_against_concurrent_
     monkeypatch.setattr("scan_worker.jobs.get_llm_spend_this_month", _get_llm_spend_this_month)
     monkeypatch.setattr("scan_worker.jobs.reserve_llm_spend", _reserve_llm_spend)
     monkeypatch.setattr("scan_worker.jobs.record_llm_spend", _record_llm_spend)
+    # record_usage's true-up calls release_llm_spend_reservation for real
+    # on a negative delta - cost_for_usage below is mocked to exactly
+    # match the reserve (delta 0, no release expected), but this is here
+    # defensively so neither thread can hit a real DB pool against this
+    # test's fake DSN - same gap already closed for the sibling
+    # full-build/incremental-update tests this one mirrors.
+    monkeypatch.setattr("scan_worker.jobs.release_llm_spend_reservation", lambda *a, **k: None)
     # Real cost equal to the flat reservation, so record_usage's true-up
     # delta is exactly 0 (a no-op) - isolates this test to the reservation
     # race itself, instead of a coincidental true-up masking it.
