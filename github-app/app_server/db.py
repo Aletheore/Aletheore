@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import asyncpg
 
@@ -192,7 +192,12 @@ async def add_paddle_ids_to_installation(
 
 
 async def reset_billing_period_credit(
-    pool: asyncpg.Pool, installation_id: int, plan: str, extra_seats: int, period_start: str
+    pool: asyncpg.Pool,
+    installation_id: int,
+    plan: str,
+    extra_seats: int,
+    period_start: str,
+    is_annual: bool,
 ) -> bool:
     """Resets base_credit_remaining_usd - and base_credit_allotment_usd,
     this billing period's ceiling, to the same value - to this plan's
@@ -209,7 +214,28 @@ async def reset_billing_period_credit(
     an existing `pool.acquire()`/`conn.transaction()` block (the same
     pattern claim_free_to_paid_plan and friends already use) so this
     reset commits atomically with that block's plan/extra_seats/Paddle-id
-    writes instead of as an independent standalone call."""
+    writes instead of as an independent standalone call.
+
+    is_annual controls next_monthly_credit_reset_at: set to one month past
+    this reset for an annual subscriber (see
+    run_monthly_credit_reset_sweep_job in scan_worker/jobs.py, which
+    resets base credit again every time that date arrives, independent of
+    Paddle's own once-a-year billing period), or cleared to NULL for a
+    monthly subscriber (whose base credit is already correctly refreshed
+    every month by THIS function alone, so the synthetic sweep must never
+    also touch them - both firing in the same month would double-credit).
+
+    That first synthetic due date is period_start + 30 days rather than a
+    true calendar month: python-dateutil's relativedelta would express
+    "+ 1 month" exactly, but dateutil is not a dependency of this service
+    (it appears in requirements.lock.txt only transitively, via croniter,
+    and nothing in app_server/scan_worker imports it) and this fix is not
+    worth adding one for. The tradeoff is small and bounded: only the
+    FIRST interval of each year is 30 days - the sweep itself advances by
+    a real `interval '1 month'` from its own previous due date afterwards
+    - and the real annual renewal re-synchronizes this column from
+    period_start every year, so the slight calendar drift can never
+    accumulate beyond one billing year."""
     new_credit = base_credit_for_plan(plan, extra_seats)
     # Paddle sends ISO 8601 with a trailing "Z" (e.g.
     # "2026-09-01T00:00:00Z") - same format webhooks/paddle.py already
@@ -218,18 +244,20 @@ async def reset_billing_period_credit(
     # a real datetime, not a string, even with an explicit ::timestamptz
     # cast in the query.
     period_start_dt = datetime.fromisoformat(period_start)
+    next_monthly_reset = period_start_dt + timedelta(days=30) if is_annual else None
     row = await pool.fetchrow(
         """
         UPDATE installations
         SET base_credit_remaining_usd = $2,
             base_credit_allotment_usd = $2,
             current_billing_period_start = $3,
+            next_monthly_credit_reset_at = $4,
             balance_epoch = balance_epoch + 1
         WHERE installation_id = $1
             AND (current_billing_period_start IS DISTINCT FROM $3)
         RETURNING installation_id
         """,
-        installation_id, new_credit, period_start_dt,
+        installation_id, new_credit, period_start_dt, next_monthly_reset,
     )
     return row is not None
 

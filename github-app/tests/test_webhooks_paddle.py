@@ -4,6 +4,7 @@ import ipaddress
 import json
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -26,8 +27,13 @@ from app_server.db import (
     upsert_installation,
 )
 from app_server.main import app
-from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID, EXTRA_SEAT_PRICE_ID
+from app_server.paddle_pricing import (
+    CREDIT_TOPUP_PRICE_ID,
+    EXTRA_SEAT_PRICE_ID,
+    PLAN_INTERVAL_TO_PRICE_ID,
+)
 from app_server.webhooks.paddle import handle_paddle_webhook_event
+from scan_worker.jobs import run_monthly_credit_reset_sweep_job
 
 WEBHOOK_SECRET = "pdl_ntfset_test_secret"
 # Matches conftest.py's SESSION_SECRET default - the webhook handler
@@ -1423,7 +1429,7 @@ async def test_reset_billing_period_credit_on_genuine_new_period(pool):
     )
 
     changed = await reset_billing_period_credit(
-        pool, 401, "air", extra_seats=0, period_start="2026-09-01T00:00:00Z"
+        pool, 401, "air", extra_seats=0, period_start="2026-09-01T00:00:00Z", is_annual=False
     )
 
     assert changed is True
@@ -1449,7 +1455,7 @@ async def test_reset_billing_period_credit_is_a_noop_on_the_same_period(pool):
         "INSERT INTO installations (installation_id, account_login, plan) VALUES (402, 'acme', 'air')"
     )
     await reset_billing_period_credit(
-        pool, 402, "air", extra_seats=0, period_start="2026-09-01T00:00:00Z"
+        pool, 402, "air", extra_seats=0, period_start="2026-09-01T00:00:00Z", is_annual=False
     )
     # Spend some of it down.
     await pool.execute(
@@ -1459,7 +1465,7 @@ async def test_reset_billing_period_credit_is_a_noop_on_the_same_period(pool):
 
     # Same period_start delivered again (a replayed or unrelated subscription.updated).
     changed = await reset_billing_period_credit(
-        pool, 402, "air", extra_seats=0, period_start="2026-09-01T00:00:00Z"
+        pool, 402, "air", extra_seats=0, period_start="2026-09-01T00:00:00Z", is_annual=False
     )
 
     assert changed is False
@@ -1469,6 +1475,78 @@ async def test_reset_billing_period_credit_is_a_noop_on_the_same_period(pool):
     )
     # Must NOT have been reset back to 18.00 - the spent-down 2.00 survives.
     assert float(row["base_credit_remaining_usd"]) == pytest.approx(2.00)
+
+
+@pytest.mark.asyncio
+async def test_reset_billing_period_credit_arms_the_monthly_clock_for_an_annual_subscriber(pool):
+    # An annual subscriber's Paddle billing period only advances once a
+    # year, so this reset is the only one they will get from Paddle for the
+    # next 12 months. next_monthly_credit_reset_at is what lets
+    # run_monthly_credit_reset_sweep_job hand them the other 11 months of
+    # the $18/month allotment they actually paid for.
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (420, 'annual-co', 'air')"
+    )
+
+    changed = await reset_billing_period_credit(
+        pool, 420, "air", extra_seats=0, period_start="2026-09-01T00:00:00Z", is_annual=True
+    )
+
+    assert changed is True
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, next_monthly_credit_reset_at "
+        "FROM installations WHERE installation_id = $1",
+        420,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    # One month past THIS reset, not past "now" - see the 30-day note in
+    # reset_billing_period_credit's docstring on why dateutil's exact
+    # relativedelta isn't used (it is not a dependency of this service).
+    assert row["next_monthly_credit_reset_at"] == datetime(
+        2026, 9, 1, tzinfo=timezone.utc
+    ) + timedelta(days=30)
+
+
+@pytest.mark.asyncio
+async def test_reset_billing_period_credit_leaves_the_monthly_clock_null_for_a_monthly_subscriber(pool):
+    # A monthly subscriber already gets a real reset from Paddle every
+    # month, so the synthetic sweep must never see them: this reset plus a
+    # sweep firing in the same month would credit them twice.
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (421, 'monthly-co', 'air')"
+    )
+
+    await reset_billing_period_credit(
+        pool, 421, "air", extra_seats=0, period_start="2026-09-01T00:00:00Z", is_annual=False
+    )
+
+    row = await pool.fetchrow(
+        "SELECT next_monthly_credit_reset_at FROM installations WHERE installation_id = $1", 421
+    )
+    assert row["next_monthly_credit_reset_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_monthly_renewal_disarms_a_previously_armed_monthly_clock(pool):
+    # A customer who downgrades from the annual price to the monthly one
+    # keeps whatever next_monthly_credit_reset_at their annual renewal set,
+    # unless a monthly reset actively clears it - and if it survived, they
+    # would collect both a real monthly reset and a synthetic one every
+    # month. is_annual=False writing NULL is what makes that impossible.
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, "
+        "next_monthly_credit_reset_at) "
+        "VALUES (422, 'switched-co', 'air', '2026-10-01T00:00:00Z')"
+    )
+
+    await reset_billing_period_credit(
+        pool, 422, "air", extra_seats=0, period_start="2026-09-15T00:00:00Z", is_annual=False
+    )
+
+    row = await pool.fetchrow(
+        "SELECT next_monthly_credit_reset_at FROM installations WHERE installation_id = $1", 422
+    )
+    assert row["next_monthly_credit_reset_at"] is None
 
 
 @pytest.mark.asyncio
@@ -1622,6 +1700,119 @@ async def test_subscription_updated_with_current_billing_period_resets_credit(po
     assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
     assert row["balance_epoch"] == 1
     assert row["current_billing_period_start"] is not None
+
+
+@pytest.mark.asyncio
+async def test_monthly_air_subscription_updated_does_not_arm_the_monthly_credit_clock(pool):
+    # The monthly AIR price. Paddle already advances this subscription's
+    # current_billing_period every month, so the synthetic clock must stay
+    # NULL - a monthly subscriber picked up by the sweep would be credited
+    # twice a month.
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (430, 'monthly-co', 'air')"
+    )
+    payload = {
+        "event_id": "evt_renewal_430",
+        "event_type": "subscription.updated",
+        "data": {
+            "id": "sub_test_430",
+            "customer_id": "ctm_test_430",
+            "status": "active",
+            "custom_data": {"installation_token": _installation_token(430)},
+            "items": [
+                {"price": {"id": PLAN_INTERVAL_TO_PRICE_ID[("air", "month")]}, "quantity": 1}
+            ],
+            "current_billing_period": {"starts_at": "2026-09-01T00:00:00Z"},
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, next_monthly_credit_reset_at "
+        "FROM installations WHERE installation_id = $1",
+        430,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    assert row["next_monthly_credit_reset_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_annual_air_subscriber_really_gets_re_credited_mid_year(pool):
+    # End-to-end proof of the bug this whole mechanism exists to fix. An
+    # annual AIR subscriber's current_billing_period.starts_at advances once
+    # a YEAR, so before this the webhook reset below was the ONLY credit
+    # they would see for 12 months: $18 for the year instead of $18 a month.
+    #
+    # Two halves, in order: the real annual renewal webhook arms the
+    # synthetic monthly clock one month out, and then the sweep - the thing
+    # that actually runs monthly in production - re-credits them off that
+    # clock, with no Paddle event involved at all.
+    fake_queue = MagicMock()
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan) VALUES (431, 'annual-co', 'air')"
+    )
+    payload = {
+        "event_id": "evt_renewal_431",
+        "event_type": "subscription.updated",
+        "data": {
+            "id": "sub_test_431",
+            "customer_id": "ctm_test_431",
+            "status": "active",
+            "custom_data": {"installation_token": _installation_token(431)},
+            "items": [
+                {"price": {"id": PLAN_INTERVAL_TO_PRICE_ID[("air", "year")]}, "quantity": 1}
+            ],
+            "current_billing_period": {"starts_at": "2026-09-01T00:00:00Z"},
+        },
+    }
+
+    await handle_paddle_webhook_event(payload, pool, "redis://unused", queue=fake_queue)
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, balance_epoch, next_monthly_credit_reset_at "
+        "FROM installations WHERE installation_id = $1",
+        431,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    assert row["balance_epoch"] == 1
+    assert row["next_monthly_credit_reset_at"] == datetime(
+        2026, 9, 1, tzinfo=timezone.utc
+    ) + timedelta(days=30)
+
+    # Now they spend the month's credit down and their synthetic due date
+    # arrives (moved into the past here rather than waiting a month - the
+    # sweep's own trigger is next_monthly_credit_reset_at <= now()).
+    await pool.execute(
+        "UPDATE installations SET base_credit_remaining_usd = 0.40, "
+        "next_monthly_credit_reset_at = now() - interval '1 minute' "
+        "WHERE installation_id = $1",
+        431,
+    )
+
+    run_monthly_credit_reset_sweep_job()
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, base_credit_allotment_usd, balance_epoch, "
+        "current_billing_period_start, next_monthly_credit_reset_at "
+        "FROM installations WHERE installation_id = $1",
+        431,
+    )
+    # The whole point: a full monthly allotment again, mid-year, with no
+    # Paddle renewal anywhere near it.
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    assert float(row["base_credit_allotment_usd"]) == pytest.approx(18.00)
+    # Bumped so the low-balance/exhausted emails they may already have been
+    # sent this year don't suppress next month's (the dedupe key is
+    # f"credit_low_balance:{installation_id}:{balance_epoch}").
+    assert row["balance_epoch"] == 2
+    # Paddle still owns the real billing period - the sweep must not fake it
+    # forward, or the next genuine annual renewal would look like a replay
+    # and be skipped.
+    assert row["current_billing_period_start"] == datetime(2026, 9, 1, tzinfo=timezone.utc)
+    # And the clock is armed again for the month after.
+    assert row["next_monthly_credit_reset_at"] > datetime.now(timezone.utc)
 
 
 @pytest.mark.asyncio

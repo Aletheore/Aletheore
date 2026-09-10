@@ -27,7 +27,12 @@ from app_server.db import (
 from app_server.email_queue import enqueue_transactional_email
 from app_server.error_alerts import send_error_alert
 from app_server.paddle_ip_allowlist import client_ip_from_forwarded_for, is_known_paddle_ip
-from app_server.paddle_pricing import CREDIT_TOPUP_PRICE_ID, EXTRA_SEAT_PRICE_ID, resolve_plan_for_price_id
+from app_server.paddle_pricing import (
+    CREDIT_TOPUP_PRICE_ID,
+    EXTRA_SEAT_PRICE_ID,
+    PLAN_INTERVAL_TO_PRICE_ID,
+    resolve_plan_for_price_id,
+)
 from app_server.paddle_webhook_verify import verify_paddle_signature
 
 paddle_webhook_router = APIRouter()
@@ -177,15 +182,20 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     if data.get("status") in _ACTIVE_SUBSCRIPTION_STATUSES:
         # The base plan price is whichever item resolves to a known plan -
         # not necessarily items[0], since the extra-seat add-on can be
-        # either item once seats are involved.
-        plan = next(
+        # either item once seats are involved. The matched price ID itself
+        # is kept, not just the plan name it resolves to: a plan has both a
+        # monthly and (for AIR) an annual price, and only the price ID says
+        # which of the two this subscription is actually billed on - needed
+        # for is_annual below.
+        matched_price_id = next(
             (
-                resolved
+                (item.get("price") or {}).get("id")
                 for item in items
-                if (resolved := resolve_plan_for_price_id((item.get("price") or {}).get("id")))
+                if resolve_plan_for_price_id((item.get("price") or {}).get("id"))
             ),
             None,
         )
+        plan = resolve_plan_for_price_id(matched_price_id) if matched_price_id else None
         if not plan:
             logger.warning(
                 "%s has an active status but no resolvable plan price id in items", event_type
@@ -193,6 +203,7 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
             return
     else:
         plan = "free"
+        matched_price_id = None
 
     previous = await get_installation(pool, installation_id)
     previous_plan = previous["plan"] if previous is not None else "free"
@@ -248,6 +259,20 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
     # `conn` from that transaction instead of `pool` works unchanged.
     period_start = (data.get("current_billing_period") or {}).get("starts_at")
 
+    # An ANNUAL subscriber's current_billing_period.starts_at only advances
+    # once a YEAR, so the reset above - the only thing that ever refreshes
+    # base credit - would hand them 1/12th of the $18/month AIR allotment
+    # that is meant to be monthly regardless of how the customer pays.
+    # Flagging the annual price here is what lets reset_billing_period_
+    # credit arm next_monthly_credit_reset_at, the synthetic monthly clock
+    # scan_worker/jobs.py's run_monthly_credit_reset_sweep_job fires off.
+    # Compared against the price ID rather than any interval field in the
+    # payload: PLAN_INTERVAL_TO_PRICE_ID is this codebase's own source of
+    # truth for which price means which interval (the same map the checkout
+    # page builds from), so a plan with no annual price at all - "flash"
+    # today - resolves to None and can never be mistaken for annual.
+    is_annual = plan != "free" and matched_price_id == PLAN_INTERVAL_TO_PRICE_ID.get((plan, "year"))
+
     # One transaction, not three (now four) independent writes: a crash
     # between any two of these previously left the installation on the new
     # plan with stale extra_seats, or upgraded with no Paddle IDs recorded -
@@ -279,7 +304,7 @@ async def handle_paddle_webhook_event(payload: dict, pool, redis_url: str, queue
             reset_happened = False
             if plan != "free" and period_start:
                 reset_happened = await reset_billing_period_credit(
-                    conn, installation_id, plan, extra_seats, period_start
+                    conn, installation_id, plan, extra_seats, period_start, is_annual
                 )
 
             # Only when the renewal reset did NOT fire - a real reset already

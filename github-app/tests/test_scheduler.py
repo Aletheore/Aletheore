@@ -9,6 +9,7 @@ from scan_worker.scheduler import (
     HEALTH_SWEEP_JOB_TIMEOUT_SECONDS,
     HEALTH_SWEEP_STALENESS_CHECK_JOB_TIMEOUT_SECONDS,
     JOB_TEMP_DIR_CLEANUP_JOB_TIMEOUT_SECONDS,
+    MONTHLY_CREDIT_RESET_JOB_TIMEOUT_SECONDS,
     OPS_MONITOR_JOB_TIMEOUT_SECONDS,
     SCANS_QUEUE_NAME,
     SESSION_CLEANUP_JOB_TIMEOUT_SECONDS,
@@ -59,7 +60,7 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         assert call.args == ("scan_worker.jobs.run_health_check_sweep_job",)
         assert call.kwargs == {"job_timeout": HEALTH_SWEEP_JOB_TIMEOUT_SECONDS}
 
-    assert scans_queue.enqueue.call_count == 30
+    assert scans_queue.enqueue.call_count == 33
     session_cleanup_calls = [
         c for c in scans_queue.enqueue.call_args_list
         if c.args == ("scan_worker.jobs.run_session_cleanup_job",)
@@ -100,6 +101,10 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
         c for c in scans_queue.enqueue.call_args_list
         if c.args == ("scan_worker.jobs.run_ops_monitor_job",)
     ]
+    monthly_credit_reset_calls = [
+        c for c in scans_queue.enqueue.call_args_list
+        if c.args == ("scan_worker.jobs.run_monthly_credit_reset_sweep_job",)
+    ]
     assert len(session_cleanup_calls) == 3
     assert len(docs_catchup_calls) == 3
     assert len(wiki_catchup_calls) == 3
@@ -110,6 +115,14 @@ def test_run_forever_enqueues_health_sweep_and_session_cleanup_on_each_iteration
     assert len(endpoint_health_cleanup_calls) == 3
     assert len(flash_review_cache_cleanup_calls) == 3
     assert len(ops_monitor_calls) == 3
+    # The synthetic monthly credit reset for annual subscribers has to be
+    # enqueued every tick like the rest: it is the only thing that gives an
+    # annual AIR customer their monthly allotment (see
+    # run_monthly_credit_reset_sweep_job), so a scheduler that silently
+    # stopped enqueueing it would under-credit them for a year.
+    assert len(monthly_credit_reset_calls) == 3
+    for call in monthly_credit_reset_calls:
+        assert call.kwargs == {"job_timeout": MONTHLY_CREDIT_RESET_JOB_TIMEOUT_SECONDS}
     for call in endpoint_health_cleanup_calls:
         assert call.kwargs == {"job_timeout": ENDPOINT_HEALTH_CLEANUP_JOB_TIMEOUT_SECONDS}
     for call in flash_review_cache_cleanup_calls:

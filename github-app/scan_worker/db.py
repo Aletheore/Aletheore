@@ -494,6 +494,83 @@ def get_extra_seats(dsn: str, installation_id: int) -> int:
             return row[0] if row else 0
 
 
+def list_installations_due_for_monthly_credit_reset(dsn: str) -> list[int]:
+    """Installations whose synthetic monthly credit clock has come due -
+    the due list for run_monthly_credit_reset_sweep_job in jobs.py.
+
+    next_monthly_credit_reset_at is non-NULL for ANNUAL subscribers only
+    (set by app_server/db.py's reset_billing_period_credit, migration
+    065): their Paddle current_billing_period only advances once a year,
+    so the webhook-driven reset alone would credit their monthly
+    allotment once for the whole year. The IS NOT NULL half of this
+    filter is load-bearing, not just an optimisation - a monthly
+    subscriber is already refreshed correctly by that webhook reset, and
+    the sweep firing for them too would double-credit them every month.
+    """
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor(row_factory=psycopg.rows.tuple_row) as cur:
+            cur.execute(
+                """
+                SELECT installation_id FROM installations
+                WHERE next_monthly_credit_reset_at IS NOT NULL
+                    AND next_monthly_credit_reset_at <= now()
+                """
+            )
+            return [row[0] for row in cur.fetchall()]
+
+
+def apply_monthly_credit_reset(dsn: str, installation_id: int, new_credit: float) -> None:
+    """One synthetic monthly reset for an annual subscriber: the same
+    write reset_billing_period_credit performs on a real Paddle renewal,
+    minus current_billing_period_start (which still belongs to Paddle's
+    own once-a-year period and must not be faked forward).
+
+    Two deliberate choices here:
+
+    (a) next_monthly_credit_reset_at advances by one month past ITS OWN
+    PREVIOUS VALUE, not past now(). The scheduler ticks about every three
+    minutes and the sweep runs behind whatever else is on the "scans"
+    queue, so a due date is always caught some minutes - occasionally
+    hours - late. Anchoring the next date on now() would bake each of
+    those delays into the schedule permanently, walking the reset day
+    later and later through the year; anchoring it on the previous due
+    date keeps it fixed to the calendar no matter how late any individual
+    tick lands.
+
+    (b) balance_epoch is incremented, exactly as a real renewal reset
+    does. That is the actual reset mechanism for the low-balance/
+    exhausted credit emails - they are deduped through sent_emails on
+    f"credit_low_balance:{installation_id}:{balance_epoch}" (see
+    reserve_llm_spend_with_email_hooks in jobs.py), there are no
+    per-installation "email sent" timestamp columns to clear. Without the
+    increment, a customer warned in month three would never be warned
+    again for the rest of the year, because every later month would reuse
+    that month's dedupe key.
+
+    Idempotent per due date rather than per call: the WHERE clause
+    re-checks that the row is still actually due, so a second sweep in
+    the same tick window (or a retried RQ job) finds the date already
+    advanced past now() and changes nothing.
+    """
+    with get_db_pool(dsn).connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE installations
+                SET base_credit_remaining_usd = %(new_credit)s,
+                    base_credit_allotment_usd = %(new_credit)s,
+                    next_monthly_credit_reset_at =
+                        next_monthly_credit_reset_at + interval '1 month',
+                    balance_epoch = balance_epoch + 1
+                WHERE installation_id = %(installation_id)s
+                    AND next_monthly_credit_reset_at IS NOT NULL
+                    AND next_monthly_credit_reset_at <= now()
+                """,
+                {"new_credit": new_credit, "installation_id": installation_id},
+            )
+        conn.commit()
+
+
 @contextmanager
 def installation_spend_lock(dsn: str, installation_id: int):
     # A single scan-worker process handles jobs sequentially today, so the

@@ -11,6 +11,8 @@ from aletheore.evidence import EVIDENCE_VERSION
 from app_server.db import hide_repo
 from app_server.evidence_limits import EvidenceTooLargeError, MAX_EVIDENCE_BYTES
 from scan_worker.db import (
+    apply_monthly_credit_reset,
+    list_installations_due_for_monthly_credit_reset,
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     managed_audit_definitely_still_cooling_down,
@@ -2421,3 +2423,153 @@ async def test_insert_repo_history_without_head_sha_does_not_tag_the_stored_evid
 
     evidence = get_latest_evidence(TEST_DATABASE_URL, 826, "a/repo1")
     assert "_scan_head_sha" not in evidence
+
+
+# --- Synthetic monthly credit reset for annual subscribers (migration 065) ---
+
+
+@pytest.mark.asyncio
+async def test_monthly_credit_reset_due_list_only_includes_armed_and_due_rows(pool):
+    # 830: an annual subscriber whose synthetic due date has arrived.
+    await _insert_installation(pool, 830, "annual-due", plan="air")
+    # 831: an annual subscriber whose due date is still in the future.
+    await _insert_installation(pool, 831, "annual-not-yet", plan="air")
+    # 832: a MONTHLY subscriber - NULL clock. Their base credit is already
+    # refreshed every month by the Paddle-driven reset, so the sweep picking
+    # them up would double-credit them; this is the case the IS NOT NULL half
+    # of the query exists for.
+    await _insert_installation(pool, 832, "monthly", plan="air")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE installations SET next_monthly_credit_reset_at = now() - interval '1 hour' "
+            "WHERE installation_id = $1",
+            830,
+        )
+        await conn.execute(
+            "UPDATE installations SET next_monthly_credit_reset_at = now() + interval '5 days' "
+            "WHERE installation_id = $1",
+            831,
+        )
+
+    due = list_installations_due_for_monthly_credit_reset(TEST_DATABASE_URL)
+
+    assert 830 in due
+    assert 831 not in due
+    assert 832 not in due
+
+
+@pytest.mark.asyncio
+async def test_apply_monthly_credit_reset_advances_the_due_date_without_drift(pool):
+    # The next due date must be one month past ITS OWN PREVIOUS VALUE, not
+    # one month past now(). A sweep tick always lands somewhat late (the
+    # scheduler ticks every ~3 minutes and this job queues behind whatever
+    # else is on "scans"), and anchoring on now() would bake every one of
+    # those delays permanently into the schedule, walking the reset day later
+    # and later through the year.
+    await _insert_installation(pool, 833, "annual-co", plan="air", base_credit_remaining_usd=1.25)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE installations SET next_monthly_credit_reset_at = $2 WHERE installation_id = $1",
+            833,
+            datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
+
+    apply_monthly_credit_reset(TEST_DATABASE_URL, 833, 18.00)
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, base_credit_allotment_usd, balance_epoch, "
+        "next_monthly_credit_reset_at FROM installations WHERE installation_id = $1",
+        833,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(18.00)
+    assert float(row["base_credit_allotment_usd"]) == pytest.approx(18.00)
+    # Exactly 2026-10-01, the old due date + 1 month - NOT now() + 1 month,
+    # which would have been over a year out from this fixed old date.
+    assert row["next_monthly_credit_reset_at"] == datetime(2026, 10, 1, tzinfo=timezone.utc)
+    # The dedupe key for the low-balance/exhausted credit emails is
+    # f"credit_low_balance:{installation_id}:{balance_epoch}" - without this
+    # bump, a customer warned once would never be warned again all year.
+    assert row["balance_epoch"] == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_monthly_credit_reset_leaves_paddles_own_billing_period_alone(pool):
+    # current_billing_period_start belongs to Paddle's real once-a-year
+    # period. If the synthetic sweep faked it forward, the next genuine
+    # annual renewal webhook would look like a replay to
+    # reset_billing_period_credit and be skipped entirely.
+    await _insert_installation(pool, 834, "annual-co", plan="air")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE installations SET next_monthly_credit_reset_at = now() - interval '1 minute', "
+            "current_billing_period_start = $2 WHERE installation_id = $1",
+            834,
+            datetime(2026, 9, 1, tzinfo=timezone.utc),
+        )
+
+    apply_monthly_credit_reset(TEST_DATABASE_URL, 834, 18.00)
+
+    row = await pool.fetchrow(
+        "SELECT current_billing_period_start FROM installations WHERE installation_id = $1", 834
+    )
+    assert row["current_billing_period_start"] == datetime(2026, 9, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_apply_monthly_credit_reset_run_twice_back_to_back_only_fires_once(pool):
+    # Two sweeps in the same tick window (or a retried RQ job): the first
+    # advances the due date a month into the future, so the second finds the
+    # row no longer due and must not credit a second allotment on top.
+    await _insert_installation(pool, 835, "annual-co", plan="air")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE installations SET next_monthly_credit_reset_at = now() - interval '1 minute' "
+            "WHERE installation_id = $1",
+            835,
+        )
+
+    apply_monthly_credit_reset(TEST_DATABASE_URL, 835, 18.00)
+    after_first = await pool.fetchrow(
+        "SELECT next_monthly_credit_reset_at, balance_epoch FROM installations "
+        "WHERE installation_id = $1",
+        835,
+    )
+    # The row is no longer in the due list at all after one firing.
+    assert 835 not in list_installations_due_for_monthly_credit_reset(TEST_DATABASE_URL)
+
+    # Spend it down, then sweep again immediately.
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE installations SET base_credit_remaining_usd = 4.00 WHERE installation_id = $1",
+            835,
+        )
+    apply_monthly_credit_reset(TEST_DATABASE_URL, 835, 18.00)
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, balance_epoch, next_monthly_credit_reset_at "
+        "FROM installations WHERE installation_id = $1",
+        835,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(4.00)
+    assert row["balance_epoch"] == after_first["balance_epoch"]
+    assert row["next_monthly_credit_reset_at"] == after_first["next_monthly_credit_reset_at"]
+
+
+@pytest.mark.asyncio
+async def test_apply_monthly_credit_reset_never_touches_a_monthly_subscriber(pool):
+    # Belt and braces on the invariant that matters most for money: even
+    # called directly with a monthly subscriber's id (NULL clock), the write
+    # must be a no-op. Their real Paddle renewal is the only thing allowed to
+    # reset their credit.
+    await _insert_installation(pool, 836, "monthly-co", plan="air", base_credit_remaining_usd=2.00)
+
+    apply_monthly_credit_reset(TEST_DATABASE_URL, 836, 18.00)
+
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, balance_epoch, next_monthly_credit_reset_at "
+        "FROM installations WHERE installation_id = $1",
+        836,
+    )
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(2.00)
+    assert row["balance_epoch"] == 0
+    assert row["next_monthly_credit_reset_at"] is None

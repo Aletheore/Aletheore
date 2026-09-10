@@ -59,6 +59,7 @@ from app_server.url_validation import UnsafeURLError, validate_and_pin_https_url
 from aletheore.docs_reference import build_api_reference
 from scan_worker import live_docs, live_wiki
 from scan_worker.db import (
+    apply_monthly_credit_reset,
     check_and_reserve_flash_review_attempt,
     check_and_reserve_managed_audit,
     check_and_reserve_monthly_repo_scan_slot,
@@ -99,6 +100,7 @@ from scan_worker.db import (
     list_docs_symbols,
     list_health_check_targets_all,
     list_installation_member_emails,
+    list_installations_due_for_monthly_credit_reset,
     list_paid_installations_due_for_digest,
     list_paid_repos_due_for_docs_catchup,
     list_paid_repos_due_for_wiki_catchup,
@@ -3917,6 +3919,63 @@ def run_weekly_digest_sweep_job() -> None:
             # per-target isolation.
             logger.warning(
                 "weekly digest sweep failed for installation=%s", installation_id, exc_info=True
+            )
+
+
+@log_job
+def run_monthly_credit_reset_sweep_job() -> None:
+    """Gives ANNUAL subscribers the monthly credit allotment they pay for.
+
+    Runs on "scans" (see scheduler.py), same placement as the weekly
+    digest sweep - a due date caught minutes or hours late is harmless
+    here, so this doesn't need "email" queue urgency.
+
+    base_credit_remaining_usd is otherwise only ever refreshed by
+    app_server/db.py's reset_billing_period_credit, which fires when
+    Paddle's current_billing_period.starts_at genuinely changes. For a
+    monthly subscriber that is once a month, which is exactly right. For
+    an ANNUAL AIR subscriber it is once a YEAR - so the $18/month
+    allotment (PLAN_BASE_CREDIT_USD), which is monthly regardless of how
+    the customer chooses to pay, landed once for the whole year: 1/12th of
+    what they bought. This sweep is the synthetic monthly clock that fixes
+    that, driven by next_monthly_credit_reset_at (migration 065) rather
+    than by Paddle's own billing period.
+
+    Only annual subscribers are ever touched: that column is NULL for
+    every monthly subscriber and every free installation, and both the due
+    query and the UPDATE require it to be non-NULL. A monthly subscriber
+    must never appear here - their real renewal reset plus a synthetic one
+    in the same month would double-credit them.
+
+    The allotment is recomputed from the installation's CURRENT plan and
+    seat count via base_credit_for_plan, not carried over from
+    base_credit_allotment_usd: a seat bought mid-year has to be reflected
+    in every later month's reset, exactly as it would be at a real
+    renewal.
+    """
+    dsn = get_settings().database_url
+    logger = logging.getLogger("scan_worker.jobs")
+
+    for installation_id in list_installations_due_for_monthly_credit_reset(dsn):
+        try:
+            installation = get_installation_row(dsn, installation_id)
+            if installation is None:
+                continue
+
+            new_credit = base_credit_for_plan(
+                installation["plan"], get_extra_seats(dsn, installation_id)
+            )
+            apply_monthly_credit_reset(dsn, installation_id, new_credit)
+        except Exception:  # noqa: BLE001
+            # One installation's bad data (a missing row, a query hiccup)
+            # must not deny every other annual customer due this tick the
+            # credit they paid for - matches the weekly digest sweep's own
+            # per-installation isolation. The next tick retries it, since
+            # nothing advanced its due date.
+            logger.warning(
+                "monthly credit reset sweep failed for installation=%s",
+                installation_id,
+                exc_info=True,
             )
 
 

@@ -711,6 +711,99 @@ def test_run_flash_review_cache_cleanup_job_removes_only_old_rows(monkeypatch):
     assert deleted == [("dsn", FLASH_REVIEW_CACHE_RETENTION_DAYS)]
 
 
+def _patch_monthly_credit_reset_deps(monkeypatch, due, installations, applied):
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_settings",
+        lambda: type("Settings", (), {"database_url": "dsn"})(),
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.list_installations_due_for_monthly_credit_reset", lambda dsn: list(due)
+    )
+    monkeypatch.setattr(
+        "scan_worker.jobs.get_installation_row", lambda dsn, iid: installations.get(iid)
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda dsn, iid: 0)
+    monkeypatch.setattr(
+        "scan_worker.jobs.apply_monthly_credit_reset",
+        lambda dsn, iid, new_credit: applied.append((iid, new_credit)),
+    )
+
+
+def test_run_monthly_credit_reset_sweep_job_credits_each_due_installation(monkeypatch):
+    from scan_worker.jobs import run_monthly_credit_reset_sweep_job
+
+    applied = []
+    _patch_monthly_credit_reset_deps(
+        monkeypatch, due=[1, 2], installations={1: {"plan": "air"}, 2: {"plan": "flash"}}, applied=applied
+    )
+
+    run_monthly_credit_reset_sweep_job()
+
+    # base_credit_for_plan for the installation's CURRENT plan, exactly what
+    # a real renewal reset would have credited.
+    assert applied == [(1, 18.00), (2, 5.00)]
+
+
+def test_run_monthly_credit_reset_sweep_job_uses_the_current_seat_count(monkeypatch):
+    from scan_worker.jobs import run_monthly_credit_reset_sweep_job
+
+    applied = []
+    _patch_monthly_credit_reset_deps(
+        monkeypatch, due=[1], installations={1: {"plan": "air"}}, applied=applied
+    )
+    monkeypatch.setattr("scan_worker.jobs.get_extra_seats", lambda dsn, iid: 2)
+
+    run_monthly_credit_reset_sweep_job()
+
+    # A seat bought mid-year has to be reflected in every later month's
+    # reset, not just at the next real annual renewal.
+    assert applied == [(1, 18.00 + 2 * 3.00)]
+
+
+def test_run_monthly_credit_reset_sweep_job_does_nothing_when_nothing_is_due(monkeypatch):
+    from scan_worker.jobs import run_monthly_credit_reset_sweep_job
+
+    applied = []
+    _patch_monthly_credit_reset_deps(monkeypatch, due=[], installations={}, applied=applied)
+
+    run_monthly_credit_reset_sweep_job()
+
+    assert applied == []
+
+
+def test_run_monthly_credit_reset_sweep_job_skips_a_missing_installation(monkeypatch):
+    from scan_worker.jobs import run_monthly_credit_reset_sweep_job
+
+    applied = []
+    _patch_monthly_credit_reset_deps(monkeypatch, due=[1], installations={}, applied=applied)
+
+    run_monthly_credit_reset_sweep_job()  # must not raise
+
+    assert applied == []
+
+
+def test_run_monthly_credit_reset_sweep_job_isolates_one_failing_installation(monkeypatch):
+    from scan_worker.jobs import run_monthly_credit_reset_sweep_job
+
+    applied = []
+    _patch_monthly_credit_reset_deps(
+        monkeypatch, due=[1, 2], installations={2: {"plan": "air"}}, applied=applied
+    )
+
+    def _get_installation(dsn, iid):
+        if iid == 1:
+            raise RuntimeError("boom")
+        return {"plan": "air"}
+
+    monkeypatch.setattr("scan_worker.jobs.get_installation_row", _get_installation)
+
+    run_monthly_credit_reset_sweep_job()
+
+    # Installation 1 blowing up must not deny installation 2 the credit it
+    # paid for - same per-installation isolation as the weekly digest sweep.
+    assert applied == [(2, 18.00)]
+
+
 def test_clone_failure_posts_failure_comment_and_cleans_up(monkeypatch):
     import scan_worker.jobs as jobs_module
 

@@ -259,6 +259,61 @@ def test_migrations_063_and_064_agree_on_every_backfilled_installation(fresh_dat
     ]
 
 
+def test_migration_065_adds_a_nullable_monthly_credit_reset_column(fresh_database):
+    """Structural only, deliberately with no backfill (065's own comment
+    explains why: zero live annual subscribers to backfill, and the webhook
+    handler arms the column for every one of them going forward).
+
+    NULL is the load-bearing default, not just an absence of data: it is
+    what excludes every monthly subscriber and every free installation from
+    run_monthly_credit_reset_sweep_job's due list. A NOT NULL column with a
+    now()-ish default here would make the sweep credit the entire customer
+    base every month.
+    """
+    run_migrations(fresh_database)
+
+    with psycopg.connect(fresh_database) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT data_type, is_nullable, column_default
+                FROM information_schema.columns
+                WHERE table_name = 'installations'
+                    AND column_name = 'next_monthly_credit_reset_at'
+                """
+            )
+            column = cur.fetchone()
+
+        assert column is not None
+        assert column[0] == "timestamp with time zone"
+        assert column[1] == "YES"
+        assert column[2] is None
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO installations (installation_id, account_login, plan) "
+                "VALUES (1, 'fresh-co', 'air')"
+            )
+        conn.commit()
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT next_monthly_credit_reset_at FROM installations WHERE installation_id = 1"
+            )
+            assert cur.fetchone()[0] is None
+
+        # The sweep's due query runs on every ~3-minute scheduler tick, so
+        # it must be an index scan over the handful of annual subscribers,
+        # not a growing sequential scan of installations.
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT indexname FROM pg_indexes WHERE tablename = 'installations'"
+            )
+            indexes = {row[0] for row in cur.fetchall()}
+
+    assert "installations_next_monthly_credit_reset_at" in indexes
+
+
 def test_concurrent_migrate_runs_do_not_collide(tmp_path):
     """Two processes running migrate.py against the same database at once -
     the shape of starting a second app-server replica, or a restart
