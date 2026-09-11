@@ -2409,7 +2409,23 @@ def _run_flash_review(
     # pricing is justified by.
     delta = spend_accumulator["total"] - reserved_spend
     if delta > 0:
-        reserve_llm_spend(settings.database_url, installation_id, delta)
+        # reserve_llm_spend no-ops (mutates nothing, returns False) when the
+        # combined balance can't cover the full overage - the review already
+        # ran and its real cost is sunk, so leaving the balance untouched
+        # would overstate what the installation actually has left. Same
+        # best-effort drain-to-zero fallback as _IncrementalSpendBudget.
+        # record_usage (PR #639): fetch what's left and reserve exactly
+        # that, rather than the full delta, so a review costing more than
+        # the entire remaining balance still zeroes it out instead of
+        # stranding a leftover amount that was never truly spendable.
+        if not reserve_llm_spend(settings.database_url, installation_id, delta):
+            row = get_installation_row(settings.database_url, installation_id)
+            if row is not None:
+                remaining = float(row.get("base_credit_remaining_usd", 0)) + float(
+                    row.get("topup_credit_balance_usd", 0)
+                )
+                if remaining > 0:
+                    reserve_llm_spend(settings.database_url, installation_id, remaining)
     elif delta < 0:
         release_llm_spend_reservation(settings.database_url, installation_id, -delta)
     record_llm_spend(
