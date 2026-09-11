@@ -4,10 +4,28 @@
 **Status:** Active baseline
 **Owner:** Arihant Kaul
 **Related Documents:** [README.md](README.md), [INCIDENT-RESPONSE.md](INCIDENT-RESPONSE.md), [../../github-app/README.md](../../github-app/README.md)
-**Last Updated:** 2026-09-10
-**Snapshot Freshness:** CURRENT as of 2026-09-10 (third deploy) - production's `app-server` was
-redeployed to `master` (commit `428e8fd`, tagged `github-app-deploy-2026-09-10-3`) and re-verified
-live via SSH the same session. Single-file fix (#654): PR #651's `align-items: start` fix for the
+**Last Updated:** 2026-09-11
+**Snapshot Freshness:** CURRENT as of 2026-09-11 - production was redeployed to `master` (commit
+`6451c41`, tagged `github-app-deploy-2026-09-11`) and re-verified live via SSH the same session. 4
+commits since the previous deploy tag (`github-app-deploy-2026-09-10-3`), all real credit/billing
+and AIRview-caching bug fixes, no migrations: an out-of-order Paddle webhook could reset a newer
+billing period's credit back to a stale allotment (#656); Flash Review's own true-up path never
+drained the balance to zero on an insufficient-overage reservation failure (#657); cancelling an
+annual AIR subscription never disarmed its synthetic monthly credit-reset clock, so a cancelled
+installation could still get a free monthly top-up (#658); AIRview's single-target write path
+never cached its own output, so the wiki page it had just built was recomputed on the very next
+request that should have hit cache (#659). Both Docker images changed (`app-server` for #656/#658,
+the shared `scan-worker` image for #657/#659, which also backs `scan-worker-2`/`health-worker`/
+`scheduler`), so all five services were rebuilt and force-recreated; confirmed healthy, all four
+fixes present in the running containers' actual source (`inspect.getsource` checked for markers
+specific to each fix - "out-of-order"/"stale"/"disarm" in `app_server.db`, "overage" in
+`scan_worker.jobs` - not re-read from the repo), zero errors in logs, the pre-existing scheduled
+jobs (`run_monthly_credit_reset_sweep_job`, `run_ops_monitor_job`) still running cleanly on the
+recreated `scan-worker`.
+
+**Previous:** CURRENT as of 2026-09-10 (third deploy) - production's `app-server` was redeployed
+to `master` (commit `428e8fd`, tagged `github-app-deploy-2026-09-10-3`) and re-verified live via
+SSH the same session. Single-file fix (#654): PR #651's `align-items: start` fix for the
 settings-page column gap was a visual no-op (that property only repositions a shorter item within
 an already-tall grid row, it doesn't shrink the row) - the real fix moves "Managed audit content"
 into the left column instead of the right, the best 2-way height partition of the five settings
@@ -51,6 +69,43 @@ Before claiming a hardening change is live, verify:
 - Restore drill target database availability.
 
 ## Current Server Snapshot
+
+As of 2026-09-11, following a redeploy to `master` (`git fetch` + `git merge --ff-only
+origin/master` + `docker compose build app-server scan-worker scan-worker-2 health-worker
+scheduler` + `docker compose up -d --no-deps --force-recreate` for those five - both images that
+changed, plus the three services that share the `scan-worker` image with the two that actually
+changed - no migrations, no lockfile changes), live inspection found:
+
+- Host: `srv1675832` (`root@187.127.169.89`).
+- Commit: `6451c41` (tag `github-app-deploy-2026-09-11`).
+- Working tree: clean aside from the expected untracked `backups/` directory.
+- 4 commits since the previous deploy tag (`github-app-deploy-2026-09-10-3`), all real bug fixes,
+  no migrations: an out-of-order Paddle webhook could reset a newer billing period's credit back
+  to a stale allotment (#656, `app_server/db.py`); Flash Review's own true-up path never drained
+  the balance to zero on an insufficient-overage reservation failure (#657, `scan_worker/jobs.py`);
+  cancelling an annual AIR subscription never disarmed its synthetic monthly credit-reset clock, so
+  a cancelled installation could still receive a free monthly top-up (#658, `app_server/db.py` +
+  `app_server/webhooks/paddle.py`); AIRview's single-target write path never cached its own output,
+  so the wiki page it had just built was recomputed on the very next request that should have hit
+  cache (#659, `scan_worker/live_wiki.py`).
+- All five app-relevant services rebuilt and force-recreated (`app-server`, `scan-worker`,
+  `scan-worker-2`, `health-worker`, `scheduler`) - `app-server`'s own image changed (#656, #658)
+  and the shared `scan-worker` image changed (#657, #659), which also backs `scan-worker-2`,
+  `health-worker`, and `scheduler`.
+- Services running: all five `Up`, all five reporting Docker-healthcheck `healthy` within ~15
+  seconds of recreation.
+- No migrations to apply - confirmed via `ls github-app/migrations/` showing `065_...` as the
+  newest file both before and after this deploy, matching the diff's own file list (no new
+  `migrations/*.sql`).
+- Post-deploy, verified live by executing directly inside the running containers, not by re-reading
+  the repo: `inspect.getsource(app_server.db)` contains the "out-of-order"/"stale"/"disarm" markers
+  specific to #656/#658, and `inspect.getsource(scan_worker.jobs)` contains the "overage" marker
+  specific to #657 - all present, not assumed from source.
+- `docker logs` on `app-server` and `scan-worker` show zero errors and the pre-existing scheduled
+  jobs (`run_live_wiki_catchup_sweep_job`, `run_monthly_credit_reset_sweep_job`,
+  `run_ops_monitor_job`) still completing cleanly on the recreated worker.
+
+## 2026-09-10 (third deploy) Snapshot
 
 **Superseded by two same-day follow-ups:** two further, smaller redeploys landed after the
 snapshot below

@@ -18,6 +18,38 @@ snapshot in `DEPLOYMENT-VERIFICATION.md` was kept current each time, but this da
 Not backfilled here; `git log <tag>..<tag>` against the tags above is the authoritative source for
 that gap until it is.
 
+## 2026-09-11
+
+Four commits since the third 2026-09-10 deploy, tagged `github-app-deploy-2026-09-11` (commit
+`6451c41`) - four real bug fixes to the dollar-credit-pricing system and AIRview caching, no
+migrations. **#656 - out-of-order Paddle webhook could reset a newer period's credit back to a
+stale allotment**: `subscription.updated` events aren't guaranteed to arrive in send order: a
+renewal-reset webhook that arrives after a later top-up or usage event could overwrite the
+installation's already-current balance with the allotment computed from its own, now-stale,
+`current_billing_period_start`. Fixed by comparing the incoming period start against the stored
+one and only resetting when the incoming period is strictly newer. **#657 - Flash Review's own
+true-up path never drained balance on insufficient overage**: `_IncrementalSpendBudget.record_usage`
+already drained the balance to zero on a *failed* `reserve_llm_spend` call, but its own
+`ledger_cost_usd` true-up branch - the "overage" case where the final real cost is more than what
+was reserved up front - called `release_llm_spend_reservation` with a negative delta and never
+checked whether the release itself succeeded, silently leaving a truthful balance behind a job that
+had actually run over. Fixed by applying the same failed-release drain-to-zero fallback there.
+**#658 - cancelling an annual AIR subscription never disarmed the monthly credit clock**: the
+synthetic `next_monthly_credit_reset_at` clock added for annual AIR subscribers (so they still get
+a monthly credit refill despite a yearly billing cycle) was only ever set, never cleared - a
+cancelled annual installation kept ticking and would still receive a free monthly top-up
+indefinitely. Fixed by clearing the column on `subscription.canceled`. **#659 - AIRview's
+single-target write path never cached its own output**: `live_wiki`'s single-file regeneration path
+(triggered by a PR touching one already-documented symbol) wrote the freshly generated page to
+storage but never wrote it into the same in-process cache the read path checks first, so the very
+next request for that page - even one arriving milliseconds later - recomputed it from scratch
+instead of hitting the page this job had just built. Fixed by writing through to the cache on the
+same path the bulk-regeneration job already used. Both Docker images changed - `app-server` for
+fixes #656 and #658, the shared `scan-worker` image for fixes #657 and #659, which also backs
+`scan-worker-2`, `health-worker`, and `scheduler` - so all five services were rebuilt and
+force-recreated; all four
+fixes confirmed present in the running containers' actual source before calling this deploy done.
+
 ## 2026-09-10
 
 25 commits since the previous deploy (`github-app-deploy-2026-09-08-2`, tagged
