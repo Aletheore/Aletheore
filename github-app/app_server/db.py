@@ -340,6 +340,36 @@ async def credit_topup_purchase(
     return True
 
 
+async def disarm_monthly_credit_reset_clock(pool: asyncpg.Pool, installation_id: int) -> None:
+    """Clears next_monthly_credit_reset_at on a transition to the free
+    plan (cancel/pause/past-due) - the same reasoning webhooks/paddle.py
+    already applies to extra_seats on that same transition, just for the
+    synthetic annual-AIR monthly clock instead.
+
+    Without this, an ANNUAL AIR subscriber who cancels keeps whatever
+    next_monthly_credit_reset_at their last renewal armed. Nothing else
+    ever clears it on a plan==free transition (unlike a real downgrade to
+    a monthly price, where reset_billing_period_credit's own is_annual=
+    False write already disarms it) - confirmed live: it stays in the
+    past, so scan_worker/db.py's list_installations_due_for_monthly_
+    credit_reset keeps matching this installation on every ~3-minute
+    sweep tick, and jobs.py's run_monthly_credit_reset_sweep_job keeps
+    "resetting" its credit (to $0, since base_credit_for_plan("free", ...)
+    is 0 - no money is actually lost) while still advancing the clock by
+    another month and incrementing balance_epoch, forever, for as long as
+    the installation row exists and never resubscribes. Harmless in
+    dollars, real in wasted per-tick work and a balance_epoch that never
+    stops climbing on a churned row.
+
+    Guarded on the column already being set so a free installation that
+    was never annual (the overwhelming majority) costs no extra write."""
+    await pool.execute(
+        "UPDATE installations SET next_monthly_credit_reset_at = NULL "
+        "WHERE installation_id = $1 AND next_monthly_credit_reset_at IS NOT NULL",
+        installation_id,
+    )
+
+
 async def list_installations_for_ids(pool: asyncpg.Pool, installation_ids: list[int]) -> list[dict]:
     if not installation_ids:
         return []
