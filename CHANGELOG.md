@@ -3,6 +3,42 @@
 Notable changes to Aletheore, by release. The working code lives in `src/` — see
 [`src/README.md`](src/README.md) for the full command reference.
 
+## 0.9.16 — 2026-09-11
+
+Two changes to `aletheore dashboard`, the local web dashboard `aletheore dashboard` serves for a
+scanned repository.
+
+**New: dependency licenses, vulnerabilities, and API endpoints (#661)**
+
+The dashboard already collected license findings, vulnerability findings, and mapped API endpoints
+into `air.json` on every scan, but never rendered any of it — Security showed only a bare
+vulnerability count, and licenses/endpoints had no card at all. Adds three cards (Vulnerability
+Findings, Dependency Licenses, API Endpoints) following the dashboard's existing card pattern,
+verified against real scans across four ecosystems (Python, Ruby, Go, and a large multi-framework
+Rails+Ember codebase) rather than just the fixture shape. Two real bugs caught during review before
+shipping: `repository.api_endpoints` is `{checked, endpoints}`, not a bare list, and several
+frameworks (Django `include()`, Express `app.use()`, Rails `resources()`, Go subrouters)
+legitimately return a `null` method for router mounts, which the first draft would have rendered as
+the literal word "null" instead of labeling distinctly. A follow-up review also caught that the new
+endpoints card silently dropped the `checked`/`reason` distinction the sibling cards already had for
+a skipped scan (`--no-map-endpoints` and friends) — fixed for all three cards at once.
+
+**Fix: the dependency graph and cluster graph could not render on large repos (#662)**
+
+Both of the dashboard's force-directed layouts ran a synchronous O(n²) all-pairs repulsion loop —
+computationally infeasible on real large repos, not just slow. A 15,241-module repo is ~58 billion
+operations for the dependency graph alone, which would not finish in any practical time. Replaced
+with a Barnes-Hut quadtree approximation (O(n log n)), with iteration count and approximation
+precision unchanged for graphs at or below 1,500 nodes (the size the original hand-tuning was
+verified against — zero behavior change there) and scaled down above that threshold. The simulation
+now yields periodically and shows live "Laying out N nodes..." progress on large repos instead of
+an apparently frozen tab. A review caught a real, confirmed bug in the first version (the
+opening-angle approximation could aggregate a region that geometrically contained the very node
+being computed for, producing genuine self-repulsion) — fixed and re-verified with 500 randomized
+adversarial trials showing zero self-inclusion. Verified end-to-end against a real, full clone of
+a large open-source Ruby/Ember repository: both graphs now render completely in under two minutes
+with the tab fully responsive throughout, versus not finishing before.
+
 ## 0.9.15 — 2026-09-10
 
 24 real bugs found and fixed via a continued backward audit of recently merged PRs - no new
