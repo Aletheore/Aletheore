@@ -16,7 +16,15 @@ from aletheore.evidence import EVIDENCE_VERSION
 from tests.air_fixtures import minimal_air_evidence
 
 
-def make_evidence(scanned_at: str, module_count: int = 2, secrets_count: int = 0) -> dict:
+def make_evidence(
+    scanned_at: str,
+    module_count: int = 2,
+    secrets_count: int = 0,
+    vulnerability_findings: list | None = None,
+    license_findings: list | None = None,
+) -> dict:
+    vulnerability_findings = vulnerability_findings or []
+    license_findings = license_findings or []
     return {
         "aletheore_version": EVIDENCE_VERSION,
         "scanned_at": scanned_at,
@@ -28,6 +36,21 @@ def make_evidence(scanned_at: str, module_count: int = 2, secrets_count: int = 0
             "dead_code": {
                 "unreachable_modules": [{"path": "old/unused.py", "reason": "no other module imports this file"}],
                 "unused_dependencies": [{"ecosystem": "pip", "package": "unused-pkg"}],
+            },
+            "api_endpoints": {
+                "checked": True,
+                "endpoints": [
+                    {
+                        "method": "GET",
+                        "path": "/healthz",
+                        "framework": "flask_or_fastapi",
+                        "file": "app.py",
+                        "line": 12,
+                        "handler": "healthz",
+                        "unresolved": False,
+                        "note": None,
+                    }
+                ],
             },
         },
         "git": {
@@ -53,7 +76,17 @@ def make_evidence(scanned_at: str, module_count: int = 2, secrets_count: int = 0
                 ],
                 "history_findings": [],
             },
-            "dependency_vulnerabilities": {"checked": True, "reason": None, "findings": []},
+            "dependency_vulnerabilities": {
+                "checked": True,
+                "reason": None,
+                "findings": vulnerability_findings,
+            },
+            "dependency_licenses": {
+                "checked": True,
+                "reason": None,
+                "repo_license": {"category": "permissive", "detected_from": "LICENSE"},
+                "findings": license_findings,
+            },
         },
         "architecture": {
             "clusters": [{"id": 0, "modules": ["m0.py"], "internal_edges": 0}],
@@ -63,7 +96,30 @@ def make_evidence(scanned_at: str, module_count: int = 2, secrets_count: int = 0
 
 
 def test_build_evidence_summary_shape():
-    evidence = make_evidence("2026-07-15T12:00:00+00:00", module_count=3, secrets_count=2)
+    evidence = make_evidence(
+        "2026-07-15T12:00:00+00:00",
+        module_count=3,
+        secrets_count=2,
+        vulnerability_findings=[
+            {
+                "ecosystem": "PyPI",
+                "package": "certifi",
+                "installed_version": "2024.0.0",
+                "advisory_id": "PYSEC-2024-230",
+                "summary": "Certifi root certificate issue",
+                "severity": [{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N"}],
+            }
+        ],
+        license_findings=[
+            {
+                "ecosystem": "PyPI",
+                "package": "some-pkg",
+                "installed_version": "1.0",
+                "license": None,
+                "category": "unknown",
+            }
+        ],
+    )
 
     summary = build_evidence_summary(evidence)
 
@@ -80,6 +136,23 @@ def test_build_evidence_summary_shape():
         {"path": "old/unused.py", "reason": "no other module imports this file"}
     ]
     assert summary["dead_code"]["unused_dependencies"] == [{"ecosystem": "pip", "package": "unused-pkg"}]
+    assert summary["security"]["vulnerabilities"]["finding_count"] == 1
+    assert summary["security"]["vulnerabilities"]["findings"][0]["package"] == "certifi"
+    assert summary["security"]["licenses"]["finding_count"] == 1
+    assert summary["security"]["licenses"]["findings"][0]["package"] == "some-pkg"
+    assert summary["security"]["licenses"]["repo_license"]["category"] == "permissive"
+    assert summary["endpoints"] == [
+        {
+            "method": "GET",
+            "path": "/healthz",
+            "framework": "flask_or_fastapi",
+            "file": "app.py",
+            "line": 12,
+            "handler": "healthz",
+            "unresolved": False,
+            "note": None,
+        }
+    ]
 
 
 def test_build_history_summary_reads_all_snapshots(tmp_path):
