@@ -1478,6 +1478,44 @@ async def test_reset_billing_period_credit_is_a_noop_on_the_same_period(pool):
 
 
 @pytest.mark.asyncio
+async def test_reset_billing_period_credit_rejects_an_out_of_order_older_period(pool):
+    # Paddle does not guarantee in-order webhook delivery - a retry of an
+    # OLDER subscription.updated can land after a newer one already
+    # committed. The old IS DISTINCT FROM guard only checked "different",
+    # not "later", so a stale older event could re-fire the reset, wiping
+    # out real spend-down progress and rewinding current_billing_period_
+    # start backward.
+    await pool.execute(
+        "INSERT INTO installations (installation_id, account_login, plan, "
+        "base_credit_remaining_usd, base_credit_allotment_usd, current_billing_period_start, balance_epoch) "
+        "VALUES (409, 'acme', 'air', 2.50, 18.00, '2026-10-01T00:00:00Z', 5)"
+    )
+
+    # An older, out-of-order event for the PREVIOUS period arrives late.
+    changed = await reset_billing_period_credit(
+        pool, 409, "air", extra_seats=0, period_start="2026-09-01T00:00:00Z", is_annual=False
+    )
+
+    assert changed is False
+    row = await pool.fetchrow(
+        "SELECT base_credit_remaining_usd, current_billing_period_start, balance_epoch "
+        "FROM installations WHERE installation_id = $1",
+        409,
+    )
+    # Must NOT have wiped the real spent-down balance back to a fresh 18.00,
+    # and must NOT have rewound current_billing_period_start backward.
+    assert float(row["base_credit_remaining_usd"]) == pytest.approx(2.50)
+    assert row["current_billing_period_start"].isoformat() == "2026-10-01T00:00:00+00:00"
+    assert row["balance_epoch"] == 5
+
+    # A genuinely newer period must still reset correctly.
+    changed_forward = await reset_billing_period_credit(
+        pool, 409, "air", extra_seats=0, period_start="2026-11-01T00:00:00Z", is_annual=False
+    )
+    assert changed_forward is True
+
+
+@pytest.mark.asyncio
 async def test_reset_billing_period_credit_arms_the_monthly_clock_for_an_annual_subscriber(pool):
     # An annual subscriber's Paddle billing period only advances once a
     # year, so this reset is the only one they will get from Paddle for the

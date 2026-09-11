@@ -203,9 +203,22 @@ async def reset_billing_period_credit(
     """Resets base_credit_remaining_usd - and base_credit_allotment_usd,
     this billing period's ceiling, to the same value - to this plan's
     real included credit (base_credit_for_plan, same per-seat bonus the
-    old flat cap used) only if period_start is genuinely new for this
-    installation; a no-op on a replayed or unrelated subscription.updated
-    event.
+    old flat cap used) only if period_start is genuinely NEWER than what's
+    already on file for this installation; a no-op on a replayed,
+    unrelated, or out-of-order (older) subscription.updated event.
+
+    Paddle does not guarantee in-order webhook delivery - a retry of an
+    older event can arrive after a newer one already committed. The guard
+    used to be `current_billing_period_start IS DISTINCT FROM $3`, which
+    only checks "different", not "later": a stale event with an OLDER
+    period_start satisfied it too, silently re-running the reset with
+    that older event's (possibly stale) plan/extra_seats, wiping out
+    whatever the customer had already spent down in the real, newer
+    period AND rewinding current_billing_period_start itself backward -
+    which could then let the next genuine newer-period webhook re-fire
+    the reset yet again. `IS NULL OR current_billing_period_start < $3`
+    only ever advances the stored period forward (or sets it for the
+    first time), so an older or equal event can never re-trigger this.
     Increments balance_epoch on a real reset, which doubles as the
     dedupe key both new credit-notification emails key off of. Returns
     whether a reset actually happened.
@@ -255,7 +268,7 @@ async def reset_billing_period_credit(
             next_monthly_credit_reset_at = $4,
             balance_epoch = balance_epoch + 1
         WHERE installation_id = $1
-            AND (current_billing_period_start IS DISTINCT FROM $3)
+            AND (current_billing_period_start IS NULL OR current_billing_period_start < $3)
         RETURNING installation_id
         """,
         installation_id, new_credit, period_start_dt, next_monthly_reset,
