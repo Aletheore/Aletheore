@@ -612,12 +612,25 @@ def build_subsystem_record(
     """skip_files/prior_record: incremental-update optimization - see
     _splice_prior_files. Both default to None (full-build behavior,
     unchanged): every file in the brief is written fresh."""
+    # cache_eligible tracks whether this packet may be WRITTEN to cache
+    # (cache_write is not None), not whether a lookup happened on this
+    # particular call - the sole caller (generate_subsystems' single-target
+    # path) deliberately passes cache_lookup=None to skip a redundant
+    # lookup it already performed via _cached_subsystem_record, while still
+    # wanting the fresh result cached for next time. Using cache_lookup's
+    # presence here made cache_write's own early-return-on-ineligible
+    # (packet_cache.store_result) silently no-op forever for every cluster
+    # that ever takes this path - real, confirmed LLM spend with zero
+    # caching benefit for that cluster, found via audit. The other two
+    # packet-building call sites in this file (_cached_subsystem_record,
+    # _generate_subsystem_records_for_targets) already use the correct
+    # cache_eligible=True pattern; this one drifted from it.
     packet = build_evidence_packet(
         evidence,
         cluster,
         brief,
         model_used,
-        cache_eligible=cache_lookup is not None,
+        cache_eligible=cache_write is not None,
         prompt_version=AIRVIEW_PROMPT_VERSION,
     )
     parsed = None

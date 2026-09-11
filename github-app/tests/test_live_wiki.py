@@ -541,6 +541,38 @@ def test_build_subsystem_record_falls_through_to_model_when_cache_lookup_raises(
     writing_adapter.simple_completion.assert_called_once()
 
 
+def test_build_subsystem_record_still_caches_when_lookup_was_skipped():
+    # generate_subsystems' single-target path passes cache_lookup=None
+    # deliberately (it already checked the cache itself via
+    # _cached_subsystem_record) but still wants the fresh result cached -
+    # this must not be treated as "caching disabled".
+    evidence = make_evidence()
+    cluster = evidence["architecture"]["clusters"][0]
+    brief = _brief_for(evidence)
+    fresh_output = {
+        "description": "Handles authentication.",
+        "files": [{"path": "auth/login.py", "role": "Login.", "key_symbols": []}],
+    }
+    writing_adapter = _adapter(json.dumps(fresh_output))
+    cache_write = MagicMock()
+
+    record = build_subsystem_record(
+        evidence,
+        cluster,
+        brief,
+        "Authentication",
+        writing_adapter,
+        cache_lookup=None,
+        cache_write=cache_write,
+        model_used="deepseek-v4-pro",
+    )
+
+    assert record is not None
+    cache_write.assert_called_once()
+    written_packet = cache_write.call_args[0][0]
+    assert written_packet["cache_eligible"] is True
+
+
 def test_build_subsystem_record_without_cache_callables_is_unchanged():
     evidence = make_evidence()
     cluster = evidence["architecture"]["clusters"][0]
